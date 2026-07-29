@@ -5,7 +5,7 @@
     "": {
       "name": "effect-agent",
       "devDependencies": {
-        "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#64d751aea03442055e1de96f0ff5e50d111f7368",
+        "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#c5f9cc551fa13f5eda75ebab146f1ce1b7d071e5",
         "@effect/platform-node": "catalog:",
         "@effect/tsgo": "catalog:",
         "@types/node": "catalog:",
@@ -77,7 +77,7 @@
 
     "@blazediff/core": ["@blazediff/core@1.9.1", "", {}, "sha512-ehg3jIkYKulZh+8om/O25vkvSsXXwC+skXmyA87FFx6A/45eqOkZsBltMw/TVteb0mloiGT8oGRTcjRAz66zaA=="],
 
-    "@danieljvdm/agent-skills": ["@danieljvdm/agent-skills@github:danieljvdm/agent-skills#64d751a", { "dependencies": { "@effect/platform-node": "4.0.0-beta.90", "effect": "4.0.0-beta.90", "jsonc-parser": "3.3.1", "tsx": "4.22.4" }, "bin": { "agent-skills": "./bin/agent-skills.mjs" } }, "danieljvdm-agent-skills-64d751a", "sha512-c4fDrpaG+EclJ5sBZE2tc79lhN8W9ECBZTH0Rub14Sc9H2zpIQ/4u3AxEL4y/0cs9SxripfSWEJg2pOgEia1UA=="],
+    "@danieljvdm/agent-skills": ["@danieljvdm/agent-skills@github:danieljvdm/agent-skills#c5f9cc5", { "dependencies": { "@effect/platform-node": "4.0.0-beta.90", "effect": "4.0.0-beta.90", "jsonc-parser": "3.3.1", "tsx": "4.22.4" }, "bin": { "agent-skills": "./bin/agent-skills.mjs" } }, "danieljvdm-agent-skills-c5f9cc5", "sha512-MYFb0ngttFSvKpev+OkW1F+IjpfFRP/0aHJuFsX+soZ8kpQTJP3JCaYqCQdRkI5bCvhSfwucKfm2cNepq4IMdQ=="],
 
     "@effect-agent/core": ["@effect-agent/core@workspace:packages/core"],
 

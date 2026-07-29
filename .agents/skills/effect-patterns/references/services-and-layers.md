@@ -3,10 +3,41 @@
 Use this when adding or changing Effect services, dependency tags, layer
 builders, and reusable domain abstractions.
 
+## Authority Seams
+
+Treat a service as an authority seam: a cohesive capability whose requirements
+propagate through the Effect environment.
+
+Create or retain a service when it owns at least one of:
+
+- Persistence, credentials, external I/O, runtime resources, configuration,
+  time, randomness, or lifecycle.
+- Cohesive effect sequencing or policy reused across entrypoints.
+- State or behavior with meaningful production and test/runtime variation.
+- Enough implementation complexity that deleting the service would spread that
+  complexity into callers.
+
+Prefer an existing Effect capability such as `Clock`, `Config`, `Random`,
+`HttpClient`, `FileSystem`, or `Path` when it already owns the authority.
+
+Keep parsed inputs, per-call request data, deterministic calculations, policy
+options for one call, adapter-confined framework values, and forwarding
+wrappers as values or pure modules.
+
+Complete the service-or-value decision when the deletion test and the existing
+Effect capability check both support it. Require production ownership or
+variation; test convenience alone does not establish an authority seam.
+
 ## Preferred Shape
 
-Keep the tag and implementation layer together. The public API should read:
-yield the service, call domain methods, provide the layer.
+Keep the tag and implementation layer together when one module owns both the
+capability and its implementation. When the application owns a port and a
+technology adapter owns its implementation, keep the tag and contract beside
+the application operation and the concrete construction and layer in the
+adapter module.
+
+The public API should read: yield the service, call domain methods, provide the
+layer.
 
 ```ts
 export class Foo extends Context.Service<
@@ -30,8 +61,9 @@ export class Foo extends Context.Service<
 Inline the service interface inside `Context.Service`. Extract a separate
 `FooServiceApi` type only when it is a true domain type independent of the tag.
 
-Use static layer members on the class. Avoid one-off `FooLive` exports for a
-single service.
+Use static layer members on the class when its module owns the implementation.
+In a split port/adapter design, export the concrete layer from the adapter
+module. Avoid one-off `FooLive` exports for a single local service.
 
 Prefer lowercase `layer` for the default implementation unless the repo already
 uses a consistent `Live` convention.
@@ -244,6 +276,9 @@ Do not hide request, websocket, durable-object, RPC transport, or server adapter
 layers inside an exported domain service layer just because they are needed by
 one caller.
 
+Let composition roots select concrete adapter layers. Keep reusable operation
+policy in application services rather than moving it into the root.
+
 ```ts
 const workerLayer = DomainServer.layer.pipe(
   Layer.provideMerge(WebSocketBridge.layer({ tag: "domain" })),
@@ -290,7 +325,11 @@ ownership is already right.
 
 Before completing a change, inspect every added or modified service and layer:
 
+- Confirm each service passes the authority seam test; keep values and pure
+  modules explicit.
 - Keep the implementation layer on its service class when ownership permits.
+- Give the contract, concrete implementation, and composition choice one
+  intentional owner each.
 - Ensure layer constructors take no runtime dependency arguments.
 - Yield every runtime dependency from the Effect environment.
 - Keep mutable state scoped to a layer or an explicitly provided state service.

@@ -20,7 +20,7 @@
     "ready": "bun run check && bun run test && bun run build"
   },
   "devDependencies": {
-    "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#64d751aea03442055e1de96f0ff5e50d111f7368",
+    "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#c5f9cc551fa13f5eda75ebab146f1ce1b7d071e5",
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
     "@types/node": "catalog:",

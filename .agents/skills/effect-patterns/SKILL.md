@@ -17,6 +17,9 @@ reference files that match the code being changed.
   failures, read `references/functions-and-errors.md`.
 - For services, dependency tags, layer builders, and domain abstractions, read
   `references/services-and-layers.md`.
+- For a service-design audit across a codebase, package, feature slice, or
+  diff, read `references/service-design-audit.md`,
+  `references/services-and-layers.md`, and `references/testing.md`.
 - For structured logs, annotations, and log spans, read
   `references/logging.md`.
 - For tests around Effect services, workflows, schemas, and runtime boundaries,
