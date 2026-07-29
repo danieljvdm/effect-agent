@@ -24,6 +24,7 @@
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/testing": "workspace:*",
+        "@effect/ai-openai": "catalog:",
         "@effect/atom-react": "catalog:",
         "@fontsource-variable/ibm-plex-sans": "catalog:",
         "@fontsource/ibm-plex-mono": "catalog:",
@@ -104,6 +105,7 @@
   },
   "catalog": {
     "@base-ui/react": "1.6.0",
+    "@effect/ai-openai": "4.0.0-beta.102",
     "@effect/atom-react": "4.0.0-beta.102",
     "@effect/platform-node": "4.0.0-beta.102",
     "@effect/tsgo": "0.24.3",
@@ -228,6 +230,8 @@
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
+
+    "@effect/ai-openai": ["@effect/ai-openai@4.0.0-beta.102", "", { "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-XqoNFJpx+/vLCStPAGPk651eRUJKu7lQ8XHLqJI77j6ZCUvEDlpH2SARQjfk+Ul1np0H7RM5o6m0C572cjvQow=="],
 
     "@effect/atom-react": ["@effect/atom-react@4.0.0-beta.102", "", { "peerDependencies": { "effect": "^4.0.0-beta.102", "react": "^19.2.4", "scheduler": "*" } }, "sha512-6SX11h7OFwje4YhxYUml9qGjBU8hvnEMrLWe3TKI3lEH/W6tkU/BzajC263eXkxM68h+BJNzE81Ipi5DTfEgug=="],
 

@@ -15,6 +15,7 @@
     "@effect-agent/core": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/testing": "workspace:*",
+    "@effect/ai-openai": "catalog:",
     "@effect/atom-react": "catalog:",
     "@fontsource-variable/ibm-plex-sans": "catalog:",
     "@fontsource/ibm-plex-mono": "catalog:",

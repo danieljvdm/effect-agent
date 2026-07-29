@@ -117,8 +117,9 @@ layer(NodeServices.layer)("Phase 0 toolchain", (it) => {
     }),
   );
 
-  it.effect("keeps the demo as an inward-consuming, provider-free leaf workspace", () =>
+  it.effect("keeps the demo as an inward-consuming leaf with an opt-in provider", () =>
     Effect.gen(function* () {
+      const root = yield* readManifest(`${repositoryRoot}/package.json`);
       const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
       const dependencies = manifestDependencies(demo);
 
@@ -126,11 +127,13 @@ layer(NodeServices.layer)("Phase 0 toolchain", (it) => {
       expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
       expect(demo.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
       expect(demo.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(demo.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(demo.dependencies?.["@effect/atom-react"]).toBe("catalog:");
       expect(demo.dependencies?.["@tanstack/react-start"]).toBe("catalog:");
       expect(demo.dependencies?.["@base-ui/react"]).toBe("catalog:");
       expect(demo.dependencies?.react).toBe("catalog:");
       expect(demo.dependencies?.effect).toBe("catalog:");
+      expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
       expect(dependencies).not.toContain("wrangler");
       expect(dependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(false);
 
@@ -139,6 +142,7 @@ layer(NodeServices.layer)("Phase 0 toolchain", (it) => {
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
         expect(manifestDependencies(manifest)).not.toContain(demo.name);
+        expect(manifestDependencies(manifest)).not.toContain("@effect/ai-openai");
       }
     }),
   );

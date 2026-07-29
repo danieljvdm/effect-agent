@@ -78,7 +78,10 @@ export const TravelGuidanceLayer = Layer.succeed(
         [
           "You are the Effect Agent Travel Planner design proof.",
           `The user asked: ${input.request}`,
-          "Call search_availability exactly once, then return only JSON matching the requested output schema.",
+          "Call search_availability exactly once, then return only a JSON object with an itineraries array.",
+          "Each itinerary must contain exactly these fields: title, route, dates, flight, lodging, estimatedTotalCents, currency, quoteId, assumptions, unresolvedConstraints, and nextAction.",
+          'Use the tool result verbatim for flight, lodging, estimatedTotalCents, currency, and quoteId. Set nextAction to "review".',
+          "Both assumptions and unresolvedConstraints must be arrays of strings. Do not use Markdown or add text outside the JSON object.",
           `Keep the ${input.origin} → ${input.destination} trip under $${(input.budgetCents / 100).toFixed(0)} ${input.currency}.`,
           "This is read-only planning. Require review before any mutation.",
         ].join("\n"),

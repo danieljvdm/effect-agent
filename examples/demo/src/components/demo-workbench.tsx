@@ -134,8 +134,9 @@ export function DemoWorkbench() {
   );
 
   const reset = () => {
+    const mode = state.mode;
     run(Atom.Interrupt);
-    setState(initialDemoState);
+    setState({ ...initialDemoState, mode });
     setPrompt(initialDemoState.activeRequest);
     setSelectedSequence(null);
   };
@@ -151,11 +152,38 @@ export function DemoWorkbench() {
             <div className="min-w-0">
               <h1 className="truncate text-sm font-semibold">Effect Agent · Phase 0 bench</h1>
               <p className="truncate font-mono text-[10px] text-muted-foreground">
-                Travel Planner / scripted model / offline
+                Travel Planner /{" "}
+                {state.mode === "openai" ? "gpt-5.6-luna / server-side" : "scripted / offline"}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
+            <div
+              aria-label="Model profile"
+              className="flex items-center rounded-md border border-border p-0.5"
+              role="group"
+            >
+              <Button
+                aria-pressed={state.mode === "deterministic"}
+                disabled={state.status === "running"}
+                onClick={() => setState({ ...state, mode: "deterministic" })}
+                size="sm"
+                type="button"
+                variant={state.mode === "deterministic" ? "outline" : "ghost"}
+              >
+                Fixture
+              </Button>
+              <Button
+                aria-pressed={state.mode === "openai"}
+                disabled={state.status === "running"}
+                onClick={() => setState({ ...state, mode: "openai" })}
+                size="sm"
+                type="button"
+                variant={state.mode === "openai" ? "outline" : "ghost"}
+              >
+                OpenAI
+              </Button>
+            </div>
             <StatusMark status={state.status} />
             <Button onClick={reset} size="sm" type="button" variant="outline">
               <RotateCcw />
@@ -174,7 +202,7 @@ export function DemoWorkbench() {
                 Your text is Schema-validated agent input.
               </p>
             </div>
-            <Badge>Effect Atom</Badge>
+            <Badge>{state.mode === "openai" ? "Live provider" : "Effect Atom"}</Badge>
           </CardHeader>
 
           <Conversation>
@@ -196,7 +224,9 @@ export function DemoWorkbench() {
                   </span>
                   <MessageContent className="flex items-center gap-2 text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
-                    Running the deterministic event loop…
+                    {state.mode === "openai"
+                      ? "Waiting for the server-side OpenAI run…"
+                      : "Running the deterministic event loop…"}
                   </MessageContent>
                 </Message>
               ) : null}
@@ -210,7 +240,7 @@ export function DemoWorkbench() {
                 event.preventDefault();
                 const request = prompt.trim();
                 if (request.length > 0 && state.status !== "running") {
-                  run(request);
+                  run({ mode: state.mode, request });
                   setSelectedSequence(null);
                 }
               }}
