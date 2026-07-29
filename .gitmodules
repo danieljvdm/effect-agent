@@ -1,0 +1,12 @@
+[submodule "repos/effect"]
+	path = repos/effect
+	url = https://github.com/Effect-TS/effect.git
+	shallow = true
+[submodule "repos/flue"]
+	path = repos/flue
+	url = https://github.com/withastro/flue.git
+	shallow = true
+[submodule "repos/pi"]
+	path = repos/pi
+	url = https://github.com/earendil-works/pi.git
+	shallow = true
