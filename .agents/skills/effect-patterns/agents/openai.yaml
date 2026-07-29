@@ -1,0 +1,4 @@
+interface:
+  display_name: "Effect Patterns"
+  short_description: "Apply focused Effect TypeScript patterns"
+  default_prompt: "Use $effect-patterns to apply the relevant Effect schema, service, error, logging, testing, or HTTP boundary pattern."

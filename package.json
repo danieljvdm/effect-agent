@@ -1,0 +1,52 @@
+{
+  "name": "effect-agent",
+  "version": "0.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*"
+  ],
+  "type": "module",
+  "scripts": {
+    "postinstall": "tsx scripts/postinstall.ts",
+    "sync:agent-skills": "agent-skills sync",
+    "sync:agent-skills:dry": "agent-skills sync --dry-run",
+    "sync:effect": "tsx scripts/sync-effect-submodule.ts",
+    "format": "vp fmt",
+    "format:write": "vp fmt --write",
+    "lint": "vp lint",
+    "check": "vp check && vp run -F './packages/*' check && tsc --noEmit -p scripts/tsconfig.json",
+    "test": "vp run -F './packages/*' test",
+    "build": "vp run -F './packages/*' build",
+    "ready": "bun run check && bun run test && bun run build"
+  },
+  "devDependencies": {
+    "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#64d751aea03442055e1de96f0ff5e50d111f7368",
+    "@effect/platform-node": "catalog:",
+    "@effect/tsgo": "catalog:",
+    "@types/node": "catalog:",
+    "effect": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "overrides": {
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "vite": "catalog:"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.11.0"
+  },
+  "packageManager": "bun@1.3.14",
+  "catalog": {
+    "@effect/platform-node": "4.0.0-beta.102",
+    "@effect/tsgo": "0.24.3",
+    "@types/node": "26.1.2",
+    "effect": "4.0.0-beta.102",
+    "tsx": "4.23.1",
+    "typescript": "7.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6",
+    "vite-plus": "0.2.6"
+  }
+}

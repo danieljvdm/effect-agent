@@ -1,0 +1,317 @@
+# Persistence Specification
+
+Status: Draft
+
+Persistence provides the mechanism used by sessions, canonical conversation
+history, the Submission Ledger, checkpoints, durable steps, approvals, and
+artifacts. The durable protocol is specified in
+[durability.md](./durability.md); this document specifies storage contracts and
+adapter behavior.
+
+## 1. Design principles
+
+- Persistence services are framework-owned Effect services. Model content uses Effect AI values at
+  runtime and explicit framework record Schemas at rest.
+- The canonical log and Submission Ledger are distinct logical records.
+- Atomicity boundaries are explicit in port methods.
+- Adapters expose their consistency and transaction capabilities.
+- Schema versions are stored with every durable record family.
+- Writes are idempotent and fenced where a producer is involved.
+- Projections are disposable; canonical records are not.
+- Large blobs are addressed by digest and stored outside hot transactional rows.
+
+## 2. Logical stores
+
+### 2.1 Conversation Log
+
+Append-only canonical batches for each conversation. It is the source for replay,
+context reconstruction, audit, and projections.
+
+### 2.2 Submission Ledger
+
+Tracks admission, scheduling, leases, attempts, commands, recovery classification,
+and settlement. It is the source for operational obligations.
+
+### 2.3 Session Store
+
+Stores mutable, revisioned metadata and references to conversations.
+
+### 2.4 Checkpoint Store
+
+Stores derived interpreter snapshots and compaction artifacts keyed by canonical log
+position and digest.
+
+### 2.5 Step Store
+
+Stores prepared and settled durable-step records under stable step identity.
+
+### 2.6 Artifact Store
+
+Stores large immutable content such as attachments, sandbox artifacts, and optional
+encrypted raw provider payloads. Records use content digests and metadata; the
+transactional stores contain references.
+
+### 2.7 Projection Store
+
+Stores rebuildable views for UI, search, metrics, and administration.
+
+## 3. Port shape
+
+The actual TypeScript API may split these services further, but it must preserve the
+semantic operations below.
+
+```ts
+interface SubmissionStore {
+  readonly admit: (request: AdmissionRequest) => Effect.Effect<AdmissionResult, AdmissionError>;
+
+  readonly markReady: (submissionId: SubmissionId) => Effect.Effect<void, SubmissionStoreError>;
+
+  readonly claim: (request: ClaimRequest) => Effect.Effect<Option.Option<Claim>, ClaimError>;
+
+  readonly renewOwnership: (
+    ownership: OwnershipToken,
+  ) => Effect.Effect<OwnershipToken, OwnershipLost | StoreError>;
+
+  readonly reserveSettlement: (
+    request: SettlementReservation,
+  ) => Effect.Effect<ReservedSettlement, SettlementConflict | SubmissionStoreError>;
+
+  readonly finalizeSettlement: (
+    request: SettlementFinalization,
+  ) => Effect.Effect<Settlement, SettlementConflict | SubmissionStoreError>;
+
+  readonly loadRecoverySnapshot: (
+    submissionId: SubmissionId,
+  ) => Effect.Effect<RecoverySnapshot, StoreError>;
+}
+
+interface ConversationStore {
+  readonly materialize: (
+    request: ConversationMaterialization,
+  ) => Effect.Effect<void, ConversationStoreError>;
+
+  readonly append: (
+    request: FencedAppendRequest,
+  ) => Effect.Effect<AppendResult, FenceRejected | AppendConflict | ConversationStoreError>;
+
+  readonly read: (
+    request: ConversationRead,
+  ) => Stream.Stream<CanonicalRecord, ConversationStoreError>;
+}
+```
+
+Each method has an explicit atomic and idempotent contract. Admission and settlement intentionally
+span the two stores through recoverable states:
+
+- admit ledger row → materialize Conversation → mark ready;
+- reserve settlement → append exact canonical record → finalize ledger.
+
+Canonical input and settlement records win over cached ledger markers during repair.
+
+## 4. Record envelopes
+
+Every record has:
+
+```ts
+interface RecordEnvelope<A> {
+  readonly recordId: RecordId;
+  readonly family: RecordFamily;
+  readonly schemaVersion: number;
+  readonly createdAt: Instant;
+  readonly deploymentId: DeploymentId;
+  readonly payload: A;
+}
+```
+
+Producer-written records additionally include producer identity and epoch. User or
+tenant identity is included where authorization and retention require it.
+
+Timestamps support audit and operations but do not define conversation ordering.
+
+## 5. Event families
+
+The canonical log supports, at minimum:
+
+- conversation created/closed;
+- user, steering, and follow-up input;
+- model request metadata;
+- model text/reasoning deltas, completion, signature/redaction metadata, or structured item;
+- tool call requested, prepared, approved/rejected, settled, unknown;
+- compaction created/selected;
+- subagent started/settled;
+- run warning/failure;
+- abort requested;
+- terminal outcome;
+- repair annotations.
+
+Partial Tool-argument deltas, queue depth changes, heartbeats, and debug spans are
+not canonical events.
+
+## 6. Optimistic and idempotent writes
+
+Each append declares:
+
+- expected conversation tail sequence and digest;
+- unique batch ID;
+- producer epoch;
+- event IDs;
+- intended sequence count.
+
+On retry:
+
+- the same batch ID and digest returns the original append result;
+- the same batch ID with different content is a conflict;
+- a stale expected tail is a conflict;
+- a stale producer epoch is fenced;
+- a partial batch is impossible.
+
+## 7. Reads
+
+The store supports:
+
+- bounded forward reads by conversation sequence;
+- tail reads;
+- batch lookup by ID;
+- submission lookup by ID and idempotency key;
+- nonterminal work scans;
+- settlement lookup;
+- point-in-time projection rebuild;
+- checkpoint lookup at or before a sequence.
+
+Reads that drive recovery must be strongly consistent with prior successful writes.
+Eventually consistent replicas may serve UI/history views if their staleness is
+visible.
+
+## 8. Checkpoints
+
+A checkpoint contains a versioned encoded interpreter snapshot plus:
+
+- conversation and submission identity;
+- canonical sequence covered;
+- canonical tail digest;
+- engine version;
+- agent definition digest;
+- active model/tool configuration digests;
+- loaded skill versions;
+- creation timestamp.
+
+A checkpoint is a performance optimization. If its schema is unsupported, digest
+does not match, or referenced configuration is unavailable, the engine rebuilds
+from canonical events or returns a typed compatibility failure. It never silently
+uses a mismatched checkpoint.
+
+## 9. Storage adapters
+
+### 9.1 In-memory
+
+Purpose: unit tests and ephemeral development.
+
+- deterministic;
+- supports fault injection;
+- no process durability claim;
+- implements the same conflict and fencing rules.
+
+### 9.2 SQLite
+
+Purpose: first operational local runtime and single-node durable host.
+
+- WAL mode;
+- transactions for admission, append, claim, and terminalization;
+- single-writer behavior handled with bounded busy retry;
+- monotonically increasing epochs allocated transactionally;
+- blob payload thresholds with artifact spillover;
+- backup and integrity-check guidance;
+- no multi-host scheduler claim unless deployment constraints prove safe.
+
+### 9.3 Cloudflare
+
+Purpose: first-class edge deployment alongside Node/SQLite.
+
+- one SQLite-backed Durable Object owns each Conversation's queue, canonical log, and local
+  operational ledger;
+- Durable Object identity provides per-Conversation routing and serialized coordination;
+- Durable Object storage transactions implement local atomic methods;
+- important state is always written to storage rather than relying on in-memory object state;
+- alarms wake unsettled work without requiring a new client request;
+- alarm handlers are idempotent because alarm delivery is at least once;
+- R2 may hold large immutable attachments/artifacts;
+- cross-Conversation indexes are optional projections, not recovery truth.
+
+All Cloudflare bindings are wrapped in Effect services and provided through Layers. Core Agent and
+engine packages do not import Cloudflare platform types.
+
+## 10. Serialization
+
+Effect Schema is the source of truth for domain codecs.
+
+Rules:
+
+- use tagged, versioned envelopes;
+- avoid serialized class prototypes or closures;
+- encode dates, durations, big integers, binary, and redacted values explicitly;
+- preserve unknown future fields where forward compatibility requires it;
+- cap nesting, array length, and byte size before decode;
+- validate data read from storage, even if the application originally wrote it;
+- store content digests over canonical encoding.
+
+Canonical encoding must be deterministic. The project will choose and document one
+encoding profile before the first persistent release.
+
+## 11. Stored-version policy during private development
+
+No data migration or backward-compatibility support is implemented or promised.
+
+- records still carry versions;
+- unsupported versions fail before mutation;
+- local SQLite development data may be deleted and recreated;
+- Cloudflare development namespaces may be replaced after breaking changes;
+- fixtures cover only the current version unless needed for a specific regression.
+
+Migration design is reopened before external users rely on stored data.
+
+## 12. Retention and deletion
+
+During private development, canonical records are retained indefinitely. Physical
+deletion, legal retention, tenant export, attachment lifecycle, and backup erasure
+are deferred until an actual internal requirement appears or external release work
+begins.
+
+## 13. Encryption and secrets
+
+- transport encryption is required for remote adapters;
+- production persistent stores require encryption at rest;
+- application secrets are referenced by handle and never stored in canonical
+  events;
+- sensitive event fields support envelope encryption and key rotation;
+- digest inputs must not make low-entropy secrets guessable;
+- backup encryption and restore authorization are part of the adapter runbook.
+
+## 14. Projection processing
+
+Projection consumers checkpoint their own canonical sequence and are idempotent.
+They may lag, fail, and rebuild without blocking the engine's canonical append,
+unless a specific projection is declared part of admission or settlement.
+
+Notifications use an outbox committed with canonical state. A dropped notification
+cannot cause lost work because schedulers also scan the ledger.
+
+## 15. Requirements
+
+- **STORE-001**: The Conversation Log and Submission Ledger are distinct logical
+  stores even if one database implements both.
+- **STORE-002**: Each admission and settlement transition is atomic and idempotent; cross-store
+  progress is recoverable rather than falsely described as one transaction.
+- **STORE-003**: Recovery reads are strongly consistent.
+- **STORE-004**: Batch append is atomic, idempotent, conflict-checked, and fenced.
+- **STORE-005**: Every durable record carries a schema version.
+- **STORE-006**: Effect Schema validates both writes and reads.
+- **STORE-007**: Checkpoints are disposable and bound to a canonical digest.
+- **STORE-008**: Projections are rebuildable from canonical records.
+- **STORE-009**: Large immutable payloads use digest-addressed artifact storage.
+- **STORE-010**: Every durable adapter passes the shared conformance and
+  crash-consistency suite.
+- **STORE-011**: Unsupported stored versions fail clearly; private development provides no
+  migration promise.
+- **STORE-012**: Canonical records are retained indefinitely during private development.
+- **STORE-013**: Node/SQLite and Cloudflare Durable Object adapters implement the same Effect
+  service contracts and conformance suite.

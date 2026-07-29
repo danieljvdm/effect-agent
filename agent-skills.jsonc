@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/@danieljvdm/agent-skills/schema/agent-skills.schema.json",
+  "include": ["effect"],
+  "targets": {
+    "agents": { "enabled": true, "mode": "copy" },
+    "claude": { "enabled": true, "mode": "symlink" },
+    "opencode": { "enabled": false, "mode": "symlink" },
+  },
+}

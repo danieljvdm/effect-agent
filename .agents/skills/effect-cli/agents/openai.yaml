@@ -1,0 +1,4 @@
+interface:
+  display_name: "Effect CLI"
+  short_description: "Build Effect-powered project scripts"
+  default_prompt: "Use $effect-cli to create or refactor a TypeScript script with Effect CLI and platform services."
