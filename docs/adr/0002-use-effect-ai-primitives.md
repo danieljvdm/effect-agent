@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-07-29
 - Decision owners: Project owner
-- Related decisions: D-002, D-003, D-008, D-012, D-019, D-022
+- Related decisions: D-002, D-003, D-008, D-012, D-019, D-022, D-027
 
 ## Context
 
@@ -21,7 +21,8 @@ Effect ecosystem.
 
 Use Effect AI primitives directly in public authoring and runtime APIs.
 
-- Agent Definitions contain Effect AI Toolkits and model requirements.
+- Agent Definitions contain Effect AI Toolkits but remain model-agnostic.
+- Agent Bindings pair one Definition with one Effect AI `Model` Layer; only Bindings are runnable.
 - Tool handlers use Effect AI's typed failure channel and service requirements.
 - Provider implementations are normal Effect AI Layers.
 - The agent interpreter consumes Effect AI Prompt and Response values.
@@ -40,6 +41,7 @@ and must pass type, runtime, provider, and persistence tests.
 Positive:
 
 - Effect applications compose without adapters;
+- one Definition can be bound explicitly to deterministic, live, or dynamically selected Models;
 - Tool failures and requirements flow through the existing Effect AI types;
 - provider Layers work directly;
 - improvements can benefit the broader Effect ecosystem;
@@ -53,6 +55,18 @@ Negative:
   annotations;
 - supporting several Effect versions at once is not a goal during private
   development.
+
+## Definition and Model Binding
+
+`Agent.define` creates the stable model-agnostic Definition. `Agent.withModel` creates an immutable
+Binding containing that Definition and a native Effect AI `Model`. The runtime supplies the bound
+Model locally, so the Model Layer's requirements remain visible without making `LanguageModel` an
+ambient implementation choice.
+
+Making `LanguageModel` a direct runtime requirement was rejected because the same Agent identity
+could then resolve to unrelated Models at different call sites without an explicit binding seam.
+Wrapping providers in a framework `ModelDriver` or registry was also rejected because Effect AI
+already owns that abstraction.
 
 ## Error behavior
 
@@ -69,5 +83,6 @@ value such as `Option.none`, not a failure.
   Effect AI;
 - Tool handler requirements remain visible in the enclosing Run;
 - Tool failures remain typed without framework conversion;
-- an Effect AI provider `Model` Layer runs an Agent directly;
+- an Effect AI provider `Model` Layer binds to an Agent Definition and runs directly;
+- an unbound Agent Definition is not accepted by the runtime;
 - each Effect upgrade passes compile-time examples and the full semantic suite.

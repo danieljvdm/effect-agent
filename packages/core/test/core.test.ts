@@ -1,0 +1,74 @@
+import { describe, expect, it } from "vite-plus/test";
+
+import { Duration, Schema } from "effect";
+
+import {
+  AgentId,
+  AgentInputError,
+  AgentPolicy,
+  RunEvent,
+  RunId,
+  RunStarted,
+} from "../src/index.ts";
+
+describe("Phase 0 core schemas", () => {
+  it("decodes distinct non-empty branded identifiers", () => {
+    expect(Schema.decodeSync(AgentId)("travel-planner")).toBe("travel-planner");
+    expect(() => Schema.decodeSync(RunId)("")).toThrow();
+  });
+
+  it("constructs finite policies and rejects invalid bounds", () => {
+    const policy = AgentPolicy.make({
+      maxTurns: 2,
+      maxToolCalls: 1,
+      maxDuration: "30 seconds",
+      toolConcurrency: 1,
+    });
+
+    expect(policy.maxDuration).toEqual(Duration.seconds(30));
+    expect(policy.repeatedFailureLimit).toBe(3);
+    expect(() =>
+      AgentPolicy.make({
+        maxTurns: 0,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: Duration.infinity,
+        toolConcurrency: 1,
+      }),
+    ).toThrow();
+  });
+
+  it("round-trips tagged expected failures", () => {
+    const failure = new AgentInputError({ message: "invalid trip input" });
+    const encoded = Schema.encodeSync(AgentInputError)(failure);
+
+    expect(Schema.decodeSync(AgentInputError)(encoded)).toEqual(failure);
+  });
+
+  it("decodes semantic run events through the public union", () => {
+    const encodedEvent = {
+      _tag: "RunStarted",
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 0,
+      timestamp: "2026-07-29T12:00:00.000Z",
+    } satisfies typeof RunStarted.Encoded;
+    const event = Schema.decodeSync(RunStarted)(encodedEvent);
+
+    expect(Schema.decodeSync(RunEvent)(encodedEvent)).toEqual(event);
+    const invalidEncodedEvent: unknown = {
+      ...event,
+      eventVersion: 2,
+    };
+    expect(() => Schema.decodeUnknownSync(RunEvent)(invalidEncodedEvent)).toThrow();
+  });
+});

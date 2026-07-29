@@ -3,6 +3,7 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/engine" },
-    { "path": "./packages/testing" }
+    { "path": "./packages/testing" },
+    { "path": "./examples/demo" }
   ]
 }

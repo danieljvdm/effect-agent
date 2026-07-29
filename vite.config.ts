@@ -1,6 +1,11 @@
 import { defineConfig } from "vite-plus";
 
-const generatedPaths = [".agents/**", ".claude/**", "repos/**"];
+const generatedPaths = [
+  ".agents/**",
+  ".claude/**",
+  "examples/demo/src/routeTree.gen.ts",
+  "repos/**",
+];
 
 export default defineConfig({
   staged: {

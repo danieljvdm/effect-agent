@@ -53,9 +53,11 @@ core + engine <- testing
 An inward package must not import an outward package. If a feature appears to require that, define
 or deepen an inward port and implement an outward adapter.
 
-The repository contains only `packages/*`; do not create an `apps/` workspace. Create a future
-package only when its roadmap phase begins. Provider integrations remain upstream Effect AI
-Layers, not framework provider packages.
+Framework code lives only in `packages/*`; do not create an `apps/` workspace. Runnable consumer
+benches live in `examples/*`, remain leaf workspaces, and may depend inward on public framework
+packages and `@effect-agent/testing`. Create a future framework package only when its roadmap
+phase begins. Provider integrations remain upstream Effect AI Layers, not framework provider
+packages.
 
 ## Toolchain rules
 

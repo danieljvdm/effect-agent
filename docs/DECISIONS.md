@@ -17,7 +17,7 @@ decisions receive or update an ADR.
 
 ### D-001 — Product shape
 
-**Status:** Accepted  
+**Status:** Accepted
 **Decision:** Build a general-purpose Effect-native agent framework in validated stages. Start with
 a narrow typed interpreter, then add persistent Conversations and durable accepted-work execution
 without replacing the authoring model or semantic Turn loop.
@@ -232,15 +232,17 @@ preparation.
 ### D-024 — Repository toolchain and shape
 
 **Status:** Accepted  
-**Decision:** Use a package-only Vite+ monorepo based on
+**Decision:** Use a Vite+ monorepo based on
 `danieljvdm/vp-effect-cf-template`. Use its Bun workspace, exact dependency catalog,
-Effect-aware TypeScript patch, and catalog-to-source Effect synchronization. Create only packages
-needed by the active roadmap phase.
+Effect-aware TypeScript patch, and catalog-to-source Effect synchronization. Framework code lives
+in phase-gated `packages/*`; runnable consumer benches live in leaf `examples/*` workspaces. Do not
+create an `apps/` workspace.
 
 Include `danieljvdm/agent-skills` as contributor tooling and keep it separate from the framework's
 runtime Skill abstraction.
 
-Record: [ADR-0006](adr/0006-package-only-vite-plus-monorepo.md)
+Records: [ADR-0006](adr/0006-package-only-vite-plus-monorepo.md),
+[ADR-0009](adr/0009-leaf-example-workspaces.md)
 
 ### D-025 — Slim toolchain and canonical Effect source
 
@@ -262,8 +264,38 @@ phase. Its default model and travel-service implementations are deterministic La
 green suite runs without credentials or network access. Selected live model providers and travel
 suppliers may be demonstrated through opt-in Layers and smoke tests.
 
-The executable slices remain package-local fixtures and tests; they do not create an `apps/`
-workspace or a production dependency on `@effect-agent/testing`. Each phase extends the same
-scenario to prove only the maturity claim available in that phase. In particular, persistent
-Conversation history does not imply durable accepted work, and external booking mutations do not
-imply exactly-once execution.
+The executable contracts and reusable deterministic fixtures live in `@effect-agent/testing`.
+`examples/demo` is a private leaf consumer that renders the same scenario as a browser test bench;
+it does not create an `apps/` workspace or a production dependency on `@effect-agent/testing`.
+Each phase extends the same scenario to prove only the maturity claim available in that phase. In
+particular, persistent Conversation history does not imply durable accepted work, and external
+booking mutations do not imply exactly-once execution.
+
+### D-027 — Agent Definition and Model Binding
+
+**Status:** Accepted
+
+**Decision:** Keep Agent Definitions model-agnostic. `Agent.define` creates the immutable
+definition; `Agent.withModel` pairs it with one concrete Effect AI `Model`. The runtime accepts
+only this explicit Agent Binding. The Model Layer's requirements remain visible in the Run's `R`.
+
+Do not make `LanguageModel` an ambient runtime requirement merely to support provider substitution.
+Applications that select Models dynamically do so with ordinary Effect services before creating
+the Binding.
+
+Record: [ADR-0002](adr/0002-use-effect-ai-primitives.md)
+
+### D-028 — Leaf example workspaces
+
+**Status:** Accepted
+
+**Decision:** Keep runnable, local consumer demonstrations under `examples/*`. Each example is a
+leaf workspace that may depend on public framework packages and `@effect-agent/testing`; no
+framework package may import it. Examples must use the real public runtime path, remain included
+in the root check/test/build gates, and avoid implying deployment or durability guarantees.
+
+The Phase 0 demo uses TanStack Start, Effect Atom, Tailwind CSS, shadcn/ui on Base UI, and Vercel AI
+Elements-style components. Its scripted Model remains the default so ordinary verification
+requires no credentials or network.
+
+Record: [ADR-0009](adr/0009-leaf-example-workspaces.md)

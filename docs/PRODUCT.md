@@ -131,6 +131,7 @@ decoding, resource budgets, and content persistence policies are enforced outsid
 
 ### P0: Design proof
 
+- Model-agnostic Agent Definitions with explicit Effect AI Model Bindings.
 - Agent composition with Effect AI Tool, Toolkit, Model, Prompt, and Response.
 - Effect Schema inputs and outputs.
 - Effectful instructions.
@@ -141,7 +142,7 @@ decoding, resource budgets, and content persistence policies are enforced outsid
 
 ### P1: Ephemeral core
 
-- `Agent.make`, `AgentRuntime.run`, and `AgentRuntime.stream`.
+- `Agent.define`, `Agent.withModel`, `AgentRuntime.run`, and `AgentRuntime.stream`.
 - Finite-concurrency execution of model-requested Effect AI Tools.
 - Bounded Stop Policy.
 - Text and structured final results.
@@ -211,9 +212,10 @@ behavior: richer Tool scheduling, interactive changes and approval, persistent C
 durable accepted work, honest booking recovery, and equivalent Node/Cloudflare Layer assemblies.
 
 The default profile is fully offline. Live OpenAI or Anthropic Models and selected travel suppliers
-are opt-in Layer substitutions used for smoke and internal validation. The example is implemented
-as package-local compiling fixtures and tests, not an `apps/` workspace, hosted product, or implied
-UI. Its maturity label never exceeds the adapter and deployment class exercised by its evidence.
+are opt-in Layer substitutions used for smoke and internal validation. Reusable contracts and
+evidence live in the testing package; `examples/demo` renders the same fixture as a local browser
+bench. It is not an `apps/` workspace or hosted product, and its maturity label never exceeds the
+adapter and deployment class exercised by its evidence.
 
 Channels, UI, hosted orchestration, and marketplaces remain separate products.
 
@@ -256,7 +258,7 @@ const TriageToolsLive = TriageTools.toLayer({
   inspect_issue: ({ repo, number }) => Effect.flatMap(IssueRepo, (_) => _.get(repo, number)),
 });
 
-const Triage = Agent.make("triage", {
+const TriageDefinition = Agent.define("triage", {
   input: Schema.Struct({
     repo: Schema.String,
     issueNumber: Schema.Int,
@@ -267,7 +269,6 @@ const Triage = Agent.make("triage", {
   }),
   instructions: ({ repo, issueNumber }) =>
     Effect.succeed(`Triage ${repo}#${issueNumber}. Escalate sensitive issues immediately.`),
-  model: AnthropicClaude,
   toolkit: TriageTools,
   policy: {
     maxTurns: 12,
@@ -277,14 +278,16 @@ const Triage = Agent.make("triage", {
   },
 });
 
+const Triage = Agent.withModel(TriageDefinition, AnthropicClaude);
+
 const result = AgentRuntime.run(Triage, {
   repo: "withastro/astro",
   issueNumber: 123,
 }).pipe(Effect.provide(TriageToolsLive), Effect.provide(IssueRepo.Default), Effect.scoped);
 ```
 
-The exact syntax may evolve. The invariant is that required Tool handlers, domain modules, model
-selection, and schema requirements remain visible to the compiler.
+The exact syntax may evolve. The invariant is that required Tool handlers, domain modules, explicit
+model selection, and schema requirements remain visible to the compiler.
 
 ## 7. Non-goals for the first stable core
 

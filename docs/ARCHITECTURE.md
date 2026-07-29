@@ -51,12 +51,14 @@ packages/
   core
   engine
   testing
+examples/
+  demo
 ```
 
-There is no `apps/` workspace. Reference Agents are compile fixtures inside package tests. The
-Travel Planner Reference Application is a cumulative set of those fixtures, with each executable
-slice owned by the package and phase it verifies. It is not a separately deployable application
-package. Platform hosts are library packages that applications can assemble later.
+There is no `apps/` workspace. Reusable Travel Planner fixtures live in the leaf testing package;
+`examples/demo` consumes those public fixtures and framework packages as a local browser bench.
+Examples are outside the framework dependency graph and do not define a deployment boundary.
+Platform hosts are library packages that applications can assemble later.
 
 | First phase | Packages introduced                           |
 | ----------: | --------------------------------------------- |
@@ -201,16 +203,22 @@ interface AgentDefinition<Input, Output, E, R, Tools> {
   readonly input: Schema.Schema<Input>;
   readonly output: Schema.Schema<Output>;
   readonly instructions: InstructionSource<Input, E, R>;
-  readonly model: Model.Model<any, LanguageModel.LanguageModel, any>;
   readonly toolkit: Toolkit.Toolkit<Tools>;
   readonly policy: AgentPolicy;
   readonly context: ReadonlyArray<ContextTransform<any>>;
   readonly metadata: AgentMetadata;
 }
+
+interface AgentBinding<Definition, ModelValue> {
+  readonly definition: Definition;
+  readonly model: ModelValue;
+}
 ```
 
-Requirements and failures are inferred from instruction sources, context transforms, handlers,
-policies, and schema encoding/decoding.
+An Agent Definition is model-agnostic and may be inspected or reused without acquiring resources.
+`Agent.withModel` creates the immutable Agent Binding accepted by the runtime. Requirements and
+failures are inferred from instruction sources, context transforms, handlers, policies, schema
+encoding/decoding, and the bound Effect AI Model Layer.
 
 ### Runtime results
 

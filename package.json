@@ -3,7 +3,8 @@
   "version": "0.0.0",
   "private": true,
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "examples/*"
   ],
   "type": "module",
   "scripts": {
@@ -14,9 +15,9 @@
     "format": "vp fmt",
     "format:write": "vp fmt --write",
     "lint": "vp lint",
-    "check": "vp check && vp run -F './packages/*' check && tsc --noEmit -p scripts/tsconfig.json",
-    "test": "vp run -F './packages/*' test",
-    "build": "vp run -F './packages/*' build",
+    "check": "vp check && vp run -F './packages/*' check && vp run -F './examples/*' check && tsc --noEmit -p scripts/tsconfig.json",
+    "test": "vp run -F './packages/*' test && vp run -F './examples/*' test",
+    "build": "vp run -F './packages/*' build && vp run -F './examples/*' build",
     "ready": "bun run check && bun run test && bun run build"
   },
   "devDependencies": {
@@ -33,20 +34,47 @@
   "overrides": {
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
-    "vite": "catalog:"
+    "vite": "catalog:",
+    "vitest": "catalog:"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"
   },
   "packageManager": "bun@1.3.14",
   "catalog": {
+    "@base-ui/react": "1.6.0",
+    "@effect/atom-react": "4.0.0-beta.102",
     "@effect/platform-node": "4.0.0-beta.102",
     "@effect/tsgo": "0.24.3",
+    "@effect/vitest": "4.0.0-beta.102",
+    "@fontsource-variable/ibm-plex-sans": "5.3.0",
+    "@fontsource/ibm-plex-mono": "5.3.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@tanstack/react-router": "1.170.18",
+    "@tanstack/react-start": "1.168.33",
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.3",
+    "@types/scheduler": "0.26.0",
     "@types/node": "26.1.2",
+    "@vitejs/plugin-react": "6.0.4",
+    "ai": "7.0.42",
+    "class-variance-authority": "0.7.1",
+    "clsx": "2.1.1",
     "effect": "4.0.0-beta.102",
+    "lucide-react": "1.27.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "scheduler": "0.27.0",
+    "shadcn": "4.16.0",
+    "streamdown": "2.5.0",
+    "tailwind-merge": "3.6.0",
+    "tailwindcss": "4.3.3",
+    "tw-animate-css": "1.4.0",
     "tsx": "4.23.1",
     "typescript": "7.0.2",
+    "use-stick-to-bottom": "1.1.6",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6",
-    "vite-plus": "0.2.6"
+    "vite-plus": "0.2.6",
+    "vitest": "4.1.10"
   }
 }

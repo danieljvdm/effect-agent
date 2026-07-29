@@ -6,16 +6,22 @@ Use these terms consistently in code, specifications, telemetry, and user docume
 
 **Agent Definition**  
 An immutable, schema-defined description of an agent: identity, input and output schemas,
-instructions, model selection, toolkit, and execution policy. It contains no mutable conversation
-state and owns no live resources.
+instructions, toolkit, and execution policy. It contains no mutable conversation state, owns no
+live resources, and is not executable until paired with a Model.
+
+**Agent Binding**
+
+An immutable pairing of one Agent Definition with one Effect AI Model. The Binding makes model
+selection explicit without hiding the Model Layer's requirements and owns no acquired provider
+resources.
 
 **Agent Runtime**  
-The Effect module that interprets an Agent Definition. The ephemeral runtime executes immediately;
-the durable runtime admits a Submission and coordinates attempts until settlement.
+The Effect module that interprets an Agent Binding. The ephemeral runtime executes immediately;
+the durable runtime admits a Submission and coordinates Attempts until Settlement.
 
 **Run**  
-One logical request to execute an Agent Definition against a Conversation. In ephemeral mode the
-Run lives for one Scope. In durable mode the logical Run may span multiple process Attempts.
+One logical request to execute an Agent Binding against a Conversation. In ephemeral mode the Run
+lives for one Scope. In durable mode the logical Run may span multiple process Attempts.
 
 **Attempt**  
 One ownership period in which a worker tries to advance a durable Submission. An interruption,

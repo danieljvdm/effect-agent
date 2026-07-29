@@ -17,8 +17,8 @@ types. It uses these Effect AI primitives directly:
 - `Toolkit`;
 - `Chat` where its state model fits.
 
-An Agent's Model is an Effect AI `Model`, which is also a Layer providing
-`LanguageModel`, `Model.ProviderName`, and `Model.ModelName`.
+An Agent Binding's Model is an Effect AI `Model`, which is also a Layer providing `LanguageModel`,
+`Model.ProviderName`, and `Model.ModelName`.
 
 Provider integration is supplied directly by Effect AI provider packages and their `Model` Layers.
 
@@ -79,13 +79,15 @@ an undocumented provider SDK shape.
 
 ## 4. Model selection
 
-The initial Agent Definition contains a concrete Effect AI Model.
+An Agent Definition is model-agnostic. A separate immutable Agent Binding selects one concrete
+Effect AI Model.
 
 ```ts
-const TriageAgent = Agent.make("triage", {
-  model: AnthropicClaude,
+const TriageDefinition = Agent.define("triage", {
   // ...
 });
+
+const TriageAgent = Agent.withModel(TriageDefinition, AnthropicClaude);
 ```
 
 Applications that need dynamic routing can construct or select a Model through an
@@ -96,10 +98,13 @@ class AgentModel extends Context.Tag("@app/AgentModel")<
   AgentModel,
   Model.Model<any, LanguageModel.LanguageModel, any>
 >() {}
+
+const makeTriageAgent = Effect.map(AgentModel, (model) => Agent.withModel(TriageDefinition, model));
 ```
 
 The framework does not ship a global mutable provider registry. Tenant policy,
-availability, cost, and data residency are application Effects and Layers.
+availability, cost, and data residency are application Effects and Layers. Dynamic selection
+occurs before creating the Binding; the runtime never silently chooses an ambient Model.
 
 ## 5. Capability checks
 
@@ -198,3 +203,5 @@ LanguageModel.
 - **MODEL-007:** Retry classification and Agent retry policy remain separate.
 - **MODEL-008:** Provider integration uses Effect AI provider `Model` Layers directly.
 - **MODEL-009:** Every Effect upgrade passes compile-time and semantic compatibility tests.
+- **MODEL-010:** Model selection is explicit in an Agent Binding, and the runtime rejects unbound
+  Agent Definitions.

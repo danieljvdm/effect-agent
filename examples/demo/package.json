@@ -1,0 +1,49 @@
+{
+  "name": "@effect-agent/example-demo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev --host 127.0.0.1 --port 4173",
+    "check": "tsc --noEmit",
+    "test": "vp test --passWithNoTests",
+    "build": "vp build",
+    "start": "vp preview --host 127.0.0.1 --port 4173"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
+    "@effect-agent/testing": "workspace:*",
+    "@effect/atom-react": "catalog:",
+    "@fontsource-variable/ibm-plex-sans": "catalog:",
+    "@fontsource/ibm-plex-mono": "catalog:",
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "ai": "catalog:",
+    "class-variance-authority": "catalog:",
+    "clsx": "catalog:",
+    "effect": "catalog:",
+    "lucide-react": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "scheduler": "catalog:",
+    "streamdown": "catalog:",
+    "tailwind-merge": "catalog:",
+    "tw-animate-css": "catalog:",
+    "use-stick-to-bottom": "catalog:"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@types/scheduler": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "shadcn": "catalog:",
+    "tailwindcss": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

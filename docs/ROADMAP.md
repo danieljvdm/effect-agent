@@ -2,8 +2,8 @@
 
 Status: **Draft**  
 This roadmap is ordered by what must be proven first, not by calendar estimate.
-The repository is package-only: it has no `apps/` workspace, and each package is created only when
-its first phase begins.
+The repository has no `apps/` workspace. Framework packages are created only when their first
+phase begins; runnable consumer benches live under `examples/*` as leaf workspaces.
 
 Implementation work follows the synced Effect skills. Each work item names the focused reference
 it needs: schema-first modeling, functions/errors, services/Layers, logging, testing, HTTP
@@ -20,8 +20,9 @@ replacing it with an unrelated demo.
 - The ordinary green suite uses a scripted Effect AI `LanguageModel` Layer and deterministic
   travel-service Layers. It requires no credentials or network.
 - Selected live AI models and travel suppliers are opt-in Layer substitutions and smoke tests.
-- Executable slices live in package-local tests or fixtures owned by the phase under test. The
-  reference application does not create an `apps/` workspace or a production package.
+- Executable evidence lives in the testing package and focused package tests. `examples/demo`
+  renders the same shared fixture as a browser bench without creating an `apps/` workspace or
+  production package.
 - Each slice names its deployment class and demonstrates only the claims unlocked by that phase.
 - The example remains cumulative: a phase exit includes all earlier Travel Planner behavior plus
   the newly introduced scenario.
@@ -30,7 +31,7 @@ replacing it with an unrelated demo.
 
 ### Deliverables
 
-- Vite+ `0.2.6` package-only monorepo using Bun `1.3.14`.
+- Vite+ `0.2.6` monorepo using Bun `1.3.14`, with phase-gated packages and a leaf example bench.
 - Root dependency catalog, frozen lockfile CI, Effect-aware TypeScript, and Vite+ task graph.
 - `@effect-agent/core`, `engine`, and `testing` package shells.
 - Exact Effect v4 pin and matching local canonical Effect source checkout.
@@ -45,6 +46,8 @@ replacing it with an unrelated demo.
 - Scripted Effect AI LanguageModel Layer.
 - First Travel Planner slice: one two-Turn, read-only availability search producing a
   Schema-decoded itinerary with deterministic model and travel-service Layers.
+- TanStack Start browser bench using Effect Atom, Tailwind, shadcn/Base UI, and Vercel AI Elements
+  to expose chat input, Tool state, semantic events, and structured output.
 - Interruption tests proving all Scope finalizers run.
 
 ### Exit gates
@@ -59,13 +62,14 @@ replacing it with an unrelated demo.
 - Reference-project research is captured as attributed source material and translated into native
   Effect Agent requirements.
 - `bun run ready` passes from a fresh frozen-lockfile install.
-- The workspace contains no application, React, Wrangler, or Cloudflare runtime scaffold.
+- React stays confined to the leaf example workspace; no `apps/`, Wrangler, hosted, or Cloudflare
+  runtime scaffold exists.
 
 ## Phase 1 — Ephemeral interpreter
 
 ### Deliverables
 
-- Immutable `Agent.make`.
+- Immutable model-agnostic `Agent.define` and explicit `Agent.withModel` Binding.
 - Effect Schema Agent input/output.
 - Effect AI Toolkits and handler Layers.
 - Effect AI Prompt construction and Response stream reduction.

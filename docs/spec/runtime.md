@@ -8,8 +8,8 @@ Related decisions: D-004, D-006, D-007, D-008, D-011, D-012
 The framework has one semantic Run interpreter. Convenience methods reduce the same event stream:
 
 ```ts
-AgentRuntime.stream(agent, input): Stream<RunEvent, RunFailure, R>
-AgentRuntime.run(agent, input): Effect<AgentResult, RunFailure, R | Scope>
+AgentRuntime.stream(agentBinding, input): Stream<RunEvent, RunFailure, R>
+AgentRuntime.run(agentBinding, input): Effect<AgentResult, RunFailure, R | Scope>
 ```
 
 `run` MUST NOT implement a separate loop. Golden tests compare its result to reducing `stream`.
@@ -27,7 +27,7 @@ Durable lifecycle adds Submission and Attempt state described in the durability 
 One Run owns:
 
 - decoded input;
-- Agent Definition and version digest;
+- Agent Binding, its Agent Definition, and version digest;
 - Conversation projection;
 - current Turn state;
 - cumulative budgets and usage;

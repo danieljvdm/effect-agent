@@ -2,10 +2,11 @@
 
 Status: **Accepted for private development**
 
-This repository is a package-only Vite+ monorepo derived from
+This repository is a Vite+ monorepo derived from
 [`danieljvdm/vp-effect-cf-template`](https://github.com/danieljvdm/vp-effect-cf-template).
-The template's browser and Cloudflare applications are intentionally absent. Cloudflare support
-will be introduced later as library packages, not as an application scaffold.
+Its hosted and Cloudflare applications are intentionally absent. A local browser test bench lives
+under `examples/demo`; Cloudflare support will be introduced later as library packages, not as an
+application scaffold.
 
 ## Source-of-truth versions
 
@@ -15,8 +16,10 @@ The root `package.json` is the only version source for shared dependencies.
 | ----------------------- | -----------------: | --------------------------------------------------------------------------------- |
 | Bun                     |           `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
 | Vite+                   |            `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
+| Vitest                  |           `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
 | Effect                  |   `4.0.0-beta.102` | Runtime, Schema, services, and Effect AI                                          |
 | `@effect/platform-node` |   `4.0.0-beta.102` | Node services used by repository scripts                                          |
+| `@effect/vitest`        |   `4.0.0-beta.102` | Effect-aware test execution and scoped Layer composition                          |
 | Node.js                 | `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
 | TypeScript              |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
 | `@effect/tsgo`          |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
@@ -28,7 +31,9 @@ Effect version. The Bun lockfile is committed and CI installs it with `--frozen-
 
 Root overrides align the contributor skills CLI with the repository's Effect and
 `@effect/platform-node` versions. Framework packages, repository scripts, and contributor tooling
-therefore install one Effect runtime.
+therefore install one Effect runtime. The Vitest override matches the version bundled by Vite+ so
+`@effect/vitest` and `vite-plus/test` resolve the same runner, assertion, and test context state.
+Vitest remains supplied by Vite+ rather than becoming a separate workspace dependency.
 
 ## Current workspace
 
@@ -39,6 +44,8 @@ packages/
   core/     Phase 0 domain and authoring package
   engine/   Phase 0 ephemeral interpreter package
   testing/  Phase 0 scripted model and conformance test kit
+examples/
+  demo/     Leaf TanStack Start browser bench for the cumulative Travel Planner
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.
@@ -50,27 +57,27 @@ core <- engine <- testing
   ^__________________|
 ```
 
-`testing` is a leaf used by tests and examples. Production packages must never depend on it.
-Additional package directories are created only when their roadmap phase starts. There is no
-`apps/` workspace. Compiling examples live in package-local tests or fixtures. The progressive
-Travel Planner is distributed across those fixtures as each phase begins; it does not justify an
-example package or platform scaffold ahead of the roadmap.
+`testing` is an outward test kit used by tests and examples. Production packages must never depend
+on it. Additional framework package directories are created only when their roadmap phase starts.
+There is no `apps/` workspace. `examples/*` are runnable, private leaf consumers: framework
+packages never import them, and they add no deployment or durability claim.
 
 ## Commands
 
 Run commands from the repository root:
 
-| Command                         | Meaning                                                                        |
-| ------------------------------- | ------------------------------------------------------------------------------ |
-| `bun install`                   | Install dependencies and run repository setup                                  |
-| `bun run check`                 | Run Vite+ format/lint/type checks, package type checks, and script type checks |
-| `bun run test`                  | Run package test tasks in dependency order                                     |
-| `bun run build`                 | Build library packages with `vp pack`                                          |
-| `bun run ready`                 | Run check, test, and build; this is the local and CI handoff gate              |
-| `bun run format:write`          | Apply repository formatting                                                    |
-| `bun run sync:effect`           | Align the local Effect source checkout with the catalog pin                    |
-| `bun run sync:agent-skills`     | Refresh checked-in contributor skills                                          |
-| `bun run sync:agent-skills:dry` | Preview contributor skill changes                                              |
+| Command                                       | Meaning                                                                        |
+| --------------------------------------------- | ------------------------------------------------------------------------------ |
+| `bun install`                                 | Install dependencies and run repository setup                                  |
+| `bun run check`                               | Run Vite+ format/lint/type checks, package type checks, and script type checks |
+| `bun run test`                                | Run package and example test tasks in dependency order                         |
+| `bun run build`                               | Build library packages and runnable examples                                   |
+| `bun --filter @effect-agent/example-demo dev` | Run the Phase 0 browser bench on port 4173                                     |
+| `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
+| `bun run format:write`                        | Apply repository formatting                                                    |
+| `bun run sync:effect`                         | Align the local Effect source checkout with the catalog pin                    |
+| `bun run sync:agent-skills`                   | Refresh checked-in contributor skills                                          |
+| `bun run sync:agent-skills:dry`               | Preview contributor skill changes                                              |
 
 Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
 package manifest so Vite+ can order and cache them from the actual workspace dependency graph.

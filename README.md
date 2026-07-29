@@ -11,9 +11,10 @@ The working product thesis is:
 > produces a `Stream`; its expected failures remain in `E`; its dependencies remain in `R`; every
 > resource belongs to a `Scope`.
 
-This repository contains the product and technical specification plus the Phase 0 package
-workspace for an AI-driven implementation project. The package shells and toolchain are live; the
-framework implementation has not started yet.
+This repository contains the product and technical specification plus the completed Phase 0
+design proof. The workspace includes schema-first Agent contracts, one shared `run`/`stream`
+interpreter, a deterministic Effect AI model Layer, the offline two-Turn Travel Planner reference
+slice, and a browser test bench under `examples/demo`.
 
 ## Status
 
@@ -21,8 +22,10 @@ framework implementation has not started yet.
 - Distribution status: **Private internal project**
 - Target Effect line: **Effect v4**, pinned exactly during pre-1.0 development
 - Working package scope: `@effect-agent/*`
-- Repository shape: **package-only Vite+ monorepo**, with Bun workspaces and no `apps/`
+- Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
+  benches in `examples/*`, and no `apps/`
 - Current packages: `core`, `engine`, and `testing`
+- Current implementation milestone: **Phase 0 complete**
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral single-agent execution
 - Durable runtime: planned, but it must pass the durability gates before the product may claim
@@ -70,7 +73,8 @@ choices, rationale, and invariants:
 - use Effect AI Tool, Toolkit, LanguageModel, Prompt, Response, and Model directly;
 - separate the canonical Conversation Log from the operational Submission Ledger;
 - represent uncertain external effects instead of blindly replaying them;
-- use a phase-gated, package-only Vite+ monorepo;
+- keep framework packages phase-gated and runnable consumer benches in leaf `examples/*`
+  workspaces;
 - use bounded-parallel Tool execution with deterministic result order;
 - deliver steering, follow-up, and joined input only at safe Turn seams.
 
@@ -78,8 +82,9 @@ choices, rationale, and invariants:
 
 ```text
 Application Agent Definitions
-  Effect AI Tool + Toolkit + Model
-       Effect + Schema + Layer
+   + explicit Model Bindings
+ Effect AI Tool + Toolkit + Model
+      Effect + Schema + Layer
                   |
         @effect-agent/core
                   |

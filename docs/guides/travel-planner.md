@@ -1,17 +1,17 @@
 # Progressive Travel Planner Reference Application
 
-Status: Design target; implementation advances with the roadmap  
+Status: Phase 0 offline design proof implemented; later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
 
 Travel Planner is the cumulative Reference Application for Effect Agent. It gives every roadmap
 phase one recognizable application scenario and makes the framework's growth visible without
-creating a separate demo architecture.
+creating a second demo runtime.
 
 The example is called **Travel Planner** rather than “travel agent” when referring to the
-application. Its `travel-planner` Agent Definition is still an Agent in the framework's domain
-language.
+application. Its model-agnostic `travel-planner` Agent Definition is paired with each scripted or
+live Effect AI Model through an explicit Agent Binding.
 
 Travel Planner must:
 
@@ -20,14 +20,14 @@ Travel Planner must:
 - grow cumulatively, retaining all earlier scenarios as later phases add behavior;
 - expose typed application services and failures in `R` and `E`;
 - use Effect Schema for model, Tool, wire, and persisted values;
-- replace model, travel-service, storage, and platform implementations through Layers;
+- replace model Bindings and travel-service, storage, and platform implementations through Layers;
 - make persistence, accepted-work durability, and external side-effect guarantees visibly
   distinct;
 - remain executable evidence, not only narrative documentation.
 
 It is not:
 
-- an `apps/` workspace, UI, hosted service, or deployable product shell;
+- an `apps/` workspace, hosted service, or deployable product shell;
 - a reason to create a package before its roadmap phase;
 - a wrapper around Effect AI provider Models;
 - a promise that airline, hotel, payment, or booking APIs execute exactly once;
@@ -78,7 +78,8 @@ needed, use opaque handles resolved inside the narrow authorized service.
   configuration Layers. It is an opt-in smoke profile and never a normal correctness dependency.
 
 The framework does not introduce `MockModelDriver`, `TravelModelProvider`, or a provider registry.
-Both profiles meet the same Effect AI boundary.
+Both profiles bind the same Agent Definition through `Agent.withModel` and meet the same Effect AI
+boundary.
 
 ### Travel-service profiles
 
@@ -121,27 +122,38 @@ P3 deliberately persists planning history without promising that unobserved work
 a crash. P4 proves durable accepted planning work before P5 introduces external booking recovery.
 This ordering keeps a visually compelling example from overstating the framework's guarantees.
 
-## 5. Package-local implementation shape
+## 5. Shared fixture and browser bench
 
 The cumulative consumer fixture belongs in the leaf testing package:
 
 ```text
 packages/testing/
-  test/
+  src/
     fixtures/
       travel-planner/
         definition.ts
         deterministic-layers.ts
         scenarios.ts
+        index.ts
+  test/
     travel-planner.test.ts
     travel-planner.compile.test.ts
+examples/
+  demo/
+    src/
+      demo/state.ts
+      components/
 ```
 
-This path is illustrative until the first public contracts exist. It is created only when the P0
-Travel Planner work item begins. The definition imports public `@effect-agent/core` and
-`@effect-agent/engine` APIs and Effect AI primitives directly. The testing package may add
-dependencies on phase packages as those packages are created because it remains a leaf; production
-packages must never import `@effect-agent/testing`.
+The definition imports public `@effect-agent/core` APIs and Effect AI primitives directly. The
+testing package may add dependencies on phase packages as those packages are created because it
+remains outward of production code; production packages must never import
+`@effect-agent/testing`.
+
+`examples/demo` imports the same public fixture exports used by the tests. Its Effect Atom action
+runs `AgentRuntime.stream`, while the TanStack Start UI exposes chat input, the Tool result,
+semantic Run Events, and Schema-decoded output. The scripted Model remains the default so this
+surface is deterministic and credential-free.
 
 Focused tests stay with their owner:
 
@@ -155,8 +167,9 @@ Those suites may reproduce the same Travel Planner scenario through public contr
 domain or record Schemas are not moved outward merely to reduce fixture duplication. One
 designated integrator owns changes to public Agent and canonical record Schemas.
 
-No phase adds `apps/travel-planner`, an example workspace package, a browser UI, a Worker
-entrypoint, or production imports from the testing package.
+No phase adds `apps/travel-planner`, a Worker entrypoint, or production imports from the testing
+package. The browser bench remains a private leaf example and does not become a host or deployment
+contract.
 
 ## 6. Verification profiles
 

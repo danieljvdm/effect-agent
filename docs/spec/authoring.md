@@ -17,9 +17,10 @@ Agent authors use ordinary Effect vocabulary:
 There are no render hooks, module directives, mutable global registries, parallel
 validation libraries, or framework-owned copies of Effect AI primitives.
 
-## 2. Agent Definition
+## 2. Agent Definition and Binding
 
-An Agent Definition is immutable data interpreted by the ephemeral or durable
+An Agent Definition is immutable, model-agnostic data. An Agent Binding explicitly pairs one
+Definition with one Effect AI Model and is the value interpreted by the ephemeral or durable
 runtime.
 
 ```ts
@@ -27,11 +28,10 @@ import { Effect, Schema } from "effect";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";
 import { Agent, AgentPolicy } from "@effect-agent/core";
 
-const Triage = Agent.make("triage", {
+const TriageDefinition = Agent.define("triage", {
   input: TriageInput,
   output: TriageOutput,
   instructions: ({ repo, issueNumber }) => Effect.succeed(`Triage ${repo}#${issueNumber}.`),
-  model: AnthropicClaude,
   toolkit: TriageToolkit,
   policy: AgentPolicy.make({
     maxTurns: 12,
@@ -40,10 +40,13 @@ const Triage = Agent.make("triage", {
     toolConcurrency: 4,
   }),
 });
+
+const Triage = Agent.withModel(TriageDefinition, AnthropicClaude);
 ```
 
 `AnthropicClaude` is an Effect AI `Model`, meaning it is also a Layer that provides
-`LanguageModel` plus provider/model metadata.
+`LanguageModel` plus provider/model metadata. Its Layer requirements remain visible in the bound
+Agent's Run requirements.
 
 The stable Agent ID is part of durable identity. During private development,
 renaming it creates a new identity; no stored-data migration is promised.
@@ -53,9 +56,10 @@ renaming it creates a new identity; no stored-data migration is promised.
 - stable ID;
 - input and output Schemas;
 - instruction source;
-- Effect AI Model;
 - Effect AI Toolkit;
 - finite Agent Policy.
+
+An Agent Binding additionally requires one Effect AI Model. An unbound Definition is not runnable.
 
 ### Optional fields
 
@@ -273,8 +277,9 @@ The framework provides helpers only for Agent-specific types:
 ```ts
 type TriageRequirements = Agent.Requirements<typeof Triage>;
 type TriageFailure = Agent.Failure<typeof Triage>;
-type TriageInput = Agent.Input<typeof Triage>;
-type TriageOutput = Agent.Output<typeof Triage>;
+type TriageInput = Agent.Input<typeof TriageDefinition>;
+type TriageOutput = Agent.Output<typeof TriageDefinition>;
+type TriageDefinitionRequirements = Agent.DefinitionRequirements<typeof TriageDefinition>;
 ```
 
 Type tests verify that:
@@ -283,6 +288,8 @@ Type tests verify that:
 - Tool and instruction failures are not widened;
 - Effect AI Toolkit handler signatures are preserved;
 - output decoding requirements are visible;
+- Model Layer requirements appear only after `Agent.withModel`;
+- unbound Definitions are rejected by `AgentRuntime`;
 - error messages remain readable.
 
 ## 13. Requirements
@@ -299,3 +306,4 @@ Type tests verify that:
 - **AUTH-010:** No authoring hook depends on module-global render state.
 - **AUTH-011:** The framework defines no competing Tool, Toolkit, LanguageModel, Prompt, Response,
   or Model type.
+- **AUTH-012:** Agent Definitions are model-agnostic and only explicit Agent Bindings are runnable.

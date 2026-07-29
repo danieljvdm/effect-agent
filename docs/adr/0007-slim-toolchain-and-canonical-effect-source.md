@@ -23,7 +23,9 @@ skills CLI's beta.90 runtime.
 - Keep only `@effect-agent/core`, `@effect-agent/engine`, and `@effect-agent/testing` in Phase 0.
 - Put shared compiler options in root `tsconfig.base.json`.
 - Install `@effect/tsgo` once at the root and invoke it directly from post-install.
-- Use Vite+'s bundled test runner rather than declaring Vitest separately.
+- Use Vite+'s bundled test runner rather than declaring Vitest separately. Pin its bundled Vitest
+  version through the root override when a test integration such as `@effect/vitest` peers on
+  Vitest, so every test API resolves the same runner instance.
 - Keep the Vite core alias because Bun needs a direct peer provider for the Vite+ toolchain.
 - Pin the current Effect v4 beta and `@effect/platform-node` to one exact aligned release.
 - Override the contributor skills CLI's older Effect pins so repository tooling uses the same

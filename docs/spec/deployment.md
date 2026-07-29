@@ -245,7 +245,8 @@ Current platform references:
 
 ## 12. Packaging and release
 
-- the repository is a package-only Vite+ monorepo with no application workspace;
+- framework and platform code live in phase-gated `packages/*`; private runnable benches may live
+  in leaf `examples/*`, and there is no deployable `apps/` workspace;
 - the root Bun catalog pins the exact Effect v4 version before 1.0;
 - workspace manifests consume that version through `catalog:` and may not introduce another copy;
 - `platform-node` and `platform-cloudflare` are Layer-assembly libraries, not application

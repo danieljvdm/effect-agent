@@ -227,7 +227,7 @@ The first executable batch should be:
 2. branded IDs and core error/event Schemas using the schema-first modeling reference;
 3. direct Effect AI Tool, Toolkit, Handler Layer composition using the services/Layers reference
    and type tests;
-4. `Agent.make`, policies, and input/output Schema using schema-derived types;
+4. `Agent.define`, `Agent.withModel`, policies, and input/output Schema using schema-derived types;
 5. scripted Effect AI LanguageModel Layer using explicit Effect service requirements;
 6. pure Turn state and named transition functions using `Effect.fn` only where transitions are
    effectful;

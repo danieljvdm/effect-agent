@@ -1,0 +1,170 @@
+import type { Effect, Schema } from "effect";
+import { Schema as S } from "effect";
+import type { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+
+import type { AgentInputError, AgentOutputError } from "./errors.ts";
+import { AgentId } from "./identifiers.ts";
+import type { AgentPolicy } from "./policy.ts";
+
+/** Prompt input produced directly or by an Effect that preserves its failure and requirements. */
+export type InstructionResult<E = never, R = never> =
+  | Prompt.RawInput
+  | Effect.Effect<Prompt.RawInput, E, R>;
+
+/** Static prompt input or an input-dependent source evaluated once while preparing a run. */
+export type InstructionSource<Input, E = never, R = never> =
+  | Prompt.RawInput
+  | ((input: Input) => InstructionResult<E, R>);
+
+/** Accepts native Effect AI Models while excluding framework-specific model wrappers. */
+export type NativeModel<ModelValue> =
+  ModelValue extends Model.Model<infer _Provider, infer _Provides, infer _Requires>
+    ? ModelValue
+    : never;
+
+/** Immutable, model-agnostic schemas, behavior, tools, and bounds for an agent. */
+export interface Definition<
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  ToolkitValue extends Toolkit.Any,
+> {
+  /** Stable agent identity; changing it creates a distinct definition identity. */
+  readonly id: AgentId;
+  /** Canonical schema used to decode and encode run input. */
+  readonly input: InputSchema;
+  /** Canonical schema used to decode the final model output. */
+  readonly output: OutputSchema;
+  /** Instructions evaluated once while preparing each run. */
+  readonly instructions: Instructions;
+  /** Native Effect AI toolkit whose failures and requirements remain visible. */
+  readonly toolkit: ToolkitValue;
+  /** Finite execution bounds enforced by the runtime. */
+  readonly policy: AgentPolicy;
+  readonly description?: string | undefined;
+  readonly metadata?: Readonly<Record<string, string>> | undefined;
+}
+
+/** Options for a model-agnostic agent definition. */
+export interface DefinitionOptions<
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions extends InstructionSource<InputSchema["Type"], any, any>,
+  ToolkitValue extends Toolkit.Any,
+> {
+  readonly input: InputSchema;
+  readonly output: OutputSchema;
+  readonly instructions: Instructions;
+  readonly toolkit: ToolkitValue;
+  readonly policy: AgentPolicy;
+  readonly description?: string | undefined;
+  readonly metadata?: Readonly<Record<string, string>> | undefined;
+}
+
+type AnyDefinitionShape = Definition<
+  Schema.Top,
+  Schema.Top,
+  InstructionSource<any, any, any>,
+  Toolkit.Toolkit<any>
+>;
+
+/** Immutable pairing of an agent definition with the explicit Effect AI Model used to run it. */
+export interface Binding<DefinitionValue extends AnyDefinitionShape, ModelValue> {
+  readonly definition: DefinitionValue;
+  readonly model: NativeModel<ModelValue>;
+}
+
+type InstructionEffect<Instructions, Input> = Instructions extends (input: Input) => infer Result
+  ? Result
+  : Instructions;
+
+type EffectError<Value> = Value extends Effect.Effect<any, infer Error, any> ? Error : never;
+
+type EffectServices<Value> =
+  Value extends Effect.Effect<any, any, infer Services> ? Services : never;
+
+type ModelServices<Value> = Value extends Model.Model<any, any, infer Services> ? Services : never;
+
+/** Constructors and type projections for definitions and runnable model bindings. */
+export namespace Agent {
+  /** Type-erased definition used at generic framework boundaries. */
+  export type AnyDefinition = AnyDefinitionShape;
+
+  /** Type-erased runnable binding used at generic framework boundaries. */
+  export type Any = Binding<AnyDefinition, any>;
+
+  type DefinitionOf<AgentValue extends AnyDefinition | Any> =
+    AgentValue extends Binding<infer DefinitionValue, any> ? DefinitionValue : AgentValue;
+
+  /** Decoded input type of a definition or binding. */
+  export type Input<AgentValue extends AnyDefinition | Any> =
+    DefinitionOf<AgentValue>["input"]["Type"];
+
+  /** Decoded output type of a definition or binding. */
+  export type Output<AgentValue extends AnyDefinition | Any> =
+    DefinitionOf<AgentValue>["output"]["Type"];
+
+  /** Input Schema carried by a definition or binding. */
+  export type InputSchema<AgentValue extends AnyDefinition | Any> =
+    DefinitionOf<AgentValue>["input"];
+
+  /** Output Schema carried by a definition or binding. */
+  export type OutputSchema<AgentValue extends AnyDefinition | Any> =
+    DefinitionOf<AgentValue>["output"];
+
+  /** Effect AI tool map carried by a definition or binding. */
+  export type Tools<AgentValue extends AnyDefinition | Any> = Toolkit.Tools<
+    DefinitionOf<AgentValue>["toolkit"]
+  >;
+
+  /** Union of the tools available to a runnable binding. */
+  export type ToolUnion<AgentValue extends Any> = Tools<AgentValue>[keyof Tools<AgentValue>];
+
+  /** Instruction, tool-handler, and Schema services required before a Model is bound. */
+  export type DefinitionRequirements<DefinitionValue extends AnyDefinition> =
+    | EffectServices<InstructionEffect<DefinitionValue["instructions"], Input<DefinitionValue>>>
+    | Tool.HandlersFor<Tools<DefinitionValue>>
+    | Tool.HandlerServices<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>
+    | DefinitionValue["input"]["DecodingServices"]
+    | DefinitionValue["input"]["EncodingServices"]
+    | DefinitionValue["output"]["DecodingServices"];
+
+  /** All services required by a runnable binding, including its Model Layer requirements. */
+  export type Requirements<AgentValue extends Any> =
+    | DefinitionRequirements<AgentValue["definition"]>
+    | ModelServices<AgentValue["model"]>;
+
+  /** Failures inferred from instructions, tools, Effect AI, and input/output decoding. */
+  export type Failure<AgentValue extends AnyDefinition | Any> =
+    | EffectError<InstructionEffect<DefinitionOf<AgentValue>["instructions"], Input<AgentValue>>>
+    | Tool.HandlerError<Tools<AgentValue>[keyof Tools<AgentValue>]>
+    | AiError.AiError
+    | AgentInputError
+    | AgentOutputError;
+
+  /** Validate an agent ID and return a shallowly frozen, model-agnostic definition. */
+  export const define = <
+    InputSchema extends Schema.Top,
+    OutputSchema extends Schema.Top,
+    Instructions extends InstructionSource<InputSchema["Type"], any, any>,
+    ToolkitValue extends Toolkit.Any,
+  >(
+    id: string,
+    options: DefinitionOptions<InputSchema, OutputSchema, Instructions, ToolkitValue>,
+  ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue> =>
+    Object.freeze({
+      ...options,
+      id: S.decodeSync(AgentId)(id),
+      metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
+    });
+
+  /** Bind a definition to a Model without acquiring or hiding the Model Layer's requirements. */
+  export const withModel = <DefinitionValue extends AnyDefinition, ModelValue>(
+    definition: DefinitionValue,
+    model: NativeModel<ModelValue>,
+  ): Binding<DefinitionValue, ModelValue> =>
+    Object.freeze({
+      definition,
+      model,
+    });
+}

@@ -13,6 +13,7 @@ The records below reflect explicit owner decisions.
 | [ADR-0006](0006-package-only-vite-plus-monorepo.md)            | Use a phase-gated, package-only Vite+ monorepo                      |
 | [ADR-0007](0007-slim-toolchain-and-canonical-effect-source.md) | Slim the toolchain and use the canonical Effect source              |
 | [ADR-0008](0008-turn-boundary-input-delivery.md)               | Deliver steering, follow-up, and joined input only at safe seams    |
+| [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces           |
 
 ## Status transitions
 

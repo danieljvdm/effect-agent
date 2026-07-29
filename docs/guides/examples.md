@@ -1,6 +1,6 @@
 # Target API examples
 
-Status: Design target; not implemented yet
+Status: Phase 0 authoring and runtime subset implemented; later-phase examples remain design targets
 
 The framework-specific API is still a design target. The Effect AI APIs shown here
 come directly from the pinned Effect v4 package and must not be wrapped.
@@ -76,7 +76,7 @@ const TriageToolsLive = TriageTools.toLayer({
     }),
 });
 
-export const TriageAgent = Agent.make("github-triage", {
+export const TriageDefinition = Agent.define("github-triage", {
   input: TriageInput,
   output: TriageOutput,
   instructions: ({ owner, repo, issueNumber }) =>
@@ -85,7 +85,6 @@ export const TriageAgent = Agent.make("github-triage", {
       Inspect the issue, determine severity, and explain the next action.
       Escalate security-related issues privately and immediately.
     `),
-  model: ClaudeSonnet,
   toolkit: TriageTools,
   policy: AgentPolicy.make({
     maxTurns: 6,
@@ -94,10 +93,13 @@ export const TriageAgent = Agent.make("github-triage", {
     toolConcurrency: 4,
   }),
 });
+
+export const TriageAgent = Agent.withModel(TriageDefinition, ClaudeSonnet);
 ```
 
-`Tool`, `Toolkit`, and `ClaudeSonnet` are Effect AI values. `TriageAgent` adds only
-the Agent-loop configuration Effect AI does not own.
+`Tool`, `Toolkit`, and `ClaudeSonnet` are Effect AI values. `TriageDefinition` contains only the
+Agent-loop configuration Effect AI does not own; `TriageAgent` is its explicit executable Model
+Binding.
 
 ## 2. Provide application services and run
 
@@ -134,7 +136,7 @@ const program = AgentRuntime.run(TriageAgent, {
 );
 ```
 
-The runtime uses the Effect AI `Model` stored in the Agent Definition directly.
+The runtime uses the Effect AI `Model` stored in the Agent Binding directly.
 
 ## 3. Stream progress
 

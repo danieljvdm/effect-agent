@@ -1,0 +1,72 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/ibm-plex-sans";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+
+@theme inline {
+  --font-sans: "IBM Plex Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+}
+
+:root {
+  --background: oklch(0.985 0.002 85);
+  --foreground: oklch(0.19 0.008 75);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.19 0.008 75);
+  --primary: oklch(0.22 0.01 75);
+  --primary-foreground: oklch(0.985 0.002 85);
+  --secondary: oklch(0.95 0.004 80);
+  --secondary-foreground: oklch(0.22 0.01 75);
+  --muted: oklch(0.958 0.003 80);
+  --muted-foreground: oklch(0.5 0.012 75);
+  --destructive: oklch(0.56 0.2 28);
+  --border: oklch(0.885 0.006 80);
+  --input: oklch(0.885 0.006 80);
+  --ring: oklch(0.63 0.02 75);
+  --radius: 0.45rem;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply bg-background font-sans text-foreground antialiased;
+  }
+
+  body {
+    @apply m-0 min-w-80 bg-background text-foreground;
+  }
+
+  button {
+    @apply cursor-pointer;
+  }
+
+  button:disabled {
+    @apply cursor-default;
+  }
+
+  ::selection {
+    background: oklch(0.84 0.04 85);
+  }
+}
