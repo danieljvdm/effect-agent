@@ -8,7 +8,6 @@ import { Activity, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { RunEvent as RunEventSchema, type RunEvent } from "@effect-agent/core";
-import { phase0Trip, TravelPlan } from "@effect-agent/testing";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import {
   Conversation,
@@ -36,6 +35,8 @@ import {
   type DemoState,
   type DemoStatus,
 } from "@/demo/state";
+import { ChatOutput } from "@/demo/general-chat";
+import { projectToolTraces } from "@/demo/tool-trace";
 import { cn } from "@/lib/utils";
 
 const statusLabel: Record<DemoStatus, string> = {
@@ -110,26 +111,17 @@ function EventTrace({
   );
 }
 
-/** Interactive Phase 0 browser bench backed by the real deterministic runtime. */
+/** Interactive general chat bench backed by fixture or live Tool profiles. */
 export function DemoWorkbench() {
   const state = useAtomValue(demoStateAtom);
   const setState = useAtomSet(demoStateAtom);
   const run = useAtomSet(runDemoAtom);
-  const [prompt, setPrompt] = useState(initialDemoState.activeRequest);
+  const [prompt, setPrompt] = useState(initialDemoState.activeMessage);
   const [selectedSequence, setSelectedSequence] = useState<number | null>(null);
 
   const selectedEvent =
     state.events.find((event) => event.sequence === selectedSequence) ?? state.events.at(-1);
-  const toolSucceeded = state.events.find((event) => event._tag === "ToolCallSucceeded");
-  const toolFailed = state.events.find((event) => event._tag === "ToolCallFailed");
-  const toolStarted = state.events.some((event) => event._tag === "ToolCallStarted");
-  const toolState = toolFailed
-    ? "output-error"
-    : toolSucceeded
-      ? "output-available"
-      : toolStarted
-        ? "input-available"
-        : "input-streaming";
+  const toolTraces = useMemo(() => projectToolTraces(state.events), [state.events]);
   const chatStatus: ChatStatus =
     state.status === "running" ? "streaming" : state.status === "failed" ? "error" : "ready";
 
@@ -137,7 +129,7 @@ export function DemoWorkbench() {
     () =>
       state.output === null
         ? null
-        : JSON.stringify(Schema.encodeSync(TravelPlan)(state.output), null, 2),
+        : JSON.stringify(Schema.encodeSync(ChatOutput)(state.output), null, 2),
     [state.output],
   );
 
@@ -145,7 +137,7 @@ export function DemoWorkbench() {
     const mode = state.mode;
     run(Atom.Interrupt);
     setState({ ...initialDemoState, mode });
-    setPrompt(initialDemoState.activeRequest);
+    setPrompt(initialDemoState.activeMessage);
     setSelectedSequence(null);
   };
 
@@ -173,10 +165,12 @@ export function DemoWorkbench() {
               <Activity className="size-3.5" />
             </div>
             <div className="min-w-0">
-              <h1 className="truncate text-sm font-semibold">Effect Agent · Phase 0 bench</h1>
+              <h1 className="truncate text-sm font-semibold">Effect Agent · chat bench</h1>
               <p className="truncate font-mono text-[10px] text-muted-foreground">
-                Travel Planner /{" "}
-                {state.mode === "openai" ? "gpt-5.6-luna / RPC stream" : "scripted / in-browser"}
+                General chat /{" "}
+                {state.mode === "openai"
+                  ? "gpt-5.6-luna / live tools"
+                  : "scripted model / offline tools"}
               </p>
             </div>
           </div>
@@ -191,8 +185,8 @@ export function DemoWorkbench() {
               }}
               value={[state.mode]}
             >
-              <ToggleGroupItem value="deterministic">Fixture</ToggleGroupItem>
-              <ToggleGroupItem value="openai">OpenAI</ToggleGroupItem>
+              <ToggleGroupItem value="deterministic">Offline fixtures</ToggleGroupItem>
+              <ToggleGroupItem value="openai">OpenAI live</ToggleGroupItem>
             </ToggleGroup>
             <StatusMark status={state.status} />
             <Button onClick={reset} size="sm" type="button" variant="outline">
@@ -212,7 +206,7 @@ export function DemoWorkbench() {
                 Your text is Schema-validated agent input.
               </p>
             </div>
-            <Badge>{state.mode === "openai" ? "Live provider" : "Effect Atom"}</Badge>
+            <Badge>{state.mode === "openai" ? "Live tools" : "Deterministic"}</Badge>
           </CardHeader>
 
           <Conversation>
@@ -259,18 +253,18 @@ export function DemoWorkbench() {
             <PromptInput
               onSubmit={(event) => {
                 event.preventDefault();
-                const request = prompt.trim();
-                if (request.length > 0 && state.status !== "running") {
-                  run({ mode: state.mode, request });
+                const message = prompt.trim();
+                if (message.length > 0 && state.status !== "running") {
+                  run({ mode: state.mode, message });
                   setSelectedSequence(null);
                 }
               }}
             >
               <PromptInputTextarea
-                aria-label="Travel request"
+                aria-label="Chat message"
                 disabled={state.status === "running"}
                 onChange={(event) => setPrompt(event.currentTarget.value)}
-                placeholder="Ask the Travel Planner…"
+                placeholder="Ask anything…"
                 value={prompt}
               />
               <PromptInputFooter>
@@ -298,36 +292,38 @@ export function DemoWorkbench() {
               <div>
                 <h2 className="text-sm font-medium">Tool execution</h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">
-                  One bounded, read-only capability.
+                  {state.mode === "openai"
+                    ? "Real arithmetic and OpenAI-hosted research."
+                    : "Deterministic offline knowledge and arithmetic."}
                 </p>
               </div>
-              <Badge>1 permit</Badge>
+              <Badge>{state.mode === "openai" ? "6 call max" : "2 call max"}</Badge>
             </CardHeader>
-            <CardContent>
-              <Tool defaultOpen>
-                <ToolHeader name="search_availability" state={toolState} />
-                <ToolContent className="grid gap-3">
-                  <ToolData
-                    label="Parameters"
-                    value={{
-                      origin: phase0Trip.origin,
-                      destination: phase0Trip.destination,
-                      departOn: phase0Trip.departOn,
-                      nights: phase0Trip.nights,
-                      travelers: phase0Trip.travelers,
-                    }}
-                  />
-                  {toolSucceeded?._tag === "ToolCallSucceeded" ? (
-                    <ToolData label="Result" value={toolSucceeded.result} />
-                  ) : null}
-                  {toolFailed?._tag === "ToolCallFailed" ? (
-                    <ToolData
-                      label="Failure"
-                      value={{ errorTag: toolFailed.errorTag, message: toolFailed.message }}
+            <CardContent className="grid gap-2">
+              {toolTraces.length === 0 ? (
+                <p className="rounded-md border border-dashed border-border px-3 py-5 text-center font-mono text-[11px] text-muted-foreground">
+                  Tool Calls will appear here during a run.
+                </p>
+              ) : (
+                toolTraces.map((trace) => (
+                  <Tool defaultOpen key={trace.toolCallId}>
+                    <ToolHeader
+                      execution={trace.providerExecuted ? "provider" : "application"}
+                      name={trace.toolName}
+                      state={trace.state}
                     />
-                  ) : null}
-                </ToolContent>
-              </Tool>
+                    <ToolContent className="grid gap-3">
+                      <ToolData label="Parameters" value={trace.parameters} />
+                      {trace.result === undefined ? null : (
+                        <ToolData label="Result" value={trace.result} />
+                      )}
+                      {trace.failure === undefined ? null : (
+                        <ToolData label="Failure" value={trace.failure} />
+                      )}
+                    </ToolContent>
+                  </Tool>
+                ))
+              )}
             </CardContent>
           </Card>
 
@@ -357,7 +353,7 @@ export function DemoWorkbench() {
               <TabsContent value="output">
                 {encodedOutput === null ? (
                   <p className="p-6 font-mono text-[11px] leading-5 text-muted-foreground">
-                    The Schema-decoded `TravelPlan` will appear here after RunCompleted.
+                    The Schema-decoded `ChatOutput` will appear here after RunCompleted.
                   </p>
                 ) : (
                   <CodeBlock className="max-h-[29rem]" code={encodedOutput} />

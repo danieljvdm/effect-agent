@@ -3,7 +3,7 @@ import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { RunEvent } from "@effect-agent/core";
-import { OpenAiDemoRunRequest } from "./contracts";
+import { ChatInput } from "./general-chat";
 
 /** Sanitized expected failure from the remote ephemeral Run. */
 export class DemoRunRpcFailure extends Schema.TaggedErrorClass<DemoRunRpcFailure>()(
@@ -14,9 +14,9 @@ export class DemoRunRpcFailure extends Schema.TaggedErrorClass<DemoRunRpcFailure
   },
 ) {}
 
-/** Streams one server-bound Travel Planner Run as semantic events. */
+/** Streams one server-bound general chat Run as semantic events. */
 export class StreamDemoRun extends Rpc.make("StreamDemoRun", {
-  payload: OpenAiDemoRunRequest,
+  payload: ChatInput,
   success: RunEvent,
   error: DemoRunRpcFailure,
   stream: true,

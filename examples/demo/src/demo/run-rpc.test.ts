@@ -1,24 +1,13 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import { Deferred, Effect, Fiber, Stream } from "effect";
-import { Model } from "effect/unstable/ai";
 import * as RpcTest from "effect/unstable/rpc/RpcTest";
 
-import { Agent } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
-import {
-  phase0HappyPathTurns,
-  phase0Trip,
-  ScriptedModel,
-  TravelPlanner,
-  TravelPlannerRuntimeLayer,
-} from "@effect-agent/testing";
+import { FixtureChatRuntimeLayer, makeFixtureChatAgent } from "./general-chat";
 import { DemoRunRpcFailure, DemoRunRpcs } from "./run-rpc";
 
-const DeterministicTravelPlanner = Agent.withModel(
-  TravelPlanner,
-  Model.make("scripted", "travel-planner-phase-0", ScriptedModel.layer(phase0HappyPathTurns)),
-);
+const fixtureMessage = "What are the best cities to visit in Europe in August?";
 
 const toRpcFailure = (error: unknown): DemoRunRpcFailure =>
   new DemoRunRpcFailure({
@@ -39,11 +28,11 @@ const toRpcFailure = (error: unknown): DemoRunRpcFailure =>
   });
 
 const DeterministicHandlers = DemoRunRpcs.toLayer({
-  StreamDemoRun: ({ request }) =>
-    AgentRuntime.stream(DeterministicTravelPlanner, {
-      ...phase0Trip,
-      request,
-    }).pipe(Stream.mapError(toRpcFailure), Stream.provide(TravelPlannerRuntimeLayer)),
+  StreamDemoRun: ({ message }) =>
+    AgentRuntime.stream(makeFixtureChatAgent(message), { message }).pipe(
+      Stream.mapError(toRpcFailure),
+      Stream.provide(FixtureChatRuntimeLayer),
+    ),
 });
 
 describe("demo streaming RPC", () => {
@@ -51,7 +40,7 @@ describe("demo streaming RPC", () => {
     const events = await Effect.runPromise(
       Effect.gen(function* () {
         const client = yield* RpcTest.makeClient(DemoRunRpcs);
-        return yield* client.StreamDemoRun({ request: phase0Trip.request }).pipe(Stream.runCollect);
+        return yield* client.StreamDemoRun({ message: fixtureMessage }).pipe(Stream.runCollect);
       }).pipe(Effect.provide(DeterministicHandlers), Effect.scoped),
     );
 
@@ -77,7 +66,7 @@ describe("demo streaming RPC", () => {
         yield* Effect.gen(function* () {
           const client = yield* RpcTest.makeClient(DemoRunRpcs);
           const fiber = yield* client
-            .StreamDemoRun({ request: phase0Trip.request })
+            .StreamDemoRun({ message: fixtureMessage })
             .pipe(Stream.runDrain, Effect.forkChild);
           yield* Deferred.await(started);
           yield* Fiber.interrupt(fiber);

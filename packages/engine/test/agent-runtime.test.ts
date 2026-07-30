@@ -62,6 +62,27 @@ const runtimeDefinition = Agent.define("runtime-test", {
   }),
 });
 
+const HostedSearch = Tool.providerDefined({
+  id: "test.web_search",
+  customName: "HostedSearch",
+  providerName: "web_search",
+  parameters: Schema.Struct({ query: Schema.String }),
+  success: Schema.Struct({ status: Schema.String }),
+})(undefined);
+const hostedTools = Toolkit.make(HostedSearch);
+const hostedDefinition = Agent.define("hosted-tool", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Search before answering.",
+  toolkit: hostedTools,
+  policy: AgentPolicy.make({
+    maxTurns: 2,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+
 const makeAgent = (parts: ReadonlyArray<Response.StreamPartEncoded>) =>
   Agent.withModel(runtimeDefinition, modelFromParts(parts));
 
@@ -160,8 +181,142 @@ layer(identifiers)("RUN-001 Phase 0 AgentRuntime", (it) => {
         "TurnCompleted",
         "RunCompleted",
       ]);
+      const declared = result.find((event) => event._tag === "ToolCallDeclared");
+      const succeeded = result.find((event) => event._tag === "ToolCallSucceeded");
+      expect(declared).toMatchObject({
+        parameters: { query: "sea" },
+        providerExecuted: false,
+      });
+      expect(succeeded).toMatchObject({ providerExecuted: false });
       expect(result.find((event) => event._tag === "RunCompleted")?.output).toEqual({
         answer: "A flight is available.",
+      });
+    });
+  });
+
+  it.effect("keeps provider-executed Tools distinct from application handlers", () => {
+    let providerResultStayedAssistant = false;
+    const model = Model.make(
+      "scripted",
+      "hosted-tool",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.gen(function* () {
+          const turn = yield* Ref.make(0);
+          return yield* LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                  Effect.map((value) => {
+                    if (value > 0) {
+                      providerResultStayedAssistant = request.prompt.content.some(
+                        (message) =>
+                          message.role === "assistant" &&
+                          message.content.some(
+                            (part) => part.type === "tool-result" && part.id === "hosted-search-1",
+                          ),
+                      );
+                      expect(
+                        request.prompt.content.some((message) => message.role === "tool"),
+                      ).toBe(false);
+                    }
+                    return Stream.fromIterable<Response.StreamPartEncoded>(
+                      value === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "hosted-search-1",
+                              name: "HostedSearch",
+                              params: { query: "current London travel context" },
+                              providerExecuted: true,
+                            },
+                            {
+                              type: "tool-result",
+                              id: "hosted-search-1",
+                              name: "HostedSearch",
+                              result: { status: "completed" },
+                              isFailure: false,
+                              providerExecuted: true,
+                            },
+                            {
+                              type: "finish",
+                              reason: "tool-calls",
+                              usage,
+                            },
+                          ]
+                        : finalParts('{"answer":"Search completed."}'),
+                    );
+                  }),
+                ),
+              ),
+          });
+        }),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const result = yield* AgentRuntime.stream(Agent.withModel(hostedDefinition, model), {
+        question: "What is current?",
+      }).pipe(Stream.runCollect);
+
+      expect(result.map((event) => event._tag)).toEqual([
+        "RunStarted",
+        "TurnStarted",
+        "ModelStarted",
+        "ToolCallDeclared",
+        "ToolCallSucceeded",
+        "TurnCompleted",
+        "TurnStarted",
+        "ModelStarted",
+        "TextDelta",
+        "TurnCompleted",
+        "RunCompleted",
+      ]);
+      expect(result.find((event) => event._tag === "ToolCallDeclared")).toMatchObject({
+        parameters: { query: "current London travel context" },
+        providerExecuted: true,
+      });
+      expect(result.find((event) => event._tag === "ToolCallSucceeded")).toMatchObject({
+        result: { status: "completed" },
+        providerExecuted: true,
+      });
+      expect(providerResultStayedAssistant).toBe(true);
+      expect(result.some((event) => event._tag === "ToolCallStarted")).toBe(false);
+    });
+  });
+
+  it.effect("accepts provider-only Tools that finish with final output in the same Turn", () => {
+    const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+      {
+        type: "tool-call",
+        id: "hosted-search-1",
+        name: "HostedSearch",
+        params: { query: "current London travel context" },
+        providerExecuted: true,
+      },
+      {
+        type: "tool-result",
+        id: "hosted-search-1",
+        name: "HostedSearch",
+        result: { status: "completed" },
+        isFailure: false,
+        providerExecuted: true,
+      },
+      ...finalParts('{"answer":"Search completed in one response."}'),
+    ];
+
+    return Effect.gen(function* () {
+      const result = yield* AgentRuntime.stream(
+        Agent.withModel(hostedDefinition, modelFromParts(parts)),
+        { question: "What is current?" },
+      ).pipe(Stream.runCollect);
+
+      expect(result.filter((event) => event._tag === "TurnStarted")).toHaveLength(1);
+      expect(result.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        output: { answer: "Search completed in one response." },
+        turns: 1,
       });
     });
   });

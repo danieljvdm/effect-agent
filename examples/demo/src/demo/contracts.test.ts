@@ -4,8 +4,8 @@ import { Schema } from "effect";
 import * as RpcSchema from "effect/unstable/rpc/RpcSchema";
 
 import { RunEvent } from "@effect-agent/core";
-import { expectedTravelPlan, phase0Trip, TravelPlan } from "@effect-agent/testing";
 import { DemoRunSelection } from "./contracts";
+import { ChatOutput } from "./general-chat";
 import { DemoRunRpcFailure, DemoRunRpcs, StreamDemoRun } from "./run-rpc";
 
 describe("demo transport contracts", () => {
@@ -13,13 +13,13 @@ describe("demo transport contracts", () => {
     expect(
       Schema.decodeSync(DemoRunSelection)({
         mode: "openai",
-        request: phase0Trip.request,
+        message: "What changed today?",
       }),
-    ).toEqual({ mode: "openai", request: phase0Trip.request });
+    ).toEqual({ mode: "openai", message: "What changed today?" });
     expect(() =>
       Schema.decodeSync(DemoRunSelection)({
         mode: "deterministic",
-        request: "  padded  ",
+        message: "  padded  ",
       }),
     ).toThrow();
   });
@@ -35,17 +35,17 @@ describe("demo transport contracts", () => {
       eventVersion: 1,
       runId: "run-contract",
       conversationId: "conversation-contract",
-      agentId: "travel-planner",
+      agentId: "general-chat-openai",
       sequence: 0,
       timestamp: "1970-01-01T00:00:00.000Z",
-      output: Schema.encodeSync(TravelPlan)(expectedTravelPlan),
-      turns: 2,
+      output: Schema.encodeSync(ChatOutput)({ answer: "A general answer." }),
+      turns: 1,
       finishReason: "model-stop",
     });
     const encoded = Schema.encodeSync(RunEvent)(completed);
     const failure = new DemoRunRpcFailure({
       errorTag: "AgentOutputError",
-      message: "Output did not match the TravelPlan Schema.",
+      message: "Output did not match the ChatOutput Schema.",
     });
 
     expect(Schema.decodeSync(RunEvent)(encoded)).toEqual(completed);

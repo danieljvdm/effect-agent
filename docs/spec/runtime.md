@@ -125,6 +125,19 @@ Every started call reaches exactly one in-memory terminal classification:
 
 The durable runtime adds unknown outcome.
 
+### Provider-executed Tools
+
+A provider-hosted built-in Tool does not run an application Handler. Its complete Effect AI call
+and result parts retain `providerExecuted: true`; the runtime emits declaration and terminal
+events with that provenance, but no `ToolCallStarted` event. These calls still consume Tool Call
+and Turn budgets. When another Turn is required, provider results remain assistant content rather
+than becoming application Tool output messages. Their authorization, recovery, and source-trust
+limits belong to the explicit provider capability that enabled them.
+
+A response containing only provider-executed calls may finish with `stop` and final text in the
+same Turn, because no application Handler remains unresolved. A response containing any
+application Tool Call still requires the Tool-compatible finish path and another Turn.
+
 ## 6. Steering and follow-ups
 
 Steering and follow-up are typed Run commands delivered through Effect queues.
@@ -200,6 +213,10 @@ Every semantic Run Event carries:
 - optional Turn ID;
 - optional Tool Call ID;
 - typed payload.
+
+`ToolCallDeclared` carries the complete JSON parameters and whether execution belongs to the
+provider. Tool progress and terminal events repeat that execution provenance so transports and
+UIs do not infer an application Handler where none ran.
 
 Terminal events are exactly one of:
 

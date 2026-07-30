@@ -1,18 +1,14 @@
 import { Effect, Schema, Stream } from "effect";
-import { Model } from "effect/unstable/ai";
 import * as Atom from "effect/unstable/reactivity/Atom";
 
-import { Agent, type RunEvent } from "@effect-agent/core";
+import type { RunEvent } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import {
-  phase0HappyPathTurns,
-  phase0Trip,
-  ScriptedModel,
-  TravelPlan,
-  type TravelPlan as TravelPlanValue,
-  TravelPlanner,
-  TravelPlannerRuntimeLayer,
-} from "@effect-agent/testing";
+  ChatOutput,
+  type ChatOutput as ChatOutputValue,
+  FixtureChatRuntimeLayer,
+  makeFixtureChatAgent,
+} from "./general-chat";
 import type { DemoRunSelection } from "./contracts";
 import { DemoRunRpcClient } from "./run-rpc-client";
 
@@ -31,12 +27,12 @@ export interface DemoState {
   readonly runNumber: number;
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly events: ReadonlyArray<RunEvent>;
-  readonly output: TravelPlanValue | null;
+  readonly output: ChatOutputValue | null;
   readonly error: string | null;
-  readonly activeRequest: string;
+  readonly activeMessage: string;
 }
 
-const initialPrompt = "Plan a review-only London trip and show me the best available option.";
+const initialPrompt = "What are the best cities to visit in Europe in August?";
 
 export const initialDemoState: DemoState = {
   status: "idle",
@@ -47,13 +43,13 @@ export const initialDemoState: DemoState = {
       id: "intro",
       role: "assistant",
       content:
-        "This bench runs the real Phase 0 agent loop. Use the direct in-browser fixture, or the streaming OpenAI RPC profile, then inspect its tool call and semantic events.",
+        "Ask anything. The offline profile replays deterministic application tools; the live profile lets the model choose real arithmetic or OpenAI-hosted web search.",
     },
   ],
   events: [],
   output: null,
   error: null,
-  activeRequest: initialPrompt,
+  activeMessage: initialPrompt,
 };
 
 /** Shared browser state for the current agent run and selected model profile. */
@@ -71,26 +67,6 @@ const failureMessage = (error: unknown): string => {
   return String(error);
 };
 
-const summarizePlan = (plan: TravelPlanValue): string => {
-  const itinerary = plan.itineraries[0];
-  if (itinerary === undefined) {
-    return "The run completed with no itineraries.";
-  }
-  return [
-    `**${itinerary.title}**`,
-    `${itinerary.route} · ${itinerary.dates}`,
-    `${itinerary.flight}\n${itinerary.lodging}`,
-    `Estimated total: **$${(itinerary.estimatedTotalCents / 100).toLocaleString("en-US")} ${itinerary.currency}**`,
-    "No reservation was made. The next action is review.",
-  ].join("\n\n");
-};
-
-const makeAgent = () =>
-  Agent.withModel(
-    TravelPlanner,
-    Model.make("scripted", "travel-planner-phase-0", ScriptedModel.layer(phase0HappyPathTurns)),
-  );
-
 const updateAssistantMessage = (
   messages: ReadonlyArray<ChatMessage>,
   id: string,
@@ -104,7 +80,7 @@ const updateAssistantMessage = (
 };
 
 /** Starts one selected profile and projects its semantic events into browser state. */
-export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, context) => {
+export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, message }, context) => {
   const previous = context(demoStateAtom);
   const runNumber = previous.runNumber + 1;
   const assistantId = `assistant-${runNumber}`;
@@ -117,8 +93,8 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, conte
     events: [],
     output: null,
     error: null,
-    activeRequest: request,
-    messages: [...previous.messages, { id: `user-${runNumber}`, role: "user", content: request }],
+    activeMessage: message,
+    messages: [...previous.messages, { id: `user-${runNumber}`, role: "user", content: message }],
   });
 
   const projectEvent = Effect.fn("Demo.projectEvent")(function* (event: RunEvent) {
@@ -143,7 +119,7 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, conte
 
     if (event._tag === "RunCompleted") {
       const candidateOutput: unknown = event.output;
-      const output = yield* Schema.decodeUnknownEffect(TravelPlan)(candidateOutput);
+      const output = yield* Schema.decodeUnknownEffect(ChatOutput)(candidateOutput);
       const completed = context(demoStateAtom);
       context.set(demoStateAtom, {
         ...completed,
@@ -151,21 +127,21 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, conte
         output,
         messages: updateAssistantMessage(completed.messages, assistantId, (message) => ({
           ...message,
-          content: summarizePlan(output),
+          content: output.answer,
         })),
       });
     }
   });
 
-  const deterministic = AgentRuntime.stream(makeAgent(), { ...phase0Trip, request }).pipe(
+  const deterministic = AgentRuntime.stream(makeFixtureChatAgent(message), { message }).pipe(
     Stream.runForEach(projectEvent),
-    Effect.provide(TravelPlannerRuntimeLayer),
+    Effect.provide(FixtureChatRuntimeLayer),
     Effect.scoped,
   );
   const openai = Stream.unwrap(
     Effect.gen(function* () {
       const client = yield* DemoRunRpcClient;
-      return client.StreamDemoRun({ request });
+      return client.StreamDemoRun({ message });
     }),
   ).pipe(Stream.runForEach(projectEvent), Effect.provide(DemoRunRpcClient.layer), Effect.scoped);
   const selected = Effect.gen(function* () {

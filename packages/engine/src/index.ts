@@ -47,6 +47,7 @@ interface TurnTrace {
   readonly parts: Array<Response.AnyPart>;
   readonly text: Array<string>;
   readonly toolCallIds: Set<string>;
+  readonly toolCallProviderExecutions: Map<string, boolean>;
   readonly finalToolResultIds: Set<string>;
   finished: boolean;
   finishReason: Response.FinishReason | undefined;
@@ -176,15 +177,76 @@ const decodeToolCallId = (id: string): Effect.Effect<ToolCallId, ModelProtocolEr
     ),
   );
 
-const decodeEventJson = (value: unknown): Effect.Effect<Schema.Json, ModelProtocolError> =>
+const decodeEventJson = (
+  value: unknown,
+  label: string,
+): Effect.Effect<Schema.Json, ModelProtocolError> =>
   Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
     Effect.mapError(
       (cause) =>
         new ModelProtocolError({
-          message: `Tool result is not JSON: ${cause.message}`,
+          message: `${label} is not JSON: ${cause.message}`,
         }),
     ),
   );
+
+/**
+ * Preserves provider-executed results as assistant content while application
+ * handler results remain Tool messages for the next model request.
+ */
+const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
+  const responsePrompt = Prompt.fromResponseParts(trace.parts);
+  const providerResults = trace.parts.flatMap((part) =>
+    part.type === "tool-result" && part.providerExecuted && !part.preliminary
+      ? [
+          Prompt.makePart("tool-result", {
+            id: part.id,
+            name: part.name,
+            isFailure: part.isFailure,
+            result: part.encodedResult,
+          }),
+        ]
+      : [],
+  );
+  if (providerResults.length === 0) {
+    return responsePrompt;
+  }
+
+  const messages: Array<Prompt.Message> = [];
+  let attachedProviderResults = false;
+  for (const message of responsePrompt.content) {
+    if (message.role === "assistant") {
+      messages.push(
+        Prompt.makeMessage("assistant", {
+          content: [...message.content, ...providerResults],
+          options: message.options,
+        }),
+      );
+      attachedProviderResults = true;
+      continue;
+    }
+    if (message.role === "tool") {
+      const content = message.content.filter(
+        (part) =>
+          part.type !== "tool-result" || trace.toolCallProviderExecutions.get(part.id) !== true,
+      );
+      if (content.length > 0) {
+        messages.push(
+          Prompt.makeMessage("tool", {
+            content,
+            options: message.options,
+          }),
+        );
+      }
+      continue;
+    }
+    messages.push(message);
+  }
+  if (!attachedProviderResults) {
+    messages.push(Prompt.makeMessage("assistant", { content: providerResults }));
+  }
+  return Prompt.fromMessages(messages);
+};
 
 const eventsForPart = (
   context: RunContext,
@@ -229,15 +291,23 @@ const eventsForPart = (
           });
         }
         const toolCallId = yield* decodeToolCallId(part.id);
+        const parameters = yield* decodeEventJson(part.params, "Tool parameters");
         trace.toolCallIds.add(part.id);
+        trace.toolCallProviderExecutions.set(part.id, part.providerExecuted);
+        const declared = {
+          ...(yield* eventBase(context)),
+          _tag: "ToolCallDeclared" as const,
+          turnId,
+          toolCallId,
+          toolName: part.name,
+          parameters,
+          providerExecuted: part.providerExecuted,
+        };
+        if (part.providerExecuted) {
+          return [declared];
+        }
         return [
-          {
-            ...(yield* eventBase(context)),
-            _tag: "ToolCallDeclared" as const,
-            turnId,
-            toolCallId,
-            toolName: part.name,
-          },
+          declared,
           {
             ...(yield* eventBase(context)),
             _tag: "ToolCallStarted" as const,
@@ -253,8 +323,13 @@ const eventsForPart = (
             message: `Model response returned an unrequested Tool result ${part.id}`,
           });
         }
+        if (trace.toolCallProviderExecutions.get(part.id) !== part.providerExecuted) {
+          return yield* new ModelProtocolError({
+            message: `Tool result execution boundary did not match Tool Call ${part.id}`,
+          });
+        }
         const toolCallId = yield* decodeToolCallId(part.id);
-        const result = yield* decodeEventJson(part.encodedResult);
+        const result = yield* decodeEventJson(part.encodedResult, "Tool result");
         if (part.preliminary === true) {
           return [
             {
@@ -264,6 +339,7 @@ const eventsForPart = (
               toolCallId,
               toolName: part.name,
               result,
+              providerExecuted: part.providerExecuted,
             },
           ];
         }
@@ -278,6 +354,7 @@ const eventsForPart = (
               toolName: part.name,
               errorTag: errorTag(part.result),
               message: errorMessage(part.result),
+              providerExecuted: part.providerExecuted,
             },
           ];
         }
@@ -289,6 +366,7 @@ const eventsForPart = (
             toolCallId,
             toolName: part.name,
             result,
+            providerExecuted: part.providerExecuted,
           },
         ];
       }
@@ -367,6 +445,7 @@ const makeTurn = <AgentValue extends Agent.Any>(
         parts: [],
         text: [],
         toolCallIds: new Set(),
+        toolCallProviderExecutions: new Map(),
         finalToolResultIds: new Set(),
         finished: false,
         finishReason: undefined,
@@ -418,6 +497,22 @@ const makeTurn = <AgentValue extends Agent.Any>(
               }),
             );
           }
+          const providerOnly =
+            trace.toolCallIds.size > 0 &&
+            Array.from(trace.toolCallProviderExecutions.values()).every(
+              (providerExecuted) => providerExecuted,
+            );
+          if (providerOnly && trace.finishReason === "stop") {
+            const output = yield* decodeFinalOutput(agent, trace.text.join(""));
+            const completed = {
+              ...(yield* eventBase(context)),
+              _tag: "RunCompleted" as const,
+              output,
+              turns: turn,
+              finishReason: "model-stop" as const,
+            } satisfies RunEvent;
+            return Stream.succeed<RunEvent>(completed);
+          }
 
           if (trace.toolCallIds.size > 0) {
             if (trace.finishReason !== "tool-calls") {
@@ -442,7 +537,7 @@ const makeTurn = <AgentValue extends Agent.Any>(
                 }),
               );
             }
-            const responsePrompt = Prompt.fromResponseParts(trace.parts);
+            const responsePrompt = promptFromTurnParts(trace);
             const nextPrompt = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
             return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls);
           }

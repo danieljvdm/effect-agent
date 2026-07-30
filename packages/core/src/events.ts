@@ -42,11 +42,13 @@ export const ReasoningDelta = Schema.TaggedStruct("ReasoningDelta", {
   text: Schema.String,
 });
 
-/** Reports a model-declared Tool Call before its handler starts. */
+/** Reports a complete model-declared Tool Call and its execution boundary. */
 export const ToolCallDeclared = Schema.TaggedStruct("ToolCallDeclared", {
   ...RunEventBase.fields,
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
+  parameters: Schema.Json,
+  providerExecuted: Schema.Boolean,
 });
 
 /** Signals that a validated Tool Call handler has started. */
@@ -62,6 +64,7 @@ export const ToolProgress = Schema.TaggedStruct("ToolProgress", {
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   result: Schema.Json,
+  providerExecuted: Schema.Boolean,
 });
 
 /** Records the successful terminal result of a Tool Call. */
@@ -70,6 +73,7 @@ export const ToolCallSucceeded = Schema.TaggedStruct("ToolCallSucceeded", {
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   result: Schema.Json,
+  providerExecuted: Schema.Boolean,
 });
 
 /** Records a terminal Tool Call failure using safe, serializable diagnostics. */
@@ -79,6 +83,7 @@ export const ToolCallFailed = Schema.TaggedStruct("ToolCallFailed", {
   toolName: Schema.NonEmptyString,
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
+  providerExecuted: Schema.Boolean,
 });
 
 /** Signals that a decoded Tool Call requires approval before execution. */

@@ -1,32 +1,20 @@
 import "@tanstack/react-start/server-only";
 
-import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { OpenAiClient } from "@effect/ai-openai";
 import { Config, Layer, Stream } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import { FetchHttpClient } from "effect/unstable/http";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
-import { Agent } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
-import { phase0Trip, TravelPlanner, TravelPlannerRuntimeLayer } from "@effect-agent/testing";
+import { LiveChatRuntimeLayer } from "./general-chat";
+import { OpenAiChatAgent } from "./openai-profile";
 import { DemoRunRpcFailure, DemoRunRpcs } from "./run-rpc";
-
-export const OPENAI_DEMO_MODEL = "gpt-5.6-luna" as const;
 
 const OpenAiClientLayer = OpenAiClient.layerConfig({
   apiKey: Config.redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
-
-const OpenAiTravelPlanner = Agent.withModel(
-  TravelPlanner,
-  OpenAiLanguageModel.model(OPENAI_DEMO_MODEL, {
-    max_output_tokens: 1_600,
-    store: false,
-    strictJsonSchema: true,
-    text: { verbosity: "low" },
-  }),
-);
 
 const errorTag = (error: unknown): string =>
   typeof error === "object" &&
@@ -56,11 +44,8 @@ const toRpcFailure = (error: unknown): DemoRunRpcFailure =>
 
 /** Implements the shared Run RPC with the server-only OpenAI Binding. */
 export const DemoRunRpcHandlers = DemoRunRpcs.toLayer({
-  StreamDemoRun: ({ request }) =>
-    AgentRuntime.stream(OpenAiTravelPlanner, {
-      ...phase0Trip,
-      request,
-    }).pipe(Stream.mapError(toRpcFailure)),
+  StreamDemoRun: ({ message }) =>
+    AgentRuntime.stream(OpenAiChatAgent, { message }).pipe(Stream.mapError(toRpcFailure)),
 });
 
 /** Complete server Layer for the credentialed HTTP/NDJSON RPC endpoint. */
@@ -71,7 +56,7 @@ export const DemoRunRpcServerLayer = RpcServer.layerHttp({
   concurrency: 8,
 }).pipe(
   Layer.provide(DemoRunRpcHandlers),
-  Layer.provide(TravelPlannerRuntimeLayer),
+  Layer.provide(LiveChatRuntimeLayer),
   Layer.provide(OpenAiClientLayer),
   Layer.provide(RpcSerialization.layerNdjson),
 );

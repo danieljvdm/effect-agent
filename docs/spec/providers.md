@@ -55,6 +55,11 @@ hook that satisfies these needs, prefer using or contributing to it.
 Provider-executed built-in Tools are separate capabilities. They are allowed only
 when their behavior and recovery limitations are explicit.
 
+Effect AI marks those calls and results with `providerExecuted: true`. The runtime preserves that
+provenance in declaration, progress, and terminal semantic events, but does not emit
+`ToolCallStarted`: no application handler entered the framework scheduler. Provider-executed calls
+still consume the Agent's Tool Call budget and may require another Turn before final output.
+
 ## 3. Prompt and Response
 
 Effect AI `Prompt.Prompt` is the model-facing conversation representation.
@@ -117,6 +122,10 @@ preflight needed and propose the general capability upstream.
 
 The runtime must not silently downgrade structured output, Tool behavior, approval,
 or content policy.
+
+An application that enables a provider-hosted Tool must bind it in a provider-specific Definition
+or profile. A provider-agnostic Definition must not gain ambient hosted capabilities merely because
+its Model supports them.
 
 ## 6. Errors
 

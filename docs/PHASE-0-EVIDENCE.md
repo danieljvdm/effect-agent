@@ -78,13 +78,19 @@ Success-path and interruption tests both prove the acquired catalog and model/To
 finalize when their Scope closes. A length-truncated model response fails with
 `ModelProtocolError`; it cannot become a successful Run.
 
-`examples/demo` consumes this same fixture through public package exports. Its TanStack Start UI
-uses an Effect Atom action to consume the scoped event Stream directly in the browser or through a
-demo-local shared Effect RPC definition over framed HTTP/NDJSON. The remote handler and generated
-client preserve semantic event streaming and client interruption without collecting an event
-array. The bench presents user input, provider-returned reasoning, Tool execution, semantic events,
-and Schema-decoded output. It remains an offline-first test bench, not a durability or deployment
-proof.
+`examples/demo` is a leaf-owned general chat bench rather than another Travel Planner contract.
+Its default profile uses a demo-local scripted Model and explicitly marked fixture Tool results;
+the opt-in profile lets OpenAI choose between direct response, real application arithmetic, and
+provider-hosted web search. Both profiles use the same small chat input/output Schemas, and neither
+injects the Travel Planner scenario.
+
+The TanStack Start UI uses an Effect Atom action to consume the scoped event Stream directly in the
+browser or through a demo-local shared Effect RPC definition over framed HTTP/NDJSON. The remote
+handler and generated client preserve semantic event streaming and client interruption without
+collecting an event array. The bench presents user input, provider-returned reasoning, Tool
+execution provenance, semantic events, and Schema-decoded output. It remains an offline-first test
+bench with an opt-in provider preview, not a durability or deployment proof. The separate demo
+contract does not widen the canonical Travel Planner Phase 0 claim.
 
 ## Requirement evidence
 
@@ -109,10 +115,10 @@ bun run ready
 
 The green suite contains:
 
-- core: 5 tests;
-- engine: 5 tests;
+- core: 6 tests;
+- engine: 7 tests;
 - testing and Travel Planner: 14 tests;
-- demo contracts, RPC streaming, and interruption: 6 tests;
+- demo contracts, profiles, RPC streaming, and interruption: 11 tests;
 - all three package builds and the TanStack Start example build;
 - Vite+ formatting, lint, Effect-aware type checks, package graph checks, and script checks.
 

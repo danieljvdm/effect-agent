@@ -33,7 +33,15 @@ export function Tool({ className, ...props }: ComponentProps<typeof Collapsible>
   );
 }
 
-export function ToolHeader({ name, state }: { readonly name: string; readonly state: ToolState }) {
+export function ToolHeader({
+  execution,
+  name,
+  state,
+}: {
+  readonly execution?: "application" | "provider";
+  readonly name: string;
+  readonly state: ToolState;
+}) {
   const meta = stateMeta[state];
   return (
     <CollapsibleTrigger className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left outline-none">
@@ -44,6 +52,9 @@ export function ToolHeader({ name, state }: { readonly name: string; readonly st
           {meta.icon}
           {meta.label}
         </Badge>
+        {execution === undefined ? null : (
+          <Badge>{execution === "provider" ? "OpenAI hosted" : "Framework"}</Badge>
+        )}
       </span>
       <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />
     </CollapsibleTrigger>

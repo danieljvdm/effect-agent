@@ -9,6 +9,7 @@ import {
   RunEvent,
   RunId,
   RunStarted,
+  ToolCallDeclared,
 } from "../src/index.ts";
 
 describe("Phase 0 core schemas", () => {
@@ -70,5 +71,28 @@ describe("Phase 0 core schemas", () => {
       eventVersion: 2,
     };
     expect(() => Schema.decodeUnknownSync(RunEvent)(invalidEncodedEvent)).toThrow();
+  });
+
+  it("preserves Tool Call parameters and provider execution provenance", () => {
+    const encodedEvent = {
+      _tag: "ToolCallDeclared",
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 3,
+      timestamp: "2026-07-29T12:00:00.000Z",
+      turnId: "turn-1",
+      toolCallId: "search-1",
+      toolName: "OpenAiWebSearch",
+      parameters: { query: "current London travel context" },
+      providerExecuted: true,
+    } satisfies typeof ToolCallDeclared.Encoded;
+
+    const event = Schema.decodeSync(ToolCallDeclared)(encodedEvent);
+
+    expect(Schema.decodeSync(RunEvent)(encodedEvent)).toEqual(event);
+    expect(event.providerExecuted).toBe(true);
+    expect(event.parameters).toEqual({ query: "current London travel context" });
   });
 });
