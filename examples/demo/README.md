@@ -31,6 +31,10 @@ framed HTTP/NDJSON, so the generated browser client receives each Schema-encoded
 `RunEvent` as it occurs. Text, provider-returned reasoning, Tool lifecycle, and terminal events are
 projected through the same Effect Atom action used by the direct in-browser scripted profile.
 
+The in-conversation activity line is derived from those semantic events too. It moves through
+startup, model reasoning, Tool-specific work, result review, and response composition without a
+second transport-only status protocol.
+
 The Tool panel renders parameters and results from semantic events. It explicitly distinguishes
 framework-executed handlers from provider-hosted execution. URLs exposed in hosted search results
 are provider output and are not independently verified by this bench.

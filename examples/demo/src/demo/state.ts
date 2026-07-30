@@ -12,7 +12,7 @@ import {
 import type { DemoRunSelection } from "./contracts";
 import { DemoRunRpcClient } from "./run-rpc-client";
 
-export type DemoStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted";
+export type DemoStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted" | "suspended";
 
 export interface ChatMessage {
   readonly id: string;
@@ -129,6 +129,27 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, message }, conte
           ...message,
           content: output.answer,
         })),
+      });
+    } else if (event._tag === "RunFailed") {
+      const failed = context(demoStateAtom);
+      context.set(demoStateAtom, {
+        ...failed,
+        status: "failed",
+        error: event.message,
+      });
+    } else if (event._tag === "RunInterrupted") {
+      const interrupted = context(demoStateAtom);
+      context.set(demoStateAtom, {
+        ...interrupted,
+        status: "interrupted",
+        error: event.message,
+      });
+    } else if (event._tag === "RunSuspended") {
+      const suspended = context(demoStateAtom);
+      context.set(demoStateAtom, {
+        ...suspended,
+        status: "suspended",
+        error: event.reason,
       });
     }
   });

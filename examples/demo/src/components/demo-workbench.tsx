@@ -8,6 +8,7 @@ import { Activity, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { RunEvent as RunEventSchema, type RunEvent } from "@effect-agent/core";
+import { AgentActivity } from "@/components/ai-elements/agent-activity";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import {
   Conversation,
@@ -36,6 +37,7 @@ import {
   type DemoStatus,
 } from "@/demo/state";
 import { ChatOutput } from "@/demo/general-chat";
+import { projectRunActivity } from "@/demo/run-activity";
 import { projectToolTraces } from "@/demo/tool-trace";
 import { cn } from "@/lib/utils";
 
@@ -45,6 +47,7 @@ const statusLabel: Record<DemoStatus, string> = {
   succeeded: "Complete",
   failed: "Failed",
   interrupted: "Stopped",
+  suspended: "Waiting",
 };
 
 const eventJson = (event: RunEvent): string =>
@@ -59,6 +62,7 @@ function StatusMark({ status }: { readonly status: DemoStatus }) {
           status === "running" && "animate-pulse bg-amber-500",
           status === "succeeded" && "bg-emerald-600",
           status === "failed" && "bg-destructive",
+          status === "suspended" && "bg-amber-500",
         )}
       />
       {statusLabel[status]}
@@ -122,6 +126,12 @@ export function DemoWorkbench() {
   const selectedEvent =
     state.events.find((event) => event.sequence === selectedSequence) ?? state.events.at(-1);
   const toolTraces = useMemo(() => projectToolTraces(state.events), [state.events]);
+  const runActivity = useMemo(
+    () => projectRunActivity(state.events, state.mode),
+    [state.events, state.mode],
+  );
+  const activeAssistantId = `assistant-${state.runNumber}`;
+  const hasActiveAssistant = state.messages.some((message) => message.id === activeAssistantId);
   const chatStatus: ChatStatus =
     state.status === "running" ? "streaming" : state.status === "failed" ? "error" : "ready";
 
@@ -227,21 +237,22 @@ export function DemoWorkbench() {
                         {message.reasoning}
                       </Reasoning>
                     )}
-                    <MessageResponse>{message.content}</MessageResponse>
+                    {message.content.length === 0 ? null : (
+                      <MessageResponse>{message.content}</MessageResponse>
+                    )}
+                    {state.status === "running" && message.id === activeAssistantId ? (
+                      <AgentActivity {...runActivity} />
+                    ) : null}
                   </MessageContent>
                 </Message>
               ))}
-              {state.status === "running" &&
-              !state.messages.some((message) => message.id === `assistant-${state.runNumber}`) ? (
+              {state.status === "running" && !hasActiveAssistant ? (
                 <Message from="assistant">
                   <span className="font-mono text-[10px] text-muted-foreground uppercase">
                     agent
                   </span>
-                  <MessageContent className="flex items-center gap-2 text-muted-foreground">
-                    <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
-                    {state.mode === "openai"
-                      ? "Opening the streaming RPC run…"
-                      : "Running the deterministic event loop…"}
+                  <MessageContent>
+                    <AgentActivity {...runActivity} />
                   </MessageContent>
                 </Message>
               ) : null}
