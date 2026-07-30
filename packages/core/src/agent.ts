@@ -49,7 +49,7 @@ export interface Definition<
 export interface DefinitionOptions<
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
-  Instructions extends InstructionSource<InputSchema["Type"], any, any>,
+  Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
   ToolkitValue extends Toolkit.Any,
 > {
   readonly input: InputSchema;
@@ -61,12 +61,7 @@ export interface DefinitionOptions<
   readonly metadata?: Readonly<Record<string, string>> | undefined;
 }
 
-type AnyDefinitionShape = Definition<
-  Schema.Top,
-  Schema.Top,
-  InstructionSource<any, any, any>,
-  Toolkit.Toolkit<any>
->;
+type AnyDefinitionShape = Definition<Schema.Top, Schema.Top, unknown, Toolkit.Any>;
 
 /** Immutable pairing of an agent definition with the explicit Effect AI Model used to run it. */
 export interface Binding<DefinitionValue extends AnyDefinitionShape, ModelValue> {
@@ -78,23 +73,31 @@ type InstructionEffect<Instructions, Input> = Instructions extends (input: Input
   ? Result
   : Instructions;
 
-type EffectError<Value> = Value extends Effect.Effect<any, infer Error, any> ? Error : never;
+type EffectError<Value> =
+  Value extends Effect.Effect<infer _Success, infer Error, infer _Services> ? Error : never;
 
 type EffectServices<Value> =
-  Value extends Effect.Effect<any, any, infer Services> ? Services : never;
+  Value extends Effect.Effect<infer _Success, infer _Error, infer Services> ? Services : never;
 
-type ModelServices<Value> = Value extends Model.Model<any, any, infer Services> ? Services : never;
+type ModelServices<Value> =
+  Value extends Model.Model<infer _Provider, infer _Provides, infer Services> ? Services : never;
 
 /** Constructors and type projections for definitions and runnable model bindings. */
 export namespace Agent {
   /** Type-erased definition used at generic framework boundaries. */
   export type AnyDefinition = AnyDefinitionShape;
 
-  /** Type-erased runnable binding used at generic framework boundaries. */
-  export type Any = Binding<AnyDefinition, any>;
+  /** Read-only, safely erased runnable binding used at inspection and projection boundaries. */
+  export interface Any {
+    readonly definition: AnyDefinition;
+    readonly model: unknown;
+  }
 
-  type DefinitionOf<AgentValue extends AnyDefinition | Any> =
-    AgentValue extends Binding<infer DefinitionValue, any> ? DefinitionValue : AgentValue;
+  type DefinitionOf<AgentValue extends AnyDefinition | Any> = AgentValue extends {
+    readonly definition: infer DefinitionValue extends AnyDefinition;
+  }
+    ? DefinitionValue
+    : AgentValue;
 
   /** Decoded input type of a definition or binding. */
   export type Input<AgentValue extends AnyDefinition | Any> =
@@ -146,7 +149,7 @@ export namespace Agent {
   export const define = <
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
-    Instructions extends InstructionSource<InputSchema["Type"], any, any>,
+    Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
     ToolkitValue extends Toolkit.Any,
   >(
     id: string,

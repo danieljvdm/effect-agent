@@ -13,7 +13,7 @@ export const QuoteId = Schema.NonEmptyString.pipe(
 );
 export type QuoteId = typeof QuoteId.Type;
 
-export const TripRequest = Schema.Struct({
+export class TripRequest extends Schema.Class<TripRequest>("TripRequest")({
   request: Schema.NonEmptyString,
   origin: AirportCode,
   destination: AirportCode,
@@ -22,55 +22,50 @@ export const TripRequest = Schema.Struct({
   travelers: Schema.Int.check(Schema.isGreaterThan(0)),
   budgetCents: Schema.Int.check(Schema.isGreaterThan(0)),
   currency: Schema.Literal("USD"),
-});
-export type TripRequest = typeof TripRequest.Type;
+}) {}
 
-export const FlightQuery = Schema.Struct({
+export class FlightQuery extends Schema.Class<FlightQuery>("FlightQuery")({
   origin: AirportCode,
   destination: AirportCode,
   departOn: Schema.String,
   travelers: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-export type FlightQuery = typeof FlightQuery.Type;
+}) {}
 
-export const LodgingQuery = Schema.Struct({
+export class LodgingQuery extends Schema.Class<LodgingQuery>("LodgingQuery")({
   destination: AirportCode,
   departOn: Schema.String,
   nights: Schema.Int.check(Schema.isGreaterThan(0)),
   travelers: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-export type LodgingQuery = typeof LodgingQuery.Type;
+}) {}
 
-export const ActivityQuery = Schema.Struct({
+export class ActivityQuery extends Schema.Class<ActivityQuery>("ActivityQuery")({
   destination: AirportCode,
   departOn: Schema.String,
   nights: Schema.Int.check(Schema.isGreaterThan(0)),
   travelers: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-export type ActivityQuery = typeof ActivityQuery.Type;
+}) {}
 
-export const FlightOption = Schema.Struct({
+export class FlightOption extends Schema.Class<FlightOption>("FlightOption")({
   quoteId: QuoteId,
   flight: Schema.String,
   estimatedCents: Schema.Int.check(Schema.isGreaterThan(0)),
   currency: Schema.Literal("USD"),
-});
-export type FlightOption = typeof FlightOption.Type;
+}) {}
 
-export const LodgingOption = Schema.Struct({
+export class LodgingOption extends Schema.Class<LodgingOption>("LodgingOption")({
   lodging: Schema.String,
   estimatedCents: Schema.Int.check(Schema.isGreaterThan(0)),
   currency: Schema.Literal("USD"),
-});
-export type LodgingOption = typeof LodgingOption.Type;
+}) {}
 
 /** A successful empty activity search is distinct from supplier unavailability. */
-export const ActivitySearchResult = Schema.Struct({
+export class ActivitySearchResult extends Schema.Class<ActivitySearchResult>(
+  "ActivitySearchResult",
+)({
   activities: Schema.Array(Schema.String),
-});
-export type ActivitySearchResult = typeof ActivitySearchResult.Type;
+}) {}
 
-export const Itinerary = Schema.Struct({
+export class Itinerary extends Schema.Class<Itinerary>("Itinerary")({
   title: Schema.String,
   route: Schema.String,
   dates: Schema.String,
@@ -83,11 +78,11 @@ export const Itinerary = Schema.Struct({
   assumptions: Schema.Array(Schema.String),
   unresolvedConstraints: Schema.Array(Schema.String),
   nextAction: Schema.Literal("review"),
-});
-export type Itinerary = typeof Itinerary.Type;
+}) {}
 
-export const TravelPlan = Schema.Struct({ itineraries: Schema.Array(Itinerary) });
-export type TravelPlan = typeof TravelPlan.Type;
+export class TravelPlan extends Schema.Class<TravelPlan>("TravelPlan")({
+  itineraries: Schema.Array(Itinerary),
+}) {}
 
 const unavailableFields = { query: Schema.String, message: Schema.String };
 export class FlightUnavailable extends Schema.TaggedErrorClass<FlightUnavailable>()(

@@ -2,100 +2,104 @@ import { Schema } from "effect";
 
 import { AgentId, ConversationId, RunId, ToolCallId, TurnId } from "./identifiers.ts";
 
-const RunEventBase = Schema.Struct({
+const RunEventBase = {
   eventVersion: Schema.Literal(1),
   runId: RunId,
   conversationId: ConversationId,
   agentId: AgentId,
   sequence: Schema.Natural,
   timestamp: Schema.DateTimeUtcFromString,
-  turnId: Schema.optional(TurnId),
-  toolCallId: Schema.optional(ToolCallId),
-});
+  turnId: Schema.optionalKey(TurnId),
+  toolCallId: Schema.optionalKey(ToolCallId),
+};
 
 /** Signals that the runtime has created a run and assigned its identities. */
-export const RunStarted = Schema.TaggedStruct("RunStarted", {
-  ...RunEventBase.fields,
-});
+export class RunStarted extends Schema.TaggedClass<RunStarted>()("RunStarted", RunEventBase) {}
 
 /** Signals the start of a positive-numbered model turn. */
-export const TurnStarted = Schema.TaggedStruct("TurnStarted", {
-  ...RunEventBase.fields,
+export class TurnStarted extends Schema.TaggedClass<TurnStarted>()("TurnStarted", {
+  ...RunEventBase,
   turn: Schema.Int.check(Schema.isGreaterThan(0)),
-});
+}) {}
 
 /** Signals that the model request for a turn is starting. */
-export const ModelStarted = Schema.TaggedStruct("ModelStarted", {
-  ...RunEventBase.fields,
+export class ModelStarted extends Schema.TaggedClass<ModelStarted>()("ModelStarted", {
+  ...RunEventBase,
   turn: Schema.Int.check(Schema.isGreaterThan(0)),
-});
+}) {}
 
 /** Carries one live assistant text delta. */
-export const TextDelta = Schema.TaggedStruct("TextDelta", {
-  ...RunEventBase.fields,
+export class TextDelta extends Schema.TaggedClass<TextDelta>()("TextDelta", {
+  ...RunEventBase,
   text: Schema.String,
-});
+}) {}
 
 /** Carries reasoning content explicitly exposed by the provider. */
-export const ReasoningDelta = Schema.TaggedStruct("ReasoningDelta", {
-  ...RunEventBase.fields,
+export class ReasoningDelta extends Schema.TaggedClass<ReasoningDelta>()("ReasoningDelta", {
+  ...RunEventBase,
   text: Schema.String,
-});
+}) {}
 
 /** Reports a complete model-declared Tool Call and its execution boundary. */
-export const ToolCallDeclared = Schema.TaggedStruct("ToolCallDeclared", {
-  ...RunEventBase.fields,
+export class ToolCallDeclared extends Schema.TaggedClass<ToolCallDeclared>()("ToolCallDeclared", {
+  ...RunEventBase,
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   parameters: Schema.Json,
   providerExecuted: Schema.Boolean,
-});
+}) {}
 
 /** Signals that a validated Tool Call handler has started. */
-export const ToolCallStarted = Schema.TaggedStruct("ToolCallStarted", {
-  ...RunEventBase.fields,
+export class ToolCallStarted extends Schema.TaggedClass<ToolCallStarted>()("ToolCallStarted", {
+  ...RunEventBase,
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
-});
+}) {}
 
 /** Carries a preliminary Tool result that is not the call's terminal outcome. */
-export const ToolProgress = Schema.TaggedStruct("ToolProgress", {
-  ...RunEventBase.fields,
+export class ToolProgress extends Schema.TaggedClass<ToolProgress>()("ToolProgress", {
+  ...RunEventBase,
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   result: Schema.Json,
   providerExecuted: Schema.Boolean,
-});
+}) {}
 
 /** Records the successful terminal result of a Tool Call. */
-export const ToolCallSucceeded = Schema.TaggedStruct("ToolCallSucceeded", {
-  ...RunEventBase.fields,
-  toolCallId: ToolCallId,
-  toolName: Schema.NonEmptyString,
-  result: Schema.Json,
-  providerExecuted: Schema.Boolean,
-});
+export class ToolCallSucceeded extends Schema.TaggedClass<ToolCallSucceeded>()(
+  "ToolCallSucceeded",
+  {
+    ...RunEventBase,
+    toolCallId: ToolCallId,
+    toolName: Schema.NonEmptyString,
+    result: Schema.Json,
+    providerExecuted: Schema.Boolean,
+  },
+) {}
 
 /** Records a terminal Tool Call failure using safe, serializable diagnostics. */
-export const ToolCallFailed = Schema.TaggedStruct("ToolCallFailed", {
-  ...RunEventBase.fields,
+export class ToolCallFailed extends Schema.TaggedClass<ToolCallFailed>()("ToolCallFailed", {
+  ...RunEventBase,
   toolCallId: ToolCallId,
   toolName: Schema.NonEmptyString,
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
   providerExecuted: Schema.Boolean,
-});
+}) {}
 
 /** Signals that a decoded Tool Call requires approval before execution. */
-export const ApprovalRequested = Schema.TaggedStruct("ApprovalRequested", {
-  ...RunEventBase.fields,
-  toolCallId: ToolCallId,
-  toolName: Schema.NonEmptyString,
-});
+export class ApprovalRequested extends Schema.TaggedClass<ApprovalRequested>()(
+  "ApprovalRequested",
+  {
+    ...RunEventBase,
+    toolCallId: ToolCallId,
+    toolName: Schema.NonEmptyString,
+  },
+) {}
 
 /** Records the normalized finish reason for a completed assistant turn. */
-export const TurnCompleted = Schema.TaggedStruct("TurnCompleted", {
-  ...RunEventBase.fields,
+export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnCompleted", {
+  ...RunEventBase,
   turn: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: Schema.Literals([
     "stop",
@@ -107,34 +111,34 @@ export const TurnCompleted = Schema.TaggedStruct("TurnCompleted", {
     "other",
     "unknown",
   ]),
-});
+}) {}
 
 /** Successful terminal event carrying Schema-compatible output and the completed turn count. */
-export const RunCompleted = Schema.TaggedStruct("RunCompleted", {
-  ...RunEventBase.fields,
+export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
+  ...RunEventBase,
   output: Schema.Json,
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: Schema.Literals(["completed", "model-stop"]),
-});
+}) {}
 
 /** Terminal event for a run that failed with an expected error. */
-export const RunFailed = Schema.TaggedStruct("RunFailed", {
-  ...RunEventBase.fields,
+export class RunFailed extends Schema.TaggedClass<RunFailed>()("RunFailed", {
+  ...RunEventBase,
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
-});
+}) {}
 
 /** Terminal event for a run stopped by interruption. */
-export const RunInterrupted = Schema.TaggedStruct("RunInterrupted", {
-  ...RunEventBase.fields,
+export class RunInterrupted extends Schema.TaggedClass<RunInterrupted>()("RunInterrupted", {
+  ...RunEventBase,
   message: Schema.String,
-});
+}) {}
 
 /** Terminal event for a run awaiting resumable external input. */
-export const RunSuspended = Schema.TaggedStruct("RunSuspended", {
-  ...RunEventBase.fields,
+export class RunSuspended extends Schema.TaggedClass<RunSuspended>()("RunSuspended", {
+  ...RunEventBase,
   reason: Schema.String,
-});
+}) {}
 
 /** Versioned union of stable semantic run events, excluding raw provider chunks. */
 export const RunEvent = Schema.Union([

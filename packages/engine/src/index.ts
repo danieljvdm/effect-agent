@@ -4,8 +4,11 @@ import {
   DateTime,
   Duration,
   Effect,
+  Fiber,
   Layer,
   Metric,
+  Option,
+  Ref,
   Schema,
   Scope,
   Semaphore,
@@ -13,52 +16,150 @@ import {
 } from "effect";
 import {
   Agent,
+  AgentApprovalDenied,
+  AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
   AgentPolicyError,
-  type ConversationId,
+  ApprovalRequested,
+  ConversationId,
+  type Definition,
   IdGenerator,
+  type InstructionSource,
+  ModelStarted,
   ModelProtocolError,
+  ReasoningDelta,
+  RunCompleted,
+  RunFailed,
+  RunStarted,
+  RunSuspended,
+  TextDelta,
+  ToolCallDeclared,
+  ToolCallFailed,
   type RunEvent,
-  type RunId,
+  RunId,
+  ToolCallStarted,
+  ToolCallSucceeded,
+  ToolProgress,
   ToolCallId,
+  TurnCompleted,
+  TurnStarted,
   type TurnId,
 } from "@effect-agent/core";
 import {
   type AiError,
   LanguageModel,
+  type Model,
   Prompt,
-  type Response,
+  Response,
   Tool,
   type Toolkit,
 } from "effect/unstable/ai";
 
+type RuntimeBinding<
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+> = {
+  readonly definition: Definition<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Toolkit.Toolkit<Tools>
+  > & {
+    readonly instructions: InstructionSource<
+      InputSchema["Type"],
+      NoInfer<InstructionError>,
+      NoInfer<InstructionRequirements>
+    >;
+  };
+  readonly model: Model.Model<Provider, LanguageModel.LanguageModel | ModelProvides, ModelRequires>;
+};
+
+type InstructionResultOf<Instructions, Input> = Instructions extends (input: Input) => infer Result
+  ? Result
+  : Instructions;
+
+type InstructionErrorOf<Instructions, Input> =
+  InstructionResultOf<Instructions, Input> extends Effect.Effect<
+    infer _Success,
+    infer Error,
+    infer _Requirements
+  >
+    ? Error
+    : never;
+
+type InstructionRequirementsOf<Instructions, Input> =
+  InstructionResultOf<Instructions, Input> extends Effect.Effect<
+    infer _Success,
+    infer _Error,
+    infer Requirements
+  >
+    ? Requirements
+    : never;
+
+import {
+  type CommandDrainPolicy,
+  type RunApprovalDecision,
+  type RunOptions,
+  type RunSchedulingHook,
+  type RunUsageDelta,
+} from "./run-options.ts";
+
+export * from "./run-options.ts";
+
+/** Schema factory for the terminal value produced by reducing a completed agent event stream. */
+export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
+  Schema.Struct({
+    output,
+    conversationId: ConversationId,
+    runId: RunId,
+    turns: Schema.Int.check(Schema.isGreaterThan(0)),
+    finishReason: Schema.Literals(["completed", "model-stop"]),
+  });
+
 /** Decoded terminal value produced by reducing a completed agent event stream. */
-export interface AgentResult<Output> {
-  readonly output: Output;
-  readonly conversationId: ConversationId;
-  readonly runId: RunId;
-  /** Number of model turns completed by the run. */
-  readonly turns: number;
-  /** Normalized reason that the runtime accepted the terminal output. */
-  readonly finishReason: "completed" | "model-stop";
-}
+export type AgentResult<Output> = ReturnType<
+  typeof AgentResultSchema<Schema.Schema<Output>>
+>["Type"];
 
 /** Expected agent, policy, and model-protocol failures exposed by the runtime. */
-export type AgentRuntimeFailure<AgentValue extends Agent.Any> =
+export type AgentRuntimeFailure<
+  AgentValue extends Agent.Any,
+  HookError = never,
+  InstructionError = never,
+> =
   | Agent.Failure<AgentValue>
   | AgentPolicyError
-  | ModelProtocolError;
+  | ModelProtocolError
+  | AgentApprovalDenied
+  | AgentApprovalPending
+  | HookError
+  | InstructionError;
 
 /** Inferred agent services plus the runtime's identity-generation authority. */
-export type AgentRuntimeRequirements<AgentValue extends Agent.Any> =
-  | Agent.Requirements<AgentValue>
-  | IdGenerator;
+export type AgentRuntimeRequirements<
+  AgentValue extends Agent.Any,
+  HookRequirements = never,
+  InstructionRequirements = never,
+> = Agent.Requirements<AgentValue> | IdGenerator | HookRequirements | InstructionRequirements;
 
 interface RunContext {
   readonly agentId: Agent.AnyDefinition["id"];
   readonly conversationId: ConversationId;
   readonly runId: RunId;
+  readonly pendingFollowUps: Array<Prompt.RawInput>;
+  history: Prompt.Prompt;
+  modelCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  costMicrousd: number;
   sequence: number;
 }
 
@@ -87,8 +188,13 @@ interface TurnTrace {
       state: PartLifecycle;
     }
   >;
-  readonly toolCallIds: Set<string>;
-  readonly toolCallProviderExecutions: Map<string, boolean>;
+  readonly toolCalls: Map<
+    string,
+    {
+      readonly name: string;
+      readonly providerExecuted: boolean;
+    }
+  >;
   readonly finalToolResultIds: Set<string>;
   readonly applicationToolCalls: Array<Response.ToolCallPart<string, unknown>>;
   readonly applicationToolResults: Array<{
@@ -99,6 +205,7 @@ interface TurnTrace {
   }>;
   finished: boolean;
   finishReason: Response.FinishReason | undefined;
+  usage: Response.Usage | undefined;
 }
 
 type PartLifecycle = "open" | "closed";
@@ -108,7 +215,9 @@ type ToolUnion<Tools extends Record<string, Tool.Any>> = Tools[keyof Tools];
 interface PreparedToolCall<Tools extends Record<string, Tool.Any>> {
   readonly call: Response.ToolCallPart<string, unknown>;
   readonly name: keyof Tools & string;
+  readonly decodedParams: Tool.Parameters<ToolUnion<Tools>>;
   readonly nativeHandlerParams: Tool.Parameters<ToolUnion<Tools>>;
+  readonly tool: ToolUnion<Tools>;
   readonly declarationIndex: number;
 }
 
@@ -136,7 +245,7 @@ const startPart = (
 ): Effect.Effect<void, ModelProtocolError> => {
   if (parts.has(id)) {
     return Effect.fail(
-      new ModelProtocolError({
+      ModelProtocolError.make({
         message: `Model response repeated ${description} start for ${id}`,
       }),
     );
@@ -153,7 +262,7 @@ const continuePart = (
   parts.get(id) === "open"
     ? Effect.void
     : Effect.fail(
-        new ModelProtocolError({
+        ModelProtocolError.make({
           message: `Model response emitted ${description} for inactive part ${id}`,
         }),
       );
@@ -207,48 +316,191 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   const name = call.name;
   if (!hasTool(toolkit.tools, name)) {
     return Effect.fail(
-      new ModelProtocolError({ message: `Model requested unknown Tool ${call.name}` }),
+      ModelProtocolError.make({ message: `Model requested unknown Tool ${call.name}` }),
     );
   }
-  const tool = toolkit.tools[name];
+  const tool = toolkit.tools[name] as ToolUnion<Tools>;
+  const decodedParams = call.params as Tool.Parameters<ToolUnion<Tools>>;
   const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
     input: Tool.Parameters<ToolUnion<Tools>>,
   ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;
-  return encodeParameters(call.params as Tool.Parameters<ToolUnion<Tools>>).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ModelProtocolError({
-          message: `Invalid parameters for Tool ${call.name}: ${cause.message}`,
-        }),
+  return encodeParameters(decodedParams).pipe(
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Invalid parameters for Tool ${call.name}: ${cause.message}`,
+      }),
     ),
     Effect.map((encodedParams) => ({
       call,
       name,
+      decodedParams,
       nativeHandlerParams: encodedParams as Tool.Parameters<ToolUnion<Tools>>,
+      tool,
       declarationIndex,
     })),
   );
 };
 
-const makeToolFailedEvent = (
+const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (
   context: RunContext,
   turnId: TurnId,
   call: Response.ToolCallPart<string, unknown>,
   error: unknown,
-): Effect.Effect<RunEvent, ModelProtocolError> =>
+): Effect.fn.Return<RunEvent, ModelProtocolError> {
+  const toolCallId = yield* decodeToolCallId(call.id);
+  return ToolCallFailed.make({
+    ...(yield* eventBase(context)),
+    turnId,
+    toolCallId,
+    toolName: call.name,
+    errorTag: errorTag(error),
+    message: errorMessage(error),
+    providerExecuted: false,
+  });
+});
+
+const approvalDecision = <Tools extends Record<string, Tool.Any>, Error, Requirements>(
+  context: RunContext,
+  turnId: TurnId,
+  prepared: PreparedToolCall<Tools>,
+  options: RunOptions<Error, Requirements>,
+): Effect.Effect<
+  | {
+      readonly required: false;
+    }
+  | {
+      readonly required: true;
+      readonly request: Response.ToolApprovalRequestPart;
+      readonly decision: RunApprovalDecision;
+    },
+  Error | ModelProtocolError,
+  Requirements
+> =>
   Effect.gen(function* () {
-    const toolCallId = yield* decodeToolCallId(call.id);
-    return {
-      ...(yield* eventBase(context)),
-      _tag: "ToolCallFailed" as const,
+    const approval = prepared.tool.needsApproval;
+    if (approval === undefined || approval === false) {
+      return { required: false as const };
+    }
+    const required =
+      typeof approval === "function"
+        ? yield* Effect.suspend(() => {
+            const result = approval(prepared.decodedParams, {
+              toolCallId: prepared.call.id,
+              messages: context.history.content,
+            });
+            return Effect.isEffect(result) ? result : Effect.succeed(result);
+          })
+        : approval;
+    if (!required) {
+      return { required: false as const };
+    }
+
+    const request = Response.makePart("tool-approval-request", {
+      approvalId: `${context.runId}:${prepared.call.id}`,
+      toolCallId: prepared.call.id,
+    });
+    if (options.approval === undefined) {
+      return {
+        required: true as const,
+        request,
+        decision: {
+          _tag: "unresolved" as const,
+          reason: "No approval decision hook is available",
+        },
+      };
+    }
+    const toolCallId = yield* decodeToolCallId(prepared.call.id);
+    const decision = yield* options.approval.request({
+      request,
+      conversationId: context.conversationId,
+      runId: context.runId,
       turnId,
       toolCallId,
-      toolName: call.name,
-      errorTag: errorTag(error),
-      message: errorMessage(error),
-      providerExecuted: false,
-    } satisfies RunEvent;
+      toolName: prepared.call.name,
+      parameters: prepared.decodedParams,
+    });
+    return {
+      required: true as const,
+      request,
+      decision,
+    };
   });
+
+/**
+ * Resolve every native Effect AI approval before the handler scheduler starts.
+ * Concatenating this preflight stream ahead of handler streams makes denied or
+ * unresolved batches a strict no-start boundary.
+ */
+const preflightApproval = <Tools extends Record<string, Tool.Any>, HookError, HookRequirements>(
+  context: RunContext,
+  turnId: TurnId,
+  prepared: PreparedToolCall<Tools>,
+  options: RunOptions<HookError, HookRequirements>,
+): Stream.Stream<
+  RunEvent,
+  HookError | ModelProtocolError | AgentApprovalDenied | AgentApprovalPending,
+  HookRequirements
+> =>
+  Stream.unwrap(
+    approvalDecision(context, turnId, prepared, options).pipe(
+      Effect.flatMap(
+        (
+          approval,
+        ): Effect.Effect<
+          Stream.Stream<RunEvent, AgentApprovalDenied | AgentApprovalPending>,
+          ModelProtocolError
+        > => {
+          if (!approval.required) {
+            return Effect.succeed(Stream.empty);
+          }
+          return Effect.gen(function* () {
+            const toolCallId = yield* decodeToolCallId(prepared.call.id);
+            const requested = ApprovalRequested.make({
+              ...(yield* eventBase(context)),
+              turnId,
+              toolCallId,
+              toolName: prepared.call.name,
+            });
+            switch (approval.decision._tag) {
+              case "approved": {
+                return Stream.succeed<RunEvent>(requested);
+              }
+              case "denied": {
+                const denied = AgentApprovalDenied.make({
+                  toolCallId: prepared.call.id,
+                  toolName: prepared.call.name,
+                  message: approval.decision.reason ?? "Tool approval was denied",
+                });
+                const failed = ToolCallFailed.make({
+                  ...(yield* eventBase(context)),
+                  turnId,
+                  toolCallId,
+                  toolName: prepared.call.name,
+                  errorTag: denied._tag,
+                  message: denied.message,
+                  providerExecuted: false,
+                });
+                return Stream.fromIterable<RunEvent>([requested, failed]).pipe(
+                  Stream.concat(Stream.fail(denied)),
+                );
+              }
+              case "unresolved": {
+                const pending = AgentApprovalPending.make({
+                  approvalId: approval.request.approvalId,
+                  toolCallId: prepared.call.id,
+                  toolName: prepared.call.name,
+                  message: approval.decision.reason ?? "Tool approval remains unresolved",
+                });
+                return Stream.succeed<RunEvent>(requested).pipe(
+                  Stream.concat(Stream.fail(pending)),
+                );
+              }
+            }
+          });
+        },
+      ),
+    ),
+  );
 
 const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   context: RunContext,
@@ -277,39 +529,37 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         }),
       );
       yield* Metric.update(toolCounter, 1);
-      return {
+      return ToolCallStarted.make({
         ...(yield* eventBase(context)),
-        _tag: "ToolCallStarted" as const,
         turnId,
         toolCallId,
         toolName: call.name,
-      } satisfies RunEvent;
+      });
     }).pipe(Effect.withLogSpan("AgentRuntime.tool")),
   );
 
   const results = Stream.unwrap(
     toolkit
       .handle(prepared.name, prepared.nativeHandlerParams, call.id)
-      .pipe(Effect.withSpan("AgentRuntime.toolkit.handle"), Effect.withTracerEnabled(false)),
+      .pipe(Effect.withSpan("AgentRuntime.toolkit.handle")),
   ).pipe(
     Stream.mapEffect((result) =>
       Effect.gen(function* () {
         if (terminal || trace.finalToolResultIds.has(call.id)) {
-          return yield* new ModelProtocolError({
+          return yield* ModelProtocolError.make({
             message: `Tool Call ${call.id} produced more than one terminal result`,
           });
         }
         const toolCallId = yield* decodeToolCallId(call.id);
         if (result.preliminary) {
-          return {
+          return ToolProgress.make({
             ...(yield* eventBase(context)),
-            _tag: "ToolProgress" as const,
             turnId,
             toolCallId,
             toolName: call.name,
             result: yield* decodeEventJson(result.encodedResult, "Tool result"),
             providerExecuted: false,
-          } satisfies RunEvent;
+          });
         }
 
         terminal = true;
@@ -321,26 +571,24 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
           isFailure: result.isFailure,
         };
         if (result.isFailure) {
-          return {
+          return ToolCallFailed.make({
             ...(yield* eventBase(context)),
-            _tag: "ToolCallFailed" as const,
             turnId,
             toolCallId,
             toolName: call.name,
             errorTag: errorTag(result.result),
             message: errorMessage(result.result),
             providerExecuted: false,
-          } satisfies RunEvent;
+          });
         }
-        return {
+        return ToolCallSucceeded.make({
           ...(yield* eventBase(context)),
-          _tag: "ToolCallSucceeded" as const,
           turnId,
           toolCallId,
           toolName: call.name,
           result: yield* decodeEventJson(result.encodedResult, "Tool result"),
           providerExecuted: false,
-        } satisfies RunEvent;
+        });
       }),
     ),
   );
@@ -350,7 +598,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
       terminal
         ? Effect.void
         : Effect.fail(
-            new ModelProtocolError({
+            ModelProtocolError.make({
               message: `Tool Call ${call.id} completed without a terminal result`,
             }),
           ),
@@ -383,17 +631,23 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
 };
 
 /** Execute a wholly preflighted native Toolkit batch under one finite engine semaphore. */
-const executeToolBatch = <Tools extends Record<string, Tool.Any>>(
+const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, HookRequirements>(
   context: RunContext,
   turnId: TurnId,
   toolkit: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallPart<string, unknown>>,
   trace: TurnTrace,
   concurrency: number,
+  options: RunOptions<HookError, HookRequirements>,
 ): Stream.Stream<
   RunEvent,
-  ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>,
-  Tool.HandlerServices<ToolUnion<Tools>>
+  | HookError
+  | ModelProtocolError
+  | AgentApprovalDenied
+  | AgentApprovalPending
+  | AiError.AiError
+  | Tool.HandlerError<ToolUnion<Tools>>,
+  HookRequirements | Tool.HandlerServices<ToolUnion<Tools>>
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -402,42 +656,237 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>>(
         prepareToolCall(toolkit, call, declarationIndex),
       );
       const semaphore = yield* Semaphore.make(concurrency);
-      return Stream.mergeAll(
-        prepared.map((call) =>
-          withSemaphorePermit(
-            semaphore,
-            executePreparedToolCall(context, turnId, toolkit, call, trace),
-          ),
-        ),
-        { concurrency: "unbounded" },
+      const approvalPreflight = prepared.reduce<
+        Stream.Stream<
+          RunEvent,
+          HookError | ModelProtocolError | AgentApprovalDenied | AgentApprovalPending,
+          HookRequirements
+        >
+      >(
+        (stream, call) =>
+          stream.pipe(Stream.concat(preflightApproval(context, turnId, call, options))),
+        Stream.empty,
       );
+
+      const groups: Array<ReadonlyArray<PreparedToolCall<Tools>>> = [];
+      let parallel: Array<PreparedToolCall<Tools>> = [];
+      for (const call of prepared) {
+        if (options.scheduling?.toolRequiresSequential?.(call.name) === true) {
+          if (parallel.length > 0) {
+            groups.push(parallel);
+            parallel = [];
+          }
+          groups.push([call]);
+        } else {
+          parallel.push(call);
+        }
+      }
+      if (parallel.length > 0) {
+        groups.push(parallel);
+      }
+
+      const handlers = groups.reduce<
+        Stream.Stream<
+          RunEvent,
+          ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>,
+          Tool.HandlerServices<ToolUnion<Tools>>
+        >
+      >((stream, group) => {
+        const next = Stream.mergeAll(
+          group.map((call) =>
+            withSemaphorePermit(
+              semaphore,
+              executePreparedToolCall(context, turnId, toolkit, call, trace),
+            ),
+          ),
+          { concurrency: "unbounded" },
+        );
+        return stream.pipe(Stream.concat(next));
+      }, Stream.empty);
+      return approvalPreflight.pipe(Stream.concat(handlers));
     }),
   );
 
-const errorMessage = (error: unknown): string => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
+const ErrorMessage = Schema.Struct({ message: Schema.String });
+const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
+
+const errorMessage = (error: unknown): string =>
+  Option.match(Schema.decodeUnknownOption(ErrorMessage)(error), {
+    onNone: () => String(error),
+    onSome: ({ message }) => message,
+  });
+
+const errorTag = (error: unknown): string =>
+  Option.match(Schema.decodeUnknownOption(ErrorTag)(error), {
+    onNone: () => "UnknownError",
+    onSome: ({ _tag }) => _tag,
+  });
+
+const schedulingConcurrency = (
+  configured: number,
+  scheduling: RunSchedulingHook | undefined,
+): Effect.Effect<number, AgentPolicyError> => {
+  const override = scheduling?.runOverride;
+  if (override === undefined) {
+    return Effect.succeed(configured);
   }
-  return String(error);
+  if (override.mode === "sequential") {
+    return Effect.succeed(1);
+  }
+  if (!Number.isInteger(override.concurrency) || override.concurrency <= 0) {
+    return Effect.fail(
+      AgentPolicyError.make({
+        limit: "usage",
+        message: "Run Tool concurrency override must be a positive integer",
+      }),
+    );
+  }
+  return Effect.succeed(Math.min(configured, override.concurrency));
 };
 
-const errorTag = (error: unknown): string => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    typeof error._tag === "string" &&
-    error._tag.length > 0
-  ) {
-    return error._tag;
+const inputsToPrompt = (
+  inputs: ReadonlyArray<Prompt.RawInput>,
+): Effect.Effect<Prompt.Prompt, ModelProtocolError> =>
+  Effect.try({
+    try: () => Prompt.fromMessages(inputs.flatMap((input) => Prompt.make(input).content)),
+    catch: (cause) =>
+      ModelProtocolError.make({
+        message: `Unable to materialize queued Run input: ${errorMessage(cause)}`,
+      }),
+  });
+
+const advanceHistory = <HookError, HookRequirements>(
+  context: RunContext,
+  history: Prompt.Prompt,
+  options: RunOptions<HookError, HookRequirements>,
+): Effect.Effect<void, HookError, HookRequirements> =>
+  Effect.gen(function* () {
+    context.history = history;
+    if (options.onHistory !== undefined) {
+      yield* options.onHistory(history);
+    }
+  });
+
+const drainInputs = <HookError, HookRequirements>(
+  context: RunContext,
+  options: RunOptions<HookError, HookRequirements>,
+): Effect.Effect<ReadonlyArray<Prompt.RawInput>, HookError, HookRequirements> =>
+  Effect.gen(function* () {
+    if (options.input === undefined) {
+      return [];
+    }
+    const commands = yield* options.input.drain(options.commandDrainPolicy ?? "one");
+    const steering: Array<Prompt.RawInput> = [];
+    for (const command of commands) {
+      if (command.kind === "steering") {
+        steering.push(command.input);
+      } else {
+        context.pendingFollowUps.push(command.input);
+      }
+    }
+    return steering;
+  });
+
+const takeFollowUps = (
+  context: RunContext,
+  policy: CommandDrainPolicy,
+): ReadonlyArray<Prompt.RawInput> => {
+  if (context.pendingFollowUps.length === 0) {
+    return [];
   }
-  return "UnknownError";
+  if (policy === "one") {
+    const input = context.pendingFollowUps.shift();
+    return input === undefined ? [] : [input];
+  }
+  return context.pendingFollowUps.splice(0, context.pendingFollowUps.length);
 };
+
+const appendInputs = <HookError, HookRequirements>(
+  context: RunContext,
+  source: Prompt.Prompt,
+  inputs: ReadonlyArray<Prompt.RawInput>,
+  options: RunOptions<HookError, HookRequirements>,
+): Effect.Effect<Prompt.Prompt, HookError | ModelProtocolError, HookRequirements> =>
+  Effect.gen(function* () {
+    if (inputs.length === 0) {
+      return source;
+    }
+    const additions = yield* inputsToPrompt(inputs);
+    const history = Prompt.fromMessages([...source.content, ...additions.content]);
+    yield* advanceHistory(context, history, options);
+    return history;
+  });
+
+const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>(
+  agent: AgentValue,
+  context: RunContext,
+  trace: TurnTrace,
+  options: RunOptions<HookError, HookRequirements>,
+): Effect.Effect<void, AgentPolicyError | HookError, HookRequirements> =>
+  Effect.gen(function* () {
+    if (trace.usage === undefined) {
+      return yield* AgentPolicyError.make({
+        limit: "usage",
+        message: "A completed model response did not report usage",
+      });
+    }
+    const inputTokens = Math.max(
+      0,
+      trace.usage.inputTokens.total ??
+        (trace.usage.inputTokens.uncached ?? 0) + (trace.usage.inputTokens.cacheRead ?? 0),
+    );
+    const outputTokens = Math.max(0, trace.usage.outputTokens.total ?? 0);
+    const totalTokens = inputTokens + outputTokens;
+    const costMicrousd =
+      options.estimateCostMicrousd === undefined
+        ? 0
+        : yield* options.estimateCostMicrousd(trace.usage);
+    if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
+      return yield* AgentPolicyError.make({
+        limit: "cost",
+        message: "Model cost estimation must produce a non-negative integer number of microdollars",
+      });
+    }
+    context.modelCalls += 1;
+    context.inputTokens += inputTokens;
+    context.outputTokens += outputTokens;
+    context.costMicrousd += costMicrousd;
+
+    const tokenBudget = agent.definition.policy.tokenBudget;
+    if (tokenBudget !== undefined && context.inputTokens + context.outputTokens > tokenBudget) {
+      return yield* AgentPolicyError.make({
+        limit: "tokens",
+        message: `Agent exceeded its ${tokenBudget} token budget`,
+      });
+    }
+    const costBudget = agent.definition.policy.costBudgetMicrousd;
+    if (costBudget !== undefined) {
+      if (options.estimateCostMicrousd === undefined) {
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: "Agent cost budget requires a model cost estimator",
+        });
+      }
+      if (context.costMicrousd > costBudget) {
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: `Agent exceeded its ${costBudget} microdollar cost budget`,
+        });
+      }
+    }
+    if (options.budget !== undefined) {
+      const delta: RunUsageDelta = {
+        modelCalls: 1,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        toolCalls: trace.toolCalls.size,
+        costMicrousd,
+        usage: trace.usage,
+      };
+      yield* options.budget.consume(delta);
+    }
+  });
 
 const eventBase = Effect.fn("AgentRuntime.eventBase")(function* (context: RunContext) {
   const timestamp = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
@@ -453,103 +902,108 @@ const eventBase = Effect.fn("AgentRuntime.eventBase")(function* (context: RunCon
   };
 });
 
-const decodeInput = <AgentValue extends Agent.Any>(
-  agent: AgentValue,
-  input: unknown,
-): Effect.Effect<
-  Agent.Input<AgentValue>,
-  AgentInputError,
-  AgentValue["definition"]["input"]["DecodingServices"]
-> =>
-  Schema.decodeUnknownEffect(agent.definition.input)(input).pipe(
-    Effect.mapError(
-      (cause) =>
-        new AgentInputError({
+const decodeInput = Effect.fn("AgentRuntime.decodeInput")(
+  <AgentValue extends Agent.Any>(
+    agent: AgentValue,
+    input: unknown,
+  ): Effect.Effect<
+    Agent.Input<AgentValue>,
+    AgentInputError,
+    AgentValue["definition"]["input"]["DecodingServices"]
+  > =>
+    Schema.decodeUnknownEffect(agent.definition.input)(input).pipe(
+      Effect.mapError((cause) =>
+        AgentInputError.make({
           message: cause.message,
         }),
+      ),
     ),
-  );
+);
 
-const evaluateInstructions = <AgentValue extends Agent.Any>(
-  agent: AgentValue,
-  input: Agent.Input<AgentValue>,
-) =>
-  Effect.suspend(() => {
-    const instruction = agent.definition.instructions;
-    const result = typeof instruction === "function" ? instruction(input) : instruction;
-    return Effect.isEffect(result) ? result : Effect.succeed(result);
-  });
+const evaluateInstructions = Effect.fn("AgentRuntime.evaluateInstructions")(
+  <Input, Error, Services>(
+    instructions: InstructionSource<Input, Error, Services>,
+    input: Input,
+  ): Effect.Effect<Prompt.RawInput, Error, Services> =>
+    Effect.suspend(() => {
+      const result = typeof instructions === "function" ? instructions(input) : instructions;
+      return Effect.isEffect(result) ? result : Effect.succeed(result);
+    }),
+);
 
-const encodeInput = <AgentValue extends Agent.Any>(
-  agent: AgentValue,
-  input: Agent.Input<AgentValue>,
-): Effect.Effect<
-  AgentValue["definition"]["input"]["Encoded"],
-  AgentInputError,
-  AgentValue["definition"]["input"]["EncodingServices"]
-> =>
-  Schema.encodeEffect(agent.definition.input)(input).pipe(
-    Effect.mapError(
-      (cause) =>
-        new AgentInputError({
+const encodeInput = Effect.fn("AgentRuntime.encodeInput")(
+  <AgentValue extends Agent.Any>(
+    agent: AgentValue,
+    input: Agent.Input<AgentValue>,
+  ): Effect.Effect<
+    AgentValue["definition"]["input"]["Encoded"],
+    AgentInputError,
+    AgentValue["definition"]["input"]["EncodingServices"]
+  > =>
+    Schema.encodeEffect(agent.definition.input)(input).pipe(
+      Effect.mapError((cause) =>
+        AgentInputError.make({
           message: `Unable to encode Agent input: ${cause.message}`,
         }),
+      ),
     ),
-  );
+);
 
-const makeInitialPrompt = (
-  instructions: Prompt.RawInput,
-  input: unknown,
-): Effect.Effect<Prompt.Prompt, AgentInputError> =>
-  Effect.try({
-    try: () => {
-      const encodedInput = JSON.stringify(input);
-      if (encodedInput === undefined) {
-        throw new Error("Agent input cannot be represented as JSON");
-      }
-      const instructionPrompt =
-        typeof instructions === "string"
-          ? Prompt.fromMessages([
-              Prompt.makeMessage("system", {
-                content: instructions,
-              }),
-            ])
-          : Prompt.make(instructions);
-      return Prompt.fromMessages([
-        ...instructionPrompt.content,
-        Prompt.makeMessage("user", {
-          content: [Prompt.makePart("text", { text: encodedInput })],
+const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
+  (
+    instructions: Prompt.RawInput,
+    input: unknown,
+    history: Prompt.Prompt,
+  ): Effect.Effect<Prompt.Prompt, AgentInputError> =>
+    Effect.try({
+      try: () => {
+        const encodedInput = JSON.stringify(input);
+        if (encodedInput === undefined) {
+          throw new Error("Agent input cannot be represented as JSON");
+        }
+        const instructionPrompt =
+          typeof instructions === "string"
+            ? Prompt.fromMessages([
+                Prompt.makeMessage("system", {
+                  content: instructions,
+                }),
+              ])
+            : Prompt.make(instructions);
+        return Prompt.fromMessages([
+          ...instructionPrompt.content,
+          ...history.content,
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: encodedInput })],
+          }),
+        ]);
+      },
+      catch: (cause) =>
+        AgentInputError.make({
+          message: `Unable to materialize Agent input: ${errorMessage(cause)}`,
         }),
-      ]);
-    },
-    catch: (cause) =>
-      new AgentInputError({
-        message: `Unable to materialize Agent input: ${errorMessage(cause)}`,
-      }),
-  });
+    }),
+);
 
-const decodeToolCallId = (id: string): Effect.Effect<ToolCallId, ModelProtocolError> =>
+const decodeToolCallId = Effect.fn("AgentRuntime.decodeToolCallId")((id: string) =>
   Schema.decodeEffect(ToolCallId)(id).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ModelProtocolError({
-          message: `Invalid Tool Call ID: ${cause.message}`,
-        }),
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Invalid Tool Call ID: ${cause.message}`,
+      }),
     ),
-  );
+  ),
+);
 
-const decodeEventJson = (
-  value: unknown,
-  label: string,
-): Effect.Effect<Schema.Json, ModelProtocolError> =>
-  Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
-    Effect.mapError(
-      (cause) =>
-        new ModelProtocolError({
+const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
+  (value: unknown, label: string): Effect.Effect<Schema.Json, ModelProtocolError> =>
+    Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
+      Effect.mapError((cause) =>
+        ModelProtocolError.make({
           message: `${label} is not JSON: ${cause.message}`,
         }),
+      ),
     ),
-  );
+);
 
 /**
  * Preserves provider-executed results as assistant content while application
@@ -601,284 +1055,341 @@ const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
   return Prompt.fromMessages(messages);
 };
 
-const eventsForPart = (
+const eventsForPart = Effect.fn("AgentRuntime.eventsForPart")(function* <
+  Tools extends Record<string, Tool.Any>,
+>(
   context: RunContext,
   turnId: TurnId,
   turn: number,
+  tools: Tools,
   trace: TurnTrace,
   part: Response.AnyPart,
-): Effect.Effect<ReadonlyArray<RunEvent>, ModelProtocolError> =>
-  Effect.gen(function* () {
-    if (trace.finished) {
-      return yield* new ModelProtocolError({
-        message: "Model response emitted content after its finish part",
-      });
+): Effect.fn.Return<
+  ReadonlyArray<RunEvent>,
+  ModelProtocolError,
+  Tool.HandlerServices<ToolUnion<Tools>>
+> {
+  if (trace.finished) {
+    return yield* ModelProtocolError.make({
+      message: "Model response emitted content after its finish part",
+    });
+  }
+  trace.parts.push(part);
+  switch (part.type) {
+    case "text-start": {
+      yield* startPart(trace.textParts, part.id, "text");
+      return [];
     }
-    trace.parts.push(part);
-    switch (part.type) {
-      case "text-start": {
-        yield* startPart(trace.textParts, part.id, "text");
-        return [];
-      }
-      case "text-delta": {
-        yield* continuePart(trace.textParts, part.id, "text delta");
-        trace.text.push(part.delta);
-        return [
-          {
-            ...(yield* eventBase(context)),
-            _tag: "TextDelta" as const,
-            turnId,
-            text: part.delta,
-          },
-        ];
-      }
-      case "text-end": {
-        yield* endPart(trace.textParts, part.id, "text");
-        return [];
-      }
-      case "reasoning-start": {
-        yield* startPart(trace.reasoningParts, part.id, "reasoning");
-        return [];
-      }
-      case "reasoning-delta": {
-        yield* continuePart(trace.reasoningParts, part.id, "reasoning delta");
-        return [
-          {
-            ...(yield* eventBase(context)),
-            _tag: "ReasoningDelta" as const,
-            turnId,
-            text: part.delta,
-          },
-        ];
-      }
-      case "reasoning-end": {
-        yield* endPart(trace.reasoningParts, part.id, "reasoning");
-        return [];
-      }
-      case "tool-params-start": {
-        if (trace.toolParameterParts.has(part.id)) {
-          return yield* new ModelProtocolError({
-            message: `Model response repeated Tool parameter start for ${part.id}`,
-          });
-        }
-        trace.toolParameterParts.set(part.id, {
-          name: part.name,
-          providerExecuted: part.providerExecuted,
-          state: "open",
-        });
-        return [];
-      }
-      case "tool-params-delta": {
-        const parameterPart = trace.toolParameterParts.get(part.id);
-        if (parameterPart?.state !== "open") {
-          return yield* new ModelProtocolError({
-            message: `Model response emitted Tool parameter delta for inactive part ${part.id}`,
-          });
-        }
-        return [];
-      }
-      case "tool-params-end": {
-        const parameterPart = trace.toolParameterParts.get(part.id);
-        if (parameterPart?.state !== "open") {
-          return yield* new ModelProtocolError({
-            message: `Model response emitted Tool parameter end for inactive part ${part.id}`,
-          });
-        }
-        parameterPart.state = "closed";
-        return [];
-      }
-      case "tool-call": {
-        if (trace.toolCallIds.has(part.id)) {
-          return yield* new ModelProtocolError({
-            message: `Model response repeated Tool Call ID ${part.id}`,
-          });
-        }
-        const parameterPart = trace.toolParameterParts.get(part.id);
-        if (parameterPart?.state === "open") {
-          return yield* new ModelProtocolError({
-            message: `Model response declared Tool Call ${part.id} before its parameters completed`,
-          });
-        }
-        if (
-          parameterPart !== undefined &&
-          (parameterPart.name !== part.name ||
-            parameterPart.providerExecuted !== part.providerExecuted)
-        ) {
-          return yield* new ModelProtocolError({
-            message: `Completed Tool parameters did not match Tool Call ${part.id}`,
-          });
-        }
-        const toolCallId = yield* decodeToolCallId(part.id);
-        const parameters = yield* decodeEventJson(part.params, "Tool parameters");
-        trace.toolCallIds.add(part.id);
-        trace.toolCallProviderExecutions.set(part.id, part.providerExecuted);
-        if (!part.providerExecuted) {
-          trace.applicationToolCalls.push(part);
-        }
-        const declared = {
+    case "text-delta": {
+      yield* continuePart(trace.textParts, part.id, "text delta");
+      trace.text.push(part.delta);
+      return [
+        TextDelta.make({
           ...(yield* eventBase(context)),
-          _tag: "ToolCallDeclared" as const,
           turnId,
-          toolCallId,
-          toolName: part.name,
-          parameters,
-          providerExecuted: part.providerExecuted,
-        };
-        return [declared];
+          text: part.delta,
+        }),
+      ];
+    }
+    case "text-end": {
+      yield* endPart(trace.textParts, part.id, "text");
+      return [];
+    }
+    case "reasoning-start": {
+      yield* startPart(trace.reasoningParts, part.id, "reasoning");
+      return [];
+    }
+    case "reasoning-delta": {
+      yield* continuePart(trace.reasoningParts, part.id, "reasoning delta");
+      return [
+        ReasoningDelta.make({
+          ...(yield* eventBase(context)),
+          turnId,
+          text: part.delta,
+        }),
+      ];
+    }
+    case "reasoning-end": {
+      yield* endPart(trace.reasoningParts, part.id, "reasoning");
+      return [];
+    }
+    case "tool-params-start": {
+      if (trace.toolParameterParts.has(part.id)) {
+        return yield* ModelProtocolError.make({
+          message: `Model response repeated Tool parameter start for ${part.id}`,
+        });
       }
-      case "tool-result": {
-        if (!trace.toolCallIds.has(part.id)) {
-          return yield* new ModelProtocolError({
-            message: `Model response returned an unrequested Tool result ${part.id}`,
-          });
-        }
-        if (trace.toolCallProviderExecutions.get(part.id) !== part.providerExecuted) {
-          return yield* new ModelProtocolError({
-            message: `Tool result execution boundary did not match Tool Call ${part.id}`,
-          });
-        }
-        if (!part.providerExecuted) {
-          return yield* new ModelProtocolError({
-            message: `Model response included an application Tool result before engine execution for ${part.id}`,
-          });
-        }
-        const toolCallId = yield* decodeToolCallId(part.id);
-        const result = yield* decodeEventJson(part.encodedResult, "Tool result");
-        if (part.preliminary === true) {
-          return [
-            {
-              ...(yield* eventBase(context)),
-              _tag: "ToolProgress" as const,
-              turnId,
-              toolCallId,
-              toolName: part.name,
-              result,
-              providerExecuted: part.providerExecuted,
-            },
-          ];
-        }
-        if (trace.finalToolResultIds.has(part.id)) {
-          return yield* new ModelProtocolError({
-            message: `Tool Call ${part.id} produced more than one terminal result`,
-          });
-        }
-        trace.finalToolResultIds.add(part.id);
-        if (part.isFailure) {
-          return [
-            {
-              ...(yield* eventBase(context)),
-              _tag: "ToolCallFailed" as const,
-              turnId,
-              toolCallId,
-              toolName: part.name,
-              errorTag: errorTag(part.result),
-              message: errorMessage(part.result),
-              providerExecuted: part.providerExecuted,
-            },
-          ];
-        }
+      trace.toolParameterParts.set(part.id, {
+        name: part.name,
+        providerExecuted: part.providerExecuted,
+        state: "open",
+      });
+      return [];
+    }
+    case "tool-params-delta": {
+      const parameterPart = trace.toolParameterParts.get(part.id);
+      if (parameterPart?.state !== "open") {
+        return yield* ModelProtocolError.make({
+          message: `Model response emitted Tool parameter delta for inactive part ${part.id}`,
+        });
+      }
+      return [];
+    }
+    case "tool-params-end": {
+      const parameterPart = trace.toolParameterParts.get(part.id);
+      if (parameterPart?.state !== "open") {
+        return yield* ModelProtocolError.make({
+          message: `Model response emitted Tool parameter end for inactive part ${part.id}`,
+        });
+      }
+      parameterPart.state = "closed";
+      return [];
+    }
+    case "tool-call": {
+      if (!hasTool(tools, part.name)) {
+        return yield* ModelProtocolError.make({
+          message: `Model requested unknown Tool ${part.name}`,
+        });
+      }
+      if (trace.toolCalls.has(part.id)) {
+        return yield* ModelProtocolError.make({
+          message: `Model response repeated Tool Call ID ${part.id}`,
+        });
+      }
+      const parameterPart = trace.toolParameterParts.get(part.id);
+      if (parameterPart?.state === "open") {
+        return yield* ModelProtocolError.make({
+          message: `Model response declared Tool Call ${part.id} before its parameters completed`,
+        });
+      }
+      if (
+        parameterPart !== undefined &&
+        (parameterPart.name !== part.name ||
+          parameterPart.providerExecuted !== part.providerExecuted)
+      ) {
+        return yield* ModelProtocolError.make({
+          message: `Completed Tool parameters did not match Tool Call ${part.id}`,
+        });
+      }
+      const toolCallId = yield* decodeToolCallId(part.id);
+      const tool = tools[part.name]! as ToolUnion<Tools>;
+      const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
+        input: Tool.Parameters<ToolUnion<Tools>>,
+      ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;
+      const encodedParameters = yield* encodeParameters(
+        part.params as Tool.Parameters<ToolUnion<Tools>>,
+      ).pipe(
+        Effect.mapError((cause) =>
+          ModelProtocolError.make({
+            message: `Invalid parameters for Tool ${part.name}: ${cause.message}`,
+          }),
+        ),
+      );
+      const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
+      trace.toolCalls.set(part.id, {
+        name: part.name,
+        providerExecuted: part.providerExecuted,
+      });
+      if (!part.providerExecuted) {
+        trace.applicationToolCalls.push(part);
+      }
+      const declared = ToolCallDeclared.make({
+        ...(yield* eventBase(context)),
+        turnId,
+        toolCallId,
+        toolName: part.name,
+        parameters,
+        providerExecuted: part.providerExecuted,
+      });
+      return [declared];
+    }
+    case "tool-result": {
+      const declaredCall = trace.toolCalls.get(part.id);
+      if (declaredCall === undefined) {
+        return yield* ModelProtocolError.make({
+          message: `Model response returned an unrequested Tool result ${part.id}`,
+        });
+      }
+      if (declaredCall.name !== part.name) {
+        return yield* ModelProtocolError.make({
+          message: `Tool result name did not match Tool Call ${part.id}: expected ${declaredCall.name}, received ${part.name}`,
+        });
+      }
+      if (declaredCall.providerExecuted !== part.providerExecuted) {
+        return yield* ModelProtocolError.make({
+          message: `Tool result execution boundary did not match Tool Call ${part.id}`,
+        });
+      }
+      if (!part.providerExecuted) {
+        return yield* ModelProtocolError.make({
+          message: `Model response included an application Tool result before engine execution for ${part.id}`,
+        });
+      }
+      const toolCallId = yield* decodeToolCallId(part.id);
+      const result = yield* decodeEventJson(part.encodedResult, "Tool result");
+      if (part.preliminary === true) {
         return [
-          {
+          ToolProgress.make({
             ...(yield* eventBase(context)),
-            _tag: "ToolCallSucceeded" as const,
             turnId,
             toolCallId,
             toolName: part.name,
             result,
             providerExecuted: part.providerExecuted,
-          },
+          }),
         ];
       }
-      case "finish": {
-        const openPart = firstOpenPart(trace);
-        if (openPart !== undefined) {
-          return yield* new ModelProtocolError({
-            message: `Model response finished before completing ${openPart}`,
-          });
-        }
-        trace.finished = true;
-        trace.finishReason = part.reason;
-        return [
-          {
-            ...(yield* eventBase(context)),
-            _tag: "TurnCompleted" as const,
-            turnId,
-            turn,
-            finishReason: part.reason,
-          },
-        ];
-      }
-      case "error": {
-        return yield* new ModelProtocolError({
-          message: `Model response failed: ${errorMessage(part.error)}`,
+      if (trace.finalToolResultIds.has(part.id)) {
+        return yield* ModelProtocolError.make({
+          message: `Tool Call ${part.id} produced more than one terminal result`,
         });
       }
-      default: {
-        return [];
+      trace.finalToolResultIds.add(part.id);
+      if (part.isFailure) {
+        return [
+          ToolCallFailed.make({
+            ...(yield* eventBase(context)),
+            turnId,
+            toolCallId,
+            toolName: part.name,
+            errorTag: errorTag(part.result),
+            message: errorMessage(part.result),
+            providerExecuted: part.providerExecuted,
+          }),
+        ];
       }
+      return [
+        ToolCallSucceeded.make({
+          ...(yield* eventBase(context)),
+          turnId,
+          toolCallId,
+          toolName: part.name,
+          result,
+          providerExecuted: part.providerExecuted,
+        }),
+      ];
     }
-  });
+    case "finish": {
+      const openPart = firstOpenPart(trace);
+      if (openPart !== undefined) {
+        return yield* ModelProtocolError.make({
+          message: `Model response finished before completing ${openPart}`,
+        });
+      }
+      trace.finished = true;
+      trace.finishReason = part.reason;
+      trace.usage = part.usage;
+      return [
+        TurnCompleted.make({
+          ...(yield* eventBase(context)),
+          turnId,
+          turn,
+          finishReason: part.reason,
+        }),
+      ];
+    }
+    case "error": {
+      return yield* ModelProtocolError.make({
+        message: `Model response failed: ${errorMessage(part.error)}`,
+      });
+    }
+    default: {
+      return [];
+    }
+  }
+});
 
-const decodeFinalOutput = <AgentValue extends Agent.Any>(
+const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* <
+  AgentValue extends Agent.Any,
+>(
   agent: AgentValue,
   text: string,
-): Effect.Effect<
+): Effect.fn.Return<
   Schema.Json,
   AgentOutputError,
   AgentValue["definition"]["output"]["DecodingServices"]
-> =>
-  Effect.gen(function* () {
-    const json: unknown = yield* Effect.try({
-      try: () => JSON.parse(text),
-      catch: (cause) =>
-        new AgentOutputError({
-          message: `Agent output is not valid JSON: ${errorMessage(cause)}`,
-        }),
-    });
-    const eventJson = yield* Schema.decodeUnknownEffect(Schema.Json)(json).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AgentOutputError({
-            message: `Agent output is not JSON: ${cause.message}`,
-          }),
-      ),
-    );
-    const candidateOutput: unknown = eventJson;
-    yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AgentOutputError({
-            message: cause.message,
-          }),
-      ),
-    );
-    return eventJson;
-  });
+> {
+  const eventJson = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Json))(
+    text,
+  ).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: `Agent output is not valid JSON: ${cause.message}`,
+      }),
+    ),
+  );
+  const candidateOutput: unknown = eventJson;
+  yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: cause.message,
+      }),
+    ),
+  );
+  return eventJson;
+});
 
-const makeTurn = <AgentValue extends Agent.Any>(
-  agent: AgentValue,
+const makeTurn = <
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookError,
+  HookRequirements,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+>(
+  agent: RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements
+  >,
   context: RunContext,
   prompt: Prompt.Prompt,
   turn: number,
   priorToolCalls: number,
-): Stream.Stream<RunEvent, AgentRuntimeFailure<AgentValue>, AgentRuntimeRequirements<AgentValue>> =>
+  options: RunOptions<HookError, HookRequirements>,
+): Stream.Stream<
+  RunEvent,
+  AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
+> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
+      const modelContext =
+        options.context === undefined
+          ? { prompt }
+          : yield* options.context.prepare({
+              conversationId: context.conversationId,
+              runId: context.runId,
+              turnId,
+              turn,
+              source: prompt,
+            });
       const trace: TurnTrace = {
         parts: [],
         text: [],
         textParts: new Map(),
         reasoningParts: new Map(),
         toolParameterParts: new Map(),
-        toolCallIds: new Set(),
-        toolCallProviderExecutions: new Map(),
+        toolCalls: new Map(),
         finalToolResultIds: new Set(),
         applicationToolCalls: [],
         applicationToolResults: [],
         finished: false,
         finishReason: undefined,
+        usage: undefined,
       };
 
       const started = Stream.fromEffect(
@@ -892,28 +1403,31 @@ const makeTurn = <AgentValue extends Agent.Any>(
             }),
           );
           return [
-            {
+            TurnStarted.make({
               ...(yield* eventBase(context)),
-              _tag: "TurnStarted" as const,
               turnId,
               turn,
-            },
-            {
+            }),
+            ModelStarted.make({
               ...(yield* eventBase(context)),
-              _tag: "ModelStarted" as const,
               turnId,
               turn,
-            },
+            }),
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.model")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
-      const response = LanguageModel.streamText({
-        prompt,
-        toolkit: agent.definition.toolkit,
-        disableToolCallResolution: true,
-      }).pipe(
-        Stream.mapEffect((part) => eventsForPart(context, turnId, turn, trace, part)),
+      const response = guardBudgetStream(
+        LanguageModel.streamText({
+          prompt: modelContext.prompt,
+          toolkit: agent.definition.toolkit,
+          disableToolCallResolution: true,
+        }),
+        options.budget,
+      ).pipe(
+        Stream.mapEffect((part) =>
+          eventsForPart(context, turnId, turn, agent.definition.toolkit.tools, trace, part),
+        ),
         Stream.flatMap(Stream.fromIterable),
         Stream.withSpan("AgentRuntime.model", {
           attributes: {
@@ -928,58 +1442,76 @@ const makeTurn = <AgentValue extends Agent.Any>(
         Effect.gen(function* () {
           if (!trace.finished) {
             return failRunEventStream(
-              new ModelProtocolError({
+              ModelProtocolError.make({
                 message: "Model response ended without a finish part",
               }),
             );
           }
-          const toolCalls = priorToolCalls + trace.toolCallIds.size;
+          yield* consumeUsage(agent, context, trace, options);
+          const toolCalls = priorToolCalls + trace.toolCalls.size;
           if (toolCalls > agent.definition.policy.maxToolCalls) {
             return failRunEventStream(
-              new AgentPolicyError({
+              AgentPolicyError.make({
                 limit: "tool-calls",
                 message: `Agent exceeded its ${agent.definition.policy.maxToolCalls} Tool Call limit`,
               }),
             );
           }
           const providerOnly =
-            trace.toolCallIds.size > 0 &&
-            Array.from(trace.toolCallProviderExecutions.values()).every(
-              (providerExecuted) => providerExecuted,
-            );
-          const missingProviderResult = Array.from(trace.toolCallProviderExecutions.entries()).find(
-            ([id, providerExecuted]) => providerExecuted && !trace.finalToolResultIds.has(id),
+            trace.toolCalls.size > 0 &&
+            Array.from(trace.toolCalls.values()).every(({ providerExecuted }) => providerExecuted);
+          const missingProviderResult = Array.from(trace.toolCalls.entries()).find(
+            ([id, call]) => call.providerExecuted && !trace.finalToolResultIds.has(id),
           );
           if (missingProviderResult !== undefined) {
             return failRunEventStream(
-              new ModelProtocolError({
+              ModelProtocolError.make({
                 message: `Provider-executed Tool Call ${missingProviderResult[0]} completed without a terminal result`,
               }),
             );
           }
           if (providerOnly && trace.finishReason === "stop") {
+            const responsePrompt = promptFromTurnParts(trace);
+            const history = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
+            yield* advanceHistory(context, history, options);
+            const steering = yield* drainInputs(context, options);
+            const queued =
+              steering.length > 0
+                ? steering
+                : takeFollowUps(context, options.commandDrainPolicy ?? "one");
+            if (queued.length > 0) {
+              if (turn >= agent.definition.policy.maxTurns) {
+                return failRunEventStream(
+                  AgentPolicyError.make({
+                    limit: "turns",
+                    message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+                  }),
+                );
+              }
+              const nextPrompt = yield* appendInputs(context, history, queued, options);
+              return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+            }
             const output = yield* decodeFinalOutput(agent, trace.text.join(""));
-            const completed = {
+            const completed = RunCompleted.make({
               ...(yield* eventBase(context)),
-              _tag: "RunCompleted" as const,
               output,
               turns: turn,
-              finishReason: "model-stop" as const,
-            } satisfies RunEvent;
+              finishReason: "model-stop",
+            });
             return Stream.succeed<RunEvent>(completed);
           }
 
-          if (trace.toolCallIds.size > 0) {
+          if (trace.toolCalls.size > 0) {
             if (trace.finishReason !== "tool-calls") {
               return failRunEventStream(
-                new ModelProtocolError({
+                ModelProtocolError.make({
                   message: `Model declared Tool Calls with incompatible finish reason ${trace.finishReason}`,
                 }),
               );
             }
             if (turn >= agent.definition.policy.maxTurns) {
               return failRunEventStream(
-                new AgentPolicyError({
+                AgentPolicyError.make({
                   limit: "turns",
                   message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
                 }),
@@ -987,28 +1519,34 @@ const makeTurn = <AgentValue extends Agent.Any>(
             }
             if (trace.applicationToolCalls.length === 0) {
               const responsePrompt = promptFromTurnParts(trace);
-              return makeTurn(
-                agent,
-                context,
-                Prompt.fromMessages([...prompt.content, ...responsePrompt.content]),
-                turn + 1,
-                toolCalls,
-              );
+              const history = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
+              yield* advanceHistory(context, history, options);
+              const steering = yield* drainInputs(context, options);
+              const nextPrompt = yield* appendInputs(context, history, steering, options);
+              return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
             }
             const toolkit = yield* agent.definition.toolkit;
-            const toolResults = executeToolBatch(
-              context,
-              turnId,
-              toolkit,
-              trace.applicationToolCalls,
-              trace,
+            const concurrency = yield* schedulingConcurrency(
               agent.definition.policy.toolConcurrency,
+              options.scheduling,
+            );
+            const toolResults = guardBudgetStream(
+              executeToolBatch(
+                context,
+                turnId,
+                toolkit,
+                trace.applicationToolCalls,
+                trace,
+                concurrency,
+                options,
+              ),
+              options.budget,
             );
             const continuationAfterTools = Stream.unwrap(
-              Effect.sync(() => {
-                if (trace.finalToolResultIds.size !== trace.toolCallIds.size) {
+              Effect.gen(function* () {
+                if (trace.finalToolResultIds.size !== trace.toolCalls.size) {
                   return failRunEventStream(
-                    new ModelProtocolError({
+                    ModelProtocolError.make({
                       message: "A Tool Call turn completed without one final result per Tool Call",
                     }),
                   );
@@ -1021,7 +1559,7 @@ const makeTurn = <AgentValue extends Agent.Any>(
                   );
                   if (result === undefined) {
                     return failRunEventStream(
-                      new ModelProtocolError({ message: "Tool batch did not settle completely" }),
+                      ModelProtocolError.make({ message: "Tool batch did not settle completely" }),
                     );
                   }
                   orderedResults.push(result);
@@ -1041,7 +1579,10 @@ const makeTurn = <AgentValue extends Agent.Any>(
                   ...responsePrompt.content,
                   toolMessage,
                 ]);
-                return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls);
+                yield* advanceHistory(context, nextPrompt, options);
+                const steering = yield* drainInputs(context, options);
+                const nextHistory = yield* appendInputs(context, nextPrompt, steering, options);
+                return makeTurn(agent, context, nextHistory, turn + 1, toolCalls, options);
               }),
             );
             return toolResults.pipe(Stream.concat(continuationAfterTools));
@@ -1049,19 +1590,38 @@ const makeTurn = <AgentValue extends Agent.Any>(
 
           if (trace.finishReason !== "stop") {
             return failRunEventStream(
-              new ModelProtocolError({
+              ModelProtocolError.make({
                 message: `Model stopped without a final answer (${trace.finishReason})`,
               }),
             );
           }
+          const responsePrompt = promptFromTurnParts(trace);
+          const history = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
+          yield* advanceHistory(context, history, options);
+          const steering = yield* drainInputs(context, options);
+          const queued =
+            steering.length > 0
+              ? steering
+              : takeFollowUps(context, options.commandDrainPolicy ?? "one");
+          if (queued.length > 0) {
+            if (turn >= agent.definition.policy.maxTurns) {
+              return failRunEventStream(
+                AgentPolicyError.make({
+                  limit: "turns",
+                  message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+                }),
+              );
+            }
+            const nextPrompt = yield* appendInputs(context, history, queued, options);
+            return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+          }
           const output = yield* decodeFinalOutput(agent, trace.text.join(""));
-          const completed = {
+          const completed = RunCompleted.make({
             ...(yield* eventBase(context)),
-            _tag: "RunCompleted" as const,
             output,
             turns: turn,
-            finishReason: "model-stop" as const,
-          } satisfies RunEvent;
+            finishReason: "model-stop",
+          });
           return Stream.succeed<RunEvent>(completed);
         }),
       );
@@ -1073,27 +1633,70 @@ const makeTurn = <AgentValue extends Agent.Any>(
 const failRunEventStream = <Error>(error: Error): Stream.Stream<RunEvent, Error> =>
   Stream.fail(error);
 
+const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
+  stream: Stream.Stream<A, E, R>,
+  budget: RunOptions<HookError, HookRequirements>["budget"],
+): Stream.Stream<A, E | HookError, R | HookRequirements> =>
+  budget === undefined
+    ? stream
+    : Stream.transformPull(stream, (pull) => Effect.succeed(budget.guard(pull)));
+
 /** Interpret a binding as an ordered semantic event stream. */
-const stream = <AgentValue extends Agent.Any>(
-  agent: AgentValue,
+const stream = <
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookError = never,
+  HookRequirements = never,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+>(
+  agent: RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements
+  >,
   input: unknown,
+  options: RunOptions<HookError, HookRequirements> = {},
 ): Stream.Stream<
   RunEvent,
-  AgentRuntimeFailure<AgentValue>,
-  AgentRuntimeRequirements<AgentValue>
+  AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
       const startedAtMillis = yield* Clock.currentTimeMillis;
       const ids = yield* IdGenerator;
-      const conversationId = yield* ids.nextConversationId;
+      const conversationId =
+        options.conversationId === undefined
+          ? yield* ids.nextConversationId
+          : options.conversationId;
       const runId = yield* ids.nextRunId;
       const context: RunContext = {
         agentId: agent.definition.id,
         conversationId,
         runId,
+        pendingFollowUps: [],
+        history: options.history ?? Prompt.empty,
+        modelCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        costMicrousd: 0,
         sequence: 0,
       };
+      if (options.input?.start !== undefined) {
+        yield* options.input.start();
+      }
 
       const started = Stream.fromEffect(
         Effect.gen(function* () {
@@ -1104,29 +1707,28 @@ const stream = <AgentValue extends Agent.Any>(
               runId: context.runId,
             }),
           );
-          return yield* eventBase(context).pipe(
-            Effect.map(
-              (base) =>
-                ({
-                  ...base,
-                  _tag: "RunStarted" as const,
-                }) satisfies RunEvent,
-            ),
-          );
+          return yield* eventBase(context).pipe(Effect.map((base) => RunStarted.make(base)));
         }).pipe(Effect.withLogSpan("AgentRuntime.run")),
       );
 
       const execution = Stream.unwrap(
         Effect.gen(function* () {
           const decodedInput = yield* decodeInput(agent, input);
-          const instructions = yield* evaluateInstructions(agent, decodedInput);
+          const instructions = yield* evaluateInstructions<
+            InputSchema["Type"],
+            InstructionError,
+            InstructionRequirements
+          >(agent.definition.instructions, decodedInput);
           const encodedInput = yield* encodeInput(agent, decodedInput);
-          const prompt = yield* makeInitialPrompt(instructions, encodedInput);
-          return makeTurn(agent, context, prompt, 1, 0);
+          const prompt = yield* makeInitialPrompt(instructions, encodedInput, context.history);
+          yield* advanceHistory(context, prompt, options);
+          const steering = yield* drainInputs(context, options);
+          const initialPrompt = yield* appendInputs(context, prompt, steering, options);
+          return makeTurn(agent, context, initialPrompt, 1, 0, options);
         }),
       );
 
-      const durationLimit = new AgentPolicyError({
+      const durationLimit = AgentPolicyError.make({
         limit: "duration",
         message: `Agent exceeded its ${Duration.format(agent.definition.policy.maxDuration)} duration limit`,
       });
@@ -1142,18 +1744,24 @@ const stream = <AgentValue extends Agent.Any>(
       const deadline = execution.pipe(Stream.interruptWhen(deadlineEffect));
       return started.pipe(
         Stream.concat(deadline),
-        Stream.catch((error) =>
-          Stream.fromEffect(
+        Stream.catch((error) => {
+          const terminal = Stream.fromEffect(
             Effect.gen(function* () {
-              return {
+              if (error instanceof AgentApprovalPending) {
+                return RunSuspended.make({
+                  ...(yield* eventBase(context)),
+                  reason: error.message,
+                });
+              }
+              return RunFailed.make({
                 ...(yield* eventBase(context)),
-                _tag: "RunFailed" as const,
                 errorTag: errorTag(error),
                 message: errorMessage(error),
-              } satisfies RunEvent;
+              });
             }),
-          ).pipe(Stream.concat(Stream.fail(error))),
-        ),
+          );
+          return terminal.pipe(Stream.concat(Stream.fail(error)));
+        }),
         Stream.withSpan("AgentRuntime.run", {
           attributes: {
             agentId: context.agentId,
@@ -1164,7 +1772,11 @@ const stream = <AgentValue extends Agent.Any>(
     }),
   );
 
-  return interpreted.pipe(Stream.provide(agent.model, { local: true }));
+  const finalized =
+    options.input?.end === undefined
+      ? interpreted
+      : interpreted.pipe(Stream.ensuring(options.input.end()));
+  return finalized.pipe(Stream.provide(agent.model, { local: true }));
 };
 
 interface RunReduction {
@@ -1172,34 +1784,129 @@ interface RunReduction {
 }
 
 /** Reduce the runtime's event stream to its decoded terminal result. */
-const run = <AgentValue extends Agent.Any>(
-  agent: AgentValue,
+const run = Effect.fn("AgentRuntime.run")(function* <
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookError = never,
+  HookRequirements = never,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+>(
+  agent: RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements
+  >,
   input: unknown,
-): Effect.Effect<
-  AgentResult<Agent.Output<AgentValue>>,
-  AgentRuntimeFailure<AgentValue>,
-  AgentRuntimeRequirements<AgentValue> | Scope.Scope
-> =>
-  Effect.gen(function* () {
-    yield* Scope.Scope;
+  options: RunOptions<HookError, HookRequirements> = {},
+): Effect.fn.Return<
+  AgentResult<Agent.Output<typeof agent>>,
+  AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
+> {
+  yield* Scope.Scope;
+  const reduction = yield* Stream.runFold(
+    stream(agent, input, options),
+    (): RunReduction => ({}),
+    (state, event) => (event._tag === "RunCompleted" ? { completed: event } : state),
+  );
+  if (reduction.completed === undefined) {
+    return yield* ModelProtocolError.make({
+      message: "Agent stream ended without RunCompleted",
+    });
+  }
+  const completed = reduction.completed;
+  const candidateOutput: unknown = completed.output;
+  const output = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
+    Effect.mapError((cause) =>
+      AgentOutputError.make({
+        message: cause.message,
+      }),
+    ),
+  );
+  return {
+    output,
+    conversationId: completed.conversationId,
+    runId: completed.runId,
+    turns: completed.turns,
+    finishReason: completed.finishReason,
+  };
+});
+
+/** Scoped detached execution whose replay observer cannot backpressure Run completion. */
+export interface DetachedRun<Output, Error> {
+  readonly await: Effect.Effect<AgentResult<Output>, Error>;
+  readonly events: Effect.Effect<ReadonlyArray<RunEvent>>;
+  readonly observe: Stream.Stream<RunEvent>;
+}
+
+const start = Effect.fn("AgentRuntime.start")(function* <
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookError = never,
+  HookRequirements = never,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+>(
+  agent: RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements
+  >,
+  input: unknown,
+  options: RunOptions<HookError, HookRequirements> = {},
+): Effect.fn.Return<
+  DetachedRun<
+    Agent.Output<typeof agent>,
+    AgentRuntimeFailure<typeof agent, HookError, InstructionError>
+  >,
+  never,
+  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
+> {
+  yield* Scope.Scope;
+  const captured = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+  const execution = Effect.gen(function* () {
     const reduction = yield* Stream.runFold(
-      stream(agent, input),
+      stream(agent, input, options).pipe(
+        Stream.tap((event) => Ref.update(captured, (events) => [...events, event])),
+      ),
       (): RunReduction => ({}),
       (state, event) => (event._tag === "RunCompleted" ? { completed: event } : state),
     );
     if (reduction.completed === undefined) {
-      return yield* new ModelProtocolError({
+      return yield* ModelProtocolError.make({
         message: "Agent stream ended without RunCompleted",
       });
     }
     const completed = reduction.completed;
     const candidateOutput: unknown = completed.output;
     const output = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
-      Effect.mapError(
-        (cause) =>
-          new AgentOutputError({
-            message: cause.message,
-          }),
+      Effect.mapError((cause) =>
+        AgentOutputError.make({
+          message: cause.message,
+        }),
       ),
     );
     return {
@@ -1210,6 +1917,14 @@ const run = <AgentValue extends Agent.Any>(
       finishReason: completed.finishReason,
     };
   });
+  const fiber = yield* execution.pipe(Effect.forkScoped);
+  const events = Fiber.await(fiber).pipe(Effect.andThen(Ref.get(captured)));
+  return {
+    await: Fiber.join(fiber),
+    events,
+    observe: Stream.unwrap(events.pipe(Effect.map(Stream.fromIterable))),
+  };
+});
 
 /**
  * Ephemeral Agent interpreter whose `run` operation reduces the same semantic
@@ -1222,5 +1937,6 @@ const run = <AgentValue extends Agent.Any>(
 export const AgentRuntime = {
   layer: Layer.empty,
   run,
+  start,
   stream,
 } as const;

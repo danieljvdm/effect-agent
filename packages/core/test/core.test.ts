@@ -4,6 +4,8 @@ import { Duration, Schema } from "effect";
 
 import {
   AgentId,
+  AgentApprovalDenied,
+  AgentApprovalPending,
   AgentError,
   AgentInputError,
   AgentInterrupted,
@@ -30,10 +32,14 @@ describe("core schemas", () => {
       maxToolCalls: 1,
       maxDuration: "30 seconds",
       toolConcurrency: 1,
+      tokenBudget: 1_000,
+      costBudgetMicrousd: 10_000,
     });
 
     expect(policy.maxDuration).toEqual(Duration.seconds(30));
     expect(policy.repeatedFailureLimit).toBe(3);
+    expect(policy.tokenBudget).toBe(1_000);
+    expect(policy.costBudgetMicrousd).toBe(10_000);
     expect(() =>
       AgentPolicy.make({
         maxTurns: 0,
@@ -71,11 +77,22 @@ describe("core schemas", () => {
 
   it("round-trips every framework-owned expected failure through the public union", () => {
     const failures = [
-      new AgentInputError({ message: "invalid trip input" }),
-      new AgentOutputError({ message: "invalid itinerary output" }),
-      new AgentPolicyError({ limit: "turns", message: "turn limit reached" }),
-      new ModelProtocolError({ message: "response completed twice" }),
-      new AgentInterrupted({ message: "consumer disconnected" }),
+      AgentInputError.make({ message: "invalid trip input" }),
+      AgentOutputError.make({ message: "invalid itinerary output" }),
+      AgentPolicyError.make({ limit: "turns", message: "turn limit reached" }),
+      AgentApprovalDenied.make({
+        toolCallId: "hold-1",
+        toolName: "hold",
+        message: "denied",
+      }),
+      AgentApprovalPending.make({
+        approvalId: "approval-1",
+        toolCallId: "hold-1",
+        toolName: "hold",
+        message: "pending",
+      }),
+      ModelProtocolError.make({ message: "response completed twice" }),
+      AgentInterrupted.make({ message: "consumer disconnected" }),
     ] as const;
 
     for (const failure of failures) {
@@ -98,7 +115,7 @@ describe("core schemas", () => {
 
     expect(Schema.decodeSync(RunEvent)(encodedEvent)).toEqual(event);
     const invalidEncodedEvent: unknown = {
-      ...event,
+      ...encodedEvent,
       eventVersion: 2,
     };
     expect(() => Schema.decodeUnknownSync(RunEvent)(invalidEncodedEvent)).toThrow();

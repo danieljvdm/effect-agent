@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/testing",
+  "name": "@effect-agent/sandbox",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,14 +12,9 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/capabilities": "workspace:*",
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/platform-node": "catalog:",
-    "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

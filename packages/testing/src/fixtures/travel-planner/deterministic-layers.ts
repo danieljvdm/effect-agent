@@ -2,13 +2,13 @@ import { Context, Deferred, Effect, Layer, Ref, Schema } from "effect";
 import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
   ActivityCatalog,
-  type ActivitySearchResult,
+  ActivitySearchResult,
   ActivityUnavailable,
   FlightCatalog,
-  type FlightOption,
+  FlightOption,
   FlightUnavailable,
   LodgingCatalog,
-  type LodgingOption,
+  LodgingOption,
   LodgingUnavailable,
   QuoteId,
   TravelGuidance,
@@ -16,11 +16,12 @@ import {
   TravelPlannerToolkitLayer,
 } from "./definition.ts";
 
-export const CatalogLifecycleCounts = Schema.Struct({
+export class CatalogLifecycleCounts extends Schema.Class<CatalogLifecycleCounts>(
+  "CatalogLifecycleCounts",
+)({
   acquired: Schema.Natural,
   finalized: Schema.Natural,
-});
-export type CatalogLifecycleCounts = typeof CatalogLifecycleCounts.Type;
+}) {}
 export class CatalogLifecycle extends Context.Service<
   CatalogLifecycle,
   {
@@ -37,26 +38,28 @@ export class CatalogLifecycle extends Context.Service<
       return CatalogLifecycle.of({
         markAcquired: Ref.update(acquired, (n) => n + 1),
         markFinalized: Ref.update(finalized, (n) => n + 1),
-        counts: Effect.all({ acquired: Ref.get(acquired), finalized: Ref.get(finalized) }),
+        counts: Effect.all({ acquired: Ref.get(acquired), finalized: Ref.get(finalized) }).pipe(
+          Effect.map((counts) => CatalogLifecycleCounts.make(counts)),
+        ),
       });
     }),
   );
 }
 
-const flight: FlightOption = {
+const flight = FlightOption.make({
   quoteId: Schema.decodeSync(QuoteId)("quote-sfo-lhr-001"),
   flight: "EA 218 · nonstop · SFO 18:40 → LHR 13:05+1",
   estimatedCents: 180_000,
   currency: "USD",
-};
-const lodging: LodgingOption = {
+});
+const lodging = LodgingOption.make({
   lodging: "Bloomsbury House · refundable studio · 4 nights",
   estimatedCents: 104_000,
   currency: "USD",
-};
-const activities: ActivitySearchResult = {
+});
+const activities = ActivitySearchResult.make({
   activities: ["British Museum timed entry", "Thames evening walk"],
-};
+});
 
 /**
  * Deterministic controls for a Tool batch whose completions are released in a
@@ -115,7 +118,7 @@ export const FlightCatalogLayer = Layer.effect(
       search: (query) =>
         query.origin === query.destination
           ? Effect.fail(
-              new FlightUnavailable({
+              FlightUnavailable.make({
                 query: `${query.origin}-${query.destination}`,
                 message: "Origin and destination must differ.",
               }),
@@ -133,7 +136,7 @@ export const LodgingCatalogLayer = Layer.effect(
       search: (query) =>
         query.nights < 1
           ? Effect.fail(
-              new LodgingUnavailable({
+              LodgingUnavailable.make({
                 query: query.destination,
                 message: "At least one night is required.",
               }),
@@ -151,7 +154,7 @@ export const ActivityCatalogLayer = Layer.effect(
       search: (query) =>
         query.destination === ""
           ? Effect.fail(
-              new ActivityUnavailable({
+              ActivityUnavailable.make({
                 query: query.destination,
                 message: "Destination is required.",
               }),

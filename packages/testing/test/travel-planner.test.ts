@@ -167,8 +167,9 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
   );
 
   it.effect("accepts an empty activity result as a successful Tool outcome", () => {
+    const encodedPlan = Schema.encodeSync(TravelPlan)(expectedTravelPlan);
     const emptyPlan = Schema.decodeSync(TravelPlan)({
-      itineraries: expectedTravelPlan.itineraries.map((itinerary) => ({
+      itineraries: encodedPlan.itineraries.map((itinerary) => ({
         ...itinerary,
         activities: [],
       })),
@@ -219,7 +220,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
   it.effect("keeps a typed flight failure in E after terminal Tool events", () =>
     Effect.gen(function* () {
       const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-      const unavailable = new FlightUnavailable({
+      const unavailable = FlightUnavailable.make({
         query: "SFO-LHR",
         message: "The deterministic supplier is unavailable.",
       });

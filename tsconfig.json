@@ -3,6 +3,9 @@
   "references": [
     { "path": "./packages/core" },
     { "path": "./packages/engine" },
+    { "path": "./packages/capabilities" },
+    { "path": "./packages/sandbox" },
+    { "path": "./packages/sandbox-local" },
     { "path": "./packages/testing" },
     { "path": "./examples/demo" },
     { "path": "./examples/providers" }

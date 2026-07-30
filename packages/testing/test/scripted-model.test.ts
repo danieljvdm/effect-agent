@@ -147,12 +147,18 @@ describe("TEST-002 scripted Effect AI LanguageModel", () => {
   );
 
   it("validates the serializable turn grammar", () => {
-    const malformedTurn: unknown = {
+    const unknownPart: unknown = {
       _tag: "Stream",
       parts: [{ type: "not-an-effect-ai-part" }],
       termination: { _tag: "Complete" },
     };
+    const incompletePart: unknown = {
+      _tag: "Stream",
+      parts: [{ type: "text-delta" }],
+      termination: { _tag: "Complete" },
+    };
 
-    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(malformedTurn)).toThrow();
+    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(unknownPart)).toThrow();
+    expect(() => Schema.decodeUnknownSync(ScriptedTurn)(incompletePart)).toThrow();
   });
 });

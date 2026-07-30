@@ -20,10 +20,23 @@ type PackageManifest = typeof PackageManifest.Type;
 
 // Vite+ runs this package test from packages/testing; Bun is the pinned test runtime in CI and locally.
 const repositoryRoot = "../..";
-const packageNames = ["core", "engine", "testing"] as const;
+const packageNames = [
+  "capabilities",
+  "core",
+  "engine",
+  "sandbox",
+  "sandbox-local",
+  "testing",
+] as const;
 const exampleNames = ["demo", "providers"] as const;
-const effectTestPackageNames = ["engine", "testing"] as const;
-const productionPackageNames = ["core", "engine"] as const;
+const effectTestPackageNames = ["capabilities", "engine", "sandbox-local", "testing"] as const;
+const productionPackageNames = [
+  "capabilities",
+  "core",
+  "engine",
+  "sandbox",
+  "sandbox-local",
+] as const;
 const dependencySections = [
   "dependencies",
   "devDependencies",
@@ -68,7 +81,7 @@ const effectDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
     .map((section) => manifest[section]?.effect)
     .filter((version): version is string => version !== undefined);
 
-layer(NodeServices.layer)("Phase 1 toolchain", (it) => {
+layer(NodeServices.layer)("Phase 2 toolchain", (it) => {
   it.effect("executes an Effect program through the Vite+ test runner", () =>
     Effect.sync(() => {
       expect("ready").toBe("ready");

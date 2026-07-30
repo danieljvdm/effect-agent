@@ -17,7 +17,28 @@ export class AgentOutputError extends Schema.TaggedErrorClass<AgentOutputError>(
 export class AgentPolicyError extends Schema.TaggedErrorClass<AgentPolicyError>()(
   "AgentPolicyError",
   {
-    limit: Schema.Literals(["turns", "tool-calls", "duration"]),
+    limit: Schema.Literals(["turns", "tool-calls", "duration", "usage", "tokens", "cost"]),
+    message: Schema.String,
+  },
+) {}
+
+/** A native Effect AI Tool approval was explicitly denied before its Handler started. */
+export class AgentApprovalDenied extends Schema.TaggedErrorClass<AgentApprovalDenied>()(
+  "AgentApprovalDenied",
+  {
+    toolCallId: Schema.NonEmptyString,
+    toolName: Schema.NonEmptyString,
+    message: Schema.String,
+  },
+) {}
+
+/** A native Effect AI Tool approval has no decision and the ephemeral Run cannot proceed. */
+export class AgentApprovalPending extends Schema.TaggedErrorClass<AgentApprovalPending>()(
+  "AgentApprovalPending",
+  {
+    approvalId: Schema.NonEmptyString,
+    toolCallId: Schema.NonEmptyString,
+    toolName: Schema.NonEmptyString,
     message: Schema.String,
   },
 ) {}
@@ -43,6 +64,8 @@ export const AgentError = Schema.Union([
   AgentInputError,
   AgentOutputError,
   AgentPolicyError,
+  AgentApprovalDenied,
+  AgentApprovalPending,
   ModelProtocolError,
   AgentInterrupted,
 ]);

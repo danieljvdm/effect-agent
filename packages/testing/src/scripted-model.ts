@@ -1,63 +1,74 @@
 import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
-import { AiError, LanguageModel, type Response } from "effect/unstable/ai";
+import { AiError, LanguageModel, Response } from "effect/unstable/ai";
 
-const generatePartTypes = new Set([
-  "text",
-  "reasoning",
-  "reasoning-delta",
-  "reasoning-end",
-  "tool-call",
-  "tool-result",
-  "tool-approval-request",
-  "file",
-  "source",
-  "response-metadata",
-  "finish",
-]);
-
-const streamPartTypes = new Set([
-  ...generatePartTypes,
-  "text-start",
-  "text-delta",
-  "text-end",
-  "reasoning-start",
-  "tool-params-start",
-  "tool-params-delta",
-  "tool-params-end",
-  "error",
-]);
-
-const hasPartType = (
-  input: unknown,
-  types: ReadonlySet<string>,
-): input is { readonly type: string } =>
-  typeof input === "object" &&
-  input !== null &&
-  "type" in input &&
-  typeof input.type === "string" &&
-  types.has(input.type);
+const ScriptedPartMetadata = Schema.Record(Schema.String, Schema.NullOr(Schema.Json));
+const ScriptedPartBase = {
+  metadata: Schema.optionalKey(ScriptedPartMetadata),
+};
+const ScriptedToolCallPart = Schema.Struct({
+  ...ScriptedPartBase,
+  type: Schema.Literal("tool-call"),
+  id: Schema.String,
+  name: Schema.String,
+  params: Schema.Unknown,
+  providerExecuted: Schema.optionalKey(Schema.Boolean),
+});
+const ScriptedToolResultPart = Schema.Struct({
+  ...ScriptedPartBase,
+  type: Schema.Literal("tool-result"),
+  id: Schema.String,
+  name: Schema.String,
+  result: Schema.Unknown,
+  isFailure: Schema.Boolean,
+  providerExecuted: Schema.optionalKey(Schema.Boolean),
+  preliminary: Schema.optionalKey(Schema.Boolean),
+});
 
 /**
  * Schema for encoded, non-streaming Effect AI response parts.
  *
- * Tool-specific fields are decoded by `LanguageModel.make` against the toolkit
- * on the normalized request. This declaration validates the protocol
- * discriminator at script construction boundaries without inventing a second
- * response-part union.
+ * Generic Tool payloads remain explicitly unknown here. `LanguageModel.make`
+ * performs the toolkit-specific decode when the scripted response is consumed.
  */
-export const ScriptedGeneratePart = Schema.declare(
-  (input): input is Response.PartEncoded => hasPartType(input, generatePartTypes),
-  { identifier: "ScriptedGeneratePart" },
-);
+export const ScriptedGeneratePart = Schema.Union([
+  Schema.toEncoded(Response.TextPart),
+  Schema.toEncoded(Response.ReasoningPart),
+  Schema.toEncoded(Response.ReasoningDeltaPart),
+  Schema.toEncoded(Response.ReasoningEndPart),
+  ScriptedToolCallPart,
+  ScriptedToolResultPart,
+  Schema.toEncoded(Response.ToolApprovalRequestPart),
+  Schema.toEncoded(Response.FilePart),
+  Schema.toEncoded(Response.DocumentSourcePart),
+  Schema.toEncoded(Response.UrlSourcePart),
+  Schema.toEncoded(Response.ResponseMetadataPart),
+  Schema.toEncoded(Response.FinishPart),
+]).annotate({ identifier: "ScriptedGeneratePart" });
 export type ScriptedGeneratePart = typeof ScriptedGeneratePart.Type;
 
 /**
  * Schema for encoded Effect AI streaming response parts.
  */
-export const ScriptedStreamPart = Schema.declare(
-  (input): input is Response.StreamPartEncoded => hasPartType(input, streamPartTypes),
-  { identifier: "ScriptedStreamPart" },
-);
+export const ScriptedStreamPart = Schema.Union([
+  Schema.toEncoded(Response.TextStartPart),
+  Schema.toEncoded(Response.TextDeltaPart),
+  Schema.toEncoded(Response.TextEndPart),
+  Schema.toEncoded(Response.ReasoningStartPart),
+  Schema.toEncoded(Response.ReasoningDeltaPart),
+  Schema.toEncoded(Response.ReasoningEndPart),
+  Schema.toEncoded(Response.ToolParamsStartPart),
+  Schema.toEncoded(Response.ToolParamsDeltaPart),
+  Schema.toEncoded(Response.ToolParamsEndPart),
+  ScriptedToolCallPart,
+  ScriptedToolResultPart,
+  Schema.toEncoded(Response.ToolApprovalRequestPart),
+  Schema.toEncoded(Response.FilePart),
+  Schema.toEncoded(Response.DocumentSourcePart),
+  Schema.toEncoded(Response.UrlSourcePart),
+  Schema.toEncoded(Response.ResponseMetadataPart),
+  Schema.toEncoded(Response.FinishPart),
+  Schema.toEncoded(Response.ErrorPart),
+]).annotate({ identifier: "ScriptedStreamPart" });
 export type ScriptedStreamPart = typeof ScriptedStreamPart.Type;
 
 /** Controls whether a scripted stream completes, fails, or waits for interruption. */
@@ -123,13 +134,13 @@ interface ScriptState {
 }
 
 const scriptedError = (method: string, description: string): AiError.AiError =>
-  new AiError.AiError({
+  AiError.AiError.make({
     module: "@effect-agent/testing/ScriptedModel",
     method,
-    reason: new AiError.UnknownError({ description }),
+    reason: AiError.UnknownError.make({ description }),
   });
 
-const runAssertion = (
+const runAssertion = Effect.fn("ScriptedModel.runAssertion")((
   assertion: ScriptedTurnHooks["assertRequest"],
   request: LanguageModel.ProviderOptions,
 ): Effect.Effect<void, AiError.AiError> => {
@@ -140,38 +151,40 @@ const runAssertion = (
     const result = assertion(request);
     return Effect.isEffect(result) ? result : Effect.void;
   });
-};
+});
 
-const takeTurn = (
-  state: Ref.Ref<ScriptState>,
-  kind: ScriptedRequestKind,
-  options: LanguageModel.ProviderOptions,
-): Effect.Effect<ScriptedTurnInput, AiError.AiError> =>
-  Ref.modify(state, (current) => {
-    const turn = current.remaining[0];
-    if (turn === undefined) {
+const takeTurn = Effect.fn("ScriptedModel.takeTurn")(
+  (
+    state: Ref.Ref<ScriptState>,
+    kind: ScriptedRequestKind,
+    options: LanguageModel.ProviderOptions,
+  ): Effect.Effect<ScriptedTurnInput, AiError.AiError> =>
+    Ref.modify(state, (current) => {
+      const turn = current.remaining[0];
+      if (turn === undefined) {
+        return [
+          undefined,
+          {
+            ...current,
+            requests: [...current.requests, { kind, options }],
+          },
+        ] as const;
+      }
       return [
-        undefined,
+        turn,
         {
-          ...current,
+          remaining: current.remaining.slice(1),
           requests: [...current.requests, { kind, options }],
         },
       ] as const;
-    }
-    return [
-      turn,
-      {
-        remaining: current.remaining.slice(1),
-        requests: [...current.requests, { kind, options }],
-      },
-    ] as const;
-  }).pipe(
-    Effect.flatMap((turn) =>
-      turn === undefined
-        ? Effect.fail(scriptedError(kind, `Script exhausted before the ${kind} request`))
-        : Effect.succeed(turn),
+    }).pipe(
+      Effect.flatMap((turn) =>
+        turn === undefined
+          ? Effect.fail(scriptedError(kind, `Script exhausted before the ${kind} request`))
+          : Effect.succeed(turn),
+      ),
     ),
-  );
+);
 
 const requireGenerateTurn = (
   turn: ScriptedTurnInput,

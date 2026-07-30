@@ -1,6 +1,6 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 1 ephemeral `E` interpreter implemented; Phase 2 and later increments remain design targets
+Status: Phase 2 operational local runtime implemented; Phase 3 and later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose

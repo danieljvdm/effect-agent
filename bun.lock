@@ -72,6 +72,21 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/capabilities": {
+      "name": "@effect-agent/capabilities",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/core": {
       "name": "@effect-agent/core",
       "version": "0.0.0",
@@ -96,10 +111,37 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/sandbox": {
+      "name": "@effect-agent/sandbox",
+      "version": "0.0.0",
+      "dependencies": {
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "packages/sandbox-local": {
+      "name": "@effect-agent/sandbox-local",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/sandbox": "workspace:*",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/testing": {
       "name": "@effect-agent/testing",
       "version": "0.0.0",
       "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "effect": "catalog:",
@@ -239,6 +281,8 @@
 
     "@dotenvx/primitives": ["@dotenvx/primitives@0.8.0", "", {}, "sha512-VYJy0uhFm9zTJ1TxBaW/pA8bjbOM/OttaNMwZ1RHG4JKyRG7DhSdiqD1ipQoAyoD22olUtxbP78W9xY3Wd11bg=="],
 
+    "@effect-agent/capabilities": ["@effect-agent/capabilities@workspace:packages/capabilities"],
+
     "@effect-agent/core": ["@effect-agent/core@workspace:packages/core"],
 
     "@effect-agent/engine": ["@effect-agent/engine@workspace:packages/engine"],
@@ -246,6 +290,10 @@
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 
     "@effect-agent/example-providers": ["@effect-agent/example-providers@workspace:examples/providers"],
+
+    "@effect-agent/sandbox": ["@effect-agent/sandbox@workspace:packages/sandbox"],
+
+    "@effect-agent/sandbox-local": ["@effect-agent/sandbox-local@workspace:packages/sandbox-local"],
 
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
 

@@ -1,9 +1,23 @@
 import { expect, layer } from "@effect/vitest";
 
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import {
   Agent,
+  AgentApprovalDenied,
+  AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
   AgentPolicy,
@@ -16,13 +30,36 @@ import {
   TurnId,
   type RunEvent,
 } from "@effect-agent/core";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  AiError,
+  LanguageModel,
+  Model,
+  Prompt,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
-import { AgentRuntime } from "../src/index.ts";
+import { AgentRuntime, type RunBudgetHook } from "../src/index.ts";
 
 class ScheduledToolFailure extends Schema.TaggedErrorClass<ScheduledToolFailure>()(
   "ScheduledToolFailure",
   { message: Schema.String },
+) {}
+
+class HookFailure extends Schema.TaggedErrorClass<HookFailure>()("HookFailure", {
+  message: Schema.String,
+}) {}
+
+class BudgetGuardFailure extends Schema.TaggedErrorClass<BudgetGuardFailure>()(
+  "BudgetGuardFailure",
+  {
+    message: Schema.String,
+  },
+) {}
+
+class HookService extends Context.Service<HookService, { readonly enabled: true }>()(
+  "@effect-agent/engine/test/HookService",
 ) {}
 
 const usage = {
@@ -116,6 +153,31 @@ const errorMessageForTest = (error: unknown): string =>
     : String(error);
 
 layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
+  it.effect("keeps Run hook failures and requirements visible in Effect E and R", () => {
+    const program = AgentRuntime.run(
+      makeAgent(finalParts('{"answer":"typed"}')),
+      { question: "typed hooks" },
+      {
+        budget: {
+          guard: (effect) => Effect.andThen(HookService, effect),
+          consume: () =>
+            Effect.gen(function* () {
+              yield* HookService;
+              return yield* HookFailure.make({ message: "budget hook failed" });
+            }),
+        },
+      },
+    );
+    type ErrorProof = HookFailure extends Effect.Error<typeof program> ? true : false;
+    type RequirementsProof = HookService extends Effect.Services<typeof program> ? true : false;
+    const errorProof: ErrorProof = true;
+    const requirementsProof: RequirementsProof = true;
+
+    expect(errorProof).toBe(true);
+    expect(requirementsProof).toBe(true);
+    return Effect.void;
+  });
+
   it.effect("uses the native Toolkit for a deterministic two-Turn flow", () => {
     const Search = Tool.make("search", {
       parameters: Schema.Struct({ query: Schema.String }),
@@ -300,6 +362,101 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(result.some((event) => event._tag === "ToolCallStarted")).toBe(false);
     });
   });
+
+  it.effect("rejects a provider Tool result whose name differs from its declared call", () => {
+    const HostedLookup = Tool.providerDefined({
+      id: "test.lookup",
+      customName: "HostedLookup",
+      providerName: "lookup",
+      parameters: Schema.Struct({ query: Schema.String }),
+      success: Schema.Struct({ status: Schema.String }),
+    })(undefined);
+    const tools = Toolkit.make(HostedSearch, HostedLookup);
+    const definition = Agent.define("hosted-tool-name-correlation", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Use one hosted Tool.",
+      toolkit: tools,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 2,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+    });
+    const model = modelFromParts([
+      {
+        type: "tool-call",
+        id: "hosted-call-1",
+        name: "HostedSearch",
+        params: { query: "current context" },
+        providerExecuted: true,
+      },
+      {
+        type: "tool-result",
+        id: "hosted-call-1",
+        name: "HostedLookup",
+        result: { status: "completed" },
+        isFailure: false,
+        providerExecuted: true,
+      },
+      { type: "finish", reason: "tool-calls", usage },
+    ]);
+
+    return Effect.gen(function* () {
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "What is current?",
+      }).pipe(Effect.exit);
+      const failure = failureFrom(exit);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("name did not match");
+      expect(failure.message).toContain("HostedSearch");
+      expect(failure.message).toContain("HostedLookup");
+    });
+  });
+
+  it.effect("preserves native Effect AI rejection of an unknown provider Tool", () =>
+    Effect.gen(function* () {
+      const seen = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const model = modelFromParts([
+        {
+          type: "tool-call",
+          id: "unknown-hosted-call",
+          name: "UnconfiguredProviderTool",
+          params: { query: "current context" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          id: "unknown-hosted-call",
+          name: "UnconfiguredProviderTool",
+          result: { status: "completed" },
+          isFailure: false,
+          providerExecuted: true,
+        },
+        ...finalParts('{"answer":"Untrusted result."}'),
+      ]);
+      const exit = yield* AgentRuntime.stream(Agent.withModel(runtimeDefinition, model), {
+        question: "What is current?",
+      }).pipe(
+        Stream.tap((event) => Ref.update(seen, (events) => [...events, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const events = yield* Ref.get(seen);
+
+      expect(failure).toBeInstanceOf(AiError.AiError);
+      expect(failure).toMatchObject({
+        _tag: "AiError",
+        module: "LanguageModel",
+        method: "streamText",
+        reason: { _tag: "InvalidOutputError" },
+      });
+      expect(events.some((event) => event._tag === "ToolCallDeclared")).toBe(false);
+    }),
+  );
 
   it.effect("accepts provider-only Tools that finish with final output in the same Turn", () => {
     const parts: ReadonlyArray<Response.StreamPartEncoded> = [
@@ -850,7 +1007,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
-      const expected = new ScheduledToolFailure({ message: "scheduled failure" });
+      const expected = ScheduledToolFailure.make({ message: "scheduled failure" });
       const toolLayer = tools.toLayer({
         fail: () =>
           Effect.acquireUseRelease(
@@ -1210,6 +1367,779 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         model: yield* Deferred.isDone(modelFinalized),
         tool: yield* Deferred.isDone(toolFinalized),
       }).toEqual({ model: true, tool: true });
+    }),
+  );
+
+  it.effect("never starts a handler while native Tool approval is unresolved", () =>
+    Effect.gen(function* () {
+      const handlerStarted = yield* Ref.make(false);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const Hold = Tool.make("hold", {
+        parameters: Schema.Struct({ itineraryId: Schema.String }),
+        success: Schema.String,
+        needsApproval: true,
+      });
+      const tools = Toolkit.make(Hold);
+      const definition = Agent.define("approval-no-start", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Hold the itinerary.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const model = modelFromParts([
+        {
+          type: "tool-call",
+          id: "hold-1",
+          name: "hold",
+          params: { itineraryId: "trip-1" },
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const agent = Agent.withModel(definition, model);
+      const toolLayer = tools.toLayer({
+        hold: () => Ref.set(handlerStarted, true).pipe(Effect.as("held")),
+      });
+      const exit = yield* AgentRuntime.stream(
+        agent,
+        { question: "hold" },
+        {
+          approval: {
+            request: () => Effect.succeed({ _tag: "unresolved" as const }),
+          },
+        },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+
+      expect(failureFrom(exit)).toBeInstanceOf(AgentApprovalPending);
+      expect(yield* Ref.get(handlerStarted)).toBe(false);
+      expect((yield* Ref.get(events)).map((event) => event._tag)).toContain("ApprovalRequested");
+      expect((yield* Ref.get(events)).map((event) => event._tag)).toContain("RunSuspended");
+      expect((yield* Ref.get(events)).some((event) => event._tag === "ToolCallStarted")).toBe(
+        false,
+      );
+
+      const deniedExit = yield* AgentRuntime.run(
+        agent,
+        { question: "hold" },
+        {
+          approval: {
+            request: () => Effect.succeed({ _tag: "denied" as const, reason: "traveler declined" }),
+          },
+        },
+      ).pipe(Effect.provide(toolLayer), Effect.exit);
+      expect(failureFrom(deniedExit)).toBeInstanceOf(AgentApprovalDenied);
+      expect(yield* Ref.get(handlerStarted)).toBe(false);
+    }),
+  );
+
+  it.effect("fails token exhaustion before accepting a successful model stop", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("token-budget", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          tokenBudget: 3,
+        }),
+      });
+      const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+        ...finalParts('{"answer":"done"}').slice(0, -1),
+        {
+          type: "finish",
+          reason: "stop",
+          usage: {
+            inputTokens: { total: 2 },
+            outputTokens: { total: 2 },
+          },
+        },
+      ];
+
+      const exit = yield* AgentRuntime.run(Agent.withModel(definition, modelFromParts(parts)), {
+        question: "answer",
+      }).pipe(Effect.exit);
+      const failure = failureFrom(exit);
+
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      if (!(failure instanceof AgentPolicyError)) {
+        throw new Error("Expected AgentPolicyError");
+      }
+      expect(failure.limit).toBe("tokens");
+    }),
+  );
+
+  it.effect("keeps source history authoritative when model context is compacted", () =>
+    Effect.gen(function* () {
+      const sources = yield* Ref.make<ReadonlyArray<number>>([]);
+      const turns = yield* Ref.make(0);
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Search);
+      const model = Model.make(
+        "scripted",
+        "compaction-source",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turns, (value) => value + 1).pipe(
+                  Effect.map((turn) =>
+                    Stream.fromIterable<Response.StreamPartEncoded>(
+                      turn === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "search-1",
+                              name: "search",
+                              params: {},
+                              providerExecuted: false,
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ]
+                        : finalParts('{"answer":"done"}'),
+                    ),
+                  ),
+                ),
+              ),
+          }),
+        ),
+      );
+      const definition = Agent.define("compaction-source", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Search.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "search" },
+        {
+          context: {
+            prepare: ({ source }) =>
+              Ref.update(sources, (all) => [...all, source.content.length]).pipe(
+                Effect.as({ prompt: Prompt.make("compacted model context") }),
+              ),
+          },
+        },
+      ).pipe(Effect.provide(tools.toLayer({ search: () => Effect.succeed("found") })));
+
+      const observed = yield* Ref.get(sources);
+      expect(observed).toHaveLength(2);
+      expect(observed[1]).toBeGreaterThan(observed[0] ?? 0);
+    }),
+  );
+
+  it.effect(
+    "delivers steering offered during Tool execution only before the next model request",
+    () =>
+      Effect.gen(function* () {
+        const toolStarted = yield* Deferred.make<void>();
+        const releaseTool = yield* Deferred.make<void>();
+        const queued = yield* Ref.make(false);
+        const requests = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
+        const turns = yield* Ref.make(0);
+        const Wait = Tool.make("wait_for_change", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        });
+        const tools = Toolkit.make(Wait);
+        const model = Model.make(
+          "scripted",
+          "steering-safe-seam",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) =>
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    yield* Ref.update(requests, (all) => [...all, request.prompt]);
+                    const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+                    return Stream.fromIterable<Response.StreamPartEncoded>(
+                      turn === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "wait-change-1",
+                              name: "wait_for_change",
+                              params: {},
+                              providerExecuted: false,
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ]
+                        : finalParts('{"answer":"changed"}'),
+                    );
+                  }),
+                ),
+            }),
+          ),
+        );
+        const definition = Agent.define("steering-safe-seam", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Wait, then incorporate changes.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const fiber = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "initial dates" },
+          {
+            input: {
+              drain: () =>
+                Ref.getAndSet(queued, false).pipe(
+                  Effect.map((available) =>
+                    available
+                      ? [{ kind: "steering" as const, input: "change dates to August" }]
+                      : [],
+                  ),
+                ),
+            },
+          },
+        ).pipe(
+          Effect.provide(
+            tools.toLayer({
+              wait_for_change: () =>
+                Deferred.succeed(toolStarted, undefined).pipe(
+                  Effect.andThen(Deferred.await(releaseTool)),
+                  Effect.as("ready"),
+                ),
+            }),
+          ),
+          Effect.forkChild,
+        );
+        yield* Deferred.await(toolStarted);
+        yield* Ref.set(queued, true);
+        expect(yield* Ref.get(requests)).toHaveLength(1);
+        yield* Deferred.succeed(releaseTool, undefined);
+        yield* Fiber.join(fiber);
+
+        const observed = yield* Ref.get(requests);
+        expect(observed).toHaveLength(2);
+        expect(JSON.stringify(observed[0])).not.toContain("change dates to August");
+        expect(JSON.stringify(observed[1])).toContain("change dates to August");
+      }),
+  );
+
+  it.effect("buffers follow-up until the otherwise-stop seam and honors all-drain input", () =>
+    Effect.gen(function* () {
+      const drains = yield* Ref.make(0);
+      const requests = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
+      const turns = yield* Ref.make(0);
+      const Search = Tool.make("search_once", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Search);
+      const model = Model.make(
+        "scripted",
+        "follow-up-stop-seam",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) =>
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  yield* Ref.update(requests, (all) => [...all, request.prompt]);
+                  const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+                  return Stream.fromIterable<Response.StreamPartEncoded>(
+                    turn === 0
+                      ? [
+                          {
+                            type: "tool-call",
+                            id: "search-once-1",
+                            name: "search_once",
+                            params: {},
+                            providerExecuted: false,
+                          },
+                          { type: "finish", reason: "tool-calls", usage },
+                        ]
+                      : finalParts(
+                          turn === 1 ? '{"answer":"candidate"}' : '{"answer":"with preferences"}',
+                        ),
+                  );
+                }),
+              ),
+          }),
+        ),
+      );
+      const definition = Agent.define("follow-up-stop-seam", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Search and answer.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 2,
+        }),
+      });
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "plan" },
+        {
+          commandDrainPolicy: "all",
+          input: {
+            drain: (policy) =>
+              Ref.getAndUpdate(drains, (value) => value + 1).pipe(
+                Effect.map((drain) => {
+                  expect(policy).toBe("all");
+                  return drain === 1
+                    ? [
+                        { kind: "follow-up" as const, input: "prefer quiet hotels" },
+                        { kind: "follow-up" as const, input: "avoid red-eyes" },
+                      ]
+                    : [];
+                }),
+              ),
+          },
+        },
+      ).pipe(Effect.provide(tools.toLayer({ search_once: () => Effect.succeed("found") })));
+
+      const observed = yield* Ref.get(requests);
+      expect(observed).toHaveLength(3);
+      expect(JSON.stringify(observed[1])).not.toContain("prefer quiet hotels");
+      expect(JSON.stringify(observed[2])).toContain("prefer quiet hotels");
+      expect(JSON.stringify(observed[2])).toContain("avoid red-eyes");
+    }),
+  );
+
+  it.effect("applies per-Tool exclusivity over the finite scheduler", () =>
+    Effect.gen(function* () {
+      const active = yield* Ref.make(0);
+      const maximum = yield* Ref.make(0);
+      const exclusiveStartedWith = yield* Ref.make<number | undefined>(undefined);
+      const toolResultOrder = yield* Ref.make<ReadonlyArray<string>>([]);
+      const Ordinary = Tool.make("ordinary", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String,
+      });
+      const Exclusive = Tool.make("exclusive", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Ordinary, Exclusive);
+      const turns = yield* Ref.make(0);
+      const model = Model.make(
+        "scripted",
+        "scheduling-overrides",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turns, (value) => value + 1).pipe(
+                  Effect.map((turn) => {
+                    if (turn > 0) {
+                      const message = request.prompt.content.find(
+                        (candidate) => candidate.role === "tool",
+                      );
+                      const ids =
+                        message?.content.flatMap((part) =>
+                          part.type === "tool-result" ? [part.id] : [],
+                        ) ?? [];
+                      return Stream.fromEffect(Ref.set(toolResultOrder, ids)).pipe(
+                        Stream.drain,
+                        Stream.concat(Stream.fromIterable(finalParts('{"answer":"done"}'))),
+                      );
+                    }
+                    return Stream.fromIterable<Response.StreamPartEncoded>([
+                      {
+                        type: "tool-call",
+                        id: "ordinary-1",
+                        name: "ordinary",
+                        params: { value: "one" },
+                        providerExecuted: false,
+                      },
+                      {
+                        type: "tool-call",
+                        id: "ordinary-2",
+                        name: "ordinary",
+                        params: { value: "two" },
+                        providerExecuted: false,
+                      },
+                      {
+                        type: "tool-call",
+                        id: "exclusive-1",
+                        name: "exclusive",
+                        params: { value: "exclusive" },
+                        providerExecuted: false,
+                      },
+                      {
+                        type: "finish",
+                        reason: "tool-calls",
+                        usage,
+                      },
+                    ]);
+                  }),
+                ),
+              ),
+          }),
+        ),
+      );
+      const definition = Agent.define("scheduling-overrides", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Run tools.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 3,
+          maxDuration: "30 seconds",
+          toolConcurrency: 3,
+        }),
+      });
+      const enter = Effect.fn(function* () {
+        const now = yield* Ref.updateAndGet(active, (value) => value + 1);
+        yield* Ref.update(maximum, (value) => Math.max(value, now));
+        yield* Effect.yieldNow;
+        yield* Effect.yieldNow;
+      });
+      const leave = Ref.update(active, (value) => value - 1);
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "run" },
+        {
+          scheduling: {
+            runOverride: { mode: "bounded", concurrency: 3 },
+            toolRequiresSequential: (name) => name === "exclusive",
+          },
+        },
+      ).pipe(
+        Effect.provide(
+          tools.toLayer({
+            ordinary: ({ value }) => enter().pipe(Effect.ensuring(leave), Effect.as(value)),
+            exclusive: ({ value }) =>
+              Ref.get(active).pipe(
+                Effect.tap((count) => Ref.set(exclusiveStartedWith, count)),
+                Effect.andThen(enter()),
+                Effect.ensuring(leave),
+                Effect.as(value),
+              ),
+          }),
+        ),
+      );
+
+      expect(yield* Ref.get(maximum)).toBe(2);
+      expect(yield* Ref.get(exclusiveStartedWith)).toBe(0);
+      expect(yield* Ref.get(toolResultOrder)).toEqual(["ordinary-1", "ordinary-2", "exclusive-1"]);
+    }),
+  );
+
+  it.effect("applies a sequential Run override to the entire Tool batch", () =>
+    Effect.gen(function* () {
+      const active = yield* Ref.make(0);
+      const maximum = yield* Ref.make(0);
+      const turns = yield* Ref.make(0);
+      const Work = Tool.make("work", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Work);
+      const model = Model.make(
+        "scripted",
+        "sequential-run",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turns, (value) => value + 1).pipe(
+                  Effect.map((turn) =>
+                    Stream.fromIterable<Response.StreamPartEncoded>(
+                      turn === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "work-1",
+                              name: "work",
+                              params: { value: "one" },
+                              providerExecuted: false,
+                            },
+                            {
+                              type: "tool-call",
+                              id: "work-2",
+                              name: "work",
+                              params: { value: "two" },
+                              providerExecuted: false,
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ]
+                        : finalParts('{"answer":"done"}'),
+                    ),
+                  ),
+                ),
+              ),
+          }),
+        ),
+      );
+      const definition = Agent.define("sequential-run", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Work.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 2,
+        }),
+      });
+
+      yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "work" },
+        { scheduling: { runOverride: { mode: "sequential" } } },
+      ).pipe(
+        Effect.provide(
+          tools.toLayer({
+            work: ({ value }) =>
+              Effect.gen(function* () {
+                const now = yield* Ref.updateAndGet(active, (count) => count + 1);
+                yield* Ref.update(maximum, (count) => Math.max(count, now));
+                yield* Effect.yieldNow;
+                yield* Ref.update(active, (count) => count - 1);
+                return value;
+              }),
+          }),
+        ),
+      );
+
+      expect(yield* Ref.get(maximum)).toBe(1);
+    }),
+  );
+
+  it.effect("reuses explicit Conversation identity and returned history across Runs", () =>
+    Effect.gen(function* () {
+      const conversationId = yield* Schema.decodeEffect(ConversationId)("shared-conversation");
+      let history = Prompt.empty;
+      const first = yield* AgentRuntime.run(
+        makeAgent(finalParts('{"answer":"first run"}')),
+        { question: "first" },
+        {
+          conversationId,
+          onHistory: (next) =>
+            Effect.sync(() => {
+              history = next;
+            }),
+        },
+      );
+      let secondPrompt = "";
+      const secondModel = Model.make(
+        "scripted",
+        "conversation-second-run",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) => {
+              secondPrompt = JSON.stringify(request.prompt);
+              return Stream.fromIterable(finalParts('{"answer":"second run"}'));
+            },
+          }),
+        ),
+      );
+      const second = yield* AgentRuntime.run(
+        Agent.withModel(runtimeDefinition, secondModel),
+        { question: "second" },
+        { conversationId, history },
+      );
+
+      expect(first.conversationId).toBe(conversationId);
+      expect(second.conversationId).toBe(conversationId);
+      expect(secondPrompt).toContain("first run");
+      expect(secondPrompt).toContain("second");
+    }),
+  );
+
+  it.effect("requires cost estimation and fails typed cost exhaustion", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("cost-budget", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          costBudgetMicrousd: 1,
+        }),
+      });
+      const agent = Agent.withModel(definition, modelFromParts(finalParts('{"answer":"done"}')));
+
+      const missing = failureFrom(
+        yield* AgentRuntime.run(agent, { question: "missing estimator" }).pipe(Effect.exit),
+      );
+      expect(missing).toBeInstanceOf(AgentPolicyError);
+      if (!(missing instanceof AgentPolicyError)) {
+        throw new Error("Expected AgentPolicyError");
+      }
+      expect(missing.limit).toBe("cost");
+      expect(missing.message).toContain("requires a model cost estimator");
+
+      const exhausted = failureFrom(
+        yield* AgentRuntime.run(
+          agent,
+          { question: "too expensive" },
+          { estimateCostMicrousd: () => Effect.succeed(2) },
+        ).pipe(Effect.exit),
+      );
+      expect(exhausted).toBeInstanceOf(AgentPolicyError);
+      if (!(exhausted instanceof AgentPolicyError)) {
+        throw new Error("Expected AgentPolicyError");
+      }
+      expect(exhausted.limit).toBe("cost");
+      expect(exhausted.message).toContain("exceeded");
+    }),
+  );
+
+  it.effect("guards a stalled model with the active hierarchical budget", () =>
+    Effect.gen(function* () {
+      const budget: RunBudgetHook<BudgetGuardFailure> = {
+        guard: () => Effect.fail(BudgetGuardFailure.make({ message: "model deadline reached" })),
+        consume: () => Effect.void,
+      };
+      const stalledModel = Model.make(
+        "scripted",
+        "guarded-model",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () => Stream.fromEffect(Effect.never),
+          }),
+        ),
+      );
+      const failure = failureFrom(
+        yield* AgentRuntime.run(
+          Agent.withModel(runtimeDefinition, stalledModel),
+          { question: "stall" },
+          { budget },
+        ).pipe(Effect.exit),
+      );
+
+      expect(failure).toBeInstanceOf(BudgetGuardFailure);
+      if (!(failure instanceof BudgetGuardFailure)) {
+        throw new Error("Expected BudgetGuardFailure");
+      }
+      expect(failure.message).toContain("model deadline");
+    }),
+  );
+
+  it.effect("guards an already-started Tool with the active hierarchical budget", () =>
+    Effect.gen(function* () {
+      const expired = yield* Deferred.make<void>();
+      const toolStarted = yield* Deferred.make<void>();
+      const Wait = Tool.make("wait_for_budget", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Wait);
+      const definition = Agent.define("guarded-tool", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Wait.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const model = modelFromParts([
+        {
+          type: "tool-call",
+          id: "guarded-tool-1",
+          name: "wait_for_budget",
+          params: {},
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const budgetFailure = BudgetGuardFailure.make({ message: "tool deadline reached" });
+      const budget: RunBudgetHook<BudgetGuardFailure> = {
+        guard: (effect) =>
+          Effect.raceFirst(
+            effect,
+            Deferred.await(expired).pipe(Effect.andThen(Effect.fail(budgetFailure))),
+          ),
+        consume: () => Effect.void,
+      };
+      const program = AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "stall in Tool" },
+        { budget },
+      ).pipe(
+        Effect.provide(
+          tools.toLayer({
+            wait_for_budget: () =>
+              Deferred.succeed(toolStarted, undefined).pipe(Effect.andThen(Effect.never)),
+          }),
+        ),
+      );
+      const fiber = yield* program.pipe(Effect.forkChild);
+      yield* Deferred.await(toolStarted);
+      yield* Deferred.succeed(expired, undefined);
+      const failure = failureFrom(yield* Fiber.join(fiber).pipe(Effect.exit));
+
+      expect(failure).toBe(budgetFailure);
+    }),
+  );
+
+  it.effect("does not let a slow detached replay observer determine completion", () =>
+    Effect.gen(function* () {
+      const detached = yield* AgentRuntime.start(makeAgent(finalParts('{"answer":"detached"}')), {
+        question: "complete independently",
+      });
+      const slowObserver = yield* detached.observe.pipe(
+        Stream.runForEach(() => Effect.never),
+        Effect.forkChild,
+      );
+      const result = yield* detached.await;
+
+      expect(result.output).toEqual({ answer: "detached" });
+      expect((yield* detached.events).at(-1)?._tag).toBe("RunCompleted");
+      yield* Fiber.interrupt(slowObserver);
     }),
   );
 });

@@ -5,6 +5,8 @@ import { type AiError, Model, type Tool, type Toolkit } from "effect/unstable/ai
 
 import {
   Agent,
+  AgentApprovalDenied,
+  AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
   AgentPolicyError,
@@ -64,7 +66,9 @@ type ExpectedFailure =
   | AgentInputError
   | AgentOutputError
   | AgentPolicyError
-  | ModelProtocolError;
+  | ModelProtocolError
+  | AgentApprovalDenied
+  | AgentApprovalPending;
 
 type RequirementsProof = Assert<Equal<Effect.Services<typeof program>, ExpectedRequirements>>;
 type FailureProof = Assert<Equal<Effect.Error<typeof program>, ExpectedFailure>>;

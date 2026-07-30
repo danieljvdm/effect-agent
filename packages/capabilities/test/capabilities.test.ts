@@ -1,0 +1,786 @@
+import { describe, expect, it } from "@effect/vitest";
+import { NodeCrypto } from "@effect/platform-node";
+
+import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
+import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
+import { ConversationId, RunId, ToolCallId, TurnId } from "@effect-agent/core";
+
+import {
+  applyCompaction,
+  ApprovalAudit,
+  ApprovalAuditMemoryLive,
+  ApprovalApproved,
+  ApprovalDecisionMismatch,
+  ApprovalDenied,
+  ApprovalRequestDraft,
+  ApprovalResolver,
+  ApprovalResolverError,
+  CompactionArtifact,
+  ConversationAppend,
+  ConversationExport,
+  digestCompactionSource,
+  EphemeralConversations,
+  EphemeralConversationsLive,
+  FollowUpCommand,
+  makeApprovalRequest,
+  makeRunCommandQueue,
+  makeUsageBudgetRoot,
+  connectMcp,
+  McpConnectionRequest,
+  McpConnector,
+  McpServerIdentity,
+  ModelContextMessage,
+  prepareModelContext,
+  requestApproval,
+  RetainedFact,
+  RunCommandQueueConfig,
+  SteeringCommand,
+  StructuralRedactorLive,
+  UsageBudgetLimits,
+  UsageBudgetNodeConfig,
+  UsageDelta,
+  validateMcpDiscovery,
+  resolveToolConcurrency,
+  conversationPrompt,
+  toRunBudgetHook,
+  toRunConversationOptions,
+  toRunApprovalHook,
+} from "../src/index.ts";
+
+const conversationId = Schema.decodeSync(ConversationId)("trip-1");
+const runId = Schema.decodeSync(RunId)("run-1");
+const toolCallId = Schema.decodeSync(ToolCallId)("hold-1");
+const turnId = Schema.decodeSync(TurnId)("turn-1");
+
+const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
+
+const textMessage = (role: "system" | "user" | "assistant", content: string): Prompt.Message =>
+  Prompt.make([{ role, content }]).content[0]!;
+
+const approvalDraft = (
+  requestId: string,
+  expiresAt: DateTime.Utc,
+  resourceTargets: ReadonlyArray<string> = ["itinerary:trip-1"],
+): ApprovalRequestDraft =>
+  ApprovalRequestDraft.make({
+    requestId,
+    runId,
+    conversationId,
+    toolCallId,
+    toolName: "holdItinerary",
+    actionSummary: "Place a 24-hour itinerary hold",
+    resourceTargets,
+    risk: "high",
+    expiresAt,
+    denial: "terminal",
+  });
+
+describe("capability contracts", () => {
+  it.effect(
+    "keeps one bounded ephemeral conversation available to multiple Runs and exports a snapshot",
+    () =>
+      Effect.gen(function* () {
+        const conversations = yield* EphemeralConversations;
+        yield* conversations.create(conversationId);
+        yield* conversations.append(
+          conversationId,
+          ConversationAppend.make({
+            runId,
+            message: textMessage("user", "Find a hotel"),
+          }),
+        );
+        const snapshot = yield* conversations.append(
+          conversationId,
+          ConversationAppend.make({
+            message: textMessage("assistant", "Which dates?"),
+          }),
+        );
+        const exported = yield* conversations.export(conversationId);
+
+        expect(snapshot.messages.map((message) => message.sequence)).toEqual([0, 1]);
+        expect(snapshot.messages[0]?.runId).toBe(runId);
+        expect(snapshot.contentBytes).toBeGreaterThan(0);
+        expect(exported.snapshot).toEqual(snapshot);
+        expect(
+          yield* Schema.decodeEffect(ConversationExport)(
+            yield* Schema.encodeEffect(ConversationExport)(exported),
+          ),
+        ).toEqual(exported);
+      }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
+  it.effect("round-trips structured Effect AI Prompt history through the engine adapter", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      const richAssistant = Prompt.assistantMessage({
+        options: { provider: { trace: "native-option" } },
+        content: [
+          Prompt.reasoningPart({ text: "bounded reasoning summary" }),
+          Prompt.toolCallPart({
+            id: "call-1",
+            name: "search",
+            params: { query: "quiet hotel" },
+            providerExecuted: false,
+          }),
+          Prompt.toolResultPart({
+            id: "call-1",
+            name: "search",
+            isFailure: false,
+            result: { hotel: "Harbor" },
+          }),
+        ],
+      });
+      yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({ runId, message: richAssistant }),
+      );
+
+      const options = yield* toRunConversationOptions(conversations, conversationId, runId);
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(options.history ?? Prompt.empty)).toEqual(
+        yield* Schema.encodeEffect(Prompt.Prompt)(Prompt.fromMessages([richAssistant])),
+      );
+
+      const toolMessage = Prompt.toolMessage({
+        content: [
+          Prompt.toolResultPart({
+            id: "call-2",
+            name: "reserve",
+            isFailure: false,
+            result: { held: true },
+          }),
+        ],
+      });
+      const extended = Prompt.fromMessages([richAssistant, toolMessage]);
+      expect(options.onHistory).toBeDefined();
+      if (options.onHistory !== undefined) yield* options.onHistory(extended);
+      const snapshot = yield* conversations.snapshot(conversationId);
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(conversationPrompt(snapshot))).toEqual(
+        yield* Schema.encodeEffect(Prompt.Prompt)(extended),
+      );
+    }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
+  it.effect("bounds the aggregate number of process-local conversations", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      for (let index = 0; index < 256; index += 1) {
+        yield* conversations.create(yield* Schema.decodeEffect(ConversationId)(`bounded-${index}`));
+      }
+      const overflowId = yield* Schema.decodeEffect(ConversationId)("bounded-overflow");
+      const exit = yield* conversations.create(overflowId).pipe(Effect.exit);
+      expect(Exit.isFailure(exit)).toBe(true);
+    }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
+  it.effect(
+    "drains one or all safe-seam commands deterministically and closes with its Scope",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const queue = yield* makeRunCommandQueue(
+            runId,
+            RunCommandQueueConfig.make({ capacity: 2 }),
+          );
+          yield* queue.offer(
+            SteeringCommand.make({
+              id: "steer-1",
+              runId,
+              conversationId,
+              author: "traveler",
+              content: "Move the trip one day later",
+              createdAt: at(1),
+            }),
+          );
+          yield* queue.offer(
+            FollowUpCommand.make({
+              id: "follow-1",
+              runId,
+              conversationId,
+              author: "traveler",
+              content: "I prefer a quiet room",
+              createdAt: at(2),
+            }),
+          );
+
+          expect((yield* queue.drain()).map((command) => command.id)).toEqual(["steer-1"]);
+          expect((yield* queue.drain("all")).map((command) => command.id)).toEqual(["follow-1"]);
+          expect(yield* queue.drain("all")).toEqual([]);
+        }),
+      ),
+  );
+
+  it.effect("rejects command admission after its owning Run Scope closes", () =>
+    Effect.gen(function* () {
+      const queue = yield* Effect.scoped(
+        makeRunCommandQueue(runId, RunCommandQueueConfig.make({ capacity: 1 })),
+      );
+      const exit = yield* queue
+        .offer(
+          SteeringCommand.make({
+            id: "late-steer",
+            runId,
+            conversationId,
+            author: "traveler",
+            content: "This run has ended",
+            createdAt: at(3),
+          }),
+        )
+        .pipe(Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+    }),
+  );
+
+  it.effect(
+    "structurally redacts decoded approval input and audits both timeout request and decision",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const request = yield* makeApprovalRequest(approvalDraft("approval-1", at(now - 1)), {
+          hotel: "beach resort",
+          password: "must-not-appear",
+          nested: { apiKey: "also-secret" },
+        });
+        const decision = yield* requestApproval(request);
+        const audit = yield* ApprovalAudit;
+        const events = yield* audit.events;
+
+        expect(request.redactedInputPreview).toContain("[REDACTED:string]");
+        expect(request.redactedInputPreview).not.toContain("must-not-appear");
+        expect(request.redactedInputPreview).not.toContain("also-secret");
+        expect(request.redactedInputPreview).not.toContain("beach resort");
+        expect(decision).toBeInstanceOf(ApprovalDenied);
+        expect(events.map((event) => event._tag)).toEqual([
+          "ApprovalRequestRecorded",
+          "ApprovalDecisionRecorded",
+        ]);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            StructuralRedactorLive,
+            ApprovalAuditMemoryLive,
+            Layer.succeed(ApprovalResolver)({
+              request: () =>
+                Effect.fail(ApprovalResolverError.make({ message: "must not be called" })),
+            }),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("fails closed when an approval resolver returns another requestId", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const request = yield* makeApprovalRequest(
+        approvalDraft("approval-correlation", at(now + 1_000)),
+        { note: "ordinary-key-secret" },
+      );
+      const error = yield* requestApproval(request).pipe(Effect.flip);
+      const audit = yield* ApprovalAudit;
+      const events = yield* audit.events;
+
+      expect(error).toBeInstanceOf(ApprovalDecisionMismatch);
+      expect(events).toHaveLength(2);
+      const recorded = events[1];
+      expect(recorded?._tag).toBe("ApprovalDecisionRecorded");
+      if (recorded?._tag === "ApprovalDecisionRecorded") {
+        expect(recorded.decision.requestId).toBe(request.requestId);
+        expect(recorded.decision._tag).toBe("ApprovalDenied");
+      }
+      expect(request.redactedInputPreview).not.toContain("ordinary-key-secret");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          StructuralRedactorLive,
+          ApprovalAuditMemoryLive,
+          Layer.succeed(ApprovalResolver)({
+            request: () =>
+              Clock.currentTimeMillis.pipe(
+                Effect.map((millis) =>
+                  ApprovalApproved.make({
+                    requestId: "wrong-request",
+                    decidedAt: at(millis),
+                    resolver: "bad-resolver",
+                  }),
+                ),
+              ),
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("reserves audit capacity atomically for request and decision pairs", () =>
+    Effect.gen(function* () {
+      const request = yield* makeApprovalRequest(approvalDraft("audit-pair", at(1)), {
+        note: "secret",
+      });
+      const audit = yield* ApprovalAudit;
+      const decision = ApprovalDenied.make({
+        requestId: request.requestId,
+        decidedAt: at(1),
+        resolver: "test",
+        reason: "test",
+        timedOut: false,
+      });
+      for (let index = 0; index < 1_024; index += 1) {
+        yield* audit.recordRequest(request);
+        yield* audit.recordDecision(decision);
+      }
+      const exit = yield* audit.recordRequest(request).pipe(Effect.exit);
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect(yield* audit.events).toHaveLength(2_048);
+    }).pipe(Effect.provide(Layer.merge(StructuralRedactorLive, ApprovalAuditMemoryLive))),
+  );
+
+  it.effect(
+    "interrupts an unresolved resolver at the approval deadline and audits the denial",
+    () =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const request = yield* makeApprovalRequest(approvalDraft("approval-2", at(now + 1_000)), {
+          hotel: "beach resort",
+        });
+        const fiber = yield* requestApproval(request).pipe(Effect.forkChild);
+        yield* TestClock.adjust("1 second");
+        const decision = yield* Fiber.join(fiber);
+        const audit = yield* ApprovalAudit;
+
+        expect(decision._tag).toBe("ApprovalDenied");
+        if (decision._tag === "ApprovalDenied") {
+          expect(decision.timedOut).toBe(true);
+        }
+        expect(yield* audit.events).toHaveLength(2);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            StructuralRedactorLive,
+            ApprovalAuditMemoryLive,
+            Layer.succeed(ApprovalResolver)({ request: () => Effect.never }),
+          ),
+        ),
+      ),
+  );
+
+  it("rejects approval target collections above the public count bound", () => {
+    expect(() =>
+      approvalDraft(
+        "too-many-targets",
+        at(1),
+        Array.from({ length: 33 }, (_, index) => `target:${index}`),
+      ),
+    ).toThrow();
+  });
+
+  it("rejects approval targets above the aggregate UTF-8 byte bound", () => {
+    expect(() =>
+      approvalDraft(
+        "targets-too-large",
+        at(1),
+        Array.from({ length: 32 }, () => "💥".repeat(1_000)),
+      ),
+    ).toThrow();
+  });
+
+  it.effect("applies the approval adapter policy Schema before invoking policy callbacks", () => {
+    let callbackInvoked = false;
+    const hook = toRunApprovalHook({
+      expiresInMillis: -1,
+      risk: "high",
+      denial: "terminal",
+      actionSummary: () => {
+        callbackInvoked = true;
+        return "must not run";
+      },
+      resourceTargets: () => [],
+    });
+    return hook
+      .request({
+        request: Response.toolApprovalRequestPart({
+          approvalId: "approval-invalid-policy",
+          toolCallId,
+        }),
+        conversationId,
+        runId,
+        turnId,
+        toolCallId,
+        toolName: "holdItinerary",
+        parameters: { note: "secret" },
+      })
+      .pipe(
+        Effect.exit,
+        Effect.tap((exit) =>
+          Effect.sync(() => {
+            expect(Exit.isFailure(exit)).toBe(true);
+            expect(callbackInvoked).toBe(false);
+          }),
+        ),
+        Effect.provide(
+          Layer.mergeAll(
+            StructuralRedactorLive,
+            ApprovalAuditMemoryLive,
+            Layer.succeed(ApprovalResolver)({
+              request: () => Effect.never,
+            }),
+          ),
+        ),
+      );
+  });
+
+  it.effect("atomically rejects hierarchical consumption across every ancestor", () =>
+    Effect.gen(function* () {
+      const globalBudget = yield* makeUsageBudgetRoot(
+        UsageBudgetNodeConfig.make({
+          level: "global",
+          id: "all",
+          limits: UsageBudgetLimits.make({ maxInputTokens: 4 }),
+        }),
+      );
+      const tenantBudget = yield* globalBudget.child(
+        UsageBudgetNodeConfig.make({
+          level: "tenant",
+          id: "tenant-a",
+          limits: UsageBudgetLimits.make({ maxInputTokens: 10 }),
+        }),
+      );
+      yield* tenantBudget.consume(
+        UsageDelta.make({
+          inputTokens: 3,
+          outputTokens: 0,
+          toolCalls: 0,
+          costMicrousd: 0,
+        }),
+      );
+      const exit = yield* tenantBudget
+        .consume(
+          UsageDelta.make({
+            inputTokens: 2,
+            outputTokens: 0,
+            toolCalls: 0,
+            costMicrousd: 0,
+          }),
+        )
+        .pipe(Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      expect((yield* globalBudget.snapshot).inputTokens).toBe(3);
+      expect((yield* tenantBudget.snapshot).inputTokens).toBe(3);
+    }),
+  );
+
+  it.effect("fails stalled guarded work at the earliest hierarchical deadline", () =>
+    Effect.gen(function* () {
+      const globalBudget = yield* makeUsageBudgetRoot(
+        UsageBudgetNodeConfig.make({
+          level: "global",
+          id: "all",
+          limits: UsageBudgetLimits.make({ maxDurationMillis: 1_000 }),
+        }),
+      );
+      const runBudget = yield* globalBudget.child(
+        UsageBudgetNodeConfig.make({
+          level: "run",
+          id: "run-1",
+          limits: UsageBudgetLimits.make({ maxDurationMillis: 5_000 }),
+        }),
+      );
+      const fiber = yield* runBudget.guard(Effect.never).pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      const exit = yield* Fiber.await(fiber);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+    }),
+  );
+
+  it.effect("wires the hierarchical guard through the engine budget adapter", () =>
+    Effect.gen(function* () {
+      const budget = yield* makeUsageBudgetRoot(
+        UsageBudgetNodeConfig.make({
+          level: "run",
+          id: "adapter-run",
+          limits: UsageBudgetLimits.make({ maxDurationMillis: 1_000 }),
+        }),
+      );
+      const hook = toRunBudgetHook(budget);
+      const fiber = yield* hook.guard(Effect.never).pipe(Effect.forkChild);
+      yield* TestClock.adjust("1 second");
+      expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+    }),
+  );
+
+  it.effect(
+    "verifies exact compaction digests, preserves a nonzero uncovered prefix, and retains source",
+    () =>
+      Effect.gen(function* () {
+        const conversations = yield* EphemeralConversations;
+        yield* conversations.create(conversationId);
+        for (const content of ["Original first", "Compact this", "Original last"]) {
+          yield* conversations.append(
+            conversationId,
+            ConversationAppend.make({ message: textMessage("user", content) }),
+          );
+        }
+        const snapshot = yield* conversations.snapshot(conversationId);
+        const context = yield* prepareModelContext(snapshot, [
+          {
+            id: "model-view-only",
+            version: "1",
+            apply: (messages) => Effect.succeed(messages),
+          },
+        ]);
+        const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
+        const artifact = CompactionArtifact.make({
+          version: 1,
+          conversationId,
+          coversFrom: 1,
+          coversThrough: 1,
+          summary: ModelContextMessage.make({
+            role: "system",
+            content: "Middle message summary.",
+            sourceSequences: [1],
+          }),
+          retainedFacts: [RetainedFact.make({ fact: "Middle retained", sourceSequences: [1] })],
+          tokenEstimate: 4,
+          sourceDigest,
+          compactorVersion: "test-1",
+        });
+        const compacted = yield* applyCompaction(context, artifact);
+
+        expect(compacted.source).toEqual(snapshot);
+        expect(compacted.source.messages).toHaveLength(3);
+        expect(compacted.messages.map((message) => message.content)).toEqual([
+          "Original first",
+          "Middle message summary.",
+          "Original last",
+        ]);
+      }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+  );
+
+  it.effect("rejects a compaction artifact whose exact source digest mismatches", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      const snapshot = yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({ message: textMessage("user", "Canonical source") }),
+      );
+      const context = yield* prepareModelContext(snapshot);
+      const artifact = CompactionArtifact.make({
+        version: 1,
+        conversationId,
+        coversFrom: 0,
+        coversThrough: 0,
+        summary: ModelContextMessage.make({
+          role: "system",
+          content: "Untrusted summary",
+          sourceSequences: [0],
+        }),
+        retainedFacts: [],
+        tokenEstimate: 2,
+        sourceDigest: `sha256:${"0".repeat(64)}`,
+        compactorVersion: "test-1",
+      });
+      const exit = yield* applyCompaction(context, artifact).pipe(Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+    }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+  );
+
+  it.effect("rejects compaction provenance outside the exact covered source range", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({ message: textMessage("user", "first") }),
+      );
+      const snapshot = yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({ message: textMessage("user", "second") }),
+      );
+      const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
+      const artifact = CompactionArtifact.make({
+        version: 1,
+        conversationId,
+        coversFrom: 1,
+        coversThrough: 1,
+        summary: ModelContextMessage.make({
+          role: "system",
+          content: "invalid provenance",
+          sourceSequences: [0],
+        }),
+        retainedFacts: [],
+        tokenEstimate: 2,
+        sourceDigest,
+        compactorVersion: "test-1",
+      });
+      const exit = yield* applyCompaction(yield* prepareModelContext(snapshot), artifact).pipe(
+        Effect.exit,
+      );
+      expect(Exit.isFailure(exit)).toBe(true);
+    }).pipe(Effect.provide(Layer.merge(EphemeralConversationsLive, NodeCrypto.layer))),
+  );
+
+  it.effect(
+    "retains authoritative source even when a transform replaces the entire model view",
+    () =>
+      Effect.gen(function* () {
+        const conversations = yield* EphemeralConversations;
+        yield* conversations.create(conversationId);
+        const snapshot = yield* conversations.append(
+          conversationId,
+          ConversationAppend.make({ message: textMessage("user", "Official history") }),
+        );
+        const context = yield* prepareModelContext(snapshot, [
+          {
+            id: "empty-view",
+            version: "1",
+            apply: () => Effect.succeed([]),
+          },
+        ]);
+
+        expect(context.messages).toEqual([]);
+        expect(context.source).toEqual(snapshot);
+        expect(context.source.messages[0]?.message).toEqual(
+          textMessage("user", "Official history"),
+        );
+      }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
+  it.effect("enforces native MCP discovery count and byte contracts", () =>
+    Effect.gen(function* () {
+      const request = McpConnectionRequest.make({
+        serverId: "travel-mcp",
+        maxToolCount: 1,
+        maxToolDescriptionBytes: 64,
+        maxDiscoveryBytes: 4_096,
+        connectTimeoutMillis: 1_000,
+      });
+      const identity = McpServerIdentity.make({
+        serverId: "travel-mcp",
+        implementation: McpSchema.Implementation.make({
+          name: "travel-tools",
+          version: "2.4.0",
+        }),
+      });
+      const tools = ["one", "two"].map((name) =>
+        McpSchema.Tool.make({
+          name,
+          description: "bounded",
+          inputSchema: {},
+        }),
+      );
+      const exit = yield* validateMcpDiscovery(request, {
+        identity,
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools,
+        toolkit: Toolkit.empty,
+      }).pipe(Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("binds MCP server identity and every native Toolkit parameter schema", () =>
+    Effect.gen(function* () {
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({ query: Schema.String }),
+        success: Schema.String,
+      });
+      const toolkit = Toolkit.make(Search);
+      const request = McpConnectionRequest.make({
+        serverId: "travel-mcp",
+        maxToolCount: 1,
+        maxToolDescriptionBytes: 64,
+        maxDiscoveryBytes: 8_192,
+        connectTimeoutMillis: 1_000,
+      });
+      const identity = McpServerIdentity.make({
+        serverId: "travel-mcp",
+        implementation: McpSchema.Implementation.make({
+          name: "travel-tools",
+          version: "2.4.0",
+        }),
+      });
+      const matching = McpSchema.Tool.make({
+        name: "search",
+        description: "bounded",
+        inputSchema: Tool.getJsonSchema(Search),
+      });
+      const discovery = yield* validateMcpDiscovery(request, {
+        identity,
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools: [matching],
+        toolkit,
+      });
+      expect(discovery.toolkitSchemaDigest).toMatch(/^sha256:[a-f0-9]{64}$/);
+
+      const wrongSchemaExit = yield* validateMcpDiscovery(request, {
+        identity,
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools: [
+          McpSchema.Tool.make({
+            name: matching.name,
+            description: matching.description,
+            inputSchema: { type: "object", properties: { count: { type: "number" } } },
+          }),
+        ],
+        toolkit,
+      }).pipe(Effect.exit);
+      expect(Exit.isFailure(wrongSchemaExit)).toBe(true);
+
+      const wrongIdentityExit = yield* validateMcpDiscovery(request, {
+        identity: McpServerIdentity.make({
+          serverId: "other-mcp",
+          implementation: identity.implementation,
+        }),
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools: [matching],
+        toolkit,
+      }).pipe(Effect.exit);
+      expect(Exit.isFailure(wrongIdentityExit)).toBe(true);
+    }).pipe(Effect.provide(NodeCrypto.layer)),
+  );
+
+  it.effect("fails a stalled MCP connection under the Effect test Clock", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const request = McpConnectionRequest.make({
+          serverId: "stalled-mcp",
+          maxToolCount: 1,
+          maxToolDescriptionBytes: 64,
+          maxDiscoveryBytes: 4_096,
+          connectTimeoutMillis: 1_000,
+        });
+        const finalized = yield* Deferred.make<void>();
+        const connector = Layer.succeed(McpConnector)({
+          connect: () =>
+            Effect.acquireUseRelease(
+              Effect.void,
+              () => Effect.never,
+              () => Deferred.succeed(finalized, undefined),
+            ),
+        });
+        const fiber = yield* connectMcp(request).pipe(
+          Effect.provide(Layer.merge(connector, NodeCrypto.layer)),
+          Effect.forkChild,
+        );
+        yield* TestClock.adjust("1 second");
+        const exit = yield* Fiber.await(fiber);
+
+        expect(Exit.isFailure(exit)).toBe(true);
+        expect(yield* Deferred.isDone(finalized)).toBe(true);
+      }),
+    ),
+  );
+
+  it("keeps every scheduler override finite and lets sequential requirements win", () => {
+    expect(resolveToolConcurrency(4, undefined, false)).toBe(4);
+    expect(resolveToolConcurrency(4, { mode: "bounded", concurrency: 2 }, false)).toBe(2);
+    expect(resolveToolConcurrency(4, { mode: "sequential" }, false)).toBe(1);
+    expect(resolveToolConcurrency(4, { mode: "bounded", concurrency: 2 }, true)).toBe(1);
+  });
+});

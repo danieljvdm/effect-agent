@@ -44,12 +44,15 @@ Dependencies point inward. Inner packages define interfaces; outer packages prov
 ## 3. Modules
 
 The architecture describes the intended package boundaries, but the repository creates a package
-only when its roadmap phase begins. The current Phase 1 tree is:
+only when its roadmap phase begins. The current Phase 2 tree is:
 
 ```text
 packages/
   core
   engine
+  capabilities
+  sandbox
+  sandbox-local
   testing
 examples/
   demo
@@ -98,7 +101,7 @@ Owns:
 - Effect AI Tool execution policy;
 - stopping, retry, and interruption policies;
 - semantic live event publication;
-- ephemeral Conversation state.
+- dependency-neutral operational capability seams.
 
 It depends only on core. The framework-owned ports needed by the interpreter are defined inward,
 initially in core; a separate ports package is created only if the concrete dependency graph later
@@ -124,16 +127,19 @@ Owns generic optional modules:
 - model-context compaction;
 - Skill activation;
 - Subagent spawning;
-- persistent state.
+- ephemeral multi-Run Conversation state;
+- approval, budget, context-compaction, safe-seam input, scheduling, and MCP adapters.
 
-Capability packages depend on engine ports and must not become a grab-bag context object.
+The package depends on engine seams and must not become a grab-bag context object.
 The initial package remains consolidated so the project can validate the capability boundaries
 before splitting them.
 
 ### `@effect-agent/sandbox`
 
 Owns narrow filesystem, process, path, and network capability ports plus Effect AI Tool definitions.
-Implementations live in platform/provider packages.
+Implementations live in outward packages. `@effect-agent/sandbox-local` is the Phase 2 explicitly
+unisolated local-process implementation: it enforces its declared request/output/time bounds and
+rejects policy it cannot enforce.
 
 ### MCP
 

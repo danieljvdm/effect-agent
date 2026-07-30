@@ -4,6 +4,8 @@ import { Effect, type Scope, Schema, Stream } from "effect";
 import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";
 
 import {
+  AgentApprovalDenied,
+  AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
   AgentPolicyError,
@@ -49,7 +51,9 @@ type ExpectedFailure =
   | AgentInputError
   | AgentOutputError
   | AgentPolicyError
-  | ModelProtocolError;
+  | ModelProtocolError
+  | AgentApprovalDenied
+  | AgentApprovalPending;
 type RequirementsProof = Assert<
   Equal<Effect.Services<typeof fixtureProgram>, ExpectedRequirements>
 >;

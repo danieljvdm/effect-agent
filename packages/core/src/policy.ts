@@ -10,38 +10,35 @@ const FinitePositiveDuration = Schema.Duration.pipe(
   ),
 );
 
-const AgentPolicySchema = Schema.Struct({
+const AgentPolicyFields = Schema.Struct({
   maxTurns: PositiveInt,
   maxToolCalls: PositiveInt,
   maxDuration: FinitePositiveDuration,
   toolConcurrency: PositiveInt,
   repeatedFailureLimit: NonNegativeInt,
+  tokenBudget: Schema.optionalKey(PositiveInt),
+  costBudgetMicrousd: Schema.optionalKey(NonNegativeInt),
 });
+type AgentPolicyFields = typeof AgentPolicyFields.Type;
 
 /** Inputs normalized and validated by `AgentPolicy.make`. */
-export interface AgentPolicyInput {
-  /** Positive maximum number of model turns. */
-  readonly maxTurns: number;
-  /** Positive maximum number of Tool Calls across the run. */
-  readonly maxToolCalls: number;
-  /** Finite, positive wall-clock duration accepted in any Effect Duration input form. */
-  readonly maxDuration: Duration.Input;
-  /** Positive maximum number of Tool handlers allowed to execute concurrently. */
-  readonly toolConcurrency: number;
-  /** Non-negative repeated-failure bound; defaults to `3`. */
-  readonly repeatedFailureLimit?: number;
-}
+export type AgentPolicyInput = Readonly<
+  Omit<AgentPolicyFields, "maxDuration" | "repeatedFailureLimit"> & {
+    /** Finite, positive wall-clock duration accepted in any Effect Duration input form. */
+    readonly maxDuration: Duration.Input;
+    /** Non-negative repeated-failure bound; defaults to `3`. */
+    readonly repeatedFailureLimit?: number;
+  }
+>;
 
-/** Normalize, validate, and freeze finite policy bounds, throwing on invalid input. */
-const make = (input: AgentPolicyInput): typeof AgentPolicySchema.Type =>
-  Object.freeze(
-    Schema.decodeSync(AgentPolicySchema)({
+/** Schema class for finite agent run limits. */
+export class AgentPolicy extends Schema.Class<AgentPolicy>("AgentPolicy")(AgentPolicyFields) {
+  /** Normalize and validate finite policy bounds, throwing on invalid input. */
+  static override make(input: AgentPolicyInput): AgentPolicy {
+    return super.make({
       ...input,
       maxDuration: Duration.fromInputUnsafe(input.maxDuration),
       repeatedFailureLimit: input.repeatedFailureLimit ?? 3,
-    }),
-  );
-
-/** Schema for finite agent run limits, augmented with a synchronous `make` constructor. */
-export const AgentPolicy = Object.assign(AgentPolicySchema, { make });
-export type AgentPolicy = typeof AgentPolicy.Type;
+    });
+  }
+}

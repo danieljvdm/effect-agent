@@ -66,7 +66,7 @@ const definition = Agent.define("type-proof", {
     Effect.gen(function* () {
       const context = yield* InstructionContext;
       if (context.locale.length === 0) {
-        return yield* new InstructionFailure({
+        return yield* InstructionFailure.make({
           message: "locale is required",
         });
       }
