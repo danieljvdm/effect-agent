@@ -40,7 +40,7 @@ export const expectedTravelPlan: TravelPlanValue = Schema.decodeSync(TravelPlan)
   ],
 });
 
-export const phase1HappyPathTurns: ReadonlyArray<ScriptedTurnInput> = [
+export const phase1HappyPathTurns = [
   {
     _tag: "Stream",
     parts: [
@@ -80,5 +80,5 @@ export const phase1HappyPathTurns: ReadonlyArray<ScriptedTurnInput> = [
     ],
     termination: { _tag: "Complete" },
   },
-];
+] satisfies readonly [ScriptedTurnInput, ScriptedTurnInput];
 export const phase0HappyPathTurns = phase1HappyPathTurns;

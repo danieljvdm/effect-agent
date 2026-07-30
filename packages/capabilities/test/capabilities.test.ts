@@ -56,8 +56,13 @@ const turnId = Schema.decodeSync(TurnId)("turn-1");
 
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
 
-const textMessage = (role: "system" | "user" | "assistant", content: string): Prompt.Message =>
-  Prompt.make([{ role, content }]).content[0]!;
+const textMessage = (role: "system" | "user" | "assistant", content: string): Prompt.Message => {
+  const [message] = Prompt.make([{ role, content }]).content;
+  if (message === undefined) {
+    throw new Error("Expected Prompt.make to preserve its single input message");
+  }
+  return message;
+};
 
 const approvalDraft = (
   requestId: string,
@@ -505,6 +510,25 @@ describe("capability contracts", () => {
         }),
       );
       const hook = toRunBudgetHook(budget);
+      const consumed: void = yield* hook.consume({
+        modelCalls: 1,
+        inputTokens: 3,
+        outputTokens: 2,
+        totalTokens: 5,
+        toolCalls: 1,
+        costMicrousd: 7,
+        usage: Response.Usage.make({
+          inputTokens: { total: 3 },
+          outputTokens: { total: 2 },
+        }),
+      });
+      expect(consumed).toBeUndefined();
+      expect(yield* budget.snapshot).toMatchObject({
+        inputTokens: 3,
+        outputTokens: 2,
+        toolCalls: 1,
+        costMicrousd: 7,
+      });
       const fiber = yield* hook.guard(Effect.never).pipe(Effect.forkChild);
       yield* TestClock.adjust("1 second");
       expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
@@ -731,6 +755,24 @@ describe("capability contracts", () => {
         toolkit,
       }).pipe(Effect.exit);
       expect(Exit.isFailure(wrongSchemaExit)).toBe(true);
+
+      const nonJsonSchemaError = yield* validateMcpDiscovery(request, {
+        identity,
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools: [
+          McpSchema.Tool.make({
+            name: matching.name,
+            description: matching.description,
+            inputSchema: { type: "object", unsupported: undefined },
+          }),
+        ],
+        toolkit,
+      }).pipe(Effect.flip);
+      expect(nonJsonSchemaError).toMatchObject({
+        _tag: "McpToolkitMismatch",
+        message: expect.stringContaining("not canonical JSON"),
+        cause: expect.anything(),
+      });
 
       const wrongIdentityExit = yield* validateMcpDiscovery(request, {
         identity: McpServerIdentity.make({

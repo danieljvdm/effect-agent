@@ -41,12 +41,18 @@ Only packages required by the active roadmap phase exist:
 
 ```text
 packages/
-  core/     Phase 1 domain and authoring package
-  engine/   Phase 1 ephemeral interpreter package
-  testing/  Phase 1 scripted model and conformance test kit
+  core/            Domain and Agent authoring package
+  engine/          Ephemeral Agent interpreter
+  capabilities/    Operational policy and capability adapters
+  sandbox/         Platform-neutral sandbox contracts
+  sandbox-local/   Node-local sandbox adapter
+  session/         Canonical Conversation records, reducers, and store ports
+  storage-memory/  Scoped deterministic reference storage adapter
+  storage-sqlite/  Node SQLite persistence adapter
+  testing/         Scripted model, fixtures, and conformance test kit
 examples/
-  demo/       Leaf TanStack Start browser bench
-  providers/  Leaf OpenAI/Anthropic Model-binding compile proof
+  demo/             Leaf TanStack Start browser bench
+  providers/        Leaf OpenAI/Anthropic Model-binding compile proof
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.
@@ -54,8 +60,11 @@ Shared compiler options live in root `tsconfig.base.json`; they do not need a wo
 The package dependency direction is:
 
 ```text
-core <- engine <- testing
-  ^__________________|
+core <- engine <- capabilities
+core <- sandbox <- sandbox-local
+core <- engine <- session <- storage adapters
+engine + session + selected adapters <- platform packages
+core + engine <- testing
 ```
 
 `testing` is an outward test kit used by tests and examples. Production packages must never depend
@@ -125,8 +134,7 @@ To upgrade Effect:
 [`@danieljvdm/agent-skills`](https://github.com/danieljvdm/agent-skills) is a root development
 dependency. `agent-skills.jsonc` opts into its `effect` family:
 
-- `effect-cli`
-- `effect-patterns`
+- `effect-ts`
 
 The sync command copies these into `.agents/skills` and creates `.claude/skills` symlinks to the
 copies. Both the copies and symlinks are committed so a fresh checkout gives agents the same

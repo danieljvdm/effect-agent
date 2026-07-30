@@ -41,11 +41,7 @@ type Equal<Left, Right> =
     : false;
 type Assert<Value extends true> = Value;
 
-const model: Model.Model<any, any, never> = Model.make(
-  "scripted",
-  "travel-planner-type-proof",
-  ScriptedModel.layer([]),
-);
+const model = Model.make("scripted", "travel-planner-type-proof", ScriptedModel.layer([]));
 const agent = Agent.withModel(TravelPlanner, model);
 const program = AgentRuntime.run(agent, phase1Trip);
 

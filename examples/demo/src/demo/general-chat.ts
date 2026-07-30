@@ -11,35 +11,36 @@ const ChatMessageText = Schema.String.check(
 );
 
 /** One standalone user message submitted to the general chat agent. */
-export const ChatInput = Schema.Struct({
+export class ChatInput extends Schema.Class<ChatInput>("ChatInput")({
   message: ChatMessageText,
-});
-export type ChatInput = typeof ChatInput.Type;
+}) {}
 
 /** Schema-decoded final answer shared by the fixture and live profiles. */
-export const ChatOutput = Schema.Struct({
+export class ChatOutput extends Schema.Class<ChatOutput>("ChatOutput")({
   answer: Schema.NonEmptyString,
-});
-export type ChatOutput = typeof ChatOutput.Type;
+}) {}
 
-export const FixtureKnowledgeQuery = Schema.Struct({
+export class FixtureKnowledgeQuery extends Schema.Class<FixtureKnowledgeQuery>(
+  "FixtureKnowledgeQuery",
+)({
   query: ChatMessageText,
-});
-export type FixtureKnowledgeQuery = typeof FixtureKnowledgeQuery.Type;
+}) {}
 
-export const FixtureKnowledgeMatch = Schema.Struct({
+export class FixtureKnowledgeMatch extends Schema.Class<FixtureKnowledgeMatch>(
+  "FixtureKnowledgeMatch",
+)({
   title: Schema.NonEmptyString,
   snippet: Schema.NonEmptyString,
   uri: Schema.NonEmptyString,
-});
-export type FixtureKnowledgeMatch = typeof FixtureKnowledgeMatch.Type;
+}) {}
 
-export const FixtureKnowledgeResult = Schema.Struct({
+export class FixtureKnowledgeResult extends Schema.Class<FixtureKnowledgeResult>(
+  "FixtureKnowledgeResult",
+)({
   fixture: Schema.Literal(true),
   query: ChatMessageText,
   matches: Schema.Array(FixtureKnowledgeMatch),
-});
-export type FixtureKnowledgeResult = typeof FixtureKnowledgeResult.Type;
+}) {}
 
 export class FixtureKnowledge extends Context.Service<
   FixtureKnowledge,
@@ -54,30 +55,30 @@ const fixtureArticles: ReadonlyArray<{
 }> = [
   {
     keywords: ["august", "europe", "city", "cities", "travel"],
-    match: {
+    match: FixtureKnowledgeMatch.make({
       title: "Europe in August · fixture note",
       snippet:
         "Copenhagen, Edinburgh, and Ljubljana are the offline catalog's example choices for long days, walkability, and comparatively mild weather.",
       uri: "fixture://travel/europe-august",
-    },
+    }),
   },
   {
     keywords: ["effect", "typescript", "agent"],
-    match: {
+    match: FixtureKnowledgeMatch.make({
       title: "Effect Agent · fixture note",
       snippet:
         "The demo exercises schema-decoded input and output, explicit model bindings, native Effect AI tools, and semantic run events.",
       uri: "fixture://project/effect-agent",
-    },
+    }),
   },
   {
     keywords: ["london", "england", "uk"],
-    match: {
+    match: FixtureKnowledgeMatch.make({
       title: "London · fixture note",
       snippet:
         "The offline catalog represents London as a walkable city with museums, markets, parks, and a large public-transit network.",
       uri: "fixture://travel/london",
-    },
+    }),
   },
 ];
 
@@ -94,12 +95,12 @@ export const searchFixtureKnowledge = (query: FixtureKnowledgeQuery): FixtureKno
       matches.length > 0
         ? matches
         : [
-            {
+            FixtureKnowledgeMatch.make({
               title: "Offline catalog",
               snippet:
                 "No specific fixture matched. This result proves the Tool Call path without claiming live information.",
               uri: "fixture://knowledge/no-match",
-            },
+            }),
           ],
   });
 };
@@ -119,17 +120,15 @@ export const SearchFixtureKnowledge = Tool.make("search_fixture_knowledge", {
   dependencies: [FixtureKnowledge],
 });
 
-export const CalculationInput = Schema.Struct({
+export class CalculationInput extends Schema.Class<CalculationInput>("CalculationInput")({
   operation: Schema.Literals(["add", "subtract", "multiply", "divide"]),
   left: Schema.Finite,
   right: Schema.Finite,
-});
-export type CalculationInput = typeof CalculationInput.Type;
+}) {}
 
-export const CalculationResult = Schema.Struct({
+export class CalculationResult extends Schema.Class<CalculationResult>("CalculationResult")({
   value: Schema.Finite,
-});
-export type CalculationResult = typeof CalculationResult.Type;
+}) {}
 
 export class CalculationFailure extends Schema.TaggedErrorClass<CalculationFailure>()(
   "CalculationFailure",
@@ -147,14 +146,14 @@ export const Calculate = Tool.make("calculate", {
   failureMode: "error",
 });
 
-const calculate = (
+const calculate = Effect.fn("Calculator.calculate")((
   input: CalculationInput,
 ): Effect.Effect<CalculationResult, CalculationFailure> => {
   const complete = (value: number): Effect.Effect<CalculationResult, CalculationFailure> =>
     Number.isFinite(value)
-      ? Effect.succeed({ value })
+      ? Effect.succeed(CalculationResult.make({ value }))
       : Effect.fail(
-          new CalculationFailure({
+          CalculationFailure.make({
             message: "The calculation did not produce a finite result.",
           }),
         );
@@ -168,10 +167,10 @@ const calculate = (
       return complete(input.left * input.right);
     case "divide":
       return input.right === 0
-        ? Effect.fail(new CalculationFailure({ message: "Cannot divide by zero." }))
+        ? Effect.fail(CalculationFailure.make({ message: "Cannot divide by zero." }))
         : complete(input.left / input.right);
   }
-};
+});
 
 export const CalculatorToolkit = Toolkit.make(Calculate);
 export const CalculatorToolkitLayer = CalculatorToolkit.toLayer({

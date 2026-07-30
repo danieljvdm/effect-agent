@@ -1,3 +1,4 @@
+import { ProducerEpoch } from "@effect-agent/session";
 import { Schema } from "effect";
 
 /** The SQLite file uses a private-development format this adapter cannot read. */
@@ -24,6 +25,7 @@ export class SqliteStorageCorruptionError extends Schema.TaggedErrorClass<Sqlite
 export class SqliteStorageError extends Schema.TaggedErrorClass<SqliteStorageError>()(
   "SqliteStorageError",
   {
+    cause: Schema.optionalKey(Schema.Defect()),
     message: Schema.String,
     operation: Schema.String,
   },
@@ -34,6 +36,7 @@ export class SqliteAppendConflict extends Schema.TaggedErrorClass<SqliteAppendCo
   "SqliteAppendConflict",
   {
     message: Schema.String,
+    reason: Schema.Literals(["batch-digest", "tail"]),
   },
 ) {}
 
@@ -41,9 +44,9 @@ export class SqliteAppendConflict extends Schema.TaggedErrorClass<SqliteAppendCo
 export class SqliteFenceRejected extends Schema.TaggedErrorClass<SqliteFenceRejected>()(
   "SqliteFenceRejected",
   {
-    actualEpoch: Schema.Int,
+    actualEpoch: ProducerEpoch,
     message: Schema.String,
-    producerEpoch: Schema.Int,
+    producerEpoch: ProducerEpoch,
   },
 ) {}
 
@@ -59,13 +62,17 @@ export const SqliteStorageFailpointLocation = Schema.Literals([
   "materialize:before",
   "materialize:after",
   "append:before",
+  "append:after-batch-insert",
+  "append:after-record-insert",
+  "append:after-tail-update",
   "append:after",
+  "export:after-conversation-read",
   "save-checkpoint:before",
   "save-checkpoint:after",
 ]);
 export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
 
-/** Deterministic test-only fault injected at a durable SQLite mutation boundary. */
+/** Deterministic test-only fault or pause injected at a SQLite operation boundary. */
 export class SqliteStorageFailpointError extends Schema.TaggedErrorClass<SqliteStorageFailpointError>()(
   "SqliteStorageFailpointError",
   {

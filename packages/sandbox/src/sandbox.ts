@@ -156,6 +156,7 @@ export class SandboxSpawnError extends Schema.TaggedErrorClass<SandboxSpawnError
     implementation: SandboxImplementation,
     command: BoundedPath,
     message: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 
@@ -166,6 +167,7 @@ export class SandboxExitError extends Schema.TaggedErrorClass<SandboxExitError>(
     implementation: SandboxImplementation,
     exitCode: Schema.Int,
     message: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 

@@ -1,9 +1,26 @@
 import { expect, layer } from "@effect/vitest";
 
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Option, Ref, Stream } from "effect";
+import {
+  Cause,
+  ConfigProvider,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { Sandbox, type SandboxEvent, type SandboxRequest } from "@effect-agent/sandbox";
 
 import { layer as localSandboxLayer } from "../src/index.ts";
+
+const AllowedEnvironmentResult = Schema.Struct({
+  allowed: Schema.String,
+  hasHidden: Schema.Boolean,
+});
 
 const request = (
   args: ReadonlyArray<string>,
@@ -153,31 +170,70 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
         )
         .pipe(Stream.runDrain, Effect.exit);
 
-      expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxSpawnError" });
+      expect(failureFrom(exit)).toMatchObject({
+        _tag: "SandboxSpawnError",
+        cause: expect.anything(),
+      });
     }),
   );
 
   it.effect("copies only explicitly allowed environment variables", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
+      const provider = ConfigProvider.fromUnknown({
+        EFFECT_AGENT_ALLOWED: "visible",
+        EFFECT_AGENT_HIDDEN: "hidden",
+      });
       const events = yield* sandbox
         .execute(
           request(
             [
               "-e",
-              "process.stdout.write(JSON.stringify({ hasPath: typeof process.env.PATH === 'string', hasHome: typeof process.env.HOME === 'string' }))",
+              "process.stdout.write(JSON.stringify({ allowed: process.env.EFFECT_AGENT_ALLOWED, hasHidden: typeof process.env.EFFECT_AGENT_HIDDEN === 'string' }))",
             ],
-            { environment: { allow: ["PATH"] } },
+            { environment: { allow: ["EFFECT_AGENT_ALLOWED"] } },
           ),
         )
-        .pipe(Stream.runCollect);
+        .pipe(Stream.runCollect, Effect.provide(ConfigProvider.layer(provider)));
       const stdout = events
         .flatMap((event) =>
           event._tag === "SandboxOutput" && event.stream === "stdout" ? [event.text] : [],
         )
         .join("");
+      const result = yield* Schema.decodeEffect(Schema.fromJsonString(AllowedEnvironmentResult))(
+        stdout,
+      );
 
-      expect(JSON.parse(stdout)).toEqual({ hasPath: true, hasHome: false });
+      expect(result).toEqual({
+        allowed: "visible",
+        hasHidden: false,
+      });
+    }),
+  );
+
+  it.effect("maps configuration source failures to typed spawn errors", () =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox;
+      const failingProvider = ConfigProvider.make(() =>
+        Effect.fail(
+          new ConfigProvider.SourceError({
+            message: "environment source unavailable",
+          }),
+        ),
+      );
+      const exit = yield* sandbox
+        .execute(
+          request(["-e", "process.exit(0)"], {
+            environment: { allow: ["EFFECT_AGENT_ALLOWED"] },
+          }),
+        )
+        .pipe(Stream.runDrain, Effect.provide(ConfigProvider.layer(failingProvider)), Effect.exit);
+
+      expect(failureFrom(exit)).toMatchObject({
+        _tag: "SandboxSpawnError",
+        message: expect.stringContaining("environment source unavailable"),
+        cause: expect.anything(),
+      });
     }),
   );
 

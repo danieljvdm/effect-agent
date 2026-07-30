@@ -102,7 +102,7 @@ export interface RunBudgetHook<Error = never, Requirements = never> {
   readonly guard: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
   ) => Effect.Effect<A, E | Error, R | Requirements>;
-  readonly consume: (delta: RunUsageDelta) => Effect.Effect<unknown, Error, Requirements>;
+  readonly consume: (delta: RunUsageDelta) => Effect.Effect<void, Error, Requirements>;
 }
 
 /** Run-level scheduler override; it may only make the Agent's finite bound stricter. */

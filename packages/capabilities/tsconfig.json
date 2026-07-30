@@ -1,9 +1,4 @@
 {
   "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "paths": {
-      "@effect-agent/engine": ["../engine/src/index.ts"]
-    }
-  },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }

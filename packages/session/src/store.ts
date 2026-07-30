@@ -8,6 +8,7 @@ import {
   CanonicalSequence,
   Digest,
   ObservationOffset,
+  PersistedJson,
   ProducerEpoch,
 } from "./records.ts";
 
@@ -77,7 +78,7 @@ export class ConversationCheckpoint extends Schema.Class<ConversationCheckpoint>
   agentDefinitionDigest: Digest,
   modelDigest: Digest,
   toolDigest: Digest,
-  state: Schema.Json,
+  state: PersistedJson,
   createdAt: Schema.DateTimeUtcFromString,
 }) {}
 
@@ -99,6 +100,7 @@ export class ConversationStoreError extends Schema.TaggedErrorClass<Conversation
   {
     operation: Schema.String,
     message: Schema.String,
+    cause: Schema.optionalKey(Schema.Defect()),
   },
 ) {}
 

@@ -6,11 +6,15 @@ import {
   CanonicalBatch,
   CanonicalRecordEnvelope,
   ConversationProjection,
+  DefinitionDigestInput,
   DefinitionDigests,
   Digest,
   digestCanonicalBatch,
   digestDefinitions,
   EMPTY_TAIL_DIGEST,
+  MAX_PERSISTED_JSON_BYTES,
+  MAX_PERSISTED_JSON_DEPTH,
+  PersistedJson,
   RecordEnvelope,
   replayConversation,
   replayConversationFromCheckpoint,
@@ -68,16 +72,20 @@ describe("session canonical contracts", () => {
 
     it.effect("produces stable definition and chained batch digests", () =>
       Effect.gen(function* () {
-        const firstDefinitions = yield* digestDefinitions({
-          agent: { name: "travel-planner", revision: 1 },
-          model: { model: "scripted", options: { temperature: 0, seed: 7 } },
-          tools: [{ name: "search" }, { name: "hold" }],
-        });
-        const reorderedDefinitions = yield* digestDefinitions({
-          agent: { revision: 1, name: "travel-planner" },
-          model: { options: { seed: 7, temperature: 0 }, model: "scripted" },
-          tools: [{ name: "search" }, { name: "hold" }],
-        });
+        const firstDefinitions = yield* digestDefinitions(
+          DefinitionDigestInput.make({
+            agent: { name: "travel-planner", revision: 1 },
+            model: { model: "scripted", options: { temperature: 0, seed: 7 } },
+            tools: [{ name: "search" }, { name: "hold" }],
+          }),
+        );
+        const reorderedDefinitions = yield* digestDefinitions(
+          DefinitionDigestInput.make({
+            agent: { revision: 1, name: "travel-planner" },
+            model: { options: { seed: 7, temperature: 0 }, model: "scripted" },
+            tools: [{ name: "search" }, { name: "hold" }],
+          }),
+        );
 
         expect(reorderedDefinitions).toEqual(firstDefinitions);
 
@@ -105,6 +113,29 @@ describe("session canonical contracts", () => {
         schemaVersion: 2,
       }),
     ).toThrow();
+  });
+
+  it("round-trips bounded persisted JSON and rejects resource-exhausting values", () => {
+    const valid = {
+      destination: "Kyoto",
+      dates: ["2026-10-10", "2026-10-15"],
+      preferences: { quiet: true, budget: 2_000 },
+    };
+    const decoded = Schema.decodeUnknownSync(PersistedJson)(valid);
+    expect(Schema.encodeSync(PersistedJson)(decoded)).toEqual(valid);
+
+    let tooDeep: unknown = "leaf";
+    for (let depth = 0; depth <= MAX_PERSISTED_JSON_DEPTH; depth++) {
+      tooDeep = { next: tooDeep };
+    }
+    expect(Schema.decodeUnknownExit(PersistedJson)(tooDeep)._tag).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(PersistedJson)("x".repeat(MAX_PERSISTED_JSON_BYTES + 1))._tag,
+    ).toBe("Failure");
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    expect(Schema.decodeUnknownExit(PersistedJson)(cyclic)._tag).toBe("Failure");
   });
 
   it("replays a checkpoint suffix equivalently to full replay", () => {

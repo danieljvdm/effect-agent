@@ -1,0 +1,5 @@
+interface:
+  display_name: "Effect Expert"
+  short_description: "Apply current Effect v4 patterns and tooling"
+  default_prompt: "Use $effect-ts to apply the relevant Effect architecture, schema, service, error, testing, HTTP, SQL, observability, or CLI guidance."
+

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
 
 import { Effect, type Scope, Schema, Stream } from "effect";
 import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";
@@ -80,34 +80,34 @@ describe("general chat fixture profile", () => {
     });
   });
 
-  it("runs the submitted message through a real fixture Tool handler", async () => {
-    const events = await Effect.runPromise(
-      AgentRuntime.stream(fixtureAgent, { message: fixtureMessage }).pipe(
+  it.effect("runs the submitted message through a real fixture Tool handler", () =>
+    Effect.gen(function* () {
+      const events = yield* AgentRuntime.stream(fixtureAgent, { message: fixtureMessage }).pipe(
         Stream.runCollect,
         Effect.provide(FixtureChatRuntimeLayer),
         Effect.scoped,
-      ),
-    );
-    const declared = events.find((event) => event._tag === "ToolCallDeclared");
-    const succeeded = events.find((event) => event._tag === "ToolCallSucceeded");
-    const completed = events.find((event) => event._tag === "RunCompleted");
+      );
+      const declared = events.find((event) => event._tag === "ToolCallDeclared");
+      const succeeded = events.find((event) => event._tag === "ToolCallSucceeded");
+      const completed = events.find((event) => event._tag === "RunCompleted");
 
-    expect(declared).toMatchObject({
-      toolName: "search_fixture_knowledge",
-      parameters: { query: fixtureMessage },
-      providerExecuted: false,
-    });
-    expect(succeeded).toMatchObject({
-      toolName: "search_fixture_knowledge",
-      result: { fixture: true, query: fixtureMessage },
-      providerExecuted: false,
-    });
-    expect(completed).toMatchObject({
-      output: {
-        answer: expect.stringContaining("deterministic fixture data"),
-      },
-    });
-  });
+      expect(declared).toMatchObject({
+        toolName: "search_fixture_knowledge",
+        parameters: { query: fixtureMessage },
+        providerExecuted: false,
+      });
+      expect(succeeded).toMatchObject({
+        toolName: "search_fixture_knowledge",
+        result: { fixture: true, query: fixtureMessage },
+        providerExecuted: false,
+      });
+      expect(completed).toMatchObject({
+        output: {
+          answer: expect.stringContaining("deterministic fixture data"),
+        },
+      });
+    }),
+  );
 
   it("preserves fixture Tool failures and requirements in Run E/R", () => {
     const requirementsProof: RequirementsProof = true;

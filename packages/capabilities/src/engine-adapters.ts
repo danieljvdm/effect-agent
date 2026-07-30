@@ -157,6 +157,7 @@ export const toRunBudgetHook = (
         }),
       ),
       Effect.flatMap((usage) => budget.consume(usage)),
+      Effect.asVoid,
     ),
 });
 

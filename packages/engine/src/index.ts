@@ -1172,7 +1172,7 @@ const eventsForPart = Effect.fn("AgentRuntime.eventsForPart")(function* <
         });
       }
       const toolCallId = yield* decodeToolCallId(part.id);
-      const tool = tools[part.name]! as ToolUnion<Tools>;
+      const tool = tools[part.name] as ToolUnion<Tools>;
       const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
         input: Tool.Parameters<ToolUnion<Tools>>,
       ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;

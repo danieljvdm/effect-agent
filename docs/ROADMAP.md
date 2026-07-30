@@ -49,7 +49,7 @@ replacing it with an unrelated demo.
 - Root dependency catalog, frozen lockfile CI, Effect-aware TypeScript, and Vite+ task graph.
 - `@effect-agent/core`, `engine`, and `testing` package shells.
 - Exact Effect v4 pin and matching local canonical Effect source checkout.
-- Project-local `effect-cli` and `effect-patterns` contributor skills synced from
+- Project-local `effect-ts` contributor skill synced from
   `@danieljvdm/agent-skills`.
 - Agent, policy, ID, error, and Run Event Schemas.
 - Schema-derived domain types, branded IDs, and `Schema.TaggedErrorClass` expected failures.

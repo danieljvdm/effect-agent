@@ -1,5 +1,5 @@
 import { NodeServices } from "@effect/platform-node";
-import { Clock, Duration, Effect, Layer, Ref, Stream } from "effect";
+import { Clock, Config, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
 import {
@@ -98,23 +98,34 @@ const validateRequest = (request: SandboxRequest): Effect.Effect<void, SandboxEr
   return Effect.void;
 };
 
-const environmentFromAllowlist = (allowlist: ReadonlyArray<string>): Record<string, string> => {
-  const environment: Record<string, string> = {};
-  for (const name of allowlist) {
-    const value = process.env[name];
-    if (value !== undefined) {
-      environment[name] = value;
-    }
-  }
-  return environment;
-};
-
-const spawnError = (request: SandboxRequest, message: string) =>
+const spawnError = (request: SandboxRequest, message: string, cause?: unknown) =>
   SandboxSpawnError.make({
     implementation: unisolatedImplementation,
     command: request.command,
     message,
+    ...(cause === undefined ? {} : { cause }),
   });
+
+const environmentFromAllowlist = Effect.fn("LocalSandbox.environmentFromAllowlist")(function* (
+  request: SandboxRequest,
+) {
+  const environment: Record<string, string> = {};
+  for (const name of request.environment.allow) {
+    const value = yield* Config.option(Config.string(name)).pipe(
+      Effect.mapError((error) =>
+        spawnError(
+          request,
+          `Could not read allowed environment variable '${name}': ${error.message}`,
+          error,
+        ),
+      ),
+    );
+    if (Option.isSome(value)) {
+      environment[name] = value.value;
+    }
+  }
+  return environment;
+});
 
 const outputEvent = (
   counts: Ref.Ref<OutputCounts>,
@@ -175,21 +186,22 @@ const makeExecute =
         const counts = yield* Ref.make(zeroOutput);
         const stdoutDecoder = new TextDecoder();
         const stderrDecoder = new TextDecoder();
+        const environment = yield* environmentFromAllowlist(request);
         const command = ChildProcess.make(request.command, request.args, {
           cwd: request.cwd,
-          env: environmentFromAllowlist(request.environment.allow),
+          env: environment,
           extendEnv: false,
           stdout: "pipe",
           stderr: "pipe",
         });
         const child = yield* spawner
           .spawn(command)
-          .pipe(Effect.mapError((error) => spawnError(request, error.message)));
+          .pipe(Effect.mapError((error) => spawnError(request, error.message, error)));
 
         const streamOutput = (stream: OutputStream, decoder: TextDecoder) => {
           const source = stream === "stdout" ? child.stdout : child.stderr;
           return source.pipe(
-            Stream.mapError((error) => spawnError(request, error.message)),
+            Stream.mapError((error) => spawnError(request, error.message, error)),
             Stream.mapEffect((bytes) =>
               outputEvent(counts, stream, bytes, decoder, request.limits.maxOutputBytes),
             ),
@@ -202,6 +214,7 @@ const makeExecute =
             const exitCode = yield* child.exitCode.pipe(
               Effect.mapError((error) =>
                 SandboxExitError.make({
+                  cause: error,
                   implementation: unisolatedImplementation,
                   exitCode: -1,
                   message: error.message,

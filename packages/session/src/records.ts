@@ -1,5 +1,5 @@
 import { AgentId, ConversationId, RunId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { Schema } from "effect";
+import { Encoding, Schema } from "effect";
 
 const identifier = <const Name extends string>(name: Name) =>
   Schema.NonEmptyString.pipe(Schema.brand(`@effect-agent/session/${name}`));
@@ -31,15 +31,99 @@ export const ObservationOffset = identifier("ObservationOffset");
 export type ObservationOffset = typeof ObservationOffset.Type;
 
 /** Gap-free position in one Conversation's canonical sequence. */
-export const CanonicalSequence = Schema.Natural;
+export const CanonicalSequence = Schema.Natural.pipe(
+  Schema.brand("@effect-agent/session/CanonicalSequence"),
+);
 export type CanonicalSequence = typeof CanonicalSequence.Type;
 
 /** Monotonic fencing epoch for a Conversation producer. */
-export const ProducerEpoch = Schema.Natural;
+export const ProducerEpoch = Schema.Natural.pipe(
+  Schema.brand("@effect-agent/session/ProducerEpoch"),
+);
 export type ProducerEpoch = typeof ProducerEpoch.Type;
 
 const BoundedText = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const BoundedName = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+
+export const MAX_PERSISTED_JSON_DEPTH = 64;
+export const MAX_PERSISTED_JSON_COLLECTION_LENGTH = 4_096;
+export const MAX_PERSISTED_JSON_NODES = 65_536;
+export const MAX_PERSISTED_JSON_BYTES = 1024 * 1024;
+
+/**
+ * Iteratively preflights an unknown value before Schema's recursive JSON validation. This is the
+ * one narrow `Schema.declare` exception in the persistence model: Effect v4's `Unknown.decodeTo`
+ * preserves `unknown` as the encoded type, which would leak through every nested record codec.
+ * Schema.Json still owns the accepted value shape after this resource preflight succeeds.
+ */
+const isJson = Schema.is(Schema.Json);
+
+const isPersistedJson = (input: unknown): input is Schema.Json => {
+  const pending: Array<{ readonly value: unknown; readonly depth: number }> = [
+    { value: input, depth: 0 },
+  ];
+  const visited = new WeakSet<object>();
+  let nodes = 0;
+  let textUnits = 0;
+
+  try {
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined) return false;
+      if (current.depth > MAX_PERSISTED_JSON_DEPTH || ++nodes > MAX_PERSISTED_JSON_NODES) {
+        return false;
+      }
+
+      const value = current.value;
+      if (value === null || typeof value === "boolean") continue;
+      if (typeof value === "number") {
+        if (!Number.isFinite(value)) return false;
+        continue;
+      }
+      if (typeof value === "string") {
+        textUnits += value.length;
+        if (textUnits > MAX_PERSISTED_JSON_BYTES) return false;
+        continue;
+      }
+      if (typeof value !== "object" || visited.has(value)) return false;
+      visited.add(value);
+
+      const entries = Array.isArray(value)
+        ? value.map((entry, index) => [index, entry] as const)
+        : Object.entries(value);
+      if (entries.length > MAX_PERSISTED_JSON_COLLECTION_LENGTH) return false;
+      for (const [key, entry] of entries) {
+        textUnits += typeof key === "string" ? key.length : 0;
+        if (textUnits > MAX_PERSISTED_JSON_BYTES) return false;
+        pending.push({ value: entry, depth: current.depth + 1 });
+      }
+    }
+
+    if (!isJson(input)) return false;
+    const encoded = JSON.stringify(input);
+    return (
+      encoded !== undefined && Encoding.encodeHex(encoded).length / 2 <= MAX_PERSISTED_JSON_BYTES
+    );
+  } catch {
+    return false;
+  }
+};
+
+/** Canonical JSON admitted to persisted records and checkpoints under explicit resource limits. */
+export const PersistedJson = Schema.declare(isPersistedJson, {
+  identifier: "@effect-agent/session/PersistedJson",
+  description: "JSON bounded by canonical persistence depth, collection, node, and byte limits",
+});
+export type PersistedJson = typeof PersistedJson.Type;
+
+/** Schema-owned replay inputs whose individual definitions are incorporated into digests. */
+export class DefinitionDigestInput extends Schema.Class<DefinitionDigestInput>(
+  "@effect-agent/session/DefinitionDigestInput",
+)({
+  agent: PersistedJson,
+  model: PersistedJson,
+  tools: PersistedJson,
+}) {}
 
 /** Digests make a replay-visible definition/configuration change explicit. */
 export class DefinitionDigests extends Schema.Class<DefinitionDigests>(
@@ -67,14 +151,14 @@ export class UserInputRecorded extends Schema.TaggedClass<UserInputRecorded>(
   submissionId: SubmissionId,
   kind: Schema.Literals(["user", "steering", "follow-up"]),
   runId: Schema.optionalKey(RunId),
-  input: Schema.Json,
+  input: PersistedJson,
 }) {}
 
 export class ModelCompleted extends Schema.TaggedClass<ModelCompleted>(
   "@effect-agent/session/ModelCompleted",
 )("ModelCompleted", {
   runId: RunId,
-  output: Schema.Json,
+  output: PersistedJson,
 }) {}
 
 export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
@@ -83,7 +167,7 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
   runId: RunId,
   toolCallId: ToolCallId,
   toolName: BoundedName,
-  result: Schema.Json,
+  result: PersistedJson,
   isFailure: Schema.Boolean,
 }) {}
 
@@ -99,7 +183,7 @@ export class RunFailed extends Schema.TaggedClass<RunFailed>("@effect-agent/sess
   "RunFailed",
   {
     runId: RunId,
-    failure: Schema.Json,
+    failure: PersistedJson,
   },
 ) {}
 
@@ -107,14 +191,14 @@ export class RunCompleted extends Schema.TaggedClass<RunCompleted>(
   "@effect-agent/session/RunCompleted",
 )("RunCompleted", {
   runId: RunId,
-  output: Schema.Json,
+  output: PersistedJson,
 }) {}
 
 export class RepairAnnotated extends Schema.TaggedClass<RepairAnnotated>(
   "@effect-agent/session/RepairAnnotated",
 )("RepairAnnotated", {
   reason: BoundedText,
-  details: Schema.Json,
+  details: PersistedJson,
 }) {}
 
 /** Current private-development canonical payload family. */

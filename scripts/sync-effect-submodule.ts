@@ -1,17 +1,19 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, FileSystem, Path, Schema as S, Stream } from "effect";
+import { Config, Console, Effect, FileSystem, Path, Schema as S, Stream } from "effect";
 import { Command as CliCommand } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
 const SUBMODULE_PATH = "repos/effect";
 const SENTINEL_PATH = `${SUBMODULE_PATH}/packages/effect/package.json`;
 
-type RootPackageJson = {
-  catalog?: Record<string, string>;
-  workspaces?: {
-    catalog?: Record<string, string>;
-  };
-};
+const WorkspaceCatalog = S.Struct({
+  catalog: S.optionalKey(S.Record(S.String, S.String)),
+});
+
+class RootPackageJson extends S.Class<RootPackageJson>("RootPackageJson")({
+  catalog: S.optionalKey(S.Record(S.String, S.String)),
+  workspaces: S.optionalKey(S.Union([S.Array(S.String), WorkspaceCatalog])),
+}) {}
 
 class CommandError extends S.TaggedErrorClass<CommandError>()("CommandError", {
   command: S.String,
@@ -35,6 +37,12 @@ class CatalogMissingPackageError extends S.TaggedErrorClass<CatalogMissingPackag
     return `package "${this.packageName}" missing from root catalog`;
   }
 }
+
+class PackageJsonError extends S.TaggedErrorClass<PackageJsonError>()("PackageJsonError", {
+  cause: S.Defect(),
+  path: S.String,
+  message: S.String,
+}) {}
 
 class SubmoduleSentinelMissingError extends S.TaggedErrorClass<SubmoduleSentinelMissingError>()(
   "SubmoduleSentinelMissingError",
@@ -73,7 +81,7 @@ const runCommand = Effect.fn("runCommand")(function* (
 
   const trimmed = output.trim();
   if (exitCode !== 0) {
-    return yield* new CommandError({
+    return yield* CommandError.make({
       command: formatted,
       exitCode,
       output: trimmed,
@@ -88,12 +96,25 @@ const runGit = (cwd: string, args: ReadonlyArray<string>) => runCommand(cwd, "gi
 const readEffectVersion = Effect.fn("readEffectVersion")(function* (rootDir: string) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const raw = yield* fs.readFileString(path.resolve(rootDir, "package.json"));
-  const packageJson = JSON.parse(raw) as RootPackageJson;
-  const version = packageJson.catalog?.effect ?? packageJson.workspaces?.catalog?.effect;
+  const packageJsonPath = path.resolve(rootDir, "package.json");
+  const raw = yield* fs.readFileString(packageJsonPath);
+  const packageJson = yield* S.decodeUnknownEffect(S.fromJsonString(RootPackageJson))(raw).pipe(
+    Effect.mapError((cause) =>
+      PackageJsonError.make({
+        cause,
+        path: packageJsonPath,
+        message: cause.message,
+      }),
+    ),
+  );
+  const workspaceCatalog =
+    packageJson.workspaces !== undefined && S.is(WorkspaceCatalog)(packageJson.workspaces)
+      ? packageJson.workspaces.catalog
+      : undefined;
+  const version = packageJson.catalog?.effect ?? workspaceCatalog?.effect;
 
   if (!version) {
-    return yield* new CatalogMissingPackageError({ packageName: "effect" });
+    return yield* CatalogMissingPackageError.make({ packageName: "effect" });
   }
 
   return version;
@@ -122,12 +143,13 @@ const ensureSubmoduleInitialized = Effect.fn("ensureSubmoduleInitialized")(funct
   ]);
 
   if (!(yield* fs.exists(sentinel))) {
-    return yield* new SubmoduleSentinelMissingError({ sentinel: SENTINEL_PATH });
+    return yield* SubmoduleSentinelMissingError.make({ sentinel: SENTINEL_PATH });
   }
 });
 
-const syncEffectSubmodule = Effect.gen(function* () {
-  if (process.env.CI === "true") {
+const syncEffectSubmodule = Effect.fn("syncEffectSubmodule")(function* () {
+  const isCi = yield* Config.boolean("CI").pipe(Config.withDefault(false));
+  if (isCi) {
     yield* Console.error("Effect submodule skipped: CI=true");
     return;
   }
@@ -160,7 +182,7 @@ const syncEffectSubmodule = Effect.gen(function* () {
   yield* Console.error(`Effect submodule: ${tag} already current`);
 });
 
-const syncCommand = CliCommand.make("sync-effect-submodule", {}, () => syncEffectSubmodule).pipe(
+const syncCommand = CliCommand.make("sync-effect-submodule", {}, () => syncEffectSubmodule()).pipe(
   CliCommand.withDescription("Sync repos/effect to the root catalog's effect version."),
 );
 

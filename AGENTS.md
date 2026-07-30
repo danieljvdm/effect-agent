@@ -13,8 +13,9 @@ Before editing code:
 4. Read `docs/TOOLCHAIN.md`.
 5. Read the specification documents for the modules in scope.
 6. Read every ADR referenced by those documents.
-7. Read `.agents/skills/effect-patterns/SKILL.md` before writing Effect code.
-8. Read `.agents/skills/effect-cli/SKILL.md` before creating or changing repository scripts.
+7. Read `.agents/skills/effect-ts/SKILL.md` before writing Effect code.
+8. Read `.agents/skills/effect-ts/references/guide-cli.md` before creating or changing repository
+   scripts.
 9. Inspect neighboring package tests before introducing a new pattern.
 
 Do not infer that a **Proposed** decision is owner-approved. Implementation may proceed against a

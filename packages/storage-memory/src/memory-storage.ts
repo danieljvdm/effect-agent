@@ -4,6 +4,7 @@ import {
   AppendConflict,
   AppendResult,
   CanonicalRecordEnvelope,
+  CanonicalSequence,
   CheckpointRejected,
   ConversationExportRequest,
   ConversationCheckpoint,
@@ -19,14 +20,16 @@ import {
   FenceRejected,
   FencedAppendRequest,
   LoadCheckpointRequest,
-  type ObservationOffset,
+  ObservationOffset,
+  ProducerEpoch,
+  RecordId,
   SaveCheckpointRequest,
   SubmissionStore,
   SubmissionStoreCapabilities,
   type BatchId,
   type Digest,
 } from "@effect-agent/session";
-import type { ConversationId } from "@effect-agent/core";
+import { ConversationId } from "@effect-agent/core";
 
 const MAX_CONVERSATIONS = 256;
 const MAX_RECORDS_PER_CONVERSATION = 65_536;
@@ -38,14 +41,14 @@ interface StoredBatch {
 }
 
 interface StoredConversation {
-  readonly producerEpoch: number;
-  readonly tailSequence: number;
+  readonly producerEpoch: ProducerEpoch;
+  readonly tailSequence: CanonicalSequence;
   readonly tailDigest: Digest;
   readonly records: ReadonlyArray<CanonicalRecordEnvelope>;
-  readonly recordIds: ReadonlySet<string>;
+  readonly recordIds: ReadonlySet<RecordId>;
   readonly batches: ReadonlyMap<BatchId, StoredBatch>;
-  readonly tailDigests: ReadonlyMap<number, Digest>;
-  readonly checkpoints: ReadonlyMap<number, ConversationCheckpoint>;
+  readonly tailDigests: ReadonlyMap<CanonicalSequence, Digest>;
+  readonly checkpoints: ReadonlyMap<CanonicalSequence, ConversationCheckpoint>;
 }
 
 interface MemoryState {
@@ -78,24 +81,31 @@ type CheckpointDecision =
     }
   | { readonly _tag: "success" };
 
-const storeError = (operation: string, message: string): ConversationStoreError =>
-  ConversationStoreError.make({ operation, message });
+const storeError = (operation: string, message: string, cause?: unknown): ConversationStoreError =>
+  cause === undefined
+    ? ConversationStoreError.make({ operation, message })
+    : ConversationStoreError.make({ operation, message, cause });
 
-const validate = <A, I>(
-  schema: Schema.Codec<A, I>,
-  operation: string,
-  value: unknown,
-): Effect.Effect<A, ConversationStoreError> =>
-  Schema.encodeUnknownEffect(schema)(value).pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-    Effect.mapError((error) => storeError(operation, error.message)),
-  );
+const validate = Effect.fn("MemoryConversationStore.validate")(
+  <A, I>(
+    schema: Schema.Codec<A, I>,
+    operation: string,
+    value: unknown,
+  ): Effect.Effect<A, ConversationStoreError> =>
+    Schema.encodeUnknownEffect(schema)(value).pipe(
+      Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+      Effect.mapError(() => storeError(operation, `Invalid ${operation} request`)),
+    ),
+);
 
-const offsetSequence = (
+const decodeCanonicalSequence = Schema.decodeSync(CanonicalSequence);
+const ZERO_CANONICAL_SEQUENCE = decodeCanonicalSequence(0);
+
+const offsetSequence = Effect.fn("MemoryConversationStore.offsetSequence")((
   conversationId: ConversationId,
   offset: ObservationOffset | undefined,
-): Effect.Effect<number, ConversationStoreError> => {
-  if (offset === undefined) return Effect.succeed(0);
+): Effect.Effect<CanonicalSequence, ConversationStoreError> => {
+  if (offset === undefined) return Effect.succeed(ZERO_CANONICAL_SEQUENCE);
   const prefix = `memory:v1:${Encoding.encodeBase64(conversationId)}:`;
   const encodedSequence = offset.startsWith(prefix) ? offset.slice(prefix.length) : "";
   if (!/^\d+$/.test(encodedSequence)) {
@@ -103,16 +113,21 @@ const offsetSequence = (
   }
   const sequence = Number(encodedSequence);
   return Number.isSafeInteger(sequence)
-    ? Effect.succeed(sequence)
+    ? Schema.decodeUnknownEffect(CanonicalSequence)(sequence).pipe(
+        Effect.mapError(() => storeError("observe", "Malformed observation offset")),
+      )
     : Effect.fail(storeError("observe", "Malformed observation offset"));
-};
+});
 
-const observationOffset = (conversationId: ConversationId, sequence: number): ObservationOffset =>
-  Schema.decodeSync(
-    Schema.NonEmptyString.pipe(Schema.brand("@effect-agent/session/ObservationOffset")),
-  )(`memory:v1:${Encoding.encodeBase64(conversationId)}:${sequence}`);
+const observationOffset = (
+  conversationId: ConversationId,
+  sequence: CanonicalSequence,
+): ObservationOffset =>
+  Schema.decodeSync(ObservationOffset)(
+    `memory:v1:${Encoding.encodeBase64(conversationId)}:${sequence}`,
+  );
 
-const findConversation = (
+const findConversation = Effect.fn("MemoryConversationStore.findConversation")((
   state: MemoryState,
   conversationId: ConversationId,
 ): Effect.Effect<StoredConversation, ConversationNotMaterialized> => {
@@ -120,15 +135,38 @@ const findConversation = (
   return conversation === undefined
     ? Effect.fail(ConversationNotMaterialized.make({ conversationId }))
     : Effect.succeed(conversation);
-};
+});
+
+const CheckpointVersionEnvelope = Schema.Struct({
+  checkpoint: Schema.Struct({
+    conversationId: ConversationId,
+    schemaVersion: Schema.Natural,
+  }),
+});
+
+const validateCheckpointVersion = Effect.fn("MemoryConversationStore.validateCheckpointVersion")(
+  function* (value: unknown): Effect.fn.Return<void, ConversationStoreError | CheckpointRejected> {
+    const envelope = yield* Schema.decodeUnknownEffect(CheckpointVersionEnvelope)(value).pipe(
+      Effect.mapError(() => storeError("saveCheckpoint", "Invalid saveCheckpoint request")),
+    );
+    if (envelope.checkpoint.schemaVersion !== 1) {
+      return yield* CheckpointRejected.make({
+        conversationId: envelope.checkpoint.conversationId,
+        reason: "unsupported-version",
+      });
+    }
+  },
+);
 
 const makeConversationStore = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const state = yield* Ref.make<MemoryState>({ conversations: new Map() });
-  const updates = yield* PubSub.unbounded<CanonicalRecordEnvelope>();
+  const updates = yield* PubSub.sliding<void>(1);
   yield* Effect.addFinalizer(() => PubSub.shutdown(updates));
 
-  const materialize: ConversationStore["Service"]["materialize"] = (unvalidated) =>
+  const materialize: ConversationStore["Service"]["materialize"] = Effect.fn(
+    "MemoryConversationStore.materialize",
+  )((unvalidated) =>
     Effect.gen(function* () {
       const request = yield* validate(ConversationMaterialization, "materialize", unvalidated);
       const decision = yield* Ref.modify(
@@ -174,26 +212,29 @@ const makeConversationStore = Effect.gen(function* () {
           const conversations = new Map(current.conversations);
           conversations.set(request.conversationId, {
             producerEpoch: request.producerEpoch,
-            tailSequence: 0,
+            tailSequence: ZERO_CANONICAL_SEQUENCE,
             tailDigest: EMPTY_TAIL_DIGEST,
             records: [],
             recordIds: new Set(),
             batches: new Map(),
-            tailDigests: new Map([[0, EMPTY_TAIL_DIGEST]]),
+            tailDigests: new Map([[ZERO_CANONICAL_SEQUENCE, EMPTY_TAIL_DIGEST]]),
             checkpoints: new Map(),
           });
           return [{ _tag: "success" }, { conversations }];
         },
       );
       if (decision._tag === "failure") return yield* decision.error;
-    });
+    }),
+  );
 
-  const append: ConversationStore["Service"]["append"] = (unvalidated) =>
+  const append: ConversationStore["Service"]["append"] = Effect.fn(
+    "MemoryConversationStore.append",
+  )((unvalidated) =>
     Effect.gen(function* () {
       const request = yield* validate(FencedAppendRequest, "append", unvalidated);
       const digest = yield* digestCanonicalBatch(request.expectedTailDigest, request.batch).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
-        Effect.mapError((error) => storeError("append", error.message)),
+        Effect.mapError((error) => storeError("append", error.message, error)),
       );
 
       const decision = yield* Effect.uninterruptible(
@@ -284,7 +325,7 @@ const makeConversationStore = Effect.gen(function* () {
             ];
           }
 
-          const batchRecordIds = new Set<string>();
+          const batchRecordIds = new Set<RecordId>();
           for (const record of request.batch.records) {
             if (
               conversation.recordIds.has(record.recordId) ||
@@ -306,7 +347,7 @@ const makeConversationStore = Effect.gen(function* () {
           }
 
           const records = request.batch.records.map((record, index) => {
-            const sequence = conversation.tailSequence + index + 1;
+            const sequence = decodeCanonicalSequence(conversation.tailSequence + index + 1);
             return CanonicalRecordEnvelope.make({
               conversationId: request.conversationId,
               batchId: request.batch.batchId,
@@ -315,9 +356,9 @@ const makeConversationStore = Effect.gen(function* () {
               record,
             });
           });
-          const lastSequence = conversation.tailSequence + records.length;
+          const lastSequence = decodeCanonicalSequence(conversation.tailSequence + records.length);
           const result = AppendResult.make({
-            firstSequence: conversation.tailSequence + 1,
+            firstSequence: decodeCanonicalSequence(conversation.tailSequence + 1),
             lastSequence,
             tailDigest: digest,
             replayed: false,
@@ -342,28 +383,27 @@ const makeConversationStore = Effect.gen(function* () {
         }).pipe(
           Effect.tap((decision) =>
             decision._tag === "success" && decision.records.length > 0
-              ? PubSub.publishAll(updates, decision.records)
+              ? PubSub.publish(updates, undefined)
               : Effect.void,
           ),
         ),
       );
       if (decision._tag === "failure") return yield* decision.error;
       return decision.result;
-    });
+    }),
+  );
 
-  const readSnapshot = (
-    conversationId: ConversationId,
-    afterSequence: number | undefined,
-    limit: number,
-  ) =>
-    Ref.get(state).pipe(
-      Effect.flatMap((current) => findConversation(current, conversationId)),
-      Effect.map((conversation) =>
-        conversation.records
-          .filter((record) => record.sequence > (afterSequence ?? 0))
-          .slice(0, limit),
+  const readSnapshot = Effect.fn("MemoryConversationStore.readSnapshot")(
+    (conversationId: ConversationId, afterSequence: CanonicalSequence | undefined, limit: number) =>
+      Ref.get(state).pipe(
+        Effect.flatMap((current) => findConversation(current, conversationId)),
+        Effect.map((conversation) =>
+          conversation.records
+            .filter((record) => record.sequence > (afterSequence ?? ZERO_CANONICAL_SEQUENCE))
+            .slice(0, limit),
+        ),
       ),
-    );
+  );
 
   const read: ConversationStore["Service"]["read"] = (unvalidated) =>
     Stream.unwrap(
@@ -392,11 +432,20 @@ const makeConversationStore = Effect.gen(function* () {
               MAX_RECORDS_PER_CONVERSATION,
             );
             const highWater =
-              initial.length === 0 ? afterSequence : initial[initial.length - 1]!.sequence;
+              initial.length === 0 ? afterSequence : (initial.at(-1)?.sequence ?? afterSequence);
             const live = Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
-              Stream.filter(
-                (record) =>
-                  record.conversationId === request.conversationId && record.sequence > highWater,
+              Stream.mapAccumEffect(
+                () => highWater,
+                (lastSequence) =>
+                  readSnapshot(
+                    request.conversationId,
+                    lastSequence,
+                    MAX_RECORDS_PER_CONVERSATION,
+                  ).pipe(
+                    Effect.map(
+                      (records) => [records.at(-1)?.sequence ?? lastSequence, records] as const,
+                    ),
+                  ),
               ),
             );
             return Stream.fromIterable(initial).pipe(Stream.concat(live));
@@ -405,7 +454,9 @@ const makeConversationStore = Effect.gen(function* () {
       }),
     );
 
-  const exportConversation: ConversationStore["Service"]["export"] = (unvalidated) =>
+  const exportConversation: ConversationStore["Service"]["export"] = Effect.fn(
+    "MemoryConversationStore.export",
+  )((unvalidated) =>
     Effect.gen(function* () {
       const request = yield* validate(ConversationExportRequest, "export", unvalidated);
       const conversation = yield* Ref.get(state).pipe(
@@ -418,10 +469,14 @@ const makeConversationStore = Effect.gen(function* () {
         tailDigest: conversation.tailDigest,
         records: conversation.records,
       });
-    });
+    }),
+  );
 
-  const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = (unvalidated) =>
+  const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
+    "MemoryConversationStore.saveCheckpoint",
+  )((unvalidated) =>
     Effect.gen(function* () {
+      yield* validateCheckpointVersion(unvalidated);
       const request = yield* validate(SaveCheckpointRequest, "saveCheckpoint", unvalidated);
       const decision = yield* Ref.modify(
         state,
@@ -486,9 +541,12 @@ const makeConversationStore = Effect.gen(function* () {
         },
       );
       if (decision._tag === "failure") return yield* decision.error;
-    });
+    }),
+  );
 
-  const loadCheckpoint: ConversationStore["Service"]["loadCheckpoint"] = (unvalidated) =>
+  const loadCheckpoint: ConversationStore["Service"]["loadCheckpoint"] = Effect.fn(
+    "MemoryConversationStore.loadCheckpoint",
+  )((unvalidated) =>
     Effect.gen(function* () {
       const request = yield* validate(LoadCheckpointRequest, "loadCheckpoint", unvalidated);
       const conversation = yield* Ref.get(state).pipe(
@@ -514,7 +572,8 @@ const makeConversationStore = Effect.gen(function* () {
         });
       }
       return Option.fromNullishOr(selected);
-    });
+    }),
+  );
 
   return ConversationStore.of({
     materialize,
@@ -538,7 +597,7 @@ export const MemorySubmissionStoreLive = Layer.succeed(
         acceptsDurableWork: false,
       }),
     ),
-    inspect: () => Effect.succeed(Option.none()),
+    inspect: Effect.fn("MemorySubmissionStore.inspect")(() => Effect.succeed(Option.none())),
   }),
 );
 

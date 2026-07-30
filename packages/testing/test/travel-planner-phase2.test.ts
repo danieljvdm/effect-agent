@@ -78,9 +78,9 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         );
         let secondPrompt = "";
         const turns: ReadonlyArray<ScriptedTurnInput> = [
-          phase1HappyPathTurns[0]!,
+          phase1HappyPathTurns[0],
           {
-            ...phase1HappyPathTurns[1]!,
+            ...phase1HappyPathTurns[1],
             assertRequest: (request) => {
               secondPrompt = JSON.stringify(request.prompt.content);
             },
@@ -153,7 +153,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
           }),
         );
         const prompts: Array<string> = [];
-        const stopTurn = phase1HappyPathTurns[1]!;
+        const stopTurn = phase1HappyPathTurns[1];
         const turns: ReadonlyArray<ScriptedTurnInput> = [
           {
             ...stopTurn,

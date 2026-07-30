@@ -10,6 +10,7 @@ import {
   makeFixtureChatAgent,
 } from "./general-chat";
 import type { DemoRunSelection } from "./contracts";
+import { decodeErrorDetails } from "./error-details";
 import { DemoRunRpcClient } from "./run-rpc-client";
 
 export type DemoStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted" | "suspended";
@@ -55,17 +56,8 @@ export const initialDemoState: DemoState = {
 /** Shared browser state for the current agent run and selected model profile. */
 export const demoStateAtom = Atom.make<DemoState>(initialDemoState);
 
-const failureMessage = (error: unknown): string => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof error.message === "string"
-  ) {
-    return error.message;
-  }
-  return String(error);
-};
+const failureMessage = (error: unknown): string =>
+  decodeErrorDetails(error).message ?? String(error);
 
 const updateAssistantMessage = (
   messages: ReadonlyArray<ChatMessage>,

@@ -6,8 +6,7 @@ export const DemoMode = Schema.Literals(["deterministic", "openai"]);
 export type DemoMode = typeof DemoMode.Type;
 
 /** One request submitted from the browser bench. */
-export const DemoRunSelection = Schema.Struct({
+export class DemoRunSelection extends Schema.Class<DemoRunSelection>("DemoRunSelection")({
   mode: DemoMode,
   message: ChatInput.fields.message,
-});
-export type DemoRunSelection = typeof DemoRunSelection.Type;
+}) {}

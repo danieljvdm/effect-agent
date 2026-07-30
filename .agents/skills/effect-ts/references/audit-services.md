@@ -1,8 +1,8 @@
-# Effect Service Design Audit
+# Auditing Effect Services
 
 Use this for an audit across a codebase, package, feature slice, or diff. Apply
 the service and test rules from the other references selected by
-`effect-patterns`.
+`effect-ts`.
 
 ## Contents
 
@@ -16,7 +16,7 @@ the service and test rules from the other references selected by
 ## 1. Establish Local Rules
 
 Read the project architecture guidance, Effect conventions, pinned Effect
-version or source, and relevant vendored examples. Record the governing
+version or source, and relevant version-matched examples. Record the governing
 conventions and APIs that later decisions must follow.
 
 Complete this step when the applicable project guidance and pinned source
@@ -36,6 +36,11 @@ Enumerate source and test files, then find:
   mutable globals.
 - Test fakes, in-memory implementations, module mocks, and hand-built
   `Layer.succeed` values.
+- Public Effects with `unknown` or `any` error types.
+- Assertions, non-null assertions, custom type predicates, structural probes,
+  JSON parsing, Promise catch mappers, and `throw` statements.
+- Local schemas, codecs, JSON types, and runtime helpers that overlap Effect or
+  platform APIs.
 
 Record one row per discovered service or candidate:
 
@@ -48,10 +53,17 @@ Record one row per discovered service or candidate:
 | Tests | Does it have an intentional and honest substitute strategy? |
 | Consumers | Are capabilities yielded or drilled as values? |
 | Requirements | Do requirements remain visible to the composition root? |
+| Type boundary | Who owns decoding, narrowing, and error translation? |
 | Verdict | Keep, deepen, relocate, merge, remove, or create? |
 
-Complete this step when every discovered service, tag, Layer, and
-service-shaped candidate appears exactly once.
+Build a companion type-safety inventory using
+[`guide-type-safety-and-boundaries.md`](guide-type-safety-and-boundaries.md).
+Attach each
+occurrence to its owning service or boundary and record its input provenance,
+intended type or error, and target disposition.
+
+Complete this step when every discovered service, tag, Layer, service-shaped
+candidate, and type-safety occurrence appears exactly once.
 
 ## 3. Trace Authority And Requirements
 
@@ -100,16 +112,18 @@ exported test and in-memory Layers implement the behavior their names promise,
 and keep focused partial fixtures local to their tests.
 
 Complete this step when every production service has an intentional test
-strategy or an explicit reason that no substitute is useful.
+strategy or an explicit production-only rationale.
 
 ## 6. Report Actionable Findings
 
 Prioritize by correctness and requirement visibility:
 
 - **P0** — hidden authority, unsafe direct runtime access, broken or duplicated
-  capability, or wrong Layer ownership.
+  capability, wrong Layer ownership, untyped expected failures, or unchecked
+  external data.
 - **P1** — repeated dependency drilling, hidden requirements, scattered service
-  ownership, or a missing intentional test strategy.
+  ownership, manual shape discovery, unjustified assertions, custom substitutes
+  for Effect APIs, or a missing intentional test strategy.
 - **P2** — naming or co-location cleanup that should accompany a nearby
   refactor.
 
@@ -125,6 +139,6 @@ End with explicit keep decisions for values, pure functions, framework
 boundaries, correctly separated ports and adapters, and request-scoped
 services.
 
-Complete the audit when every inventory row has a disposition, every proposed
-change names its owner and target shape, and the report contains no speculative
-abstractions.
+Complete the audit when every inventory row and type-safety occurrence has a
+disposition, every proposed change names its owner and target shape, and every
+proposal remains evidence-backed and scoped to observed code.

@@ -6,6 +6,7 @@ import {
   CanonicalBatch,
   CanonicalRecord,
   CanonicalRecordEnvelope,
+  CanonicalSequence,
   CheckpointRejected,
   ConversationCheckpoint,
   ConversationExport,
@@ -33,7 +34,6 @@ import {
   SqliteAppendConflict,
   SqliteCheckpointConflict,
   SqliteFenceRejected,
-  SqliteStorageFailpointError,
   type SqliteStorageFailpointLocation,
   SqliteStorageCompatibilityError,
   SqliteStorageCorruptionError,
@@ -41,17 +41,21 @@ import {
 } from "./errors.ts";
 import {
   initializeSqliteJournal,
-  type RawCheckpoint,
-  type RawReadRequest,
+  RawAppendRequest,
+  RawCheckpoint,
+  RawReadRequest,
   type SqliteJournal,
 } from "./sqlite-journal.ts";
+import { SqliteStorageConfig, SqliteStorageConfigValue } from "./sqlite-storage-config.ts";
+import {
+  SqliteStorageFailpoint,
+  type SqliteStorageFailpointHandler,
+} from "./sqlite-storage-failpoint.ts";
 
 export interface SqliteStorageOptions {
   readonly filename: string;
   readonly observationPollInterval?: number | undefined;
-  readonly failpoint?: (
-    location: SqliteStorageFailpointLocation,
-  ) => Effect.Effect<void, SqliteStorageFailpointError>;
+  readonly failpoint?: SqliteStorageFailpointHandler | undefined;
 }
 
 export type SqliteStorageInitializationError =
@@ -59,106 +63,114 @@ export type SqliteStorageInitializationError =
   | SqliteStorageCorruptionError
   | SqliteStorageError;
 
-const NonNegativeInt = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
 const SQLITE_OFFSET_PREFIX = "effect-agent-sqlite@1:";
+const ZERO_CANONICAL_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 
 const storeError = (operation: string, error: { readonly message: string }) =>
-  new ConversationStoreError({
+  ConversationStoreError.make({
+    cause: error,
     operation,
     message: error.message,
   });
 
 const schemaStoreError = (operation: string, error: { readonly message: string }) =>
-  new ConversationStoreError({
+  ConversationStoreError.make({
+    cause: error,
     operation,
     message: error.message,
   });
 
-const makeOffset = (
+const makeOffset = Effect.fn("SqliteConversationStore.makeOffset")(function* (
   conversationId: ConversationMaterialization["conversationId"],
   sequence: number,
-): Effect.Effect<ObservationOffset, ConversationStoreError> =>
-  Schema.decodeUnknownEffect(ObservationOffset)(
-    `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(conversationId)}:${sequence}`,
-  ).pipe(Effect.mapError((error) => schemaStoreError("encode observation offset", error)));
+): Effect.fn.Return<ObservationOffset, ConversationStoreError> {
+  return yield* Schema.decodeUnknownEffect(CanonicalSequence)(sequence).pipe(
+    Effect.flatMap((validatedSequence) =>
+      Schema.decodeUnknownEffect(ObservationOffset)(
+        `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(conversationId)}:${validatedSequence}`,
+      ),
+    ),
+    Effect.mapError((error) => schemaStoreError("encode observation offset", error)),
+  );
+});
 
-const parseOffset = (
+const parseOffset = Effect.fn("SqliteConversationStore.parseOffset")(function* (
   conversationId: ConversationMaterialization["conversationId"],
   offset: ObservationOffset | undefined,
-): Effect.Effect<number, ConversationStoreError> => {
-  if (offset === undefined) return Effect.succeed(0);
-  return Effect.gen(function* () {
-    const text = yield* Schema.decodeUnknownEffect(OffsetText)(offset).pipe(
-      Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
-    );
-    const conversationPrefix = `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(conversationId)}:`;
-    if (!text.startsWith(conversationPrefix)) {
-      return yield* new ConversationStoreError({
-        operation: "decode observation offset",
-        message:
-          "The observation offset belongs to a different adapter, storage version, or Conversation.",
-      });
-    }
-    const sequenceText = text.slice(conversationPrefix.length);
-    if (!/^(0|[1-9][0-9]*)$/.test(sequenceText)) {
-      return yield* new ConversationStoreError({
-        operation: "decode observation offset",
-        message: "The observation offset is malformed.",
-      });
-    }
-    return yield* Schema.decodeUnknownEffect(NonNegativeInt)(Number(sequenceText)).pipe(
-      Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
-    );
-  });
-};
+): Effect.fn.Return<CanonicalSequence, ConversationStoreError> {
+  if (offset === undefined) return ZERO_CANONICAL_SEQUENCE;
+  const text = yield* Schema.decodeUnknownEffect(OffsetText)(offset).pipe(
+    Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
+  );
+  const conversationPrefix = `${SQLITE_OFFSET_PREFIX}${encodeURIComponent(conversationId)}:`;
+  if (!text.startsWith(conversationPrefix)) {
+    return yield* ConversationStoreError.make({
+      operation: "decode observation offset",
+      message:
+        "The observation offset belongs to a different adapter, storage version, or Conversation.",
+    });
+  }
+  const sequenceText = text.slice(conversationPrefix.length);
+  if (!/^(0|[1-9][0-9]*)$/.test(sequenceText)) {
+    return yield* ConversationStoreError.make({
+      operation: "decode observation offset",
+      message: "The observation offset is malformed.",
+    });
+  }
+  return yield* Schema.decodeUnknownEffect(CanonicalSequence)(Number(sequenceText)).pipe(
+    Effect.mapError((error) => schemaStoreError("decode observation offset", error)),
+  );
+});
 
 const mapFence = (
   conversationId: ConversationMaterialization["conversationId"],
   error: SqliteFenceRejected,
 ) =>
-  new FenceRejected({
+  FenceRejected.make({
     conversationId,
     actualEpoch: error.actualEpoch,
     attemptedEpoch: error.producerEpoch,
   });
 
-const encodeCanonicalRecord = (
+const encodeCanonicalRecord = Effect.fn("SqliteConversationStore.encodeCanonicalRecord")(function* (
   record: CanonicalRecord,
-): Effect.Effect<string, ConversationStoreError> =>
-  Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
+): Effect.fn.Return<string, ConversationStoreError> {
+  return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(record).pipe(
     Effect.mapError((error) => schemaStoreError("encode canonical record", error)),
   );
+});
 
-const encodeCanonicalBatch = (
+const encodeCanonicalBatch = Effect.fn("SqliteConversationStore.encodeCanonicalBatch")(function* (
   batch: CanonicalBatch,
-): Effect.Effect<string, ConversationStoreError> =>
-  Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
+): Effect.fn.Return<string, ConversationStoreError> {
+  return yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalBatch))(batch).pipe(
     Effect.mapError((error) => schemaStoreError("encode canonical batch", error)),
   );
+});
 
-const encodeCheckpoint = (
+const encodeCheckpoint = Effect.fn("SqliteConversationStore.encodeCheckpoint")(function* (
   checkpoint: ConversationCheckpoint,
-): Effect.Effect<string, ConversationStoreError> =>
-  Schema.encodeEffect(Schema.fromJsonString(ConversationCheckpoint))(checkpoint).pipe(
+): Effect.fn.Return<string, ConversationStoreError> {
+  return yield* Schema.encodeEffect(Schema.fromJsonString(ConversationCheckpoint))(checkpoint).pipe(
     Effect.mapError((error) => schemaStoreError("encode checkpoint", error)),
   );
+});
 
 const decodeEnvelope = Effect.fn("SqliteConversationStore.decodeEnvelope")(function* (row: {
   readonly batch_id: string;
   readonly conversation_id: string;
   readonly record_json: string;
-  readonly sequence: number;
+  readonly sequence: CanonicalSequence;
 }) {
   const record = yield* Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(
     row.record_json,
   ).pipe(
-    Effect.mapError(
-      (error) =>
-        new ConversationStoreError({
-          operation: "decode canonical record",
-          message: error.message,
-        }),
+    Effect.mapError((error) =>
+      ConversationStoreError.make({
+        operation: "decode canonical record",
+        message: error.message,
+      }),
     ),
   );
   const conversationId = yield* Schema.decodeUnknownEffect(
@@ -179,12 +191,13 @@ const decodeEnvelope = Effect.fn("SqliteConversationStore.decodeEnvelope")(funct
   });
 });
 
-const decodeCheckpoint = (
+const decodeCheckpoint = Effect.fn("SqliteConversationStore.decodeCheckpoint")(function* (
   checkpointJson: string,
-): Effect.Effect<ConversationCheckpoint, ConversationStoreError> =>
-  Schema.decodeEffect(Schema.fromJsonString(ConversationCheckpoint))(checkpointJson).pipe(
-    Effect.mapError((error) => schemaStoreError("decode checkpoint", error)),
-  );
+): Effect.fn.Return<ConversationCheckpoint, ConversationStoreError> {
+  return yield* Schema.decodeEffect(Schema.fromJsonString(ConversationCheckpoint))(
+    checkpointJson,
+  ).pipe(Effect.mapError((error) => schemaStoreError("decode checkpoint", error)));
+});
 
 const requireConversation = Effect.fn("SqliteConversationStore.requireConversation")(function* (
   journal: SqliteJournal,
@@ -194,7 +207,7 @@ const requireConversation = Effect.fn("SqliteConversationStore.requireConversati
     .getConversation(conversationId)
     .pipe(Effect.mapError((error) => storeError("read conversation", error)));
   if (rows.length === 0) {
-    return yield* new ConversationNotMaterialized({ conversationId });
+    return yield* ConversationNotMaterialized.make({ conversationId });
   }
   return rows[0];
 });
@@ -202,14 +215,14 @@ const requireConversation = Effect.fn("SqliteConversationStore.requireConversati
 const tailDigestAt = Effect.fn("SqliteConversationStore.tailDigestAt")(function* (
   journal: SqliteJournal,
   conversationId: ConversationMaterialization["conversationId"],
-  sequence: number,
+  sequence: CanonicalSequence,
 ) {
   if (sequence === 0) return EMPTY_TAIL_DIGEST;
   const digests = yield* journal
     .getTailDigestAt(conversationId, sequence)
     .pipe(Effect.mapError((error) => storeError("read checkpoint digest", error)));
   if (digests.length !== 1) {
-    return yield* new CheckpointRejected({
+    return yield* CheckpointRejected.make({
       conversationId,
       reason: "digest-mismatch",
     });
@@ -227,26 +240,24 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
   const batches = yield* Effect.forEach(stored.batches, (batch) =>
     Schema.decodeEffect(Schema.fromJsonString(CanonicalBatch))(batch.batch_json).pipe(
       Effect.map((decoded) => ({ decoded, row: batch })),
-      Effect.mapError(
-        (error) =>
-          new SqliteStorageCorruptionError({
-            table: "effect_agent_canonical_batches",
-            rowKey: `${batch.conversation_id}/${batch.batch_id}`,
-            message: error.message,
-          }),
+      Effect.mapError((error) =>
+        SqliteStorageCorruptionError.make({
+          table: "effect_agent_canonical_batches",
+          rowKey: `${batch.conversation_id}/${batch.batch_id}`,
+          message: error.message,
+        }),
       ),
     ),
   );
   const records = yield* Effect.forEach(stored.records, (record) =>
     Schema.decodeEffect(Schema.fromJsonString(CanonicalRecord))(record.record_json).pipe(
       Effect.map((decoded) => ({ decoded, row: record })),
-      Effect.mapError(
-        (error) =>
-          new SqliteStorageCorruptionError({
-            table: "effect_agent_canonical_records",
-            rowKey: `${record.conversation_id}/${record.sequence}`,
-            message: error.message,
-          }),
+      Effect.mapError((error) =>
+        SqliteStorageCorruptionError.make({
+          table: "effect_agent_canonical_records",
+          rowKey: `${record.conversation_id}/${record.sequence}`,
+          message: error.message,
+        }),
       ),
     ),
   );
@@ -255,13 +266,12 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
       checkpoint.checkpoint_json,
     ).pipe(
       Effect.map((decoded) => ({ decoded, row: checkpoint })),
-      Effect.mapError(
-        (error) =>
-          new SqliteStorageCorruptionError({
-            table: "effect_agent_checkpoints",
-            rowKey: `${checkpoint.conversation_id}/${checkpoint.through_sequence}`,
-            message: error.message,
-          }),
+      Effect.mapError((error) =>
+        SqliteStorageCorruptionError.make({
+          table: "effect_agent_checkpoints",
+          rowKey: `${checkpoint.conversation_id}/${checkpoint.through_sequence}`,
+          message: error.message,
+        }),
       ),
     ),
   );
@@ -287,7 +297,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
         batchRow.first_sequence !== expectedSequence ||
         batchRow.last_sequence !== batchRow.first_sequence + canonicalBatch.records.length - 1
       ) {
-        return yield* new SqliteStorageCorruptionError({
+        return yield* SqliteStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: key,
           message: "Canonical batch identity, sequence, or record count is inconsistent.",
@@ -296,17 +306,16 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
 
       const digest = yield* digestCanonicalBatch(previousDigest, canonicalBatch).pipe(
         Effect.provideService(Crypto.Crypto, crypto),
-        Effect.mapError(
-          (error) =>
-            new SqliteStorageCorruptionError({
-              table: "effect_agent_canonical_batches",
-              rowKey: key,
-              message: error.message,
-            }),
+        Effect.mapError((error) =>
+          SqliteStorageCorruptionError.make({
+            table: "effect_agent_canonical_batches",
+            rowKey: key,
+            message: error.message,
+          }),
         ),
       );
       if (batchRow.batch_digest !== digest || batchRow.tail_digest !== digest) {
-        return yield* new SqliteStorageCorruptionError({
+        return yield* SqliteStorageCorruptionError.make({
           table: "effect_agent_canonical_batches",
           rowKey: key,
           message: "Canonical batch digest does not match its decoded content and prior tail.",
@@ -317,7 +326,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
         ({ row }) => row.batch_id === batchRow.batch_id,
       );
       if (batchRecords.length !== canonicalBatch.records.length) {
-        return yield* new SqliteStorageCorruptionError({
+        return yield* SqliteStorageCorruptionError.make({
           table: "effect_agent_canonical_records",
           rowKey: key,
           message: "Canonical batch and record-table counts differ.",
@@ -329,25 +338,23 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
         const expectedJson = yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(
           expectedRecord,
         ).pipe(
-          Effect.mapError(
-            (error) =>
-              new SqliteStorageCorruptionError({
-                table: "effect_agent_canonical_batches",
-                rowKey: key,
-                message: error.message,
-              }),
+          Effect.mapError((error) =>
+            SqliteStorageCorruptionError.make({
+              table: "effect_agent_canonical_batches",
+              rowKey: key,
+              message: error.message,
+            }),
           ),
         );
         const storedJson = yield* Schema.encodeEffect(Schema.fromJsonString(CanonicalRecord))(
           storedRecord.decoded,
         ).pipe(
-          Effect.mapError(
-            (error) =>
-              new SqliteStorageCorruptionError({
-                table: "effect_agent_canonical_records",
-                rowKey: `${key}/${storedRecord.row.sequence}`,
-                message: error.message,
-              }),
+          Effect.mapError((error) =>
+            SqliteStorageCorruptionError.make({
+              table: "effect_agent_canonical_records",
+              rowKey: `${key}/${storedRecord.row.sequence}`,
+              message: error.message,
+            }),
           ),
         );
         if (
@@ -355,7 +362,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
           storedRecord.row.record_id !== expectedRecord.recordId ||
           expectedJson !== storedJson
         ) {
-          return yield* new SqliteStorageCorruptionError({
+          return yield* SqliteStorageCorruptionError.make({
             table: "effect_agent_canonical_records",
             rowKey: `${key}/${storedRecord.row.sequence}`,
             message: "Canonical record identity, sequence, or payload differs from its batch.",
@@ -373,7 +380,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
       conversation.tail_sequence !== expectedSequence - 1 ||
       conversation.tail_digest !== previousDigest
     ) {
-      return yield* new SqliteStorageCorruptionError({
+      return yield* SqliteStorageCorruptionError.make({
         table: "effect_agent_conversations",
         rowKey: conversation.conversation_id,
         message: "Conversation tail does not match its canonical batch chain.",
@@ -387,7 +394,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
         checkpoint.decoded.tailDigest !== checkpoint.row.tail_digest ||
         tailDigests.get(checkpoint.row.through_sequence) !== checkpoint.row.tail_digest
       ) {
-        return yield* new SqliteStorageCorruptionError({
+        return yield* SqliteStorageCorruptionError.make({
           table: "effect_agent_checkpoints",
           rowKey: `${conversation.conversation_id}/${checkpoint.row.through_sequence}`,
           message: "Checkpoint identity or digest is not bound to a canonical batch tail.",
@@ -416,7 +423,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
         ),
     )
   ) {
-    return yield* new SqliteStorageCorruptionError({
+    return yield* SqliteStorageCorruptionError.make({
       table: "effect_agent_conversations",
       rowKey: "startup_scan",
       message: "Canonical rows exist without a materialized Conversation.",
@@ -424,113 +431,102 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
   }
 });
 
-const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function* (
-  options: SqliteStorageOptions,
-) {
+const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function* () {
+  const config = yield* SqliteStorageConfig;
+  const failpoint = yield* SqliteStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeSqliteJournal(sql);
+  const journal = yield* initializeSqliteJournal(sql, failpoint.hit);
   yield* decodeStartupPayloads(journal, crypto);
 
   const provideCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
-  const hitFailpoint = (location: SqliteStorageFailpointLocation) =>
-    options.failpoint === undefined
-      ? Effect.void
-      : options
-          .failpoint(location)
-          .pipe(Effect.mapError((error) => storeError(`storage failpoint ${location}`, error)));
+  const hitFailpoint = Effect.fn("SqliteConversationStore.hitFailpoint")(
+    (location: SqliteStorageFailpointLocation): Effect.Effect<void, ConversationStoreError> =>
+      failpoint
+        .hit(location)
+        .pipe(Effect.mapError((error) => storeError(`storage failpoint ${location}`, error))),
+  );
 
-  const materialize: ConversationStore["Service"]["materialize"] = (request) =>
-    Effect.gen(function* () {
-      const validated = yield* Schema.decodeUnknownEffect(
-        Schema.toType(ConversationMaterialization),
-      )(request).pipe(
-        Effect.mapError((error) => schemaStoreError("validate materialization", error)),
+  const materialize: ConversationStore["Service"]["materialize"] = Effect.fn(
+    "SqliteConversationStore.materialize",
+  )(function* (request: ConversationMaterialization) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationMaterialization))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate materialization", error)));
+    const now = yield* Clock.currentTimeMillis;
+    yield* hitFailpoint("materialize:before");
+    yield* journal
+      .materialize(
+        validated.conversationId,
+        new Date(now).toISOString(),
+        EMPTY_TAIL_DIGEST,
+        validated.producerEpoch,
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          error._tag === "SqliteFenceRejected"
+            ? mapFence(validated.conversationId, error)
+            : storeError("materialize conversation", error),
+        ),
       );
-      const now = yield* Clock.currentTimeMillis;
-      yield* hitFailpoint("materialize:before");
-      yield* journal
-        .materialize(
-          validated.conversationId,
-          new Date(now).toISOString(),
-          EMPTY_TAIL_DIGEST,
-          validated.producerEpoch,
-        )
-        .pipe(
-          Effect.mapError((error) =>
-            error._tag === "SqliteFenceRejected"
-              ? mapFence(validated.conversationId, error)
-              : storeError("materialize conversation", error),
-          ),
-        );
-      yield* hitFailpoint("materialize:after");
-    });
+    yield* hitFailpoint("materialize:after");
+  });
 
-  const append: ConversationStore["Service"]["append"] = (request) =>
-    Effect.gen(function* () {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(FencedAppendRequest))(
-        request,
-      ).pipe(Effect.mapError((error) => schemaStoreError("validate canonical append", error)));
-      yield* requireConversation(journal, validated.conversationId);
-      const tailDigest = yield* provideCrypto(
-        digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
-      ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
-      const batchJson = yield* encodeCanonicalBatch(validated.batch);
-      const firstRecordJson = yield* encodeCanonicalRecord(validated.batch.records[0]);
-      const remainingRecordJson = yield* Effect.forEach(
-        validated.batch.records.slice(1),
-        encodeCanonicalRecord,
-      );
-      const rawRecords: [
-        { readonly recordId: string; readonly recordJson: string },
-        ...Array<{ readonly recordId: string; readonly recordJson: string }>,
-      ] = [
-        {
-          recordId: validated.batch.records[0].recordId,
-          recordJson: firstRecordJson,
-        },
-        ...validated.batch.records.slice(1).map((record, index) => ({
+  const append: ConversationStore["Service"]["append"] = Effect.fn(
+    "SqliteConversationStore.append",
+  )(function* (request: FencedAppendRequest) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(FencedAppendRequest))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate canonical append", error)));
+    yield* requireConversation(journal, validated.conversationId);
+    const tailDigest = yield* provideCrypto(
+      digestCanonicalBatch(validated.expectedTailDigest, validated.batch),
+    ).pipe(Effect.mapError((error) => storeError("digest canonical append", error)));
+    const batchJson = yield* encodeCanonicalBatch(validated.batch);
+    const rawRecords = yield* Effect.forEach(validated.batch.records, (record) =>
+      encodeCanonicalRecord(record).pipe(
+        Effect.map((recordJson) => ({
           recordId: record.recordId,
-          recordJson: remainingRecordJson[index],
+          recordJson,
         })),
-      ];
-      yield* hitFailpoint("append:before");
-      const result = yield* journal
-        .append({
-          conversationId: validated.conversationId,
-          batchId: validated.batch.batchId,
-          batchDigest: tailDigest,
-          batchJson,
-          expectedTailSequence: validated.expectedTailSequence,
-          expectedTailDigest: validated.expectedTailDigest,
-          producerEpoch: validated.producerEpoch,
-          records: rawRecords,
-          tailDigest,
-        })
-        .pipe(
-          Effect.mapError((error) => {
-            if (error instanceof SqliteFenceRejected) {
-              return mapFence(validated.conversationId, error);
-            }
-            if (error instanceof SqliteAppendConflict) {
-              return new AppendConflict({
-                conversationId: validated.conversationId,
-                batchId: validated.batch.batchId,
-                reason: error.message.includes("tail") ? "tail" : "batch-digest",
-              });
-            }
-            return storeError("append canonical batch", error);
-          }),
-          Effect.flatMap((result) =>
-            Schema.decodeUnknownEffect(AppendResult)(result).pipe(
-              Effect.mapError((error) => schemaStoreError("decode append result", error)),
-            ),
-          ),
-        );
-      yield* hitFailpoint("append:after");
-      return result;
-    });
+      ),
+    );
+    const rawRequest = yield* Schema.decodeUnknownEffect(RawAppendRequest)({
+      conversationId: validated.conversationId,
+      batchId: validated.batch.batchId,
+      batchDigest: tailDigest,
+      batchJson,
+      expectedTailSequence: validated.expectedTailSequence,
+      expectedTailDigest: validated.expectedTailDigest,
+      producerEpoch: validated.producerEpoch,
+      records: rawRecords,
+      tailDigest,
+    }).pipe(Effect.mapError((error) => schemaStoreError("encode canonical append", error)));
+    yield* hitFailpoint("append:before");
+    const result = yield* journal.append(rawRequest).pipe(
+      Effect.mapError((error) => {
+        if (error instanceof SqliteFenceRejected) {
+          return mapFence(validated.conversationId, error);
+        }
+        if (error instanceof SqliteAppendConflict) {
+          return AppendConflict.make({
+            conversationId: validated.conversationId,
+            batchId: validated.batch.batchId,
+            reason: error.reason,
+          });
+        }
+        return storeError("append canonical batch", error);
+      }),
+      Effect.flatMap((result) =>
+        Schema.decodeUnknownEffect(AppendResult)(result).pipe(
+          Effect.mapError((error) => schemaStoreError("decode append result", error)),
+        ),
+      ),
+    );
+    yield* hitFailpoint("append:after");
+    return result;
+  });
 
   const loadRecords = Effect.fn("SqliteConversationStore.loadRecords")(function* (
     request: RawReadRequest,
@@ -541,157 +537,165 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     return yield* Effect.forEach(rows, decodeEnvelope);
   });
 
-  const read: ConversationStore["Service"]["read"] = (request) =>
-    Stream.unwrap(
-      Effect.gen(function* () {
-        const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationRead))(
-          request,
-        ).pipe(Effect.mapError((error) => schemaStoreError("validate conversation read", error)));
-        yield* requireConversation(journal, validated.conversationId);
-        const records = yield* loadRecords({
-          conversationId: validated.conversationId,
-          fromSequenceExclusive: validated.afterSequence ?? 0,
-          limit: validated.limit,
-        });
-        return Stream.fromIterable(records);
-      }),
-    );
-
-  const observe: ConversationStore["Service"]["observe"] = (request) =>
-    Stream.unwrap(
-      Effect.gen(function* () {
-        const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationObservation))(
-          request,
-        ).pipe(
-          Effect.mapError((error) => schemaStoreError("validate conversation observation", error)),
-        );
-        yield* requireConversation(journal, validated.conversationId);
-        const initialSequence = yield* parseOffset(validated.conversationId, validated.afterOffset);
-        const cursor = yield* Ref.make(initialSequence);
-        return Stream.fromIterableEffectRepeat(
-          Effect.gen(function* () {
-            const fromSequenceExclusive = yield* Ref.get(cursor);
-            const records = yield* loadRecords({
-              conversationId: validated.conversationId,
-              fromSequenceExclusive,
-              limit: 1_024,
-            });
-            if (records.length === 0) {
-              yield* Effect.sleep(options.observationPollInterval ?? 25);
-              return [];
-            }
-            yield* Ref.set(cursor, records[records.length - 1].sequence);
-            return records;
-          }),
-        );
-      }),
-    );
-
-  const exportConversation: ConversationStore["Service"]["export"] = (request) =>
-    Effect.gen(function* () {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationExportRequest))(
-        request,
-      ).pipe(Effect.mapError((error) => schemaStoreError("validate conversation export", error)));
-      yield* requireConversation(journal, validated.conversationId);
-      const exported = yield* journal
-        .exportConversation(validated.conversationId)
-        .pipe(Effect.mapError((error) => storeError("export conversation", error)));
-      const records = yield* Effect.forEach(exported.records, decodeEnvelope);
-      if (records.length > 65_536) {
-        return yield* new ConversationStoreError({
-          operation: "decode conversation export",
-          message: "The conversation exceeds the current export record limit.",
-        });
-      }
-      const tailDigest = yield* Schema.decodeUnknownEffect(Digest)(
-        exported.conversation.tail_digest,
-      ).pipe(Effect.mapError((error) => schemaStoreError("decode export tail digest", error)));
-      return ConversationExport.make({
-        format: "effect-agent/conversation@1",
+  const readEffect = Effect.fn("SqliteConversationStore.read")(function* (
+    request: ConversationRead,
+  ) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationRead))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate conversation read", error)));
+    yield* requireConversation(journal, validated.conversationId);
+    const records = yield* loadRecords(
+      RawReadRequest.make({
         conversationId: validated.conversationId,
-        tailSequence: exported.conversation.tail_sequence,
-        tailDigest,
-        records,
+        fromSequenceExclusive: validated.afterSequence ?? ZERO_CANONICAL_SEQUENCE,
+        limit: validated.limit,
+      }),
+    );
+    return Stream.fromIterable(records);
+  });
+  const read: ConversationStore["Service"]["read"] = (request) =>
+    Stream.unwrap(readEffect(request));
+
+  const observeEffect = Effect.fn("SqliteConversationStore.observe")(function* (
+    request: ConversationObservation,
+  ) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationObservation))(
+      request,
+    ).pipe(
+      Effect.mapError((error) => schemaStoreError("validate conversation observation", error)),
+    );
+    yield* requireConversation(journal, validated.conversationId);
+    const initialSequence = yield* parseOffset(validated.conversationId, validated.afterOffset);
+    const cursor = yield* Ref.make(initialSequence);
+    const poll = Effect.fn("SqliteConversationStore.observePoll")(function* () {
+      const fromSequenceExclusive = yield* Ref.get(cursor);
+      const records = yield* loadRecords(
+        RawReadRequest.make({
+          conversationId: validated.conversationId,
+          fromSequenceExclusive,
+          limit: 1_024,
+        }),
+      );
+      if (records.length === 0) {
+        yield* Effect.sleep(config.observationPollInterval);
+        return [];
+      }
+      yield* Ref.set(cursor, records[records.length - 1].sequence);
+      return records;
+    });
+    return Stream.fromIterableEffectRepeat(poll());
+  });
+  const observe: ConversationStore["Service"]["observe"] = (request) =>
+    Stream.unwrap(observeEffect(request));
+
+  const exportConversation: ConversationStore["Service"]["export"] = Effect.fn(
+    "SqliteConversationStore.export",
+  )(function* (request: ConversationExportRequest) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationExportRequest))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate conversation export", error)));
+    yield* requireConversation(journal, validated.conversationId);
+    const exported = yield* journal
+      .exportConversation(validated.conversationId)
+      .pipe(Effect.mapError((error) => storeError("export conversation", error)));
+    const records = yield* Effect.forEach(exported.records, decodeEnvelope);
+    if (records.length > 65_536) {
+      return yield* ConversationStoreError.make({
+        operation: "decode conversation export",
+        message: "The conversation exceeds the current export record limit.",
       });
+    }
+    const tailDigest = yield* Schema.decodeUnknownEffect(Digest)(
+      exported.conversation.tail_digest,
+    ).pipe(Effect.mapError((error) => schemaStoreError("decode export tail digest", error)));
+    return ConversationExport.make({
+      format: "effect-agent/conversation@1",
+      conversationId: validated.conversationId,
+      tailSequence: exported.conversation.tail_sequence,
+      tailDigest,
+      records,
     });
+  });
 
-  const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = (request) =>
-    Effect.gen(function* () {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SaveCheckpointRequest))(
-        request,
-      ).pipe(Effect.mapError((error) => schemaStoreError("validate checkpoint", error)));
-      const conversation = yield* requireConversation(journal, validated.checkpoint.conversationId);
-      if (validated.checkpoint.throughSequence > conversation.tail_sequence) {
-        return yield* new CheckpointRejected({
-          conversationId: validated.checkpoint.conversationId,
-          reason: "ahead-of-tail",
-        });
-      }
-      const canonicalDigest = yield* tailDigestAt(
-        journal,
-        validated.checkpoint.conversationId,
-        validated.checkpoint.throughSequence,
-      );
-      if (canonicalDigest !== validated.checkpoint.tailDigest) {
-        return yield* new CheckpointRejected({
-          conversationId: validated.checkpoint.conversationId,
-          reason: "digest-mismatch",
-        });
-      }
-      const checkpointJson = yield* encodeCheckpoint(validated.checkpoint);
-      const raw: RawCheckpoint = {
+  const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
+    "SqliteConversationStore.saveCheckpoint",
+  )(function* (request: SaveCheckpointRequest) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SaveCheckpointRequest))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate checkpoint", error)));
+    const conversation = yield* requireConversation(journal, validated.checkpoint.conversationId);
+    if (validated.checkpoint.throughSequence > conversation.tail_sequence) {
+      return yield* CheckpointRejected.make({
         conversationId: validated.checkpoint.conversationId,
-        throughSequence: validated.checkpoint.throughSequence,
-        tailDigest: validated.checkpoint.tailDigest,
-        checkpointJson,
-      };
-      yield* hitFailpoint("save-checkpoint:before");
-      yield* journal.saveCheckpoint(raw).pipe(
-        Effect.mapError((error) =>
-          error instanceof SqliteCheckpointConflict
-            ? new CheckpointRejected({
-                conversationId: validated.checkpoint.conversationId,
-                reason: "digest-mismatch",
-              })
-            : storeError("save checkpoint", error),
-        ),
-      );
-      yield* hitFailpoint("save-checkpoint:after");
+        reason: "ahead-of-tail",
+      });
+    }
+    const canonicalDigest = yield* tailDigestAt(
+      journal,
+      validated.checkpoint.conversationId,
+      validated.checkpoint.throughSequence,
+    );
+    if (canonicalDigest !== validated.checkpoint.tailDigest) {
+      return yield* CheckpointRejected.make({
+        conversationId: validated.checkpoint.conversationId,
+        reason: "digest-mismatch",
+      });
+    }
+    const checkpointJson = yield* encodeCheckpoint(validated.checkpoint);
+    const raw = RawCheckpoint.make({
+      conversationId: validated.checkpoint.conversationId,
+      throughSequence: validated.checkpoint.throughSequence,
+      tailDigest: validated.checkpoint.tailDigest,
+      checkpointJson,
     });
+    yield* hitFailpoint("save-checkpoint:before");
+    yield* journal.saveCheckpoint(raw).pipe(
+      Effect.mapError((error) =>
+        error instanceof SqliteCheckpointConflict
+          ? CheckpointRejected.make({
+              conversationId: validated.checkpoint.conversationId,
+              reason: "digest-mismatch",
+            })
+          : storeError("save checkpoint", error),
+      ),
+    );
+    yield* hitFailpoint("save-checkpoint:after");
+  });
 
-  const loadCheckpoint: ConversationStore["Service"]["loadCheckpoint"] = (request) =>
-    Effect.gen(function* () {
-      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(LoadCheckpointRequest))(
-        request,
-      ).pipe(Effect.mapError((error) => schemaStoreError("validate checkpoint lookup", error)));
-      const conversation = yield* requireConversation(journal, validated.conversationId);
-      const rows = yield* journal
-        .loadCheckpoint(
-          validated.conversationId,
-          validated.atOrBeforeSequence ?? conversation.tail_sequence,
-        )
-        .pipe(Effect.mapError((error) => storeError("load checkpoint", error)));
-      if (rows.length === 0) return Option.none();
-      if (rows.length !== 1) {
-        return yield* new ConversationStoreError({
-          operation: "load checkpoint",
-          message: `Expected at most one checkpoint row but found ${rows.length}.`,
-        });
-      }
-      const checkpoint = yield* decodeCheckpoint(rows[0].checkpoint_json);
-      const canonicalDigest = yield* tailDigestAt(
-        journal,
-        checkpoint.conversationId,
-        checkpoint.throughSequence,
-      );
-      if (canonicalDigest !== checkpoint.tailDigest) {
-        return yield* new CheckpointRejected({
-          conversationId: checkpoint.conversationId,
-          reason: "digest-mismatch",
-        });
-      }
-      return Option.some(checkpoint);
-    });
+  const loadCheckpoint: ConversationStore["Service"]["loadCheckpoint"] = Effect.fn(
+    "SqliteConversationStore.loadCheckpoint",
+  )(function* (request: LoadCheckpointRequest) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(LoadCheckpointRequest))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate checkpoint lookup", error)));
+    const conversation = yield* requireConversation(journal, validated.conversationId);
+    const rows = yield* journal
+      .loadCheckpoint(
+        validated.conversationId,
+        validated.atOrBeforeSequence ?? conversation.tail_sequence,
+      )
+      .pipe(Effect.mapError((error) => storeError("load checkpoint", error)));
+    if (rows.length === 0) return Option.none();
+    if (rows.length !== 1) {
+      return yield* ConversationStoreError.make({
+        operation: "load checkpoint",
+        message: `Expected at most one checkpoint row but found ${rows.length}.`,
+      });
+    }
+    const checkpoint = yield* decodeCheckpoint(rows[0].checkpoint_json);
+    const canonicalDigest = yield* tailDigestAt(
+      journal,
+      checkpoint.conversationId,
+      checkpoint.throughSequence,
+    );
+    if (canonicalDigest !== checkpoint.tailDigest) {
+      return yield* CheckpointRejected.make({
+        conversationId: checkpoint.conversationId,
+        reason: "digest-mismatch",
+      });
+    }
+    return Option.some(checkpoint);
+  });
 
   const conversationStore = ConversationStore.of({
     append,
@@ -719,7 +723,17 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
 });
 
 /**
- * A Node SQLite persistence Layer for canonical Conversations.
+ * SQLite Conversation Store implementation with configuration, failpoint, SQL, and Crypto
+ * authority kept visible in its input channel.
+ */
+export const conversationStoreLayer: Layer.Layer<
+  ConversationStore | SubmissionStore,
+  SqliteStorageInitializationError,
+  SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
+> = Layer.effectContext(makeServices());
+
+/**
+ * A composition-root convenience Layer for canonical Conversations.
  *
  * It explicitly exposes a non-durable SubmissionStore: this Phase 3 adapter persists
  * conversation history but does not accept or settle durable work.
@@ -727,9 +741,27 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
 export const layer = (
   options: SqliteStorageOptions,
 ): Layer.Layer<ConversationStore | SubmissionStore, SqliteStorageInitializationError> => {
+  const configLayer = Layer.effect(SqliteStorageConfig)(
+    Schema.decodeUnknownEffect(SqliteStorageConfigValue)({
+      filename: options.filename,
+      observationPollInterval: options.observationPollInterval ?? 25,
+    }).pipe(
+      Effect.mapError((error) =>
+        SqliteStorageError.make({
+          cause: error,
+          operation: "configure SQLite storage",
+          message: error.message,
+        }),
+      ),
+    ),
+  );
+  const failpointLayer =
+    options.failpoint === undefined
+      ? SqliteStorageFailpoint.layer
+      : Layer.succeed(SqliteStorageFailpoint)({ hit: options.failpoint });
   const sqlLayer = SqliteClient.layer({ filename: options.filename });
-  return Layer.effectContext(makeServices(options)).pipe(
-    Layer.provide(Layer.merge(sqlLayer, NodeCrypto.layer)),
+  return conversationStoreLayer.pipe(
+    Layer.provide(Layer.mergeAll(configLayer, failpointLayer, sqlLayer, NodeCrypto.layer)),
   );
 };
 

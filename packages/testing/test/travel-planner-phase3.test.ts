@@ -4,6 +4,7 @@ import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 import {
   CanonicalBatch,
+  CanonicalSequence,
   ConversationExport,
   ConversationExportRequest,
   ConversationMaterialization,
@@ -14,6 +15,7 @@ import {
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
   LoadCheckpointRequest,
+  ProducerEpoch,
   replayConversation,
   replayConversationFromCheckpoint,
   SaveCheckpointRequest,
@@ -32,7 +34,8 @@ import {
   travelPlanFromProjection,
 } from "../src/index.ts";
 
-const producerEpoch = 1;
+const producerEpoch = Schema.decodeSync(ProducerEpoch)(1);
+const initialSequence = Schema.decodeSync(CanonicalSequence)(0);
 
 const writePersistentTravelPlanner = Effect.gen(function* () {
   const store = yield* ConversationStore;
@@ -47,7 +50,7 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
     FencedAppendRequest.make({
       conversationId: phase3TravelPlannerConversationId,
       batch: phase3TravelPlannerBatches[0],
-      expectedTailSequence: 0,
+      expectedTailSequence: initialSequence,
       expectedTailDigest: EMPTY_TAIL_DIGEST,
       producerEpoch,
     }),

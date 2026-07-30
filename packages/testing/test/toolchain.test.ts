@@ -6,15 +6,15 @@ import { ChildProcess } from "effect/unstable/process";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
 const PackageManifest = Schema.Struct({
-  name: Schema.optional(Schema.String),
-  version: Schema.optional(Schema.String),
-  workspaces: Schema.optional(Schema.Array(Schema.String)),
-  catalog: Schema.optional(Dependencies),
-  dependencies: Schema.optional(Dependencies),
-  devDependencies: Schema.optional(Dependencies),
-  optionalDependencies: Schema.optional(Dependencies),
-  overrides: Schema.optional(Dependencies),
-  peerDependencies: Schema.optional(Dependencies),
+  name: Schema.optionalKey(Schema.String),
+  version: Schema.optionalKey(Schema.String),
+  workspaces: Schema.optionalKey(Schema.Array(Schema.String)),
+  catalog: Schema.optionalKey(Dependencies),
+  dependencies: Schema.optionalKey(Dependencies),
+  devDependencies: Schema.optionalKey(Dependencies),
+  optionalDependencies: Schema.optionalKey(Dependencies),
+  overrides: Schema.optionalKey(Dependencies),
+  peerDependencies: Schema.optionalKey(Dependencies),
 });
 type PackageManifest = typeof PackageManifest.Type;
 

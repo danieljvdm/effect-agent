@@ -48,7 +48,7 @@ const runCommand = Effect.fn("runCommand")(function* (
   }
 
   if (exitCode !== 0) {
-    return yield* new CommandError({
+    return yield* CommandError.make({
       command: formatted,
       exitCode,
       output: trimmed,
@@ -56,13 +56,17 @@ const runCommand = Effect.fn("runCommand")(function* (
   }
 });
 
-const runStep = (label: string, cwd: string, command: string, args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    yield* Console.error(`${label}...`);
-    yield* runCommand(cwd, command, args);
-  });
+const runStep = Effect.fn("runStep")(function* (
+  label: string,
+  cwd: string,
+  command: string,
+  args: ReadonlyArray<string>,
+) {
+  yield* Console.error(`${label}...`);
+  yield* runCommand(cwd, command, args);
+});
 
-const postinstall = Effect.gen(function* () {
+const postinstall = Effect.fn("postinstall")(function* () {
   const paths = yield* resolvePaths();
 
   yield* runStep("Syncing Effect submodule", paths.rootDir, paths.tsxBin, [paths.syncEffectScript]);
@@ -70,7 +74,7 @@ const postinstall = Effect.gen(function* () {
   yield* runStep("Patching effect-tsgo", paths.rootDir, paths.effectTsgoBin, ["patch"]);
 });
 
-const postinstallCommand = CliCommand.make("postinstall", {}, () => postinstall).pipe(
+const postinstallCommand = CliCommand.make("postinstall", {}, () => postinstall()).pipe(
   CliCommand.withDescription("Run repository postinstall setup."),
 );
 

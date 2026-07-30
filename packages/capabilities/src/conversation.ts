@@ -327,12 +327,12 @@ export const EphemeralConversationsLive = Layer.effect(
             });
           }
           let next = current;
-          for (let index = currentEncoded.length; index < history.content.length; index += 1) {
+          for (const message of history.content.slice(currentEncoded.length)) {
             next = yield* append(
               conversationId,
               ConversationAppend.make({
                 runId: historyRunId,
-                message: history.content[index]!,
+                message,
               }),
             );
           }

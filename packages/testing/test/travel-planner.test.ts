@@ -63,7 +63,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
     let sawToolResultOnSecondTurn = false;
     const assertedTurns: ReadonlyArray<ScriptedTurnInput> = [
       {
-        ...phase1HappyPathTurns[0]!,
+        ...phase1HappyPathTurns[0],
         assertRequest: (request) => {
           expect(request.tools.map((tool) => tool.name)).toEqual([
             "search_flights",
@@ -74,7 +74,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         },
       },
       {
-        ...phase1HappyPathTurns[1]!,
+        ...phase1HappyPathTurns[1],
         assertRequest: (request) => {
           const roles = request.prompt.content.map((message) => message.role);
           sawToolResultOnSecondTurn = roles.includes("tool");
@@ -174,7 +174,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
         activities: [],
       })),
     });
-    const baseFinalTurn = phase1HappyPathTurns[1]!;
+    const baseFinalTurn = phase1HappyPathTurns[1];
     if (baseFinalTurn._tag !== "Stream") {
       throw new Error("Expected the Phase 1 final fixture Turn to stream");
     }
@@ -208,7 +208,7 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
     ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
 
     return AgentRuntime.run(
-      makeScriptedAgent([phase1HappyPathTurns[0]!, finalTurn]),
+      makeScriptedAgent([phase1HappyPathTurns[0], finalTurn]),
       phase1Trip,
     ).pipe(
       Effect.provide(layer),
@@ -274,9 +274,9 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
       const controlled = yield* ReverseCompletionToolkitLayer;
       let nextPrompt = "";
       const turns: ReadonlyArray<ScriptedTurnInput> = [
-        phase1HappyPathTurns[0]!,
+        phase1HappyPathTurns[0],
         {
-          ...phase1HappyPathTurns[1]!,
+          ...phase1HappyPathTurns[1],
           assertRequest: (request) => {
             nextPrompt = JSON.stringify(request.prompt.content);
           },

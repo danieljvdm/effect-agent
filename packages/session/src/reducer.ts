@@ -2,7 +2,7 @@ import { ConversationId, RunId } from "@effect-agent/core";
 import { Schema } from "effect";
 
 import { EMPTY_TAIL_DIGEST } from "./digest.ts";
-import { CanonicalRecordEnvelope, Digest } from "./records.ts";
+import { CanonicalRecordEnvelope, CanonicalSequence, Digest, PersistedJson } from "./records.ts";
 
 /**
  * Rebuildable Phase 3 projection. It contains only canonical values and can be discarded and
@@ -12,10 +12,10 @@ export class ConversationProjection extends Schema.Class<ConversationProjection>
   "@effect-agent/session/ConversationProjection",
 )({
   conversationId: ConversationId,
-  throughSequence: Schema.Natural,
+  throughSequence: CanonicalSequence,
   tailDigest: Digest,
-  inputs: Schema.Array(Schema.Json),
-  modelOutputs: Schema.Array(Schema.Json),
+  inputs: Schema.Array(PersistedJson),
+  modelOutputs: Schema.Array(PersistedJson),
   completedRuns: Schema.Array(RunId),
   failedRuns: Schema.Array(RunId),
 }) {}
@@ -25,7 +25,7 @@ export const initialConversationProjection = (
 ): ConversationProjection =>
   ConversationProjection.make({
     conversationId,
-    throughSequence: 0,
+    throughSequence: Schema.decodeSync(CanonicalSequence)(0),
     tailDigest: EMPTY_TAIL_DIGEST,
     inputs: [],
     modelOutputs: [],
