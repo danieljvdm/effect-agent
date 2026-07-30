@@ -44,7 +44,7 @@ Dependencies point inward. Inner packages define interfaces; outer packages prov
 ## 3. Modules
 
 The architecture describes the intended package boundaries, but the repository creates a package
-only when its roadmap phase begins. The current Phase 2 tree is:
+only when its roadmap phase begins. The current Phase 3 tree is:
 
 ```text
 packages/
@@ -53,6 +53,9 @@ packages/
   capabilities
   sandbox
   sandbox-local
+  session
+  storage-memory
+  storage-sqlite
   testing
 examples/
   demo
@@ -118,6 +121,11 @@ Owns:
 - Receipt, reattachment, and Settlement interfaces;
 - stored-version compatibility checks.
 
+Phase 3 implements the canonical Conversation records, pure replay/checkpoint projections,
+definition digests, `ConversationStore`, and an explicitly non-durable `SubmissionStore`
+capability surface. The Submission Ledger, recovery classifier, Receipt, and Settlement contracts
+remain Phase 4 work.
+
 ### `@effect-agent/capabilities`
 
 Owns generic optional modules:
@@ -155,6 +163,10 @@ Examples:
 - `@effect-agent/storage-sqlite`
 - `@effect-agent/storage-cloudflare`
 - `@effect-agent/sandbox-local`
+
+The Phase 3 memory and SQLite adapters implement the same Conversation Store semantics: atomic
+fenced batch append, bounded forward read, resumable observation, portable export, and
+digest-bound disposable checkpoints. Neither adapter durably accepts work in this phase.
 
 Model providers come from Effect AI provider packages and are supplied as `Model`/`LanguageModel`
 Layers. The framework does not wrap them in its own provider packages.

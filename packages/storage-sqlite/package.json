@@ -1,5 +1,5 @@
 {
-  "name": "@effect-agent/testing",
+  "name": "@effect-agent/storage-sqlite",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -12,16 +12,12 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/capabilities": "workspace:*",
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect-agent/session": "workspace:*",
-    "@effect-agent/storage-memory": "workspace:*",
-    "@effect-agent/storage-sqlite": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
-    "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"

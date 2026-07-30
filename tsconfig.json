@@ -6,6 +6,9 @@
     { "path": "./packages/capabilities" },
     { "path": "./packages/sandbox" },
     { "path": "./packages/sandbox-local" },
+    { "path": "./packages/session" },
+    { "path": "./packages/storage-memory" },
+    { "path": "./packages/storage-sqlite" },
     { "path": "./packages/testing" },
     { "path": "./examples/demo" },
     { "path": "./examples/providers" }

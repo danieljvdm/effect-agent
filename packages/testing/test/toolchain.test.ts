@@ -26,16 +26,30 @@ const packageNames = [
   "engine",
   "sandbox",
   "sandbox-local",
+  "session",
+  "storage-memory",
+  "storage-sqlite",
   "testing",
 ] as const;
 const exampleNames = ["demo", "providers"] as const;
-const effectTestPackageNames = ["capabilities", "engine", "sandbox-local", "testing"] as const;
+const effectTestPackageNames = [
+  "capabilities",
+  "engine",
+  "sandbox-local",
+  "session",
+  "storage-memory",
+  "storage-sqlite",
+  "testing",
+] as const;
 const productionPackageNames = [
   "capabilities",
   "core",
   "engine",
   "sandbox",
   "sandbox-local",
+  "session",
+  "storage-memory",
+  "storage-sqlite",
 ] as const;
 const dependencySections = [
   "dependencies",
@@ -81,7 +95,7 @@ const effectDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
     .map((section) => manifest[section]?.effect)
     .filter((version): version is string => version !== undefined);
 
-layer(NodeServices.layer)("Phase 2 toolchain", (it) => {
+layer(NodeServices.layer)("workspace toolchain", (it) => {
   it.effect("executes an Effect program through the Vite+ test runner", () =>
     Effect.sync(() => {
       expect("ready").toBe("ready");
@@ -191,6 +205,7 @@ layer(NodeServices.layer)("Phase 2 toolchain", (it) => {
 
         expect(effectVersion).toMatch(/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/);
         expect(rootManifest.catalog?.["@effect/platform-node"]).toBe(effectVersion);
+        expect(rootManifest.catalog?.["@effect/sql-sqlite-node"]).toBe(effectVersion);
         expect(rootManifest.catalog?.["@effect/vitest"]).toBe(effectVersion);
         expect(rootManifest.catalog?.vitest).toBe(vitePlusManifest.dependencies?.vitest);
         expect(rootManifest.overrides?.vitest).toBe("catalog:");

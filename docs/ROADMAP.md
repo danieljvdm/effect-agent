@@ -21,8 +21,9 @@ not change the specified scope of later phases.
 | P0     | Complete — [design proof](PHASE-0-EVIDENCE.md)              |
 | P1     | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md) |
 | P2     | Complete — [operational local runtime](PHASE-2-EVIDENCE.md) |
-| **P3** | **Next — persistent Conversation foundation**               |
-| P4–P7  | Planned — not yet implemented                               |
+| P3     | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)  |
+| **P4** | **Next — durable Node/SQLite runtime**                      |
+| P5–P7  | Planned — not yet implemented                               |
 
 ## Progressive reference application
 

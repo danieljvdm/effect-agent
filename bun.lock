@@ -137,6 +137,50 @@
         "vite-plus": "catalog:",
       },
     },
+    "packages/session": {
+      "name": "@effect-agent/session",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "packages/storage-memory": {
+      "name": "@effect-agent/storage-memory",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/session": "workspace:*",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "packages/storage-sqlite": {
+      "name": "@effect-agent/storage-sqlite",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/session": "workspace:*",
+        "@effect/platform-node": "catalog:",
+        "@effect/sql-sqlite-node": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/testing": {
       "name": "@effect-agent/testing",
       "version": "0.0.0",
@@ -144,6 +188,9 @@
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
+        "@effect-agent/session": "workspace:*",
+        "@effect-agent/storage-memory": "workspace:*",
+        "@effect-agent/storage-sqlite": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -166,6 +213,7 @@
     "@effect/ai-openai": "4.0.0-beta.102",
     "@effect/atom-react": "4.0.0-beta.102",
     "@effect/platform-node": "4.0.0-beta.102",
+    "@effect/sql-sqlite-node": "4.0.0-beta.102",
     "@effect/tsgo": "0.24.3",
     "@effect/vitest": "4.0.0-beta.102",
     "@fontsource-variable/ibm-plex-sans": "5.3.0",
@@ -295,6 +343,12 @@
 
     "@effect-agent/sandbox-local": ["@effect-agent/sandbox-local@workspace:packages/sandbox-local"],
 
+    "@effect-agent/session": ["@effect-agent/session@workspace:packages/session"],
+
+    "@effect-agent/storage-memory": ["@effect-agent/storage-memory@workspace:packages/storage-memory"],
+
+    "@effect-agent/storage-sqlite": ["@effect-agent/storage-sqlite@workspace:packages/storage-sqlite"],
+
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
 
     "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-beta.102", "", { "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-p0z58yxaDBP8uH93XB/wJRfFovc/OoIouS2HRjtvUj6sI/QZqjC7SmzCTYTx8ei36gVJu8e5Zy75Ky0x/pZNIA=="],
@@ -306,6 +360,8 @@
     "@effect/platform-node": ["@effect/platform-node@4.0.0-beta.102", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.102", "mime": "^4.1.0", "undici": "^8.7.0" }, "peerDependencies": { "effect": "^4.0.0-beta.102", "ioredis": "^5.7.0" } }, "sha512-wYVAU9jAePT+gouMr/EVz1CaW6yDLjPAgXYeEFLz7wugT5iZhFRag6mqajV/wwN3bzWP2fzZHokLuPmqD/rqeA=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-beta.102", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.0" }, "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-gVd793I72MrkX4dXo7eYtRKfNj0RW4eMRfVEKEJI16h2+mBDCzQ+gqMrog2hSTHQnaIbvbYShNQ4TVGuRCYZeQ=="],
+
+    "@effect/sql-sqlite-node": ["@effect/sql-sqlite-node@4.0.0-beta.102", "", { "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-MtHf58b33hP8t5wJ9SrQCoLwIWQntxtFdcAN3aSLTSczBgKk+d/BPGfyv6iIgDkWWyMKHOYrJ29C7vprgjqeyA=="],
 
     "@effect/tsgo": ["@effect/tsgo@0.24.3", "", { "optionalDependencies": { "@effect/tsgo-darwin-arm64": "0.24.3", "@effect/tsgo-darwin-x64": "0.24.3", "@effect/tsgo-linux-arm": "0.24.3", "@effect/tsgo-linux-arm64": "0.24.3", "@effect/tsgo-linux-x64": "0.24.3", "@effect/tsgo-win32-arm64": "0.24.3", "@effect/tsgo-win32-x64": "0.24.3" }, "bin": { "effect-tsgo": "dist/effect-tsgo.js" } }, "sha512-WQxKU3MFzWzI38GbE9cf0POkVX4y0xahD8QqDjLfixW1AEValuHNfOQvyKM2MDWOLdGff4hP8VnIOeduwQt66A=="],
 

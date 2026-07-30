@@ -1,10 +1,11 @@
 {
-  "name": "@effect-agent/testing",
+  "name": "@effect-agent/storage-memory",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
   },
   "scripts": {
     "build": "vp pack",
@@ -12,12 +13,8 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
-    "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect-agent/session": "workspace:*",
-    "@effect-agent/storage-memory": "workspace:*",
-    "@effect-agent/storage-sqlite": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

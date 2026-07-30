@@ -1,6 +1,6 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 2 operational local runtime implemented; Phase 3 and later increments remain design targets
+Status: Phase 3 persistent Conversation foundation implemented; Phase 4 and later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -111,8 +111,9 @@ insufficient without `DN` or `DC` and the tested adapter.
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
 
-P0 and P1 are implemented. P2 is the next planned increment; its steering, follow-up, approval,
-MCP, sandbox, compaction, and operational claims are not present in the current `E` runtime.
+P0 through P3 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
+adds a separate `P` profile that stores and reconstructs planning history while keeping accepted
+work explicitly non-durable.
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -140,10 +141,14 @@ packages/testing/
       travel-planner/
         definition.ts
         deterministic-layers.ts
+        phase2.ts
+        phase3.ts
         scenarios.ts
         index.ts
   test/
     travel-planner.test.ts
+    travel-planner-phase2.test.ts
+    travel-planner-phase3.test.ts
     travel-planner.compile.test.ts
 examples/
   demo/

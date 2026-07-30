@@ -12,11 +12,12 @@ The working product thesis is:
 > resource belongs to a `Scope`.
 
 This repository contains the product and technical specification plus the completed Phase 0 design
-proof, Phase 1 interpreter, and Phase 2 operational local runtime. The workspace includes
-schema-first Agent contracts, one shared `run`/`stream` interpreter, scoped operational
-capabilities, a narrow local sandbox adapter, deterministic scripted model Layers, the progressive
-Travel Planner reference slice, provider-binding compile examples, and a browser test bench under
-`examples/demo`.
+proof, Phase 1 interpreter, Phase 2 operational local runtime, and Phase 3 persistent Conversation
+foundation. The workspace includes schema-first Agent contracts, one shared `run`/`stream`
+interpreter, scoped operational capabilities, a narrow local sandbox adapter, replayable canonical
+Conversation records with memory and SQLite adapters, deterministic scripted model Layers, the
+progressive Travel Planner reference slice, provider-binding compile examples, and a browser test
+bench under `examples/demo`.
 
 ## Status
 
@@ -26,12 +27,15 @@ Travel Planner reference slice, provider-binding compile examples, and a browser
 - Working package scope: `@effect-agent/*`
 - Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
   benches in `examples/*`, and no `apps/`
-- Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, and `testing`
-- Current implementation milestone: **Phase 2 complete** (operational local runtime);
-  **Phase 3 next**
+- Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
+  `storage-memory`, `storage-sqlite`, and `testing`
+- Current implementation milestone: **Phase 3 complete** (persistent Conversation foundation);
+  **Phase 4 next**
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral multi-Run Conversations with safe-seam input, approval,
   context, budget, MCP, and sandbox capabilities
+- Persistent foundation: versioned canonical records, pure replay/checkpoints, definition digests,
+  opaque resumable offsets, export, and memory/SQLite Conversation Store Layers
 - Durable runtime: planned, but it must pass the durability gates before the product may claim
   durable execution
 
@@ -54,6 +58,7 @@ Decisions labeled **Proposed** are recommendations, not settled owner decisions.
 12. [Reference-project analysis](docs/REFERENCE-ANALYSIS.md)
 13. [Phase 1 evidence](docs/PHASE-1-EVIDENCE.md)
 14. [Phase 2 evidence](docs/PHASE-2-EVIDENCE.md)
+15. [Phase 3 evidence](docs/PHASE-3-EVIDENCE.md)
 
 ## Detailed specifications
 
