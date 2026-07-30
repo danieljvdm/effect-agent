@@ -151,9 +151,12 @@ remains outward of production code; production packages must never import
 `@effect-agent/testing`.
 
 `examples/demo` imports the same public fixture exports used by the tests. Its Effect Atom action
-runs `AgentRuntime.stream`, while the TanStack Start UI exposes chat input, the Tool result,
-semantic Run Events, and Schema-decoded output. The scripted Model remains the default so this
-surface is deterministic and credential-free.
+consumes `AgentRuntime.stream` directly for the scripted browser profile. The optional live profile
+uses a demo-local shared Effect RPC definition whose server handler returns that same semantic
+Stream over framed HTTP/NDJSON; the generated browser client consumes it without collecting or
+replaying an event array. The TanStack Start UI exposes chat input, provider-returned reasoning,
+Tool results, semantic Run Events, and Schema-decoded output. The scripted Model remains the
+default so this surface is deterministic and credential-free.
 
 Focused tests stay with their owner:
 

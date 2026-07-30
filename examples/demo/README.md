@@ -18,7 +18,12 @@ and `gpt-5.6-luna`. Put the credential in this workspace's untracked `.env` file
 OPENAI_API_KEY=...
 ```
 
-The provider Layer and credential are resolved only by a TanStack Start server function. The
-browser receives a Schema-encoded union of semantic `RunEvent` values and the final `TravelPlan`;
-the ordinary test and build gates never make a live provider call. This is a provider preview over
-the Phase 0 contract, not a claim that the Phase 1 provider workstream is complete.
+The provider Layer and credential are resolved only by the server implementation of a shared
+Effect RPC definition. A TanStack Start server route delegates the request to Effect RPC over
+framed HTTP/NDJSON, so the generated browser client receives each Schema-encoded semantic
+`RunEvent` as it occurs. Text, provider-returned reasoning, Tool lifecycle, and terminal events are
+projected through the same Effect Atom action used by the direct in-browser scripted profile.
+
+The ordinary test and build gates never make a live provider call. This remains an ephemeral
+provider preview over the Phase 0 contract, not a deployable transport or a claim that the Phase 1
+provider workstream is complete.

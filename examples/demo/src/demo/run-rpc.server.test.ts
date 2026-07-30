@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ConfigProvider, Effect } from "effect";
+import { ConfigProvider, Effect, Layer } from "effect";
+import * as HttpRouter from "effect/unstable/http/HttpRouter";
 
-import { runOpenAiDemoOnServer } from "./run-openai.server";
+import { DemoRunRpcServerLayer } from "./run-rpc.server";
 
-describe("OpenAI demo server runner", () => {
+describe("OpenAI demo RPC server", () => {
   it("fails before network access when its server credential is absent", async () => {
     const outcome = await Effect.runPromise(
-      runOpenAiDemoOnServer({ request: "Plan a review-only London trip." }).pipe(
+      Layer.build(DemoRunRpcServerLayer.pipe(Layer.provide(HttpRouter.layer))).pipe(
+        Effect.scoped,
         Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
         Effect.match({
           onFailure: (error) => ({ _tag: "Failure" as const, error }),

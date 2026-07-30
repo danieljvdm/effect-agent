@@ -79,9 +79,12 @@ finalize when their Scope closes. A length-truncated model response fails with
 `ModelProtocolError`; it cannot become a successful Run.
 
 `examples/demo` consumes this same fixture through public package exports. Its TanStack Start UI
-uses an Effect Atom action to run the scoped event Stream and presents user input, Tool execution,
-semantic events, and Schema-decoded output. It remains an offline test bench, not a durability or
-deployment proof.
+uses an Effect Atom action to consume the scoped event Stream directly in the browser or through a
+demo-local shared Effect RPC definition over framed HTTP/NDJSON. The remote handler and generated
+client preserve semantic event streaming and client interruption without collecting an event
+array. The bench presents user input, provider-returned reasoning, Tool execution, semantic events,
+and Schema-decoded output. It remains an offline-first test bench, not a durability or deployment
+proof.
 
 ## Requirement evidence
 
@@ -108,7 +111,8 @@ The green suite contains:
 
 - core: 5 tests;
 - engine: 5 tests;
-- testing and Travel Planner: 13 tests;
+- testing and Travel Planner: 14 tests;
+- demo contracts, RPC streaming, and interruption: 6 tests;
 - all three package builds and the TanStack Start example build;
 - Vite+ formatting, lint, Effect-aware type checks, package graph checks, and script checks.
 

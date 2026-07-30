@@ -22,12 +22,20 @@ import {
   PromptInputSubmit,
   PromptInputTextarea,
 } from "@/components/ai-elements/prompt-input";
+import { Reasoning } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolData, ToolHeader } from "@/components/ai-elements/tool";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { demoStateAtom, initialDemoState, runDemoAtom, type DemoStatus } from "@/demo/state";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  demoStateAtom,
+  initialDemoState,
+  runDemoAtom,
+  type DemoState,
+  type DemoStatus,
+} from "@/demo/state";
 import { cn } from "@/lib/utils";
 
 const statusLabel: Record<DemoStatus, string> = {
@@ -141,6 +149,21 @@ export function DemoWorkbench() {
     setSelectedSequence(null);
   };
 
+  const selectMode = (mode: DemoState["mode"]) => {
+    if (mode === state.mode) {
+      return;
+    }
+    const wasRunning = state.status === "running";
+    setState({
+      ...state,
+      mode,
+      status: wasRunning ? "interrupted" : state.status,
+    });
+    if (wasRunning) {
+      run(Atom.Interrupt);
+    }
+  };
+
   return (
     <main className="min-h-svh bg-background">
       <header className="border-b border-border bg-background">
@@ -153,37 +176,24 @@ export function DemoWorkbench() {
               <h1 className="truncate text-sm font-semibold">Effect Agent · Phase 0 bench</h1>
               <p className="truncate font-mono text-[10px] text-muted-foreground">
                 Travel Planner /{" "}
-                {state.mode === "openai" ? "gpt-5.6-luna / server-side" : "scripted / offline"}
+                {state.mode === "openai" ? "gpt-5.6-luna / RPC stream" : "scripted / in-browser"}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div
+            <ToggleGroup
               aria-label="Model profile"
-              className="flex items-center rounded-md border border-border p-0.5"
-              role="group"
+              onValueChange={(modes) => {
+                const mode = modes[0];
+                if (mode !== undefined) {
+                  selectMode(mode);
+                }
+              }}
+              value={[state.mode]}
             >
-              <Button
-                aria-pressed={state.mode === "deterministic"}
-                disabled={state.status === "running"}
-                onClick={() => setState({ ...state, mode: "deterministic" })}
-                size="sm"
-                type="button"
-                variant={state.mode === "deterministic" ? "outline" : "ghost"}
-              >
-                Fixture
-              </Button>
-              <Button
-                aria-pressed={state.mode === "openai"}
-                disabled={state.status === "running"}
-                onClick={() => setState({ ...state, mode: "openai" })}
-                size="sm"
-                type="button"
-                variant={state.mode === "openai" ? "outline" : "ghost"}
-              >
-                OpenAI
-              </Button>
-            </div>
+              <ToggleGroupItem value="deterministic">Fixture</ToggleGroupItem>
+              <ToggleGroupItem value="openai">OpenAI</ToggleGroupItem>
+            </ToggleGroup>
             <StatusMark status={state.status} />
             <Button onClick={reset} size="sm" type="button" variant="outline">
               <RotateCcw />
@@ -213,11 +223,22 @@ export function DemoWorkbench() {
                     {message.role}
                   </span>
                   <MessageContent>
+                    {message.reasoning === undefined || message.reasoning.length === 0 ? null : (
+                      <Reasoning
+                        streaming={
+                          state.status === "running" &&
+                          message.id === `assistant-${state.runNumber}`
+                        }
+                      >
+                        {message.reasoning}
+                      </Reasoning>
+                    )}
                     <MessageResponse>{message.content}</MessageResponse>
                   </MessageContent>
                 </Message>
               ))}
-              {state.status === "running" ? (
+              {state.status === "running" &&
+              !state.messages.some((message) => message.id === `assistant-${state.runNumber}`) ? (
                 <Message from="assistant">
                   <span className="font-mono text-[10px] text-muted-foreground uppercase">
                     agent
@@ -225,7 +246,7 @@ export function DemoWorkbench() {
                   <MessageContent className="flex items-center gap-2 text-muted-foreground">
                     <span className="size-1.5 animate-pulse rounded-full bg-amber-500" />
                     {state.mode === "openai"
-                      ? "Waiting for the server-side OpenAI run…"
+                      ? "Opening the streaming RPC run…"
                       : "Running the deterministic event loop…"}
                   </MessageContent>
                 </Message>

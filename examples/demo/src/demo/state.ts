@@ -13,8 +13,8 @@ import {
   TravelPlanner,
   TravelPlannerRuntimeLayer,
 } from "@effect-agent/testing";
-import { DemoRequestError, type DemoRunSelection, OpenAiDemoRunResponse } from "./contracts";
-import { runOpenAiDemo } from "./run-openai";
+import type { DemoRunSelection } from "./contracts";
+import { DemoRunRpcClient } from "./run-rpc-client";
 
 export type DemoStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted";
 
@@ -22,6 +22,7 @@ export interface ChatMessage {
   readonly id: string;
   readonly role: "assistant" | "user";
   readonly content: string;
+  readonly reasoning?: string;
 }
 
 export interface DemoState {
@@ -46,7 +47,7 @@ export const initialDemoState: DemoState = {
       id: "intro",
       role: "assistant",
       content:
-        "This bench runs the real Phase 0 agent loop. Use the deterministic fixture, or opt into the server-side OpenAI profile, then inspect its tool call and semantic events.",
+        "This bench runs the real Phase 0 agent loop. Use the direct in-browser fixture, or the streaming OpenAI RPC profile, then inspect its tool call and semantic events.",
     },
   ],
   events: [],
@@ -90,34 +91,23 @@ const makeAgent = () =>
     Model.make("scripted", "travel-planner-phase-0", ScriptedModel.layer(phase0HappyPathTurns)),
   );
 
-const requestOpenAiRun = Effect.fn("Demo.requestOpenAiRun")(function* (request: string) {
-  const encoded = yield* Effect.tryPromise({
-    try: (signal) => runOpenAiDemo({ data: { request }, signal }),
-    catch: (cause) =>
-      new DemoRequestError({
-        message: failureMessage(cause),
-      }),
-  });
-  const response = yield* Schema.decodeEffect(OpenAiDemoRunResponse)(encoded).pipe(
-    Effect.mapError(
-      (cause) =>
-        new DemoRequestError({
-          message: `Invalid live response: ${cause.message}`,
-        }),
-    ),
-  );
-  if (response._tag === "OpenAiDemoRunFailure") {
-    return yield* new DemoRequestError({
-      message: `${response.errorTag}: ${response.message}`,
-    });
+const updateAssistantMessage = (
+  messages: ReadonlyArray<ChatMessage>,
+  id: string,
+  update: (message: ChatMessage) => ChatMessage,
+): ReadonlyArray<ChatMessage> => {
+  const existing = messages.findIndex((message) => message.id === id);
+  if (existing === -1) {
+    return [...messages, update({ id, role: "assistant", content: "" })];
   }
-  return response;
-});
+  return messages.map((message, index) => (index === existing ? update(message) : message));
+};
 
 /** Starts one selected profile and projects its semantic events into browser state. */
 export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, context) => {
   const previous = context(demoStateAtom);
   const runNumber = previous.runNumber + 1;
+  const assistantId = `assistant-${runNumber}`;
 
   context.set(demoStateAtom, {
     ...previous,
@@ -132,31 +122,39 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, conte
   });
 
   const projectEvent = Effect.fn("Demo.projectEvent")(function* (event: RunEvent) {
+    const current = context(demoStateAtom);
+    const messages =
+      event._tag === "TextDelta"
+        ? updateAssistantMessage(current.messages, assistantId, (message) => ({
+            ...message,
+            content: message.content + event.text,
+          }))
+        : event._tag === "ReasoningDelta"
+          ? updateAssistantMessage(current.messages, assistantId, (message) => ({
+              ...message,
+              reasoning: (message.reasoning ?? "") + event.text,
+            }))
+          : current.messages;
     context.set(demoStateAtom, {
-      ...context(demoStateAtom),
-      events: [...context(demoStateAtom).events, event],
+      ...current,
+      messages,
+      events: [...current.events, event],
     });
 
     if (event._tag === "RunCompleted") {
       const candidateOutput: unknown = event.output;
       const output = yield* Schema.decodeUnknownEffect(TravelPlan)(candidateOutput);
-      const current = context(demoStateAtom);
+      const completed = context(demoStateAtom);
       context.set(demoStateAtom, {
-        ...current,
+        ...completed,
         status: "succeeded",
         output,
-        messages: [
-          ...current.messages,
-          {
-            id: `assistant-${runNumber}`,
-            role: "assistant",
-            content: summarizePlan(output),
-          },
-        ],
+        messages: updateAssistantMessage(completed.messages, assistantId, (message) => ({
+          ...message,
+          content: summarizePlan(output),
+        })),
       });
     }
-
-    yield* Effect.sleep("35 millis");
   });
 
   const deterministic = AgentRuntime.stream(makeAgent(), { ...phase0Trip, request }).pipe(
@@ -164,9 +162,12 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, conte
     Effect.provide(TravelPlannerRuntimeLayer),
     Effect.scoped,
   );
-  const openai = requestOpenAiRun(request).pipe(
-    Effect.flatMap((response) => Effect.forEach(response.events, projectEvent)),
-  );
+  const openai = Stream.unwrap(
+    Effect.gen(function* () {
+      const client = yield* DemoRunRpcClient;
+      return client.StreamDemoRun({ request });
+    }),
+  ).pipe(Stream.runForEach(projectEvent), Effect.provide(DemoRunRpcClient.layer), Effect.scoped);
   const selected = Effect.gen(function* () {
     if (mode === "openai") {
       return yield* openai;
@@ -175,6 +176,18 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, request }, conte
   });
 
   return selected.pipe(
+    Effect.tap(() =>
+      Effect.sync(() => {
+        const current = context(demoStateAtom);
+        if (current.status === "running") {
+          context.set(demoStateAtom, {
+            ...current,
+            status: "failed",
+            error: "The Run stream ended without a terminal event.",
+          });
+        }
+      }),
+    ),
     Effect.tapError((error) =>
       Effect.sync(() => {
         context.set(demoStateAtom, {
