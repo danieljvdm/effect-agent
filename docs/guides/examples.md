@@ -1,9 +1,9 @@
 # Target API examples
 
-Status: Phase 0 authoring and runtime subset implemented; later-phase examples remain design targets
+Status: Phase 1 ephemeral authoring and runtime subset implemented; Phase 2 and later examples remain design targets
 
-The framework-specific API is still a design target. The Effect AI APIs shown here
-come directly from the pinned Effect v4 package and must not be wrapped.
+The implemented Phase 1 API uses the pinned Effect v4 package directly; later-phase sections remain
+design targets. The Effect AI APIs shown here must not be wrapped.
 
 These focused API examples complement the
 [progressive Travel Planner Reference Application](travel-planner.md), which carries one

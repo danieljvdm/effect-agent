@@ -44,7 +44,7 @@ Dependencies point inward. Inner packages define interfaces; outer packages prov
 ## 3. Modules
 
 The architecture describes the intended package boundaries, but the repository creates a package
-only when its roadmap phase begins. The current Phase 0 tree is:
+only when its roadmap phase begins. The current Phase 1 tree is:
 
 ```text
 packages/
@@ -53,11 +53,14 @@ packages/
   testing
 examples/
   demo
+  providers
 ```
 
 There is no `apps/` workspace. Reusable Travel Planner fixtures live in the leaf testing package;
-`examples/demo` consumes those public fixtures and framework packages as a local browser bench.
-Examples are outside the framework dependency graph and do not define a deployment boundary.
+`examples/demo` consumes public framework packages as a local browser bench. `examples/providers`
+binds the shared Travel Planner Definition directly to upstream OpenAI and Anthropic Effect AI
+Models as a compile-only leaf proof. Examples are outside the framework dependency graph and do not
+define a deployment boundary.
 Platform hosts are library packages that applications can assemble later.
 
 | First phase | Packages introduced                           |

@@ -1,6 +1,6 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 0 offline design proof implemented; later increments remain design targets
+Status: Phase 1 ephemeral `E` interpreter implemented; Phase 2 and later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -81,6 +81,10 @@ The framework does not introduce `MockModelDriver`, `TravelModelProvider`, or a 
 Both profiles bind the same Agent Definition through `Agent.withModel` and meet the same Effect AI
 boundary.
 
+`examples/providers` is the Phase 1 compile-only proof for direct OpenAI and Anthropic bindings of
+the shared Definition. It has no ordinary live invocation: credentials and client Layers are
+application composition, not a normal test dependency.
+
 ### Travel-service profiles
 
 - **Deterministic catalog** — fixed, Schema-valid inventory and quotes with controllable latency,
@@ -106,6 +110,9 @@ insufficient without `DN` or `DC` and the tested adapter.
 ## 4. Phase progression
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
+
+P0 and P1 are implemented. P2 is the next planned increment; its steering, follow-up, approval,
+MCP, sandbox, compaction, and operational claims are not present in the current `E` runtime.
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

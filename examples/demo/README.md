@@ -45,6 +45,7 @@ The live profile keeps the upstream provider metadata and result schemas but nar
 declaration schema to the empty object actually emitted. This compatibility projection should be
 removed when the upstream adapter and helper agree.
 
-The ordinary test and build gates never make a live provider call. This remains an ephemeral
-provider preview and observability bench, not a deployable transport or a claim that the Phase 1
-provider workstream is complete.
+The ordinary test and build gates never make a live provider call. This is an ephemeral (`E`)
+provider preview and observability bench, not a deployable transport. Phase 1 also includes the
+separate compile-only `examples/providers` OpenAI/Anthropic Travel Planner bindings; neither
+example claims persistence, durable execution, steering, approval, MCP, or sandbox behavior.

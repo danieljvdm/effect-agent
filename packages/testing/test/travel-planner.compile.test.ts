@@ -17,10 +17,14 @@ import {
   type AgentRuntimeRequirements,
 } from "@effect-agent/engine";
 import {
-  AvailabilityCatalog,
-  AvailabilityUnavailable,
+  ActivityCatalog,
+  ActivityUnavailable,
+  FlightCatalog,
+  FlightUnavailable,
   GuidanceFailure,
-  phase0Trip,
+  LodgingCatalog,
+  LodgingUnavailable,
+  phase1Trip,
   ScriptedModel,
   TravelGuidance,
   TravelPlanner,
@@ -41,16 +45,20 @@ const model: Model.Model<any, any, never> = Model.make(
   ScriptedModel.layer([]),
 );
 const agent = Agent.withModel(TravelPlanner, model);
-const program = AgentRuntime.run(agent, phase0Trip);
+const program = AgentRuntime.run(agent, phase1Trip);
 
 type ExpectedRequirements =
-  | AvailabilityCatalog
+  | FlightCatalog
+  | LodgingCatalog
+  | ActivityCatalog
   | TravelGuidance
   | Tool.HandlersFor<Toolkit.Tools<typeof TravelPlannerToolkit>>
   | IdGenerator
   | Scope.Scope;
 type ExpectedFailure =
-  | AvailabilityUnavailable
+  | FlightUnavailable
+  | LodgingUnavailable
+  | ActivityUnavailable
   | GuidanceFailure
   | AiError.AiError
   | AgentInputError
@@ -65,7 +73,7 @@ type PublicRequirementsProof = Assert<
 >;
 type PublicFailureProof = Assert<Equal<AgentRuntimeFailure<typeof agent>, ExpectedFailure>>;
 
-describe("TEST-009 Travel Planner public-contract inference", () => {
+describe("TEST-009 P1 Travel Planner public-contract inference", () => {
   it("preserves Tool and instruction failures and requirements in Run E/R", () => {
     const requirementsProof: RequirementsProof = true;
     const failureProof: FailureProof = true;

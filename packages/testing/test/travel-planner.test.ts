@@ -1,17 +1,24 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { Model } from "effect/unstable/ai";
 
-import { Agent } from "@effect-agent/core";
+import { Agent, type RunEvent } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import {
-  AvailabilityCatalogLayer,
+  ActivityCatalog,
+  ActivityCatalogLayer,
+  ActivitySearchResult,
   CatalogLifecycle,
   DeterministicIdGeneratorLayer,
   expectedTravelPlan,
-  phase0HappyPathTurns,
-  phase0Trip,
+  FlightCatalog,
+  FlightCatalogLayer,
+  FlightUnavailable,
+  phase1HappyPathTurns,
+  phase1Trip,
+  LodgingCatalogLayer,
+  ReverseCompletionToolkitLayer,
   ScriptedModel,
   type ScriptedTurnInput,
   TravelGuidanceLayer,
@@ -23,12 +30,14 @@ import {
 const makeScriptedAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   Agent.withModel(
     TravelPlanner,
-    Model.make("scripted", "travel-planner-phase-0", ScriptedModel.layer(turns)),
+    Model.make("scripted", "travel-planner-phase-1", ScriptedModel.layer(turns)),
   );
 
 const TravelRuntimeLayer = Layer.mergeAll(
   TravelPlannerToolkitLayer,
-  AvailabilityCatalogLayer,
+  FlightCatalogLayer,
+  LodgingCatalogLayer,
+  ActivityCatalogLayer,
   TravelGuidanceLayer,
   DeterministicIdGeneratorLayer,
 );
@@ -36,23 +45,43 @@ const TravelRuntimeLayer = Layer.mergeAll(
 const provideTravelLayers = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
   effect.pipe(Effect.provide(TravelRuntimeLayer));
 
-describe("TEST-014 Phase 0 Travel Planner reference application", () => {
-  it.effect("runs the offline two-Turn availability scenario through run and stream", () => {
+const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isSuccess(exit)) {
+    throw new Error("Expected the Effect to fail");
+  }
+  const failure = Cause.findErrorOption(exit.cause);
+  expect(Option.isSome(failure)).toBe(true);
+  if (Option.isNone(failure)) {
+    throw new Error("Expected a typed failure in the Cause");
+  }
+  return failure.value;
+};
+
+describe("TEST-014 P1 Travel Planner reference application (E)", () => {
+  it.effect("runs the offline two-Turn bounded Tool batch through run and stream", () => {
     let sawToolResultOnSecondTurn = false;
     const assertedTurns: ReadonlyArray<ScriptedTurnInput> = [
       {
-        ...phase0HappyPathTurns[0]!,
+        ...phase1HappyPathTurns[0]!,
         assertRequest: (request) => {
-          expect(request.tools.map((tool) => tool.name)).toEqual(["search_availability"]);
+          expect(request.tools.map((tool) => tool.name)).toEqual([
+            "search_flights",
+            "search_lodging",
+            "search_activities",
+          ]);
           expect(request.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
         },
       },
       {
-        ...phase0HappyPathTurns[1]!,
+        ...phase1HappyPathTurns[1]!,
         assertRequest: (request) => {
           const roles = request.prompt.content.map((message) => message.role);
           sawToolResultOnSecondTurn = roles.includes("tool");
-          expect(JSON.stringify(request.prompt.content)).toContain("quote-sfo-lhr-001");
+          const prompt = JSON.stringify(request.prompt.content);
+          expect(prompt).toContain("quote-sfo-lhr-001");
+          expect(prompt.indexOf("EA 218")).toBeLessThan(prompt.indexOf("Bloomsbury House"));
+          expect(prompt.indexOf("Bloomsbury House")).toBeLessThan(prompt.indexOf("British Museum"));
         },
       },
     ];
@@ -61,7 +90,7 @@ describe("TEST-014 Phase 0 Travel Planner reference application", () => {
       const streamEvidence = yield* Effect.gen(function* () {
         const lifecycle = yield* CatalogLifecycle;
         const events = yield* provideTravelLayers(
-          AgentRuntime.stream(makeScriptedAgent(assertedTurns), phase0Trip).pipe(Stream.runCollect),
+          AgentRuntime.stream(makeScriptedAgent(assertedTurns), phase1Trip).pipe(Stream.runCollect),
         ).pipe(Effect.scoped);
         const counts = yield* lifecycle.counts;
         return { counts, events: Array.from(events) };
@@ -70,7 +99,7 @@ describe("TEST-014 Phase 0 Travel Planner reference application", () => {
       const runEvidence = yield* Effect.gen(function* () {
         const lifecycle = yield* CatalogLifecycle;
         const result = yield* provideTravelLayers(
-          AgentRuntime.run(makeScriptedAgent(phase0HappyPathTurns), phase0Trip),
+          AgentRuntime.run(makeScriptedAgent(phase1HappyPathTurns), phase1Trip),
         ).pipe(Effect.scoped);
         const counts = yield* lifecycle.counts;
         return { counts, result };
@@ -97,9 +126,9 @@ describe("TEST-014 Phase 0 Travel Planner reference application", () => {
       expect(streamEvidence.events.filter((event) => event._tag === "TurnStarted")).toHaveLength(2);
       expect(
         streamEvidence.events.filter((event) => event._tag === "ToolCallSucceeded"),
-      ).toHaveLength(1);
-      expect(streamEvidence.counts).toEqual({ acquired: 1, finalized: 1 });
-      expect(runEvidence.counts).toEqual({ acquired: 1, finalized: 1 });
+      ).toHaveLength(3);
+      expect(streamEvidence.counts).toEqual({ acquired: 3, finalized: 3 });
+      expect(runEvidence.counts).toEqual({ acquired: 3, finalized: 3 });
     });
   });
 
@@ -120,7 +149,7 @@ describe("TEST-014 Phase 0 Travel Planner reference application", () => {
         ];
 
         const fiber = yield* provideTravelLayers(
-          AgentRuntime.run(makeScriptedAgent(turns), phase0Trip),
+          AgentRuntime.run(makeScriptedAgent(turns), phase1Trip),
         ).pipe(Effect.scoped, Effect.forkChild);
 
         yield* Deferred.await(started);
@@ -133,7 +162,153 @@ describe("TEST-014 Phase 0 Travel Planner reference application", () => {
       }).pipe(Effect.provide(CatalogLifecycle.layerNoDeps));
 
       expect(evidence.modelFinalized).toBe(true);
-      expect(evidence.catalog).toEqual({ acquired: 1, finalized: 1 });
+      expect(evidence.catalog).toEqual({ acquired: 3, finalized: 3 });
+    }),
+  );
+
+  it.effect("accepts an empty activity result as a successful Tool outcome", () => {
+    const emptyPlan = Schema.decodeSync(TravelPlan)({
+      itineraries: expectedTravelPlan.itineraries.map((itinerary) => ({
+        ...itinerary,
+        activities: [],
+      })),
+    });
+    const baseFinalTurn = phase1HappyPathTurns[1]!;
+    if (baseFinalTurn._tag !== "Stream") {
+      throw new Error("Expected the Phase 1 final fixture Turn to stream");
+    }
+    const finalTurn: ScriptedTurnInput = {
+      ...baseFinalTurn,
+      parts: baseFinalTurn.parts.map((part): (typeof baseFinalTurn.parts)[number] =>
+        part.type === "text-delta"
+          ? {
+              ...part,
+              delta: JSON.stringify(Schema.encodeSync(TravelPlan)(emptyPlan)),
+            }
+          : part,
+      ),
+      assertRequest: (request) => {
+        expect(JSON.stringify(request.prompt.content)).toContain('"activities":[]');
+      },
+    };
+    const emptyActivityLayer = Layer.succeed(
+      ActivityCatalog,
+      ActivityCatalog.of({
+        search: () => Effect.succeed(Schema.decodeSync(ActivitySearchResult)({ activities: [] })),
+      }),
+    );
+    const layer = Layer.mergeAll(
+      TravelPlannerToolkitLayer,
+      FlightCatalogLayer,
+      LodgingCatalogLayer,
+      emptyActivityLayer,
+      TravelGuidanceLayer,
+      DeterministicIdGeneratorLayer,
+    ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
+
+    return AgentRuntime.run(
+      makeScriptedAgent([phase1HappyPathTurns[0]!, finalTurn]),
+      phase1Trip,
+    ).pipe(
+      Effect.provide(layer),
+      Effect.scoped,
+      Effect.tap((result) => Effect.sync(() => expect(result.output).toEqual(emptyPlan))),
+    );
+  });
+
+  it.effect("keeps a typed flight failure in E after terminal Tool events", () =>
+    Effect.gen(function* () {
+      const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const unavailable = new FlightUnavailable({
+        query: "SFO-LHR",
+        message: "The deterministic supplier is unavailable.",
+      });
+      const failingFlightLayer = Layer.succeed(
+        FlightCatalog,
+        FlightCatalog.of({
+          search: () => Effect.fail(unavailable),
+        }),
+      );
+      const layer = Layer.mergeAll(
+        TravelPlannerToolkitLayer,
+        failingFlightLayer,
+        LodgingCatalogLayer,
+        ActivityCatalogLayer,
+        TravelGuidanceLayer,
+        DeterministicIdGeneratorLayer,
+      ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
+
+      const exit = yield* AgentRuntime.stream(
+        makeScriptedAgent(phase1HappyPathTurns),
+        phase1Trip,
+      ).pipe(
+        Stream.tap((event) => Ref.update(observed, (events) => [...events, event])),
+        Stream.runDrain,
+        Effect.provide(layer),
+        Effect.scoped,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const events = yield* Ref.get(observed);
+
+      expect(failure).toEqual(unavailable);
+      expect(
+        events.some(
+          (event) => event._tag === "ToolCallStarted" && event.toolName === "search_flights",
+        ),
+      ).toBe(true);
+      expect(
+        events.some(
+          (event) =>
+            event._tag === "ToolCallFailed" &&
+            event.toolName === "search_flights" &&
+            event.errorTag === "FlightUnavailable",
+        ),
+      ).toBe(true);
+    }),
+  );
+
+  it.effect("keeps reverse Tool completion deterministic for the next model request", () =>
+    Effect.gen(function* () {
+      const controlled = yield* ReverseCompletionToolkitLayer;
+      let nextPrompt = "";
+      const turns: ReadonlyArray<ScriptedTurnInput> = [
+        phase1HappyPathTurns[0]!,
+        {
+          ...phase1HappyPathTurns[1]!,
+          assertRequest: (request) => {
+            nextPrompt = JSON.stringify(request.prompt.content);
+          },
+        },
+      ];
+      const layer = Layer.mergeAll(
+        controlled.layer,
+        FlightCatalogLayer,
+        LodgingCatalogLayer,
+        ActivityCatalogLayer,
+        TravelGuidanceLayer,
+        DeterministicIdGeneratorLayer,
+      ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
+      const fiber = yield* AgentRuntime.run(makeScriptedAgent(turns), phase1Trip).pipe(
+        Effect.provide(layer),
+        Effect.scoped,
+        Effect.forkChild,
+      );
+
+      yield* Effect.all([
+        controlled.controls.flightStarted,
+        controlled.controls.lodgingStarted,
+        controlled.controls.activityStarted,
+      ]);
+      yield* controlled.controls.releaseActivity;
+      yield* controlled.controls.releaseLodging;
+      yield* controlled.controls.releaseFlight;
+      yield* Fiber.join(fiber);
+
+      expect(nextPrompt.indexOf("EA 218")).toBeLessThan(nextPrompt.indexOf("Bloomsbury House"));
+      expect(nextPrompt.indexOf("Bloomsbury House")).toBeLessThan(
+        nextPrompt.indexOf("British Museum"),
+      );
     }),
   );
 });

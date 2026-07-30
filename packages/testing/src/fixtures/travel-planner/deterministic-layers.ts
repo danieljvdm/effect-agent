@@ -1,12 +1,18 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect";
+import { Context, Deferred, Effect, Layer, Ref, Schema } from "effect";
 import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
-
 import {
-  AvailabilityCatalog,
-  AvailabilityUnavailable,
-  type AvailabilityOption,
+  ActivityCatalog,
+  type ActivitySearchResult,
+  ActivityUnavailable,
+  FlightCatalog,
+  type FlightOption,
+  FlightUnavailable,
+  LodgingCatalog,
+  type LodgingOption,
+  LodgingUnavailable,
   QuoteId,
   TravelGuidance,
+  TravelPlannerToolkit,
   TravelPlannerToolkitLayer,
 } from "./definition.ts";
 
@@ -15,7 +21,6 @@ export const CatalogLifecycleCounts = Schema.Struct({
   finalized: Schema.Natural,
 });
 export type CatalogLifecycleCounts = typeof CatalogLifecycleCounts.Type;
-
 export class CatalogLifecycle extends Context.Service<
   CatalogLifecycle,
   {
@@ -29,91 +34,171 @@ export class CatalogLifecycle extends Context.Service<
     Effect.gen(function* () {
       const acquired = yield* Ref.make(0);
       const finalized = yield* Ref.make(0);
-
       return CatalogLifecycle.of({
-        markAcquired: Ref.update(acquired, (count) => count + 1),
-        markFinalized: Ref.update(finalized, (count) => count + 1),
-        counts: Effect.all({
-          acquired: Ref.get(acquired),
-          finalized: Ref.get(finalized),
-        }),
+        markAcquired: Ref.update(acquired, (n) => n + 1),
+        markFinalized: Ref.update(finalized, (n) => n + 1),
+        counts: Effect.all({ acquired: Ref.get(acquired), finalized: Ref.get(finalized) }),
       });
     }),
   );
 }
 
-const deterministicOption: AvailabilityOption = {
+const flight: FlightOption = {
   quoteId: Schema.decodeSync(QuoteId)("quote-sfo-lhr-001"),
   flight: "EA 218 · nonstop · SFO 18:40 → LHR 13:05+1",
-  lodging: "Bloomsbury House · refundable studio · 4 nights",
-  estimatedTotalCents: 284_000,
+  estimatedCents: 180_000,
   currency: "USD",
 };
+const lodging: LodgingOption = {
+  lodging: "Bloomsbury House · refundable studio · 4 nights",
+  estimatedCents: 104_000,
+  currency: "USD",
+};
+const activities: ActivitySearchResult = {
+  activities: ["British Museum timed entry", "Thames evening walk"],
+};
 
-export const AvailabilityCatalogLayer = Layer.effect(
-  AvailabilityCatalog,
+/**
+ * Deterministic controls for a Tool batch whose completions are released in a
+ * caller-selected order. This is intentionally a test fixture: it uses no
+ * clock or sleep and lets engine scheduler tests prove parallel starts and
+ * declaration-order prompt materialization.
+ */
+export interface TravelPlannerCompletionControls {
+  readonly flightStarted: Effect.Effect<void>;
+  readonly lodgingStarted: Effect.Effect<void>;
+  readonly activityStarted: Effect.Effect<void>;
+  readonly releaseFlight: Effect.Effect<void>;
+  readonly releaseLodging: Effect.Effect<void>;
+  readonly releaseActivity: Effect.Effect<void>;
+}
+
+export const ReverseCompletionToolkitLayer = Effect.gen(function* () {
+  const flightStarted = yield* Deferred.make<void>();
+  const lodgingStarted = yield* Deferred.make<void>();
+  const activityStarted = yield* Deferred.make<void>();
+  const releaseFlight = yield* Deferred.make<void>();
+  const releaseLodging = yield* Deferred.make<void>();
+  const releaseActivity = yield* Deferred.make<void>();
+  const awaitRelease = <A>(
+    started: Deferred.Deferred<void>,
+    release: Deferred.Deferred<void>,
+    value: A,
+  ) =>
+    Deferred.succeed(started, undefined).pipe(
+      Effect.andThen(Deferred.await(release)),
+      Effect.as(value),
+    );
+  return {
+    controls: {
+      flightStarted: Deferred.await(flightStarted),
+      lodgingStarted: Deferred.await(lodgingStarted),
+      activityStarted: Deferred.await(activityStarted),
+      releaseFlight: Deferred.succeed(releaseFlight, undefined).pipe(Effect.asVoid),
+      releaseLodging: Deferred.succeed(releaseLodging, undefined).pipe(Effect.asVoid),
+      releaseActivity: Deferred.succeed(releaseActivity, undefined).pipe(Effect.asVoid),
+    },
+    layer: TravelPlannerToolkit.toLayer({
+      search_flights: () => awaitRelease(flightStarted, releaseFlight, flight),
+      search_lodging: () => awaitRelease(lodgingStarted, releaseLodging, lodging),
+      search_activities: () => awaitRelease(activityStarted, releaseActivity, activities),
+    }),
+  };
+});
+
+export const FlightCatalogLayer = Layer.effect(
+  FlightCatalog,
   Effect.gen(function* () {
     const lifecycle = yield* CatalogLifecycle;
     yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
-
-    return AvailabilityCatalog.of({
-      search: Effect.fn("AvailabilityCatalog.search")(function* (query) {
-        if (query.origin === query.destination) {
-          return yield* new AvailabilityUnavailable({
-            route: `${query.origin}-${query.destination}`,
-            message: "Origin and destination must differ.",
-          });
-        }
-        return deterministicOption;
-      }),
+    return FlightCatalog.of({
+      search: (query) =>
+        query.origin === query.destination
+          ? Effect.fail(
+              new FlightUnavailable({
+                query: `${query.origin}-${query.destination}`,
+                message: "Origin and destination must differ.",
+              }),
+            )
+          : Effect.succeed(flight),
     });
   }),
 );
-
+export const LodgingCatalogLayer = Layer.effect(
+  LodgingCatalog,
+  Effect.gen(function* () {
+    const lifecycle = yield* CatalogLifecycle;
+    yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
+    return LodgingCatalog.of({
+      search: (query) =>
+        query.nights < 1
+          ? Effect.fail(
+              new LodgingUnavailable({
+                query: query.destination,
+                message: "At least one night is required.",
+              }),
+            )
+          : Effect.succeed(lodging),
+    });
+  }),
+);
+export const ActivityCatalogLayer = Layer.effect(
+  ActivityCatalog,
+  Effect.gen(function* () {
+    const lifecycle = yield* CatalogLifecycle;
+    yield* Effect.acquireRelease(lifecycle.markAcquired, () => lifecycle.markFinalized);
+    return ActivityCatalog.of({
+      search: (query) =>
+        query.destination === ""
+          ? Effect.fail(
+              new ActivityUnavailable({
+                query: query.destination,
+                message: "Destination is required.",
+              }),
+            )
+          : Effect.succeed(activities),
+    });
+  }),
+);
 export const TravelGuidanceLayer = Layer.succeed(
   TravelGuidance,
   TravelGuidance.of({
     instructions: (input) =>
       Effect.succeed(
         [
-          "You are the Effect Agent Travel Planner design proof.",
+          "You are the Effect Agent Travel Planner P1 interpreter fixture.",
           `The user asked: ${input.request}`,
-          "Call search_availability exactly once, then return only a JSON object with an itineraries array.",
-          "Each itinerary must contain exactly these fields: title, route, dates, flight, lodging, estimatedTotalCents, currency, quoteId, assumptions, unresolvedConstraints, and nextAction.",
-          'Use the tool result verbatim for flight, lodging, estimatedTotalCents, currency, and quoteId. Set nextAction to "review".',
-          "Both assumptions and unresolvedConstraints must be arrays of strings. Do not use Markdown or add text outside the JSON object.",
-          `Keep the ${input.origin} → ${input.destination} trip under $${(input.budgetCents / 100).toFixed(0)} ${input.currency}.`,
+          "Call search_flights, search_lodging, and search_activities exactly once in one Tool batch.",
+          "Return only a JSON object with an itineraries array. Use the Tool results verbatim; activity results may legitimately be an empty array.",
           "This is read-only planning. Require review before any mutation.",
         ].join("\n"),
       ),
   }),
 );
-
 export const DeterministicIdGeneratorLayer = Layer.effect(
   IdGenerator,
   Effect.gen(function* () {
     const conversation = yield* Ref.make(0);
     const run = yield* Ref.make(0);
     const turn = yield* Ref.make(0);
-
     return IdGenerator.of({
-      nextConversationId: Ref.updateAndGet(conversation, (value) => value + 1).pipe(
-        Effect.map((value) => Schema.decodeSync(ConversationId)(`conversation-${value}`)),
+      nextConversationId: Ref.updateAndGet(conversation, (n) => n + 1).pipe(
+        Effect.map((n) => Schema.decodeSync(ConversationId)(`conversation-${n}`)),
       ),
-      nextRunId: Ref.updateAndGet(run, (value) => value + 1).pipe(
-        Effect.map((value) => Schema.decodeSync(RunId)(`run-${value}`)),
+      nextRunId: Ref.updateAndGet(run, (n) => n + 1).pipe(
+        Effect.map((n) => Schema.decodeSync(RunId)(`run-${n}`)),
       ),
-      nextTurnId: Ref.updateAndGet(turn, (value) => value + 1).pipe(
-        Effect.map((value) => Schema.decodeSync(TurnId)(`turn-${value}`)),
+      nextTurnId: Ref.updateAndGet(turn, (n) => n + 1).pipe(
+        Effect.map((n) => Schema.decodeSync(TurnId)(`turn-${n}`)),
       ),
     });
   }),
 );
-
-/** Browser-safe services for running the deterministic Travel Planner fixture. */
 export const TravelPlannerRuntimeLayer = Layer.mergeAll(
   TravelPlannerToolkitLayer,
-  AvailabilityCatalogLayer,
+  FlightCatalogLayer,
+  LodgingCatalogLayer,
+  ActivityCatalogLayer,
   TravelGuidanceLayer,
   DeterministicIdGeneratorLayer,
 ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));

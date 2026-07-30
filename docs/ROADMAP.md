@@ -11,6 +11,18 @@ boundaries, or Effect CLI scripting. The
 [project execution guide](guides/project-execution.md#3-skill-routing) defines the mapping and
 review expectations.
 
+## Implementation status
+
+The roadmap remains normative and **Draft**. This table records implementation evidence; it does
+not change the specified scope of later phases.
+
+| Phase  | Implementation status                                       |
+| ------ | ----------------------------------------------------------- |
+| P0     | Complete — [design proof](PHASE-0-EVIDENCE.md)              |
+| P1     | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md) |
+| **P2** | **Next — operational local runtime**                        |
+| P3–P7  | Planned — not yet implemented                               |
+
 ## Progressive reference application
 
 The [Travel Planner Reference Application](guides/travel-planner.md) is the cumulative integration

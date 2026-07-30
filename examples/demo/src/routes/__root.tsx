@@ -10,9 +10,9 @@ export const Route = createRootRoute({
       { name: "viewport", content: "width=device-width, initial-scale=1" },
       {
         name: "description",
-        content: "A browser test bench for the Effect Agent Phase 0 runtime.",
+        content: "A browser test bench for the Effect Agent Phase 1 ephemeral runtime.",
       },
-      { title: "Effect Agent · Phase 0 bench" },
+      { title: "Effect Agent · Phase 1 bench" },
     ],
     links: [{ rel: "stylesheet", href: appCss }],
   }),

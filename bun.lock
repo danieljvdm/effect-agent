@@ -57,6 +57,21 @@
         "vite-plus": "catalog:",
       },
     },
+    "examples/providers": {
+      "name": "@effect-agent/example-providers",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/testing": "workspace:*",
+        "@effect/ai-anthropic": "catalog:",
+        "@effect/ai-openai": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "packages/core": {
       "name": "@effect-agent/core",
       "version": "0.0.0",
@@ -105,6 +120,7 @@
   },
   "catalog": {
     "@base-ui/react": "1.6.0",
+    "@effect/ai-anthropic": "4.0.0-beta.102",
     "@effect/ai-openai": "4.0.0-beta.102",
     "@effect/atom-react": "4.0.0-beta.102",
     "@effect/platform-node": "4.0.0-beta.102",
@@ -229,7 +245,11 @@
 
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 
+    "@effect-agent/example-providers": ["@effect-agent/example-providers@workspace:examples/providers"],
+
     "@effect-agent/testing": ["@effect-agent/testing@workspace:packages/testing"],
+
+    "@effect/ai-anthropic": ["@effect/ai-anthropic@4.0.0-beta.102", "", { "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-p0z58yxaDBP8uH93XB/wJRfFovc/OoIouS2HRjtvUj6sI/QZqjC7SmzCTYTx8ei36gVJu8e5Zy75Ky0x/pZNIA=="],
 
     "@effect/ai-openai": ["@effect/ai-openai@4.0.0-beta.102", "", { "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-XqoNFJpx+/vLCStPAGPk651eRUJKu7lQ8XHLqJI77j6ZCUvEDlpH2SARQjfk+Ul1np0H7RM5o6m0C572cjvQow=="],
 

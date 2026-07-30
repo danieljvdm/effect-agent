@@ -106,18 +106,31 @@ type FailureProof = Assert<Equal<Agent.Failure<typeof agent>, ExpectedFailure>>;
 type DefinitionIsNotRunnableProof = Assert<
   Equal<typeof definition extends Agent.Any ? true : false, false>
 >;
+type BindingRetainsNativeModelProof = Assert<Equal<(typeof agent)["model"], typeof model>>;
+type InputProjectionProof = Assert<
+  Equal<Agent.Input<typeof agent>, { readonly destination: string }>
+>;
+type OutputProjectionProof = Assert<
+  Equal<Agent.Output<typeof agent>, { readonly summary: string }>
+>;
 
-describe("Phase 0 Agent type inference", () => {
+describe("Agent type inference", () => {
   it("separates immutable definition from model binding", () => {
     const requirementsProof: RequirementsProof = true;
     const definitionRequirementsProof: DefinitionRequirementsProof = true;
     const failureProof: FailureProof = true;
     const definitionIsNotRunnableProof: DefinitionIsNotRunnableProof = true;
+    const bindingRetainsNativeModelProof: BindingRetainsNativeModelProof = true;
+    const inputProjectionProof: InputProjectionProof = true;
+    const outputProjectionProof: OutputProjectionProof = true;
 
     expect(requirementsProof).toBe(true);
     expect(definitionRequirementsProof).toBe(true);
     expect(failureProof).toBe(true);
     expect(definitionIsNotRunnableProof).toBe(true);
+    expect(bindingRetainsNativeModelProof).toBe(true);
+    expect(inputProjectionProof).toBe(true);
+    expect(outputProjectionProof).toBe(true);
     expect(agent.definition).toBe(definition);
     expect(agent.model).toBe(model);
     expect(Object.isFrozen(definition)).toBe(true);

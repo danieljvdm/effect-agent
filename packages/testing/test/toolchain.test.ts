@@ -21,7 +21,7 @@ type PackageManifest = typeof PackageManifest.Type;
 // Vite+ runs this package test from packages/testing; Bun is the pinned test runtime in CI and locally.
 const repositoryRoot = "../..";
 const packageNames = ["core", "engine", "testing"] as const;
-const exampleNames = ["demo"] as const;
+const exampleNames = ["demo", "providers"] as const;
 const effectTestPackageNames = ["engine", "testing"] as const;
 const productionPackageNames = ["core", "engine"] as const;
 const dependencySections = [
@@ -39,6 +39,7 @@ const forbiddenScaffoldDependencies = new Set([
   "react-dom",
   "wrangler",
 ]);
+const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"] as const;
 
 const readManifest = (path: string) =>
   Effect.gen(function* () {
@@ -67,7 +68,7 @@ const effectDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
     .map((section) => manifest[section]?.effect)
     .filter((version): version is string => version !== undefined);
 
-layer(NodeServices.layer)("Phase 0 toolchain", (it) => {
+layer(NodeServices.layer)("Phase 1 toolchain", (it) => {
   it.effect("executes an Effect program through the Vite+ test runner", () =>
     Effect.sync(() => {
       expect("ready").toBe("ready");
@@ -117,11 +118,13 @@ layer(NodeServices.layer)("Phase 0 toolchain", (it) => {
     }),
   );
 
-  it.effect("keeps the demo as an inward-consuming leaf with an opt-in provider", () =>
+  it.effect("keeps provider adapters catalog-pinned and confined to leaf examples", () =>
     Effect.gen(function* () {
       const root = yield* readManifest(`${repositoryRoot}/package.json`);
       const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
-      const dependencies = manifestDependencies(demo);
+      const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
+      const demoDependencies = manifestDependencies(demo);
+      const providerDependencies = manifestDependencies(providers);
 
       expect(demo.name).toBe("@effect-agent/example-demo");
       expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
@@ -134,15 +137,31 @@ layer(NodeServices.layer)("Phase 0 toolchain", (it) => {
       expect(demo.dependencies?.react).toBe("catalog:");
       expect(demo.dependencies?.effect).toBe("catalog:");
       expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
-      expect(dependencies).not.toContain("wrangler");
-      expect(dependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(false);
+      expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(demoDependencies).not.toContain("wrangler");
+      expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
+      expect(providers.name).toBe("@effect-agent/example-providers");
+      expect(providers.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(providers.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(providers.dependencies?.effect).toBe("catalog:");
+      expect(providers.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(providers.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
+      expect(providerDependencies).not.toContain("wrangler");
+      expect(providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
 
       for (const packageName of packageNames) {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
         expect(manifestDependencies(manifest)).not.toContain(demo.name);
-        expect(manifestDependencies(manifest)).not.toContain("@effect/ai-openai");
+        expect(manifestDependencies(manifest)).not.toContain(providers.name);
+        for (const adapter of providerAdapterDependencies) {
+          expect(manifestDependencies(manifest)).not.toContain(adapter);
+        }
       }
     }),
   );

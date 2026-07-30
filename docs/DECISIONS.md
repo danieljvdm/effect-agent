@@ -247,7 +247,8 @@ Records: [ADR-0006](adr/0006-package-only-vite-plus-monorepo.md),
 ### D-025 — Slim toolchain and canonical Effect source
 
 **Status:** Accepted  
-**Decision:** Keep only the active Phase 0 packages: `core`, `engine`, and `testing`. Shared
+**Decision:** Keep only the active Phase 1 framework packages: `core`, `engine`, and `testing`.
+Create later packages only when their roadmap phase begins. Shared
 TypeScript configuration lives at the repository root.
 
 The framework and contributor tooling resolve one exact Effect runtime. Follow Effect v4 in the

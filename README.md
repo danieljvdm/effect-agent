@@ -11,10 +11,11 @@ The working product thesis is:
 > produces a `Stream`; its expected failures remain in `E`; its dependencies remain in `R`; every
 > resource belongs to a `Scope`.
 
-This repository contains the product and technical specification plus the completed Phase 0
-design proof. The workspace includes schema-first Agent contracts, one shared `run`/`stream`
-interpreter, a deterministic Effect AI model Layer, the offline two-Turn Travel Planner reference
-slice, and a browser test bench under `examples/demo`.
+This repository contains the product and technical specification plus the completed Phase 0 design
+proof and Phase 1 ephemeral interpreter. The workspace includes schema-first Agent contracts, one
+shared `run`/`stream` interpreter, deterministic scripted model Layers, the offline three-Tool
+Travel Planner reference slice, provider-binding compile examples, and a browser test bench under
+`examples/demo`.
 
 ## Status
 
@@ -25,7 +26,7 @@ slice, and a browser test bench under `examples/demo`.
 - Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
   benches in `examples/*`, and no `apps/`
 - Current packages: `core`, `engine`, and `testing`
-- Current implementation milestone: **Phase 0 complete**
+- Current implementation milestone: **Phase 1 complete** (ephemeral `E` runtime); **Phase 2 next**
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral single-agent execution
 - Durable runtime: planned, but it must pass the durability gates before the product may claim
@@ -48,6 +49,7 @@ Decisions labeled **Proposed** are recommendations, not settled owner decisions.
 10. [Target API examples](docs/guides/examples.md)
 11. [Progressive Travel Planner reference application](docs/guides/travel-planner.md)
 12. [Reference-project analysis](docs/REFERENCE-ANALYSIS.md)
+13. [Phase 1 evidence](docs/PHASE-1-EVIDENCE.md)
 
 ## Detailed specifications
 

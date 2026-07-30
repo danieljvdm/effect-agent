@@ -4,6 +4,7 @@
     { "path": "./packages/core" },
     { "path": "./packages/engine" },
     { "path": "./packages/testing" },
-    { "path": "./examples/demo" }
+    { "path": "./examples/demo" },
+    { "path": "./examples/providers" }
   ]
 }

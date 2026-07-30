@@ -25,23 +25,50 @@ export const TripRequest = Schema.Struct({
 });
 export type TripRequest = typeof TripRequest.Type;
 
-export const AvailabilityQuery = Schema.Struct({
+export const FlightQuery = Schema.Struct({
   origin: AirportCode,
+  destination: AirportCode,
+  departOn: Schema.String,
+  travelers: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+export type FlightQuery = typeof FlightQuery.Type;
+
+export const LodgingQuery = Schema.Struct({
   destination: AirportCode,
   departOn: Schema.String,
   nights: Schema.Int.check(Schema.isGreaterThan(0)),
   travelers: Schema.Int.check(Schema.isGreaterThan(0)),
 });
-export type AvailabilityQuery = typeof AvailabilityQuery.Type;
+export type LodgingQuery = typeof LodgingQuery.Type;
 
-export const AvailabilityOption = Schema.Struct({
+export const ActivityQuery = Schema.Struct({
+  destination: AirportCode,
+  departOn: Schema.String,
+  nights: Schema.Int.check(Schema.isGreaterThan(0)),
+  travelers: Schema.Int.check(Schema.isGreaterThan(0)),
+});
+export type ActivityQuery = typeof ActivityQuery.Type;
+
+export const FlightOption = Schema.Struct({
   quoteId: QuoteId,
   flight: Schema.String,
-  lodging: Schema.String,
-  estimatedTotalCents: Schema.Int.check(Schema.isGreaterThan(0)),
+  estimatedCents: Schema.Int.check(Schema.isGreaterThan(0)),
   currency: Schema.Literal("USD"),
 });
-export type AvailabilityOption = typeof AvailabilityOption.Type;
+export type FlightOption = typeof FlightOption.Type;
+
+export const LodgingOption = Schema.Struct({
+  lodging: Schema.String,
+  estimatedCents: Schema.Int.check(Schema.isGreaterThan(0)),
+  currency: Schema.Literal("USD"),
+});
+export type LodgingOption = typeof LodgingOption.Type;
+
+/** A successful empty activity search is distinct from supplier unavailability. */
+export const ActivitySearchResult = Schema.Struct({
+  activities: Schema.Array(Schema.String),
+});
+export type ActivitySearchResult = typeof ActivitySearchResult.Type;
 
 export const Itinerary = Schema.Struct({
   title: Schema.String,
@@ -49,6 +76,7 @@ export const Itinerary = Schema.Struct({
   dates: Schema.String,
   flight: Schema.String,
   lodging: Schema.String,
+  activities: Schema.Array(Schema.String),
   estimatedTotalCents: Schema.Int.check(Schema.isGreaterThan(0)),
   currency: Schema.Literal("USD"),
   quoteId: QuoteId,
@@ -58,53 +86,74 @@ export const Itinerary = Schema.Struct({
 });
 export type Itinerary = typeof Itinerary.Type;
 
-export const TravelPlan = Schema.Struct({
-  itineraries: Schema.Array(Itinerary),
-});
+export const TravelPlan = Schema.Struct({ itineraries: Schema.Array(Itinerary) });
 export type TravelPlan = typeof TravelPlan.Type;
 
-export class AvailabilityUnavailable extends Schema.TaggedErrorClass<AvailabilityUnavailable>()(
-  "AvailabilityUnavailable",
-  {
-    route: Schema.String,
-    message: Schema.String,
-  },
+const unavailableFields = { query: Schema.String, message: Schema.String };
+export class FlightUnavailable extends Schema.TaggedErrorClass<FlightUnavailable>()(
+  "FlightUnavailable",
+  unavailableFields,
 ) {}
-
+export class LodgingUnavailable extends Schema.TaggedErrorClass<LodgingUnavailable>()(
+  "LodgingUnavailable",
+  unavailableFields,
+) {}
+export class ActivityUnavailable extends Schema.TaggedErrorClass<ActivityUnavailable>()(
+  "ActivityUnavailable",
+  unavailableFields,
+) {}
 export class GuidanceFailure extends Schema.TaggedErrorClass<GuidanceFailure>()("GuidanceFailure", {
   message: Schema.String,
 }) {}
 
-export class AvailabilityCatalog extends Context.Service<
-  AvailabilityCatalog,
+export class FlightCatalog extends Context.Service<
+  FlightCatalog,
+  { readonly search: (query: FlightQuery) => Effect.Effect<FlightOption, FlightUnavailable> }
+>()("@effect-agent/testing/travel-planner/FlightCatalog") {}
+export class LodgingCatalog extends Context.Service<
+  LodgingCatalog,
+  { readonly search: (query: LodgingQuery) => Effect.Effect<LodgingOption, LodgingUnavailable> }
+>()("@effect-agent/testing/travel-planner/LodgingCatalog") {}
+export class ActivityCatalog extends Context.Service<
+  ActivityCatalog,
   {
     readonly search: (
-      query: AvailabilityQuery,
-    ) => Effect.Effect<AvailabilityOption, AvailabilityUnavailable>;
+      query: ActivityQuery,
+    ) => Effect.Effect<ActivitySearchResult, ActivityUnavailable>;
   }
->()("@effect-agent/testing/travel-planner/AvailabilityCatalog") {}
-
+>()("@effect-agent/testing/travel-planner/ActivityCatalog") {}
 export class TravelGuidance extends Context.Service<
   TravelGuidance,
-  {
-    readonly instructions: (input: TripRequest) => Effect.Effect<string, GuidanceFailure>;
-  }
+  { readonly instructions: (input: TripRequest) => Effect.Effect<string, GuidanceFailure> }
 >()("@effect-agent/testing/travel-planner/TravelGuidance") {}
 
-export const SearchAvailability = Tool.make("search_availability", {
-  description: "Search the deterministic catalog for one read-only flight and lodging option.",
-  parameters: AvailabilityQuery,
-  success: AvailabilityOption,
-  failure: AvailabilityUnavailable,
+export const SearchFlights = Tool.make("search_flights", {
+  parameters: FlightQuery,
+  success: FlightOption,
+  failure: FlightUnavailable,
   failureMode: "error",
-  dependencies: [AvailabilityCatalog],
+  dependencies: [FlightCatalog],
+});
+export const SearchLodging = Tool.make("search_lodging", {
+  parameters: LodgingQuery,
+  success: LodgingOption,
+  failure: LodgingUnavailable,
+  failureMode: "error",
+  dependencies: [LodgingCatalog],
+});
+export const SearchActivities = Tool.make("search_activities", {
+  parameters: ActivityQuery,
+  success: ActivitySearchResult,
+  failure: ActivityUnavailable,
+  failureMode: "error",
+  dependencies: [ActivityCatalog],
 });
 
-export const TravelPlannerToolkit = Toolkit.make(SearchAvailability);
-
+export const TravelPlannerToolkit = Toolkit.make(SearchFlights, SearchLodging, SearchActivities);
 export const TravelPlannerToolkitLayer = TravelPlannerToolkit.toLayer({
-  search_availability: (query) =>
-    Effect.flatMap(AvailabilityCatalog, (catalog) => catalog.search(query)),
+  search_flights: (query) => Effect.flatMap(FlightCatalog, (catalog) => catalog.search(query)),
+  search_lodging: (query) => Effect.flatMap(LodgingCatalog, (catalog) => catalog.search(query)),
+  search_activities: (query) => Effect.flatMap(ActivityCatalog, (catalog) => catalog.search(query)),
 });
 
 export const TravelPlanner = Agent.define("travel-planner", {
@@ -115,13 +164,10 @@ export const TravelPlanner = Agent.define("travel-planner", {
   toolkit: TravelPlannerToolkit,
   policy: AgentPolicy.make({
     maxTurns: 2,
-    maxToolCalls: 1,
+    maxToolCalls: 3,
     maxDuration: "30 seconds",
-    toolConcurrency: 1,
+    toolConcurrency: 3,
   }),
-  description: "Build one review-only itinerary from deterministic availability.",
-  metadata: {
-    deploymentClass: "E",
-    phase: "P0",
-  },
+  description: "Build one review-only itinerary from bounded parallel deterministic searches.",
+  metadata: { deploymentClass: "E", phase: "P1" },
 });

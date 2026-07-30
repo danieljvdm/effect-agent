@@ -5,8 +5,8 @@ Status: **Accepted for private development**
 This repository is a Vite+ monorepo derived from
 [`danieljvdm/vp-effect-cf-template`](https://github.com/danieljvdm/vp-effect-cf-template).
 Its hosted and Cloudflare applications are intentionally absent. A local browser test bench lives
-under `examples/demo`; Cloudflare support will be introduced later as library packages, not as an
-application scaffold.
+under `examples/demo`; `examples/providers` is a compile-only native provider-binding leaf.
+Cloudflare support will be introduced later as library packages, not as an application scaffold.
 
 ## Source-of-truth versions
 
@@ -41,11 +41,12 @@ Only packages required by the active roadmap phase exist:
 
 ```text
 packages/
-  core/     Phase 0 domain and authoring package
-  engine/   Phase 0 ephemeral interpreter package
-  testing/  Phase 0 scripted model and conformance test kit
+  core/     Phase 1 domain and authoring package
+  engine/   Phase 1 ephemeral interpreter package
+  testing/  Phase 1 scripted model and conformance test kit
 examples/
-  demo/     Leaf TanStack Start browser bench for the cumulative Travel Planner
+  demo/       Leaf TanStack Start browser bench
+  providers/  Leaf OpenAI/Anthropic Model-binding compile proof
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.
@@ -72,7 +73,7 @@ Run commands from the repository root:
 | `bun run check`                               | Run Vite+ format/lint/type checks, package type checks, and script type checks |
 | `bun run test`                                | Run package and example test tasks in dependency order                         |
 | `bun run build`                               | Build library packages and runnable examples                                   |
-| `bun --filter @effect-agent/example-demo dev` | Run the Phase 0 browser bench on port 4173                                     |
+| `bun --filter @effect-agent/example-demo dev` | Run the Phase 1 browser bench on port 4173                                     |
 | `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
 | `bun run format:write`                        | Apply repository formatting                                                    |
 | `bun run sync:effect`                         | Align the local Effect source checkout with the catalog pin                    |
