@@ -12,12 +12,13 @@ The working product thesis is:
 > resource belongs to a `Scope`.
 
 This repository contains the product and technical specification plus the completed Phase 0 design
-proof, Phase 1 interpreter, Phase 2 operational local runtime, and Phase 3 persistent Conversation
-foundation. The workspace includes schema-first Agent contracts, one shared `run`/`stream`
-interpreter, scoped operational capabilities, a narrow local sandbox adapter, replayable canonical
-Conversation records with memory and SQLite adapters, deterministic scripted model Layers, the
-progressive Travel Planner reference slice, provider-binding compile examples, and a browser test
-bench under `examples/demo`.
+proof, Phase 1 interpreter, Phase 2 operational local runtime, Phase 3 persistent Conversation
+foundation, and Phase 4 durable Node/SQLite runtime. The workspace includes schema-first Agent
+contracts, one shared `run`/`stream` interpreter, scoped operational capabilities, a narrow local
+sandbox adapter, replayable canonical Conversation records with memory and SQLite adapters, the
+durable Submission Ledger, recovery classifier, and `DurableAgentRuntime` coordinator with the
+Node host assembly, deterministic scripted model Layers, the progressive Travel Planner reference
+slice, provider-binding compile examples, and a browser test bench under `examples/demo`.
 
 ## Status
 
@@ -28,9 +29,10 @@ bench under `examples/demo`.
 - Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
   benches in `examples/*`, and no `apps/`
 - Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
-  `storage-memory`, `storage-sqlite`, and `testing`
-- Current implementation milestone: **Phase 3 complete** (persistent Conversation foundation);
-  **S1 attached ephemeral Subagents implemented**; **Phase 4 next**
+  `storage-memory`, `storage-sqlite`, `platform-node`, and `testing`
+- Current implementation milestone: **Phase 4 complete** (durable Node/SQLite runtime,
+  [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral Subagents implemented**;
+  **Phase 5 next**
 - Subagents: declared attached delegation Tools, the engine spawner seam, and in-memory budget
   reservations are implemented for ephemeral (`E`) execution as the roadmap-assigned proposed
   default ([S1 evidence](docs/S1-EVIDENCE.md)); ADR-0010 remains Proposed and durable attached
@@ -40,8 +42,11 @@ bench under `examples/demo`.
   context, budget, MCP, and sandbox capabilities
 - Persistent foundation: versioned canonical records, pure replay/checkpoints, definition digests,
   opaque resumable offsets, export, and memory/SQLite Conversation Store Layers
-- Durable runtime: planned, but it must pass the durability gates before the product may claim
-  durable execution
+- Durable runtime: class `DN` on the tested Node/SQLite assembly — durable admission and Receipt,
+  FIFO Conversation lanes, fenced Attempts with liveness leases, pure recovery classification,
+  and exactly one Settlement per accepted Submission; recovery resumes at Turn boundaries and may
+  re-invoke the model, so the claim covers safe-to-repeat toolkits only — durable Tools, unknown
+  outcomes, and Steps arrive in Phase 5
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 Decisions labeled **Proposed** are recommendations, not settled owner decisions.
@@ -67,6 +72,7 @@ interfaces. The specifications below remain the normative design source.
 13. [Phase 1 evidence](docs/PHASE-1-EVIDENCE.md)
 14. [Phase 2 evidence](docs/PHASE-2-EVIDENCE.md)
 15. [Phase 3 evidence](docs/PHASE-3-EVIDENCE.md)
+16. [Phase 4 evidence](docs/PHASE-4-EVIDENCE.md)
 
 ## Detailed specifications
 

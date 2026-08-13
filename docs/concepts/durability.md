@@ -5,7 +5,7 @@ description: Why replayable history and accepted-work recovery are separate prod
 
 # Persistence and durability
 
-<StatusCallout status="available" phase="P3" title="Persistent Conversation history exists today; durable execution does not." />
+<StatusCallout status="available" phase="P3–P4" title="Persistent history and base durable execution exist today on Node/SQLite." />
 
 Persistence answers “can I rebuild what was recorded?” Durability answers “after I acknowledge
 work, who owes the terminal outcome?” The second promise requires substantially more machinery.
@@ -16,7 +16,7 @@ work, who owes the terminal outcome?” The second promise requires substantiall
 | ----- | -------------------------------------------------------- | ---------------------------------- |
 | `E`   | ephemeral execution; no process-loss recovery            | <StatusBadge status="available" /> |
 | `P`   | Conversation history survives restart; clients may retry | <StatusBadge status="available" /> |
-| `DN`  | durable admission and recovery on Node/SQLite            | <StatusBadge status="next" />      |
+| `DN`  | durable admission and recovery on Node/SQLite            | <StatusBadge status="available" /> |
 | `DC`  | equivalent contract on Cloudflare Durable Objects        | <StatusBadge status="planned" />   |
 
 No package or example should use “durable” without naming the deployment class and tested adapter.
@@ -31,7 +31,7 @@ Replay reads records to rebuild state. It never executes a Tool or repeats an ex
 
 ## Operational obligation
 
-The future Submission Ledger separately owns admission, FIFO readiness, Attempt ownership, abort
+The Submission Ledger separately owns admission, FIFO readiness, Attempt ownership, abort
 intent, recovery classification, and the obligation to settle accepted work.
 
 Keeping the two structures separate makes both contracts explicit:
@@ -46,7 +46,7 @@ canonical Settlement          outstanding Settlement obligation
 
 ## Exactly-once recording
 
-The target contract promises one accepted Settlement record, not one physical execution of every
+The contract promises one accepted Settlement record, not one physical execution of every
 external operation. Model inference and external APIs can repeat across crash windows.
 
 An ordinary Tool may finish externally just before its worker disappears. If storage cannot prove
@@ -70,4 +70,5 @@ The future target is already constraining today's interfaces:
 
 That is how durability can be added without replacing the authoring model.
 
-Continue to [Durable execution](../future/durable-execution) for the planned public surface.
+Continue to [Durable execution](../future/durable-execution) for the implemented `DN` surface and
+the planned Phase 5 durable Tool contracts.

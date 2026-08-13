@@ -13,9 +13,11 @@
   },
   "dependencies": {
     "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@effect-agent/storage-memory": "workspace:*",
     "@effect/platform-node": "catalog:",
     "@effect/vitest": "catalog:",
     "typescript": "catalog:",

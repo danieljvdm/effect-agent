@@ -132,7 +132,9 @@ same.
 
 ## 6. Attempt ownership and fencing
 
-The engine depends on an `AttemptOwnership` Effect service. A claim returns:
+Attempt ownership is a capability of the `SubmissionLedger` service (its claim,
+renewal, and release operations); the durable runtime, not the engine, depends on it.
+A claim returns:
 
 - an attempt identity;
 - an ownership token;

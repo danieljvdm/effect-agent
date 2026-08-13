@@ -1,5 +1,5 @@
 import { Context, Effect, Option, Schema, Stream } from "effect";
-import { ConversationId, SubmissionId } from "@effect-agent/core";
+import { ConversationId } from "@effect-agent/core";
 
 import {
   BatchId,
@@ -206,28 +206,3 @@ export class ConversationStore extends Context.Service<
     >;
   }
 >()("@effect-agent/session/ConversationStore") {}
-
-export class SubmissionStoreCapabilities extends Schema.Class<SubmissionStoreCapabilities>(
-  "@effect-agent/session/SubmissionStoreCapabilities",
-)({
-  /** Phase 3 persists Conversations but does not durably accept work. */
-  durability: Schema.Literal("non-durable"),
-  acceptsDurableWork: Schema.Literal(false),
-}) {}
-
-export class SubmissionStatus extends Schema.Class<SubmissionStatus>(
-  "@effect-agent/session/SubmissionStatus",
-)({
-  submissionId: SubmissionId,
-  state: Schema.Literal("not-persisted"),
-}) {}
-
-export class SubmissionStore extends Context.Service<
-  SubmissionStore,
-  {
-    readonly capabilities: Effect.Effect<SubmissionStoreCapabilities>;
-    readonly inspect: (
-      submissionId: SubmissionId,
-    ) => Effect.Effect<Option.Option<SubmissionStatus>, ConversationStoreError>;
-  }
->()("@effect-agent/session/SubmissionStore") {}

@@ -61,28 +61,30 @@ The actual TypeScript API may split these services further, but it must preserve
 semantic operations below.
 
 ```ts
-interface SubmissionStore {
-  readonly admit: (request: AdmissionRequest) => Effect.Effect<AdmissionResult, AdmissionError>;
+interface SubmissionLedger {
+  readonly admit: (
+    request: AdmissionRequest,
+  ) => Effect.Effect<AdmissionResult, AdmissionConflict | LedgerError>;
 
-  readonly markReady: (submissionId: SubmissionId) => Effect.Effect<void, SubmissionStoreError>;
+  readonly markReady: (request: MarkReadyRequest) => Effect.Effect<void, LedgerError>;
 
-  readonly claim: (request: ClaimRequest) => Effect.Effect<Option.Option<Claim>, ClaimError>;
+  readonly claim: (request: ClaimRequest) => Effect.Effect<Option.Option<Claim>, LedgerError>;
 
   readonly renewOwnership: (
-    ownership: OwnershipToken,
-  ) => Effect.Effect<OwnershipToken, OwnershipLost | StoreError>;
+    request: RenewOwnershipRequest,
+  ) => Effect.Effect<OwnershipRenewal, OwnershipLost | LedgerError>;
 
   readonly reserveSettlement: (
     request: SettlementReservation,
-  ) => Effect.Effect<ReservedSettlement, SettlementConflict | SubmissionStoreError>;
+  ) => Effect.Effect<ReservedSettlement, SettlementConflict | OwnershipLost | LedgerError>;
 
   readonly finalizeSettlement: (
     request: SettlementFinalization,
-  ) => Effect.Effect<Settlement, SettlementConflict | SubmissionStoreError>;
+  ) => Effect.Effect<Settlement, SettlementConflict | LedgerError>;
 
   readonly loadRecoverySnapshot: (
-    submissionId: SubmissionId,
-  ) => Effect.Effect<RecoverySnapshot, StoreError>;
+    request: RecoverySnapshotRequest,
+  ) => Effect.Effect<RecoverySnapshot, LedgerError>;
 }
 
 interface ConversationStore {
@@ -107,6 +109,11 @@ interface ConversationStore {
 `inspectTail` returns the committed tail sequence, tail digest, and current producer epoch in
 one cheap read inside the same consistency domain as `append`. A resuming producer composes
 its next `FencedAppendRequest` from this value instead of exporting the whole log.
+
+The shipped `@effect-agent/session` `SubmissionLedger` port implements exactly these semantic
+operations and additionally exposes strongly consistent `lookup`, graceful `releaseOwnership`,
+the idempotent `markInputApplied` canonical-input marker, idempotent `requestAbort`, the ordered
+`scanNonterminal` stream, and a `capabilities` durability declaration.
 
 Each method has an explicit atomic and idempotent contract. Admission and settlement intentionally
 span the two stores through recoverable states:

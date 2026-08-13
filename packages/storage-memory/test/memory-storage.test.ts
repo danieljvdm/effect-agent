@@ -40,7 +40,6 @@ import {
   replayConversationFromCheckpoint,
   RunCompleted,
   SaveCheckpointRequest,
-  SubmissionStore,
   UserInputRecorded,
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
@@ -538,19 +537,6 @@ describe("MemoryConversationStore", () => {
 
         expect(checkpointReplay).toEqual(fullReplay);
         expect(exported.records).toHaveLength(2);
-      }),
-    );
-  });
-
-  it.layer(testLayer)((it) => {
-    it.effect("states explicitly that the SubmissionStore accepts no durable work", () =>
-      Effect.gen(function* () {
-        const submissions = yield* SubmissionStore;
-        expect(yield* submissions.capabilities).toEqual({
-          durability: "non-durable",
-          acceptsDurableWork: false,
-        });
-        expect(Option.isNone(yield* submissions.inspect(submissionId))).toBe(true);
       }),
     );
   });

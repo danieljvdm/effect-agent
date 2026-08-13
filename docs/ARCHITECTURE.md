@@ -44,7 +44,7 @@ Dependencies point inward. Inner packages define interfaces; outer packages prov
 ## 3. Modules
 
 The architecture describes the intended package boundaries, but the repository creates a package
-only when its roadmap phase begins. The current Phase 3 tree is:
+only when its roadmap phase begins. The current Phase 4 tree is:
 
 ```text
 packages/
@@ -56,6 +56,7 @@ packages/
   session
   storage-memory
   storage-sqlite
+  platform-node
   testing
 examples/
   demo
@@ -121,10 +122,12 @@ Owns:
 - Receipt, reattachment, and Settlement interfaces;
 - stored-version compatibility checks.
 
-Phase 3 implements the canonical Conversation records, pure replay/checkpoint projections,
-definition digests, `ConversationStore`, and an explicitly non-durable `SubmissionStore`
-capability surface. The Submission Ledger, recovery classifier, Receipt, and Settlement contracts
-remain Phase 4 work.
+Phase 3 implemented the canonical Conversation records, pure replay/checkpoint projections,
+definition digests, and `ConversationStore`. Phase 4 replaced the interim non-durable
+`SubmissionStore` stub with the `SubmissionLedger` port and added the `WakeScheduler` port, the
+pure recovery classifier, the run journal, and the `DurableAgentRuntime` coordinator (Receipt,
+Attempt, Settlement). The session package now depends on `@effect-agent/engine` to drive the
+interpreter through its public seams (ADR-0011).
 
 ### `@effect-agent/capabilities`
 
@@ -196,6 +199,8 @@ const AttemptId = Schema.String.pipe(Schema.brand("AttemptId"));
 const RunId = Schema.String.pipe(Schema.brand("RunId"));
 const TurnId = Schema.String.pipe(Schema.brand("TurnId"));
 const ToolCallId = Schema.String.pipe(Schema.brand("ToolCallId"));
+const ReceiptId = Schema.String.pipe(Schema.brand("ReceiptId"));
+const SettlementId = Schema.String.pipe(Schema.brand("SettlementId"));
 const EventOffset = Schema.String.pipe(Schema.brand("EventOffset"));
 ```
 
@@ -270,15 +275,18 @@ Required core services:
 - `Clock` through Effect's clock module
 - `RunEventSink` for internal semantic publication
 
-Durable ports:
+Durable ports (all owned by `@effect-agent/session`; see [deployment §3.1](spec/deployment.md)):
 
-- `ConversationLog`
-- `SubmissionStore`
-- `AttachmentStore`
-- `CheckpointStore`
-- `AttemptOwnership`
-- `WakeScheduler`
-- `RecoveryScheduler`
+- `ConversationStore` — the canonical Conversation Log plus digest-bound disposable checkpoints
+  (no separate `CheckpointStore` port exists)
+- `SubmissionLedger` — admission, FIFO-head claims, Attempt identity, ownership tokens,
+  producer-epoch fencing, leases, settlement, and abort intent (absorbs the earlier
+  `AttemptOwnership` prose service)
+- `WakeScheduler` — droppable liveness hints paired with ledger scans
+
+Deferred durable ports: `AttachmentStore` waits for a real digest-addressed attachment
+requirement; `RecoveryScheduler` waits for recovery cadence needs beyond the host startup pass
+and wake/scan loop.
 
 Optional capability ports:
 
@@ -360,6 +368,11 @@ Expected failure is represented with closed tagged unions:
 
 Defects remain defects in `Cause`. At durable seams, defects are classified and redacted into a
 stable `DurableFailure`; raw Cause values and stacks are never serialized as canonical public data.
+
+The shipped durable seams keep their own closed typed unions: admission and ledger failures
+(`AdmissionConflict`, `OwnershipLost`, `SettlementConflict`, `LedgerError`), store conflicts
+(`AppendConflict`, `FenceRejected`, `ConversationStoreError`), and coordinator failures
+(`RunJournalError`, failpoint errors). None of them widen to `unknown` or `Error`.
 
 ## 9. Events and backpressure
 

@@ -11,7 +11,7 @@ pageClass: ea-index
 <main class="ea-home">
   <section class="ea-home__hero">
     <div class="ea-home__intro">
-      <p class="ea-home__eyebrow"><span>●</span> Phase 3 available · Phase 4 next</p>
+      <p class="ea-home__eyebrow"><span>●</span> Phase 4 available · Phase 5 next</p>
       <h1 class="ea-home__title">Agents,<em>with cause.</em></h1>
       <p class="ea-home__lede">
         Build autonomous TypeScript agents without leaving Effect behind. Schemas stay canonical,

@@ -22,24 +22,24 @@ beta release, and the user-facing specification remains Draft.
 
 ## Capability matrix
 
-| Surface                          |       Phase | Status                             | Evidence                          | Explicit non-claim                 |
-| -------------------------------- | ----------: | ---------------------------------- | --------------------------------- | ---------------------------------- |
-| Agent Definition and Binding     |       P0–P1 | <StatusBadge status="available" /> | type proofs, core tests           | no public compatibility window     |
-| `run`, `stream`, `start`         |          P1 | <StatusBadge status="available" /> | shared-trace runtime tests        | no process-loss recovery           |
-| bounded Tool batches             |          P1 | <StatusBadge status="available" /> | scheduling and interruption tests | no automatic external-effect retry |
-| provider Model Bindings          |          P1 | <StatusBadge status="available" /> | OpenAI/Anthropic compile examples | examples make no live request      |
-| steering and follow-up           |          P2 | <StatusBadge status="available" /> | safe-seam capability tests        | queues are process-local           |
-| approval, budgets, context       |          P2 | <StatusBadge status="available" /> | adapter and policy tests          | approval is not durable suspension |
-| MCP connector policy             |          P2 | <StatusBadge status="available" /> | bounded discovery tests           | remote Tools are not exactly once  |
-| local sandbox adapter            |          P2 | <StatusBadge status="available" /> | process/limit tests               | explicitly unisolated              |
-| canonical Conversation Log       |          P3 | <StatusBadge status="available" /> | reducer and round-trip tests      | persistence is not accepted work   |
-| memory and SQLite stores         |          P3 | <StatusBadge status="available" /> | shared adapter contracts          | current-version data only          |
-| Receipt and durable admission    |          P4 | <StatusBadge status="next" />      | specification only                | no API exists today                |
-| Attempt ownership and Settlement |          P4 | <StatusBadge status="next" />      | specification only                | no coordinator exists today        |
-| unknown Tool outcome and Steps   |          P5 | <StatusBadge status="planned" />   | specification only                | no durable Tool surface exists     |
-| Cloudflare durable runtime       |          P6 | <StatusBadge status="planned" />   | specification only                | no Cloudflare packages exist       |
-| attached ephemeral Subagents     |          S1 | <StatusBadge status="available" /> | [S1 evidence](../S1-EVIDENCE)     | `E` only; ADR-0010 stays Proposed  |
-| durable attached Subagents       | proposed S2 | <StatusBadge status="proposed" />  | ADR/spec design                   | not accepted roadmap scope         |
+| Surface                          |       Phase | Status                             | Evidence                           | Explicit non-claim                        |
+| -------------------------------- | ----------: | ---------------------------------- | ---------------------------------- | ----------------------------------------- |
+| Agent Definition and Binding     |       P0–P1 | <StatusBadge status="available" /> | type proofs, core tests            | no public compatibility window            |
+| `run`, `stream`, `start`         |          P1 | <StatusBadge status="available" /> | shared-trace runtime tests         | no process-loss recovery                  |
+| bounded Tool batches             |          P1 | <StatusBadge status="available" /> | scheduling and interruption tests  | no automatic external-effect retry        |
+| provider Model Bindings          |          P1 | <StatusBadge status="available" /> | OpenAI/Anthropic compile examples  | examples make no live request             |
+| steering and follow-up           |          P2 | <StatusBadge status="available" /> | safe-seam capability tests         | queues are process-local                  |
+| approval, budgets, context       |          P2 | <StatusBadge status="available" /> | adapter and policy tests           | approval is not durable suspension        |
+| MCP connector policy             |          P2 | <StatusBadge status="available" /> | bounded discovery tests            | remote Tools are not exactly once         |
+| local sandbox adapter            |          P2 | <StatusBadge status="available" /> | process/limit tests                | explicitly unisolated                     |
+| canonical Conversation Log       |          P3 | <StatusBadge status="available" /> | reducer and round-trip tests       | persistence is not accepted work          |
+| memory and SQLite stores         |          P3 | <StatusBadge status="available" /> | shared adapter contracts           | current-version data only                 |
+| Receipt and durable admission    |          P4 | <StatusBadge status="available" /> | [P4 evidence](../PHASE-4-EVIDENCE) | no exactly-once external effects          |
+| Attempt ownership and Settlement |          P4 | <StatusBadge status="available" /> | [P4 evidence](../PHASE-4-EVIDENCE) | model calls may repeat at Turn boundaries |
+| unknown Tool outcome and Steps   |          P5 | <StatusBadge status="next" />      | specification only                 | no durable Tool surface exists            |
+| Cloudflare durable runtime       |          P6 | <StatusBadge status="planned" />   | specification only                 | no Cloudflare packages exist              |
+| attached ephemeral Subagents     |          S1 | <StatusBadge status="available" /> | [S1 evidence](../S1-EVIDENCE)      | `E` only; ADR-0010 stays Proposed         |
+| durable attached Subagents       | proposed S2 | <StatusBadge status="proposed" />  | ADR/spec design                    | not accepted roadmap scope                |
 
 S1 attached ephemeral Subagents are implemented as the roadmap-assigned proposed default: the
 owner has not accepted [ADR-0010](../adr/0010-declared-attached-subagents), so the delegation
@@ -57,6 +57,7 @@ The source of truth for completion evidence is:
 - [Phase 1 evidence](../PHASE-1-EVIDENCE)
 - [Phase 2 evidence](../PHASE-2-EVIDENCE)
 - [Phase 3 evidence](../PHASE-3-EVIDENCE)
+- [Phase 4 evidence](../PHASE-4-EVIDENCE)
 - [S1 evidence](../S1-EVIDENCE) — attached ephemeral Subagents
 
 The [requirements index](../REQUIREMENTS) distinguishes specified, planned, implemented, verified,
@@ -71,4 +72,10 @@ Use these labels precisely:
 - `DN`: durable Node/SQLite after its complete gate passes;
 - `DC`: durable Cloudflare after its complete gate passes.
 
-Today the highest implemented deployment class is `P`.
+Today the highest implemented deployment class is `DN` on the tested Node/SQLite assembly:
+durable Submissions with turn-boundary recovery, valid for safe-to-repeat toolkits
+([Phase 4 evidence](../PHASE-4-EVIDENCE)). The P3 `P` label described persistence whose canonical
+appends were application-driven; the durable coordinator now commits engine Turns to the log
+itself. `DN` still does not claim exactly-once model inference or external Tool execution —
+recovery may re-invoke the model from the last committed Turn boundary, and consequential
+external mutations (booking-style Tools) are not safely replayable until P5.

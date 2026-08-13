@@ -94,5 +94,5 @@ Memory and SQLite stores run shared contract cases for materialization, idempote
 conflict, producer fencing, observation offsets, export, checkpoints, and corruption. A memory fake
 must not teach the engine behavior that SQLite rejects.
 
-Future durable adapters add process-kill crash matrices and state-machine equivalence. A durability
-milestone cannot pass while those tests are skipped.
+Durable adapters add ledger conformance, failpoint, and process-kill crash coverage on top. A
+durability milestone cannot pass while those tests are skipped.

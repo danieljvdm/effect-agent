@@ -26,8 +26,6 @@ import {
   ProducerEpoch,
   RecordId,
   SaveCheckpointRequest,
-  SubmissionStore,
-  SubmissionStoreCapabilities,
   type BatchId,
   type Digest,
 } from "@effect-agent/session";
@@ -610,20 +608,8 @@ const makeConversationStore = Effect.gen(function* () {
 
 export const MemoryConversationStoreLive = Layer.effect(ConversationStore, makeConversationStore);
 
-export const MemorySubmissionStoreLive = Layer.succeed(
-  SubmissionStore,
-  SubmissionStore.of({
-    capabilities: Effect.succeed(
-      SubmissionStoreCapabilities.make({
-        durability: "non-durable",
-        acceptsDurableWork: false,
-      }),
-    ),
-    inspect: Effect.fn("MemorySubmissionStore.inspect")(() => Effect.succeed(Option.none())),
-  }),
-);
-
-export const MemoryStorageLive = Layer.merge(
-  MemoryConversationStoreLive,
-  MemorySubmissionStoreLive,
-);
+/**
+ * In-memory canonical Conversation persistence. Durable accepted work is served by the separate
+ * SubmissionLedger port; this Layer deliberately provides only the ConversationStore.
+ */
+export const MemoryStorageLive = MemoryConversationStoreLive;

@@ -295,19 +295,23 @@ The external idempotency key remains necessary.
 ## 9. Node and Cloudflare use the same Agent
 
 ```ts
-const NodeRuntimeLive = Layer.mergeAll(
-  NodePlatform.layer,
-  SqliteConversationStore.layer,
-  SqliteSubmissionStore.layer,
-);
+// Implemented (Phase 4): one option bag assembles the SQLite Conversation Store,
+// SQLite Submission Ledger, Node wake scheduler, and durable coordinator.
+const NodeRuntimeLive = NodeDurableRuntime.layer({
+  filename: "planner.sqlite",
+  deploymentId: "dev-host",
+  producerId: "worker-1",
+});
 
+// Planned (Phase 6): the same services assembled from Cloudflare Layers.
 const CloudflareRuntimeLive = Layer.mergeAll(
   CloudflarePlatform.layer,
   DurableObjectConversationStore.layer,
-  DurableObjectSubmissionStore.layer,
+  DurableObjectSubmissionLedger.layer,
   DurableObjectAlarm.layer,
 );
 ```
 
-These Layers implement the same framework services. The Agent Definition and engine
-do not import Node or Cloudflare types.
+These Layers implement the same framework services (`ConversationStore`,
+`SubmissionLedger`, `WakeScheduler`). The Agent Definition and engine do not import
+Node or Cloudflare types.

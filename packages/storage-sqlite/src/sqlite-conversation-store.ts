@@ -19,6 +19,7 @@ import {
   ConversationStoreError,
   ConversationTail,
   ConversationTailRequest,
+  DEFAULT_OWNERSHIP_LEASE_DURATION,
   digestCanonicalBatch,
   Digest,
   EMPTY_TAIL_DIGEST,
@@ -27,10 +28,19 @@ import {
   LoadCheckpointRequest,
   ObservationOffset,
   SaveCheckpointRequest,
-  SubmissionStore,
-  SubmissionStoreCapabilities,
 } from "@effect-agent/session";
-import { Clock, Context, Crypto, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Clock,
+  Context,
+  Crypto,
+  Duration,
+  Effect,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import {
   SqliteAppendConflict,
@@ -59,6 +69,11 @@ export interface SqliteStorageOptions {
   readonly observationPollInterval?: number | undefined;
   /** Bounded SQLITE_BUSY retry window for write-lock acquisition, in milliseconds. */
   readonly busyTimeout?: number | undefined;
+  /**
+   * Submission ownership lease duration in milliseconds (D5). Defaults to
+   * `DEFAULT_OWNERSHIP_LEASE_DURATION` from `@effect-agent/session`.
+   */
+  readonly ownershipLeaseDuration?: number | undefined;
   /**
    * Re-verify every stored payload and digest chain while opening the store. Defaults to
    * off: per-operation Schema decoding and the digest chain already fail clearly on corrupt
@@ -754,19 +769,7 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     saveCheckpoint,
   });
 
-  const submissionStore = SubmissionStore.of({
-    capabilities: Effect.succeed(
-      SubmissionStoreCapabilities.make({
-        durability: "non-durable",
-        acceptsDurableWork: false,
-      }),
-    ),
-    inspect: () => Effect.succeed(Option.none()),
-  });
-
-  return Context.make(ConversationStore, conversationStore).pipe(
-    Context.add(SubmissionStore, submissionStore),
-  );
+  return Context.make(ConversationStore, conversationStore);
 });
 
 /**
@@ -774,24 +777,25 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
  * authority kept visible in its input channel.
  */
 export const conversationStoreLayer: Layer.Layer<
-  ConversationStore | SubmissionStore,
+  ConversationStore,
   SqliteStorageInitializationError,
   SqliteStorageConfig | SqliteStorageFailpoint | SqlClientService.SqlClient | Crypto.Crypto
 > = Layer.effectContext(makeServices());
 
 /**
- * A composition-root convenience Layer for canonical Conversations.
- *
- * It explicitly exposes a non-durable SubmissionStore: this Phase 3 adapter persists
- * conversation history but does not accept or settle durable work.
+ * Validated SQLite storage configuration Layer with the documented defaults applied. Shared
+ * by the ConversationStore and SubmissionLedger convenience layers so their defaults cannot
+ * drift.
  */
-export const layer = (
+export const storageConfigLayer = (
   options: SqliteStorageOptions,
-): Layer.Layer<ConversationStore | SubmissionStore, SqliteStorageInitializationError> => {
-  const configLayer = Layer.effect(SqliteStorageConfig)(
+): Layer.Layer<SqliteStorageConfig, SqliteStorageError> =>
+  Layer.effect(SqliteStorageConfig)(
     Schema.decodeUnknownEffect(SqliteStorageConfigValue)({
       observationPollInterval: options.observationPollInterval ?? 25,
       busyTimeout: options.busyTimeout ?? 5_000,
+      ownershipLeaseDuration:
+        options.ownershipLeaseDuration ?? Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
       verifyOnOpen: options.verifyOnOpen ?? false,
     }).pipe(
       Effect.mapError((error) =>
@@ -803,13 +807,32 @@ export const layer = (
       ),
     ),
   );
-  const failpointLayer =
-    options.failpoint === undefined
-      ? SqliteStorageFailpoint.layer
-      : Layer.succeed(SqliteStorageFailpoint)({ hit: options.failpoint });
+
+/** The failpoint Layer selected by convenience options: explicit handler or the no-op default. */
+export const storageFailpointLayer = (
+  options: SqliteStorageOptions,
+): Layer.Layer<SqliteStorageFailpoint> =>
+  options.failpoint === undefined
+    ? SqliteStorageFailpoint.layer
+    : Layer.succeed(SqliteStorageFailpoint)({ hit: options.failpoint });
+
+/**
+ * A composition-root convenience Layer for canonical Conversations. Durable accepted work is
+ * served by the separate SubmissionLedger port.
+ */
+export const layer = (
+  options: SqliteStorageOptions,
+): Layer.Layer<ConversationStore, SqliteStorageInitializationError> => {
   const sqlLayer = SqliteClient.layer({ filename: options.filename });
   return conversationStoreLayer.pipe(
-    Layer.provide(Layer.mergeAll(configLayer, failpointLayer, sqlLayer, NodeCrypto.layer)),
+    Layer.provide(
+      Layer.mergeAll(
+        storageConfigLayer(options),
+        storageFailpointLayer(options),
+        sqlLayer,
+        NodeCrypto.layer,
+      ),
+    ),
   );
 };
 

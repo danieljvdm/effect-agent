@@ -2,11 +2,24 @@ import { ConversationId, RunId } from "@effect-agent/core";
 import { Schema } from "effect";
 
 import { EMPTY_TAIL_DIGEST } from "./digest.ts";
-import { CanonicalRecordEnvelope, CanonicalSequence, Digest, PersistedJson } from "./records.ts";
+import {
+  AbortRequested,
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  Digest,
+  PersistedJson,
+  SubmissionSettled,
+} from "./records.ts";
 
 /**
- * Rebuildable Phase 3 projection. It contains only canonical values and can be discarded and
+ * Rebuildable canonical projection. It contains only canonical values and can be discarded and
  * reconstructed from the record stream at any time.
+ *
+ * Phase 4 adds `settlements` and `abortRequests`. A Phase 3 checkpoint whose persisted state
+ * lacks these fields fails to decode against this schema; the checkpoint is rejected and the
+ * projection is rebuilt from canonical records (documented disposable-checkpoint behavior,
+ * STORE-007/STORE-008). `ModelResponseRecorded` advances `throughSequence` without dedicated
+ * projection state: Prompt reconstruction reads canonical records directly.
  */
 export class ConversationProjection extends Schema.Class<ConversationProjection>(
   "@effect-agent/session/ConversationProjection",
@@ -18,6 +31,8 @@ export class ConversationProjection extends Schema.Class<ConversationProjection>
   modelOutputs: Schema.Array(PersistedJson),
   completedRuns: Schema.Array(RunId),
   failedRuns: Schema.Array(RunId),
+  settlements: Schema.Array(SubmissionSettled),
+  abortRequests: Schema.Array(AbortRequested),
 }) {}
 
 export const initialConversationProjection = (
@@ -31,6 +46,8 @@ export const initialConversationProjection = (
     modelOutputs: [],
     completedRuns: [],
     failedRuns: [],
+    settlements: [],
+    abortRequests: [],
   });
 
 /** Pure one-record Conversation transition. */
@@ -56,6 +73,14 @@ export const reduceConversationRecord = (
     payload._tag === "RunFailed"
       ? [...projection.failedRuns, payload.runId]
       : projection.failedRuns;
+  const settlements =
+    payload._tag === "SubmissionSettled"
+      ? [...projection.settlements, payload]
+      : projection.settlements;
+  const abortRequests =
+    payload._tag === "AbortRequested"
+      ? [...projection.abortRequests, payload]
+      : projection.abortRequests;
 
   return ConversationProjection.make({
     conversationId: projection.conversationId,
@@ -65,6 +90,8 @@ export const reduceConversationRecord = (
     modelOutputs,
     completedRuns,
     failedRuns,
+    settlements,
+    abortRequests,
   });
 };
 

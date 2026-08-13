@@ -23,8 +23,9 @@ not change the specified scope of later phases.
 | P2     | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                       |
 | P3     | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                        |
 | S1     | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
-| **P4** | **Next — durable Node/SQLite runtime**                                                                                            |
-| P5–P7  | Planned — not yet implemented                                                                                                     |
+| P4     | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                     |
+| **P5** | **Next — durable Tools and joined input**                                                                                         |
+| P6–P7  | Planned — not yet implemented                                                                                                     |
 
 ## Proposed Subagent insertion
 

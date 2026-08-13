@@ -1,0 +1,28 @@
+{
+  "name": "@effect-agent/platform-node",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/session": "workspace:*",
+    "@effect-agent/storage-sqlite": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "@effect/sql-sqlite-node": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "tsx": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

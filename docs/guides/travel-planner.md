@@ -1,6 +1,6 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 3 persistent Conversation foundation implemented; Phase 4 and later increments remain design targets
+Status: Phase 4 durable Node/SQLite runtime implemented; Phase 5 and later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -111,9 +111,13 @@ insufficient without `DN` or `DC` and the tested adapter.
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
 
-P0 through P3 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
+P0 through P4 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
 adds a separate `P` profile that stores and reconstructs planning history while keeping accepted
-work explicitly non-durable.
+work explicitly non-durable. P4 adds the `DN` profile: a durable planning Submission that returns
+a Receipt, keeps one FIFO trip lane, survives restart to the same projection, supports durable
+abort, and settles exactly once — while its fixture pins `supplierBookingReplaySafe: false`
+because replay-safe booking is P5 scope (`packages/testing/src/fixtures/travel-planner/phase4.ts`,
+`packages/testing/test/travel-planner-phase4.test.ts`; [Phase 4 evidence](../PHASE-4-EVIDENCE.md)).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -143,12 +147,16 @@ packages/testing/
         deterministic-layers.ts
         phase2.ts
         phase3.ts
+        phase4.ts
+        subagents.ts
         scenarios.ts
         index.ts
   test/
     travel-planner.test.ts
     travel-planner-phase2.test.ts
     travel-planner-phase3.test.ts
+    travel-planner-phase4.test.ts
+    travel-planner-subagents.test.ts
     travel-planner.compile.test.ts
 examples/
   demo/

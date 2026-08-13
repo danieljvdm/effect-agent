@@ -24,6 +24,7 @@ const packageNames = [
   "capabilities",
   "core",
   "engine",
+  "platform-node",
   "sandbox",
   "sandbox-local",
   "session",
@@ -35,6 +36,7 @@ const exampleNames = ["demo", "providers"] as const;
 const effectTestPackageNames = [
   "capabilities",
   "engine",
+  "platform-node",
   "sandbox-local",
   "session",
   "storage-memory",
@@ -45,6 +47,7 @@ const productionPackageNames = [
   "capabilities",
   "core",
   "engine",
+  "platform-node",
   "sandbox",
   "sandbox-local",
   "session",

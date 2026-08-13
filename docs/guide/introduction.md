@@ -138,12 +138,14 @@ Canonical Conversation records can survive restart through memory or SQLite adap
 be replayed, projected, exported, checkpointed, and observed from an opaque offset. Persistence
 does not mean the runtime has accepted an obligation to finish active work.
 
-### Durable accepted work <StatusBadge status="next" />
+### Durable accepted work <StatusBadge status="available" />
 
-The target durable runtime first commits a Submission obligation, then returns a Receipt. Attempts
-may be replaced after a crash, but exactly one terminal Settlement must eventually be recorded.
-This contract requires fencing, recovery classification, crash tests, and honest unknown external
-outcomes. It is Phase 4–5 work.
+The durable runtime first commits a Submission obligation, then returns a Receipt. Attempts may
+be replaced after a crash, but exactly one terminal Settlement is eventually recorded. The base
+Node/SQLite runtime — fencing, recovery classification, and deterministic failpoints — is
+implemented ([Phase 4 evidence](../PHASE-4-EVIDENCE)); recovery resumes at Turn boundaries, so
+the claim covers safe-to-repeat toolkits. Honest unknown external outcomes, durable Steps, and
+replay-safe external mutations are Phase 5 work.
 
 ## What the framework optimizes for
 

@@ -7,6 +7,8 @@ projects belong in [REFERENCE-ANALYSIS.md](REFERENCE-ANALYSIS.md).
 Status values:
 
 - **Accepted** — authoritative for implementation.
+- **Accepted by default** — adopted as a roadmap-assigned implementation default and already
+  implemented; owner review may still amend it.
 - **Deferred** — intentionally postponed until the stated trigger.
 - **Proposed** — a future recommendation that still needs owner approval.
 
@@ -208,6 +210,24 @@ admission and live coordination such as queue order, attempts, ownership, and ab
 terminal ledger row that disagrees with canonical history is repaired from history.
 
 Record: [ADR-0003](adr/0003-canonical-log-and-ledger.md)
+
+### D-029 — Durable runtime placement and leases
+
+**Status:** Accepted by default (adopted as the Phase 4 implementation default; pending owner
+review)
+
+**Decision:** The durable coordinator (`DurableAgentRuntime`), recovery classifier, and run
+journal live in `@effect-agent/session`, which now depends on `@effect-agent/engine`; platform
+packages remain Layer assembly, host gates, and crash harnesses. Ledger claims fence with
+atomically bumped producer epochs as the correctness authority, while renewable ownership leases
+(default 30 seconds, adapter-configurable) provide liveness only. The SQLite storage version is 2
+with an exact-or-zero compatibility check: version-1 development files fail with typed reset
+guidance and are never migrated. Canonical model output is recorded per Turn as
+`ModelResponseRecorded` carrying the Turn's Schema-encoded Prompt messages; per-delta canonical
+records were rejected for volume and remain a Phase 5 consideration.
+
+Record: [ADR-0011](adr/0011-durable-runtime-placement-and-leases.md)
+Evidence: [Phase 4 evidence](PHASE-4-EVIDENCE.md)
 
 ## Integration and project boundaries
 

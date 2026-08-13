@@ -32,6 +32,20 @@ export class SqliteStorageError extends Schema.TaggedErrorClass<SqliteStorageErr
 ) {}
 
 /**
+ * SQLite infrastructure failed while operating the Submission Ledger. Surfaces at the
+ * SubmissionLedger port as the typed `LedgerError` with this error preserved as its cause,
+ * so the adapter-level tag is never erased.
+ */
+export class SqliteLedgerError extends Schema.TaggedErrorClass<SqliteLedgerError>()(
+  "SqliteLedgerError",
+  {
+    cause: Schema.optionalKey(Schema.Defect()),
+    message: Schema.String,
+    operation: Schema.String,
+  },
+) {}
+
+/**
  * A canonical batch retry conflicts with existing append state. Tail conflicts carry the
  * actual committed tail as a diagnostic resume hint.
  */
@@ -92,6 +106,24 @@ export const SqliteStorageFailpointLocation = Schema.Literals([
   "export:after-conversation-read",
   "save-checkpoint:before",
   "save-checkpoint:after",
+  "ledger:admit:before",
+  "ledger:admit:after",
+  "ledger:mark-ready:before",
+  "ledger:mark-ready:after",
+  "ledger:claim:before",
+  "ledger:claim:after",
+  "ledger:mark-input-applied:before",
+  "ledger:mark-input-applied:after",
+  "ledger:renew:before",
+  "ledger:renew:after",
+  "ledger:reserve-settlement:before",
+  "ledger:reserve-settlement:after",
+  "ledger:finalize-settlement:before",
+  "ledger:finalize-settlement:after",
+  "ledger:request-abort:before",
+  "ledger:request-abort:after",
+  "ledger:release:before",
+  "ledger:release:after",
 ]);
 export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
 

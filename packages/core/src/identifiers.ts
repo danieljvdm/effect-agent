@@ -15,6 +15,14 @@ export type ConversationId = typeof ConversationId.Type;
 export const SubmissionId = identifier("SubmissionId");
 export type SubmissionId = typeof SubmissionId.Type;
 
+/** Durable identity returned once ledger admission and Conversation readiness are committed. */
+export const ReceiptId = identifier("ReceiptId");
+export type ReceiptId = typeof ReceiptId.Type;
+
+/** Identity of the single durable terminal outcome owed to one accepted Submission. */
+export const SettlementId = identifier("SettlementId");
+export type SettlementId = typeof SettlementId.Type;
+
 /** Identity of one execution ownership period for accepted work. */
 export const AttemptId = identifier("AttemptId");
 export type AttemptId = typeof AttemptId.Type;

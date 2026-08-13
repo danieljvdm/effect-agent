@@ -108,5 +108,6 @@ richer domain contracts to this narrow engine boundary rather than creating a se
 A Run Scope owns its Model stream, Tool fibers, input queues, MCP clients, sandbox processes, and
 other acquired resources. Closing it interrupts children and runs finalizers.
 
-This is distinct from future durable abort. Interrupting a local waiter for accepted durable work
-will detach that waiter; aborting the Submission will require an explicit persisted command.
+This is distinct from durable abort. Interrupting a local waiter for accepted durable work
+detaches that waiter; aborting the Submission requires an explicit persisted command
+([Durable execution](../future/durable-execution)).

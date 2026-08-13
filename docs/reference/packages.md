@@ -5,7 +5,7 @@ description: Current private workspace packages and future phase-gated boundarie
 
 # Package map
 
-<StatusCallout status="available" phase="Private workspace" title="Nine framework packages exist today.">
+<StatusCallout status="available" phase="Private workspace" title="Ten framework packages exist today.">
 
 All package names are working private names with source export maps. They are not published npm
 artifacts. New packages appear only when their roadmap phase begins.
@@ -47,17 +47,30 @@ itself as `unisolated` and rejects isolation policy it cannot enforce.
 
 ### `@effect-agent/session`
 
-Owns canonical Conversation record Schemas, batches, digests, replay/checkpoints, and
-`ConversationStore` / non-durable `SubmissionStore` ports.
+Owns canonical Conversation record Schemas, batches, digests, replay/checkpoints, the
+`ConversationStore`, `SubmissionLedger`, and `WakeScheduler` ports, the pure recovery classifier,
+the run journal, and the `DurableAgentRuntime` coordinator (Receipt, Attempt, Settlement). It
+depends on `@effect-agent/engine` to drive the interpreter through its public seams (ADR-0011).
 
 ### `@effect-agent/storage-memory`
 
-Provides deterministic scoped in-memory Conversation and non-durable Submission store Layers.
+Provides deterministic scoped in-memory `ConversationStore` and reference `SubmissionLedger`
+Layers. The ledger declares `non-durable` capabilities; it exists for tests and conformance.
 
 ### `@effect-agent/storage-sqlite`
 
-Provides the Node SQLite class `P` adapter, current-version initialization, observation, typed
-compatibility/corruption/conflict errors, and failpoints.
+Provides the Node SQLite adapters behind the `DN` assembly: the Conversation Store and the
+durable Submission Ledger in one database file, current-version (v2, exact-match) initialization,
+observation, typed compatibility/corruption/conflict/contention errors, and before/after
+failpoints on every durable mutation.
+
+### `@effect-agent/platform-node`
+
+Assembles the class `DN` Node/SQLite runtime: one shared SQLite client behind both stores,
+validated typed configuration, the in-process wake scheduler with ledger-scan fallback, graceful
+ownership drain, and the `NodeDurableHost` startup gates (storage compatibility, recovery before
+admission) and shutdown order (close admission → release ownership → close storage). It is a
+Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/testing`
 
@@ -74,7 +87,6 @@ deployment package.
 
 | Package                             | First phase | Status                           |
 | ----------------------------------- | ----------: | -------------------------------- |
-| `@effect-agent/platform-node`       |          P4 | <StatusBadge status="next" />    |
 | `@effect-agent/storage-cloudflare`  |          P6 | <StatusBadge status="planned" /> |
 | `@effect-agent/platform-cloudflare` |          P6 | <StatusBadge status="planned" /> |
 

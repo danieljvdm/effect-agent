@@ -15,6 +15,12 @@ The records below reflect explicit owner decisions.
 | [ADR-0008](0008-turn-boundary-input-delivery.md)               | Deliver steering, follow-up, and joined input only at safe seams    |
 | [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces           |
 
+## Accepted by default
+
+| ADR                                                      | Decision                                                                                                                                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [ADR-0011](0011-durable-runtime-placement-and-leases.md) | Durable coordinator in session; leases as liveness, epochs as correctness; exact-match storage v2; Turn-granular canonical model records — adopted as the P4 plan default, pending owner review ([evidence](../PHASE-4-EVIDENCE.md)) |
+
 ## Proposed
 
 | ADR                                             | Recommendation                                                                                                             |

@@ -152,7 +152,8 @@ const storageError =
       message: error.message,
     });
 
-const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
+/** Decode raw SQLite rows against a Schema, reporting failures as typed corruption. */
+export const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
@@ -170,7 +171,8 @@ const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
     ),
 );
 
-const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
+/** Decode exactly one raw SQLite row against a Schema, reporting failures as typed corruption. */
+export const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
@@ -230,12 +232,17 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     versionRows,
   );
 
-  if (version.user_version > CurrentSqliteStorageVersion) {
+  // D7: the storage version must match EXACTLY (or be 0 for a fresh file). Older
+  // private-development versions fail closed with reset guidance rather than being
+  // migrated, and newer versions fail closed rather than being decoded incorrectly.
+  if (version.user_version !== 0 && version.user_version !== CurrentSqliteStorageVersion) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: version.user_version,
       supportedVersion: CurrentSqliteStorageVersion,
       message:
-        "The SQLite file uses an unsupported private-development storage format. Reset it explicitly; automatic stored-data migrations are not provided.",
+        `The SQLite file uses private-development storage version ${version.user_version}; ` +
+        `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
+        "Reset the database file explicitly; automatic stored-data migrations are not provided during private development.",
     });
   }
 
@@ -285,7 +292,12 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
         'effect_agent_conversations',
         'effect_agent_canonical_batches',
         'effect_agent_canonical_records',
-        'effect_agent_checkpoints'
+        'effect_agent_checkpoints',
+        'effect_agent_submissions',
+        'effect_agent_submission_ownership',
+        'effect_agent_attempts',
+        'effect_agent_settlement_reservations',
+        'effect_agent_abort_intents'
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
@@ -295,7 +307,7 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     "required_tables",
     requiredRows,
   );
-  if (required.length !== 4) {
+  if (required.length !== 9) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,
@@ -1041,6 +1053,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
     read,
     saveCheckpoint,
     scanStoredPayloads,
+    withWriteTransaction,
   } as const;
 };
 

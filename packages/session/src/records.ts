@@ -1,4 +1,13 @@
-import { AgentId, ConversationId, RunId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import {
+  AgentId,
+  ConversationId,
+  ReceiptId,
+  RunId,
+  SettlementId,
+  SubmissionId,
+  ToolCallId,
+  TurnId,
+} from "@effect-agent/core";
 import { Encoding, Schema } from "effect";
 
 const identifier = <const Name extends string>(name: Name) =>
@@ -171,6 +180,22 @@ export class ToolCallSettled extends Schema.TaggedClass<ToolCallSettled>(
   isFailure: Schema.Boolean,
 }) {}
 
+/**
+ * One committed model Turn. `messages` carries the Schema-encoded Effect AI Prompt messages this
+ * Turn appended (assistant response plus any tool-call declarations), committed atomically at the
+ * Turn boundary so a recovering Attempt can rebuild the next Prompt from canonical records alone.
+ * `messagesDigest` pins the exact encoded content.
+ */
+export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecorded>(
+  "@effect-agent/session/ModelResponseRecorded",
+)("ModelResponseRecorded", {
+  runId: RunId,
+  turnId: TurnId,
+  turn: Schema.Int.check(Schema.isGreaterThan(0)),
+  messages: PersistedJson,
+  messagesDigest: Digest,
+}) {}
+
 export class CompactionCreated extends Schema.TaggedClass<CompactionCreated>(
   "@effect-agent/session/CompactionCreated",
 )("CompactionCreated", {
@@ -201,15 +226,50 @@ export class RepairAnnotated extends Schema.TaggedClass<RepairAnnotated>(
   details: PersistedJson,
 }) {}
 
+/** Terminal outcome family for one accepted Submission (DUR-002). */
+export const SettlementOutcome = Schema.Literals(["completed", "failed", "aborted"]);
+export type SettlementOutcome = typeof SettlementOutcome.Type;
+
+/**
+ * A durable abort command made canonical before the active worker is interrupted (DUR-012).
+ * Repeating the same abort command is idempotent; abort never rewrites a prior terminal outcome.
+ */
+export class AbortRequested extends Schema.TaggedClass<AbortRequested>(
+  "@effect-agent/session/AbortRequested",
+)("AbortRequested", {
+  submissionId: SubmissionId,
+  author: BoundedName,
+  reason: BoundedText,
+}) {}
+
+/**
+ * The single canonical settlement record owed to one accepted Submission (DUR-002, DUR-011).
+ * Canonical history is the outcome authority: the ledger row is finalized from this record and
+ * never the other way around (DUR-015).
+ */
+export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
+  "@effect-agent/session/SubmissionSettled",
+)("SubmissionSettled", {
+  submissionId: SubmissionId,
+  settlementId: SettlementId,
+  receiptId: ReceiptId,
+  outcome: SettlementOutcome,
+  runId: Schema.optionalKey(RunId),
+  result: Schema.optionalKey(PersistedJson),
+}) {}
+
 /** Current private-development canonical payload family. */
 export const CanonicalRecordPayload = Schema.Union([
   ConversationCreated,
   UserInputRecorded,
   ModelCompleted,
+  ModelResponseRecorded,
   ToolCallSettled,
   CompactionCreated,
   RunFailed,
   RunCompleted,
+  AbortRequested,
+  SubmissionSettled,
   RepairAnnotated,
 ]);
 export type CanonicalRecordPayload = typeof CanonicalRecordPayload.Type;

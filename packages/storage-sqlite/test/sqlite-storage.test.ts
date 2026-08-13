@@ -40,7 +40,6 @@ import {
   ProducerEpoch,
   RunCompleted,
   SaveCheckpointRequest,
-  SubmissionStore,
   UserInputRecorded,
   type AppendResult,
   type CanonicalRecordPayload,
@@ -157,14 +156,12 @@ const append = (
     }),
   );
 
-const withStorage = <A, E>(
-  filename: string,
-  effect: Effect.Effect<A, E, ConversationStore | SubmissionStore>,
-) => Effect.provide(effect, layer({ filename, observationPollInterval: 1 }));
+const withStorage = <A, E>(filename: string, effect: Effect.Effect<A, E, ConversationStore>) =>
+  Effect.provide(effect, layer({ filename, observationPollInterval: 1 }));
 
 const withVerifiedStorage = <A, E>(
   filename: string,
-  effect: Effect.Effect<A, E, ConversationStore | SubmissionStore>,
+  effect: Effect.Effect<A, E, ConversationStore>,
 ) => Effect.provide(effect, layer({ filename, observationPollInterval: 1, verifyOnOpen: true }));
 
 const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
@@ -178,6 +175,7 @@ const explicitTestStorageLayer = (filename: string) =>
           SqliteStorageConfigValue.make({
             observationPollInterval: 1,
             busyTimeout: 5_000,
+            ownershipLeaseDuration: 30_000,
             verifyOnOpen: false,
           }),
         ),
@@ -314,7 +312,6 @@ describe("SqliteConversationStore", () => {
             filename,
             Effect.gen(function* () {
               const store = yield* ConversationStore;
-              const submissions = yield* SubmissionStore;
               const exported = yield* store.export(
                 ConversationExportRequest.make({ conversationId }),
               );
@@ -334,11 +331,6 @@ describe("SqliteConversationStore", () => {
                 .observe(ConversationObservation.make({ conversationId }))
                 .pipe(Stream.take(1), Stream.runCollect);
               expect(reobserved).toHaveLength(1);
-              expect(yield* submissions.capabilities).toEqual({
-                durability: "non-durable",
-                acceptsDurableWork: false,
-              });
-              expect(Option.isNone(yield* submissions.inspect(submissionId))).toBe(true);
             }),
           );
         }),
@@ -754,9 +746,7 @@ describe("SqliteConversationStore", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const active = yield* Ref.make<SqliteStorageFailpointLocation | undefined>(undefined);
-        const withFailpoints = <A, E>(
-          effect: Effect.Effect<A, E, ConversationStore | SubmissionStore>,
-        ) =>
+        const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ConversationStore>) =>
           Effect.provide(
             effect,
             layer({

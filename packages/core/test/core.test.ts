@@ -16,9 +16,11 @@ import {
   DelegationId,
   IdGenerator,
   ModelProtocolError,
+  ReceiptId,
   RunEvent,
   RunId,
   RunStarted,
+  SettlementId,
   SubagentCompleted,
   SubagentFailed,
   SubagentInterrupted,
@@ -38,6 +40,18 @@ describe("core schemas", () => {
     expect(Schema.decodeSync(DelegationId)("delegate-research")).toBe("delegate-research");
     expect(() => Schema.decodeSync(RunId)("")).toThrow();
     expect(() => Schema.decodeSync(DelegationId)("")).toThrow();
+  });
+
+  it("round-trips the durable Receipt and Settlement identities and rejects empty values", () => {
+    const receiptId = Schema.decodeSync(ReceiptId)("receipt-1");
+    const settlementId = Schema.decodeSync(SettlementId)("settlement:submission-1");
+
+    expect(Schema.encodeSync(ReceiptId)(receiptId)).toBe("receipt-1");
+    expect(Schema.encodeSync(SettlementId)(settlementId)).toBe("settlement:submission-1");
+    expect(Schema.decodeUnknownExit(ReceiptId)("")._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(SettlementId)("")._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(ReceiptId)(7)._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(SettlementId)(null)._tag).toBe("Failure");
   });
 
   it("constructs finite policies and rejects invalid bounds", () => {

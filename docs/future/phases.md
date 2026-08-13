@@ -5,9 +5,9 @@ description: A capability-led roadmap from the current persistent runtime to ver
 
 # Future phases
 
-<StatusCallout status="next" phase="P4 is next" title="The roadmap is ordered by proof, not calendar date.">
+<StatusCallout status="next" phase="P5 is next" title="The roadmap is ordered by proof, not calendar date.">
 
-P0–P3 have implementation evidence. P4 is the next active target. P5–P7 remain planned. The
+P0–P4 have implementation evidence. P5 is the next active target. P6–P7 remain planned. The
 overall specification and roadmap are Draft; “complete” means the current evidence gate passed,
 not that a public compatibility promise exists.
 
@@ -43,23 +43,27 @@ redaction, and an explicitly unisolated local sandbox adapter.
 Added versioned canonical records, pure replay, digest-bound checkpoints, export, resumable
 observation, and memory/SQLite Conversation Store Layers.
 
-**Claim:** class `P` Conversation persistence. The `SubmissionStore` explicitly rejects a durable
-accepted-work claim.
+**Claim:** class `P` Conversation persistence. Its interim non-durable `SubmissionStore`
+explicitly rejected a durable accepted-work claim; P4 replaced it with the real
+`SubmissionLedger`.
 
-## P4 — Durable Node/SQLite <StatusBadge status="next" />
+## P4 — Durable Node/SQLite <StatusBadge status="available" />
 
-The next phase introduces the first durable host boundary:
+Added the first durable host boundary ([evidence](../PHASE-4-EVIDENCE)):
 
-- commit admission, Conversation readiness, and attachments before returning a Receipt;
+- commit admission and Conversation readiness before returning a Receipt;
 - serialize one ordered active head per Conversation;
-- fence Attempts with stable ownership identity and producer epochs;
-- classify recovery from persisted state;
+- fence Attempts with stable ownership identity and atomically bumped producer epochs, with
+  renewable leases for liveness only;
+- classify recovery purely from persisted state, with a host recovery pass before admission;
 - reserve, append, and finalize exactly one Settlement;
-- prove behavior with deterministic failpoints and real process-kill tests.
+- prove behavior with deterministic failpoints around every durable mutation.
 
-**Target claim:** `DN`, durable accepted work on the tested Node/SQLite assembly.
+**Claim:** `DN` — durable Submissions with turn-boundary recovery on the tested Node/SQLite
+assembly, valid for safe-to-repeat toolkits. Recovery may re-invoke the model; supplier booking
+replay is explicitly not claimed until P5.
 
-## P5 — Durable Tools and joined input <StatusBadge status="planned" />
+## P5 — Durable Tools and joined input <StatusBadge status="next" />
 
 Adds prepared/settled ordinary Tool records, honest unknown external outcomes, named durable Steps,
 reconciliation, durable approval suspension, and recoverable `joining`/`joined` queued input.
