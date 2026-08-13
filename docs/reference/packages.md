@@ -5,7 +5,7 @@ description: Current private workspace packages and future phase-gated boundarie
 
 # Package map
 
-<StatusCallout status="available" phase="Private workspace" title="Ten framework packages exist today.">
+<StatusCallout status="available" phase="Private workspace" title="Twelve framework packages exist today.">
 
 All package names are working private names with source export maps. They are not published npm
 artifacts. New packages appear only when their roadmap phase begins.
@@ -79,10 +79,35 @@ roster fails every claim closed), and the `NodeDurableHost` startup gates (stora
 recovery before admission) and shutdown order (close admission → release ownership → close
 storage). It is a Layer-assembly library, not an application entrypoint.
 
+### `@effect-agent/storage-cloudflare`
+
+Provides the Durable Object SQLite adapters behind the `DC` assembly: the Conversation Store and
+durable Submission Ledger against one Conversation Object's private SQLite database (the v4
+table mirror plus the `effect_agent_meta` exact-or-fresh version gate and the durable
+`effect_agent_child_settlements` cross-store notification marker), storage-backed transactions,
+typed compatibility/corruption/bound errors, the same failpoint-location names as the Node
+adapter, and the cross-Object seam — Schema port-call envelopes and routed decorator Layers over
+a closed route-capable subset with adapter-minted routable Submission identities. It never
+imports the `cloudflare:workers` runtime module; Durable Object handles are injected as Layer
+construction values.
+
+### `@effect-agent/platform-cloudflare`
+
+Assembles the class `DC` Cloudflare runtime and is the only package that imports
+`cloudflare:workers`: binding Layers (namespace, Object context, identity), schema-validated
+configuration, the single multiplexed `DurableAlarmService` with the idempotent
+`ConversationMaintenance` pass (pre-armed alarm invariant: committed nonterminal work implies a
+committed alarm), the alarm/RPC wake scheduler, the Durable Object RPC port transport,
+`CloudflareDurableRuntime.layer`, `makeConversationObjectClass` (local-only constructor gates
+and the typed admission-limits gate before `submit`), and the Worker-side
+`CloudflareConversationClient`. It is a Layer-assembly library, not an application entrypoint.
+
 ### `@effect-agent/testing`
 
 Provides the scripted Effect AI Model, deterministic services, cumulative Travel Planner fixtures,
-and reusable conformance evidence. Production packages never depend on it.
+and reusable conformance evidence. Production packages never depend on it (the one dev-only
+exception: `platform-cloudflare`'s test suite consumes the shared fixtures to prove DN/DC
+equivalence).
 
 ## Leaf examples
 
@@ -92,13 +117,9 @@ deployment package.
 
 ## Future packages
 
-| Package                             | First phase | Status                           |
-| ----------------------------------- | ----------: | -------------------------------- |
-| `@effect-agent/storage-cloudflare`  |          P6 | <StatusBadge status="planned" /> |
-| `@effect-agent/platform-cloudflare` |          P6 | <StatusBadge status="planned" /> |
-
-Provider wrapper packages are deliberately absent. Provider integration remains upstream Effect AI
-Models and Layers.
+Every phase-gated framework package through the active roadmap now exists; Phase 7 (internal
+hardening) plans no new packages. Provider wrapper packages are deliberately absent. Provider
+integration remains upstream Effect AI Models and Layers.
 
 ## Dependency direction
 

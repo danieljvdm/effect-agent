@@ -26,7 +26,8 @@ not change the specified scope of later phases.
 | P4    | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                               |
 | P5    | Complete — [durable Tools and joined input](PHASE-5-EVIDENCE.md)                                                                            |
 | S2    | Implemented — [durable attached Subagents](S2-EVIDENCE.md) (`DN` only), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
-| P6–P7 | Planned — not yet implemented                                                                                                               |
+| P6    | Complete — [Cloudflare Durable Object runtime](PHASE-6-EVIDENCE.md), including the deferred S2 `DC` Subagent conformance row                |
+| P7    | Planned — not yet implemented                                                                                                               |
 
 ## Proposed Subagent insertion
 

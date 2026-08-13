@@ -282,6 +282,33 @@ their reservation, overruns recorded and never clipped.
 Record: [ADR-0013](adr/0013-durable-subagent-establishment.md)
 Evidence: [S2 evidence](S2-EVIDENCE.md)
 
+### D-032 — Cloudflare Conversation Objects
+
+**Status:** Accepted by default (adopted as the Phase 6 implementation default; pending owner
+review)
+
+**Decision:** Deployment class `DC` runs the unchanged durable coordinator inside one
+SQLite-backed Durable Object per Conversation (`namespace.idFromName(conversationId)`): no
+worker loop — each ingress event or alarm runs one bounded reconcile-then-drain pass, with the
+constructor gate local-only so cross-Object recovery can never deadlock. One multiplexed storage
+alarm is the liveness engine under the pre-armed invariant that committed nonterminal work
+implies a committed alarm, making eviction recovery request-free; alarm passes are idempotent
+under at-least-once delivery. Storage mirrors the Node v4 tables in one fresh migration plus an
+`effect_agent_meta` exact-or-fresh version gate and the durable `effect_agent_child_settlements`
+cross-store notification marker; transactions use Durable Object storage transactions (the
+Node write-contention machinery has no analogue and is absent). Cross-Object port calls travel
+as Schema-encoded envelopes over Durable Object JS RPC across a closed route-capable subset,
+with adapter-minted routable Submission identities (`{uuidv7}:{conversationId}`) and transport
+faults surfacing as `AdmissionIndeterminate`, never absence. Admission limits (queue depth,
+input bytes, database size under the 10 GB cap) are checked before `submit`; the ~1.9 MB stored
+value bound fails typed and R2 stays deferred with the `AttachmentStore` port. DN ≡ DC is
+claimed as byte-equal cross-platform normalized canonical evidence against one committed golden.
+The Cloudflare suites run on `@cloudflare/vitest-pool-workers` plus a programmatic Miniflare
+restart lane, via direct `vitest run` (the probed `vp test` exception).
+
+Record: [ADR-0014](adr/0014-cloudflare-conversation-objects.md)
+Evidence: [Phase 6 evidence](PHASE-6-EVIDENCE.md)
+
 ## Integration and project boundaries
 
 ### D-021 — Reference-material role

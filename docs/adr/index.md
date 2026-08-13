@@ -23,6 +23,7 @@ are authoritative; a Proposed ADR is design material, not an owner-approved feat
 | [0011](./0011-durable-runtime-placement-and-leases)       | Accepted by default — pending owner review ([evidence](../PHASE-4-EVIDENCE))                           | Place the durable coordinator in session; leases for liveness, epochs for correctness |
 | [0012](./0012-durable-tool-uncertainty-and-steps)         | Accepted by default — pending owner review ([evidence](../PHASE-5-EVIDENCE))                           | Annotation-scoped Tool uncertainty, log-native Steps, and record-free suspension      |
 | [0013](./0013-durable-subagent-establishment)             | Accepted by default — pending owner review ([evidence](../S2-EVIDENCE))                                | Durable Subagent establishment, waiting suspension, and exact binding resolution      |
+| [0014](./0014-cloudflare-conversation-objects)            | Accepted by default — pending owner review ([evidence](../PHASE-6-EVIDENCE))                           | Cloudflare Conversation Objects: serialized owner, multiplexed alarm, routed ports    |
 
 The [decision register](../DECISIONS) is the owner-facing status source. ADRs preserve rationale,
 consequences, rejected alternatives, and validation criteria.

@@ -257,6 +257,8 @@ const decodeRecordId = Schema.decodeSync(RecordId);
 const decodeToolCallIdUnknown = Schema.decodeUnknownEffect(ToolCallId);
 const ZERO_EPOCH = Schema.decodeSync(ProducerEpoch)(0);
 const READ_PAGE = 1_024;
+/** Stale-tail append retries per batch before the conflict propagates (see `appendBatch`). */
+const MAX_APPEND_FENCE_REFRESHES = 8;
 const MAX_FAILURE_MESSAGE_LENGTH = 16_384;
 const RECONCILER_AUTHOR = "reconciler";
 /** Canonical `ToolApprovalDecided.resolver` for policy-auto decisions made by the delegate. */
@@ -1134,18 +1136,52 @@ const make = Effect.gen(function* () {
   const appendBatch = (ctx: AttemptAppendContext, batch: CanonicalBatch) =>
     ctx.gate.withPermits(1)(
       Effect.gen(function* () {
-        const tail = yield* Ref.get(ctx.tailRef);
-        const result = yield* store.append(
-          FencedAppendRequest.make({
-            conversationId: ctx.conversationId,
-            batch,
-            expectedTailSequence: tail.sequence,
-            expectedTailDigest: tail.digest,
-            producerEpoch: ctx.producerEpoch,
-          }),
-        );
-        yield* Ref.set(ctx.tailRef, { sequence: result.lastSequence, digest: result.tailDigest });
-        return result;
+        // Bounded fence refresh on a stale-tail conflict: `AppendConflict(reason: "tail")`
+        // means this batch was NOT appended — another legitimate same-epoch writer advanced
+        // the log after this context read its tail (a parent's establishment repair appending
+        // the deterministic lineage/start records to a child Conversation while the child's
+        // own Attempt runs — routine when the child lives in its own Durable Object). The
+        // retry re-reads the ACTUAL tail the conflict carries and re-appends under the SAME
+        // epoch: a superseded epoch still fails `FenceRejected` (DUR-006 untouched) and the
+        // batch/record identity dedupe absorbs true replays. Treating a stale-tail conflict
+        // as "already appended" at the tolerant call sites would let a settlement finalize
+        // WITHOUT its canonical record.
+        for (let refresh = 0; ; refresh++) {
+          const tail = yield* Ref.get(ctx.tailRef);
+          const result = yield* store
+            .append(
+              FencedAppendRequest.make({
+                conversationId: ctx.conversationId,
+                batch,
+                expectedTailSequence: tail.sequence,
+                expectedTailDigest: tail.digest,
+                producerEpoch: ctx.producerEpoch,
+              }),
+            )
+            .pipe(
+              Effect.catchTag("AppendConflict", (conflict) =>
+                conflict.reason === "tail" &&
+                conflict.actualTailSequence !== undefined &&
+                conflict.actualTailDigest !== undefined &&
+                refresh < MAX_APPEND_FENCE_REFRESHES
+                  ? Effect.as(
+                      Ref.set(ctx.tailRef, {
+                        sequence: conflict.actualTailSequence,
+                        digest: conflict.actualTailDigest,
+                      }),
+                      undefined,
+                    )
+                  : Effect.fail(conflict),
+              ),
+            );
+          if (result !== undefined) {
+            yield* Ref.set(ctx.tailRef, {
+              sequence: result.lastSequence,
+              digest: result.tailDigest,
+            });
+            return result;
+          }
+        }
       }),
     );
 
@@ -2062,10 +2098,22 @@ const make = Effect.gen(function* () {
     childSubmissionId: SubmissionId,
   ): Effect.fn.Return<ChildVerification, DurableWorkerFailure> {
     const mismatch = (message: string): ChildVerification => ({ _tag: "mismatch", message });
-    const childSnapshot = yield* ledger.loadRecoverySnapshot(
-      RecoverySnapshotRequest.make({ submissionId: childSubmissionId }),
+    // The child's lane state crosses the store boundary through `lookup` — a status check on
+    // the child's owning ledger — because recovery snapshots are lane-local by construction:
+    // on Cloudflare the child Conversation lives in a different Durable Object whose
+    // operational rows are not readable across the boundary (deployment §11). The child's
+    // CANONICAL Settlement, read below from its Conversation Log, remains the only
+    // cross-lane verification authority (spec §12 join step 1, SUB-019, DUR-015).
+    const childLookup = yield* ledger.lookup(
+      SubmissionLookupById.make({ submissionId: childSubmissionId }),
     );
-    const child = childSnapshot.submission;
+    if (Option.isNone(childLookup)) {
+      return yield* LedgerError.make({
+        operation: "verifySettledChild",
+        message: `Attached child ${childSubmissionId} is unknown to its owning Submission Ledger`,
+      });
+    }
+    const child = childLookup.value;
     if (child.conversationId !== request.childConversationId) {
       return mismatch("The child Conversation does not match the intended child identity");
     }
@@ -2126,15 +2174,11 @@ const make = Effect.gen(function* () {
     ) {
       return mismatch("The child Settlement identity does not match the child Receipt");
     }
-    if (childSnapshot.reservation !== undefined && settlementEnvelope !== undefined) {
-      const encoded = yield* Schema.encodeEffect(RecordEnvelope)(settlementEnvelope.record).pipe(
-        Effect.orDie,
-      );
-      const recordDigest = yield* withCrypto(digestJson(encoded));
-      if (recordDigest !== childSnapshot.reservation.recordDigest) {
-        return mismatch("The canonical Settlement record digest does not match the reservation");
-      }
-    }
+    // No parent-side crosscheck against the child's settlement RESERVATION row exists here:
+    // the reservation lives in the child's own store, invisible across the Object boundary on
+    // Cloudflare, and its byte-identity with the canonical record is the child store's own
+    // conformance-tested reserve→append→finalize invariant (DUR-011) — never a parent
+    // obligation. The canonical Settlement verified above is the sole cross-lane authority.
     if (settlement.outcome === "completed" && settlement.result === undefined) {
       return mismatch("The completed child Settlement carries no terminal output");
     }

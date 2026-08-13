@@ -1,7 +1,7 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 5 durable booking and the S1/S2 Subagent delegation slices implemented; Phase 6 and
-later increments remain design targets
+Status: Phase 6 (`DC` Cloudflare) implemented on top of the Phase 5 durable booking and S1/S2
+Subagent delegation slices; Phase 7 increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -112,7 +112,7 @@ insufficient without `DN` or `DC` and the tested adapter.
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
 
-P0 through P5 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
+P0 through P6 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
 adds a separate `P` profile that stores and reconstructs planning history while keeping accepted
 work explicitly non-durable. P4 adds the `DN` profile: a durable planning Submission that returns
 a Receipt, keeps one FIFO trip lane, survives restart to the same projection, supports durable
@@ -139,6 +139,18 @@ invocation-counted never-re-executed proof — while pinning
 `packages/testing/test/travel-planner-subagents-durable.test.ts`,
 `packages/platform-node/test/crash/crash-subagents.test.ts`;
 [S2 evidence](../S2-EVIDENCE.md)).
+P6 adds the `DC` profile: the same cumulative fixtures assembled with Cloudflare Layers inside
+workerd — one SQLite-backed Durable Object per Conversation, eviction and alarm redelivery as
+the exercised recovery path, approval suspension and Unknown Outcomes across eviction,
+coordinator→researcher delegation across two Durable Objects, admission limits refused before
+any ledger row, and a Miniflare runtime-restart lane — with `cloudflareEquivalence: true`
+earned by asserting the DN and DC runs against one committed cross-platform normalized golden
+while `exactlyOnceExternalEffects` stays `false`
+(`packages/testing/src/fixtures/travel-planner/phase6.ts`,
+`packages/testing/test/travel-planner-phase6.test.ts`,
+`packages/platform-cloudflare/test/travel-planner-dc.test.ts`,
+`packages/platform-cloudflare/test/restart/travel-planner-restart.test.ts`;
+[Phase 6 evidence](../PHASE-6-EVIDENCE.md)).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -171,6 +183,7 @@ packages/testing/
         phase3.ts
         phase4.ts
         phase5.ts
+        phase6.ts
         subagents.ts
         subagents-durable.ts
         scenarios.ts
@@ -181,6 +194,7 @@ packages/testing/
     travel-planner-phase3.test.ts
     travel-planner-phase4.test.ts
     travel-planner-phase5.test.ts
+    travel-planner-phase6.test.ts
     travel-planner-subagents.test.ts
     travel-planner-subagents-durable.test.ts
     travel-planner.compile.test.ts

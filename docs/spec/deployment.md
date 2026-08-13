@@ -251,8 +251,14 @@ Durable Object storage is the only correctness-critical store for that Conversat
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
 
-The target remains experimental until the generic durability conformance suite passes eviction,
-alarm retry, deployment, and fault-injection scenarios.
+The target left experimental status with Phase 6: the generic durability conformance suite —
+the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the
+eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry (double-fire
+and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted storage), and
+fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
+are implemented and green ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)). The tested harness is
+workerd/Miniflare; the hosted production service, its observability adapters, and live soak
+remain P7 scope.
 
 Current platform references:
 

@@ -13,15 +13,17 @@ The working product thesis is:
 
 This repository contains the product and technical specification plus the completed Phase 0 design
 proof, Phase 1 interpreter, Phase 2 operational local runtime, Phase 3 persistent Conversation
-foundation, Phase 4 durable Node/SQLite runtime, and Phase 5 durable Tools and joined input. The
-workspace includes schema-first Agent contracts, one shared `run`/`stream` interpreter, scoped
-operational capabilities, a narrow local sandbox adapter, replayable canonical Conversation
-records with memory and SQLite adapters, the durable Submission Ledger, recovery classifier, and
-`DurableAgentRuntime` coordinator with the Node host assembly — now covering prepared/settled
-ordinary Tool records, Unknown Outcomes, Durable Steps, durable approval suspension, joined
-queued input, and durable attached Subagent delegation — deterministic scripted model Layers, the
-progressive Travel Planner reference slice, provider-binding compile examples, and a browser test
-bench under `examples/demo`.
+foundation, Phase 4 durable Node/SQLite runtime, Phase 5 durable Tools and joined input, and
+Phase 6 Cloudflare Durable Object runtime. The workspace includes schema-first Agent contracts,
+one shared `run`/`stream` interpreter, scoped operational capabilities, a narrow local sandbox
+adapter, replayable canonical Conversation records with memory and SQLite adapters, the durable
+Submission Ledger, recovery classifier, and `DurableAgentRuntime` coordinator with the Node host
+assembly — covering prepared/settled ordinary Tool records, Unknown Outcomes, Durable Steps,
+durable approval suspension, joined queued input, and durable attached Subagent delegation — the
+Cloudflare assembly running the same coordinator inside one SQLite-backed Durable Object per
+Conversation with alarm-driven recovery and cross-Object delegation, deterministic scripted
+model Layers, the progressive Travel Planner reference slice, provider-binding compile examples,
+and a browser test bench under `examples/demo`.
 
 ## Status
 
@@ -32,11 +34,13 @@ bench under `examples/demo`.
 - Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
   benches in `examples/*`, and no `apps/`
 - Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
-  `storage-memory`, `storage-sqlite`, `platform-node`, and `testing`
-- Current implementation milestone: **Phase 5 complete** (durable Tools and joined input,
-  [evidence](docs/PHASE-5-EVIDENCE.md), on the Phase 4 durable Node/SQLite runtime,
+  `storage-memory`, `storage-sqlite`, `storage-cloudflare`, `platform-node`,
+  `platform-cloudflare`, and `testing`
+- Current implementation milestone: **Phase 6 complete** (Cloudflare Durable Object runtime,
+  [evidence](docs/PHASE-6-EVIDENCE.md), on the Phase 5 durable Tools and joined input,
+  [evidence](docs/PHASE-5-EVIDENCE.md), and the Phase 4 durable Node/SQLite runtime,
   [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral and S2 durable attached
-  Subagents implemented**
+  Subagents implemented**, with the S2 `DC` conformance row discharged by Phase 6
 - Subagents: declared attached delegation Tools are implemented for both slices as
   roadmap-assigned proposed defaults — ephemeral (`E`) delegation with the engine spawner seam
   and in-memory budget reservations ([S1 evidence](docs/S1-EVIDENCE.md)), and durable (`DN`)
@@ -44,7 +48,8 @@ bench under `examples/demo`.
   records, parent-owned budget reservations, `waitingForChild` suspension and durable wakeup,
   verified Settlement joins, independent parent/child fencing, durable abort propagation, and
   exact-digest Binding resolution under real process-kill tests
-  ([S2 evidence](docs/S2-EVIDENCE.md)); ADR-0010 remains Proposed, `DC` Subagents are P6 scope,
+  ([S2 evidence](docs/S2-EVIDENCE.md)); ADR-0010 remains Proposed, `DC` Subagents run the same
+  matrix across two Durable Objects under eviction ([P6 evidence](docs/PHASE-6-EVIDENCE.md)),
   and no exactly-once child external effects are claimed
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral multi-Run Conversations with safe-seam input, approval,
@@ -58,6 +63,12 @@ bench under `examples/demo`.
   an audited resolution path, Durable Steps, durable approval suspension, and joined queued
   input); execution stays honestly at-least-once — recovery may re-invoke the model and never
   claims exactly-once external side effects
+- Cloudflare runtime: class `DC` on the tested workerd/Miniflare assembly — the same coordinator
+  and ports inside one SQLite-backed Durable Object per Conversation, a single multiplexed
+  pre-armed alarm so eviction at every failpoint recovers without an incoming request,
+  admission limits checked before any ledger row, cross-Object Subagent delegation over a typed
+  routed port subset, and Travel Planner canonical outcomes byte-equal to `DN` after the
+  documented cross-platform normalization ([evidence](docs/PHASE-6-EVIDENCE.md))
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 Decisions labeled **Proposed** are recommendations, not settled owner decisions.
@@ -85,6 +96,7 @@ interfaces. The specifications below remain the normative design source.
 15. [Phase 3 evidence](docs/PHASE-3-EVIDENCE.md)
 16. [Phase 4 evidence](docs/PHASE-4-EVIDENCE.md)
 17. [Phase 5 evidence](docs/PHASE-5-EVIDENCE.md)
+18. [Phase 6 evidence](docs/PHASE-6-EVIDENCE.md)
 
 ## Detailed specifications
 
