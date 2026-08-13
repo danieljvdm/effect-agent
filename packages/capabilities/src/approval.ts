@@ -247,7 +247,9 @@ const timeoutDenial = (request: ApprovalRequest, decidedAt: DateTime.Utc): Appro
 
 /**
  * Resolve with fail-closed deadline semantics and record request/decision audit
- * events around every successful, denied, or timed-out resolution.
+ * events around every successful, denied, timed-out, or resolver-failed
+ * resolution. A resolver infrastructure failure records a synthetic denial so
+ * the audit reservation is released before the typed error propagates.
  */
 export const requestApproval = Effect.fn("requestApproval")(function* (request: ApprovalRequest) {
   const audit = yield* ApprovalAudit;
@@ -275,6 +277,21 @@ export const requestApproval = Effect.fn("requestApproval")(function* (request: 
         Clock.currentTimeMillis.pipe(
           Effect.map((millis) =>
             timeoutDenial(request, DateTime.toUtc(DateTime.makeUnsafe(millis))),
+          ),
+        ),
+      ),
+      Effect.tapError(() =>
+        Clock.currentTimeMillis.pipe(
+          Effect.flatMap((millis) =>
+            audit.recordDecision(
+              ApprovalDenied.make({
+                requestId: request.requestId,
+                decidedAt: DateTime.toUtc(DateTime.makeUnsafe(millis)),
+                resolver: "effect-agent.resolver-error",
+                reason: "Approval resolver failed before making a policy decision",
+                timedOut: false,
+              }),
+            ),
           ),
         ),
       ),

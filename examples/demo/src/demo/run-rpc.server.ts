@@ -10,13 +10,12 @@ import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
 import { AgentRuntime } from "@effect-agent/engine";
 import { type DemoChatHistoryMessage } from "./contracts";
-import { decodeErrorDetails } from "./error-details";
+import { toDemoRunFailure } from "./error-details";
 import {
   FixtureChatRuntimeLayer,
   LiveChatRuntimeLayer,
   makeFixtureChatAgent,
 } from "./general-chat";
-import { DemoRunFailure } from "./operational-contracts";
 import { DemoInteractiveRuntime, DemoInteractiveRuntimeLive } from "./operational-runtime.server";
 import { OpenAiChatAgent } from "./openai-profile";
 import { DemoRunRpcs } from "./run-rpc";
@@ -37,16 +36,6 @@ export const chatHistoryPrompt = (history: ReadonlyArray<DemoChatHistoryMessage>
     ),
   );
 
-const toRunFailure = (error: unknown): DemoRunFailure => {
-  const details = decodeErrorDetails(error);
-  return DemoRunFailure.make({
-    errorTag: details._tag ?? "DemoChatRunError",
-    message: (details.message ?? "The chat Run failed.")
-      .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[redacted]")
-      .slice(0, 600),
-  });
-};
-
 /** Thin RPC adapters over the server-scoped interactive Phase 2 runtime. */
 export const DemoRunRpcHandlers = DemoRunRpcs.toLayer({
   StreamChatRun: ({ history, message, mode }) =>
@@ -55,12 +44,12 @@ export const DemoRunRpcHandlers = DemoRunRpcs.toLayer({
           OpenAiChatAgent,
           { message },
           { history: chatHistoryPrompt(history) },
-        ).pipe(Stream.provide(LiveChatServerLayer), Stream.mapError(toRunFailure))
+        ).pipe(Stream.provide(LiveChatServerLayer), Stream.mapError(toDemoRunFailure))
       : AgentRuntime.stream(
           makeFixtureChatAgent(message),
           { message },
           { history: chatHistoryPrompt(history) },
-        ).pipe(Stream.provide(FixtureChatRuntimeLayer), Stream.mapError(toRunFailure)),
+        ).pipe(Stream.provide(FixtureChatRuntimeLayer), Stream.mapError(toDemoRunFailure)),
   StreamOperationalRun: (request) =>
     DemoInteractiveRuntime.pipe(
       Effect.map((runtime) => runtime.start(request)),
@@ -71,7 +60,9 @@ export const DemoRunRpcHandlers = DemoRunRpcs.toLayer({
       Effect.map((runtime) => runtime.startLiveTravel(request)),
       Stream.unwrap,
       Stream.provide(OpenAiClientLayer),
-      Stream.mapError(toRunFailure),
+      // The shared mapper passes an already-typed DemoRunFailure through, so
+      // the runtime's specific errorTag is never re-wrapped on the wire.
+      Stream.mapError(toDemoRunFailure),
     ),
   QueueRunCommand: (request) =>
     DemoInteractiveRuntime.pipe(Effect.flatMap((runtime) => runtime.queueCommand(request))),

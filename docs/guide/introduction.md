@@ -21,9 +21,9 @@ Effect program.
 
 ```ts [calculator-agent.ts]
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
-import { Config, Effect, Layer, Ref, Schema } from "effect";
+import { Config, Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import { FetchHttpClient } from "effect/unstable/http";
 
@@ -61,27 +61,11 @@ const Definition = Agent.define("calculator", {
 const CalculatorAgent = Agent.withModel(Definition, OpenAiLanguageModel.model("gpt-4.1-mini"));
 
 // 4. Build the application's Effect environment.
-const IdsLive = Layer.effect(
-  IdGenerator,
-  Effect.gen(function* () {
-    const sequence = yield* Ref.make(0);
-    const next = Ref.updateAndGet(sequence, (n) => n + 1);
-
-    return IdGenerator.of({
-      nextConversationId: next.pipe(
-        Effect.map((n) => Schema.decodeSync(ConversationId)(`conversation-${n}`)),
-      ),
-      nextRunId: next.pipe(Effect.map((n) => Schema.decodeSync(RunId)(`run-${n}`))),
-      nextTurnId: next.pipe(Effect.map((n) => Schema.decodeSync(TurnId)(`turn-${n}`))),
-    });
-  }),
-);
-
 const OpenAiLive = OpenAiClient.layerConfig({
   apiKey: Config.redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
-const AppLive = Layer.mergeAll(CalculatorLive, IdsLive, OpenAiLive);
+const AppLive = Layer.mergeAll(CalculatorLive, IdGenerator.layer, OpenAiLive);
 
 // 5. The Agent is still an Effect until the application entrypoint runs it.
 const program = AgentRuntime.run(CalculatorAgent, {
@@ -96,8 +80,10 @@ void Effect.runPromise(program);
 ```
 
 `Definition` contains the immutable Agent configuration. `CalculatorLive` supplies Tool behavior,
-`CalculatorAgent` fixes the Model selection, and `AppLive` provides the runtime dependencies. The
-result remains an `Effect` until the application entrypoint executes it.
+`CalculatorAgent` fixes the Model selection, and `AppLive` provides the runtime dependencies.
+`IdGenerator.layer` is the framework's default Web Crypto identity authority; the
+[testing guide](./testing) replaces it with deterministic IDs. The result remains an `Effect`
+until the application entrypoint executes it.
 
 Effect Agent is an interpreter for autonomous programs in Effect applications. An Agent is an
 immutable, schema-defined value. Pair it with an Effect AI Model and the runtime can interpret it as

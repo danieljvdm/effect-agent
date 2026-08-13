@@ -161,20 +161,27 @@ const outputEvent = (
     ),
   );
 
-const flushDecoder = (stream: OutputStream, decoder: TextDecoder): Stream.Stream<SandboxOutput> => {
-  const text = decoder.decode();
-  return text.length === 0
-    ? Stream.empty
-    : Stream.succeed(
-        SandboxOutput.make({
-          eventVersion: 1,
-          implementation: unisolatedImplementation,
-          stream,
-          text,
-          bytes: 0,
-        }),
-      );
-};
+/**
+ * Emits any text the streaming decoder still holds once its source stream ends. The final decode
+ * must run at end-of-stream, not at pipeline construction, so the flush is suspended; a trailing
+ * incomplete UTF-8 sequence surfaces as replacement text. Its raw bytes were already counted when
+ * the chunk arrived, so the flush event carries zero bytes.
+ */
+const flushDecoder = (stream: OutputStream, decoder: TextDecoder): Stream.Stream<SandboxOutput> =>
+  Stream.suspend(() => {
+    const text = decoder.decode();
+    return text.length === 0
+      ? Stream.empty
+      : Stream.succeed(
+          SandboxOutput.make({
+            eventVersion: 1,
+            implementation: unisolatedImplementation,
+            stream,
+            text,
+            bytes: 0,
+          }),
+        );
+  });
 
 const makeExecute =
   (spawner: ChildProcessSpawner["Service"]): SandboxExecute =>
@@ -282,13 +289,14 @@ const makeExecute =
           ),
         );
       }),
-    );
+    ).pipe(Stream.withSpan("LocalSandbox.execute"));
 
 /**
- * Development-only local process adapter. It is unisolated and must never be used as a security
- * boundary for untrusted code or commands.
+ * Development-only local process adapter with its `ChildProcessSpawner` requirement kept visible
+ * so composition roots and tests can inject a spawner double. It is unisolated and must never be
+ * used as a security boundary for untrusted code or commands.
  */
-const localLayer = Layer.effect(Sandbox)(
+export const sandboxLayer: Layer.Layer<Sandbox, never, ChildProcessSpawner> = Layer.effect(Sandbox)(
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner;
     return Sandbox.of({ execute: makeExecute(spawner) });
@@ -296,4 +304,4 @@ const localLayer = Layer.effect(Sandbox)(
 );
 
 /** A scoped Node process implementation whose events are always labeled `unisolated`. */
-export const layer = localLayer.pipe(Layer.provide(NodeServices.layer));
+export const layer: Layer.Layer<Sandbox> = sandboxLayer.pipe(Layer.provide(NodeServices.layer));

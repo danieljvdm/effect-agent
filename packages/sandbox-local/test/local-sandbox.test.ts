@@ -1,5 +1,8 @@
-import { expect, layer } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   Cause,
   ConfigProvider,
@@ -8,14 +11,18 @@ import {
   Effect,
   Exit,
   Fiber,
+  Layer,
   Option,
   Ref,
   Schema,
+  Sink,
   Stream,
+  type Scope,
 } from "effect";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import { Sandbox, type SandboxEvent, type SandboxRequest } from "@effect-agent/sandbox";
 
-import { layer as localSandboxLayer } from "../src/index.ts";
+import { layer as localSandboxLayer, sandboxLayer } from "../src/index.ts";
 
 const AllowedEnvironmentResult = Schema.Struct({
   allowed: Schema.String,
@@ -55,6 +62,33 @@ const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   return failure.value;
 };
 
+const withTempDirectory = <A, E, R>(
+  use: (directory: string) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E, Exclude<R, Scope.Scope>> =>
+  Effect.scoped(
+    Effect.acquireRelease(
+      Effect.sync(() => fs.mkdtempSync(path.join(os.tmpdir(), "effect-agent-sandbox-"))),
+      (directory) => Effect.sync(() => fs.rmSync(directory, { recursive: true, force: true })),
+    ).pipe(Effect.flatMap(use)),
+  );
+
+/** Writes the child's own pid to `pidFile` before running `script`, so tests can observe it. */
+const recordPidThen = (pidFile: string, script: string): string =>
+  `require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); ${script}`;
+
+const readRecordedPid = (pidFile: string): Effect.Effect<number> =>
+  Effect.sync(() => Number.parseInt(fs.readFileSync(pidFile, "utf8"), 10));
+
+const isProcessAlive = (pid: number): Effect.Effect<boolean> =>
+  Effect.sync(() => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
 layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbox", (it) => {
   it.effect("labels streamed stdout and successful completion as unisolated", () =>
     Effect.gen(function* () {
@@ -83,6 +117,26 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
     }),
   );
 
+  it.effect("surfaces trailing incomplete UTF-8 stdout with byte accounting intact", () =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox;
+      const events = yield* sandbox
+        .execute(request(["-e", "process.stdout.write(Buffer.from([0xe2, 0x82]))"]))
+        .pipe(Stream.runCollect);
+
+      const stdout = events.flatMap((event) =>
+        event._tag === "SandboxOutput" && event.stream === "stdout" ? [event] : [],
+      );
+      expect(stdout.map((event) => event.text).join("")).toBe("\uFFFD");
+      expect(stdout.reduce((total, event) => total + event.bytes, 0)).toBe(2);
+      expect(events.at(-1)).toMatchObject({
+        _tag: "SandboxExited",
+        exitCode: 0,
+        resourceUse: { stdoutBytes: 2 },
+      });
+    }),
+  );
+
   it.effect("emits the exit record before returning a typed non-zero exit failure", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
@@ -103,23 +157,37 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   );
 
   it.effect("enforces a bounded stderr limit and terminates the owned process", () =>
-    Effect.gen(function* () {
-      const sandbox = yield* Sandbox;
-      const exit = yield* sandbox
-        .execute(
-          request(["-e", "process.stderr.write('12345')"], {
-            limits: { maxOutputBytes: 4, maxWallTime: Duration.seconds(5) },
-          }),
-        )
-        .pipe(Stream.runDrain, Effect.exit);
+    withTempDirectory((directory) =>
+      Effect.gen(function* () {
+        const sandbox = yield* Sandbox;
+        const pidFile = path.join(directory, "pid");
+        const exit = yield* sandbox
+          .execute(
+            request(
+              [
+                "-e",
+                recordPidThen(
+                  pidFile,
+                  "process.stderr.write('12345'); setInterval(() => undefined, 1_000)",
+                ),
+              ],
+              {
+                limits: { maxOutputBytes: 4, maxWallTime: Duration.seconds(5) },
+              },
+            ),
+          )
+          .pipe(Stream.runDrain, Effect.exit);
 
-      expect(failureFrom(exit)).toMatchObject({
-        _tag: "SandboxOutputLimitError",
-        stream: "stderr",
-        limit: 4,
-        observed: 5,
-      });
-    }),
+        expect(failureFrom(exit)).toMatchObject({
+          _tag: "SandboxOutputLimitError",
+          stream: "stderr",
+          limit: 4,
+          observed: 5,
+        });
+        const pid = yield* readRecordedPid(pidFile);
+        expect(yield* isProcessAlive(pid)).toBe(false);
+      }),
+    ),
   );
 
   it.effect("applies the output limit across stdout and stderr together", () =>
@@ -240,18 +308,23 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect(
     "fails wall-clock timeout through the typed channel and finalizes the process scope",
     () =>
-      Effect.gen(function* () {
-        const sandbox = yield* Sandbox;
-        const exit = yield* sandbox
-          .execute(
-            request(["-e", "setInterval(() => undefined, 1_000)"], {
-              limits: { maxOutputBytes: 1_024, maxWallTime: Duration.millis(100) },
-            }),
-          )
-          .pipe(Stream.runDrain, Effect.exit);
+      withTempDirectory((directory) =>
+        Effect.gen(function* () {
+          const sandbox = yield* Sandbox;
+          const pidFile = path.join(directory, "pid");
+          const exit = yield* sandbox
+            .execute(
+              request(["-e", recordPidThen(pidFile, "setInterval(() => undefined, 1_000)")], {
+                limits: { maxOutputBytes: 1_024, maxWallTime: Duration.millis(500) },
+              }),
+            )
+            .pipe(Stream.runDrain, Effect.exit);
 
-        expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxTimeoutError" });
-      }),
+          expect(failureFrom(exit)).toMatchObject({ _tag: "SandboxTimeoutError" });
+          const pid = yield* readRecordedPid(pidFile);
+          expect(yield* isProcessAlive(pid)).toBe(false);
+        }),
+      ),
   );
 
   it.effect("propagates consumer interruption while scope finalization owns process cleanup", () =>
@@ -277,14 +350,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
       const pid = yield* Deferred.await(startedPid);
       yield* Fiber.interrupt(fiber);
       const exit = yield* Fiber.await(fiber);
-      const processAlive = yield* Effect.sync(() => {
-        try {
-          process.kill(pid, 0);
-          return true;
-        } catch {
-          return false;
-        }
-      });
+      const processAlive = yield* isProcessAlive(pid);
 
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
@@ -292,5 +358,61 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
       }
       expect(processAlive).toBe(false);
     }),
+  );
+});
+
+const scriptedSpawner = (
+  stdoutChunks: ReadonlyArray<Uint8Array>,
+): ChildProcessSpawner.ChildProcessSpawner["Service"] =>
+  ChildProcessSpawner.make(() =>
+    Effect.succeed(
+      ChildProcessSpawner.makeHandle({
+        pid: ChildProcessSpawner.ProcessId(4_242),
+        exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+        isRunning: Effect.succeed(false),
+        kill: () => Effect.void,
+        stdin: Sink.drain,
+        stdout: Stream.fromArray(stdoutChunks),
+        stderr: Stream.empty,
+        all: Stream.fromArray(stdoutChunks),
+        getInputFd: () => Sink.drain,
+        getOutputFd: () => Stream.empty,
+        unref: Effect.succeed(Effect.void),
+      }),
+    ),
+  );
+
+describe("unisolated local Sandbox with an injected spawner double", () => {
+  it.effect("decodes UTF-8 sequences split across chunk boundaries and flushes the tail", () =>
+    Effect.gen(function* () {
+      const sandbox = yield* Sandbox;
+      const events = yield* sandbox.execute(request([])).pipe(Stream.runCollect);
+
+      const stdout = events.flatMap((event) =>
+        event._tag === "SandboxOutput" && event.stream === "stdout" ? [event] : [],
+      );
+      expect(stdout.map((event) => event.text).join("")).toBe("\u20AC\uFFFD");
+      expect(stdout.reduce((total, event) => total + event.bytes, 0)).toBe(5);
+      expect(events.at(-1)).toMatchObject({
+        _tag: "SandboxExited",
+        exitCode: 0,
+        resourceUse: { stdoutBytes: 5, stderrBytes: 0 },
+      });
+    }).pipe(
+      Effect.provide(
+        sandboxLayer.pipe(
+          Layer.provide(
+            Layer.succeed(ChildProcessSpawner.ChildProcessSpawner)(
+              // "€" (0xe2 0x82 0xac) split mid-sequence, then a trailing incomplete sequence.
+              scriptedSpawner([
+                new Uint8Array([0xe2]),
+                new Uint8Array([0x82, 0xac]),
+                new Uint8Array([0xe2, 0x82]),
+              ]),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 });

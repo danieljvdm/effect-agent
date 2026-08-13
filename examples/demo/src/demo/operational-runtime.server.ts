@@ -11,6 +11,7 @@ import {
   Deferred,
   Duration,
   Effect,
+  Exit,
   Layer,
   Queue,
   Ref,
@@ -94,6 +95,7 @@ import {
   phase1HappyPathTurns,
   phase1Trip,
 } from "@effect-agent/testing";
+import { toDemoRunFailure } from "./error-details";
 import {
   DemoApprovalPending,
   DemoApprovalSettled,
@@ -389,6 +391,18 @@ const LiveCatalogLayers = Layer.mergeAll(
   LiveActivityCatalogLayer,
 );
 
+/**
+ * The tool-defect scenario proves a dying Tool handler cannot strand the
+ * browser: every search handler dies as a defect, so only the producer
+ * boundary's full-Cause handling can terminalize the client stream.
+ */
+const defectiveSearch = Effect.die(new Error("The demo supplier catalog crashed while searching."));
+const DefectiveCatalogLayers = Layer.mergeAll(
+  Layer.succeed(FlightCatalog, FlightCatalog.of({ search: () => defectiveSearch })),
+  Layer.succeed(LodgingCatalog, LodgingCatalog.of({ search: () => defectiveSearch })),
+  Layer.succeed(ActivityCatalog, ActivityCatalog.of({ search: () => defectiveSearch })),
+);
+
 const LiveTravelGuidanceLayer = Layer.succeed(
   TravelGuidance,
   TravelGuidance.of({
@@ -412,32 +426,6 @@ const LiveTravelGuidanceLayer = Layer.succeed(
 const nowUtc = Clock.currentTimeMillis.pipe(
   Effect.map((millis) => DateTime.toUtc(DateTime.makeUnsafe(millis))),
 );
-
-const describeUnknown = (error: unknown): string => {
-  if (typeof error === "string") return error;
-  if (error instanceof Error) return error.message;
-  try {
-    return JSON.stringify(error) ?? "Unknown demo error";
-  } catch {
-    return "Unserializable demo error";
-  }
-};
-
-const toRunFailure = (error: unknown): DemoRunFailure => {
-  if (typeof error === "object" && error !== null && "_tag" in error) {
-    return DemoRunFailure.make({
-      errorTag: typeof error._tag === "string" ? error._tag : "DemoRunError",
-      message:
-        "message" in error && typeof error.message === "string"
-          ? error.message.slice(0, 1_000)
-          : describeUnknown(error).slice(0, 1_000),
-    });
-  }
-  return DemoRunFailure.make({
-    errorTag: "DemoRunError",
-    message: describeUnknown(error).slice(0, 1_000),
-  });
-};
 
 interface PendingApproval {
   readonly requestId: string;
@@ -744,7 +732,12 @@ const InteractiveRuntimeLive = Layer.effect(
             });
           }
 
+          const cleanedUp = yield* Ref.make(false);
           const cleanup = Effect.gen(function* () {
+            const alreadyCleaned = yield* Ref.getAndSet(cleanedUp, true);
+            if (alreadyCleaned) {
+              return;
+            }
             yield* Ref.set(acceptingCommands, false);
             yield* Ref.update(activeRuns, (current) => {
               const next = new Map(current);
@@ -944,7 +937,7 @@ const InteractiveRuntimeLive = Layer.effect(
               ? ([holdTurn, finalPlanTurn] satisfies ReadonlyArray<ScriptedTurnInput>)
               : request.scenario === "budget-duration"
                 ? ([durationTurn] satisfies ReadonlyArray<ScriptedTurnInput>)
-                : request.scenario.startsWith("budget-")
+                : request.scenario.startsWith("budget-") || request.scenario === "tool-defect"
                   ? ([phase1HappyPathTurns[0]] satisfies ReadonlyArray<ScriptedTurnInput>)
                   : guidedTurns;
 
@@ -995,7 +988,7 @@ const InteractiveRuntimeLive = Layer.effect(
           );
           const scriptedRuntimeLayer = Layer.mergeAll(
             commonRuntimeLayers,
-            ControlledCatalogLayers,
+            request.scenario === "tool-defect" ? DefectiveCatalogLayers : ControlledCatalogLayers,
             TravelGuidanceLayer,
           ).pipe(Layer.provide(controlsLayer));
           const liveRuntimeLayer = Layer.mergeAll(
@@ -1148,6 +1141,33 @@ const InteractiveRuntimeLive = Layer.effect(
               : Effect.void;
 
           yield* Effect.forkChild(releaseGuidedTools);
+
+          /**
+           * The producer boundary observes the full Cause: a defect (for
+           * example a dying Tool handler) must still fail the output queue and
+           * release the single-run registry slot, or the browser waits forever
+           * on a stream that will never terminalize.
+           */
+          const terminalizeProducerFailure = (cause: Cause.Cause<unknown>) =>
+            Effect.gen(function* () {
+              yield* Ref.set(acceptingCommands, false);
+              const error = Cause.squash(cause);
+              if (Schema.is(BudgetExceeded)(error)) {
+                yield* emit(
+                  DemoBudgetRejected.make({
+                    ...(yield* eventBase),
+                    scopeLevel: error.scopeLevel,
+                    scopeId: error.scopeId,
+                    limit: error.limit,
+                    limitValue: error.limitValue,
+                    observedValue: error.observedValue,
+                  }),
+                );
+              }
+              yield* cleanup;
+              yield* Queue.fail(output, toDemoRunFailure(error));
+            }).pipe(Effect.asVoid);
+
           const producer = Effect.gen(function* () {
             yield* runPrelude;
             if (live) {
@@ -1180,29 +1200,16 @@ const InteractiveRuntimeLive = Layer.effect(
             }
             yield* Queue.end(output);
           }).pipe(
-            Effect.catch((error) =>
-              Effect.gen(function* () {
-                yield* Ref.set(acceptingCommands, false);
-                if (Schema.is(BudgetExceeded)(error)) {
-                  yield* emit(
-                    DemoBudgetRejected.make({
-                      ...(yield* eventBase),
-                      scopeLevel: error.scopeLevel,
-                      scopeId: error.scopeId,
-                      limit: error.limit,
-                      limitValue: error.limitValue,
-                      observedValue: error.observedValue,
-                    }),
-                  );
-                }
-                yield* Queue.fail(output, toRunFailure(error));
-              }).pipe(Effect.asVoid),
+            Effect.onExit((exit) =>
+              Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)
+                ? Effect.void
+                : terminalizeProducerFailure(exit.cause),
             ),
           );
           yield* Effect.forkChild(producer);
 
-          return Stream.fromQueue(output).pipe(Stream.ensuring(cleanup));
-        }).pipe(Effect.mapError(toRunFailure)),
+          return Stream.fromQueue(output);
+        }).pipe(Effect.mapError(toDemoRunFailure)),
       );
 
     const start = (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { Duration, Schema } from "effect";
+import { Duration, Effect, Schema } from "effect";
 
 import {
   AgentId,
@@ -12,12 +12,15 @@ import {
   AgentOutputError,
   AgentPolicy,
   AgentPolicyError,
+  ConversationId,
+  IdGenerator,
   ModelProtocolError,
   RunEvent,
   RunId,
   RunStarted,
   ToolCallFailed,
   ToolCallDeclared,
+  TurnId,
 } from "../src/index.ts";
 
 describe("core schemas", () => {
@@ -80,6 +83,10 @@ describe("core schemas", () => {
       AgentInputError.make({ message: "invalid trip input" }),
       AgentOutputError.make({ message: "invalid itinerary output" }),
       AgentPolicyError.make({ limit: "turns", message: "turn limit reached" }),
+      AgentPolicyError.make({
+        limit: "repeated-failures",
+        message: "3 consecutive Tool Call failures",
+      }),
       AgentApprovalDenied.make({
         toolCallId: "hold-1",
         toolName: "hold",
@@ -177,5 +184,26 @@ describe("core schemas", () => {
         toolCallId: "",
       }),
     ).toThrow();
+  });
+
+  it("mints valid, distinct branded identities from the default IdGenerator Layer", () => {
+    const program = Effect.gen(function* () {
+      const ids = yield* IdGenerator;
+      return {
+        firstConversation: yield* ids.nextConversationId,
+        secondConversation: yield* ids.nextConversationId,
+        run: yield* ids.nextRunId,
+        turn: yield* ids.nextTurnId,
+      };
+    }).pipe(Effect.provide(IdGenerator.layer));
+    const { firstConversation, secondConversation, run, turn } = Effect.runSync(program);
+
+    expect(Schema.decodeSync(ConversationId)(firstConversation)).toBe(firstConversation);
+    expect(Schema.decodeSync(RunId)(run)).toBe(run);
+    expect(Schema.decodeSync(TurnId)(turn)).toBe(turn);
+    expect(firstConversation).not.toBe(secondConversation);
+    expect(firstConversation.startsWith("conversation-")).toBe(true);
+    expect(run.startsWith("run-")).toBe(true);
+    expect(turn.startsWith("turn-")).toBe(true);
   });
 });

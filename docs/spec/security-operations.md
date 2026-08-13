@@ -188,7 +188,8 @@ include principal, reason, and before/after state digests.
 The OpenTelemetry surface includes:
 
 - trace per admitted submission and attempt;
-- spans for model calls, tool calls, approvals, compaction, storage, and child runs;
+- spans for model calls, tool calls, approvals, compaction, storage, sandbox executions, and
+  child runs;
 - metrics for latency, tokens, estimated cost, failures, retries, queue age, Attempt ownership,
   uncertainty, and settlement age;
 - structured logs for state transitions and operator actions.

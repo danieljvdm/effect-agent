@@ -57,11 +57,13 @@ const detached = yield * AgentRuntime.start(agent, input);
 
 const result = yield * detached.await;
 const completeTrace = yield * detached.events;
-const replay = detached.observe;
+const live = detached.observe;
 ```
 
-`start` is still scoped. “Detached” means replay observers cannot backpressure completion; it does
-not create a daemon fiber or survive process loss.
+`start` is still scoped. `observe` is a live multicast subscription: each subscription replays the
+events already emitted, follows the Run as it progresses, and ends once the Run settles. `events`
+is the complete replay, available after settlement. “Detached” means observers cannot backpressure
+completion; it does not create a daemon fiber or survive process loss.
 
 ## Turn boundaries
 

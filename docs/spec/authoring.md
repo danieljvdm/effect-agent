@@ -238,6 +238,12 @@ The Tool default is bounded parallel execution. The engine wraps Effect AI Toolk
 with Effect `Semaphore` permits and owns their structured concurrency. A Run or Tool may require
 sequential behavior.
 
+`repeatedFailureLimit` bounds consecutive terminal Tool Call failures across the whole Run. Each
+completed Turn folds its terminal Tool Call outcomes into one Run-level counter in declaration
+order; any terminal Tool Call success resets the counter. Reaching the limit fails the Run with
+the typed policy failure (`AgentPolicyError` with `limit: "repeated-failures"`) at the Turn seam,
+before the next model request. A `repeatedFailureLimit` of `0` disables the bound.
+
 Budget exhaustion is a typed non-success outcome.
 
 Subagent policy, hierarchical reservation, and ancestor accounting are specified as a proposal in

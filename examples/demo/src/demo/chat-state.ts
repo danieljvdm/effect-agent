@@ -13,7 +13,7 @@ import {
   type DemoRunHandle,
   type DemoScenario,
 } from "./operational-contracts";
-import { DemoRunRpcClient } from "./run-rpc-client";
+import { DemoRunRpcClient, DemoRunRpcRuntime } from "./run-rpc-client";
 
 export type ChatStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted";
 
@@ -96,7 +96,10 @@ const updateAssistant = (
 };
 
 /** Starts one standalone chat Run without sharing simulator state or cancellation. */
-export const runChatAtom = Atom.fn<DemoRunSelection>()(({ history, message, mode }, context) => {
+export const runChatAtom = DemoRunRpcRuntime.fn<DemoRunSelection>()((
+  { history, message, mode },
+  context,
+) => {
   const previous = context(chatStateAtom);
   const runNumber = previous.runNumber + 1;
   const assistantId = `assistant-${runNumber}`;
@@ -176,7 +179,6 @@ export const runChatAtom = Atom.fn<DemoRunSelection>()(({ history, message, mode
     }),
   ).pipe(
     Stream.runForEach(projectEvent),
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {
@@ -219,7 +221,7 @@ export interface CapabilityChatRequest {
 }
 
 /** Starts a live OpenAI travel Run or an explicit scripted replay in Chat. */
-export const runCapabilityChatAtom = Atom.fn<CapabilityChatRequest>()((
+export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>()((
   { message, scenario },
   context,
 ) => {
@@ -314,7 +316,6 @@ export const runCapabilityChatAtom = Atom.fn<CapabilityChatRequest>()((
     }),
   ).pipe(
     Stream.runForEach(projectEvent),
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {
@@ -363,7 +364,10 @@ export interface QueueChatUpdate {
 }
 
 /** Queues ordinary chat input without replacing the active travel Run. */
-export const queueChatUpdateAtom = Atom.fn<QueueChatUpdate>()(({ content }, context) => {
+export const queueChatUpdateAtom = DemoRunRpcRuntime.fn<QueueChatUpdate>()((
+  { content },
+  context,
+) => {
   const current = context(chatStateAtom);
   if (current.handle === null || current.activeExperience !== "capability") {
     return Effect.sync(() => {
@@ -399,7 +403,6 @@ export const queueChatUpdateAtom = Atom.fn<QueueChatUpdate>()(({ content }, cont
       ],
     });
   }).pipe(
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.catch((cause) =>
       Effect.sync(() => {
@@ -419,7 +422,10 @@ export interface ResolveChatApproval {
 }
 
 /** Resolves the approval card without replacing or interrupting its active Run. */
-export const resolveChatApprovalAtom = Atom.fn<ResolveChatApproval>()((request, context) => {
+export const resolveChatApprovalAtom = DemoRunRpcRuntime.fn<ResolveChatApproval>()((
+  request,
+  context,
+) => {
   const current = context(chatStateAtom);
   if (current.handle === null || current.activeExperience !== "capability") {
     return Effect.sync(() => {
@@ -440,7 +446,6 @@ export const resolveChatApprovalAtom = Atom.fn<ResolveChatApproval>()((request, 
       choice: request.choice,
     });
   }).pipe(
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.catch((cause) =>
       Effect.sync(() => {

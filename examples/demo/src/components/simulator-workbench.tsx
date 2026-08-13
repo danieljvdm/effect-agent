@@ -93,6 +93,11 @@ const scenarios: ReadonlyArray<{
     label: "Time fuse",
     detail: "Deadline: 10 ms",
   },
+  {
+    id: "tool-defect",
+    label: "Tool handler defect",
+    detail: "A dying handler still ends the stream with a typed failure",
+  },
 ];
 
 const isRunEvent = (event: DemoOperationalEventValue): event is RunEvent =>

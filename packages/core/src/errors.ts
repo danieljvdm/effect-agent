@@ -17,7 +17,15 @@ export class AgentOutputError extends Schema.TaggedErrorClass<AgentOutputError>(
 export class AgentPolicyError extends Schema.TaggedErrorClass<AgentPolicyError>()(
   "AgentPolicyError",
   {
-    limit: Schema.Literals(["turns", "tool-calls", "duration", "usage", "tokens", "cost"]),
+    limit: Schema.Literals([
+      "turns",
+      "tool-calls",
+      "duration",
+      "usage",
+      "tokens",
+      "cost",
+      "repeated-failures",
+    ]),
     message: Schema.String,
   },
 ) {}

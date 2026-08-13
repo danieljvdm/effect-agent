@@ -1,10 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
 
-import { Deferred, Effect, Exit, Fiber, Ref, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
 
 import {
   DemoApprovalPending,
   type DemoOperationalEvent,
+  DemoRunFailure,
   ResolveRunApprovalRequest,
   StartOperationalRunRequest,
 } from "./operational-contracts";
@@ -120,6 +121,47 @@ describe("Phase 2 operational runtime", () => {
       expect(Exit.isFailure(exit)).toBe(true);
       expect(starts).toEqual([0]);
       expect(events.some((event) => event._tag === "RunFailed")).toBe(true);
+    }).pipe(Effect.provide(DemoInteractiveRuntimeLive), Effect.scoped),
+  );
+
+  it.effect("terminalizes the client stream and frees the registry when a Tool handler dies", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DemoInteractiveRuntime;
+      const observed = yield* Ref.make<ReadonlyArray<DemoOperationalEvent>>([]);
+      const exit = yield* runtime
+        .start(StartOperationalRunRequest.make({ scenario: "tool-defect" }))
+        .pipe(
+          Stream.tap((event) => Ref.update(observed, (events) => [...events, event])),
+          Stream.runDrain,
+          Effect.exit,
+        );
+      const events = yield* Ref.get(observed);
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      const failure = Exit.isFailure(exit) ? Cause.squash(exit.cause) : undefined;
+      expect(Schema.is(DemoRunFailure)(failure)).toBe(true);
+      if (Schema.is(DemoRunFailure)(failure)) {
+        expect(failure.errorTag).toBe("DemoRunError");
+        expect(failure.message).toContain("crashed");
+      }
+      expect(events.some((event) => event._tag === "DemoRunOpened")).toBe(true);
+
+      const reopened = yield* Ref.make<ReadonlyArray<DemoOperationalEvent>>([]);
+      const secondExit = yield* runtime
+        .start(StartOperationalRunRequest.make({ scenario: "tool-defect" }))
+        .pipe(
+          Stream.tap((event) => Ref.update(reopened, (events) => [...events, event])),
+          Stream.runDrain,
+          Effect.exit,
+        );
+      const reopenedEvents = yield* Ref.get(reopened);
+
+      expect(Exit.isFailure(secondExit)).toBe(true);
+      const secondFailure = Exit.isFailure(secondExit) ? Cause.squash(secondExit.cause) : undefined;
+      if (Schema.is(DemoRunFailure)(secondFailure)) {
+        expect(secondFailure.errorTag).not.toBe("DemoRunAlreadyActive");
+      }
+      expect(reopenedEvents.some((event) => event._tag === "DemoRunOpened")).toBe(true);
     }).pipe(Effect.provide(DemoInteractiveRuntimeLive), Effect.scoped),
   );
 

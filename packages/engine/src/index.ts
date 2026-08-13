@@ -4,15 +4,17 @@ import {
   DateTime,
   Duration,
   Effect,
+  Exit,
   Fiber,
   Layer,
   Metric,
   Option,
-  Ref,
+  PubSub,
   Schema,
   Scope,
   Semaphore,
   Stream,
+  Take,
 } from "effect";
 import {
   Agent,
@@ -157,6 +159,7 @@ interface RunContext {
   readonly pendingFollowUps: Array<Prompt.RawInput>;
   history: Prompt.Prompt;
   modelCalls: number;
+  consecutiveToolFailures: number;
   inputTokens: number;
   outputTokens: number;
   costMicrousd: number;
@@ -297,12 +300,32 @@ const firstOpenPart = (trace: TurnTrace): string | undefined => {
 
 /**
  * `LanguageModel.streamText` has already decoded a complete Tool Call against
- * the owning parameter Schema. The pinned `Toolkit.handle` implementation
- * decodes once more internally, despite its decoded-parameter signature, so
- * transformed values must be encoded back to that native runtime boundary.
- * These private function-type assertions restore correlation lost by dynamic
- * record lookup only around a successful Schema encode; they never bypass
- * validation.
+ * the owning parameter Schema, so transformed values must be encoded back to
+ * the native runtime boundary before they can cross it again. These private
+ * function-type assertions restore correlation lost by dynamic record lookup
+ * only around a successful Schema encode; they never bypass validation.
+ */
+const encodeToolCallParameters = <Tools extends Record<string, Tool.Any>>(
+  tool: ToolUnion<Tools>,
+  toolName: string,
+  decodedParams: Tool.Parameters<ToolUnion<Tools>>,
+): Effect.Effect<unknown, ModelProtocolError, Tool.HandlerServices<ToolUnion<Tools>>> => {
+  const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
+    input: Tool.Parameters<ToolUnion<Tools>>,
+  ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;
+  return encodeParameters(decodedParams).pipe(
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Invalid parameters for Tool ${toolName}: ${cause.message}`,
+      }),
+    ),
+  );
+};
+
+/**
+ * The pinned `Toolkit.handle` implementation decodes once more internally,
+ * despite its decoded-parameter signature, so handler parameters are the
+ * encoded form produced by `encodeToolCallParameters`.
  */
 const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
@@ -321,15 +344,7 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   }
   const tool = toolkit.tools[name] as ToolUnion<Tools>;
   const decodedParams = call.params as Tool.Parameters<ToolUnion<Tools>>;
-  const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
-    input: Tool.Parameters<ToolUnion<Tools>>,
-  ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;
-  return encodeParameters(decodedParams).pipe(
-    Effect.mapError((cause) =>
-      ModelProtocolError.make({
-        message: `Invalid parameters for Tool ${call.name}: ${cause.message}`,
-      }),
-    ),
+  return encodeToolCallParameters<Tools>(tool, call.name, decodedParams).pipe(
     Effect.map((encodedParams) => ({
       call,
       name,
@@ -744,13 +759,65 @@ const schedulingConcurrency = (
   return Effect.succeed(Math.min(configured, override.concurrency));
 };
 
+/**
+ * One terminal outcome per declared Tool Call of the completed Turn, in
+ * declaration order. Provider-executed results are read from the response
+ * parts; application results from the settled batch.
+ */
+const turnToolFailures = (trace: TurnTrace): ReadonlyArray<boolean> => {
+  const outcomes: Array<boolean> = [];
+  for (const [id, call] of trace.toolCalls) {
+    if (call.providerExecuted) {
+      for (const part of trace.parts) {
+        if (part.type === "tool-result" && part.id === id && part.preliminary !== true) {
+          outcomes.push(part.isFailure);
+          break;
+        }
+      }
+      continue;
+    }
+    const result = trace.applicationToolResults.find((candidate) => candidate?.id === id);
+    if (result !== undefined) {
+      outcomes.push(result.isFailure);
+    }
+  }
+  return outcomes;
+};
+
+/**
+ * Fold the completed Turn's terminal Tool outcomes into the Run's
+ * consecutive-failure counter in declaration order, then enforce the
+ * repeated-failure Stop Policy before the next model request. A terminal
+ * success resets the counter; a `repeatedFailureLimit` of `0` disables the
+ * bound.
+ */
+const applyRepeatedFailurePolicy = (
+  context: RunContext,
+  trace: TurnTrace,
+  repeatedFailureLimit: number,
+): Effect.Effect<void, AgentPolicyError> =>
+  Effect.suspend(() => {
+    for (const isFailure of turnToolFailures(trace)) {
+      context.consecutiveToolFailures = isFailure ? context.consecutiveToolFailures + 1 : 0;
+    }
+    if (repeatedFailureLimit > 0 && context.consecutiveToolFailures >= repeatedFailureLimit) {
+      return Effect.fail(
+        AgentPolicyError.make({
+          limit: "repeated-failures",
+          message: `Agent reached its ${repeatedFailureLimit} consecutive Tool Call failure limit`,
+        }),
+      );
+    }
+    return Effect.void;
+  });
+
 const inputsToPrompt = (
   inputs: ReadonlyArray<Prompt.RawInput>,
-): Effect.Effect<Prompt.Prompt, ModelProtocolError> =>
+): Effect.Effect<Prompt.Prompt, AgentInputError> =>
   Effect.try({
     try: () => Prompt.fromMessages(inputs.flatMap((input) => Prompt.make(input).content)),
     catch: (cause) =>
-      ModelProtocolError.make({
+      AgentInputError.make({
         message: `Unable to materialize queued Run input: ${errorMessage(cause)}`,
       }),
   });
@@ -806,7 +873,7 @@ const appendInputs = <HookError, HookRequirements>(
   source: Prompt.Prompt,
   inputs: ReadonlyArray<Prompt.RawInput>,
   options: RunOptions<HookError, HookRequirements>,
-): Effect.Effect<Prompt.Prompt, HookError | ModelProtocolError, HookRequirements> =>
+): Effect.Effect<Prompt.Prompt, HookError | AgentInputError, HookRequirements> =>
   Effect.gen(function* () {
     if (inputs.length === 0) {
       return source;
@@ -833,9 +900,15 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     const inputTokens = Math.max(
       0,
       trace.usage.inputTokens.total ??
-        (trace.usage.inputTokens.uncached ?? 0) + (trace.usage.inputTokens.cacheRead ?? 0),
+        (trace.usage.inputTokens.uncached ?? 0) +
+          (trace.usage.inputTokens.cacheRead ?? 0) +
+          (trace.usage.inputTokens.cacheWrite ?? 0),
     );
-    const outputTokens = Math.max(0, trace.usage.outputTokens.total ?? 0);
+    const outputTokens = Math.max(
+      0,
+      trace.usage.outputTokens.total ??
+        (trace.usage.outputTokens.text ?? 0) + (trace.usage.outputTokens.reasoning ?? 0),
+    );
     const totalTokens = inputTokens + outputTokens;
     const costMicrousd =
       options.estimateCostMicrousd === undefined
@@ -888,7 +961,10 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     }
   });
 
-const eventBase = Effect.fn("AgentRuntime.eventBase")(function* (context: RunContext) {
+// `Effect.fnUntraced`: this helper runs for every streamed Response Part, so a
+// named span here would emit one span per TextDelta/ReasoningDelta. Spans stay
+// on per-Run, per-Turn, and per-Tool operations.
+const eventBase = Effect.fnUntraced(function* (context: RunContext) {
   const timestamp = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
   const sequence = context.sequence;
   context.sequence += 1;
@@ -1055,9 +1131,10 @@ const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
   return Prompt.fromMessages(messages);
 };
 
-const eventsForPart = Effect.fn("AgentRuntime.eventsForPart")(function* <
-  Tools extends Record<string, Tool.Any>,
->(
+// `Effect.fnUntraced`: this dispatcher runs for every streamed Response Part,
+// so a named span here would emit one span per TextDelta/ReasoningDelta. The
+// enclosing model request keeps its `AgentRuntime.model` stream span.
+const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, Tool.Any>>(
   context: RunContext,
   turnId: TurnId,
   turn: number,
@@ -1173,17 +1250,10 @@ const eventsForPart = Effect.fn("AgentRuntime.eventsForPart")(function* <
       }
       const toolCallId = yield* decodeToolCallId(part.id);
       const tool = tools[part.name] as ToolUnion<Tools>;
-      const encodeParameters = Schema.encodeUnknownEffect(tool.parametersSchema) as (
-        input: Tool.Parameters<ToolUnion<Tools>>,
-      ) => Effect.Effect<unknown, Schema.SchemaError, Tool.HandlerServices<ToolUnion<Tools>>>;
-      const encodedParameters = yield* encodeParameters(
+      const encodedParameters = yield* encodeToolCallParameters<Tools>(
+        tool,
+        part.name,
         part.params as Tool.Parameters<ToolUnion<Tools>>,
-      ).pipe(
-        Effect.mapError((cause) =>
-          ModelProtocolError.make({
-            message: `Invalid parameters for Tool ${part.name}: ${cause.message}`,
-          }),
-        ),
       );
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
       trace.toolCalls.set(part.id, {
@@ -1470,35 +1540,71 @@ const makeTurn = <
               }),
             );
           }
-          if (providerOnly && trace.finishReason === "stop") {
-            const responsePrompt = promptFromTurnParts(trace);
-            const history = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
-            yield* advanceHistory(context, history, options);
-            const steering = yield* drainInputs(context, options);
-            const queued =
-              steering.length > 0
-                ? steering
-                : takeFollowUps(context, options.commandDrainPolicy ?? "one");
-            if (queued.length > 0) {
-              if (turn >= agent.definition.policy.maxTurns) {
-                return failRunEventStream(
-                  AgentPolicyError.make({
-                    limit: "turns",
-                    message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
-                  }),
-                );
-              }
-              const nextPrompt = yield* appendInputs(context, history, queued, options);
+
+          /** Official history advanced through this Turn's response, plus any Tool message. */
+          const historyWithResponse = (...additions: ReadonlyArray<Prompt.Message>) =>
+            Prompt.fromMessages([
+              ...prompt.content,
+              ...promptFromTurnParts(trace).content,
+              ...additions,
+            ]);
+
+          /**
+           * Advance official history for a Turn that always continues, drain
+           * steering at the safe seam, and start the next Turn. The `maxTurns`
+           * guard already ran for these Tool Call sites.
+           */
+          const continueTurn = (history: Prompt.Prompt) =>
+            Effect.gen(function* () {
+              yield* advanceHistory(context, history, options);
+              const steering = yield* drainInputs(context, options);
+              const nextPrompt = yield* appendInputs(context, history, steering, options);
               return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
-            }
-            const output = yield* decodeFinalOutput(agent, trace.text.join(""));
-            const completed = RunCompleted.make({
-              ...(yield* eventBase(context)),
-              output,
-              turns: turn,
-              finishReason: "model-stop",
             });
-            return Stream.succeed<RunEvent>(completed);
+
+          /**
+           * The otherwise-stop seam: advance official history, drain steering,
+           * fall back to buffered follow-ups, then either start the next Turn
+           * under the `maxTurns` and repeated-failure Stop Policy bounds or
+           * complete the Run with the Turn's decoded final output.
+           */
+          const settleOrFollowUp = (history: Prompt.Prompt) =>
+            Effect.gen(function* () {
+              yield* advanceHistory(context, history, options);
+              const steering = yield* drainInputs(context, options);
+              const queued =
+                steering.length > 0
+                  ? steering
+                  : takeFollowUps(context, options.commandDrainPolicy ?? "one");
+              if (queued.length > 0) {
+                if (turn >= agent.definition.policy.maxTurns) {
+                  return failRunEventStream(
+                    AgentPolicyError.make({
+                      limit: "turns",
+                      message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+                    }),
+                  );
+                }
+                yield* applyRepeatedFailurePolicy(
+                  context,
+                  trace,
+                  agent.definition.policy.repeatedFailureLimit,
+                );
+                const nextPrompt = yield* appendInputs(context, history, queued, options);
+                return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+              }
+              const output = yield* decodeFinalOutput(agent, trace.text.join(""));
+              const completed = RunCompleted.make({
+                ...(yield* eventBase(context)),
+                output,
+                turns: turn,
+                finishReason: "model-stop",
+              });
+              return Stream.succeed<RunEvent>(completed);
+            });
+
+          if (providerOnly && trace.finishReason === "stop") {
+            return yield* settleOrFollowUp(historyWithResponse());
           }
 
           if (trace.toolCalls.size > 0) {
@@ -1518,12 +1624,12 @@ const makeTurn = <
               );
             }
             if (trace.applicationToolCalls.length === 0) {
-              const responsePrompt = promptFromTurnParts(trace);
-              const history = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
-              yield* advanceHistory(context, history, options);
-              const steering = yield* drainInputs(context, options);
-              const nextPrompt = yield* appendInputs(context, history, steering, options);
-              return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+              yield* applyRepeatedFailurePolicy(
+                context,
+                trace,
+                agent.definition.policy.repeatedFailureLimit,
+              );
+              return yield* continueTurn(historyWithResponse());
             }
             const toolkit = yield* agent.definition.toolkit;
             const concurrency = yield* schedulingConcurrency(
@@ -1551,7 +1657,6 @@ const makeTurn = <
                     }),
                   );
                 }
-                const responsePrompt = promptFromTurnParts(trace);
                 const orderedResults: Array<(typeof trace.applicationToolResults)[number]> = [];
                 for (const call of trace.applicationToolCalls) {
                   const result = trace.applicationToolResults.find(
@@ -1564,6 +1669,11 @@ const makeTurn = <
                   }
                   orderedResults.push(result);
                 }
+                yield* applyRepeatedFailurePolicy(
+                  context,
+                  trace,
+                  agent.definition.policy.repeatedFailureLimit,
+                );
                 const toolMessage = Prompt.makeMessage("tool", {
                   content: orderedResults.map((result) =>
                     Prompt.makePart("tool-result", {
@@ -1574,15 +1684,7 @@ const makeTurn = <
                     }),
                   ),
                 });
-                const nextPrompt = Prompt.fromMessages([
-                  ...prompt.content,
-                  ...responsePrompt.content,
-                  toolMessage,
-                ]);
-                yield* advanceHistory(context, nextPrompt, options);
-                const steering = yield* drainInputs(context, options);
-                const nextHistory = yield* appendInputs(context, nextPrompt, steering, options);
-                return makeTurn(agent, context, nextHistory, turn + 1, toolCalls, options);
+                return yield* continueTurn(historyWithResponse(toolMessage));
               }),
             );
             return toolResults.pipe(Stream.concat(continuationAfterTools));
@@ -1595,34 +1697,7 @@ const makeTurn = <
               }),
             );
           }
-          const responsePrompt = promptFromTurnParts(trace);
-          const history = Prompt.fromMessages([...prompt.content, ...responsePrompt.content]);
-          yield* advanceHistory(context, history, options);
-          const steering = yield* drainInputs(context, options);
-          const queued =
-            steering.length > 0
-              ? steering
-              : takeFollowUps(context, options.commandDrainPolicy ?? "one");
-          if (queued.length > 0) {
-            if (turn >= agent.definition.policy.maxTurns) {
-              return failRunEventStream(
-                AgentPolicyError.make({
-                  limit: "turns",
-                  message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
-                }),
-              );
-            }
-            const nextPrompt = yield* appendInputs(context, history, queued, options);
-            return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
-          }
-          const output = yield* decodeFinalOutput(agent, trace.text.join(""));
-          const completed = RunCompleted.make({
-            ...(yield* eventBase(context)),
-            output,
-            turns: turn,
-            finishReason: "model-stop",
-          });
-          return Stream.succeed<RunEvent>(completed);
+          return yield* settleOrFollowUp(historyWithResponse());
         }),
       );
 
@@ -1689,6 +1764,7 @@ const stream = <
         pendingFollowUps: [],
         history: options.history ?? Prompt.empty,
         modelCalls: 0,
+        consecutiveToolFailures: 0,
         inputTokens: 0,
         outputTokens: 0,
         costMicrousd: 0,
@@ -1783,6 +1859,44 @@ interface RunReduction {
   readonly completed?: Extract<RunEvent, { readonly _tag: "RunCompleted" }>;
 }
 
+/** Reduce one semantic Run event stream to its decoded terminal result. */
+const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
+  agent: AgentValue,
+  events: Stream.Stream<RunEvent, Error, Requirements>,
+): Effect.Effect<
+  AgentResult<Agent.Output<AgentValue>>,
+  Error | ModelProtocolError | AgentOutputError,
+  Requirements | AgentValue["definition"]["output"]["DecodingServices"]
+> =>
+  Effect.gen(function* () {
+    const reduction = yield* Stream.runFold(
+      events,
+      (): RunReduction => ({}),
+      (state, event) => (event._tag === "RunCompleted" ? { completed: event } : state),
+    );
+    if (reduction.completed === undefined) {
+      return yield* ModelProtocolError.make({
+        message: "Agent stream ended without RunCompleted",
+      });
+    }
+    const completed = reduction.completed;
+    const candidateOutput: unknown = completed.output;
+    const output = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
+      Effect.mapError((cause) =>
+        AgentOutputError.make({
+          message: cause.message,
+        }),
+      ),
+    );
+    return {
+      output,
+      conversationId: completed.conversationId,
+      runId: completed.runId,
+      turns: completed.turns,
+      finishReason: completed.finishReason,
+    };
+  });
+
 /** Reduce the runtime's event stream to its decoded terminal result. */
 const run = Effect.fn("AgentRuntime.run")(function* <
   InputSchema extends Schema.Top,
@@ -1816,35 +1930,20 @@ const run = Effect.fn("AgentRuntime.run")(function* <
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
 > {
   yield* Scope.Scope;
-  const reduction = yield* Stream.runFold(
-    stream(agent, input, options),
-    (): RunReduction => ({}),
-    (state, event) => (event._tag === "RunCompleted" ? { completed: event } : state),
-  );
-  if (reduction.completed === undefined) {
-    return yield* ModelProtocolError.make({
-      message: "Agent stream ended without RunCompleted",
-    });
-  }
-  const completed = reduction.completed;
-  const candidateOutput: unknown = completed.output;
-  const output = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
-    Effect.mapError((cause) =>
-      AgentOutputError.make({
-        message: cause.message,
-      }),
-    ),
-  );
-  return {
-    output,
-    conversationId: completed.conversationId,
-    runId: completed.runId,
-    turns: completed.turns,
-    finishReason: completed.finishReason,
-  };
+  return yield* reduceRunEvents(agent, stream(agent, input, options));
 });
 
-/** Scoped detached execution whose replay observer cannot backpressure Run completion. */
+/**
+ * Scoped detached execution whose observers cannot backpressure Run
+ * completion.
+ *
+ * `observe` is a live multicast subscription: each subscription replays every
+ * event the Run has already emitted, follows subsequent events as they occur,
+ * and ends once the Run settles. Events are never dropped for a slow
+ * subscriber, and publishing never blocks the Run. `events` remains the
+ * complete replay, available after settlement. Both belong to the `start`
+ * Scope; observing after that Scope closes interrupts the observer.
+ */
 export interface DetachedRun<Output, Error> {
   readonly await: Effect.Effect<AgentResult<Output>, Error>;
   readonly events: Effect.Effect<ReadonlyArray<RunEvent>>;
@@ -1886,43 +1985,34 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
 > {
   yield* Scope.Scope;
-  const captured = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-  const execution = Effect.gen(function* () {
-    const reduction = yield* Stream.runFold(
-      stream(agent, input, options).pipe(
-        Stream.tap((event) => Ref.update(captured, (events) => [...events, event])),
-      ),
-      (): RunReduction => ({}),
-      (state, event) => (event._tag === "RunCompleted" ? { completed: event } : state),
-    );
-    if (reduction.completed === undefined) {
-      return yield* ModelProtocolError.make({
-        message: "Agent stream ended without RunCompleted",
-      });
-    }
-    const completed = reduction.completed;
-    const candidateOutput: unknown = completed.output;
-    const output = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
-      Effect.mapError((cause) =>
-        AgentOutputError.make({
-          message: cause.message,
+  // Single-writer append-only trace owned by the Run fiber; readers only see
+  // it after the fiber settles, so a plain array avoids the quadratic cost of
+  // copying an immutable Ref array per event.
+  const captured: Array<RunEvent> = [];
+  // The unbounded replay window keeps `observe` subscriptions live without
+  // backpressuring the Run: it retains references to the same events as
+  // `captured`, replays them to subscribers that attach mid-Run or after
+  // settlement, and the terminal `Exit.void` Take ends every subscription.
+  const pubsub = yield* PubSub.unbounded<Take.Take<RunEvent>>({
+    replay: Number.MAX_SAFE_INTEGER,
+  });
+  yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
+  const execution = reduceRunEvents(
+    agent,
+    stream(agent, input, options).pipe(
+      Stream.tap((event) =>
+        Effect.suspend(() => {
+          captured.push(event);
+          return PubSub.publish(pubsub, [event]);
         }),
       ),
-    );
-    return {
-      output,
-      conversationId: completed.conversationId,
-      runId: completed.runId,
-      turns: completed.turns,
-      finishReason: completed.finishReason,
-    };
-  });
+    ),
+  ).pipe(Effect.ensuring(PubSub.publish(pubsub, Exit.void)));
   const fiber = yield* execution.pipe(Effect.forkScoped);
-  const events = Fiber.await(fiber).pipe(Effect.andThen(Ref.get(captured)));
   return {
     await: Fiber.join(fiber),
-    events,
-    observe: Stream.unwrap(events.pipe(Effect.map(Stream.fromIterable))),
+    events: Fiber.await(fiber).pipe(Effect.andThen(Effect.sync(() => captured.slice()))),
+    observe: Stream.fromPubSubTake(pubsub),
   };
 });
 

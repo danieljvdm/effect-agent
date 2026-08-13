@@ -30,9 +30,30 @@ finalization.
 
 ## Exercise the public runtime
 
-Tests provide the same Layers a real application would provide:
+Tests provide the same Layers a real application would provide, swapping the default
+`IdGenerator.layer` (random Web Crypto UUIDs) for a deterministic Ref-counter Layer so
+identities are stable across runs:
 
 ```ts
+import { Effect, Layer, Ref, Schema } from "effect";
+import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+
+const DeterministicIdGeneratorLive = Layer.effect(
+  IdGenerator,
+  Effect.gen(function* () {
+    const sequence = yield* Ref.make(0);
+    const next = Ref.updateAndGet(sequence, (n) => n + 1);
+
+    return IdGenerator.of({
+      nextConversationId: next.pipe(
+        Effect.map((n) => Schema.decodeSync(ConversationId)(`conversation-${n}`)),
+      ),
+      nextRunId: next.pipe(Effect.map((n) => Schema.decodeSync(RunId)(`run-${n}`))),
+      nextTurnId: next.pipe(Effect.map((n) => Schema.decodeSync(TurnId)(`turn-${n}`))),
+    });
+  }),
+);
+
 const TestRuntimeLive = Layer.mergeAll(
   ToolkitLive,
   DomainServicesTest,

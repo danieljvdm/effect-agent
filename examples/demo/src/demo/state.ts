@@ -10,7 +10,7 @@ import {
   type DemoRunHandle,
   type DemoScenario,
 } from "./operational-contracts";
-import { DemoRunRpcClient } from "./run-rpc-client";
+import { DemoRunRpcClient, DemoRunRpcRuntime } from "./run-rpc-client";
 
 export type DemoStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted" | "suspended";
 
@@ -42,10 +42,7 @@ export const demoStateAtom = Atom.make<DemoState>(initialDemoState);
 const failureMessage = (error: unknown): string =>
   decodeErrorDetails(error).message ?? String(error);
 
-const failControl = (
-  context: Parameters<Parameters<typeof Atom.fn>[0]>[1],
-  error: unknown,
-): Effect.Effect<void> =>
+const failControl = (context: Atom.FnContext, error: unknown): Effect.Effect<void> =>
   Effect.sync(() => {
     const current = context(demoStateAtom);
     context.set(demoStateAtom, {
@@ -55,7 +52,7 @@ const failControl = (
   });
 
 /** Starts one bounded Phase 2 scenario and projects its streamed evidence. */
-export const runOperationalDemoAtom = Atom.fn<DemoScenario>()((scenario, context) => {
+export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scenario, context) => {
   const previous = context(demoStateAtom);
   context.set(demoStateAtom, {
     ...previous,
@@ -122,7 +119,6 @@ export const runOperationalDemoAtom = Atom.fn<DemoScenario>()((scenario, context
     }),
   ).pipe(
     Stream.runForEach(projectEvent),
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {
@@ -164,7 +160,7 @@ export interface QueueDemoCommand {
 }
 
 /** Offers a command without interrupting the active stream or Tool batch. */
-export const queueDemoCommandAtom = Atom.fn<QueueDemoCommand>()((request, context) => {
+export const queueDemoCommandAtom = DemoRunRpcRuntime.fn<QueueDemoCommand>()((request, context) => {
   const handle = context(demoStateAtom).handle;
   if (handle === null) {
     return failControl(context, "No active Run is ready to accept input.");
@@ -181,7 +177,6 @@ export const queueDemoCommandAtom = Atom.fn<QueueDemoCommand>()((request, contex
       content: request.content,
     });
   }).pipe(
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.catch((cause) => failControl(context, cause)),
   );
@@ -193,7 +188,10 @@ export interface ResolveDemoApproval {
 }
 
 /** Resolves a pending approval exactly once through a separate unary RPC. */
-export const resolveDemoApprovalAtom = Atom.fn<ResolveDemoApproval>()((request, context) => {
+export const resolveDemoApprovalAtom = DemoRunRpcRuntime.fn<ResolveDemoApproval>()((
+  request,
+  context,
+) => {
   const handle = context(demoStateAtom).handle;
   if (handle === null) {
     return failControl(context, "No active Run has a pending approval.");
@@ -210,7 +208,6 @@ export const resolveDemoApprovalAtom = Atom.fn<ResolveDemoApproval>()((request, 
       choice: request.choice,
     });
   }).pipe(
-    Effect.provide(DemoRunRpcClient.layer),
     Effect.scoped,
     Effect.catch((cause) => failControl(context, cause)),
   );

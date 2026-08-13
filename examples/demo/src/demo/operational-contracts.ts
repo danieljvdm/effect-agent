@@ -17,6 +17,7 @@ export const DemoScenario = Schema.Literals([
   "budget-tools",
   "budget-cost",
   "budget-duration",
+  "tool-defect",
 ]);
 export type DemoScenario = typeof DemoScenario.Type;
 

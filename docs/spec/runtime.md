@@ -62,6 +62,13 @@ Normative sequence:
 The transition reducer should be pure wherever possible. Effects interpret decisions; they do not
 hide transition rules.
 
+Stop Policy evaluation (step 16) enforces the finite Agent Policy at the Turn seam, before the
+next model request. Turn and Tool Call limits fail the Run before the work that would exceed them
+starts. Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool Call
+outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool Call
+success resets it, and reaching `repeatedFailureLimit` fails the Run with the typed policy failure
+(`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.
+
 ## 4. Effect AI response reduction
 
 The reducer accepts Effect AI `Response.StreamPart` values. It validates:

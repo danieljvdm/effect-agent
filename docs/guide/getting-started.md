@@ -126,6 +126,7 @@ requirements join the Run's `R`.
 
 ```ts
 import { Effect } from "effect";
+import { IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 
 const program = AgentRuntime.run(Triage, {
@@ -134,14 +135,15 @@ const program = AgentRuntime.run(Triage, {
 }).pipe(
   Effect.provide(TriageToolkitLive),
   Effect.provide(IssueRepoLive),
-  Effect.provide(IdGeneratorLive),
+  Effect.provide(IdGenerator.layer),
   Effect.provide(OpenAiClientLive),
   Effect.scoped,
 );
 ```
 
-`IssueRepoLive`, `IdGeneratorLive`, and `OpenAiClientLive` are application Layers. Their exact
-construction is intentionally outside the Definition.
+`IssueRepoLive` and `OpenAiClientLive` are application Layers whose exact construction is
+intentionally outside the Definition. `IdGenerator.layer` is the framework's default identity
+authority backed by Web Crypto's `randomUUID`; tests replace it with a deterministic Layer.
 
 ::: tip Deterministic first
 The repository's ordinary tests bind the same Definitions to `ScriptedModel`, not a live provider.

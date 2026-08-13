@@ -1,4 +1,4 @@
-import { ProducerEpoch } from "@effect-agent/session";
+import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
 import { Schema } from "effect";
 
 /** The SQLite file uses a private-development format this adapter cannot read. */
@@ -31,22 +31,45 @@ export class SqliteStorageError extends Schema.TaggedErrorClass<SqliteStorageErr
   },
 ) {}
 
-/** A canonical batch retry conflicts with existing append state. */
+/**
+ * A canonical batch retry conflicts with existing append state. Tail conflicts carry the
+ * actual committed tail as a diagnostic resume hint.
+ */
 export class SqliteAppendConflict extends Schema.TaggedErrorClass<SqliteAppendConflict>()(
   "SqliteAppendConflict",
   {
     message: Schema.String,
-    reason: Schema.Literals(["batch-digest", "tail"]),
+    reason: Schema.Literals(["batch-digest", "record-identity", "tail"]),
+    actualTailSequence: Schema.optionalKey(CanonicalSequence),
+    actualTailDigest: Schema.optionalKey(Schema.String),
   },
 ) {}
 
-/** A producer epoch is older than the current conversation writer. */
+/**
+ * A producer epoch does not match the Conversation's current writer registration. Appends
+ * require the exact registered epoch, so both older and newer unregistered epochs are fenced;
+ * a newer epoch takes over by materializing first.
+ */
 export class SqliteFenceRejected extends Schema.TaggedErrorClass<SqliteFenceRejected>()(
   "SqliteFenceRejected",
   {
     actualEpoch: ProducerEpoch,
     message: Schema.String,
     producerEpoch: ProducerEpoch,
+  },
+) {}
+
+/**
+ * A write transaction could not acquire the SQLite write lock within the configured busy
+ * timeout (SQLITE_BUSY / SQLITE_LOCKED). Another transiently coexisting owner is writing;
+ * the operation did not mutate canonical state and is safe to retry.
+ */
+export class SqliteWriteContention extends Schema.TaggedErrorClass<SqliteWriteContention>()(
+  "SqliteWriteContention",
+  {
+    cause: Schema.optionalKey(Schema.Defect()),
+    message: Schema.String,
+    operation: Schema.String,
   },
 ) {}
 

@@ -17,6 +17,8 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
+  ConversationTail,
+  ConversationTailRequest,
   digestCanonicalBatch,
   Digest,
   EMPTY_TAIL_DIGEST,
@@ -55,6 +57,14 @@ import {
 export interface SqliteStorageOptions {
   readonly filename: string;
   readonly observationPollInterval?: number | undefined;
+  /** Bounded SQLITE_BUSY retry window for write-lock acquisition, in milliseconds. */
+  readonly busyTimeout?: number | undefined;
+  /**
+   * Re-verify every stored payload and digest chain while opening the store. Defaults to
+   * off: per-operation Schema decoding and the digest chain already fail clearly on corrupt
+   * rows without scanning the whole database on every open.
+   */
+  readonly verifyOnOpen?: boolean | undefined;
   readonly failpoint?: SqliteStorageFailpointHandler | undefined;
 }
 
@@ -66,6 +76,7 @@ export type SqliteStorageInitializationError =
 const OffsetText = Schema.String.check(Schema.isMaxLength(4 * 1024));
 const SQLITE_OFFSET_PREFIX = "effect-agent-sqlite@1:";
 const ZERO_CANONICAL_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
+const isDigest = Schema.is(Digest);
 
 const storeError = (operation: string, error: { readonly message: string }) =>
   ConversationStoreError.make({
@@ -232,6 +243,27 @@ const tailDigestAt = Effect.fn("SqliteConversationStore.tailDigestAt")(function*
   );
 });
 
+const groupByKey = <A>(
+  rows: ReadonlyArray<A>,
+  key: (row: A) => string,
+): ReadonlyMap<string, ReadonlyArray<A>> => {
+  const grouped = new Map<string, Array<A>>();
+  for (const row of rows) {
+    const existing = grouped.get(key(row));
+    if (existing === undefined) {
+      grouped.set(key(row), [row]);
+    } else {
+      existing.push(row);
+    }
+  }
+  return grouped;
+};
+
+/**
+ * Opt-in full integrity audit (`verifyOnOpen`). Every stored payload is decoded, re-encoded,
+ * and re-digested against the canonical chain. Routine opens skip this scan: per-operation
+ * Schema decoding plus the digest chain already fail clearly on corrupt rows.
+ */
 const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPayloads")(function* (
   journal: SqliteJournal,
   crypto: Crypto.Crypto,
@@ -276,16 +308,19 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
     ),
   );
 
+  const batchesByConversation = groupByKey(batches, ({ row }) => row.conversation_id);
+  const recordsByConversation = groupByKey(records, ({ row }) => row.conversation_id);
+  const checkpointsByConversation = groupByKey(checkpoints, ({ row }) => row.conversation_id);
+  const materializedIds = new Set(
+    stored.conversations.map((conversation) => conversation.conversation_id),
+  );
+
   for (const conversation of stored.conversations) {
-    const conversationBatches = batches.filter(
-      ({ row }) => row.conversation_id === conversation.conversation_id,
-    );
-    const conversationRecords = records.filter(
-      ({ row }) => row.conversation_id === conversation.conversation_id,
-    );
-    const conversationCheckpoints = checkpoints.filter(
-      ({ row }) => row.conversation_id === conversation.conversation_id,
-    );
+    const conversationBatches = batchesByConversation.get(conversation.conversation_id) ?? [];
+    const conversationRecords = recordsByConversation.get(conversation.conversation_id) ?? [];
+    const conversationCheckpoints =
+      checkpointsByConversation.get(conversation.conversation_id) ?? [];
+    const recordsByBatch = groupByKey(conversationRecords, ({ row }) => row.batch_id);
     let previousDigest = EMPTY_TAIL_DIGEST;
     let expectedSequence = 1;
     const tailDigests = new Map<number, string>([[0, EMPTY_TAIL_DIGEST]]);
@@ -322,9 +357,7 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
         });
       }
 
-      const batchRecords = conversationRecords.filter(
-        ({ row }) => row.batch_id === batchRow.batch_id,
-      );
+      const batchRecords = recordsByBatch.get(batchRow.batch_id) ?? [];
       if (batchRecords.length !== canonicalBatch.records.length) {
         return yield* SqliteStorageCorruptionError.make({
           table: "effect_agent_canonical_records",
@@ -404,24 +437,9 @@ const decodeStartupPayloads = Effect.fn("SqliteConversationStore.decodeStartupPa
   }
 
   if (
-    batches.some(
-      ({ row }) =>
-        !stored.conversations.some(
-          (conversation) => conversation.conversation_id === row.conversation_id,
-        ),
-    ) ||
-    records.some(
-      ({ row }) =>
-        !stored.conversations.some(
-          (conversation) => conversation.conversation_id === row.conversation_id,
-        ),
-    ) ||
-    checkpoints.some(
-      ({ row }) =>
-        !stored.conversations.some(
-          (conversation) => conversation.conversation_id === row.conversation_id,
-        ),
-    )
+    batches.some(({ row }) => !materializedIds.has(row.conversation_id)) ||
+    records.some(({ row }) => !materializedIds.has(row.conversation_id)) ||
+    checkpoints.some(({ row }) => !materializedIds.has(row.conversation_id))
   ) {
     return yield* SqliteStorageCorruptionError.make({
       table: "effect_agent_conversations",
@@ -436,8 +454,10 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
   const failpoint = yield* SqliteStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
-  const journal = yield* initializeSqliteJournal(sql, failpoint.hit);
-  yield* decodeStartupPayloads(journal, crypto);
+  const journal = yield* initializeSqliteJournal(sql, failpoint.hit, config.busyTimeout);
+  if (config.verifyOnOpen) {
+    yield* decodeStartupPayloads(journal, crypto);
+  }
 
   const provideCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>) =>
     Effect.provideService(effect, Crypto.Crypto, crypto);
@@ -510,11 +530,19 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
           return mapFence(validated.conversationId, error);
         }
         if (error instanceof SqliteAppendConflict) {
-          return AppendConflict.make({
-            conversationId: validated.conversationId,
-            batchId: validated.batch.batchId,
-            reason: error.reason,
-          });
+          return error.actualTailSequence !== undefined && isDigest(error.actualTailDigest)
+            ? AppendConflict.make({
+                conversationId: validated.conversationId,
+                batchId: validated.batch.batchId,
+                reason: error.reason,
+                actualTailSequence: error.actualTailSequence,
+                actualTailDigest: error.actualTailDigest,
+              })
+            : AppendConflict.make({
+                conversationId: validated.conversationId,
+                batchId: validated.batch.batchId,
+                reason: error.reason,
+              });
         }
         return storeError("append canonical batch", error);
       }),
@@ -617,6 +645,24 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
     });
   });
 
+  const inspectTail: ConversationStore["Service"]["inspectTail"] = Effect.fn(
+    "SqliteConversationStore.inspectTail",
+  )(function* (request: ConversationTailRequest) {
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ConversationTailRequest))(
+      request,
+    ).pipe(Effect.mapError((error) => schemaStoreError("validate tail inspection", error)));
+    const conversation = yield* requireConversation(journal, validated.conversationId);
+    const tailDigest = yield* Schema.decodeUnknownEffect(Digest)(conversation.tail_digest).pipe(
+      Effect.mapError((error) => schemaStoreError("decode tail digest", error)),
+    );
+    return ConversationTail.make({
+      conversationId: validated.conversationId,
+      tailSequence: conversation.tail_sequence,
+      tailDigest,
+      producerEpoch: conversation.producer_epoch,
+    });
+  });
+
   const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
     "SqliteConversationStore.saveCheckpoint",
   )(function* (request: SaveCheckpointRequest) {
@@ -700,6 +746,7 @@ const makeServices = Effect.fn("SqliteConversationStore.makeServices")(function*
   const conversationStore = ConversationStore.of({
     append,
     export: exportConversation,
+    inspectTail,
     loadCheckpoint,
     materialize,
     observe,
@@ -743,8 +790,9 @@ export const layer = (
 ): Layer.Layer<ConversationStore | SubmissionStore, SqliteStorageInitializationError> => {
   const configLayer = Layer.effect(SqliteStorageConfig)(
     Schema.decodeUnknownEffect(SqliteStorageConfigValue)({
-      filename: options.filename,
       observationPollInterval: options.observationPollInterval ?? 25,
+      busyTimeout: options.busyTimeout ?? 5_000,
+      verifyOnOpen: options.verifyOnOpen ?? false,
     }).pipe(
       Effect.mapError((error) =>
         SqliteStorageError.make({

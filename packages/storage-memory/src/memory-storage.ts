@@ -15,6 +15,8 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
+  ConversationTail,
+  ConversationTailRequest,
   digestCanonicalBatch,
   EMPTY_TAIL_DIGEST,
   FenceRejected,
@@ -94,7 +96,7 @@ const validate = Effect.fn("MemoryConversationStore.validate")(
   ): Effect.Effect<A, ConversationStoreError> =>
     Schema.encodeUnknownEffect(schema)(value).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-      Effect.mapError(() => storeError(operation, `Invalid ${operation} request`)),
+      Effect.mapError((error) => storeError(operation, `Invalid ${operation} request`, error)),
     ),
 );
 
@@ -304,6 +306,8 @@ const makeConversationStore = Effect.gen(function* () {
                   conversationId: request.conversationId,
                   batchId: request.batch.batchId,
                   reason: "tail",
+                  actualTailSequence: conversation.tailSequence,
+                  actualTailDigest: conversation.tailDigest,
                 }),
               },
               current,
@@ -337,7 +341,7 @@ const makeConversationStore = Effect.gen(function* () {
                   error: AppendConflict.make({
                     conversationId: request.conversationId,
                     batchId: request.batch.batchId,
-                    reason: "batch-digest",
+                    reason: "record-identity",
                   }),
                 },
                 current,
@@ -472,6 +476,23 @@ const makeConversationStore = Effect.gen(function* () {
     }),
   );
 
+  const inspectTail: ConversationStore["Service"]["inspectTail"] = Effect.fn(
+    "MemoryConversationStore.inspectTail",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(ConversationTailRequest, "inspectTail", unvalidated);
+      const conversation = yield* Ref.get(state).pipe(
+        Effect.flatMap((current) => findConversation(current, request.conversationId)),
+      );
+      return ConversationTail.make({
+        conversationId: request.conversationId,
+        tailSequence: conversation.tailSequence,
+        tailDigest: conversation.tailDigest,
+        producerEpoch: conversation.producerEpoch,
+      });
+    }),
+  );
+
   const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
     "MemoryConversationStore.saveCheckpoint",
   )((unvalidated) =>
@@ -581,6 +602,7 @@ const makeConversationStore = Effect.gen(function* () {
     read,
     observe,
     export: exportConversation,
+    inspectTail,
     saveCheckpoint,
     loadCheckpoint,
   });

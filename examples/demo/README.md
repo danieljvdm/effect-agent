@@ -58,6 +58,9 @@ Simulator scenarios:
   zero until approval. Denial or a 20-second non-response fails closed.
 - **Token, Tool, spend, and time fuses** run with deliberately tiny limits and expose the exact
   rejected usage dimension and observed value.
+- **Tool handler defect** makes every supplier handler die mid-batch. The producer boundary
+  converts the defect into the stream's typed terminal failure and releases the single-run
+  registry, so the browser never waits on a stranded Run.
 
 The guided scenario also validates one bounded deterministic MCP discovery result, executes a
 fixed `/bin/echo` request through `@effect-agent/sandbox-local`, and shows the implementation's

@@ -17,9 +17,13 @@ import {
   ApprovalRequestDraft,
   ApprovalResolver,
   ApprovalResolverError,
+  BudgetExceeded,
+  BudgetNodeConflict,
   CompactionArtifact,
   ConversationAppend,
   ConversationExport,
+  ConversationHistoryDiverged,
+  ConversationLimitExceeded,
   digestCompactionSource,
   EphemeralConversations,
   EphemeralConversationsLive,
@@ -180,6 +184,93 @@ describe("capability contracts", () => {
     }).pipe(Effect.provide(EphemeralConversationsLive)),
   );
 
+  it.effect("commits exactly one of two concurrently recorded diverging histories", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      const base = yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({ message: textMessage("user", "shared base") }),
+      );
+      const extend = (content: string) =>
+        Prompt.fromMessages([
+          ...conversationPrompt(base).content,
+          textMessage("assistant", content),
+        ]);
+      const historyA = extend("suffix A");
+      const historyB = extend("suffix B");
+      const record = (label: "A" | "B", history: Prompt.Prompt) =>
+        conversations.recordHistory(conversationId, runId, history).pipe(
+          Effect.map(() => ({ _tag: "committed" as const, label })),
+          Effect.catchTag("ConversationHistoryDiverged", () =>
+            Effect.succeed({ _tag: "diverged" as const, label }),
+          ),
+        );
+      const outcomes = yield* Effect.all([record("A", historyA), record("B", historyB)], {
+        concurrency: 2,
+      });
+      const committed = outcomes.filter((outcome) => outcome._tag === "committed");
+      const diverged = outcomes.filter((outcome) => outcome._tag === "diverged");
+
+      expect(committed).toHaveLength(1);
+      expect(diverged).toHaveLength(1);
+      const snapshot = yield* conversations.snapshot(conversationId);
+      const winnerHistory = committed[0]?.label === "A" ? historyA : historyB;
+      expect(yield* Schema.encodeEffect(Prompt.Prompt)(conversationPrompt(snapshot))).toEqual(
+        yield* Schema.encodeEffect(Prompt.Prompt)(winnerHistory),
+      );
+    }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
+  it.effect("commits no suffix message when a recorded history exceeds content bounds", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      const base = yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({ message: textMessage("user", "bounded base") }),
+      );
+      const oversized = Prompt.fromMessages([
+        ...conversationPrompt(base).content,
+        textMessage("assistant", "a".repeat(3 * 1024 * 1024)),
+        textMessage("assistant", "b".repeat(3 * 1024 * 1024)),
+      ]);
+      const error = yield* conversations
+        .recordHistory(conversationId, runId, oversized)
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(ConversationLimitExceeded);
+      expect(yield* conversations.snapshot(conversationId)).toEqual(base);
+    }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
+  it.effect(
+    "rejects an engine history that is not an append-only extension of official history",
+    () =>
+      Effect.gen(function* () {
+        const conversations = yield* EphemeralConversations;
+        yield* conversations.create(conversationId);
+        const official = yield* conversations.append(
+          conversationId,
+          ConversationAppend.make({ message: textMessage("user", "official input") }),
+        );
+        const rewritten = Prompt.fromMessages([
+          textMessage("user", "rewritten input"),
+          textMessage("assistant", "suffix built on a rewritten base"),
+        ]);
+        const rewrittenError = yield* conversations
+          .recordHistory(conversationId, runId, rewritten)
+          .pipe(Effect.flip);
+        const truncatedError = yield* conversations
+          .recordHistory(conversationId, runId, Prompt.empty)
+          .pipe(Effect.flip);
+
+        expect(rewrittenError).toBeInstanceOf(ConversationHistoryDiverged);
+        expect(truncatedError).toBeInstanceOf(ConversationHistoryDiverged);
+        expect(yield* conversations.snapshot(conversationId)).toEqual(official);
+      }).pipe(Effect.provide(EphemeralConversationsLive)),
+  );
+
   it.effect(
     "drains one or all safe-seam commands deterministically and closes with its Scope",
     () =>
@@ -312,6 +403,54 @@ describe("capability contracts", () => {
                   }),
                 ),
               ),
+          }),
+        ),
+      ),
+    ),
+  );
+
+  it.effect("audits a synthetic denial and releases the reservation when the resolver fails", () =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const request = yield* makeApprovalRequest(
+        approvalDraft("approval-resolver-error", at(now + 1_000)),
+        { note: "infrastructure-secret" },
+      );
+      const error = yield* requestApproval(request).pipe(Effect.flip);
+      const audit = yield* ApprovalAudit;
+      const events = yield* audit.events;
+
+      expect(error).toBeInstanceOf(ApprovalResolverError);
+      expect(events.map((event) => event._tag)).toEqual([
+        "ApprovalRequestRecorded",
+        "ApprovalDecisionRecorded",
+      ]);
+      const recorded = events[1];
+      expect(recorded?._tag).toBe("ApprovalDecisionRecorded");
+      if (recorded?._tag === "ApprovalDecisionRecorded") {
+        expect(recorded.decision._tag).toBe("ApprovalDenied");
+        expect(recorded.decision.requestId).toBe(request.requestId);
+      }
+      // The reservation is released: the same request admits a fresh request/decision pair.
+      yield* audit.recordRequest(request);
+      yield* audit.recordDecision(
+        ApprovalDenied.make({
+          requestId: request.requestId,
+          decidedAt: at(now),
+          resolver: "test",
+          reason: "explicit denial after recovery",
+          timedOut: false,
+        }),
+      );
+      expect(yield* audit.events).toHaveLength(4);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          StructuralRedactorLive,
+          ApprovalAuditMemoryLive,
+          Layer.succeed(ApprovalResolver)({
+            request: () =>
+              Effect.fail(ApprovalResolverError.make({ message: "resolver transport failed" })),
           }),
         ),
       ),
@@ -521,6 +660,61 @@ describe("capability contracts", () => {
     }),
   );
 
+  it.effect("re-attaches an identical child registration and rejects conflicting limits", () =>
+    Effect.gen(function* () {
+      const globalBudget = yield* makeUsageBudgetRoot(
+        UsageBudgetNodeConfig.make({
+          level: "global",
+          id: "all",
+          limits: UsageBudgetLimits.make({}),
+        }),
+      );
+      const first = yield* globalBudget.child(
+        UsageBudgetNodeConfig.make({
+          level: "run",
+          id: "run-1",
+          limits: UsageBudgetLimits.make({ maxToolCalls: 1 }),
+        }),
+      );
+      yield* first.consume(
+        UsageDelta.make({ inputTokens: 0, outputTokens: 0, toolCalls: 1, costMicrousd: 0 }),
+      );
+      const reattached = yield* globalBudget.child(
+        UsageBudgetNodeConfig.make({
+          level: "run",
+          id: "run-1",
+          limits: UsageBudgetLimits.make({ maxToolCalls: 1 }),
+        }),
+      );
+      expect((yield* reattached.snapshot).toolCalls).toBe(1);
+      const exceeded = yield* reattached
+        .consume(
+          UsageDelta.make({ inputTokens: 0, outputTokens: 0, toolCalls: 1, costMicrousd: 0 }),
+        )
+        .pipe(Effect.flip);
+      const conflict = yield* globalBudget
+        .child(
+          UsageBudgetNodeConfig.make({
+            level: "run",
+            id: "run-1",
+            limits: UsageBudgetLimits.make({ maxToolCalls: 5 }),
+          }),
+        )
+        .pipe(Effect.flip);
+
+      expect(exceeded).toBeInstanceOf(BudgetExceeded);
+      expect(conflict).toBeInstanceOf(BudgetNodeConflict);
+      if (conflict instanceof BudgetNodeConflict) {
+        const decoded = yield* Schema.decodeEffect(BudgetNodeConflict)(
+          yield* Schema.encodeEffect(BudgetNodeConflict)(conflict),
+        );
+        expect(decoded).toBeInstanceOf(BudgetNodeConflict);
+        expect(decoded.scopeLevel).toBe("run");
+        expect(decoded.scopeId).toBe("run-1");
+      }
+    }),
+  );
+
   it.effect("fails stalled guarded work at the earliest hierarchical deadline", () =>
     Effect.gen(function* () {
       const globalBudget = yield* makeUsageBudgetRoot(
@@ -626,6 +820,64 @@ describe("capability contracts", () => {
           "Original last",
         ]);
       }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+  );
+
+  it.effect("keeps transform-synthesized and partially covered model-view messages visible", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      for (const content of ["first", "second", "third"]) {
+        yield* conversations.append(
+          conversationId,
+          ConversationAppend.make({ message: textMessage("user", content) }),
+        );
+      }
+      const snapshot = yield* conversations.snapshot(conversationId);
+      const context = yield* prepareModelContext(snapshot, [
+        {
+          id: "merge-and-synthesize",
+          version: "1",
+          apply: (messages) =>
+            Effect.succeed([
+              ModelContextMessage.make({
+                role: "system",
+                content: "synthesized guidance",
+                sourceSequences: [],
+              }),
+              ModelContextMessage.make({
+                role: "user",
+                content: "merged first+second",
+                sourceSequences: [0, 1],
+              }),
+              ...messages.filter((message) => message.sourceSequences.includes(2)),
+            ]),
+        },
+      ]);
+      const sourceDigest = yield* digestCompactionSource(snapshot, 1, 1);
+      const artifact = CompactionArtifact.make({
+        version: 1,
+        conversationId,
+        coversFrom: 1,
+        coversThrough: 1,
+        summary: ModelContextMessage.make({
+          role: "system",
+          content: "second summarized",
+          sourceSequences: [1],
+        }),
+        retainedFacts: [],
+        tokenEstimate: 2,
+        sourceDigest,
+        compactorVersion: "test-1",
+      });
+      const compacted = yield* applyCompaction(context, artifact);
+
+      expect(compacted.messages.map((message) => message.content)).toEqual([
+        "synthesized guidance",
+        "merged first+second",
+        "second summarized",
+        "third",
+      ]);
+    }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
   );
 
   it.effect("rejects a compaction artifact whose exact source digest mismatches", () =>

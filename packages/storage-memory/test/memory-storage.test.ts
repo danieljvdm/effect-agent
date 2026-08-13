@@ -29,9 +29,9 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
+  conversationStoreConformanceCases,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
-  inspectConversationStoreConformance,
   LoadCheckpointRequest,
   MAX_PERSISTED_JSON_BYTES,
   ObservationOffset,
@@ -57,7 +57,6 @@ const canonicalSequence = Schema.decodeSync(CanonicalSequence);
 const producerEpoch = Schema.decodeSync(ProducerEpoch);
 const ZERO_CANONICAL_SEQUENCE = canonicalSequence(0);
 const FIRST_PRODUCER_EPOCH = producerEpoch(1);
-const SECOND_PRODUCER_EPOCH = producerEpoch(2);
 
 const id = <A>(schema: Schema.Codec<A, string>, value: string): A =>
   Schema.decodeSync(schema)(value);
@@ -124,103 +123,10 @@ const append = (
   );
 
 describe("MemoryConversationStore", () => {
-  it.layer(testLayer)((it) => {
-    it.effect(
-      "atomically appends, replays identical batches, conflicts, and fences stale epochs",
-      () =>
-        Effect.gen(function* () {
-          const store = yield* ConversationStore;
-          yield* store.materialize(
-            ConversationMaterialization.make({
-              conversationId,
-              producerEpoch: FIRST_PRODUCER_EPOCH,
-            }),
-          );
-          const firstBatch = batch("batch-1", [inputRecord("record-1", "Lisbon")]);
-          const first = yield* append(store, firstBatch);
-          const replayed = yield* append(store, firstBatch);
-
-          expect(first.replayed).toBe(false);
-          expect(replayed).toEqual(
-            AppendResult.make({
-              firstSequence: first.firstSequence,
-              lastSequence: first.lastSequence,
-              tailDigest: first.tailDigest,
-              replayed: true,
-            }),
-          );
-
-          const conflictingBatch = batch("batch-1", [inputRecord("record-2", "Porto")]);
-          const batchConflict = yield* append(store, conflictingBatch).pipe(Effect.flip);
-          expect(batchConflict).toMatchObject({
-            _tag: "AppendConflict",
-            conversationId,
-            reason: "batch-digest",
-          });
-
-          const staleTail = yield* append(
-            store,
-            batch("batch-2", [inputRecord("record-3", "Coimbra")]),
-          ).pipe(Effect.flip);
-          expect(staleTail).toMatchObject({
-            _tag: "AppendConflict",
-            conversationId,
-            reason: "tail",
-          });
-
-          yield* store.materialize(
-            ConversationMaterialization.make({
-              conversationId,
-              producerEpoch: SECOND_PRODUCER_EPOCH,
-            }),
-          );
-          const staleProducer = yield* append(
-            store,
-            batch("batch-3", [inputRecord("record-4", "Braga")]),
-            first,
-            FIRST_PRODUCER_EPOCH,
-          ).pipe(Effect.flip);
-          expect(staleProducer).toMatchObject({
-            _tag: "FenceRejected",
-            conversationId,
-            actualEpoch: SECOND_PRODUCER_EPOCH,
-            attemptedEpoch: FIRST_PRODUCER_EPOCH,
-          });
-
-          const records = yield* store
-            .read(ConversationRead.make({ conversationId, limit: 1_024 }))
-            .pipe(Stream.runCollect);
-          expect(records).toHaveLength(1);
-        }),
-    );
-  });
-
-  it.layer(testLayer)((it) => {
-    it.effect("commits no batch prefix when duplicate record identity conflicts", () =>
-      Effect.gen(function* () {
-        const store = yield* ConversationStore;
-        yield* store.materialize(
-          ConversationMaterialization.make({
-            conversationId,
-            producerEpoch: FIRST_PRODUCER_EPOCH,
-          }),
-        );
-        const duplicate = inputRecord("duplicate-record", "first");
-        const conflict = yield* append(
-          store,
-          batch("duplicate-batch", [duplicate, duplicate]),
-        ).pipe(Effect.flip);
-        expect(conflict).toMatchObject({
-          _tag: "AppendConflict",
-          conversationId,
-          reason: "batch-digest",
-        });
-
-        const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
-        expect(exported.records).toEqual([]);
-        expect(exported.tailDigest).toBe(EMPTY_TAIL_DIGEST);
-      }),
-    );
+  describe("shared ConversationStore conformance", () => {
+    for (const conformanceCase of conversationStoreConformanceCases) {
+      it.effect(conformanceCase.name, () => conformanceCase.run.pipe(Effect.provide(testLayer)));
+    }
   });
 
   it.layer(testLayer)((it) => {
@@ -268,11 +174,14 @@ describe("MemoryConversationStore", () => {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        const storeFailure = yield* Schema.decodeUnknownEffect(ConversationStoreError)(failure);
-        expect(storeFailure).toMatchObject({
+        if (!(failure instanceof ConversationStoreError)) {
+          return yield* Effect.die(new Error("Expected a ConversationStoreError"));
+        }
+        expect(failure).toMatchObject({
           _tag: "ConversationStoreError",
           operation: "append",
         });
+        expect(failure.cause).toBeDefined();
 
         const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
         expect(exported.records).toEqual([]);
@@ -325,11 +234,14 @@ describe("MemoryConversationStore", () => {
           return yield* Effect.die(new Error("Expected append to return an Effect"));
         }
         const failure = yield* unvalidatedResult.pipe(Effect.flip);
-        const storeFailure = yield* Schema.decodeUnknownEffect(ConversationStoreError)(failure);
-        expect(storeFailure).toMatchObject({
+        if (!(failure instanceof ConversationStoreError)) {
+          return yield* Effect.die(new Error("Expected a ConversationStoreError"));
+        }
+        expect(failure).toMatchObject({
           _tag: "ConversationStoreError",
           operation: "append",
         });
+        expect(failure.cause).toBeDefined();
 
         const exported = yield* store.export(ConversationExportRequest.make({ conversationId }));
         expect(exported.records).toEqual([]);
@@ -625,12 +537,7 @@ describe("MemoryConversationStore", () => {
         );
 
         expect(checkpointReplay).toEqual(fullReplay);
-        expect(yield* inspectConversationStoreConformance(conversationId)).toEqual({
-          readCount: 2,
-          observedCount: 2,
-          exportCount: 2,
-          hasCheckpoint: true,
-        });
+        expect(exported.records).toHaveLength(2);
       }),
     );
   });

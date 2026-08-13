@@ -48,6 +48,16 @@ describe("Phase 2 demo transport contracts", () => {
       }),
     ).toEqual({ scenario: "budget-cost" });
     expect(
+      Schema.decodeSync(StartOperationalRunRequest)({
+        scenario: "tool-defect",
+      }),
+    ).toEqual({ scenario: "tool-defect" });
+    expect(
+      Schema.encodeSync(StartOperationalRunRequest)(
+        StartOperationalRunRequest.make({ scenario: "tool-defect" }),
+      ),
+    ).toEqual({ scenario: "tool-defect" });
+    expect(
       Schema.decodeSync(StartLiveTravelChatRequest)({
         message: "Compare the fixture flights, stays, and activities.",
         scenario: "guided",

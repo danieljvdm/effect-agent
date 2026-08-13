@@ -11,6 +11,7 @@ import {
   Digest,
   digestCanonicalBatch,
   digestDefinitions,
+  digestJson,
   EMPTY_TAIL_DIGEST,
   MAX_PERSISTED_JSON_BYTES,
   MAX_PERSISTED_JSON_DEPTH,
@@ -100,6 +101,36 @@ describe("session canonical contracts", () => {
 
         expect(repeatedBatchDigest).toBe(firstBatchDigest);
         expect(firstBatchDigest).toMatch(/^[a-f0-9]{64}$/);
+      }),
+    );
+
+    it.effect("digests object keys by UTF-16 code units, independent of insertion order", () =>
+      Effect.gen(function* () {
+        const ordered = yield* digestJson({
+          alpha: 1,
+          beta: { gamma: [true, null], delta: "d" },
+        });
+        const reordered = yield* digestJson({
+          beta: { delta: "d", gamma: [true, null] },
+          alpha: 1,
+        });
+
+        expect(reordered).toBe(ordered);
+
+        // Precomposed U+00E0 and decomposed U+0061 U+0300 are canonically equivalent
+        // but distinct code-unit sequences. Locale-aware collation treats them as equal,
+        // so a stable sort would leak insertion order; code-unit ordering must not.
+        const precomposedFirst = yield* digestJson({ "\u00e0": 1, "a\u0300": 2 });
+        const decomposedFirst = yield* digestJson({ "a\u0300": 2, "\u00e0": 1 });
+
+        expect(decomposedFirst).toBe(precomposedFirst);
+
+        // Locale-aware collation orders "\u00e4" before "z" in en but after "z" in sv.
+        // Code-unit ordering is the same on every host, whatever the process locale.
+        const umlautFirst = yield* digestJson({ "\u00e4": 1, z: 2 });
+        const umlautLast = yield* digestJson({ z: 2, "\u00e4": 1 });
+
+        expect(umlautLast).toBe(umlautFirst);
       }),
     );
   });
