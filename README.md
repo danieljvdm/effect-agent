@@ -44,6 +44,10 @@ Decisions labeled **Proposed** are recommendations, not settled owner decisions.
 
 ## Read this first
 
+The curated, future-facing documentation site lives in [`docs/`](docs/index.md). Run it locally
+with `bun run docs:dev`; its guides distinguish implemented APIs from next, planned, and proposed
+interfaces. The specifications below remain the normative design source.
+
 1. [Product specification](docs/PRODUCT.md)
 2. [Domain language](CONTEXT.md)
 3. [Technical architecture](docs/ARCHITECTURE.md)
@@ -68,6 +72,7 @@ Decisions labeled **Proposed** are recommendations, not settled owner decisions.
 | Turn loop, events, errors, concurrency                  | [Runtime engine](docs/spec/runtime.md)                      |
 | Effect AI and model provider integration                | [Model providers](docs/spec/providers.md)                   |
 | Sessions, tools, skills, MCP, sandboxes, subagents      | [Capabilities](docs/spec/capabilities.md)                   |
+| Declared delegation, child lifecycle, budgets, recovery | [Subagents](docs/spec/subagents.md)                         |
 | Accepted work and crash recovery                        | [Durability](docs/spec/durability.md)                       |
 | Conversation history, work ledger, and storage adapters | [Persistence](docs/spec/persistence.md)                     |
 | Node and Cloudflare hosts                               | [Deployment](docs/spec/deployment.md)                       |
@@ -118,6 +123,7 @@ packages are added only when their phase begins.
 ```sh
 bun install
 bun run sync:agent-skills
+bun run docs:dev
 bun run ready
 ```
 

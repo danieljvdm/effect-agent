@@ -435,6 +435,51 @@ describe("capability contracts", () => {
       );
   });
 
+  it.effect("decodes a valid approval adapter deadline before invoking the resolver", () => {
+    const hook = toRunApprovalHook({
+      expiresInMillis: 1_000,
+      risk: "high",
+      denial: "terminal",
+      actionSummary: () => "Place a temporary itinerary hold",
+      resourceTargets: () => ["quote:quote-sfo-lhr-001"],
+    });
+    return Effect.gen(function* () {
+      const decision = yield* hook.request({
+        request: Response.toolApprovalRequestPart({
+          approvalId: "approval-valid-policy",
+          toolCallId,
+        }),
+        conversationId,
+        runId,
+        turnId,
+        toolCallId,
+        toolName: "holdItinerary",
+        parameters: { quoteId: "quote-sfo-lhr-001" },
+      });
+
+      expect(decision._tag).toBe("approved");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          StructuralRedactorLive,
+          ApprovalAuditMemoryLive,
+          Layer.succeed(ApprovalResolver)({
+            request: (request) =>
+              Clock.currentTimeMillis.pipe(
+                Effect.map((millis) =>
+                  ApprovalApproved.make({
+                    requestId: request.requestId,
+                    decidedAt: at(millis),
+                    resolver: "test-resolver",
+                  }),
+                ),
+              ),
+          }),
+        ),
+      ),
+    );
+  });
+
   it.effect("atomically rejects hierarchical consumption across every ancestor", () =>
     Effect.gen(function* () {
       const globalBudget = yield* makeUsageBudgetRoot(

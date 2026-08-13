@@ -153,6 +153,54 @@ const errorMessageForTest = (error: unknown): string =>
     : String(error);
 
 layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
+  it.effect("preserves official prior history as the exact prefix of a new Run", () => {
+    const priorHistory = Prompt.fromMessages([
+      Prompt.makeMessage("system", { content: "Original conversation instructions." }),
+      Prompt.makeMessage("user", {
+        content: [Prompt.makePart("text", { text: "Which city is best?" })],
+      }),
+      Prompt.makeMessage("assistant", {
+        content: [Prompt.makePart("text", { text: "Edinburgh." })],
+      }),
+    ]);
+    let observedPrompt: Prompt.Prompt | undefined;
+    const model = Model.make(
+      "scripted",
+      "history-prefix",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: (request) => {
+            observedPrompt = request.prompt;
+            return Stream.fromIterable(finalParts('{"answer":"Edinburgh."}'));
+          },
+        }),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* AgentRuntime.run(
+        Agent.withModel(runtimeDefinition, model),
+        { question: "Which city did you recommend?" },
+        { history: priorHistory },
+      );
+
+      expect(observedPrompt).toBeDefined();
+      if (observedPrompt === undefined) {
+        throw new Error("Expected the model request Prompt to be captured");
+      }
+      const encodedPrior = yield* Schema.encodeEffect(Prompt.Prompt)(priorHistory);
+      const encodedObserved = yield* Schema.encodeEffect(Prompt.Prompt)(observedPrompt);
+
+      expect(encodedObserved.content.slice(0, encodedPrior.content.length)).toEqual(
+        encodedPrior.content,
+      );
+      expect(encodedObserved.content.at(-2)?.role).toBe("system");
+      expect(encodedObserved.content.at(-1)?.role).toBe("user");
+    });
+  });
+
   it.effect("keeps Run hook failures and requirements visible in Effect E and R", () => {
     const program = AgentRuntime.run(
       makeAgent(finalParts('{"answer":"typed"}')),

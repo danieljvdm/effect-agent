@@ -970,8 +970,8 @@ const makeInitialPrompt = Effect.fn("AgentRuntime.makeInitialPrompt")(
               ])
             : Prompt.make(instructions);
         return Prompt.fromMessages([
-          ...instructionPrompt.content,
           ...history.content,
+          ...instructionPrompt.content,
           Prompt.makeMessage("user", {
             content: [Prompt.makePart("text", { text: encodedInput })],
           }),

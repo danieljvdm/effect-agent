@@ -2,6 +2,8 @@ node_modules
 dist
 coverage
 .vite
+docs/.vitepress/cache
+docs/.vitepress/dist
 *.tsbuildinfo
 .DS_Store
 .env

@@ -1,11 +1,22 @@
 import tailwindcss from "@tailwindcss/vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
-import { defineConfig } from "vite-plus";
+import { defineConfig, loadEnv } from "vite-plus";
 
-export default defineConfig({
-  resolve: {
-    tsconfigPaths: true,
-  },
-  plugins: [tailwindcss(), tanstackStart(), viteReact()],
+export default defineConfig(({ mode }) => {
+  const demoEnvironment = loadEnv(mode, import.meta.dirname, "");
+  const openAiApiKey = demoEnvironment.OPENAI_API_KEY;
+
+  // Vite loads .env values for import.meta.env, while Effect Config reads the
+  // server process environment. Copy only this server credential across that boundary.
+  if (openAiApiKey !== undefined && process.env.OPENAI_API_KEY === undefined) {
+    process.env.OPENAI_API_KEY = openAiApiKey;
+  }
+
+  return {
+    resolve: {
+      tsconfigPaths: true,
+    },
+    plugins: [tailwindcss(), tanstackStart(), viteReact()],
+  };
 });

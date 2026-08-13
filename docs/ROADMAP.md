@@ -25,6 +25,29 @@ not change the specified scope of later phases.
 | **P4** | **Next — durable Node/SQLite runtime**                      |
 | P5–P7  | Planned — not yet implemented                               |
 
+## Proposed Subagent insertion
+
+[ADR-0010](adr/0010-declared-attached-subagents.md) and
+[the Subagent specification](spec/subagents.md) recommend two bounded slices. This proposal does
+not change phase status until the owner accepts it.
+
+- **S1 — attached ephemeral Subagents:** implement immediately after Phase 3, before or alongside
+  early Phase 4 work. Deliver declared Effect AI delegation Tools with an explicit engine service,
+  preallocated child identity, explicit child Bindings, fresh child Conversations, context/result
+  projection, per-action authorization, non-transitive approval, a real reservation service,
+  normative nested-delegation rejection, bounded child concurrency, scoped interruption, and
+  deterministic parent result order.
+- **S2 — durable attached Subagents:** implement after Phase 5 establishes admission, Tool
+  uncertainty, durable Steps, approval suspension, and joined-input recovery, but before Phase 6
+  claims platform equivalence. It additionally depends on the Phase 4 ownership-token/epoch and
+  ledger ports; the Phase 3 Conversation Store is insufficient. Deliver child Receipts, immutable
+  Parent Links, requested/started/joined records, parent-owned budget reservations, authoritative
+  admission lookup, worker-permit-free parent waiting/wakeup, independent fencing, Settlement
+  joins, durable abort propagation, and the full crash matrix.
+
+Handoff, detached children, child Conversation reuse, peer messaging, and depth above one remain
+later proposals.
+
 ## Progressive reference application
 
 The [Travel Planner Reference Application](guides/travel-planner.md) is the cumulative integration
@@ -272,7 +295,8 @@ replacing it with an unrelated demo.
 - retention/deletion policy beyond indefinite internal retention;
 - public package names, license, governance, npm publication, and final `dist` export maps;
 - PostgreSQL and generic multi-node scheduling;
-- durable Subagents and detailed child budgets;
+- durable Subagents and detailed child budgets, unless proposed ADR-0010 is accepted and its S1/S2
+  slices become active roadmap work;
 - channel integrations, UI, hosted control plane, and marketplace.
 
 ## Workstreams for a large AI project

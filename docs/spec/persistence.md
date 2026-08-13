@@ -138,7 +138,7 @@ The canonical log supports, at minimum:
 - model text/reasoning deltas, completion, signature/redaction metadata, or structured item;
 - tool call requested, prepared, approved/rejected, settled, unknown;
 - compaction created/selected;
-- subagent started/settled;
+- subagent requested/started/joined and child Parent Link;
 - run warning/failure;
 - abort requested;
 - terminal outcome;

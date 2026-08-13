@@ -12,7 +12,7 @@ The durable runtime makes this promise:
 
 > Once a submission is durably accepted, the system will eventually record exactly
 > one durable terminal outcome—`completed`, `failed`, or `aborted`—unless the
-> configured durability dependencies remain unavailable.
+> configured durability or required outcome-resolution dependencies remain unavailable.
 
 This is an exactly-once **recording** guarantee, not an exactly-once execution
 guarantee.
@@ -79,7 +79,9 @@ stateDiagram-v2
 ```
 
 `Unknown` is nonterminal operational state. It blocks automatic continuation until
-resolved. The settlement obligation remains outstanding.
+resolved. The settlement obligation remains outstanding. A deployment that permits ordinary
+external effects MUST configure an authorized reconciler/operator resolution path; an unresolved
+external truth is not converted to a terminal result merely to satisfy liveness.
 
 ## 4. Admission
 
@@ -319,6 +321,11 @@ Poison submissions are not retried forever. The scheduler supports:
 - quarantine for corrupt records;
 - alerts for overdue settlement obligations.
 
+`Unknown` stops ordinary running-time and worker-permit consumption, but not the accepted settlement
+obligation. Unknown work is aged, alerted, and routed to the configured resolution dependency.
+Durable deployment claims require an operational runbook and authorized bounded intervention path
+for that queue.
+
 ## 17. Requirements
 
 - **DUR-001**: A durable Receipt is returned only after ledger admission and Conversation
@@ -347,3 +354,6 @@ Poison submissions are not retried forever. The scheduler supports:
   operational ledger can be rebuilt from it.
 - **DUR-016**: Recovery returns pre-append `joining` input to ready and reattaches post-append
   `joined` input without duplicate delivery.
+- **DUR-017**: Unknown external outcomes remain visible accepted-work obligations, consume no
+  ordinary worker permit, and require an authorized, alerted resolution dependency before a
+  deployment may claim durable liveness.

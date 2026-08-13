@@ -9,7 +9,7 @@ import { DemoRunRpcs } from "./run-rpc";
 
 type DemoRunRpcClientApi = RpcClient.RpcClient<RpcGroup.Rpcs<typeof DemoRunRpcs>, RpcClientError>;
 
-/** Generated browser client for the shared streaming Run RPC definitions. */
+/** Generated browser client for the shared interactive operational RPC definitions. */
 export class DemoRunRpcClient extends Context.Service<DemoRunRpcClient, DemoRunRpcClientApi>()(
   "@effect-agent/example-demo/DemoRunRpcClient",
 ) {

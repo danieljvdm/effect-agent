@@ -13,29 +13,35 @@
     "sync:agent-skills:dry": "agent-skills sync --dry-run",
     "sync:effect": "tsx scripts/sync-effect-submodule.ts",
     "reset:development-storage": "tsx scripts/reset-development-storage.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
     "format": "vp fmt",
     "format:write": "vp fmt --write",
     "lint": "vp lint",
     "check": "vp check && vp run -F './packages/*' check && vp run -F './examples/*' check && tsc --noEmit -p scripts/tsconfig.json",
     "test": "vp run -F './packages/*' test && vp run -F './examples/*' test",
-    "build": "vp run -F './packages/*' build && vp run -F './examples/*' build",
+    "build": "vp run -F './packages/*' build && vp run -F './examples/*' build && bun run docs:build",
     "ready": "bun run check && bun run test && bun run build"
   },
   "devDependencies": {
     "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#e1cdbe5dbad7576617052285d0cad43091432e0f",
     "@effect/platform-node": "catalog:",
     "@effect/tsgo": "catalog:",
+    "@fontsource-variable/ibm-plex-sans": "catalog:",
+    "@fontsource/ibm-plex-mono": "catalog:",
     "@types/node": "catalog:",
     "effect": "catalog:",
     "tsx": "catalog:",
     "typescript": "catalog:",
     "vite": "catalog:",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitepress": "catalog:",
+    "vue": "catalog:"
   },
   "overrides": {
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
-    "vite": "catalog:",
     "vitest": "catalog:"
   },
   "engines": {
@@ -79,6 +85,8 @@
     "use-stick-to-bottom": "1.1.6",
     "vite": "npm:@voidzero-dev/vite-plus-core@0.2.6",
     "vite-plus": "0.2.6",
-    "vitest": "4.1.10"
+    "vitepress": "2.0.0-alpha.18",
+    "vitest": "4.1.10",
+    "vue": "3.5.40"
   }
 }

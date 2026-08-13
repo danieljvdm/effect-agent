@@ -14,6 +14,7 @@ release evidence reference those IDs.
 | `RUN`        | Interpreter and event runtime              | [Runtime](spec/runtime.md)                             |               P0–P2 |
 | `MODEL`      | Model drivers and routing                  | [Providers](spec/providers.md)                         |               P0–P2 |
 | `CAP`        | Optional capabilities                      | [Capabilities](spec/capabilities.md)                   |               P1–P5 |
+| `SUB`        | Subagent delegation and child lifecycle    | [Subagents](spec/subagents.md)                         |            Proposed |
 | `STORE`      | Persistence and adapters                   | [Persistence](spec/persistence.md)                     |               P3–P7 |
 | `DUR`        | Accepted work and recovery                 | [Durability](spec/durability.md)                       |               P4–P7 |
 | `DEPLOY`     | Hosts and deployment classes               | [Deployment](spec/deployment.md)                       |               P1–P7 |

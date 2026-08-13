@@ -162,13 +162,17 @@ testing package may add dependencies on phase packages as those packages are cre
 remains outward of production code; production packages must never import
 `@effect-agent/testing`.
 
-`examples/demo` imports the same public fixture exports used by the tests. Its Effect Atom action
-consumes `AgentRuntime.stream` directly for the scripted browser profile. The optional live profile
-uses a demo-local shared Effect RPC definition whose server handler returns that same semantic
-Stream over framed HTTP/NDJSON; the generated browser client consumes it without collecting or
-replaying an event array. The TanStack Start UI exposes chat input, provider-returned reasoning,
-Tool results, semantic Run Events, and Schema-decoded output. The scripted Model remains the
-default so this surface is deterministic and credential-free.
+`examples/demo` imports the same public Phase 2 fixture exports used by the tests. A server-scoped
+runtime assembles the scripted Model, controlled Travel Planner services, ephemeral Conversation,
+command queue, approval resolver, budgets, MCP connector, and local sandbox. A demo-local shared
+Effect RPC definition returns the operational Stream over framed HTTP/NDJSON; separate unary RPCs
+admit commands and approval decisions while the stream remains open.
+
+The TanStack Start app defaults to a separate general-chat surface. Its Simulator tab projects
+safe-seam command delivery, Tool declaration/completion order, deterministic commit order,
+approval and handler-start state, budget rejection, official versus model-only context, MCP
+discovery bounds, local command posture, semantic Run Events, and Schema-decoded output. The
+Simulator is deterministic and credential-free.
 
 Focused tests stay with their owner:
 

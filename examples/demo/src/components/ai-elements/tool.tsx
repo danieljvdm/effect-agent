@@ -35,10 +35,12 @@ export function Tool({ className, ...props }: ComponentProps<typeof Collapsible>
 
 export function ToolHeader({
   execution,
+  executionLabel,
   name,
   state,
 }: {
   readonly execution?: "application" | "provider";
+  readonly executionLabel?: string;
   readonly name: string;
   readonly state: ToolState;
 }) {
@@ -53,7 +55,9 @@ export function ToolHeader({
           {meta.label}
         </Badge>
         {execution === undefined ? null : (
-          <Badge>{execution === "provider" ? "OpenAI hosted" : "Framework"}</Badge>
+          <Badge>
+            {executionLabel ?? (execution === "provider" ? "OpenAI hosted" : "Framework")}
+          </Badge>
         )}
       </span>
       <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-data-[panel-open]:rotate-180" />

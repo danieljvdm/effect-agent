@@ -3,54 +3,99 @@ import { describe, expect, it } from "vite-plus/test";
 import { Schema } from "effect";
 import * as RpcSchema from "effect/unstable/rpc/RpcSchema";
 
-import { RunEvent } from "@effect-agent/core";
 import { DemoRunSelection } from "./contracts";
-import { ChatOutput } from "./general-chat";
-import { DemoRunRpcFailure, DemoRunRpcs, StreamDemoRun } from "./run-rpc";
+import {
+  DemoOperationalEvent,
+  DemoRunFailure,
+  DemoRunOpened,
+  QueueRunCommandRequest,
+  StartLiveTravelChatRequest,
+  StartOperationalRunRequest,
+} from "./operational-contracts";
+import {
+  DemoRunRpcs,
+  StreamChatRun,
+  StreamLiveTravelChatRun,
+  StreamOperationalRun,
+} from "./run-rpc";
 
-describe("demo transport contracts", () => {
-  it("accepts the two explicit profiles and rejects untrimmed input", () => {
+describe("Phase 2 demo transport contracts", () => {
+  it("accepts explicit scenarios and bounds queued input", () => {
     expect(
       Schema.decodeSync(DemoRunSelection)({
-        mode: "openai",
-        message: "What changed today?",
-      }),
-    ).toEqual({ mode: "openai", message: "What changed today?" });
-    expect(() =>
-      Schema.decodeSync(DemoRunSelection)({
         mode: "deterministic",
-        message: "  padded  ",
+        message: "What does this demo prove?",
+        history: [
+          {
+            role: "assistant",
+            content: "The demo proves bounded agent control.",
+          },
+        ],
+      }),
+    ).toEqual({
+      mode: "deterministic",
+      message: "What does this demo prove?",
+      history: [
+        {
+          role: "assistant",
+          content: "The demo proves bounded agent control.",
+        },
+      ],
+    });
+    expect(
+      Schema.decodeSync(StartOperationalRunRequest)({
+        scenario: "budget-cost",
+      }),
+    ).toEqual({ scenario: "budget-cost" });
+    expect(
+      Schema.decodeSync(StartLiveTravelChatRequest)({
+        message: "Compare the fixture flights, stays, and activities.",
+        scenario: "guided",
+      }),
+    ).toEqual({
+      message: "Compare the fixture flights, stays, and activities.",
+      scenario: "guided",
+    });
+    expect(() =>
+      Schema.decodeSync(QueueRunCommandRequest)({
+        handle: "demo-handle-contract",
+        kind: "steering",
+        content: "",
       }),
     ).toThrow();
   });
 
-  it("shares one streaming Run definition between the server and client", () => {
-    expect(DemoRunRpcs.requests.get("StreamDemoRun")).toBe(StreamDemoRun);
-    expect(RpcSchema.isStreamSchema(StreamDemoRun.successSchema)).toBe(true);
+  it("shares general chat, live travel, and simulator streams plus two unary controls", () => {
+    expect(DemoRunRpcs.requests.get("StreamChatRun")).toBe(StreamChatRun);
+    expect(RpcSchema.isStreamSchema(StreamChatRun.successSchema)).toBe(true);
+    expect(DemoRunRpcs.requests.get("StreamLiveTravelChatRun")).toBe(StreamLiveTravelChatRun);
+    expect(RpcSchema.isStreamSchema(StreamLiveTravelChatRun.successSchema)).toBe(true);
+    expect(DemoRunRpcs.requests.get("StreamOperationalRun")).toBe(StreamOperationalRun);
+    expect(RpcSchema.isStreamSchema(StreamOperationalRun.successSchema)).toBe(true);
+    expect(DemoRunRpcs.requests.has("QueueRunCommand")).toBe(true);
+    expect(DemoRunRpcs.requests.has("ResolveRunApproval")).toBe(true);
   });
 
-  it("round-trips live semantic events and failures through their wire schemas", () => {
-    const completed = Schema.decodeSync(RunEvent)({
-      _tag: "RunCompleted",
-      eventVersion: 1,
-      runId: "run-contract",
-      conversationId: "conversation-contract",
-      agentId: "general-chat-openai",
-      sequence: 0,
-      timestamp: "1970-01-01T00:00:00.000Z",
-      output: Schema.encodeSync(ChatOutput)(ChatOutput.make({ answer: "A general answer." })),
-      turns: 1,
-      finishReason: "model-stop",
+  it("round-trips operational evidence and typed failures", () => {
+    const opened = Schema.decodeSync(DemoRunOpened)({
+      _tag: "DemoRunOpened",
+      handle: "demo-handle-contract",
+      emittedAt: "2026-07-30T12:00:00.000Z",
+      runId: "demo-run-contract",
+      conversationId: "demo-conversation-contract",
+      scenario: "guided",
+      executionClass: "ephemeral",
+      schedulerConcurrency: 3,
     });
-    const encoded = Schema.encodeSync(RunEvent)(completed);
-    const failure = DemoRunRpcFailure.make({
-      errorTag: "AgentOutputError",
-      message: "Output did not match the ChatOutput Schema.",
+    const encoded = Schema.encodeSync(DemoOperationalEvent)(opened);
+    const failure = DemoRunFailure.make({
+      errorTag: "BudgetExceeded",
+      message: "The run-level cost fuse opened.",
     });
 
-    expect(Schema.decodeSync(RunEvent)(encoded)).toEqual(completed);
-    expect(
-      Schema.decodeSync(DemoRunRpcFailure)(Schema.encodeSync(DemoRunRpcFailure)(failure)),
-    ).toEqual(failure);
+    expect(Schema.decodeSync(DemoOperationalEvent)(encoded)).toEqual(opened);
+    expect(Schema.decodeSync(DemoRunFailure)(Schema.encodeSync(DemoRunFailure)(failure))).toEqual(
+      failure,
+    );
   });
 });

@@ -240,7 +240,9 @@ sequential behavior.
 
 Budget exhaustion is a typed non-success outcome.
 
-Subagent-specific policy is deferred until subagents enter the roadmap.
+Subagent policy, hierarchical reservation, and ancestor accounting are specified as a proposal in
+[the Subagent specification](./subagents.md). Until ADR-0010 is accepted, they are not an
+implemented Agent Policy surface.
 
 ## 10. Turn Plans
 

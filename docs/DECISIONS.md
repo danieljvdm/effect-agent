@@ -135,9 +135,19 @@ Record: [ADR-0002](adr/0002-use-effect-ai-primitives.md)
 
 ### D-013 — Child agent budgets
 
-**Status:** Deferred  
-**Decision for now:** Do not design a detailed child-budget system. Reopen when Subagents become an
-active implementation phase.
+**Status:** Proposed
+**Recommendation:** Reopen Subagents in two slices: attached ephemeral delegation immediately
+after Phase 3, and durable attached delegation after the Phase 4/5 recovery foundations. A child
+receives a finite allocation reserved from its parent's remaining delegation budget; consumption
+is charged exactly once to every ancestor, and unused reservation returns exactly once through an
+idempotent accounting transition after settlement. The grant is only a ceiling: each protected
+child action reauthorizes current policy, and parent approval is not transitive.
+
+The proposed first release is depth one, attached join only, and uses declared Effect AI Tools with
+fresh child Conversations. Owner approval and roadmap placement remain required.
+
+Proposed record: [ADR-0010](adr/0010-declared-attached-subagents.md)
+Specification: [Subagents](spec/subagents.md)
 
 ## Platforms, persistence, and operations
 

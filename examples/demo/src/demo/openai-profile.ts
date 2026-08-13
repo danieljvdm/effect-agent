@@ -1,8 +1,14 @@
 import { OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { Agent, AgentPolicy } from "@effect-agent/core";
+import {
+  TravelGuidance,
+  TravelPlan,
+  TravelPlannerPhase2Toolkit,
+  TripRequest,
+} from "@effect-agent/testing";
 import { CalculatorToolkit, ChatInput, ChatOutput, GeneralChatInstructions } from "./general-chat";
 
 export const OPENAI_DEMO_MODEL = "gpt-5.6-luna" as const;
@@ -51,6 +57,40 @@ export const OpenAiChatDefinition = Agent.define("general-chat-openai", {
 /** Server-only model binding for live general chat. */
 export const OpenAiChatAgent = Agent.withModel(
   OpenAiChatDefinition,
+  OpenAiLanguageModel.model(OPENAI_DEMO_MODEL, {
+    max_output_tokens: 1_600,
+    store: false,
+    strictJsonSchema: true,
+    text: { verbosity: "low" },
+  }),
+);
+
+/**
+ * The reusable Phase 2 fixture keeps a deliberately tiny 2,048-token policy
+ * for deterministic tests. A real provider needs room for Tool schemas,
+ * results, and one queued update while retaining the same P2 safety bounds.
+ */
+export const OpenAiTravelPlannerDefinition = Agent.define("travel-planner-phase-2-live-demo", {
+  input: TripRequest,
+  output: TravelPlan,
+  instructions: (input) =>
+    Effect.flatMap(TravelGuidance, (guidance) => guidance.instructions(input)),
+  toolkit: TravelPlannerPhase2Toolkit,
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 4,
+    maxDuration: "30 seconds",
+    toolConcurrency: 3,
+    tokenBudget: 12_000,
+  }),
+  description:
+    "Coordinate repeatable travel suppliers and require approval before a demo itinerary hold.",
+  metadata: { deploymentClass: "E", phase: "P2-live-demo" },
+});
+
+/** Live coordinator for fixture travel suppliers and approval-gated holds. */
+export const OpenAiTravelPlannerAgent = Agent.withModel(
+  OpenAiTravelPlannerDefinition,
   OpenAiLanguageModel.model(OPENAI_DEMO_MODEL, {
     max_output_tokens: 1_600,
     store: false,

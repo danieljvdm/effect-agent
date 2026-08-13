@@ -15,6 +15,12 @@ The records below reflect explicit owner decisions.
 | [ADR-0008](0008-turn-boundary-input-delivery.md)               | Deliver steering, follow-up, and joined input only at safe seams    |
 | [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces           |
 
+## Proposed
+
+| ADR                                             | Recommendation                                        |
+| ----------------------------------------------- | ----------------------------------------------------- |
+| [ADR-0010](0010-declared-attached-subagents.md) | Model Subagents as declared attached delegation Tools |
+
 ## Status transitions
 
 - `Proposed` → `Accepted` after explicit owner approval.

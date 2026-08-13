@@ -25,6 +25,8 @@ The root `package.json` is the only version source for shared dependencies.
 | `@effect/tsgo`          |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
 | `@types/node`           |           `26.1.2` | Node types for repository scripts                                                 |
 | `tsx`                   |           `4.23.1` | TypeScript script runner                                                          |
+| VitePress               |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
+| Vue                     |           `3.5.40` | VitePress theme components                                                        |
 
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
@@ -81,8 +83,11 @@ Run commands from the repository root:
 | `bun install`                                 | Install dependencies and run repository setup                                  |
 | `bun run check`                               | Run Vite+ format/lint/type checks, package type checks, and script type checks |
 | `bun run test`                                | Run package and example test tasks in dependency order                         |
-| `bun run build`                               | Build library packages and runnable examples                                   |
-| `bun --filter @effect-agent/example-demo dev` | Run the Phase 1 browser bench on port 4173                                     |
+| `bun run build`                               | Build packages, runnable examples, and the VitePress documentation site        |
+| `bun run docs:dev`                            | Run the local VitePress documentation server                                   |
+| `bun run docs:build`                          | Build and validate the Markdown documentation site                             |
+| `bun run docs:preview`                        | Preview the built documentation site                                           |
+| `bun --filter @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
 | `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
 | `bun run format:write`                        | Apply repository formatting                                                    |
 | `bun run sync:effect`                         | Align the local Effect source checkout with the catalog pin                    |
@@ -92,7 +97,9 @@ Run commands from the repository root:
 Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
 package manifest so Vite+ can order and cache them from the actual workspace dependency graph.
 The root declares the catalog's Vite+ core alias as `vite` as well as `vite-plus`; Bun needs that
-direct peer provider to avoid resolving a second Vite implementation.
+direct peer provider for the Vite+ toolchain. VitePress intentionally resolves the official Vite
+implementation as its nested dependency; the repository therefore does not use a global `vite`
+override. The documentation build is part of the root `build` and `ready` gates.
 
 ## Post-install setup
 

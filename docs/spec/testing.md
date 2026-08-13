@@ -216,6 +216,12 @@ inference.
 - forged producer epochs and receipts;
 - approval replay/expiry;
 - artifact integrity and content-type confusion.
+- Subagent establishment without concrete child-resource authority and revocation after admission;
+- parent approval replay against child actions, siblings, retries, or descendants;
+- parent/child/Receipt IDOR across observer reconnects and paginated reads;
+- cross-tenant artifact digest substitution, deduplication leakage, and classification laundering;
+- child failure, progress, and provenance payloads containing secret-bearing values;
+- hierarchical reservation races, accounting replay, and recursive fan-out attempts.
 
 High-risk parsers and protocol adapters receive fuzz tests.
 

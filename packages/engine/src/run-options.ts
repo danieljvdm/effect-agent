@@ -128,7 +128,11 @@ export interface RunSchedulingHook {
 export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Reuse an existing ephemeral Conversation identity instead of allocating one. */
   readonly conversationId?: ConversationId | undefined;
-  /** Official prior history. Context preparation never mutates this source. */
+  /**
+   * Official prior history. The engine preserves it as the exact initial
+   * prefix, then appends this Run's evaluated instructions and decoded input.
+   * Context preparation never mutates this source.
+   */
   readonly history?: Prompt.Prompt | undefined;
   readonly commandDrainPolicy?: CommandDrainPolicy | undefined;
   readonly input?: RunInputHook<HookError, HookRequirements> | undefined;

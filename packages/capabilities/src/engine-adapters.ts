@@ -112,7 +112,9 @@ export const toRunApprovalHook = (
         actionSummary: metadata.actionSummary,
         resourceTargets: metadata.resourceTargets,
         risk: validatedPolicy.risk,
-        expiresAt: DateTime.toUtc(DateTime.makeUnsafe(now + validatedPolicy.expiresInMillis)),
+        expiresAt: DateTime.formatIso(
+          DateTime.toUtc(DateTime.makeUnsafe(now + validatedPolicy.expiresInMillis)),
+        ),
         denial: validatedPolicy.denial,
       }).pipe(
         Effect.mapError((error) =>

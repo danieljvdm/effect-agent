@@ -196,6 +196,10 @@ Context preparation:
 5. Compact if policy requires.
 6. Produce normalized Model Input.
 
+Official prior history remains the exact prefix of the newly materialized Run history. Evaluated
+instructions and the current decoded input append after that prefix; a new Run must never prepend,
+rewrite, or reorder already-official messages.
+
 Compaction appends or emits a summary/branch representation and preserves the source history.
 Summary generation is a separately metered Model purpose. Failed compaction leaves the original
 history authoritative.

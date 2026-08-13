@@ -101,6 +101,22 @@ A Skill is data, not ambient executable code.
 An Agent Definition invoked by another agent through a declared delegation capability. A durable
 Subagent owns a child Conversation with explicit parent linkage.
 
+**Delegation Definition**
+An immutable declaration that exposes one target Agent Definition to a parent as an Effect AI
+Tool, with explicit input/result projections, authority, budget, and policy bounds.
+
+**Subagent Invocation**
+One parent Tool Call that runs one declared Subagent. Its child Conversation is fresh and distinct;
+its stable parent-side identity is the parent Run and Tool Call pair.
+
+**Parent Link**
+The immutable lineage from a child Conversation to the parent Conversation, Run, Tool Call, Agent,
+delegation, and depth that established it.
+
+**Attached Child**
+A Subagent Invocation whose terminal outcome must be joined into its parent Tool Call before that
+Tool Call settles. Detachment is a separate future capability.
+
 **Sandbox**  
 A scoped capability set for filesystem, process, and optional network operations. It is not a
 generic bag of provider SDK methods.

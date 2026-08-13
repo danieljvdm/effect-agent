@@ -3,7 +3,9 @@
 Status: Draft
 
 This guide turns the specification into a coordinated implementation program. It
-supplements [AGENTS.md](../../AGENTS.md), which contains mandatory repository rules.
+supplements the repository's
+[AGENTS.md](https://github.com/danieljvdm/effect-agent/blob/main/AGENTS.md), which contains
+mandatory repository rules.
 
 ## 1. Operating model
 
