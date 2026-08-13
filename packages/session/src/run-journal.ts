@@ -1,8 +1,9 @@
-import { RunId, ToolCallId, TurnId, type SubmissionId } from "@effect-agent/core";
+import { ConversationId, RunId, ToolCallId, TurnId, type SubmissionId } from "@effect-agent/core";
 import { Crypto, Effect, Schema, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
 import { digestJson, type DigestError } from "./digest.ts";
+import { IdempotencyKey } from "./ledger.ts";
 import {
   BatchId,
   CanonicalBatch,
@@ -174,6 +175,78 @@ export const modelResponseInterruptedRecordId = (runId: RunId, supersededEpoch: 
 export const modelResponseInterruptedBatchId = (runId: RunId, supersededEpoch: number): BatchId =>
   decodeBatchId(`interrupted:${runId}:${supersededEpoch}`);
 
+const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
+
+/**
+ * Deterministic canonical record identity of one parent Tool Call's `SubagentRequested` record
+ * (spec/subagents.md §12 step 3). The one-record batch reuses the same string, so batch
+ * idempotency plus the parent epoch fence make the request append exactly-once-canonical.
+ */
+export const subagentRequestedRecordId = (runId: RunId, toolCallId: ToolCallId): RecordId =>
+  decodeRecordId(`subagent-requested:${runId}:${toolCallId}`);
+
+/** Deterministic batch identity of one `SubagentRequested` append (same string). */
+export const subagentRequestedBatchId = (runId: RunId, toolCallId: ToolCallId): BatchId =>
+  decodeBatchId(`subagent-requested:${runId}:${toolCallId}`);
+
+/**
+ * Deterministic canonical record identity of one parent Tool Call's `SubagentStarted` record
+ * (spec/subagents.md §12 step 9). Recovery's start-link repair appends the EXACT same record
+ * under this identity, so a raced repair replays instead of duplicating (SUB-016/SUB-017).
+ */
+export const subagentStartedRecordId = (runId: RunId, toolCallId: ToolCallId): RecordId =>
+  decodeRecordId(`subagent-started:${runId}:${toolCallId}`);
+
+/** Deterministic batch identity of one `SubagentStarted` append (same string). */
+export const subagentStartedBatchId = (runId: RunId, toolCallId: ToolCallId): BatchId =>
+  decodeBatchId(`subagent-started:${runId}:${toolCallId}`);
+
+/**
+ * Deterministic batch identity of one parent Tool Call's atomic settlement join: the
+ * `SubagentJoined` record plus the parent's `ToolCallSettled` record (its existing
+ * `tool-settled:{runId}:{turn}:{toolCallId}` identity) commit as ONE canonical batch (SUB-019).
+ */
+export const subagentJoinBatchId = (runId: RunId, toolCallId: ToolCallId): BatchId =>
+  decodeBatchId(`subagent-join:${runId}:${toolCallId}`);
+
+/** Deterministic canonical record identity of one parent Tool Call's `SubagentJoined` record. */
+export const subagentJoinedRecordId = (runId: RunId, toolCallId: ToolCallId): RecordId =>
+  decodeRecordId(`subagent-joined:${runId}:${toolCallId}`);
+
+/**
+ * Deterministic identity of one child Conversation's `SubagentLineageRecorded` record
+ * (spec/subagents.md §11). Its own single-record batch reuses the same string so the generic
+ * `conversation-created:{cid}` batch identity is never contradicted.
+ */
+export const subagentLineageRecordId = (conversationId: ConversationId): RecordId =>
+  decodeRecordId(`subagent-lineage:${conversationId}`);
+
+/** Deterministic batch identity of one `SubagentLineageRecorded` append (same string). */
+export const subagentLineageBatchId = (conversationId: ConversationId): BatchId =>
+  decodeBatchId(`subagent-lineage:${conversationId}`);
+
+/**
+ * Deterministic intended child Conversation identity (spec/subagents.md §12 step 4, D4): the
+ * parent Submission and Tool Call pair addresses exactly one child Conversation, so a replayed
+ * establishment converges on the one existing child (SUB-016).
+ */
+export const childConversationIdFor = (
+  parentSubmissionId: SubmissionId,
+  toolCallId: ToolCallId,
+): ConversationId => decodeConversationId(`subagent:${parentSubmissionId}:${toolCallId}`);
+
+/**
+ * Deterministic child admission idempotency key (spec/subagents.md §12 step 4, D4): scoped to
+ * the parent Run and Tool Call identity, so duplicate admission attempts resolve through the
+ * ledger's idempotency contract to one child Receipt (SUB-016, SUB-031). The ledger key is
+ * bounded (256); coordinator-minted Run and Tool Call identities stay far below that bound.
+ */
+export const childIdempotencyKeyFor = (
+  parentRunId: RunId,
+  toolCallId: ToolCallId,
+): IdempotencyKey => decodeIdempotencyKey(`subagent:${parentRunId}:${toolCallId}`);
+
 const decodePromptMessages = Effect.fn("RunJournal.decodePromptMessages")(
   (messages: PersistedJson): Effect.Effect<Prompt.Prompt, RunJournalError> =>
     Schema.decodeUnknownEffect(Prompt.Prompt)(messages).pipe(
@@ -242,6 +315,11 @@ interface FoldState {
  * the model-visible Prompt, and — unlike the P4 tags — they do NOT split a contiguous
  * `ToolCallSettled` group into separate Tool messages, so a late-settled call's audit records
  * cannot change the replayed prompt shape.
+ *
+ * The four S2 Subagent lifecycle tags are prompt-transparent for the same reason (spec §5/§11):
+ * the parent prompt never carries child transcript or establishment evidence — the joined child
+ * result reaches the model exclusively through the paired `ToolCallSettled` record, and the
+ * child-log lineage record is not model input.
  */
 const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "ToolCallPrepared",
@@ -251,6 +329,10 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
   "ToolApprovalRequested",
   "ToolApprovalDecided",
   "ModelResponseInterrupted",
+  "SubagentRequested",
+  "SubagentStarted",
+  "SubagentJoined",
+  "SubagentLineageRecorded",
 ]);
 
 /**

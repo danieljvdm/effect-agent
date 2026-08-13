@@ -518,6 +518,32 @@ describe("SubmissionLedger port schemas", () => {
         reason: { _tag: "ApprovalPending", toolCallIds: ["call-1"] },
         suspendedAt: "2026-08-12T00:00:15.000Z",
       },
+      childReservations: [
+        {
+          reservationId: "child-reservation:run-1:call-3",
+          parentSubmissionId: "submission-1",
+          parentToolCallId: "call-3",
+          childSubmissionId: "submission-child-1",
+          status: "releasePending",
+          allocation: { turns: 4 },
+          allocationDigest: SHA_256_A,
+          accounting: { consumed: { turns: 1 }, released: { turns: 3 } },
+          reservedAt: "2026-08-12T00:00:05.000Z",
+          releaseBeganAt: "2026-08-12T00:00:18.000Z",
+        },
+      ],
+      childAttachments: [
+        {
+          toolCallId: "call-3",
+          childSubmissionId: "submission-child-1",
+          childState: "settled",
+          childOutcome: "completed",
+        },
+      ],
+      parentLinkage: {
+        parentSubmissionId: "submission-0",
+        parentToolCallId: "call-0",
+      },
     };
     const recovery = Schema.decodeUnknownSync(RecoverySnapshot)(encodedRecovery);
     expect(Schema.encodeSync(RecoverySnapshot)(recovery)).toEqual(encodedRecovery);
@@ -526,16 +552,41 @@ describe("SubmissionLedger port schemas", () => {
       joins: [],
       approvalDecisions: [],
       unknownResolutions: [],
+      childReservations: [],
+      childAttachments: [],
     });
     expect(minimalRecovery.ownership).toBeUndefined();
     expect(minimalRecovery.reservation).toBeUndefined();
     expect(minimalRecovery.abortIntent).toBeUndefined();
     expect(minimalRecovery.hostSubmissionId).toBeUndefined();
     expect(minimalRecovery.suspension).toBeUndefined();
+    expect(minimalRecovery.parentLinkage).toBeUndefined();
     // The P5 snapshot fields are required: a P4-shaped snapshot value no longer decodes.
     expect(
       Schema.decodeUnknownExit(RecoverySnapshot)({ submission: encodedSubmissionSnapshot })._tag,
     ).toBe("Failure");
+    // The S2 snapshot arrays are required on the wire (construction alone defaults them):
+    // a P5-shaped snapshot value no longer decodes.
+    expect(
+      Schema.decodeUnknownExit(RecoverySnapshot)({
+        submission: encodedSubmissionSnapshot,
+        joins: [],
+        approvalDecisions: [],
+        unknownResolutions: [],
+      })._tag,
+    ).toBe("Failure");
+    // A WaitingForChild suspension round-trips through the additive reason union (spec §12).
+    const waitingRecovery = Schema.decodeUnknownSync(RecoverySnapshot)({
+      ...encodedRecovery,
+      suspension: {
+        reason: {
+          _tag: "WaitingForChild",
+          children: [{ toolCallId: "call-3", childSubmissionId: "submission-child-1" }],
+        },
+        suspendedAt: "2026-08-12T00:00:15.000Z",
+      },
+    });
+    expect(waitingRecovery.suspension?.reason._tag).toBe("WaitingForChild");
   });
 
   it("round-trips settlement reservation values carrying the exact canonical record", () => {
@@ -849,6 +900,171 @@ describe("phase 5 durable canonical payloads", () => {
       abortRequests: [],
     };
     expect(Schema.decodeUnknownExit(ConversationProjection)(phase4State)._tag).toBe("Failure");
+  });
+});
+
+describe("S2 durable subagent canonical payloads", () => {
+  const encodedSubagentRequested = {
+    _tag: "SubagentRequested",
+    runId: "run:submission-parent",
+    turnId: "turn:run:submission-parent:1",
+    turn: 1,
+    toolCallId: "call-delegate-1",
+    delegationId: "delegation-destination-research",
+    targetAgentId: "destination-researcher",
+    targetDigests: { agent: SHA_256_A, model: SHA_256_B, tools: SHA_256_C },
+    childInput: { destination: "Kyoto", month: "October" },
+    childInputDigest: SHA_256_A,
+    grantDigest: SHA_256_B,
+    reservationId: "run%3Asubmission-parent:call-delegate-1",
+    reservationDigest: SHA_256_C,
+    childConversationId: "subagent:submission-parent:call-delegate-1",
+    childPrincipal: "tenant-a",
+    childIdempotencyKey: "subagent:run:submission-parent:call-delegate-1",
+  } as const;
+  const encodedSubagentStarted = {
+    _tag: "SubagentStarted",
+    runId: "run:submission-parent",
+    toolCallId: "call-delegate-1",
+    childConversationId: "subagent:submission-parent:call-delegate-1",
+    childSubmissionId: "submission-child-1",
+    childReceiptId: "receipt-child-1",
+    childRunId: "run:submission-child-1",
+  } as const;
+  const encodedSubagentJoined = {
+    _tag: "SubagentJoined",
+    runId: "run:submission-parent",
+    toolCallId: "call-delegate-1",
+    childSubmissionId: "submission-child-1",
+    childSettlementId: "settlement:submission-child-1",
+    childOutcome: "completed",
+    childResultDigest: SHA_256_A,
+    projectedResultDigest: SHA_256_B,
+    usageSummary: { turns: 1, toolCalls: 0 },
+    reservationId: "run%3Asubmission-parent:call-delegate-1",
+    finalAccounting: { consumed: { turns: 1 }, released: { turns: 3 } },
+  } as const;
+  const encodedSubagentLineage = {
+    _tag: "SubagentLineageRecorded",
+    parentLink: {
+      delegationId: "delegation-destination-research",
+      parentAgentId: "travel-coordinator",
+      parentConversationId: "conversation-parent",
+      parentRunId: "run:submission-parent",
+      parentToolCallId: "call-delegate-1",
+      depth: 1,
+    },
+    parentSubmissionId: "submission-parent",
+    childDefinitionDigests: { agent: SHA_256_A, model: SHA_256_B, tools: SHA_256_C },
+    childInputDigest: SHA_256_A,
+    grantDigest: SHA_256_B,
+  } as const;
+
+  it("round-trips the four new payload tags through the version-1 record envelope", () => {
+    const payloads = [
+      encodedSubagentRequested,
+      encodedSubagentStarted,
+      encodedSubagentJoined,
+      encodedSubagentLineage,
+    ] as const;
+    for (const [index, payload] of payloads.entries()) {
+      const record = decodeRecord(`record-s2-${index}`, payload);
+      expect(record.schemaVersion).toBe(1);
+      const encoded = Schema.encodeSync(RecordEnvelope)(record);
+      expect(encoded.payload).toEqual(payload);
+      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+    }
+  });
+
+  it("rejects malformed subagent payloads (invalid identity, digest, size, outcome, and depth)", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-s2-invalid",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-08-12T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const failures: ReadonlyArray<unknown> = [
+      { ...encodedSubagentRequested, turn: 0 },
+      { ...encodedSubagentRequested, childInputDigest: "not-a-digest" },
+      { ...encodedSubagentRequested, reservationId: "" },
+      { ...encodedSubagentRequested, reservationId: "x".repeat(257) },
+      { ...encodedSubagentRequested, childPrincipal: "x".repeat(257) },
+      { ...encodedSubagentRequested, childIdempotencyKey: "" },
+      { ...encodedSubagentStarted, childReceiptId: "" },
+      { ...encodedSubagentStarted, childSubmissionId: "" },
+      { ...encodedSubagentJoined, childOutcome: "cancelled" },
+      { ...encodedSubagentJoined, childResultDigest: "not-a-digest" },
+      { ...encodedSubagentLineage, parentLink: { ...encodedSubagentLineage.parentLink, depth: 0 } },
+      {
+        ...encodedSubagentLineage,
+        parentLink: { ...encodedSubagentLineage.parentLink, parentToolCallId: "" },
+      },
+    ];
+    for (const payload of failures) {
+      expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
+    }
+  });
+
+  it("folds the parent-side invocation view and the child-side lineage into the projection", () => {
+    const created = decodeEnvelope(
+      1,
+      decodeRecord("record-s2-created", {
+        _tag: "ConversationCreated",
+        agentId: "travel-coordinator",
+        definitions: Schema.encodeSync(DefinitionDigests)(definitionDigests),
+      }),
+    );
+    const requested = decodeEnvelope(
+      2,
+      decodeRecord("record-s2-requested", encodedSubagentRequested),
+    );
+    const started = decodeEnvelope(3, decodeRecord("record-s2-started", encodedSubagentStarted));
+    const joined = decodeEnvelope(4, decodeRecord("record-s2-joined", encodedSubagentJoined));
+
+    const afterStarted = replayConversation(created.conversationId, [created, requested, started]);
+    expect(afterStarted.subagentInvocations).toHaveLength(1);
+    const invocation = afterStarted.subagentInvocations[0];
+    expect(invocation?.toolCallId).toBe("call-delegate-1");
+    expect(invocation?.requested).toEqual(requested.record.payload);
+    expect(invocation?.started).toEqual(started.record.payload);
+    expect(invocation?.joined).toBeUndefined();
+    expect(afterStarted.parentLink).toBeUndefined();
+
+    const full = replayConversation(created.conversationId, [created, requested, started, joined]);
+    expect(full.subagentInvocations[0]?.joined).toEqual(joined.record.payload);
+
+    // Checkpoint replay equals full replay, and the projection round-trips through its Schema.
+    const resumed = replayConversationFromCheckpoint(afterStarted, [joined]);
+    expect(resumed).toEqual(full);
+    expect(
+      Schema.decodeSync(ConversationProjection)(Schema.encodeSync(ConversationProjection)(full)),
+    ).toEqual(full);
+
+    // Child-side lineage: the first canonical record wins forever (immutable Parent Link).
+    const lineage = decodeEnvelope(2, decodeRecord("record-s2-lineage", encodedSubagentLineage));
+    const child = replayConversation(created.conversationId, [created, lineage]);
+    expect(child.parentLink).toEqual(lineage.record.payload);
+    expect(child.subagentInvocations).toEqual([]);
+  });
+
+  it("rejects a Phase 5 checkpoint projection state so callers rebuild from canonical records", () => {
+    const phase5State = {
+      conversationId: "travel-conversation",
+      throughSequence: 2,
+      tailDigest: SHA_256_A,
+      inputs: [{ destination: "Kyoto" }],
+      modelOutputs: [],
+      completedRuns: [],
+      failedRuns: [],
+      settlements: [],
+      abortRequests: [],
+      openToolCalls: [],
+      unknownToolCalls: [],
+      approvals: [],
+    };
+    expect(Schema.decodeUnknownExit(ConversationProjection)(phase5State)._tag).toBe("Failure");
   });
 });
 

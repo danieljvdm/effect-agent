@@ -2,9 +2,14 @@ import type { Effect } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type {
+  AgentId,
   ConversationId,
+  DelegationDepth,
+  DelegationId,
+  ReceiptId,
   RunId,
   SubagentParentLink,
+  SubmissionId,
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
@@ -166,6 +171,126 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
   readonly step: RunStepHook<Error, Requirements>;
 }
 
+/**
+ * `DefinitionDigests`-shaped digests of one child Agent Binding in plain
+ * string form. The durable coordinator's session-owned digest Schema never
+ * crosses inward: the delegation capability computes these exact digests at
+ * handler-Layer construction and the coordinator stores and verifies them
+ * byte-for-byte (SUB-023 exact-digest binding resolution).
+ */
+export interface RunSubagentDigests {
+  readonly agent: string;
+  readonly model: string;
+  readonly tools: string;
+}
+
+/**
+ * Establishment request assembled by a delegation Tool handler for the
+ * durable coordinator (spec/subagents.md §12 steps 2-9), expressed strictly
+ * in core/engine vocabulary. The coordinator derives everything else
+ * deterministically: reservation identity from `(parentRunId, toolCallId)`,
+ * child Conversation/Submission identity and the admission idempotency key
+ * from the parent Run and Tool Call pair, the child principal from the parent
+ * Submission, and digests of the encoded input/grant/allocation values (it
+ * owns the canonical digest authority). Establishment is idempotent by
+ * construction (SUB-016): replaying the identical request converges on the
+ * one existing child.
+ */
+export interface RunSubagentEstablishRequest {
+  readonly toolCallId: ToolCallId;
+  readonly delegationId: DelegationId;
+  readonly targetAgentId: AgentId;
+  /** The child Run's root-relative delegation depth (S2 fixes the ceiling at 1). */
+  readonly depth: DelegationDepth;
+  /** Exact child Binding digests computed at handler-Layer construction. */
+  readonly targetDigests: RunSubagentDigests;
+  /** The prepared child input in encoded (wire) form; it rides the canonical request record so recovery admission never needs a live handler. */
+  readonly encodedChildInput: unknown;
+  /** The delegation's authority ceiling in encoded form. */
+  readonly encodedGrant: unknown;
+  /** The per-invocation budget allocation in encoded form (opaque to the engine and to storage adapters). */
+  readonly encodedAllocation: unknown;
+}
+
+/** Durable identity of one established attached child, in core vocabulary. */
+export interface RunSubagentChildIdentity {
+  readonly childConversationId: ConversationId;
+  readonly childSubmissionId: SubmissionId;
+  readonly childRunId: RunId;
+  /** The child Receipt: establishment is never durable-visible before it exists (SUB-017). */
+  readonly receiptId: ReceiptId;
+}
+
+/** The established child has not settled; the parent must suspend, never poll or respawn (SUB-018). */
+export interface ChildEstablishWaiting extends RunSubagentChildIdentity {
+  readonly _tag: "waiting";
+}
+
+/**
+ * The established child already has a verified canonical Settlement. The
+ * coordinator verified Parent Link, target, digests, and settlement identity
+ * fail-closed before returning it; `encodedResult` is the Schema-encoded
+ * child terminal output for `completed` and the coordinator's bounded
+ * `{errorTag, message}` failure projection otherwise — never a raw Cause.
+ */
+export interface ChildEstablishSettled extends RunSubagentChildIdentity {
+  readonly _tag: "settled";
+  readonly outcome: "completed" | "failed" | "aborted";
+  readonly encodedResult: unknown;
+}
+
+/**
+ * Establishment was refused or failed verification fail-closed (typed, bounded;
+ * never a raw Cause). No further establishment attempt is made for this call.
+ */
+export interface ChildEstablishDenied {
+  readonly _tag: "denied";
+  readonly errorTag: string;
+  readonly message: string;
+}
+
+/** Result of one idempotent durable child establishment attempt. */
+export type ChildEstablishStatus =
+  | ChildEstablishWaiting
+  | ChildEstablishSettled
+  | ChildEstablishDenied;
+
+/**
+ * One settlement join handed back to the coordinator by the delegation
+ * handler after it decoded the verified child output and applied its bounded
+ * result/failure projection. The coordinator appends `SubagentJoined` and the
+ * parent `ToolCallSettled` as ONE atomic canonical batch (SUB-019) and then
+ * applies the accounting decision through the idempotent reservation-release
+ * transitions.
+ */
+export interface RunSubagentJoinRequest {
+  readonly toolCallId: ToolCallId;
+  /** The encoded parent Tool result exactly as the Tool message will carry it. */
+  readonly encodedResult: unknown;
+  readonly isFailure: boolean;
+  /** Final consumed/released accounting decision per budget dimension (opaque encoded policy math owned by the delegation capability). */
+  readonly encodedAccounting: unknown;
+}
+
+/**
+ * Dependency-neutral durable-Subagent seam implemented by a durable
+ * coordinator (S2 plan §2 option c) and consumed by the delegation Tool
+ * handler through the engine-provided per-batch `SubagentDurability` service.
+ *
+ * `establish` performs (or replays) the recoverable establishment protocol of
+ * spec/subagents.md §12 under the parent's ownership fence and reports where
+ * the one child stands; `join` atomically commits the verified settlement
+ * join. When the hook is absent the engine provides the explicit
+ * ephemeral-mode service and the S1 in-process spawn semantics apply honestly
+ * — absence means no durable claim is being made.
+ */
+export interface RunSubagentHook<Error = never, Requirements = never> {
+  readonly establish: (
+    request: RunSubagentEstablishRequest,
+  ) => Effect.Effect<ChildEstablishStatus, Error, Requirements>;
+  readonly join: (request: RunSubagentJoinRequest) => Effect.Effect<void, Error, Requirements>;
+}
+
 /** One declared Tool Call of a Turn being resumed, in canonical encoded form. */
 export interface RunTurnResumeCall {
   readonly id: string;
@@ -198,6 +323,18 @@ export interface RunTurnResume {
   readonly turnId: TurnId;
   readonly calls: ReadonlyArray<RunTurnResumeCall>;
   readonly settled: ReadonlyArray<RunTurnResumeSettledCall>;
+  /**
+   * The pending Turn's committed LEADING messages — the messages the durable
+   * coordinator committed inside the pending Turn's canonical response record
+   * BEFORE the assistant tool-call message (Turn-1 evaluated instructions +
+   * input, or steering drained at the prior seam). A resumed Attempt's
+   * canonical prompt boundary excludes the pending Turn entirely, so without
+   * this field those messages would be absent from the resumed Run's live
+   * model context. When present the engine threads them into official history
+   * between the re-evaluated initial prompt and the rebuilt assistant
+   * tool-call message. Optional: absent keeps the prior behavior byte-for-byte.
+   */
+  readonly leadingMessages?: Prompt.Prompt | undefined;
 }
 
 /** Run-level scheduler override; it may only make the Agent's finite bound stricter. */
@@ -254,6 +391,13 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * executes pass-through.
    */
   readonly durability?: RunDurabilityHook<HookError, HookRequirements> | undefined;
+  /**
+   * Durable-Subagent establishment/join seam (S2). When present the engine's
+   * per-batch `SubagentDurability` service runs in durable mode over this
+   * hook; when absent the service is the explicit ephemeral-mode default and
+   * delegation Tools keep their S1 in-process spawn semantics unchanged.
+   */
+  readonly subagent?: RunSubagentHook<HookError, HookRequirements> | undefined;
   /**
    * Resume a declared, canonically committed Tool batch without re-invoking
    * the model (durable batch-resume seam). Consumed by the Run's first Turn.

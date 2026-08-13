@@ -28,16 +28,28 @@ import {
   AgentPolicy,
   ConversationId,
   IdGenerator,
+  ReceiptId,
   type RunEvent,
   RunId,
+  SubmissionId,
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
 import {
+  AgentChildPending,
   AgentRuntime,
   AgentSpawner,
+  type ChildEstablishStatus,
   RunEventSink,
+  type RunSubagentChildIdentity,
+  type RunSubagentEstablishRequest,
+  type RunSubagentHook,
+  type RunSubagentJoinRequest,
+  type RunTurnResume,
   type RuntimeBinding,
+  SubagentDurability,
+  SubagentDurabilityError,
+  ToolCallWaiting,
 } from "@effect-agent/engine";
 
 import {
@@ -48,6 +60,7 @@ import {
   SubagentBudgetExhausted,
   type SubagentChildRunFailure,
   SubagentDelegationCaps,
+  SubagentExecutionFailure,
   SubagentGrant,
   SubagentPolicy,
   SubagentPrestartDenied,
@@ -1037,6 +1050,577 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
   );
 });
 
+// ---------------------------------------------------------------------------
+// S2 durable delegation branch (spec/subagents.md §12, plan §5 WP5)
+// ---------------------------------------------------------------------------
+
+const decodeSubmissionId = Schema.decodeSync(SubmissionId);
+const decodeReceiptId = Schema.decodeSync(ReceiptId);
+
+const durableChildIdentity = (suffix: string): RunSubagentChildIdentity => ({
+  childConversationId: decodeConversationId(`durable-child-conversation-${suffix}`),
+  childSubmissionId: decodeSubmissionId(`durable-child-submission-${suffix}`),
+  childRunId: decodeRunId(`durable-child-run-${suffix}`),
+  receiptId: decodeReceiptId(`durable-child-receipt-${suffix}`),
+});
+
+/** Application-computed child Binding digests, fixed at Layer construction (SUB-023). */
+const durableDigests = {
+  agent: "sha-agent-research-child",
+  model: "sha-model-scripted",
+  tools: "sha-tools-empty",
+} as const;
+
+/** Scripted coordinator hook: establish answers per call; joins are recorded. */
+const scriptedDurableHook = (options: {
+  readonly establish: (request: RunSubagentEstablishRequest) => ChildEstablishStatus;
+  readonly establishes?: Ref.Ref<ReadonlyArray<RunSubagentEstablishRequest>>;
+  readonly joins?: Ref.Ref<ReadonlyArray<RunSubagentJoinRequest>>;
+}): RunSubagentHook => ({
+  establish: (request) =>
+    (options.establishes === undefined
+      ? Effect.void
+      : Ref.update(options.establishes, (all) => [...all, request])
+    ).pipe(Effect.map(() => options.establish(request))),
+  join: (request) =>
+    options.joins === undefined
+      ? Effect.void
+      : Ref.update(options.joins, (all) => [...all, request]),
+});
+
+/** Child binding whose scripted model counts invocations: durable mode must never run it. */
+const countingChildBinding = (invocations: Ref.Ref<number>) =>
+  Agent.withModel(
+    childDefinition,
+    Model.make(
+      "scripted",
+      "durable-counting-child",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: () =>
+            Stream.unwrap(
+              Ref.update(invocations, (count) => count + 1).pipe(
+                Effect.as(
+                  Stream.fromIterable<Response.StreamPartEncoded>(
+                    finalParts('{"answer":"in-process"}'),
+                  ),
+                ),
+              ),
+            ),
+        }),
+      ),
+    ),
+  );
+
+const durableResearchLayer = (invocations: Ref.Ref<number>) =>
+  SubagentRuntime.layer(researchDelegation, countingChildBinding(invocations), {
+    mapChildFailure,
+    durable: { targetDigests: durableDigests },
+  });
+
+/** The construction-fixed per-invocation allocation of `researchPolicy` in encoded form. */
+const expectedEncodedAllocation = {
+  turns: 4,
+  toolCalls: 4,
+  durationMillis: 10_000,
+  inputTokens: 0,
+  outputTokens: 0,
+  costMicrousd: 0,
+  resultBytes: 0,
+};
+
+const zeroEncodedAmounts = {
+  turns: 0,
+  toolCalls: 0,
+  durationMillis: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  costMicrousd: 0,
+  resultBytes: 0,
+};
+
+/** D11: the handler's join accounting conservatively consumes the full reservation. */
+const expectedConservativeAccounting = {
+  allocation: expectedEncodedAllocation,
+  consumed: expectedEncodedAllocation,
+  released: zeroEncodedAmounts,
+  basis: "reserved-conservative",
+};
+
+const durableParent = (name: string, topic: string) =>
+  Agent.withModel(
+    coordinatorDefinition,
+    delegatingModel(
+      name,
+      "delegate_research",
+      [{ id: "call-1", params: { topic } }],
+      '{"report":"done"}',
+    ),
+  );
+
+layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
+  it.effect("assembles the establishment request from construction-fixed declaration values", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
+      const child = durableChildIdentity("assemble");
+      const subagent = scriptedDurableHook({
+        establish: () => ({
+          _tag: "settled",
+          ...child,
+          outcome: "completed",
+          encodedResult: { answer: "durable-answer" },
+        }),
+        establishes,
+      });
+
+      const result = yield* AgentRuntime.run(
+        durableParent("parent-durable-assemble", "paris"),
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-durable-assemble"), subagent },
+      ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped);
+
+      expect(result.output).toEqual({ report: "done" });
+      const requests = yield* Ref.get(establishes);
+      expect(requests).toHaveLength(1);
+      // Everything the coordinator digests into `SubagentRequested` is
+      // assembled from construction-fixed values plus the projected, encoded
+      // child input — no live handler state.
+      expect(requests[0]).toEqual({
+        toolCallId: "call-1",
+        delegationId: "delegate_research",
+        targetAgentId: "research-child",
+        depth: 1,
+        targetDigests: durableDigests,
+        encodedChildInput: { question: "research:paris" },
+        encodedGrant: { allowedToolNames: [], maxDepth: 1 },
+        encodedAllocation: expectedEncodedAllocation,
+      });
+    }),
+  );
+
+  it.effect("durable mode never spawns an in-process child fiber while waiting", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const child = durableChildIdentity("waiting");
+      const subagent = scriptedDurableHook({ establish: () => ({ _tag: "waiting", ...child }) });
+      const runId = decodeRunId("parent-run-durable-waiting");
+
+      const exit = yield* AgentRuntime.stream(
+        durableParent("parent-durable-waiting", "waiting"),
+        { mission: "m" },
+        { runId, subagent },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(durableResearchLayer(invocations)),
+        Effect.exit,
+      );
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(AgentChildPending);
+      if (!(failure instanceof AgentChildPending)) {
+        throw new Error("Expected AgentChildPending");
+      }
+      expect(failure.children).toEqual([
+        {
+          toolCallId: "call-1",
+          childConversationId: child.childConversationId,
+          childSubmissionId: child.childSubmissionId,
+          childRunId: child.childRunId,
+        },
+      ]);
+      // No in-process child fiber: the scripted child model never ran.
+      expect(yield* Ref.get(invocations)).toBe(0);
+
+      const observed = yield* Ref.get(events);
+      expect(subagentTags(observed)).toEqual(["SubagentRequested", "SubagentStarted"]);
+      // The waiting call is not a Tool failure: it stays open and the Run
+      // suspends after the batch instead of failing.
+      expect(observed.some((event) => event._tag === "ToolCallFailed")).toBe(false);
+      expect(observed.at(-1)?._tag).toBe("RunSuspended");
+
+      // The S1 in-memory reservation service is bypassed in durable mode:
+      // its Scope-finalizer settlement would contradict a handler that exits
+      // waiting while the child keeps running; durable budget is the
+      // coordinator's fenced ledger reservation.
+      const reservations = yield* SubagentReservations;
+      const snapshotExit = yield* Effect.exit(reservations.parentSnapshot(runId));
+      expect(failureFrom(snapshotExit)._tag).toBe("SubagentParentBudgetUnknown");
+    }),
+  );
+
+  it.effect(
+    "joins the settled child output through projectResult with conservative accounting",
+    () =>
+      Effect.gen(function* () {
+        const invocations = yield* Ref.make(0);
+        const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+        const child = durableChildIdentity("join");
+        const subagent = scriptedDurableHook({
+          establish: () => ({
+            _tag: "settled",
+            ...child,
+            outcome: "completed",
+            encodedResult: { answer: "child-answer" },
+          }),
+          joins,
+        });
+
+        const detached = yield* AgentRuntime.start(
+          durableParent("parent-durable-join", "paris"),
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-durable-join"), subagent },
+        ).pipe(Effect.provide(durableResearchLayer(invocations)));
+        const result = yield* detached.await;
+        const events = yield* detached.events;
+
+        expect(result.output).toEqual({ report: "done" });
+        expect(yield* Ref.get(invocations)).toBe(0);
+        // projectResult ran over the Schema-decoded verified child output and
+        // the parent Tool result is the projected, encoded value.
+        expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
+          result: { summary: "finding:child-answer" },
+        });
+        expect(findEvent(events, "SubagentJoined")).toMatchObject({
+          toolCallId: "call-1",
+          childConversationId: child.childConversationId,
+          childRunId: child.childRunId,
+        });
+        expect(yield* Ref.get(joins)).toEqual([
+          {
+            toolCallId: "call-1",
+            encodedResult: { summary: "finding:child-answer" },
+            isFailure: false,
+            encodedAccounting: expectedConservativeAccounting,
+          },
+        ]);
+      }),
+  );
+
+  it.effect("fails closed when the settled child output escapes the target schema", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+      const child = durableChildIdentity("escape");
+      const subagent = scriptedDurableHook({
+        establish: () => ({
+          _tag: "settled",
+          ...child,
+          outcome: "completed",
+          encodedResult: { leaked: "secret-raw-child-value" },
+        }),
+        joins,
+      });
+
+      const exit = yield* AgentRuntime.run(
+        durableParent("parent-durable-escape", "escape"),
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-durable-escape"), subagent },
+      ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(SubagentProjectionFailure);
+      expect(failure).toMatchObject({ stage: "result" });
+      // Fail closed: the raw settled value never enters the failure message.
+      if (failure instanceof SubagentProjectionFailure) {
+        expect(failure.message).not.toContain("secret-raw-child-value");
+      }
+      // The deterministic projection failure still joins the call durably,
+      // as failure data, so the canonical Tool settlement exists.
+      const recordedJoins = yield* Ref.get(joins);
+      expect(recordedJoins).toHaveLength(1);
+      expect(recordedJoins[0]).toMatchObject({
+        toolCallId: "call-1",
+        isFailure: true,
+        encodedAccounting: expectedConservativeAccounting,
+      });
+      expect(recordedJoins[0]?.encodedResult).toMatchObject({ _tag: "SubagentProjectionFailure" });
+      expect(JSON.stringify(recordedJoins[0]?.encodedResult)).not.toContain(
+        "secret-raw-child-value",
+      );
+    }),
+  );
+
+  it.effect("a failed child joins as the bounded framework failure (no raw cause)", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+      const child = durableChildIdentity("failed");
+      const subagent = scriptedDurableHook({
+        establish: () => ({
+          _tag: "settled",
+          ...child,
+          outcome: "failed",
+          encodedResult: { errorTag: "TravelPlanningFailed", message: "child failed typed" },
+        }),
+        joins,
+      });
+
+      const exit = yield* AgentRuntime.run(
+        durableParent("parent-durable-failed", "failed"),
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-durable-failed"), subagent },
+      ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(SubagentExecutionFailure);
+      expect(failure).toMatchObject({
+        classification: "child-failed",
+        delegationId: "delegate_research",
+        targetAgentId: "research-child",
+        childConversationId: child.childConversationId,
+        childSubmissionId: child.childSubmissionId,
+        childRunId: child.childRunId,
+        errorTag: "TravelPlanningFailed",
+        message: "child failed typed",
+      });
+
+      const recordedJoins = yield* Ref.get(joins);
+      expect(recordedJoins).toHaveLength(1);
+      expect(recordedJoins[0]).toMatchObject({ toolCallId: "call-1", isFailure: true });
+      // The joined failure is exactly the bounded Schema projection: a
+      // classification, child references, and tag/message — no Cause, stack,
+      // or raw child payload key can exist on it.
+      const encodedFailure = recordedJoins[0]?.encodedResult as Record<string, unknown>;
+      expect(Object.keys(encodedFailure).sort()).toEqual([
+        "_tag",
+        "childConversationId",
+        "childRunId",
+        "childSubmissionId",
+        "classification",
+        "delegationId",
+        "errorTag",
+        "message",
+        "targetAgentId",
+      ]);
+      expect(encodedFailure._tag).toBe("SubagentExecutionFailure");
+    }),
+  );
+
+  it.effect("classifies aborted children and compatibility failures distinctly", () =>
+    Effect.gen(function* () {
+      const runCase = (suffix: string, outcome: "failed" | "aborted", encodedResult: unknown) =>
+        Effect.gen(function* () {
+          const invocations = yield* Ref.make(0);
+          const child = durableChildIdentity(suffix);
+          const subagent = scriptedDurableHook({
+            establish: () => ({ _tag: "settled", ...child, outcome, encodedResult }),
+          });
+          const exit = yield* AgentRuntime.run(
+            durableParent(`parent-durable-${suffix}`, suffix),
+            { mission: "m" },
+            { runId: decodeRunId(`parent-run-durable-${suffix}`), subagent },
+          ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
+          return failureFrom(exit);
+        });
+
+      const aborted = yield* runCase("aborted", "aborted", {
+        errorTag: "SubagentInterrupted",
+        message: "durable abort propagated",
+      });
+      expect(aborted).toBeInstanceOf(SubagentExecutionFailure);
+      expect(aborted).toMatchObject({ classification: "child-aborted" });
+
+      // A child settled with the framework's ChildCompatibilityFailure (its
+      // stored Binding digest was unavailable) surfaces to the parent as the
+      // bounded framework failure, classified distinctly (spec §15).
+      const compatibility = yield* runCase("compat", "failed", {
+        errorTag: "ChildCompatibilityFailure",
+        message: "stored child Binding digest unavailable",
+      });
+      expect(compatibility).toBeInstanceOf(SubagentExecutionFailure);
+      expect(compatibility).toMatchObject({
+        classification: "child-compatibility",
+        errorTag: "ChildCompatibilityFailure",
+      });
+    }),
+  );
+
+  it.effect("a denied establishment fails typed without joining", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+      const subagent = scriptedDurableHook({
+        establish: () => ({
+          _tag: "denied",
+          errorTag: "ChildVerificationFailed",
+          message: "stored request digests diverged from the replayed establishment",
+        }),
+        joins,
+      });
+
+      const exit = yield* AgentRuntime.run(
+        durableParent("parent-durable-denied", "denied"),
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-durable-denied"), subagent },
+      ).pipe(Effect.provide(durableResearchLayer(invocations)), Effect.scoped, Effect.exit);
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(SubagentExecutionFailure);
+      expect(failure).toMatchObject({
+        classification: "establishment-denied",
+        errorTag: "ChildVerificationFailed",
+      });
+      expect(yield* Ref.get(joins)).toEqual([]);
+      expect(yield* Ref.get(invocations)).toBe(0);
+    }),
+  );
+
+  it.effect("fails closed under a durable coordinator without a construction declaration", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
+      const child = durableChildIdentity("undeclared");
+      const subagent = scriptedDurableHook({
+        establish: () => ({ _tag: "waiting", ...child }),
+        establishes,
+      });
+      // The Layer was built WITHOUT SubagentRuntimeOptions.durable.
+      const undeclaredLayer = SubagentRuntime.layer(
+        researchDelegation,
+        countingChildBinding(invocations),
+        { mapChildFailure },
+      );
+
+      const exit = yield* AgentRuntime.run(
+        durableParent("parent-durable-undeclared", "undeclared"),
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-durable-undeclared"), subagent },
+      ).pipe(Effect.provide(undeclaredLayer), Effect.scoped, Effect.exit);
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(SubagentExecutionFailure);
+      expect(failure).toMatchObject({ classification: "declaration-unavailable" });
+      // Fail closed before any establishment: no digests were invented.
+      expect(yield* Ref.get(establishes)).toEqual([]);
+      expect(yield* Ref.get(invocations)).toBe(0);
+    }),
+  );
+
+  it.effect("a narrowed grant denies the resumed action before establishment replay", () =>
+    Effect.gen(function* () {
+      const establishes = yield* Ref.make<ReadonlyArray<RunSubagentEstablishRequest>>([]);
+      const child = durableChildIdentity("revoked");
+      const subagent = scriptedDurableHook({
+        establish: () => ({ _tag: "waiting", ...child }),
+        establishes,
+      });
+
+      // A child agent WITH a Tool, exposed through a delegation whose grant
+      // ceiling no longer allows it — the shape of a grant revoked between
+      // the original establishment and this resumed Attempt.
+      const Probe = Tool.make("probe_docs", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const probeTools = Toolkit.make(Probe);
+      const probeChildDefinition = Agent.define("probe-durable-child", {
+        input: ChildInput,
+        output: ChildOutput,
+        instructions: "Probe.",
+        toolkit: probeTools,
+        policy: childPolicy,
+      });
+      const revokedDelegation = Subagent.define("delegate_revoked_durable", {
+        description: "Durable delegation with a revoked grant ceiling.",
+        target: probeChildDefinition,
+        parameters: ResearchParams,
+        success: ResearchFindings,
+        failure: ResearchDelegationFailed,
+        prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
+        projectResult: (output) => Effect.succeed({ summary: output.answer }),
+        policy: researchPolicy,
+        grant: SubagentGrant.make({ allowedToolNames: [], maxDepth: 1 }),
+      });
+      const revokedParentDefinition = Agent.define("coordinator-revoked-durable", {
+        input: Schema.Struct({ mission: Schema.String }),
+        output: Schema.Struct({ report: Schema.String }),
+        instructions: "Delegate, then answer as JSON.",
+        toolkit: Toolkit.make(revokedDelegation.tool),
+        policy: parentPolicy,
+      });
+      const probeToolLayer = probeTools.toLayer({
+        probe_docs: () => Effect.succeed("probed"),
+      });
+      const childBinding = Agent.withModel(
+        probeChildDefinition,
+        answeringModel("probe-durable-model", '{"answer":"never-runs"}'),
+      );
+      const revokedLayer = SubagentRuntime.layer(revokedDelegation, childBinding, {
+        mapChildFailure,
+        durable: { targetDigests: durableDigests },
+      });
+
+      // Batch resume: the declared delegation call re-executes without a
+      // model request, exactly the durable re-entry seam.
+      const resume: RunTurnResume = {
+        turn: 1,
+        turnId: decodeTurnId("turn-durable-revoked"),
+        calls: [{ id: "call-1", name: "delegate_revoked_durable", params: { topic: "revoked" } }],
+        settled: [],
+      };
+      const parent = Agent.withModel(
+        revokedParentDefinition,
+        answeringModel("parent-durable-revoked", '{"report":"unreached"}'),
+      );
+
+      const exit = yield* AgentRuntime.run(
+        parent,
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-durable-revoked"), subagent, resume },
+      ).pipe(
+        Effect.provide(Layer.provide(revokedLayer, probeToolLayer)),
+        Effect.scoped,
+        Effect.exit,
+      );
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(SubagentPrestartDenied);
+      expect(failure).toMatchObject({ reason: "grant-violation" });
+      // Preflight denied the resumed action BEFORE any establishment replay.
+      expect(yield* Ref.get(establishes)).toEqual([]);
+    }),
+  );
+
+  it.effect("falls back to the ephemeral spawn path when no durable coordinator is present", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const runId = decodeRunId("parent-run-durable-fallback");
+
+      // The Layer carries the durable declaration, but the Run has NO
+      // subagent hook: the engine's explicit ephemeral default keeps the S1
+      // in-process spawn semantics — dispatch follows the service mode, not
+      // the configuration.
+      const detached = yield* AgentRuntime.start(
+        durableParent("parent-durable-fallback", "paris"),
+        { mission: "m" },
+        { runId },
+      ).pipe(Effect.provide(durableResearchLayer(invocations)));
+      const result = yield* detached.await;
+      const events = yield* detached.events;
+
+      expect(result.output).toEqual({ report: "done" });
+      // The child really ran in-process...
+      expect(yield* Ref.get(invocations)).toBe(1);
+      expect(subagentTags(events)).toEqual([
+        "SubagentRequested",
+        "SubagentStarted",
+        "SubagentCompleted",
+        "SubagentJoined",
+      ]);
+      // ...and the S1 in-memory reservation lifecycle settled exactly once.
+      const reservations = yield* SubagentReservations;
+      const snapshot = yield* reservations.parentSnapshot(runId);
+      expect(snapshot.totalChildInvocations).toBe(1);
+      expectSettledOnce(snapshot.reservations[0]);
+    }),
+  );
+});
+
 describe("Subagent.define", () => {
   it("rejects delegation names outside the naming convention", () => {
     expect(() =>
@@ -1213,7 +1797,9 @@ type TypedHandlerServices = Tool.HandlerServices<typeof typedDelegation.tool>;
 // The delegation exposes a real Effect AI Tool (SUB-001).
 type ToolProof = Assert<Equal<typeof typedDelegation.tool extends Tool.Any ? true : false, true>>;
 // Per-call handler failures are exactly the declared Tool failure union plus
-// Effect AI's own error (spec §4.2); nothing else can leak through `E`.
+// Effect AI's own error (spec §4.2); nothing else can leak through `E`. The
+// S2 members travel typed: the engine-owned waiting signal, the coordinator
+// seam failure, and the bounded durable execution failure (D5).
 type HandlerErrorProof = Assert<
   Equal<
     TypedHandlerError,
@@ -1221,13 +1807,21 @@ type HandlerErrorProof = Assert<
     | SubagentPrestartDenied
     | SubagentBudgetExhausted
     | SubagentProjectionFailure
+    | SubagentExecutionFailure
+    | ToolCallWaiting
+    | SubagentDurabilityError
     | AiError.AiError
   >
 >;
 // Per-call handler services are exactly the declared engine dependencies
-// (SUB-003); child requirements never appear here.
+// (SUB-003); child requirements never appear here. The S2 durable branch
+// adds only the engine-provided per-batch `SubagentDurability`, so the
+// per-call `R` visible to applications is unchanged.
 type HandlerSpawnerProof = Assert<Equal<Extract<TypedHandlerServices, AgentSpawner>, AgentSpawner>>;
 type HandlerSinkProof = Assert<Equal<Extract<TypedHandlerServices, RunEventSink>, RunEventSink>>;
+type HandlerDurabilityProof = Assert<
+  Equal<Extract<TypedHandlerServices, SubagentDurability>, SubagentDurability>
+>;
 type HandlerIdGeneratorProof = Assert<
   Equal<Extract<TypedHandlerServices, IdGenerator>, IdGenerator>
 >;
@@ -1263,6 +1857,9 @@ type LayerSpawnerExcludedProof = Assert<
   Equal<Extract<TypedLayerRequirements, AgentSpawner>, never>
 >;
 type LayerSinkExcludedProof = Assert<Equal<Extract<TypedLayerRequirements, RunEventSink>, never>>;
+type LayerDurabilityExcludedProof = Assert<
+  Equal<Extract<TypedLayerRequirements, SubagentDurability>, never>
+>;
 // The provided parent program still needs the child requirements but never
 // the engine-provided services.
 type ProgramModelProof = Assert<
@@ -1275,6 +1872,9 @@ type ProgramSpawnerExcludedProof = Assert<
   Equal<Extract<TypedProgramServices, AgentSpawner>, never>
 >;
 type ProgramSinkExcludedProof = Assert<Equal<Extract<TypedProgramServices, RunEventSink>, never>>;
+type ProgramDurabilityExcludedProof = Assert<
+  Equal<Extract<TypedProgramServices, SubagentDurability>, never>
+>;
 
 const unboundDefinitionRejected = () =>
   SubagentRuntime.layer(
@@ -1321,6 +1921,7 @@ describe("Subagent type proofs", () => {
     const handlerErrorProof: HandlerErrorProof = true;
     const handlerSpawnerProof: HandlerSpawnerProof = true;
     const handlerSinkProof: HandlerSinkProof = true;
+    const handlerDurabilityProof: HandlerDurabilityProof = true;
     const handlerIdGeneratorProof: HandlerIdGeneratorProof = true;
     const handlerHidesModelProof: HandlerHidesModelProof = true;
     const handlerHidesReservationsProof: HandlerHidesReservationsProof = true;
@@ -1332,10 +1933,12 @@ describe("Subagent type proofs", () => {
     const layerReservationsProof: LayerReservationsProof = true;
     const layerSpawnerExcludedProof: LayerSpawnerExcludedProof = true;
     const layerSinkExcludedProof: LayerSinkExcludedProof = true;
+    const layerDurabilityExcludedProof: LayerDurabilityExcludedProof = true;
     const programModelProof: ProgramModelProof = true;
     const programReservationsProof: ProgramReservationsProof = true;
     const programSpawnerExcludedProof: ProgramSpawnerExcludedProof = true;
     const programSinkExcludedProof: ProgramSinkExcludedProof = true;
+    const programDurabilityExcludedProof: ProgramDurabilityExcludedProof = true;
     const mappingDomainToolFailureProof: MappingDomainToolFailureProof = true;
     const mappingDomainOutputFailureProof: MappingDomainOutputFailureProof = true;
     const partialMappingRejectedProof: PartialMappingRejectedProof = true;
@@ -1345,6 +1948,7 @@ describe("Subagent type proofs", () => {
       handlerErrorProof,
       handlerSpawnerProof,
       handlerSinkProof,
+      handlerDurabilityProof,
       handlerIdGeneratorProof,
       handlerHidesModelProof,
       handlerHidesReservationsProof,
@@ -1356,10 +1960,12 @@ describe("Subagent type proofs", () => {
       layerReservationsProof,
       layerSpawnerExcludedProof,
       layerSinkExcludedProof,
+      layerDurabilityExcludedProof,
       programModelProof,
       programReservationsProof,
       programSpawnerExcludedProof,
       programSinkExcludedProof,
+      programDurabilityExcludedProof,
       mappingDomainToolFailureProof,
       mappingDomainOutputFailureProof,
       partialMappingRejectedProof,

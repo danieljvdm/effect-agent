@@ -2,7 +2,7 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const CurrentSqliteStorageVersion = 3;
+export const CurrentSqliteStorageVersion = 4;
 
 export const sqliteMigrations = SqliteMigrator.fromRecord({
   "1_current_persistent_conversation_foundation": Effect.gen(function* () {
@@ -227,5 +227,49 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
     `.withoutTransform;
 
     yield* sql`PRAGMA user_version = 3`.withoutTransform;
+  }),
+  "4_durable_subagents": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    // Durable attached children (spec §12, SUB-004): a child Submission records its immutable
+    // parent linkage at admission; the parent-side index serves the recovery attachment view.
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN parent_submission_id TEXT
+    `.withoutTransform;
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN parent_tool_call_id TEXT
+    `.withoutTransform;
+    yield* sql`
+      CREATE INDEX effect_agent_submissions_parent
+        ON effect_agent_submissions (parent_submission_id)
+    `.withoutTransform;
+
+    // Parent-owned child budget reservations (spec §12 steps 2 and 6, SUB-010): generic
+    // opaque-payload state-machine rows (D8) — allocation and accounting are Schema-encoded
+    // JSON documents the adapter never interprets; status moves
+    // reserved → releasePending → released, applied exactly once.
+    yield* sql`
+      CREATE TABLE effect_agent_child_reservations (
+        reservation_id TEXT PRIMARY KEY NOT NULL,
+        parent_submission_id TEXT NOT NULL,
+        parent_tool_call_id TEXT NOT NULL,
+        child_submission_id TEXT,
+        status TEXT NOT NULL,
+        allocation_json TEXT NOT NULL,
+        allocation_digest TEXT NOT NULL,
+        accounting_json TEXT,
+        reserved_at TEXT NOT NULL,
+        release_began_at TEXT,
+        released_at TEXT,
+        UNIQUE (parent_submission_id, parent_tool_call_id),
+        FOREIGN KEY (parent_submission_id)
+          REFERENCES effect_agent_submissions(submission_id)
+          ON DELETE RESTRICT
+      )
+    `.withoutTransform;
+
+    yield* sql`PRAGMA user_version = 4`.withoutTransform;
   }),
 });

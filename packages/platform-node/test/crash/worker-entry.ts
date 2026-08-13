@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 
-import { Agent } from "@effect-agent/core";
+import { Agent, type ConversationId } from "@effect-agent/core";
 import {
   AbortCommand,
+  AgentBindingResolver,
   ApprovalDecisionCommand,
   DurableAgentRuntime,
   DurableRuntimeFailpointLocation,
@@ -10,6 +11,7 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
+  childConversationIdFor,
   type DurableRuntimeFailpointHandler,
   type Receipt,
   type Settlement,
@@ -22,7 +24,11 @@ import {
 import { Cause, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import type { Response } from "effect/unstable/ai";
 
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../../src/index.ts";
+import {
+  NodeDurableHost,
+  NodeDurableRuntime,
+  type NodeDurableRuntimeOptions,
+} from "../../src/index.ts";
 import {
   CHILD_ANSWER,
   CHILD_PRODUCER_ID,
@@ -30,6 +36,7 @@ import {
   CRASH_QUESTION,
   BOOK_CALL_ID,
   CrashScenario,
+  DELEGATE_CALL_ID,
   JOIN_QUESTION,
   KILL_EXIT_CODE,
   FENCED_EXIT_CODE,
@@ -41,6 +48,7 @@ import {
   bookTools,
   approvalDefinition,
   approvalTools,
+  coordinatorSubmitSlice,
   crashSubmitOptions,
   decodeConversationId,
   decodeToolCallId,
@@ -50,6 +58,7 @@ import {
   itineraryToolCallParts,
   makeBlockedBookToolLayer,
   makeBookToolLayer,
+  makeCrashSubagentBindings,
   makeItineraryToolLayer,
   makeScriptedModel,
   makeScriptedStreamModel,
@@ -82,12 +91,17 @@ const WorkerEnv = Schema.Struct({
   EFFECT_AGENT_KEY: Schema.NonEmptyString,
   EFFECT_AGENT_KILL_AT: Schema.optionalKey(DurableRuntimeFailpointLocation),
   EFFECT_AGENT_KILL_AT_STORAGE: Schema.optionalKey(SqliteStorageFailpointLocation),
+  EFFECT_AGENT_BLOCK_AT: Schema.optionalKey(DurableRuntimeFailpointLocation),
   EFFECT_AGENT_LEASE_MS: Schema.optionalKey(MillisFromString),
   EFFECT_AGENT_MARKER_FILE: Schema.optionalKey(Schema.NonEmptyString),
   EFFECT_AGENT_RELEASE_FILE: Schema.optionalKey(Schema.NonEmptyString),
   EFFECT_AGENT_SUPPLIER_DIR: Schema.optionalKey(Schema.NonEmptyString),
   EFFECT_AGENT_KILL_REQUIRES_SUPPLIER: Schema.optionalKey(Schema.NonEmptyString),
   EFFECT_AGENT_DECISION: Schema.optionalKey(Schema.Literals(["approved", "denied"])),
+  EFFECT_AGENT_CHILD_BLOCK_FILE: Schema.optionalKey(Schema.NonEmptyString),
+  EFFECT_AGENT_CHILD_RELEASE_FILE: Schema.optionalKey(Schema.NonEmptyString),
+  EFFECT_AGENT_PROJECT_MARKER_FILE: Schema.optionalKey(Schema.NonEmptyString),
+  EFFECT_AGENT_PROJECT_RELEASE_FILE: Schema.optionalKey(Schema.NonEmptyString),
 });
 
 const env = Schema.decodeUnknownSync(WorkerEnv)(process.env);
@@ -119,10 +133,31 @@ const killIfGated: Effect.Effect<void> = Effect.suspend(() =>
   killGateSatisfied() ? hardKill : Effect.void,
 );
 
+/**
+ * A blocking failpoint (S2 simultaneous-kill rows): the worker proves it reached the location
+ * with the marker file, then hangs mid-Attempt — still holding its ownership lease — until the
+ * harness SIGKILLs it, exactly like a process that stalled at that durable step.
+ */
+const blockAndHang: Effect.Effect<never> = Effect.suspend(() => {
+  const marker = env.EFFECT_AGENT_MARKER_FILE;
+  if (marker === undefined)
+    throw new Error("EFFECT_AGENT_BLOCK_AT requires EFFECT_AGENT_MARKER_FILE");
+  fs.writeFileSync(marker, "1");
+  return Effect.never;
+});
+
 const runtimeKill: DurableRuntimeFailpointHandler | undefined =
-  env.EFFECT_AGENT_KILL_AT === undefined
+  env.EFFECT_AGENT_KILL_AT === undefined && env.EFFECT_AGENT_BLOCK_AT === undefined
     ? undefined
-    : (location) => (location === env.EFFECT_AGENT_KILL_AT ? killIfGated : Effect.void);
+    : (location) => {
+        if (env.EFFECT_AGENT_KILL_AT !== undefined && location === env.EFFECT_AGENT_KILL_AT) {
+          return killIfGated;
+        }
+        if (env.EFFECT_AGENT_BLOCK_AT !== undefined && location === env.EFFECT_AGENT_BLOCK_AT) {
+          return blockAndHang;
+        }
+        return Effect.void;
+      };
 
 const storageKill: SqliteStorageFailpointHandler | undefined =
   env.EFFECT_AGENT_KILL_AT_STORAGE === undefined
@@ -227,6 +262,63 @@ const lookupSubmission: Effect.Effect<SubmissionSnapshot, never, SubmissionLedge
 
 const requireSupplierDir = (): string =>
   requireEnv(env.EFFECT_AGENT_SUPPLIER_DIR, "EFFECT_AGENT_SUPPLIER_DIR");
+
+/**
+ * S2 fixture assembly for one worker process (plan §4.4): the coordinator/researcher bindings
+ * registered under their exact digests, with the optional blocked child model and projection
+ * gate taken from the environment. The resolver serves `processConversationResolved`, so one
+ * worker process can drive BOTH the parent and the derived child Conversation lane.
+ */
+const makeSubagentResolver = Effect.gen(function* () {
+  const supplierDir = requireSupplierDir();
+  const childBlock =
+    env.EFFECT_AGENT_CHILD_BLOCK_FILE === undefined
+      ? undefined
+      : {
+          markerFile: env.EFFECT_AGENT_CHILD_BLOCK_FILE,
+          releaseFile: env.EFFECT_AGENT_CHILD_RELEASE_FILE,
+        };
+  const projectionGate =
+    env.EFFECT_AGENT_PROJECT_MARKER_FILE === undefined
+      ? undefined
+      : {
+          markerFile: env.EFFECT_AGENT_PROJECT_MARKER_FILE,
+          releaseFile: requireEnv(
+            env.EFFECT_AGENT_PROJECT_RELEASE_FILE,
+            "EFFECT_AGENT_PROJECT_RELEASE_FILE",
+          ),
+        };
+  const bindings = yield* makeCrashSubagentBindings({
+    supplierDir,
+    parentScript: "delegate-then-final",
+    childBlock,
+    projectionGate,
+  });
+  return AgentBindingResolver.fromBindings([...bindings]);
+});
+
+const driveResolved = (
+  resolver: (typeof AgentBindingResolver)["Service"],
+  conversation: ConversationId,
+) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    return yield* runtime
+      .processConversationResolved(conversation)
+      .pipe(Effect.provideService(AgentBindingResolver, resolver));
+  });
+
+const submitCoordinator = (key: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    const receipt: Receipt = yield* runtime.submit(
+      coordinatorSubmitSlice,
+      { mission: CRASH_QUESTION },
+      crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, key),
+    );
+    yield* emit({ kind: "receipt", key, receipt });
+    return receipt;
+  });
 
 const scenario = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
@@ -408,6 +500,58 @@ const scenario = Effect.gen(function* () {
         }),
       );
       yield* emit({ kind: "resolved", value: intent.resolution._tag });
+      return;
+    }
+    case "subagent-run": {
+      // Establishment → child Settlement → join, all in one process over one pool of resolved
+      // Bindings; armed kill/block failpoints land at exactly one durable step of that flow.
+      const resolver = yield* makeSubagentResolver;
+      const receipt = yield* submitCoordinator(idempotencyKey);
+      const childConversation = childConversationIdFor(
+        receipt.submissionId,
+        decodeToolCallId(DELEGATE_CALL_ID),
+      );
+      const establishment = yield* driveResolved(resolver, conversationId);
+      const child = yield* driveResolved(resolver, childConversation);
+      const join = yield* driveResolved(resolver, conversationId);
+      yield* emitSettlements([...establishment, ...child, ...join]);
+      return;
+    }
+    case "subagent-child": {
+      // Second-process child worker: derive the child Conversation from the parent Submission's
+      // durable identity and drive ONLY that lane (independent ownership, SUB-020).
+      const resolver = yield* makeSubagentResolver;
+      const parent = yield* lookupSubmission;
+      const childConversation = childConversationIdFor(
+        parent.submissionId,
+        decodeToolCallId(DELEGATE_CALL_ID),
+      );
+      yield* emitSettlements(yield* driveResolved(resolver, childConversation));
+      return;
+    }
+    case "subagent-abort": {
+      const resolver = yield* makeSubagentResolver;
+      const receipt = yield* submitCoordinator(idempotencyKey);
+      yield* driveResolved(resolver, conversationId);
+      yield* runtime.abort(
+        AbortCommand.make({
+          submissionId: receipt.submissionId,
+          author: "operator",
+          reason: "crash harness abort",
+        }),
+      );
+      yield* emit({ kind: "resolved", value: "aborted" });
+      return;
+    }
+    case "subagent-recover": {
+      // One host startup-recovery pass over the shared file (binding-free executors only); the
+      // armed kill dies mid-pass, e.g. right after the propagated child abort intent commits.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const host = yield* NodeDurableHost;
+          yield* emit({ kind: "resolved", value: String(host.startupRecovery.length) });
+        }).pipe(Effect.provide(NodeDurableHost.layer)),
+      );
       return;
     }
   }

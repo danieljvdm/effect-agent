@@ -138,6 +138,16 @@ export const SqliteStorageFailpointLocation = Schema.Literals([
   "ledger:mark-unknown:after",
   "ledger:unknown-resolution:before",
   "ledger:unknown-resolution:after",
+  "ledger:child-reservation:before",
+  "ledger:child-reservation:after",
+  "ledger:child-attach:before",
+  "ledger:child-attach:after",
+  "ledger:child-release-pending:before",
+  "ledger:child-release-pending:after",
+  "ledger:child-release:before",
+  "ledger:child-release:after",
+  "ledger:child-settled:before",
+  "ledger:child-settled:after",
 ]);
 export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
 

@@ -1,6 +1,7 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 5 durable booking implemented; Phase 6 and later increments remain design targets
+Status: Phase 5 durable booking and the S1/S2 Subagent delegation slices implemented; Phase 6 and
+later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -126,6 +127,18 @@ approval suspension, and joined traveler follow-ups — with crash tests that ne
 booking result (`packages/testing/src/fixtures/travel-planner/phase5.ts`,
 `packages/testing/test/travel-planner-phase5.test.ts`,
 `packages/platform-node/test/crash/crash.test.ts`; [Phase 5 evidence](../PHASE-5-EVIDENCE.md)).
+The S1 slice adds the ephemeral `travel-coordinator` → `destination-researcher` delegation
+(`packages/testing/src/fixtures/travel-planner/subagents.ts`,
+`packages/testing/test/travel-planner-subagents.test.ts`; [S1 evidence](../S1-EVIDENCE.md)), and
+the S2 slice re-runs that delegation as accepted work on the `DN` runtime: a separately admitted
+child Submission with a Receipt, `waitingForChild` suspension without a worker permit, durable
+wakeup, a verified join with conserved reservation accounting, abort propagation, and
+invocation-counted never-re-executed proof — while pinning
+`childExternalEffectsExactlyOnce: false` and `cloudflareEquivalence: false`
+(`packages/testing/src/fixtures/travel-planner/subagents-durable.ts`,
+`packages/testing/test/travel-planner-subagents-durable.test.ts`,
+`packages/platform-node/test/crash/crash-subagents.test.ts`;
+[S2 evidence](../S2-EVIDENCE.md)).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -135,6 +148,7 @@ booking result (`packages/testing/src/fixtures/travel-planner/phase5.ts`,
 |    P3 | `P` persistent              | Stored trip Conversation, resumable observation, export, replayable itinerary projection, and current-version redacted fixtures                                   | Full replay equals valid Checkpoint replay; restart reconstruction; unsupported data fails before mutation; explicit non-durable label                 |
 |    P4 | `DN` durable planning       | Durable admission of a planning request, Receipt, FIFO trip lane, restart recovery, abort, and one Settlement                                                     | Node process-kill tests across admission, input application, model Turns, terminalization, and reattachment; no replayable booking claim               |
 |    P5 | `DN` durable booking        | Approval suspension, prepared/settled booking Tools, named booking Steps, supplier reconciliation, explicit unknown outcomes, and joined traveler changes         | Crash tests before/during/after supplier mutation; confirmed recovery or `UnknownToolOutcome`; no fabricated Tool result; joined input exactly once    |
+|    S2 | `DN` durable delegation     | The S1 coordinator→researcher delegation as accepted work: child Receipt, `waitingForChild` wakeup, verified join, conserved reservation, abort propagation       | Establishment/join failpoint and process-kill convergence; one child per invocation; completed child never re-executed; no exactly-once child effects  |
 |    P6 | `DN` + `DC`                 | The same authoring definition and scenarios assembled with Node/SQLite and Cloudflare Layers                                                                      | Shared durability suite; Durable Object eviction and alarm retry; equivalent canonical outcomes; no Cloudflare types in Agent/core/engine              |
 |    P7 | certified internal profiles | Live model and selected supplier Layers, operator diagnostics, security cases, chaos, and soak coverage                                                           | Adapter certification; threat model; redacted fixtures/cassettes; explainable recovery; Travel Planner counts as one of at least three internal Agents |
 
@@ -156,7 +170,9 @@ packages/testing/
         phase2.ts
         phase3.ts
         phase4.ts
+        phase5.ts
         subagents.ts
+        subagents-durable.ts
         scenarios.ts
         index.ts
   test/
@@ -164,7 +180,9 @@ packages/testing/
     travel-planner-phase2.test.ts
     travel-planner-phase3.test.ts
     travel-planner-phase4.test.ts
+    travel-planner-phase5.test.ts
     travel-planner-subagents.test.ts
+    travel-planner-subagents-durable.test.ts
     travel-planner.compile.test.ts
 examples/
   demo/
@@ -254,6 +272,7 @@ travel-specific contract.
 |    P3 | `STORE-001`, `STORE-004`–`STORE-008`, `STORE-011`, `TEST-001`, `TEST-004`, `TEST-014`                               |
 |    P4 | `DUR-001`–`DUR-008`, `DUR-011`–`DUR-015`, `DEPLOY-001`–`DEPLOY-009`, `TEST-003`–`TEST-006`, `TEST-012`, `TEST-014`  |
 |    P5 | `DUR-009`, `DUR-010`, `DUR-013`, `DUR-016`, `CAP-006`, `OPS-002`, `TEST-005`, `TEST-006`, `TEST-014`                |
+| S1/S2 | `SUB-001`–`SUB-032`, `TEST-014` (S1: `E` delegation; S2: `DN` durable delegation)                                   |
 |    P6 | `STORE-013`, `DEPLOY-010`, `TEST-004`–`TEST-006`, `TEST-014`                                                        |
 |    P7 | `SEC-001`–`SEC-013`, `OPS-001`–`OPS-003`, `TEST-003`–`TEST-014`                                                     |
 

@@ -1,3 +1,4 @@
+export * from "./binding-resolver.ts";
 export * from "./conformance.ts";
 export * from "./digest.ts";
 export * from "./durable-failpoint.ts";

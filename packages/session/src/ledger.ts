@@ -105,10 +105,25 @@ export class LedgerCapabilities extends Schema.Class<LedgerCapabilities>(
 }) {}
 
 /**
+ * Immutable lineage from a child Submission to the exact parent Tool Call that established it
+ * (spec §12 step 5, SUB-004). Recorded once at admission and never rewritten; it is an
+ * identifier, not an authorization capability (D10) — the join path verifies the canonical
+ * Parent Link records, never this marker alone.
+ */
+export class ParentLinkage extends Schema.Class<ParentLinkage>(
+  "@effect-agent/session/ParentLinkage",
+)({
+  parentSubmissionId: SubmissionId,
+  parentToolCallId: ToolCallId,
+}) {}
+
+/**
  * Durable admission input. `inputDigest` must be the digest of the canonical JSON encoding of
  * `inputPayload` (see `digestJson`); admission idempotency compares digests, never re-encodes.
  * `agentId`/`agentDigests`/`deploymentId` are persisted so recovery can complete Conversation
- * materialization without the submitting client.
+ * materialization without the submitting client. `parentLinkage` is present exactly when the
+ * Submission is a durable attached child (spec §12); an admission replay must repeat the same
+ * linkage (or its absence) or fail with `AdmissionConflict`.
  */
 export class AdmissionRequest extends Schema.Class<AdmissionRequest>(
   "@effect-agent/session/AdmissionRequest",
@@ -121,6 +136,7 @@ export class AdmissionRequest extends Schema.Class<AdmissionRequest>(
   deploymentId: DeploymentId,
   inputPayload: PersistedJson,
   inputDigest: Digest,
+  parentLinkage: Schema.optionalKey(ParentLinkage),
 }) {}
 
 /**
@@ -181,7 +197,44 @@ export class SubmissionSnapshot extends Schema.Class<SubmissionSnapshot>(
   settledOutcome: Schema.optionalKey(SettlementOutcome),
   createdAt: Schema.DateTimeUtcFromString,
   readyAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+  parentLinkage: Schema.optionalKey(ParentLinkage),
 }) {}
+
+/** The authoritative store proves the scoped idempotency key was never admitted (SUB-031). */
+export class AdmissionNotAdmitted extends Schema.TaggedClass<AdmissionNotAdmitted>(
+  "@effect-agent/session/AdmissionNotAdmitted",
+)("NotAdmitted", {}) {}
+
+/** The scoped idempotency key was admitted; the full Submission snapshot is authoritative. */
+export class AdmissionAdmitted extends Schema.TaggedClass<AdmissionAdmitted>(
+  "@effect-agent/session/AdmissionAdmitted",
+)("Admitted", {
+  submission: SubmissionSnapshot,
+}) {}
+
+/**
+ * The adapter cannot currently prove admission or its absence (e.g. the authoritative child
+ * owner is unreachable on a partitioned platform). Callers wait and retry; an indeterminate
+ * answer NEVER permits a second admission attempt (SUB-031).
+ */
+export class AdmissionIndeterminate extends Schema.TaggedClass<AdmissionIndeterminate>(
+  "@effect-agent/session/AdmissionIndeterminate",
+)("Indeterminate", {
+  reason: Schema.String.check(Schema.isMaxLength(4096)),
+}) {}
+
+/**
+ * The tri-state answer of `resolveAdmission` (spec §12: "absence from an eventually consistent
+ * projection is never proof"). Single strongly consistent stores derive `NotAdmitted`/`Admitted`
+ * from a direct lookup; only adapters that can genuinely fail to reach the authoritative owner
+ * answer `Indeterminate`.
+ */
+export const AdmissionResolution = Schema.Union([
+  AdmissionNotAdmitted,
+  AdmissionAdmitted,
+  AdmissionIndeterminate,
+]);
+export type AdmissionResolution = typeof AdmissionResolution.Type;
 
 export class ClaimRequest extends Schema.Class<ClaimRequest>("@effect-agent/session/ClaimRequest")({
   conversationId: ConversationId,
@@ -361,8 +414,9 @@ export class RevertJoiningRequest extends Schema.Class<RevertJoiningRequest>(
 }) {}
 
 /**
- * Why one Submission is durably suspended. Approval is the only Phase 5 reason; the union keeps
- * later suspension families (e.g. operator quarantine) additive.
+ * Why one Submission is durably suspended. Approval was the only Phase 5 reason; S2 adds
+ * `WaitingForChild` (spec §12 step 10) and the union keeps later suspension families (e.g.
+ * operator quarantine) additive.
  */
 export class ApprovalPendingSuspension extends Schema.TaggedClass<ApprovalPendingSuspension>(
   "@effect-agent/session/ApprovalPendingSuspension",
@@ -370,7 +424,28 @@ export class ApprovalPendingSuspension extends Schema.TaggedClass<ApprovalPendin
   toolCallIds: Schema.NonEmptyArray(ToolCallId),
 }) {}
 
-export const SuspensionReason = Schema.Union([ApprovalPendingSuspension]);
+/** One attached child a `waitingForChild` parent is durably waiting on (spec §12 step 10). */
+export class WaitingChild extends Schema.Class<WaitingChild>("@effect-agent/session/WaitingChild")({
+  toolCallId: ToolCallId,
+  childSubmissionId: SubmissionId,
+}) {}
+
+/**
+ * The parent Attempt ended without settling because attached durable children must settle and
+ * join first (spec §12 step 10, SUB-030). The suspended lane holds no worker permit; each listed
+ * child settles on its own Conversation lane and `recordChildSettled` wakes the parent once
+ * every listed child is settled.
+ */
+export class WaitingForChildSuspension extends Schema.TaggedClass<WaitingForChildSuspension>(
+  "@effect-agent/session/WaitingForChildSuspension",
+)("WaitingForChild", {
+  children: Schema.NonEmptyArray(WaitingChild),
+}) {}
+
+export const SuspensionReason = Schema.Union([
+  ApprovalPendingSuspension,
+  WaitingForChildSuspension,
+]);
 export type SuspensionReason = typeof SuspensionReason.Type;
 
 /**
@@ -387,12 +462,120 @@ export class SuspendRequest extends Schema.Class<SuspendRequest>(
 }) {}
 
 /**
- * `suspended` when the lane is now durably waiting; `resume-immediately` when recorded decision
- * intents already cover every pending call of the suspension reason (a decision raced ahead of
- * the suspend transaction), so the caller resumes without releasing the lane.
+ * `suspended` when the lane is now durably waiting; `resume-immediately` when the suspension
+ * reason is already fully covered (a covering decision or child settlement raced ahead of the
+ * suspend transaction), so the caller resumes without releasing the lane.
  */
 export const SuspensionOutcome = Schema.Literals(["suspended", "resume-immediately"]);
 export type SuspensionOutcome = typeof SuspensionOutcome.Type;
+
+/**
+ * A durable child-settlement notification for one waitingForChild parent (spec §12 step 10).
+ * The child's canonical Settlement is the authority; this command only drives the parent lane's
+ * wake transition.
+ */
+export class ChildSettledNotification extends Schema.Class<ChildSettledNotification>(
+  "@effect-agent/session/ChildSettledNotification",
+)({
+  parentSubmissionId: SubmissionId,
+  childSubmissionId: SubmissionId,
+}) {}
+
+/**
+ * `woken` when this notification completed the waiting set and the parent transitioned
+ * `suspended(WaitingForChild) → input-applied`; `still-waiting` while other listed children are
+ * unsettled; `not-waiting` when the parent is not (or no longer) suspended waiting on this
+ * child — including replays after a wake, so the operation is idempotent.
+ */
+export const ChildSettledOutcome = Schema.Literals(["woken", "still-waiting", "not-waiting"]);
+export type ChildSettledOutcome = typeof ChildSettledOutcome.Type;
+
+/** Parent-owned child budget reservation identity, deterministically derived by the
+ * coordinator from the parent Run and Tool Call identity (spec §12 step 2). */
+export const ChildReservationId = identifier("ChildReservationId");
+export type ChildReservationId = typeof ChildReservationId.Type;
+
+/**
+ * The reservation state machine (spec §12 steps 2 and 6): `reserved` while the child may still
+ * consume the allocation, `releasePending` once the final accounting decision is frozen, and
+ * `released` after the unused allocation returned exactly once.
+ */
+export const ChildReservationStatus = Schema.Literals(["reserved", "releasePending", "released"]);
+export type ChildReservationStatus = typeof ChildReservationStatus.Type;
+
+/**
+ * Creation input for one parent-owned child budget reservation. The allocation is an opaque
+ * Schema-encoded budget document (D8: adapters implement transitions only and never interpret
+ * budget dimensions); `allocationDigest` must be the digest of its canonical JSON encoding.
+ */
+export class ChildBudgetReservationRequest extends Schema.Class<ChildBudgetReservationRequest>(
+  "@effect-agent/session/ChildBudgetReservationRequest",
+)({
+  reservationId: ChildReservationId,
+  parentSubmissionId: SubmissionId,
+  parentToolCallId: ToolCallId,
+  ownershipToken: OwnershipToken,
+  allocation: PersistedJson,
+  allocationDigest: Digest,
+}) {}
+
+/** One child budget reservation row as the port exposes it. */
+export class ChildBudgetReservationSnapshot extends Schema.Class<ChildBudgetReservationSnapshot>(
+  "@effect-agent/session/ChildBudgetReservationSnapshot",
+)({
+  reservationId: ChildReservationId,
+  parentSubmissionId: SubmissionId,
+  parentToolCallId: ToolCallId,
+  childSubmissionId: Schema.optionalKey(SubmissionId),
+  status: ChildReservationStatus,
+  allocation: PersistedJson,
+  allocationDigest: Digest,
+  accounting: Schema.optionalKey(PersistedJson),
+  reservedAt: Schema.DateTimeUtcFromString,
+  releaseBeganAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+  releasedAt: Schema.optionalKey(Schema.DateTimeUtcFromString),
+}) {}
+
+/**
+ * The committed reservation. `replayed` is true when an identical reservation already existed;
+ * the stored row is returned unchanged so a recovering caller resumes rather than duplicates
+ * (SUB-016).
+ */
+export class ReservedChildBudget extends Schema.Class<ReservedChildBudget>(
+  "@effect-agent/session/ReservedChildBudget",
+)({
+  reservation: ChildBudgetReservationSnapshot,
+  replayed: Schema.Boolean,
+}) {}
+
+/** Records the admitted child on its reservation row (repairable from `SubagentStarted`). */
+export class AttachChildToReservationRequest extends Schema.Class<AttachChildToReservationRequest>(
+  "@effect-agent/session/AttachChildToReservationRequest",
+)({
+  reservationId: ChildReservationId,
+  ownershipToken: OwnershipToken,
+  childSubmissionId: SubmissionId,
+}) {}
+
+/**
+ * Freezes the final consumed/released accounting decision (spec §12 join step 6). The
+ * accounting is an opaque Schema-encoded document replayed from the canonical `SubagentJoined`
+ * record (or the deterministic zero-consumed decision for an orphaned reservation), so the
+ * decision itself authorizes the transition — no ownership token is consulted (DUR-015).
+ */
+export class BeginChildBudgetReleaseRequest extends Schema.Class<BeginChildBudgetReleaseRequest>(
+  "@effect-agent/session/BeginChildBudgetReleaseRequest",
+)({
+  reservationId: ChildReservationId,
+  accounting: PersistedJson,
+}) {}
+
+/** Applies the frozen accounting decision: `releasePending → released`, exactly once. */
+export class ReleaseChildBudgetRequest extends Schema.Class<ReleaseChildBudgetRequest>(
+  "@effect-agent/session/ReleaseChildBudgetRequest",
+)({
+  reservationId: ChildReservationId,
+}) {}
 
 /**
  * A durable approval decision command (plan §2.6, `abort`-shaped). Field bounds are exactly those
@@ -547,6 +730,21 @@ export class SuspensionSnapshot extends Schema.Class<SuspensionSnapshot>(
 }) {}
 
 /**
+ * One attached child of this parent as its recovery sees it: the reservation's recorded child
+ * plus that child's current lane state. A disposable derived view — the canonical
+ * `SubagentRequested`/`SubagentStarted` records and the child's own canonical Settlement remain
+ * the recovery truth (DUR-015).
+ */
+export class ChildAttachmentSnapshot extends Schema.Class<ChildAttachmentSnapshot>(
+  "@effect-agent/session/ChildAttachmentSnapshot",
+)({
+  toolCallId: ToolCallId,
+  childSubmissionId: SubmissionId,
+  childState: SubmissionState,
+  childOutcome: Schema.optionalKey(SettlementOutcome),
+}) {}
+
+/**
  * Everything the pure recovery classifier needs about one Submission, read strongly consistently
  * (STORE-003). Canonical history still wins over every marker in this snapshot (DUR-015).
  *
@@ -554,6 +752,10 @@ export class SuspensionSnapshot extends Schema.Class<SuspensionSnapshot>(
  * one); `hostSubmissionId` is the joined-side view; `suspension` mirrors the `suspended` state;
  * `approvalDecisions` and `unknownResolutions` are the durable intents recorded against this
  * Submission (empty when none exist).
+ *
+ * S2 fields: `childReservations`/`childAttachments` are the parent-side subagent view (ordered
+ * by parent Tool Call id) and `parentLinkage` is the child-side view. They default to
+ * empty/absent at construction so pre-S2 call sites stay valid; adapters always populate them.
  */
 export class RecoverySnapshot extends Schema.Class<RecoverySnapshot>(
   "@effect-agent/session/RecoverySnapshot",
@@ -568,6 +770,13 @@ export class RecoverySnapshot extends Schema.Class<RecoverySnapshot>(
   suspension: Schema.optionalKey(SuspensionSnapshot),
   approvalDecisions: Schema.Array(ApprovalDecisionIntent),
   unknownResolutions: Schema.Array(UnknownResolutionIntent),
+  childReservations: Schema.Array(ChildBudgetReservationSnapshot).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
+  childAttachments: Schema.Array(ChildAttachmentSnapshot).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
+  parentLinkage: Schema.optionalKey(ParentLinkage),
 }) {}
 
 /** The same idempotency key was admitted with different canonical input content. */
@@ -634,6 +843,21 @@ export class JoinedToHost extends Schema.TaggedErrorClass<JoinedToHost>()("Joine
   hostSubmissionId: SubmissionId,
 }) {}
 
+/**
+ * A child budget reservation request contradicts recorded reservation state: a divergent
+ * allocation for the same reservation id, a second reservation id for the same parent Tool
+ * Call, a divergent child attachment, a divergent accounting freeze, or an out-of-order state
+ * transition. `status` reports the existing row's status. Identical replays never conflict.
+ */
+export class ChildReservationConflict extends Schema.TaggedErrorClass<ChildReservationConflict>()(
+  "ChildReservationConflict",
+  {
+    reservationId: ChildReservationId,
+    status: ChildReservationStatus,
+    message: Schema.String,
+  },
+) {}
+
 /** Adapter-level ledger failure (storage unavailable, unknown submission, corrupt row, ...). */
 export class LedgerError extends Schema.TaggedErrorClass<LedgerError>()("LedgerError", {
   operation: Schema.String,
@@ -648,6 +872,7 @@ export type SubmissionLedgerFailure =
   | ApprovalConflict
   | UnknownResolutionConflict
   | JoinedToHost
+  | ChildReservationConflict
   | LedgerError;
 
 /**
@@ -662,6 +887,14 @@ export type SubmissionLedgerFailure =
  *   with the same `inputDigest` returns the original `AdmissionResult` with `replayed` set; a
  *   replay with a different digest fails with `AdmissionConflict`. Admission allocates the
  *   Submission's `queueSequence` (FIFO position, DUR-004) and mints `submissionId`/`receiptId`.
+ *   An optional `parentLinkage` is recorded immutably at first admission (SUB-016); a replay
+ *   whose linkage diverges (present vs. absent, or different identities) fails with
+ *   `AdmissionConflict` even when the input digest matches.
+ * - `resolveAdmission` — authoritative tri-state admission lookup by scoped idempotency key
+ *   (SUB-031): `NotAdmitted` proves absence, `Admitted` carries the full snapshot, and
+ *   `Indeterminate` states that the adapter cannot currently prove either. Only `NotAdmitted`
+ *   permits an admission attempt. Single strongly consistent stores derive the answer from a
+ *   direct lookup and never answer `Indeterminate`.
  * - `markReady` — idempotent transition admitted → ready after Conversation materialization.
  *   Marking an already-ready (or later-state) Submission is a no-op.
  * - `lookup` — read one Submission by identity or scoped idempotency key; strongly consistent
@@ -707,12 +940,43 @@ export type SubmissionLedgerFailure =
  * - `revertJoining` — recovery-only, idempotent `joining → ready`; a no-op when already joined.
  * - `suspend` — `input-applied`/`running` → `suspended`; ends the ownership period WITHOUT
  *   settling (the obligation stays owed, the lane consumes no worker permit). Returns
- *   `resume-immediately` when recorded decisions already cover the reason's pending calls.
+ *   `resume-immediately` when the reason is already fully covered: for `ApprovalPending`,
+ *   recorded decisions cover every pending call; for `WaitingForChild`, every listed child is
+ *   already provably settled. Adapters must guarantee that a child settlement reported before
+ *   the suspend transaction commits is observed by that suspend (single-store adapters derive
+ *   this from the child's own row; cross-store adapters record a durable notification marker).
  *   Fails with `SettlementConflict` once settled.
  * - `recordApprovalDecision` — durable, idempotent per `(submissionId, toolCallId)`: repeating
  *   the same decision replays the intent; a divergent re-decision fails with `ApprovalConflict`.
- *   Transitions `suspended → input-applied` once every pending call of the suspension reason is
- *   decided, waking the lane. Fails with `SettlementConflict` once settled.
+ *   Transitions `suspended(ApprovalPending) → input-applied` once every pending call of the
+ *   suspension reason is decided, waking the lane. Fails with `SettlementConflict` once settled.
+ * - `recordChildSettled` — idempotent cross-lane wake (spec §12 step 10): transitions
+ *   `suspended(WaitingForChild) → input-applied` exactly when EVERY listed child is settled,
+ *   answering `woken`; `still-waiting` while any listed child is unsettled; `not-waiting` when
+ *   the parent is not suspended waiting on this child (including replays after the wake). The
+ *   child's canonical Settlement is the authority — a notification for an unsettled child is an
+ *   adapter-checked caller error (`LedgerError` on single-store adapters). It never settles the
+ *   parent and requires no ownership token: the recorded child settlement authorizes the wake.
+ * - `reserveChildBudget` — idempotent get-or-create of the parent-owned child budget
+ *   reservation (spec §12 step 2), fenced by the parent lane's live `OwnershipToken`. An
+ *   identical replay returns the stored row with `replayed` set (unfenced, mirroring
+ *   `reserveSettlement`); a divergent allocation for the same id, or a second id for the same
+ *   `(parentSubmissionId, parentToolCallId)`, fails with `ChildReservationConflict`.
+ * - `attachChildToReservation` — idempotent: records the admitted child on the reservation row
+ *   (repairable from the canonical `SubagentStarted` record). A replay with the recorded child
+ *   is a no-op; the first attach is fenced by the parent token and requires status `reserved`;
+ *   a divergent child fails with `ChildReservationConflict`.
+ * - `beginChildBudgetRelease` — `reserved → releasePending`: freezes the final accounting
+ *   decision exactly once. Replaying the identical accounting (at `releasePending` or
+ *   `released`) is a no-op; a divergent accounting fails with `ChildReservationConflict`.
+ *   Requires no ownership token: the accounting is replayed from the canonical `SubagentJoined`
+ *   record (or is the deterministic zero-consumed decision for an orphaned reservation), so
+ *   canonical history authorizes the transition (DUR-015) and the freeze comparison — not a
+ *   fence — guarantees one decision.
+ * - `releaseChildBudget` — `releasePending → released`, applied exactly once; replaying returns
+ *   the released row unchanged. Releasing a still-`reserved` row (no frozen accounting) fails
+ *   with `ChildReservationConflict`. "A crash before release leaves budget unavailable until
+ *   repair, never available twice" (spec §12).
  * - `markUnknown` — idempotent, ownership-free (canonical evidence authorizes it): state →
  *   `unknown`, the lane blocks and stops consuming worker permits while the accepted settlement
  *   obligation stays visible (DUR-009/DUR-017). Fails with `SettlementConflict` once settled.
@@ -738,6 +1002,9 @@ export class SubmissionLedger extends Context.Service<
     readonly lookup: (
       request: SubmissionLookup,
     ) => Effect.Effect<Option.Option<SubmissionSnapshot>, LedgerError>;
+    readonly resolveAdmission: (
+      request: SubmissionLookupByKey,
+    ) => Effect.Effect<AdmissionResolution, LedgerError>;
     readonly claim: (request: ClaimRequest) => Effect.Effect<Option.Option<Claim>, LedgerError>;
     readonly renewOwnership: (
       request: RenewOwnershipRequest,
@@ -779,6 +1046,24 @@ export class SubmissionLedger extends Context.Service<
       UnknownResolutionIntent,
       UnknownResolutionConflict | SettlementConflict | LedgerError
     >;
+    readonly recordChildSettled: (
+      request: ChildSettledNotification,
+    ) => Effect.Effect<ChildSettledOutcome, LedgerError>;
+    readonly reserveChildBudget: (
+      request: ChildBudgetReservationRequest,
+    ) => Effect.Effect<ReservedChildBudget, ChildReservationConflict | OwnershipLost | LedgerError>;
+    readonly attachChildToReservation: (
+      request: AttachChildToReservationRequest,
+    ) => Effect.Effect<
+      ChildBudgetReservationSnapshot,
+      ChildReservationConflict | OwnershipLost | LedgerError
+    >;
+    readonly beginChildBudgetRelease: (
+      request: BeginChildBudgetReleaseRequest,
+    ) => Effect.Effect<ChildBudgetReservationSnapshot, ChildReservationConflict | LedgerError>;
+    readonly releaseChildBudget: (
+      request: ReleaseChildBudgetRequest,
+    ) => Effect.Effect<ChildBudgetReservationSnapshot, ChildReservationConflict | LedgerError>;
     readonly scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError>;
     readonly loadRecoverySnapshot: (
       request: RecoverySnapshotRequest,

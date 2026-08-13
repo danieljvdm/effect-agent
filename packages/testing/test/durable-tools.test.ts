@@ -582,6 +582,58 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
   );
 
   it.effect(
+    "a resumed declared batch re-delivers the pending Turn's leading messages to the next model request",
+    () =>
+      Effect.gen(function* () {
+        yield* resetReconciler;
+        const runtime = yield* DurableAgentRuntime;
+        const desk = yield* makeBookDesk(bookIdempotentTools);
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? toolTurn(toolCall("book-1", "book", { ref: "r-leading" }))
+            : finalParts('{"answer":"resumed"}'),
+        );
+        const agent = Agent.withModel(bookIdempotentDefinition, scripted.model);
+        const conversation = "conversation-resume-leading";
+
+        yield* runtime.submit(
+          agent,
+          { question: "book it" },
+          submitOptions(conversation, "leading-1"),
+        );
+        yield* armFailpoint("tools:after-prepared-append");
+        const killed = yield* Effect.exit(
+          runtime
+            .processConversation(agent, decodeConversationId(conversation))
+            .pipe(Effect.provide(desk.toolLayer)),
+        );
+        expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        const settlements = yield* runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(desk.toolLayer));
+        expect(settlements[0]?.outcome).toBe("completed");
+        expect(scripted.prompts).toHaveLength(2);
+
+        // WP1 `resume.leadingMessages` (task #12): the pending Turn's canonical response record
+        // carries the Turn-1 evaluated instructions + input BEFORE its assistant tool-call
+        // message; the resumed Attempt's canonical prompt boundary excludes the pending Turn
+        // entirely, so without the threaded leading messages the next model request would open
+        // with a bare assistant message and no instructions or user input at all.
+        const resumedRequest = scripted.prompts[1];
+        expect(resumedRequest).toBeDefined();
+        const roles = (resumedRequest?.content ?? []).map((message) => message.role);
+        expect(roles[0]).toBe("system");
+        const userIndex = roles.indexOf("user");
+        const assistantIndex = roles.indexOf("assistant");
+        expect(userIndex).toBeGreaterThanOrEqual(0);
+        expect(assistantIndex).toBeGreaterThan(userIndex);
+        expect(roles).toContain("tool");
+      }),
+  );
+
+  it.effect(
     "a prepared call without a settled record marks unknown under the default reconciler and frees the worker permit",
     () =>
       Effect.gen(function* () {

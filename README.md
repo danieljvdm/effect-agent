@@ -18,9 +18,10 @@ workspace includes schema-first Agent contracts, one shared `run`/`stream` inter
 operational capabilities, a narrow local sandbox adapter, replayable canonical Conversation
 records with memory and SQLite adapters, the durable Submission Ledger, recovery classifier, and
 `DurableAgentRuntime` coordinator with the Node host assembly — now covering prepared/settled
-ordinary Tool records, Unknown Outcomes, Durable Steps, durable approval suspension, and joined
-queued input — deterministic scripted model Layers, the progressive Travel Planner reference
-slice, provider-binding compile examples, and a browser test bench under `examples/demo`.
+ordinary Tool records, Unknown Outcomes, Durable Steps, durable approval suspension, joined
+queued input, and durable attached Subagent delegation — deterministic scripted model Layers, the
+progressive Travel Planner reference slice, provider-binding compile examples, and a browser test
+bench under `examples/demo`.
 
 ## Status
 
@@ -34,11 +35,17 @@ slice, provider-binding compile examples, and a browser test bench under `exampl
   `storage-memory`, `storage-sqlite`, `platform-node`, and `testing`
 - Current implementation milestone: **Phase 5 complete** (durable Tools and joined input,
   [evidence](docs/PHASE-5-EVIDENCE.md), on the Phase 4 durable Node/SQLite runtime,
-  [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral Subagents implemented**
-- Subagents: declared attached delegation Tools, the engine spawner seam, and in-memory budget
-  reservations are implemented for ephemeral (`E`) execution as the roadmap-assigned proposed
-  default ([S1 evidence](docs/S1-EVIDENCE.md)); ADR-0010 remains Proposed and durable attached
-  Subagents (S2) remain a later proposal
+  [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral and S2 durable attached
+  Subagents implemented**
+- Subagents: declared attached delegation Tools are implemented for both slices as
+  roadmap-assigned proposed defaults — ephemeral (`E`) delegation with the engine spawner seam
+  and in-memory budget reservations ([S1 evidence](docs/S1-EVIDENCE.md)), and durable (`DN`)
+  attached children as separately admitted Submissions with requested/started/joined canonical
+  records, parent-owned budget reservations, `waitingForChild` suspension and durable wakeup,
+  verified Settlement joins, independent parent/child fencing, durable abort propagation, and
+  exact-digest Binding resolution under real process-kill tests
+  ([S2 evidence](docs/S2-EVIDENCE.md)); ADR-0010 remains Proposed, `DC` Subagents are P6 scope,
+  and no exactly-once child external effects are claimed
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral multi-Run Conversations with safe-seam input, approval,
   context, budget, MCP, and sandbox capabilities
@@ -149,8 +156,9 @@ package creation, hooks, and CI.
 ## Product boundaries
 
 The first release is the bounded Effect-native runtime described by the roadmap. Hosted execution,
-channels, a chat UI, a visual builder, an embedded coding sandbox, durable Subagents, and a
-marketplace remain outside that first release. Later packages may add them after the core loop is
+channels, a chat UI, a visual builder, an embedded coding sandbox, Subagent extensions beyond the
+implemented attached S1/S2 slices (nested delegation, handoff, detachment), and a marketplace
+remain outside that first release. Later packages may add them after the core loop is
 deterministic, typed, testable, and resource-safe.
 
 Likewise, conversation persistence is not the same as durable execution. The framework may only

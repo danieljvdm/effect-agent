@@ -31,7 +31,9 @@ Key exports: `AgentRuntime`, `DetachedRun`, `RunOptions`, operational hook inter
 ### `@effect-agent/capabilities`
 
 Adapts richer optional services to the engine: process-local Conversations, command queues,
-approval and audit, budgets, context/compaction, scheduling, MCP, and structural redaction.
+approval and audit, budgets, context/compaction, scheduling, MCP, structural redaction, and the
+Subagent authoring surface (`Subagent.define`, `SubagentPolicy`/`SubagentGrant`, and
+`SubagentRuntime.layer` with its ephemeral and durable delegation branches).
 
 It depends outward from engine; the engine does not import it.
 
@@ -51,6 +53,9 @@ Owns canonical Conversation record Schemas, batches, digests, replay/checkpoints
 `ConversationStore`, `SubmissionLedger`, and `WakeScheduler` ports, the pure recovery classifier,
 the run journal, and the `DurableAgentRuntime` coordinator (Receipt, Attempt, Settlement). It
 depends on `@effect-agent/engine` to drive the interpreter through its public seams (ADR-0011).
+Since S2 it also owns the durable Subagent protocol: the requested/started/joined/lineage record
+Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
+host-supplied `AgentBindingResolver` port for exact-digest Binding resolution (ADR-0013).
 
 ### `@effect-agent/storage-memory`
 
@@ -60,7 +65,7 @@ Layers. The ledger declares `non-durable` capabilities; it exists for tests and 
 ### `@effect-agent/storage-sqlite`
 
 Provides the Node SQLite adapters behind the `DN` assembly: the Conversation Store and the
-durable Submission Ledger in one database file, current-version (v2, exact-match) initialization,
+durable Submission Ledger in one database file, current-version (v4, exact-match) initialization,
 observation, typed compatibility/corruption/conflict/contention errors, and before/after
 failpoints on every durable mutation.
 
@@ -68,9 +73,11 @@ failpoints on every durable mutation.
 
 Assembles the class `DN` Node/SQLite runtime: one shared SQLite client behind both stores,
 validated typed configuration, the in-process wake scheduler with ledger-scan fallback, graceful
-ownership drain, and the `NodeDurableHost` startup gates (storage compatibility, recovery before
-admission) and shutdown order (close admission → release ownership → close storage). It is a
-Layer-assembly library, not an application entrypoint.
+ownership drain, Agent Binding registration for durable workers
+(`NodeDurableRuntimeOptions.bindings` behind `NodeDurableHost.runResolvedWorkers`; an empty
+roster fails every claim closed), and the `NodeDurableHost` startup gates (storage compatibility,
+recovery before admission) and shutdown order (close admission → release ownership → close
+storage). It is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/testing`
 

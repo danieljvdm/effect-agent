@@ -252,6 +252,36 @@ operator surface, aging, and alerting are P7 scope.
 Record: [ADR-0012](adr/0012-durable-tool-uncertainty-and-steps.md)
 Evidence: [Phase 5 evidence](PHASE-5-EVIDENCE.md)
 
+### D-031 — Durable Subagent establishment, waiting suspension, and binding resolution
+
+**Status:** Accepted by default (adopted as the S2 implementation default; pending owner
+review — the Subagent capability decision itself, ADR-0010/D-013, remains Proposed)
+
+**Decision:** The durable delegation seam is an engine-owned `RunSubagentHook` contract with a
+per-batch `SubagentDurability` service and an explicit ephemeral default; session implements the
+hook inside the coordinator and capabilities consumes it, so no package gains a forbidden
+dependency edge. A durable parent waits as `waitingForChild` through an additive
+`SuspensionReason` member plus one new idempotent cross-lane wake operation
+(`recordChildSettled`) — no new submission state. Recovery is primarily idempotent delegation-
+handler re-entry via batch resume, with binding-free repair executors only; the encoded child
+input rides the canonical `SubagentRequested` record so admission completes without a live
+handler, and child identity is derived deterministically from the parent Run and Tool Call pair.
+Admission recovery uses a tri-state `resolveAdmission` port operation (`notAdmitted` | `admitted`
+| `indeterminate`). Durable recovery resolves Agent Bindings through the host-supplied
+`AgentBindingResolver` by stable identity and exact stored digests, fail-closed: an unresolvable
+parent-linked child settles the framework `ChildCompatibilityFailure`, a failed durable child
+joins as the bounded `SubagentExecutionFailure` (no raw Cause; `mapChildFailure` stays the
+ephemeral contract), and a root head is refused typed. Child budget reservations are generic
+opaque state-machine rows in the one `SubmissionLedger` port; delegation calls remain ordinary
+prepared Tool Calls excluded from `MarkUnknown` by durable evidence plus the core-owned naming
+rule. Authorization scope is service possession plus structural Parent-Link/digest verification;
+authenticated per-read authorization, aging, and alerting stay P7. Accounting is conservative:
+structural dimensions from canonical child evidence, unreported token/cost dimensions consume
+their reservation, overruns recorded and never clipped.
+
+Record: [ADR-0013](adr/0013-durable-subagent-establishment.md)
+Evidence: [S2 evidence](S2-EVIDENCE.md)
+
 ## Integration and project boundaries
 
 ### D-021 — Reference-material role

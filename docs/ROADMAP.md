@@ -16,24 +16,26 @@ review expectations.
 The roadmap remains normative and **Draft**. This table records implementation evidence; it does
 not change the specified scope of later phases.
 
-| Phase | Implementation status                                                                                                             |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------- |
-| P0    | Complete — [design proof](PHASE-0-EVIDENCE.md)                                                                                    |
-| P1    | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md)                                                                       |
-| P2    | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                       |
-| P3    | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                        |
-| S1    | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
-| P4    | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                     |
-| P5    | Complete — [durable Tools and joined input](PHASE-5-EVIDENCE.md)                                                                  |
-| P6–P7 | Planned — not yet implemented; the proposed S2 Subagent slice is recommended to precede P6                                        |
+| Phase | Implementation status                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0    | Complete — [design proof](PHASE-0-EVIDENCE.md)                                                                                              |
+| P1    | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md)                                                                                 |
+| P2    | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                                 |
+| P3    | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                                  |
+| S1    | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed           |
+| P4    | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                               |
+| P5    | Complete — [durable Tools and joined input](PHASE-5-EVIDENCE.md)                                                                            |
+| S2    | Implemented — [durable attached Subagents](S2-EVIDENCE.md) (`DN` only), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
+| P6–P7 | Planned — not yet implemented                                                                                                               |
 
 ## Proposed Subagent insertion
 
 [ADR-0010](adr/0010-declared-attached-subagents.md) and
 [the Subagent specification](spec/subagents.md) recommend two bounded slices. This proposal does
-not change phase status until the owner accepts it. The S1 slice is now implemented as the
-roadmap-assigned proposed default ([S1 evidence](S1-EVIDENCE.md)); ADR-0010 itself remains
-Proposed, and the S2 recommendation below is unchanged.
+not change phase status until the owner accepts it. Both slices are now implemented as
+roadmap-assigned proposed defaults — S1 ([S1 evidence](S1-EVIDENCE.md)) and S2
+([S2 evidence](S2-EVIDENCE.md), `DN` only; shape-level defaults in
+[ADR-0013](adr/0013-durable-subagent-establishment.md)); ADR-0010 itself remains Proposed.
 
 - **S1 — attached ephemeral Subagents:** implement immediately after Phase 3, before or alongside
   early Phase 4 work. Deliver declared Effect AI delegation Tools with an explicit engine service,
@@ -48,7 +50,9 @@ Proposed, and the S2 recommendation below is unchanged.
   ledger ports; the Phase 3 Conversation Store is insufficient. Deliver child Receipts, immutable
   Parent Links, requested/started/joined records, parent-owned budget reservations, authoritative
   admission lookup, worker-permit-free parent waiting/wakeup, independent fencing, Settlement
-  joins, durable abort propagation, and the full crash matrix.
+  joins, durable abort propagation, and the full crash matrix. Implemented for `DN` — see the
+  [S2 evidence](S2-EVIDENCE.md) for the delivered surface and its explicit non-claims; the `DC`
+  Subagent conformance row is P6 scope.
 
 Handoff, detached children, child Conversation reuse, peer messaging, and depth above one remain
 later proposals.
@@ -300,8 +304,9 @@ replacing it with an unrelated demo.
 - retention/deletion policy beyond indefinite internal retention;
 - public package names, license, governance, npm publication, and final `dist` export maps;
 - PostgreSQL and generic multi-node scheduling;
-- durable Subagents and detailed child budgets, unless proposed ADR-0010 is accepted and its S1/S2
-  slices become active roadmap work;
+- Subagent extensions beyond the implemented S1/S2 slices: nested delegation above depth one,
+  handoff, detached children, child Conversation reuse, and peer messaging (spec §17 later
+  extensions);
 - channel integrations, UI, hosted control plane, and marketplace.
 
 ## Workstreams for a large AI project

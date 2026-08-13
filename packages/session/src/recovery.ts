@@ -1,7 +1,20 @@
-import { SettlementId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { Schema } from "effect";
+import {
+  ConversationId,
+  isDelegationToolName,
+  SettlementId,
+  SubmissionId,
+  ToolCallId,
+} from "@effect-agent/core";
+import { Effect, Schema } from "effect";
 
-import { submissionSettlementId, type RecoverySnapshot } from "./ledger.ts";
+import {
+  ChildReservationId,
+  submissionSettlementId,
+  WaitingChild,
+  type ChildAttachmentSnapshot,
+  type ChildBudgetReservationSnapshot,
+  type RecoverySnapshot,
+} from "./ledger.ts";
 import { SettlementOutcome, ToolCallPrepared } from "./records.ts";
 
 /** One canonical `ToolCallPrepared` without a settling or resolving canonical record (DUR-009). */
@@ -34,6 +47,47 @@ export class PendingApprovalEvidence extends Schema.Class<PendingApprovalEvidenc
 }) {}
 
 /**
+ * The authoritative tri-state admission answer recorded as pure classifier evidence (SUB-031):
+ * the recovery pass queries `resolveAdmission` with the deterministic child idempotency key for
+ * a requested-but-unstarted delegation call and records the result here. Absence of this field
+ * means the lookup was not performed — the classifier treats that exactly like `indeterminate`
+ * (fail-closed: only a proven `not-admitted` ever permits an admission attempt).
+ */
+export const DelegationAdmissionEvidence = Schema.Literals([
+  "not-admitted",
+  "admitted",
+  "indeterminate",
+]);
+export type DelegationAdmissionEvidence = typeof DelegationAdmissionEvidence.Type;
+
+/**
+ * One prepared-without-outcome parent Tool Call that IS a delegation (plan §4.1), separated from
+ * `openToolCalls` because its establishment protocol is idempotent by construction and must
+ * NEVER be marked Unknown (spec §13 vs. DUR-009). Delegation detection is durable and
+ * fail-closed: a matching `ChildBudgetReservation` row or `SubagentRequested` record, plus — for
+ * the pre-reservation window — the core-owned `delegate_` naming rule. The
+ * `requested`/`started`/`joined` flags come from the parent-log canonical records; the child
+ * identity fields are present exactly when those records (or the reservation attachment) carry
+ * them.
+ */
+export class OpenDelegationCallEvidence extends Schema.Class<OpenDelegationCallEvidence>(
+  "@effect-agent/session/OpenDelegationCallEvidence",
+)({
+  toolCallId: ToolCallId,
+  toolName: ToolCallPrepared.fields.toolName,
+  turn: ToolCallPrepared.fields.turn,
+  /** The canonical `SubagentRequested` record exists for this call. */
+  requested: Schema.Boolean,
+  /** The canonical `SubagentStarted` record exists for this call. */
+  started: Schema.Boolean,
+  /** The canonical `SubagentJoined` record exists for this call. */
+  joined: Schema.Boolean,
+  childConversationId: Schema.optionalKey(ConversationId),
+  childSubmissionId: Schema.optionalKey(SubmissionId),
+  admission: Schema.optionalKey(DelegationAdmissionEvidence),
+}) {}
+
+/**
  * Canonical-log facts about one Submission, read strongly consistently alongside the ledger
  * `RecoverySnapshot` (STORE-003). Canonical history wins over every ledger marker (DUR-015), so
  * the classifier consults these facts before trusting ledger state — with one deliberate Phase 5
@@ -42,9 +96,13 @@ export class PendingApprovalEvidence extends Schema.Class<PendingApprovalEvidenc
  * gone.
  *
  * `openToolCalls` is the DUR-009 seam: every `ToolCallPrepared` without a matching
- * `ToolCallSettled` or `ToolCallResolved`. `joinedInputCovered` implements the plan §2.5
- * prompt-coverage rule for the joined side: a joined input is covered iff a later
- * `ModelResponseRecorded` of the host Run exists after the `input:{sid}` record.
+ * `ToolCallSettled` or `ToolCallResolved`. S2 separates `openDelegationCalls` from it (plan
+ * §4.1): a delegation's prepared-without-outcome state is provably replay-safe, so those calls
+ * route through the Subagent recovery rows and never through `MarkUnknown` — the classifier
+ * additionally applies the core-owned naming rule and the snapshot's reservation rows to any
+ * delegation call an assembler left in `openToolCalls` (fail-closed). `joinedInputCovered`
+ * implements the plan §2.5 prompt-coverage rule for the joined side: a joined input is covered
+ * iff a later `ModelResponseRecorded` of the host Run exists after the `input:{sid}` record.
  * `hostSettlementOutcome` is the joined-side view of the host's canonical `SubmissionSettled`
  * record, present exactly when that record exists.
  */
@@ -64,6 +122,14 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
   abortRecorded: Schema.Boolean,
   /** Prepared ordinary Tool Calls without a canonical settled/resolved outcome (DUR-009). */
   openToolCalls: Schema.Array(OpenToolCallEvidence),
+  /**
+   * Delegation Tool Calls with an open parent-side obligation (plan §4.1), removed from
+   * `openToolCalls`. Wire-required; construction alone defaults it so pre-S2 evidence
+   * assemblers stay valid while the classifier's fail-closed detection still protects them.
+   */
+  openDelegationCalls: Schema.Array(OpenDelegationCallEvidence).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
   /** A declared-but-unprepared tool batch: response canonical, zero prepared, zero settled. */
   declaredPendingBatch: Schema.optionalKey(DeclaredPendingBatchEvidence),
   /** Canonically requested approvals without a canonical decision. */
@@ -122,16 +188,18 @@ export class FinalizeLedgerFromHistory extends Schema.TaggedClass<FinalizeLedger
   outcome: SettlementOutcome,
 }) {}
 
-/** A durable abort intent exists and no terminal outcome is reserved: settle aborted (DUR-012).
- * The executor first appends `ToolCallUnknown` audit records for any open calls — abort settles
- * the obligation but never asserts external rollback (durability §13). */
+/** A durable abort intent exists, no terminal outcome is reserved, and no attached-child
+ * obligation remains open: settle aborted (DUR-012). The executor first appends
+ * `ToolCallUnknown` audit records for any open ordinary calls — abort settles the obligation but
+ * never asserts external rollback (durability §13). */
 export class SettleAborted extends Schema.TaggedClass<SettleAborted>(
   "@effect-agent/session/SettleAborted",
 )("SettleAborted", { submissionId: SubmissionId }) {}
 
 /** Prepared ordinary Tool Calls have no canonical outcome: the executor reconciles each open
  * call (recovered result / never-started / safe-retry) and marks the remainder Unknown — never
- * an automatic replay (DUR-009/DUR-017). */
+ * an automatic replay (DUR-009/DUR-017). Delegation calls are excluded: their establishment is
+ * idempotent by construction and routes through the Subagent rows instead (plan §4.3). */
 export class MarkUnknown extends Schema.TaggedClass<MarkUnknown>(
   "@effect-agent/session/MarkUnknown",
 )("MarkUnknown", {
@@ -141,7 +209,9 @@ export class MarkUnknown extends Schema.TaggedClass<MarkUnknown>(
 }) {}
 
 /** A committed tool-declaring response has zero prepared and zero settled records: a worker
- * resumes the declared batch — no model re-invocation, no Unknown (durability §15). */
+ * resumes the declared batch — no model re-invocation, no Unknown (durability §15). S2 also
+ * routes an open delegation call WITHOUT establishment evidence here (spec §13 row 1): the
+ * declared batch re-executes and the idempotent establishment converges on one child. */
 export class ResumePendingToolBatch extends Schema.TaggedClass<ResumePendingToolBatch>(
   "@effect-agent/session/ResumePendingToolBatch",
 )("ResumePendingToolBatch", {
@@ -203,6 +273,105 @@ export class AwaitHostSettlement extends Schema.TaggedClass<AwaitHostSettlement>
   hostSubmissionId: Schema.optionalKey(SubmissionId),
 }) {}
 
+/** A canonical `SubagentRequested` exists and the authoritative admission lookup proved
+ * `notAdmitted`: idempotently admit the intended child from the canonical request payload — it
+ * carries the encoded child input (D3), the intended child identity, and every digest — then
+ * materialize the child Conversation, append its immutable lineage, and mark it ready. No live
+ * delegation handler is required (spec §13, SUB-016/SUB-031). */
+export class CompleteChildAdmission extends Schema.TaggedClass<CompleteChildAdmission>(
+  "@effect-agent/session/CompleteChildAdmission",
+)("CompleteChildAdmission", {
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+}) {}
+
+/** A canonical `SubagentRequested` exists but the authoritative admission lookup answered
+ * `indeterminate` — or was not (yet) performed: wait and retry the authoritative owner directly.
+ * Absence from a projection is never proof of absence and a second admission NEVER occurs
+ * (spec §12, SUB-031). */
+export class AwaitChildAdmissionResolution extends Schema.TaggedClass<AwaitChildAdmissionResolution>(
+  "@effect-agent/session/AwaitChildAdmissionResolution",
+)("AwaitChildAdmissionResolution", {
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+}) {}
+
+/** The child Submission is admitted but the parent's `SubagentStarted` link is missing (or its
+ * reservation attachment was lost): resolve the SAME child by its deterministic idempotency key
+ * and append the exact deterministic start record, then attach the child to its reservation —
+ * the same Receipt on every replay (spec §13, SUB-016/SUB-017). */
+export class RepairSubagentStartLink extends Schema.TaggedClass<RepairSubagentStartLink>(
+  "@effect-agent/session/RepairSubagentStartLink",
+)("RepairSubagentStartLink", {
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+}) {}
+
+/** Children are established and at least one is nonterminal while the parent lane is NOT
+ * durably suspended: restore the `waitingForChild` suspension so the lane holds no worker
+ * permit while each child runs on its own lane. Recovery reattaches the one existing child and
+ * NEVER spawns a replacement (spec §13, SUB-018/SUB-030). */
+export class EnsureWaitingForChild extends Schema.TaggedClass<EnsureWaitingForChild>(
+  "@effect-agent/session/EnsureWaitingForChild",
+)("EnsureWaitingForChild", {
+  submissionId: SubmissionId,
+  children: Schema.NonEmptyArray(WaitingChild),
+}) {}
+
+/** The parent is durably suspended `WaitingForChild` and at least one listed child is not yet
+ * provably settled: the lane stays dormant and consumes no permit; the child's Settlement wakes
+ * it durably (spec §12 step 10). An unresolved ordinary Tool inside a child keeps the parent
+ * here honestly — the obligation stays visible and aged, nothing is fabricated (SUB-021). */
+export class AwaitChildSettlement extends Schema.TaggedClass<AwaitChildSettlement>(
+  "@effect-agent/session/AwaitChildSettlement",
+)("AwaitChildSettlement", { submissionId: SubmissionId }) {}
+
+/** Every relevant child is provably settled but the parent has not joined (a dropped wake or a
+ * crash between child finalization and `recordChildSettled`): replay the idempotent wake so a
+ * claiming worker resumes the declared batch and joins each child's canonical Settlement — the
+ * join itself needs the parent Binding and is deferred to that worker (spec §13). */
+export class ResumeWaitingParent extends Schema.TaggedClass<ResumeWaitingParent>(
+  "@effect-agent/session/ResumeWaitingParent",
+)("ResumeWaitingParent", {
+  submissionId: SubmissionId,
+  children: Schema.NonEmptyArray(WaitingChild),
+}) {}
+
+/** The canonical `SubagentJoined` record exists but the reservation release is incomplete:
+ * replay `beginChildBudgetRelease` with the accounting decision FROM the canonical record, then
+ * apply `releaseChildBudget` — budget stays unavailable until repair, never available twice
+ * (spec §12 join step 6, DUR-015). */
+export class ApplyJoinAccounting extends Schema.TaggedClass<ApplyJoinAccounting>(
+  "@effect-agent/session/ApplyJoinAccounting",
+)("ApplyJoinAccounting", {
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+  reservationId: ChildReservationId,
+}) {}
+
+/** Parent abort is canonical while attached children are nonterminal: idempotently issue each
+ * child's durable abort command and keep the parent waiting for the joins —
+ * request-abort-and-join is the ONLY close behavior; the replayed command returns the recorded
+ * child intent unchanged, so the intent row IS the propagation marker (spec §13.1, SUB-022,
+ * DUR-012). */
+export class PropagateChildAbort extends Schema.TaggedClass<PropagateChildAbort>(
+  "@effect-agent/session/PropagateChildAbort",
+)("PropagateChildAbort", {
+  submissionId: SubmissionId,
+  children: Schema.NonEmptyArray(WaitingChild),
+}) {}
+
+/** A child budget reservation can no longer bind a child — its request is absent with no
+ * resumable batch, or the parent is aborting and the child provably never admitted: freeze the
+ * deterministic zero-consumed accounting decision and release the unused allocation exactly
+ * once (spec §13/§14: "releases the reservation exactly once"). */
+export class ReleaseOrphanChildReservation extends Schema.TaggedClass<ReleaseOrphanChildReservation>(
+  "@effect-agent/session/ReleaseOrphanChildReservation",
+)("ReleaseOrphanChildReservation", {
+  submissionId: SubmissionId,
+  reservationIds: Schema.NonEmptyArray(ChildReservationId),
+}) {}
+
 /** The Submission is settled; nothing is owed. */
 export class NoAction extends Schema.TaggedClass<NoAction>("@effect-agent/session/NoAction")(
   "NoAction",
@@ -229,15 +398,370 @@ export const RecoveryDecision = Schema.Union([
   RepairJoinMarker,
   SettleJoinedWithHost,
   AwaitHostSettlement,
+  CompleteChildAdmission,
+  AwaitChildAdmissionResolution,
+  RepairSubagentStartLink,
+  EnsureWaitingForChild,
+  AwaitChildSettlement,
+  ResumeWaitingParent,
+  ApplyJoinAccounting,
+  PropagateChildAbort,
+  ReleaseOrphanChildReservation,
   NoAction,
 ]);
 export type RecoveryDecision = typeof RecoveryDecision.Type;
 
 /**
+ * The classifier's merged per-call view of one delegation Tool Call: canonical parent-log flags
+ * from the evidence, the reservation row, and the child attachment from the ledger snapshot.
+ */
+interface DelegationCallView {
+  readonly toolCallId: ToolCallId;
+  turn: number | undefined;
+  /** A prepared-without-outcome record exists, so the declared batch is worker-resumable. */
+  open: boolean;
+  requested: boolean;
+  started: boolean;
+  joined: boolean;
+  admission: DelegationAdmissionEvidence | undefined;
+  childSubmissionId: SubmissionId | undefined;
+  reservation: ChildBudgetReservationSnapshot | undefined;
+  attachment: ChildAttachmentSnapshot | undefined;
+}
+
+/** The attachment proves the child's canonical Settlement exists. */
+const isTerminalAttachment = (attachment: ChildAttachmentSnapshot): boolean =>
+  attachment.childState === "settled" || attachment.childOutcome !== undefined;
+
+/**
+ * Merge every durable delegation-detection source into per-call views (plan §4.1): the
+ * separated `openDelegationCalls` evidence, the core-owned naming rule over any delegation call
+ * an assembler left in `openToolCalls` (fail-closed), and the snapshot's reservation rows and
+ * child attachments — a reservation row is durable proof of a delegation even without evidence.
+ */
+const delegationViewsOf = (
+  snapshot: RecoverySnapshot,
+  evidence: RecoveryEvidence,
+): Array<DelegationCallView> => {
+  const views = new Map<ToolCallId, DelegationCallView>();
+  const ensure = (toolCallId: ToolCallId): DelegationCallView => {
+    const existing = views.get(toolCallId);
+    if (existing !== undefined) return existing;
+    const created: DelegationCallView = {
+      toolCallId,
+      turn: undefined,
+      open: false,
+      requested: false,
+      started: false,
+      joined: false,
+      admission: undefined,
+      childSubmissionId: undefined,
+      reservation: undefined,
+      attachment: undefined,
+    };
+    views.set(toolCallId, created);
+    return created;
+  };
+
+  for (const call of evidence.openDelegationCalls) {
+    const view = ensure(call.toolCallId);
+    view.turn = call.turn;
+    view.open = true;
+    view.requested = call.requested;
+    view.started = call.started;
+    view.joined = call.joined;
+    view.admission = call.admission;
+    view.childSubmissionId = call.childSubmissionId;
+  }
+  const openByCallId = new Map(evidence.openToolCalls.map((call) => [call.toolCallId, call]));
+  for (const [toolCallId, call] of openByCallId) {
+    if (views.has(toolCallId) || !isDelegationToolName(call.toolName)) continue;
+    const view = ensure(toolCallId);
+    view.turn = call.turn;
+    view.open = true;
+  }
+  for (const reservation of snapshot.childReservations) {
+    let view = views.get(reservation.parentToolCallId);
+    if (view === undefined) {
+      view = ensure(reservation.parentToolCallId);
+      const open = openByCallId.get(reservation.parentToolCallId);
+      if (open !== undefined) {
+        view.turn = open.turn;
+        view.open = true;
+      }
+    }
+    view.reservation = reservation;
+    if (view.childSubmissionId === undefined && reservation.childSubmissionId !== undefined) {
+      view.childSubmissionId = reservation.childSubmissionId;
+    }
+  }
+  for (const attachment of snapshot.childAttachments) {
+    const view = ensure(attachment.toolCallId);
+    view.attachment = attachment;
+    if (view.childSubmissionId === undefined) {
+      view.childSubmissionId = attachment.childSubmissionId;
+    }
+  }
+  return [...views.values()];
+};
+
+const waitingChildOf = (view: DelegationCallView, childSubmissionId: SubmissionId): WaitingChild =>
+  WaitingChild.make({ toolCallId: view.toolCallId, childSubmissionId });
+
+const nonEmpty = <A>(values: ReadonlyArray<A>): readonly [A, ...Array<A>] | undefined => {
+  const [first, ...rest] = values;
+  return first === undefined ? undefined : [first, ...rest];
+};
+
+/**
+ * The reservation's frozen accounting decision has not been applied: whether frozen by a
+ * canonical join or by an orphan zero-consumed decision, `releasePending` always finishes
+ * through the idempotent `releaseChildBudget` replay — never through a second freeze, whose
+ * divergent accounting would conflict (`ChildReservationConflict`).
+ */
+const releasePendingReservation = (
+  view: DelegationCallView,
+): ChildBudgetReservationSnapshot | undefined =>
+  view.reservation !== undefined && view.reservation.status === "releasePending"
+    ? view.reservation
+    : undefined;
+
+/** The reservation still holds unfrozen allocation (`reserved`). */
+const reservedReservation = (
+  view: DelegationCallView,
+): ChildBudgetReservationSnapshot | undefined =>
+  view.reservation !== undefined && view.reservation.status === "reserved"
+    ? view.reservation
+    : undefined;
+
+/**
+ * The spec §13 Subagent rows for a live (non-suspended) parent WITHOUT a durable abort intent,
+ * in most-repairing-first order. Returns `undefined` when no delegation obligation is open so
+ * the ordinary rows apply.
+ */
+const classifyDelegationRepairs = (
+  submissionId: SubmissionId,
+  views: ReadonlyArray<DelegationCallView>,
+): RecoveryDecision | undefined => {
+  const applyJoins: Array<DelegationCallView> = [];
+  const completeAdmissions: Array<DelegationCallView> = [];
+  const repairStartLinks: Array<DelegationCallView> = [];
+  const awaitAdmissions: Array<DelegationCallView> = [];
+  const resumeBatches: Array<DelegationCallView> = [];
+  const waiting: Array<WaitingChild> = [];
+  const terminalUnjoined: Array<WaitingChild> = [];
+  const orphanReservations: Array<ChildBudgetReservationSnapshot> = [];
+
+  for (const view of views) {
+    if (view.reservation !== undefined && view.reservation.status === "released") {
+      // The reservation lifecycle is complete: release happens only after the canonical join
+      // (or a provably-childless orphan decision), so no parent-side budget or waiting
+      // obligation remains on this call.
+      continue;
+    }
+    if (releasePendingReservation(view) !== undefined) {
+      // Row: budget release incomplete with the accounting decision already frozen → finish
+      // the idempotent release; a second freeze would conflict.
+      applyJoins.push(view);
+      continue;
+    }
+    if (view.joined) {
+      // Row: parent join canonical, budget release incomplete → apply the canonical accounting.
+      if (reservedReservation(view) !== undefined) applyJoins.push(view);
+      continue;
+    }
+    if (view.started && view.childSubmissionId !== undefined) {
+      // Rows: started + child nonterminal → waiting; child terminal + join missing → wake.
+      const child = waitingChildOf(view, view.childSubmissionId);
+      if (view.attachment !== undefined && isTerminalAttachment(view.attachment)) {
+        terminalUnjoined.push(child);
+      } else {
+        waiting.push(child);
+      }
+      continue;
+    }
+    if (view.started || view.childSubmissionId !== undefined || view.admission === "admitted") {
+      // Row: child admitted, parent start record missing (or the start/attachment link is
+      // incomplete) → resolve the same child by key and append the exact link.
+      repairStartLinks.push(view);
+      continue;
+    }
+    if (view.requested) {
+      // Rows: requested + notAdmitted → admit exactly one child; indeterminate (or unqueried,
+      // fail-closed) → wait/retry the authoritative owner, never a second admission.
+      if (view.admission === "not-admitted") completeAdmissions.push(view);
+      else awaitAdmissions.push(view);
+      continue;
+    }
+    if (view.open) {
+      // Row: no reservation and no request (or reservation without a request on a live parent)
+      // → the declared batch re-executes; establishment is idempotent by construction.
+      resumeBatches.push(view);
+      continue;
+    }
+    const reservation = reservedReservation(view);
+    if (reservation !== undefined) {
+      // Row: reservation exists, request absent, no resumable batch → release exactly once.
+      orphanReservations.push(reservation);
+    }
+  }
+
+  const applyJoin = applyJoins[0];
+  if (applyJoin?.reservation !== undefined) {
+    return ApplyJoinAccounting.make({
+      submissionId,
+      toolCallId: applyJoin.toolCallId,
+      reservationId: applyJoin.reservation.reservationId,
+    });
+  }
+  const completeAdmission = completeAdmissions[0];
+  if (completeAdmission !== undefined) {
+    return CompleteChildAdmission.make({ submissionId, toolCallId: completeAdmission.toolCallId });
+  }
+  const repairStartLink = repairStartLinks[0];
+  if (repairStartLink !== undefined) {
+    return RepairSubagentStartLink.make({ submissionId, toolCallId: repairStartLink.toolCallId });
+  }
+  const awaitAdmission = awaitAdmissions[0];
+  if (awaitAdmission !== undefined) {
+    return AwaitChildAdmissionResolution.make({
+      submissionId,
+      toolCallId: awaitAdmission.toolCallId,
+    });
+  }
+  const resumeBatch = resumeBatches[0];
+  if (resumeBatch?.turn !== undefined) {
+    return ResumePendingToolBatch.make({ submissionId, turn: resumeBatch.turn });
+  }
+  const waitingChildren = nonEmpty([...waiting, ...terminalUnjoined]);
+  if (waiting.length > 0 && waitingChildren !== undefined) {
+    return EnsureWaitingForChild.make({ submissionId, children: waitingChildren });
+  }
+  const settledChildren = nonEmpty(terminalUnjoined);
+  if (settledChildren !== undefined) {
+    return ResumeWaitingParent.make({ submissionId, children: settledChildren });
+  }
+  const orphans = nonEmpty(orphanReservations.map((reservation) => reservation.reservationId));
+  if (orphans !== undefined) {
+    return ReleaseOrphanChildReservation.make({ submissionId, reservationIds: orphans });
+  }
+  return undefined;
+};
+
+/**
+ * The spec §13/§13.1 Subagent rows under a canonical parent abort intent: request-abort-and-join
+ * is the only close behavior, so a nonterminal attached child converts `SettleAborted` into
+ * `PropagateChildAbort`, terminal-but-unjoined children are joined first, incomplete releases
+ * are applied, provably childless reservations release exactly once, and only a parent with no
+ * open child obligation settles aborted. Returns `undefined` for exactly that last case.
+ */
+const classifyDelegationAbort = (
+  submissionId: SubmissionId,
+  views: ReadonlyArray<DelegationCallView>,
+): RecoveryDecision | undefined => {
+  const awaitAdmissions: Array<DelegationCallView> = [];
+  const repairStartLinks: Array<DelegationCallView> = [];
+  const nonterminal: Array<WaitingChild> = [];
+  const terminalUnjoined: Array<WaitingChild> = [];
+  const applyJoins: Array<DelegationCallView> = [];
+  const orphanReservations: Array<ChildBudgetReservationSnapshot> = [];
+
+  for (const view of views) {
+    if (view.reservation !== undefined && view.reservation.status === "released") {
+      // Fully closed (release only follows the canonical join or a provably-childless orphan
+      // decision): nothing left to abort, join, or release for this call.
+      continue;
+    }
+    if (releasePendingReservation(view) !== undefined) {
+      // The accounting decision is already frozen: finish the idempotent release; a second
+      // (zero-consumed) freeze would conflict with the frozen decision.
+      applyJoins.push(view);
+      continue;
+    }
+    if (view.joined) {
+      if (reservedReservation(view) !== undefined) applyJoins.push(view);
+      continue;
+    }
+    if (view.childSubmissionId !== undefined) {
+      if (!view.started) {
+        // The child exists but the canonical start link is missing: repair it first so the
+        // abort command targets a canonically linked child.
+        repairStartLinks.push(view);
+        continue;
+      }
+      const child = waitingChildOf(view, view.childSubmissionId);
+      if (view.attachment !== undefined && isTerminalAttachment(view.attachment)) {
+        terminalUnjoined.push(child);
+      } else {
+        nonterminal.push(child);
+      }
+      continue;
+    }
+    if (view.started || view.admission === "admitted") {
+      repairStartLinks.push(view);
+      continue;
+    }
+    if (view.requested) {
+      if (view.admission === "not-admitted") {
+        // Provably childless request under abort: never admit a child merely to abort it;
+        // release the unused reservation exactly once.
+        const reservation = reservedReservation(view);
+        if (reservation !== undefined) orphanReservations.push(reservation);
+      } else {
+        // Indeterminate or unqueried: a child may exist — never release, settle, or re-admit
+        // until the authoritative owner answers (SUB-031).
+        awaitAdmissions.push(view);
+      }
+      continue;
+    }
+    const reservation = reservedReservation(view);
+    if (reservation !== undefined) orphanReservations.push(reservation);
+    // An open delegation call with no reservation carries no child obligation: establishment
+    // never started, so the ordinary aborted settlement (with its unknown-audit for open
+    // calls) is honest.
+  }
+
+  const awaitAdmission = awaitAdmissions[0];
+  if (awaitAdmission !== undefined) {
+    return AwaitChildAdmissionResolution.make({
+      submissionId,
+      toolCallId: awaitAdmission.toolCallId,
+    });
+  }
+  const repairStartLink = repairStartLinks[0];
+  if (repairStartLink !== undefined) {
+    return RepairSubagentStartLink.make({ submissionId, toolCallId: repairStartLink.toolCallId });
+  }
+  const abortChildren = nonEmpty(nonterminal);
+  if (abortChildren !== undefined) {
+    return PropagateChildAbort.make({ submissionId, children: abortChildren });
+  }
+  const settledChildren = nonEmpty(terminalUnjoined);
+  if (settledChildren !== undefined) {
+    return ResumeWaitingParent.make({ submissionId, children: settledChildren });
+  }
+  const applyJoin = applyJoins[0];
+  if (applyJoin?.reservation !== undefined) {
+    return ApplyJoinAccounting.make({
+      submissionId,
+      toolCallId: applyJoin.toolCallId,
+      reservationId: applyJoin.reservation.reservationId,
+    });
+  }
+  const orphans = nonEmpty(orphanReservations.map((reservation) => reservation.reservationId));
+  if (orphans !== undefined) {
+    return ReleaseOrphanChildReservation.make({ submissionId, reservationIds: orphans });
+  }
+  return undefined;
+};
+
+/**
  * Pure recovery classifier (durability §14, DUR-013): a finite persisted snapshot plus canonical
  * evidence deterministically selects exactly one decision. Precedence, most-settled first
- * (plan §4.2 — note the deliberate P5 reorder: canonical settlement and reservation now beat
- * open tool calls, because a recorded terminal outcome is never revisited, DUR-002/DUR-015):
+ * (plan §4.2/§4.3 — note the deliberate P5 reorder: canonical settlement and reservation beat
+ * open tool calls, because a recorded terminal outcome is never revisited, DUR-002/DUR-015; and
+ * the three S2 edits: the abort row propagates to nonterminal attached children, delegation
+ * calls never mark Unknown, and the suspended row branches on the suspension reason):
  *
  * 1. `settled` → NoAction — terminal outcomes are never revisited (DUR-002).
  * 2. canonical settlement record → FinalizeLedgerFromHistory — history beats every ledger
@@ -248,20 +772,37 @@ export type RecoveryDecision = typeof RecoveryDecision.Type;
  * 4. joined-side states (DUR-016): `joining` without canonical input → RevertJoining; `joining`
  *    with canonical input → RepairJoinMarker (marker lost); `joined` + host settled →
  *    SettleJoinedWithHost; `joined` + host live → AwaitHostSettlement (deferred).
- * 5. abort intent → SettleAborted — inactive accepted work settles aborted without an Attempt;
- *    open calls become `ToolCallUnknown` audit records, never a rollback claim (§13).
- * 6. open tool calls (state not yet `unknown`) → MarkUnknown — reconcile-then-mark, never an
- *    automatic replay (DUR-009). A lane already `unknown` is in the DUR-017 resolution regime
+ * 5. abort intent → the S2 abort rows (spec §13.1 request-abort-and-join): an unproven child
+ *    admission waits, an admitted-but-unlinked child repairs its start link, a nonterminal
+ *    attached child gets PropagateChildAbort — the parent does NOT settle — terminal children
+ *    are joined, incomplete releases applied, provably childless reservations released; ONLY a
+ *    parent with no open child obligation reaches SettleAborted, where open ordinary calls
+ *    become `ToolCallUnknown` audit records, never a rollback claim (§13).
+ * 6. ordinary open tool calls (state not yet `unknown`) → MarkUnknown — reconcile-then-mark,
+ *    never an automatic replay (DUR-009). Delegation calls are EXCLUDED (plan §4.3's most
+ *    important edit): their prepared-without-outcome state is provably replay-safe and routes
+ *    through rows 5/8/9 instead. A lane already `unknown` is in the DUR-017 resolution regime
  *    (row 7) and is not re-marked.
- * 7. state `unknown` → ApplyUnknownResolutions when durable intents cover every open call,
- *    else AwaitUnknownResolution.
- * 8. undecided canonical approval requests → AwaitApprovalDecision (repairing a lost suspend
- *    transition from history); state `suspended` with every request decided → ResumeSuspended.
- * 9. declared-but-unprepared tool batch → ResumePendingToolBatch — no handler ran (no prepared
- *    records), so the batch resumes with no model re-invocation and no Unknown (§15).
- * 10. `admitted` → CompleteMaterialization / RepairReadiness by Conversation durability.
- * 11. otherwise → ApplyInput / RepairInputMarker / ResumeFromTurnBoundary by canonical input
+ * 7. state `unknown` → ApplyUnknownResolutions when durable intents cover every open ordinary
+ *    call, else AwaitUnknownResolution.
+ * 8. state `suspended` branches on the stored reason: `WaitingForChild` → ResumeWaitingParent
+ *    when every listed child is provably settled (replay the idempotent wake), else
+ *    AwaitChildSettlement (SUB-030); `ApprovalPending` keeps the P5 behavior — undecided
+ *    canonical approval requests → AwaitApprovalDecision (repairing a lost suspend transition
+ *    from history), every request decided → ResumeSuspended.
+ * 9. the S2 establishment/join rows for a live parent (spec §13, most-repairing first):
+ *    ApplyJoinAccounting → CompleteChildAdmission → RepairSubagentStartLink →
+ *    AwaitChildAdmissionResolution → ResumePendingToolBatch (idempotent handler re-entry) →
+ *    EnsureWaitingForChild → ResumeWaitingParent → ReleaseOrphanChildReservation.
+ * 10. declared-but-unprepared tool batch → ResumePendingToolBatch — no handler ran (no prepared
+ *     records), so the batch resumes with no model re-invocation and no Unknown (§15).
+ * 11. `admitted` → CompleteMaterialization / RepairReadiness by Conversation durability.
+ * 12. otherwise → ApplyInput / RepairInputMarker / ResumeFromTurnBoundary by canonical input
  *     evidence, with the ledger marker repaired from history, never the reverse.
+ *
+ * A CHILD Submission (one whose snapshot carries `parentLinkage`) classifies through exactly
+ * the same rows as any Submission — child recovery proceeds under its own ownership token and
+ * epoch (spec §13, SUB-020); nothing here consults the parent's lane.
  *
  * Ownership leases are deliberately ignored here: the executor's fenced claim is the only
  * authority over liveness, and a stale Attempt is fenced by producer epoch regardless (DUR-006).
@@ -315,21 +856,28 @@ export const classifyRecovery = (
         : { hostSubmissionId: snapshot.hostSubmissionId }),
     });
   }
+  const delegationViews = delegationViewsOf(snapshot, evidence);
   if (snapshot.abortIntent !== undefined) {
-    return SettleAborted.make({ submissionId });
+    return (
+      classifyDelegationAbort(submissionId, delegationViews) ?? SettleAborted.make({ submissionId })
+    );
   }
-  if (state !== "unknown" && evidence.openToolCalls.length > 0) {
+  const delegationCallIds = new Set<string>(delegationViews.map((view) => view.toolCallId));
+  const ordinaryOpenCalls = evidence.openToolCalls.filter(
+    (call) => !delegationCallIds.has(call.toolCallId),
+  );
+  if (state !== "unknown" && ordinaryOpenCalls.length > 0) {
     return MarkUnknown.make({
       submissionId,
       reason: "An ordinary Tool call may have executed without a canonical outcome",
-      openToolCallIds: evidence.openToolCalls.map((call) => call.toolCallId),
+      openToolCallIds: ordinaryOpenCalls.map((call) => call.toolCallId),
     });
   }
   if (state === "unknown") {
     const resolved = new Set(
       snapshot.unknownResolutions.map((resolution) => resolution.toolCallId),
     );
-    const covered = evidence.openToolCalls.every((call) => resolved.has(call.toolCallId));
+    const covered = ordinaryOpenCalls.every((call) => resolved.has(call.toolCallId));
     return covered
       ? ApplyUnknownResolutions.make({ submissionId })
       : AwaitUnknownResolution.make({ submissionId });
@@ -339,12 +887,27 @@ export const classifyRecovery = (
     (pending) => !decided.has(pending.toolCallId),
   );
   if (state === "suspended") {
+    const reason = snapshot.suspension?.reason;
+    if (reason !== undefined && reason._tag === "WaitingForChild") {
+      const terminalChildIds = new Set(
+        snapshot.childAttachments
+          .filter(isTerminalAttachment)
+          .map((attachment) => attachment.childSubmissionId),
+      );
+      return reason.children.every((child) => terminalChildIds.has(child.childSubmissionId))
+        ? ResumeWaitingParent.make({ submissionId, children: reason.children })
+        : AwaitChildSettlement.make({ submissionId });
+    }
     return undecidedApprovals.length === 0
       ? ResumeSuspended.make({ submissionId })
       : AwaitApprovalDecision.make({ submissionId });
   }
   if (undecidedApprovals.length > 0) {
     return AwaitApprovalDecision.make({ submissionId });
+  }
+  const delegationDecision = classifyDelegationRepairs(submissionId, delegationViews);
+  if (delegationDecision !== undefined) {
+    return delegationDecision;
   }
   if (evidence.declaredPendingBatch !== undefined) {
     return ResumePendingToolBatch.make({

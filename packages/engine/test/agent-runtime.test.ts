@@ -41,7 +41,12 @@ import {
   Toolkit,
 } from "effect/unstable/ai";
 
-import { AgentRuntime, type RunBudgetHook, type RunUsageDelta } from "../src/index.ts";
+import {
+  AgentRuntime,
+  type RunBudgetHook,
+  type RunTurnResume,
+  type RunUsageDelta,
+} from "../src/index.ts";
 
 class ScheduledToolFailure extends Schema.TaggedErrorClass<ScheduledToolFailure>()(
   "ScheduledToolFailure",
@@ -2846,5 +2851,113 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(handlerParams?.city).toBe("Kyoto");
       expect(DateTime.isDateTime(handlerParams?.departAt)).toBe(true);
     }),
+  );
+
+  it.effect(
+    "threads resume leading messages into the model context before the assistant tool-call message",
+    () =>
+      Effect.gen(function* () {
+        const leadingText = "steering committed inside the pending turn";
+        const resumeLeadingTurnId = yield* Schema.decodeEffect(TurnId)("turn-resume-leading").pipe(
+          Effect.orDie,
+        );
+        const Lookup = Tool.make("lookup", {
+          parameters: Schema.Struct({ key: Schema.String }),
+          success: Schema.String,
+        });
+        const tools = Toolkit.make(Lookup);
+        const definition = Agent.define("resume-leading-messages", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Look everything up.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 2,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const toolLayer = tools.toLayer({
+          lookup: ({ key }) => Effect.succeed(`handled-${key}`),
+        });
+        const runResumed = (leadingMessages: Prompt.Prompt | undefined) =>
+          Effect.gen(function* () {
+            let captured: Prompt.Prompt | undefined;
+            const model = Model.make(
+              "scripted",
+              "resume-leading",
+              Layer.effect(
+                LanguageModel.LanguageModel,
+                LanguageModel.make({
+                  generateText: () => Effect.succeed([]),
+                  streamText: (request) => {
+                    captured = request.prompt;
+                    return Stream.fromIterable(finalParts('{"answer":"resumed"}'));
+                  },
+                }),
+              ),
+            );
+            const resume: RunTurnResume = {
+              turn: 1,
+              turnId: resumeLeadingTurnId,
+              calls: [{ id: "lookup-1", name: "lookup", params: { key: "a" } }],
+              settled: [],
+              ...(leadingMessages === undefined ? {} : { leadingMessages }),
+            };
+            const result = yield* AgentRuntime.run(
+              Agent.withModel(definition, model),
+              { question: "resume" },
+              { resume },
+            ).pipe(Effect.provide(toolLayer), Effect.scoped);
+            expect(result.output).toEqual({ answer: "resumed" });
+            expect(captured).toBeDefined();
+            if (captured === undefined) {
+              throw new Error("Expected the follow-up model request to be captured");
+            }
+            return captured;
+          });
+
+        const leadingMessages = Prompt.fromMessages([
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: leadingText })],
+          }),
+        ]);
+        const prompt = yield* runResumed(leadingMessages);
+
+        const leadingIndex = prompt.content.findIndex(
+          (message) =>
+            message.role === "user" &&
+            message.content.some((part) => part.type === "text" && part.text === leadingText),
+        );
+        const assistantIndex = prompt.content.findIndex(
+          (message) =>
+            message.role === "assistant" &&
+            message.content.some((part) => part.type === "tool-call" && part.id === "lookup-1"),
+        );
+        const toolIndex = prompt.content.findIndex((message) => message.role === "tool");
+        const inputIndex = prompt.content.findIndex(
+          (message) =>
+            message.role === "user" &&
+            message.content.some((part) => part.type === "text" && part.text.includes("resume")),
+        );
+        // The pending Turn's committed leading messages sit between the
+        // re-evaluated initial prompt and the rebuilt assistant tool-call
+        // message, and precede the Tool results.
+        expect(inputIndex).toBeGreaterThanOrEqual(0);
+        expect(leadingIndex).toBeGreaterThan(inputIndex);
+        expect(assistantIndex).toBeGreaterThan(leadingIndex);
+        expect(toolIndex).toBeGreaterThan(assistantIndex);
+
+        // Absent leadingMessages keeps the prior behavior: the steering text
+        // never enters the resumed model context.
+        const bare = yield* runResumed(undefined);
+        const bareLeading = bare.content.findIndex(
+          (message) =>
+            message.role === "user" &&
+            message.content.some((part) => part.type === "text" && part.text === leadingText),
+        );
+        expect(bareLeading).toBe(-1);
+      }),
   );
 });

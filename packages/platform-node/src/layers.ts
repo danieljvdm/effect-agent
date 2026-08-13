@@ -1,5 +1,6 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
+  AgentBindingResolver,
   ConversationStore,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
@@ -13,6 +14,7 @@ import {
   WakeScheduler,
   type DurableRuntimeFailpointHandler,
   type OwnershipToken,
+  type ResolvedBinding,
 } from "@effect-agent/session";
 import {
   conversationStoreLayer,
@@ -121,6 +123,15 @@ export interface NodeDurableRuntimeOptions {
    * DUR-017 resolution path.
    */
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
+  /**
+   * Registered worker Bindings resolved at durable claim time (S2, spec/subagents.md §11):
+   * build each with `DurableWorkerBinding.make(binding, digests)` so
+   * `NodeDurableHost.runResolvedWorkers` / `DurableAgentRuntime.runResolvedWorker` can serve
+   * parent and child lanes from one pool with exact-digest resolution (SUB-023). Defaults to
+   * the empty registration: every resolved claim then fails closed (`BindingUnavailable` for a
+   * root, the framework `ChildCompatibilityFailure` Settlement for a parent-linked child).
+   */
+  readonly bindings?: ReadonlyArray<ResolvedBinding> | undefined;
 }
 
 /** Every construction failure of the assembled Node durable runtime stack. */
@@ -135,7 +146,8 @@ export type NodeDurableRuntimeServices =
   | ConversationStore
   | WakeScheduler
   | DurableRuntimeConfig
-  | NodeDurableRuntimeConfig;
+  | NodeDurableRuntimeConfig
+  | AgentBindingResolver;
 
 const decodeConfigValue = Schema.decodeUnknownEffect(NodeDurableRuntimeConfigValue);
 
@@ -263,6 +275,15 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
         admit: ledger.admit,
         markReady: ledger.markReady,
         lookup: ledger.lookup,
+        // The S2 subagent ops forward untouched: none of them grants an ownership period, so
+        // the drain has nothing to track for them (`suspend` below already stops tracking the
+        // waitingForChild ownership period the moment it ends).
+        resolveAdmission: ledger.resolveAdmission,
+        recordChildSettled: ledger.recordChildSettled,
+        reserveChildBudget: ledger.reserveChildBudget,
+        attachChildToReservation: ledger.attachChildToReservation,
+        beginChildBudgetRelease: ledger.beginChildBudgetRelease,
+        releaseChildBudget: ledger.releaseChildBudget,
         claim: (request) =>
           ledger
             .claim(request)
@@ -341,6 +362,7 @@ export class NodeDurableRuntime {
         ? DurableRuntimeFailpoint.layer
         : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
     const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+    const bindingResolverLayer = AgentBindingResolver.layer(options.bindings ?? []);
     const ports = Layer.mergeAll(
       conversationStoreLayer,
       nodeWakeSchedulerLayer.pipe(
@@ -348,7 +370,7 @@ export class NodeDurableRuntime {
       ),
     );
     return DurableAgentRuntime.layer.pipe(
-      Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer)),
+      Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer)),
       Layer.provide(
         Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
       ),

@@ -36,10 +36,12 @@ import {
   ModelStarted,
   ModelProtocolError,
   ReasoningDelta,
+  ReceiptId,
   RunCompleted,
   RunFailed,
   RunStarted,
   RunSuspended,
+  SubmissionId,
   SubagentCompleted,
   SubagentFailed,
   SubagentInterrupted,
@@ -125,10 +127,15 @@ type InstructionRequirementsOf<Instructions, Input> =
     : never;
 
 import {
+  type ChildEstablishStatus,
   type CommandDrainPolicy,
   type RunApprovalDecision,
   type RunOptions,
   type RunSchedulingHook,
+  type RunSubagentChildIdentity,
+  type RunSubagentEstablishRequest,
+  type RunSubagentHook,
+  type RunSubagentJoinRequest,
   type RunToolCallDescriptor,
   type RunTurnResume,
   type RunUsageDelta,
@@ -179,17 +186,22 @@ export type AgentRuntimeFailure<
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentApprovalPending
+  | AgentChildPending
   | HookError
   | InstructionError;
 
 /**
  * Services the engine itself provides locally to every Run: `AgentSpawner`
  * bound to the Run's immutable identity and delegation depth, `RunEventSink`
- * bound to the active Tool batch, and `DurableStep` bound to the active Tool
- * Call. They are excluded from the runtime's public requirements and MUST NOT
- * be satisfied from an application Layer.
+ * and `SubagentDurability` bound to the active Tool batch, and `DurableStep`
+ * bound to the active Tool Call. They are excluded from the runtime's public
+ * requirements and MUST NOT be satisfied from an application Layer.
  */
-export type EngineProvidedToolServices = AgentSpawner | RunEventSink | DurableStep;
+export type EngineProvidedToolServices =
+  | AgentSpawner
+  | RunEventSink
+  | DurableStep
+  | SubagentDurability;
 
 /**
  * Inferred agent services plus the runtime's identity-generation authority.
@@ -695,6 +707,14 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
   prepared: PreparedToolCall<Tools>,
   trace: TurnTrace,
+  /**
+   * Batch-level collector for the durable-Subagent waiting signal. A
+   * `ToolCallWaiting` failure is not a Tool failure: the call stays open (no
+   * terminal result, no `ToolCallFailed`, no batch failure policy) and the
+   * batch reports it through `AgentChildPending` after every non-waiting
+   * sibling settled.
+   */
+  onWaiting: (waiting: ToolCallWaiting) => void,
 ): Stream.Stream<
   RunEvent,
   ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>,
@@ -796,6 +816,24 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     Stream.concat(results),
     Stream.concat(requireTerminal),
     Stream.catchCause((cause) => {
+      const waiting = waitingFromCause(cause);
+      if (waiting !== undefined) {
+        if (terminal || trace.finalToolResultIds.has(call.id)) {
+          // A handler that produced a terminal result cannot also wait: the
+          // anomaly fails loud and typed instead of suspending a settled call.
+          return Stream.fail(
+            ModelProtocolError.make({
+              message: `Tool Call ${call.id} raised the waiting signal after its terminal result`,
+            }),
+          );
+        }
+        // The waiting call stays open: no terminal result is recorded, no
+        // failure event is emitted, and the batch failure policy never
+        // applies — sibling handlers keep running and the batch terminates
+        // with `AgentChildPending` once they all settled.
+        onWaiting(waiting);
+        return Stream.empty;
+      }
       if (terminal) {
         return Stream.failCause(cause);
       }
@@ -848,6 +886,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentApprovalPending
+  | AgentChildPending
   | AiError.AiError
   | Tool.HandlerError<ToolUnion<Tools>>,
   HookRequirements | Tool.HandlerServices<ToolUnion<Tools>>
@@ -915,6 +954,22 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? passthroughDurableStep()
           : makeDurableStepService(call.toolCallId, durability.step, hookServices);
 
+      // This batch's live `SubagentDurability` service: durable over the
+      // coordinator's subagent hook, the explicit ephemeral-mode default
+      // otherwise. Absence of the hook means the Run is not under a durable
+      // coordinator (the coordinator always supplies it), so no durable claim
+      // is being made and the S1 in-process spawn semantics apply honestly.
+      const subagentHook = options.subagent;
+      const batchSubagentDurability: SubagentDurabilityService =
+        subagentHook === undefined
+          ? ephemeralSubagentDurability
+          : makeSubagentDurabilityService(subagentHook, hookServices);
+
+      // Delegation calls that raised the waiting signal, keyed by declaration
+      // index so `AgentChildPending` lists its children deterministically
+      // regardless of parallel handler completion order.
+      const waitingByDeclaration = new Map<number, ToolCallWaiting>();
+
       const executable =
         settledCallIds === undefined
           ? prepared
@@ -948,9 +1003,9 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           group.map((call) =>
             withSemaphorePermit(
               semaphore,
-              executePreparedToolCall(context, turnId, toolkit, call, trace).pipe(
-                Stream.provideService(DurableStep, stepServiceFor(call)),
-              ),
+              executePreparedToolCall(context, turnId, toolkit, call, trace, (waiting) => {
+                waitingByDeclaration.set(call.declarationIndex, waiting);
+              }).pipe(Stream.provideService(DurableStep, stepServiceFor(call))),
             ),
           ),
           { concurrency: "unbounded" },
@@ -995,6 +1050,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         Tool.HandlerServices<ToolUnion<Tools>>
       > = handlers.pipe(
         Stream.provideService(RunEventSink, batchSink),
+        Stream.provideService(SubagentDurability, batchSubagentDurability),
         Stream.catchCause((cause) => {
           settledCause = cause;
           return Stream.empty;
@@ -1007,8 +1063,46 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       const settled = Stream.merge(settling, sinkEvents).pipe(
         Stream.concat(
           Stream.fromEffect(
-            Effect.suspend(() =>
-              settledCause === undefined ? Effect.void : Effect.failCause(settledCause),
+            Effect.suspend(
+              (): Effect.Effect<
+                void,
+                | AgentChildPending
+                | ModelProtocolError
+                | AiError.AiError
+                | Tool.HandlerError<ToolUnion<Tools>>
+              > => {
+                if (settledCause !== undefined) {
+                  // A real sibling failure keeps the existing batch failure
+                  // policy even when another call is waiting: the Run fails
+                  // with the sibling's cause and the coordinator's durable
+                  // ledger state (not this stream) carries the attached child.
+                  return Effect.failCause(settledCause);
+                }
+                const waiting = [...waitingByDeclaration.entries()]
+                  .sort(([left], [right]) => left - right)
+                  .map(([, signal]) => signal);
+                const [first, ...rest] = waiting;
+                if (first === undefined) {
+                  return Effect.void;
+                }
+                // Every non-waiting sibling has settled; the Run now suspends
+                // `waitingForChild` (spec/subagents.md §12 step 10, SUB-030)
+                // via the AgentApprovalPending-mirroring typed error below.
+                const child = (signal: ToolCallWaiting) => ({
+                  toolCallId: signal.toolCallId,
+                  childConversationId: signal.childConversationId,
+                  childSubmissionId: signal.childSubmissionId,
+                  childRunId: signal.childRunId,
+                });
+                return Effect.fail(
+                  AgentChildPending.make({
+                    children: [child(first), ...rest.map(child)],
+                    message: `${waiting.length} durable delegation ${
+                      waiting.length === 1 ? "call is" : "calls are"
+                    } waiting on attached children; the Run suspended without settling`,
+                  }),
+                );
+              },
             ),
           ).pipe(Stream.drain),
         ),
@@ -2267,6 +2361,22 @@ const makeResumeTurn = <
         options.scheduling,
       );
 
+      // The pending Turn's committed LEADING messages (Turn-1 evaluated
+      // instructions + input, or steering committed inside the pending
+      // canonical response record) re-enter official history here, BEFORE the
+      // rebuilt assistant tool-call message: a resumed Attempt's canonical
+      // prompt boundary excludes the pending Turn, so without this thread the
+      // resumed Run's live model context would silently drop them. Absent
+      // `leadingMessages` keeps the prior behavior byte-for-byte.
+      const leading = resume.leadingMessages;
+      const resumedPrompt =
+        leading === undefined || leading.content.length === 0
+          ? prompt
+          : Prompt.fromMessages([...prompt.content, ...leading.content]);
+      if (resumedPrompt !== prompt) {
+        yield* advanceHistory(context, resumedPrompt, options);
+      }
+
       // The resumed Turn made its model call in a prior Attempt: no
       // ModelStarted event, no model metric, and no usage is consumed. The
       // TurnCompleted seam is re-emitted so downstream commit seams observe
@@ -2312,7 +2422,7 @@ const makeResumeTurn = <
       return started.pipe(
         Stream.concat(toolResults),
         Stream.concat(
-          toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
+          toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
         ),
       );
     }),
@@ -2457,6 +2567,7 @@ const stream = <
       ).pipe(
         Context.add(RunEventSink, closedRunEventSink),
         Context.add(DurableStep, closedDurableStep),
+        Context.add(SubagentDurability, closedSubagentDurability),
       );
 
       return started.pipe(
@@ -2464,7 +2575,7 @@ const stream = <
         Stream.catch((error) => {
           const terminal = Stream.fromEffect(
             Effect.gen(function* () {
-              if (error instanceof AgentApprovalPending) {
+              if (error instanceof AgentApprovalPending || error instanceof AgentChildPending) {
                 return RunSuspended.make({
                   ...(yield* eventBase(context)),
                   reason: error.message,
@@ -2830,6 +2941,210 @@ const makeDurableStepService = <HookError, HookRequirements>(
         return value;
       }),
   };
+};
+
+/**
+ * Typed engine-owned suspension signal raised by a delegation Tool handler
+ * through the per-batch `SubagentDurability` service when its durable child
+ * is established but not settled (S2 plan §2). It is NOT a Tool failure: the
+ * batch executor treats the raising call as "stays open" — no terminal
+ * result, no `ToolCallFailed`, no batch failure policy, no sibling
+ * interruption — and terminates the Run with `AgentChildPending` after every
+ * non-waiting sibling handler settled.
+ */
+export class ToolCallWaiting extends Schema.TaggedErrorClass<ToolCallWaiting>()("ToolCallWaiting", {
+  toolCallId: ToolCallId,
+  childConversationId: ConversationId,
+  childSubmissionId: SubmissionId,
+  childRunId: RunId,
+  receiptId: ReceiptId,
+  message: Schema.String,
+}) {}
+
+/**
+ * The Run suspended `waitingForChild`: at least one durable delegation call
+ * of the last Tool batch is waiting on its attached child (spec/subagents.md
+ * §12 step 10, SUB-030). Mirrors `AgentApprovalPending`: the engine emits
+ * `RunSuspended` and then fails the Run stream with this error; the durable
+ * coordinator catches it and ends the Attempt's ownership period without
+ * settling. `children` is listed in declaration order, deterministically.
+ */
+export class AgentChildPending extends Schema.TaggedErrorClass<AgentChildPending>()(
+  "AgentChildPending",
+  {
+    children: Schema.NonEmptyArray(
+      Schema.Struct({
+        toolCallId: ToolCallId,
+        childConversationId: ConversationId,
+        childSubmissionId: SubmissionId,
+        childRunId: RunId,
+      }),
+    ),
+    message: Schema.String,
+  },
+) {}
+
+/**
+ * Typed failure of the engine-provided `SubagentDurability` operations.
+ * `hook-failed` wraps a coordinator hook failure without leaking the hook's
+ * error type into handler signatures (the `DurableStepError` precedent);
+ * `no-active-tool-batch` is the fail-closed Run-level default — establishment
+ * outside an active Tool batch never silently degrades to ephemeral spawning.
+ */
+export class SubagentDurabilityError extends Schema.TaggedErrorClass<SubagentDurabilityError>()(
+  "SubagentDurabilityError",
+  {
+    operation: Schema.Literals(["establish", "join", "waiting"]),
+    reason: Schema.Literals(["hook-failed", "no-active-tool-batch"]),
+    message: Schema.String,
+    toolCallId: Schema.optionalKey(ToolCallId),
+  },
+) {}
+
+/**
+ * Explicit ephemeral mode: no durable coordinator supplied
+ * `RunOptions.subagent`, so no durable claim is being made and the delegation
+ * handler keeps the S1 in-process spawn semantics honestly.
+ */
+export interface SubagentDurabilityEphemeral {
+  readonly mode: "ephemeral";
+}
+
+/**
+ * Durable mode: establishment and join run through the coordinator's
+ * `RunSubagentHook` under the parent's ownership fence, and `waiting` raises
+ * the engine-owned suspension signal for a still-running child.
+ */
+export interface SubagentDurabilityDurable {
+  readonly mode: "durable";
+  /** Idempotent durable child establishment (spec/subagents.md §12 steps 2-9, SUB-016). */
+  readonly establish: (
+    request: RunSubagentEstablishRequest,
+  ) => Effect.Effect<ChildEstablishStatus, SubagentDurabilityError>;
+  /** Atomic settlement join: `SubagentJoined` + parent `ToolCallSettled` in one canonical batch (SUB-019). */
+  readonly join: (request: RunSubagentJoinRequest) => Effect.Effect<void, SubagentDurabilityError>;
+  /**
+   * Raise the waiting suspension signal for one delegation call whose
+   * established child has not settled. Never returns: the handler ends here,
+   * siblings run to completion, the Run suspends, and the resumed batch
+   * re-executes the handler idempotently.
+   */
+  readonly waiting: (
+    toolCallId: ToolCallId,
+    child: RunSubagentChildIdentity,
+  ) => Effect.Effect<never, ToolCallWaiting | SubagentDurabilityError>;
+}
+
+/**
+ * Mode-dispatched service value seen by delegation Tool handlers: an explicit
+ * ephemeral default when the Run carries no durable coordinator, the durable
+ * establish/join/waiting surface otherwise.
+ */
+export type SubagentDurabilityService = SubagentDurabilityEphemeral | SubagentDurabilityDurable;
+
+/**
+ * Engine-owned durable-Subagent seam provided locally to every Tool batch,
+ * constructed from `RunOptions.subagent` when present and the explicit
+ * ephemeral-mode default when absent. Like the other engine-provided Tool
+ * services it is excluded from the runtime's public requirements and MUST NOT
+ * be satisfied from an application Layer; handlers resolve it per call (the
+ * S1 innermost re-provide pattern) so a Layer built inside another Run's
+ * batch never captures a stale mode.
+ */
+export class SubagentDurability extends Context.Service<
+  SubagentDurability,
+  SubagentDurabilityService
+>()("@effect-agent/engine/SubagentDurability") {}
+
+/** The one explicit ephemeral-mode value: absence of a durable coordinator is stated, not inferred. */
+const ephemeralSubagentDurability: SubagentDurabilityService = { mode: "ephemeral" };
+
+const closedSubagentDurabilityFailure = (
+  operation: "establish" | "join" | "waiting",
+  toolCallId?: ToolCallId,
+): SubagentDurabilityError =>
+  SubagentDurabilityError.make({
+    operation,
+    reason: "no-active-tool-batch",
+    message: `Durable Subagent ${operation} was invoked outside an active Tool batch`,
+    ...(toolCallId === undefined ? {} : { toolCallId }),
+  });
+
+/**
+ * Fail-closed Run-level `SubagentDurability` default. Each Tool batch shadows
+ * it with its live per-batch service; resolving the seam outside an active
+ * Tool batch fails typed instead of silently spawning an ephemeral child
+ * under a durable coordinator.
+ */
+const closedSubagentDurability: SubagentDurabilityService = {
+  mode: "durable",
+  establish: (request) =>
+    Effect.fail(closedSubagentDurabilityFailure("establish", request.toolCallId)),
+  join: (request) => Effect.fail(closedSubagentDurabilityFailure("join", request.toolCallId)),
+  waiting: (toolCallId) => Effect.fail(closedSubagentDurabilityFailure("waiting", toolCallId)),
+};
+
+/**
+ * Durable `SubagentDurability` service bound to one Tool batch over the
+ * coordinator's `RunSubagentHook`. Hook failures surface as typed
+ * `SubagentDurabilityError` values without widening handler error channels
+ * (the coordinator keeps its own halt side channel, exactly like the Step
+ * hook); `waiting` constructs the engine-owned `ToolCallWaiting` signal so a
+ * handler can never counterfeit a foreign child identity shape.
+ */
+const makeSubagentDurabilityService = <HookError, HookRequirements>(
+  hook: RunSubagentHook<HookError, HookRequirements>,
+  hookServices: Context.Context<HookRequirements>,
+): SubagentDurabilityService => ({
+  mode: "durable",
+  establish: (request) =>
+    provideHookServices(hook.establish(request), hookServices).pipe(
+      Effect.mapError((cause) =>
+        SubagentDurabilityError.make({
+          operation: "establish",
+          reason: "hook-failed",
+          toolCallId: request.toolCallId,
+          message: `Durable child establishment failed: ${errorMessage(cause)}`,
+        }),
+      ),
+    ),
+  join: (request) =>
+    provideHookServices(hook.join(request), hookServices).pipe(
+      Effect.mapError((cause) =>
+        SubagentDurabilityError.make({
+          operation: "join",
+          reason: "hook-failed",
+          toolCallId: request.toolCallId,
+          message: `Durable child join failed: ${errorMessage(cause)}`,
+        }),
+      ),
+    ),
+  waiting: (toolCallId, child) =>
+    Effect.fail(
+      ToolCallWaiting.make({
+        toolCallId,
+        childConversationId: child.childConversationId,
+        childSubmissionId: child.childSubmissionId,
+        childRunId: child.childRunId,
+        receiptId: child.receiptId,
+        message: `Tool Call ${toolCallId} is waiting on durable attached child ${child.childSubmissionId}`,
+      }),
+    ),
+});
+
+/**
+ * Extract the waiting suspension signal from a handler cause. It normally
+ * travels as a typed failure through the native `Toolkit.handle` error
+ * channel; the squash fallback also recognizes it inside a defect so a
+ * wrapped signal still suspends instead of manufacturing a Tool failure.
+ */
+const waitingFromCause = (cause: Cause.Cause<unknown>): ToolCallWaiting | undefined => {
+  const failure = Cause.findErrorOption(cause);
+  if (Option.isSome(failure) && failure.value instanceof ToolCallWaiting) {
+    return failure.value;
+  }
+  const squashed = Cause.squash(cause);
+  return squashed instanceof ToolCallWaiting ? squashed : undefined;
 };
 
 /** Stable delegation identity supplied by the invoking delegation Tool handler. */

@@ -6,6 +6,12 @@ import { Context, Effect, Layer, Ref, Schema } from "effect";
  * simulates a crash between two durable steps; the matching BEFORE boundary of each mutation is
  * owned by the storage adapters (`ledger:*:before`, `append:before`, ...), giving every durable
  * mutation a failpoint on both sides (change discipline).
+ *
+ * The `subagent:*` family covers every durable mutation of the S2 establishment/join protocol
+ * (spec/subagents.md §12/§14): reservation, request append, child admission, child readiness,
+ * start-link append, sibling per-call settles at the suspension seam, the `waitingForChild`
+ * suspension, child abort propagation, the atomic join batch, and both reservation-release
+ * transitions.
  */
 export const DurableRuntimeFailpointLocation = Schema.Literals([
   "submit:after-admit",
@@ -25,6 +31,17 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
   "terminalize:after-reserve",
   "terminalize:after-canonical-append",
   "abort:after-intent",
+  "subagent:after-reserve",
+  "subagent:after-request-append",
+  "subagent:after-admit",
+  "subagent:after-child-ready",
+  "subagent:after-start-append",
+  "subagent:after-sibling-settle",
+  "subagent:after-suspend",
+  "subagent:after-child-abort-intent",
+  "subagent:after-join-append",
+  "subagent:after-release-pending",
+  "subagent:after-release",
 ]);
 export type DurableRuntimeFailpointLocation = typeof DurableRuntimeFailpointLocation.Type;
 

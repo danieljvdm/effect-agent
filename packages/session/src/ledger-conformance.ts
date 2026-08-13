@@ -11,18 +11,27 @@ import {
   ApprovalConflict,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
+  AttachChildToReservationRequest,
+  BeginChildBudgetReleaseRequest,
+  ChildBudgetReservationRequest,
+  ChildReservationConflict,
+  ChildReservationId,
+  ChildSettledNotification,
   ClaimJoiningRequest,
   ClaimRequest,
   IdempotencyKey,
   JoinedToHost,
+  LedgerError,
   MarkInputAppliedRequest,
   MarkJoinedRequest,
   MarkReadyRequest,
   MarkUnknownRequest,
   OwnershipLost,
   OwnershipToken,
+  ParentLinkage,
   Principal,
   RecoverySnapshotRequest,
+  ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
   ResolutionCompletedWithResult,
@@ -38,6 +47,8 @@ import {
   SuspendRequest,
   UnknownResolutionCommand,
   UnknownResolutionConflict,
+  WaitingChild,
+  WaitingForChildSuspension,
   submissionInputRecordId,
   submissionSettlementId,
   submissionSettlementRecordId,
@@ -90,6 +101,7 @@ const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeSequence = Schema.decodeSync(CanonicalSequence);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
+const decodeChildReservationId = Schema.decodeSync(ChildReservationId);
 
 /** A token that never owned any lane, for ownership-fencing assertions. */
 const BOGUS_TOKEN = Schema.decodeSync(OwnershipToken)("ownership-ledger-conformance-bogus");
@@ -118,6 +130,7 @@ const admissionRequest = Effect.fn("SubmissionLedgerConformance.admissionRequest
   conversationId: ConversationId,
   idempotencyKey: string,
   input: PersistedJson,
+  parentLinkage?: ParentLinkage,
 ) {
   const inputDigest = yield* digestJson(input);
   return AdmissionRequest.make({
@@ -129,6 +142,7 @@ const admissionRequest = Effect.fn("SubmissionLedgerConformance.admissionRequest
     deploymentId: CONFORMANCE_DEPLOYMENT,
     inputPayload: input,
     inputDigest,
+    ...(parentLinkage === undefined ? {} : { parentLinkage }),
   });
 });
 
@@ -2206,6 +2220,853 @@ const joinedSettlementLinkageAuthority = conformanceCase(
     }),
 );
 
+const childReservationIdempotency = conformanceCase(
+  "replays an identical child reservation and rejects a divergent allocation digest",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-child-reserve");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(conversationId, "child-reserve-parent", { work: "parent" });
+      const claim = yield* expectSome(
+        "the parent claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+
+      const allocation = { turns: 4, toolCalls: 8 };
+      const allocationDigest = yield* digestJson(allocation);
+      const requestFields = {
+        reservationId: decodeChildReservationId("child-reservation:run-reserve:call-1"),
+        parentSubmissionId: parent.submissionId,
+        parentToolCallId: decodeToolCallId("call-child-reserve"),
+        ownershipToken: claim.ownershipToken,
+        allocation,
+        allocationDigest,
+      };
+      const request = ChildBudgetReservationRequest.make(requestFields);
+      const first = yield* ledger.reserveChildBudget(request);
+      yield* ensure(
+        !first.replayed &&
+          first.reservation.status === "reserved" &&
+          first.reservation.allocationDigest === allocationDigest &&
+          first.reservation.childSubmissionId === undefined &&
+          sameJson(first.reservation.allocation, allocation),
+        "The first reservation must create a reserved row carrying the exact allocation",
+      );
+
+      yield* TestClock.adjust("1 second");
+      const replayed = yield* ledger.reserveChildBudget(request);
+      yield* ensure(
+        replayed.replayed &&
+          replayed.reservation.status === "reserved" &&
+          sameJson(replayed.reservation.allocation, allocation) &&
+          sameInstant(replayed.reservation.reservedAt, first.reservation.reservedAt),
+        "An identical reservation must replay the stored row unchanged",
+      );
+
+      const divergentAllocation = { turns: 64, toolCalls: 8 };
+      const divergent = yield* expectFailure(
+        "a divergent allocation for the same reservation id",
+        ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({
+            ...requestFields,
+            allocation: divergentAllocation,
+            allocationDigest: yield* digestJson(divergentAllocation),
+          }),
+        ),
+      );
+      yield* ensure(
+        divergent instanceof ChildReservationConflict && divergent.status === "reserved",
+        "A divergent allocation must conflict with the recorded reservation",
+      );
+
+      const secondId = yield* expectFailure(
+        "a second reservation id for the same parent Tool Call",
+        ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({
+            ...requestFields,
+            reservationId: decodeChildReservationId("child-reservation:run-reserve:call-1-other"),
+          }),
+        ),
+      );
+      yield* ensure(
+        secondId instanceof ChildReservationConflict,
+        "One parent Tool Call must never own two reservations",
+      );
+
+      const snapshot = yield* recoverySnapshot(parent.submissionId);
+      yield* ensure(
+        snapshot.childReservations.length === 1 &&
+          snapshot.childReservations[0].reservationId === request.reservationId &&
+          snapshot.childReservations[0].status === "reserved" &&
+          snapshot.childAttachments.length === 0,
+        "The parent recovery snapshot must expose the reservation before any attachment",
+      );
+    }),
+);
+
+const childReservationFencing = conformanceCase(
+  "a stale parent token cannot transition a child reservation",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-child-fence");
+      const childLane = decodeConversationId("ledger-conformance-child-fence-child");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(conversationId, "child-fence-parent", { work: "parent" });
+      const child = yield* admitReady(childLane, "child-fence-child", { work: "child" });
+      const firstClaim = yield* expectSome(
+        "the first parent claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+
+      const allocation = { turns: 2 };
+      const allocationDigest = yield* digestJson(allocation);
+      const requestFields = {
+        reservationId: decodeChildReservationId("child-reservation:run-fence:call-1"),
+        parentSubmissionId: parent.submissionId,
+        parentToolCallId: decodeToolCallId("call-child-fence"),
+        ownershipToken: BOGUS_TOKEN,
+        allocation,
+        allocationDigest,
+      };
+      const request = ChildBudgetReservationRequest.make(requestFields);
+      const foreign = yield* expectFailure(
+        "creating a reservation without owning the parent lane",
+        ledger.reserveChildBudget(request),
+      );
+      yield* ensure(
+        foreign instanceof OwnershipLost,
+        "Reservation creation must be fenced by the parent's live ownership token",
+      );
+      const afterForeign = yield* recoverySnapshot(parent.submissionId);
+      yield* ensure(
+        afterForeign.childReservations.length === 0,
+        "A fenced reservation attempt must leave no row behind",
+      );
+
+      yield* ledger.reserveChildBudget(
+        ChildBudgetReservationRequest.make({
+          ...requestFields,
+          ownershipToken: firstClaim.ownershipToken,
+        }),
+      );
+
+      // The parent Attempt ends and a replacement claims the lane: the old token is fenced.
+      yield* ledger.releaseOwnership(
+        ReleaseOwnershipRequest.make({
+          submissionId: parent.submissionId,
+          ownershipToken: firstClaim.ownershipToken,
+        }),
+      );
+      const reclaim = yield* expectSome(
+        "the replacement parent claim",
+        yield* claimLane(conversationId, PRODUCER_B),
+      );
+      yield* ensure(
+        reclaim.producerEpoch > firstClaim.producerEpoch,
+        "The replacement claim must fence the stale parent Attempt",
+      );
+
+      const staleAttach = yield* expectFailure(
+        "attaching a child with the superseded parent token",
+        ledger.attachChildToReservation(
+          AttachChildToReservationRequest.make({
+            reservationId: request.reservationId,
+            ownershipToken: firstClaim.ownershipToken,
+            childSubmissionId: child.submissionId,
+          }),
+        ),
+      );
+      yield* ensure(
+        staleAttach instanceof OwnershipLost,
+        "A superseded parent token must not attach a child",
+      );
+
+      const staleCreate = yield* expectFailure(
+        "creating a second-call reservation with the superseded parent token",
+        ledger.reserveChildBudget(
+          ChildBudgetReservationRequest.make({
+            ...requestFields,
+            reservationId: decodeChildReservationId("child-reservation:run-fence:call-2"),
+            parentToolCallId: decodeToolCallId("call-child-fence-second"),
+            ownershipToken: firstClaim.ownershipToken,
+          }),
+        ),
+      );
+      yield* ensure(
+        staleCreate instanceof OwnershipLost,
+        "A superseded parent token must not create new reservation state",
+      );
+
+      // An identical replay creates nothing, so it short-circuits before the fence exactly
+      // like reserveSettlement: a recovering caller reads the recorded row.
+      const staleReplay = yield* ledger.reserveChildBudget(
+        ChildBudgetReservationRequest.make({
+          ...requestFields,
+          ownershipToken: firstClaim.ownershipToken,
+        }),
+      );
+      yield* ensure(
+        staleReplay.replayed && staleReplay.reservation.status === "reserved",
+        "An identical reservation replay must return the recorded row even from a stale caller",
+      );
+
+      const attached = yield* ledger.attachChildToReservation(
+        AttachChildToReservationRequest.make({
+          reservationId: request.reservationId,
+          ownershipToken: reclaim.ownershipToken,
+          childSubmissionId: child.submissionId,
+        }),
+      );
+      yield* ensure(
+        attached.childSubmissionId === child.submissionId,
+        "The live replacement token must attach the child",
+      );
+    }),
+);
+
+const attachChildIdempotency = conformanceCase(
+  "attachChildToReservation is idempotent and rejects a divergent child",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-child-attach");
+      const childLane = decodeConversationId("ledger-conformance-child-attach-child");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(conversationId, "child-attach-parent", { work: "parent" });
+      const child = yield* admitReady(childLane, "child-attach-child", { queued: 1 });
+      const otherChild = yield* admitReady(childLane, "child-attach-other", { queued: 2 });
+      const claim = yield* expectSome(
+        "the parent claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+
+      const allocation = { turns: 3 };
+      const reservationId = decodeChildReservationId("child-reservation:run-attach:call-1");
+      yield* ledger.reserveChildBudget(
+        ChildBudgetReservationRequest.make({
+          reservationId,
+          parentSubmissionId: parent.submissionId,
+          parentToolCallId: decodeToolCallId("call-child-attach"),
+          ownershipToken: claim.ownershipToken,
+          allocation,
+          allocationDigest: yield* digestJson(allocation),
+        }),
+      );
+
+      const unknownReservation = yield* expectFailure(
+        "attaching to a reservation that was never created",
+        ledger.attachChildToReservation(
+          AttachChildToReservationRequest.make({
+            reservationId: decodeChildReservationId("child-reservation:run-attach:missing"),
+            ownershipToken: claim.ownershipToken,
+            childSubmissionId: child.submissionId,
+          }),
+        ),
+      );
+      yield* ensure(
+        unknownReservation instanceof LedgerError,
+        "Attaching to an unknown reservation must fail as a ledger error",
+      );
+
+      const attached = yield* ledger.attachChildToReservation(
+        AttachChildToReservationRequest.make({
+          reservationId,
+          ownershipToken: claim.ownershipToken,
+          childSubmissionId: child.submissionId,
+        }),
+      );
+      yield* ensure(
+        attached.childSubmissionId === child.submissionId && attached.status === "reserved",
+        "Attaching must record the child on the reservation row",
+      );
+
+      const replayed = yield* ledger.attachChildToReservation(
+        AttachChildToReservationRequest.make({
+          reservationId,
+          ownershipToken: claim.ownershipToken,
+          childSubmissionId: child.submissionId,
+        }),
+      );
+      yield* ensure(
+        replayed.childSubmissionId === child.submissionId,
+        "Repeating the identical attachment must be a no-op",
+      );
+
+      const divergent = yield* expectFailure(
+        "attaching a different child to the same reservation",
+        ledger.attachChildToReservation(
+          AttachChildToReservationRequest.make({
+            reservationId,
+            ownershipToken: claim.ownershipToken,
+            childSubmissionId: otherChild.submissionId,
+          }),
+        ),
+      );
+      yield* ensure(
+        divergent instanceof ChildReservationConflict,
+        "A divergent child attachment must conflict with the recorded child",
+      );
+
+      const snapshot = yield* recoverySnapshot(parent.submissionId);
+      yield* ensure(
+        snapshot.childAttachments.length === 1 &&
+          snapshot.childAttachments[0].childSubmissionId === child.submissionId &&
+          snapshot.childAttachments[0].toolCallId === decodeToolCallId("call-child-attach") &&
+          snapshot.childAttachments[0].childState === "ready" &&
+          snapshot.childAttachments[0].childOutcome === undefined,
+        "The parent recovery snapshot must expose the attachment with the child's lane state",
+      );
+    }),
+);
+
+const beginReleaseFreezesAccountingOnce = conformanceCase(
+  "beginRelease freezes the accounting decision exactly once",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-child-freeze");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(conversationId, "child-freeze-parent", { work: "parent" });
+      const claim = yield* expectSome(
+        "the parent claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+
+      const allocation = { turns: 4 };
+      const reservationId = decodeChildReservationId("child-reservation:run-freeze:call-1");
+      yield* ledger.reserveChildBudget(
+        ChildBudgetReservationRequest.make({
+          reservationId,
+          parentSubmissionId: parent.submissionId,
+          parentToolCallId: decodeToolCallId("call-child-freeze"),
+          ownershipToken: claim.ownershipToken,
+          allocation,
+          allocationDigest: yield* digestJson(allocation),
+        }),
+      );
+
+      const accounting = { consumed: { turns: 1 }, released: { turns: 3 } };
+      const frozen = yield* ledger.beginChildBudgetRelease(
+        BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+      );
+      yield* ensure(
+        frozen.status === "releasePending" &&
+          sameJson(frozen.accounting, accounting) &&
+          frozen.releaseBeganAt !== undefined,
+        "The first beginRelease must freeze the accounting and move to releasePending",
+      );
+
+      yield* TestClock.adjust("1 second");
+      const replayed = yield* ledger.beginChildBudgetRelease(
+        BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+      );
+      yield* ensure(
+        replayed.status === "releasePending" &&
+          replayed.releaseBeganAt !== undefined &&
+          frozen.releaseBeganAt !== undefined &&
+          sameInstant(replayed.releaseBeganAt, frozen.releaseBeganAt),
+        "Replaying the identical accounting must be a no-op with the frozen decision retained",
+      );
+
+      const divergent = yield* expectFailure(
+        "freezing a different accounting decision",
+        ledger.beginChildBudgetRelease(
+          BeginChildBudgetReleaseRequest.make({
+            reservationId,
+            accounting: { consumed: { turns: 4 }, released: { turns: 0 } },
+          }),
+        ),
+      );
+      yield* ensure(
+        divergent instanceof ChildReservationConflict && divergent.status === "releasePending",
+        "A divergent accounting freeze must conflict with the frozen decision",
+      );
+
+      yield* ledger.releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId }));
+      const afterRelease = yield* ledger.beginChildBudgetRelease(
+        BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+      );
+      yield* ensure(
+        afterRelease.status === "released" && sameJson(afterRelease.accounting, accounting),
+        "Replaying the identical accounting after release must return the released row",
+      );
+      const divergentAfterRelease = yield* expectFailure(
+        "freezing a different accounting decision after release",
+        ledger.beginChildBudgetRelease(
+          BeginChildBudgetReleaseRequest.make({
+            reservationId,
+            accounting: { consumed: { turns: 2 }, released: { turns: 2 } },
+          }),
+        ),
+      );
+      yield* ensure(
+        divergentAfterRelease instanceof ChildReservationConflict &&
+          divergentAfterRelease.status === "released",
+        "The frozen decision must stay immutable after release",
+      );
+    }),
+);
+
+const releaseAppliedExactlyOnce = conformanceCase(
+  "release returns unused allocation exactly once",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-child-release");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(conversationId, "child-release-parent", { work: "parent" });
+      const claim = yield* expectSome(
+        "the parent claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+
+      const allocation = { turns: 4 };
+      const reservationId = decodeChildReservationId("child-reservation:run-release:call-1");
+      yield* ledger.reserveChildBudget(
+        ChildBudgetReservationRequest.make({
+          reservationId,
+          parentSubmissionId: parent.submissionId,
+          parentToolCallId: decodeToolCallId("call-child-release"),
+          ownershipToken: claim.ownershipToken,
+          allocation,
+          allocationDigest: yield* digestJson(allocation),
+        }),
+      );
+
+      const early = yield* expectFailure(
+        "releasing before the accounting decision is frozen",
+        ledger.releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId })),
+      );
+      yield* ensure(
+        early instanceof ChildReservationConflict && early.status === "reserved",
+        "Release must never skip the releasePending freeze",
+      );
+
+      yield* ledger.beginChildBudgetRelease(
+        BeginChildBudgetReleaseRequest.make({
+          reservationId,
+          accounting: { consumed: {}, released: { turns: 4 } },
+        }),
+      );
+      const released = yield* ledger.releaseChildBudget(
+        ReleaseChildBudgetRequest.make({ reservationId }),
+      );
+      yield* ensure(
+        released.status === "released" && released.releasedAt !== undefined,
+        "Release must transition releasePending to released",
+      );
+
+      yield* TestClock.adjust("1 second");
+      const replayed = yield* ledger.releaseChildBudget(
+        ReleaseChildBudgetRequest.make({ reservationId }),
+      );
+      yield* ensure(
+        replayed.status === "released" &&
+          replayed.releasedAt !== undefined &&
+          released.releasedAt !== undefined &&
+          sameInstant(replayed.releasedAt, released.releasedAt),
+        "Replaying the release must return the stored row unchanged — never applied twice",
+      );
+
+      const snapshot = yield* recoverySnapshot(parent.submissionId);
+      yield* ensure(
+        snapshot.childReservations.length === 1 &&
+          snapshot.childReservations[0].status === "released",
+        "The recovery snapshot must expose the released reservation",
+      );
+    }),
+);
+
+const recordChildSettledWake = conformanceCase(
+  "recordChildSettled wakes only when every listed child settled",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const parentLane = decodeConversationId("ledger-conformance-child-wake");
+      const childLaneA = decodeConversationId("ledger-conformance-child-wake-a");
+      const childLaneB = decodeConversationId("ledger-conformance-child-wake-b");
+      const ledger = yield* SubmissionLedger;
+
+      const parent = yield* admitReady(parentLane, "child-wake-parent", { work: "parent" });
+      const childA = yield* admitReady(childLaneA, "child-wake-a", { child: "a" });
+      const childB = yield* admitReady(childLaneB, "child-wake-b", { child: "b" });
+      const parentClaim = yield* expectSome(
+        "the parent claim",
+        yield* claimLane(parentLane, PRODUCER_A),
+      );
+
+      const suspended = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: parent.submissionId,
+          ownershipToken: parentClaim.ownershipToken,
+          reason: WaitingForChildSuspension.make({
+            children: [
+              WaitingChild.make({
+                toolCallId: decodeToolCallId("call-wake-a"),
+                childSubmissionId: childA.submissionId,
+              }),
+              WaitingChild.make({
+                toolCallId: decodeToolCallId("call-wake-b"),
+                childSubmissionId: childB.submissionId,
+              }),
+            ],
+          }),
+        }),
+      );
+      yield* ensure(
+        suspended === "suspended",
+        "Unsettled children must suspend the parent durably",
+      );
+      const ended = yield* expectFailure(
+        "renewing after the waitingForChild suspension ended the ownership period",
+        ledger.renewOwnership(
+          RenewOwnershipRequest.make({
+            submissionId: parent.submissionId,
+            ownershipToken: parentClaim.ownershipToken,
+          }),
+        ),
+      );
+      yield* ensure(
+        ended instanceof OwnershipLost,
+        "waitingForChild must end the ownership period without settling (SUB-030)",
+      );
+      yield* ensure(
+        Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
+        "A waitingForChild head must produce no claim and consume no worker permit",
+      );
+
+      const childClaimA = yield* expectSome(
+        "the first child claim",
+        yield* claimLane(childLaneA, PRODUCER_A),
+      );
+      yield* settleClaimed(childA, childClaimA.ownershipToken);
+      const partial = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: childA.submissionId,
+        }),
+      );
+      yield* ensure(
+        partial === "still-waiting",
+        "A settlement notification must not wake the parent while a listed child is unsettled",
+      );
+      const stillSuspended = yield* expectSome(
+        "lookup while one child is outstanding",
+        yield* lookupById(parent.submissionId),
+      );
+      yield* ensure(
+        stillSuspended.state === "suspended" &&
+          Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
+        "The parent lane must stay suspended until every listed child settled",
+      );
+
+      const childClaimB = yield* expectSome(
+        "the second child claim",
+        yield* claimLane(childLaneB, PRODUCER_A),
+      );
+      yield* settleClaimed(childB, childClaimB.ownershipToken);
+      const woken = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: childB.submissionId,
+        }),
+      );
+      yield* ensure(
+        woken === "woken",
+        "The covering child settlement must wake the parent exactly once",
+      );
+      const awake = yield* expectSome(
+        "lookup after the covering settlement",
+        yield* lookupById(parent.submissionId),
+      );
+      yield* ensure(
+        awake.state === "input-applied",
+        "The woken parent must transition suspended(WaitingForChild) to input-applied",
+      );
+      const wokenSnapshot = yield* recoverySnapshot(parent.submissionId);
+      yield* ensure(
+        wokenSnapshot.suspension === undefined,
+        "Waking must clear the durable suspension",
+      );
+
+      const replayedNotification = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: childA.submissionId,
+        }),
+      );
+      yield* ensure(
+        replayedNotification === "not-waiting",
+        "Replaying a notification after the wake must be an idempotent no-op",
+      );
+
+      const reclaim = yield* expectSome(
+        "the parent claim after waking",
+        yield* claimLane(parentLane, PRODUCER_B),
+      );
+      yield* ensure(
+        reclaim.submissionId === parent.submissionId &&
+          reclaim.producerEpoch > parentClaim.producerEpoch,
+        "The woken lane must grant a fresh fenced Attempt",
+      );
+      yield* settleClaimed(parent, reclaim.ownershipToken);
+      const afterSettlement = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: childB.submissionId,
+        }),
+      );
+      yield* ensure(
+        afterSettlement === "not-waiting",
+        "A notification for a settled parent must answer not-waiting",
+      );
+    }),
+);
+
+const suspendResumesImmediatelyForSettledChildren = conformanceCase(
+  "suspend returns resume-immediately when children already settled",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      const parentLane = decodeConversationId("ledger-conformance-child-raced");
+      const childLaneA = decodeConversationId("ledger-conformance-child-raced-a");
+      const childLaneB = decodeConversationId("ledger-conformance-child-raced-b");
+      const ledger = yield* SubmissionLedger;
+
+      // The child settles BEFORE the parent's suspend transaction commits (spec §12 step 10
+      // race): the suspend must observe the settlement and resume immediately.
+      const settledChild = yield* admitReady(childLaneA, "child-raced-a", { child: "a" });
+      const settledClaim = yield* expectSome(
+        "the settled child's claim",
+        yield* claimLane(childLaneA, PRODUCER_A),
+      );
+      yield* settleClaimed(settledChild, settledClaim.ownershipToken);
+      const pendingChild = yield* admitReady(childLaneB, "child-raced-b", { child: "b" });
+
+      const parent = yield* admitReady(parentLane, "child-raced-parent", { work: "parent" });
+      const parentClaim = yield* expectSome(
+        "the parent claim",
+        yield* claimLane(parentLane, PRODUCER_A),
+      );
+
+      const immediate = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: parent.submissionId,
+          ownershipToken: parentClaim.ownershipToken,
+          reason: WaitingForChildSuspension.make({
+            children: [
+              WaitingChild.make({
+                toolCallId: decodeToolCallId("call-raced-a"),
+                childSubmissionId: settledChild.submissionId,
+              }),
+            ],
+          }),
+        }),
+      );
+      yield* ensure(
+        immediate === "resume-immediately",
+        "A suspend listing only settled children must resume immediately",
+      );
+      const stillRunning = yield* expectSome(
+        "lookup after the immediate resume",
+        yield* lookupById(parent.submissionId),
+      );
+      yield* ensure(
+        stillRunning.state === "running",
+        "An immediate resume must not transition the parent to suspended",
+      );
+      // The ownership period must survive an immediate resume: the caller keeps working.
+      yield* ledger.renewOwnership(
+        RenewOwnershipRequest.make({
+          submissionId: parent.submissionId,
+          ownershipToken: parentClaim.ownershipToken,
+        }),
+      );
+
+      const suspended = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: parent.submissionId,
+          ownershipToken: parentClaim.ownershipToken,
+          reason: WaitingForChildSuspension.make({
+            children: [
+              WaitingChild.make({
+                toolCallId: decodeToolCallId("call-raced-a"),
+                childSubmissionId: settledChild.submissionId,
+              }),
+              WaitingChild.make({
+                toolCallId: decodeToolCallId("call-raced-b"),
+                childSubmissionId: pendingChild.submissionId,
+              }),
+            ],
+          }),
+        }),
+      );
+      yield* ensure(
+        suspended === "suspended",
+        "One unsettled listed child must suspend the parent durably",
+      );
+      const snapshot = yield* recoverySnapshot(parent.submissionId);
+      yield* ensure(
+        snapshot.suspension !== undefined &&
+          snapshot.suspension.reason._tag === "WaitingForChild" &&
+          snapshot.suspension.reason.children.length === 2,
+        "The recovery snapshot must expose the WaitingForChild reason with its children",
+      );
+    }),
+);
+
+const admissionParentLinkage = conformanceCase(
+  "admit records and replays parent linkage",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const parentLane = decodeConversationId("ledger-conformance-linkage");
+      const childLane = decodeConversationId("ledger-conformance-linkage-child");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(parentLane, "linkage-parent", { work: "parent" });
+
+      const linkage = ParentLinkage.make({
+        parentSubmissionId: parent.submissionId,
+        parentToolCallId: decodeToolCallId("call-linkage"),
+      });
+      const request = yield* admissionRequest(
+        childLane,
+        "linkage-child-key",
+        { task: "research" },
+        linkage,
+      );
+      const admitted = yield* ledger.admit(request);
+      yield* ensure(!admitted.replayed, "The first linked admission must create the child");
+
+      const byId = yield* expectSome(
+        "lookup of the linked child",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        byId.parentLinkage !== undefined &&
+          byId.parentLinkage.parentSubmissionId === parent.submissionId &&
+          byId.parentLinkage.parentToolCallId === linkage.parentToolCallId,
+        "The child snapshot must expose its immutable parent linkage",
+      );
+      const childSnapshot = yield* recoverySnapshot(admitted.submissionId);
+      yield* ensure(
+        childSnapshot.parentLinkage !== undefined &&
+          childSnapshot.parentLinkage.parentSubmissionId === parent.submissionId,
+        "The child recovery snapshot must expose its parent linkage",
+      );
+
+      const replayed = yield* ledger.admit(request);
+      yield* ensure(
+        replayed.replayed &&
+          replayed.submissionId === admitted.submissionId &&
+          replayed.receiptId === admitted.receiptId,
+        "An identical linked admission must replay the original identities (SUB-016)",
+      );
+
+      const divergentLinkage = yield* expectFailure(
+        "replaying the admission with a different parent Tool Call",
+        ledger.admit(
+          yield* admissionRequest(
+            childLane,
+            "linkage-child-key",
+            { task: "research" },
+            ParentLinkage.make({
+              parentSubmissionId: parent.submissionId,
+              parentToolCallId: decodeToolCallId("call-linkage-other"),
+            }),
+          ),
+        ),
+      );
+      yield* ensure(
+        divergentLinkage instanceof AdmissionConflict,
+        "A divergent parent linkage must conflict even when the input digest matches",
+      );
+
+      const droppedLinkage = yield* expectFailure(
+        "replaying the admission without its parent linkage",
+        ledger.admit(yield* admissionRequest(childLane, "linkage-child-key", { task: "research" })),
+      );
+      yield* ensure(
+        droppedLinkage instanceof AdmissionConflict,
+        "Dropping the recorded linkage on replay must conflict",
+      );
+
+      const plain = yield* ledger.admit(
+        yield* admissionRequest(childLane, "linkage-plain-key", { task: "plain" }),
+      );
+      const addedLinkage = yield* expectFailure(
+        "replaying an unlinked admission with a parent linkage",
+        ledger.admit(
+          yield* admissionRequest(childLane, "linkage-plain-key", { task: "plain" }, linkage),
+        ),
+      );
+      yield* ensure(
+        addedLinkage instanceof AdmissionConflict,
+        "Adding a linkage to an unlinked admission on replay must conflict",
+      );
+      const plainSnapshot = yield* expectSome(
+        "lookup of the unlinked Submission",
+        yield* lookupById(plain.submissionId),
+      );
+      yield* ensure(
+        plainSnapshot.parentLinkage === undefined,
+        "An unlinked Submission must expose no parent linkage",
+      );
+    }),
+);
+
+const resolveAdmissionAuthority = conformanceCase(
+  "resolveAdmission distinguishes notAdmitted from admitted authoritatively",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-resolve");
+      const ledger = yield* SubmissionLedger;
+      const key = SubmissionLookupByKey.make({
+        conversationId,
+        principal: CONFORMANCE_PRINCIPAL,
+        idempotencyKey: decodeIdempotencyKey("resolve-key-1"),
+      });
+
+      const before = yield* ledger.resolveAdmission(key);
+      yield* ensure(
+        before._tag === "NotAdmitted",
+        "The authoritative store must prove absence before admission (SUB-031)",
+      );
+
+      const admitted = yield* ledger.admit(
+        yield* admissionRequest(conversationId, "resolve-key-1", { work: "resolve" }),
+      );
+      const after = yield* ledger.resolveAdmission(key);
+      yield* ensure(
+        after._tag === "Admitted" &&
+          after.submission.submissionId === admitted.submissionId &&
+          after.submission.receiptId === admitted.receiptId &&
+          after.submission.state === "admitted",
+        "An admitted key must resolve to the full authoritative snapshot",
+      );
+
+      const foreign = yield* ledger.resolveAdmission(
+        SubmissionLookupByKey.make({
+          conversationId,
+          principal: OTHER_PRINCIPAL,
+          idempotencyKey: decodeIdempotencyKey("resolve-key-1"),
+        }),
+      );
+      yield* ensure(
+        foreign._tag === "NotAdmitted",
+        "Admission resolution must stay scoped to the requesting principal",
+      );
+
+      yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+      const claim = yield* expectSome(
+        "the claim before terminal resolution",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      yield* settleClaimed(admitted, claim.ownershipToken);
+      const settled = yield* ledger.resolveAdmission(key);
+      yield* ensure(
+        settled._tag === "Admitted" &&
+          settled.submission.state === "settled" &&
+          settled.submission.settledOutcome === "completed",
+        "A settled Submission still resolves as admitted — terminality never becomes absence",
+      );
+    }),
+);
+
 /**
  * The shared, adapter-parameterized SubmissionLedger contract suite (STORE-010). Every durable
  * ledger adapter test suite must execute each case against its own ledger provisioning, inside
@@ -2232,4 +3093,13 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   unknownResolutionLifecycle,
   suspendResumesImmediatelyWhenDecided,
   joinedSettlementLinkageAuthority,
+  childReservationIdempotency,
+  childReservationFencing,
+  attachChildIdempotency,
+  beginReleaseFreezesAccountingOnce,
+  releaseAppliedExactlyOnce,
+  recordChildSettledWake,
+  suspendResumesImmediatelyForSettledChildren,
+  admissionParentLinkage,
+  resolveAdmissionAuthority,
 ];

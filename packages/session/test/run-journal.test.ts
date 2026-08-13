@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, layer } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import { DateTime, Effect, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
 import { ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
@@ -8,6 +8,8 @@ import {
   BatchId,
   CanonicalRecordEnvelope,
   CanonicalSequence,
+  childConversationIdFor,
+  childIdempotencyKeyFor,
   DeploymentId,
   ObservationOffset,
   ProducerId,
@@ -15,6 +17,14 @@ import {
   modelResponseRecordId,
   projectRunJournal,
   runIdForSubmission,
+  subagentJoinBatchId,
+  subagentJoinedRecordId,
+  subagentLineageBatchId,
+  subagentLineageRecordId,
+  subagentRequestedBatchId,
+  subagentRequestedRecordId,
+  subagentStartedBatchId,
+  subagentStartedRecordId,
   toolCallSettledRecordId,
   turnCanonicalBatch,
   turnIdForRun,
@@ -264,6 +274,97 @@ describe("run journal batch split (plan §2.1)", () => {
       }),
     );
 
+    it.effect("subagent lifecycle records are prompt-transparent (S2, spec §5/§11)", () =>
+      Effect.gen(function* () {
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+        const [firstSettled, secondSettled] = results.records;
+
+        const requested = auditRecord(`subagent-requested:${RUN_ID}:call-1`, {
+          _tag: "SubagentRequested",
+          runId: RUN_ID,
+          turnId: turnIdForRun(RUN_ID, 1),
+          turn: 1,
+          toolCallId: "call-1",
+          delegationId: "delegation-destination-research",
+          targetAgentId: "destination-researcher",
+          targetDigests: { agent: "a".repeat(64), model: "b".repeat(64), tools: "c".repeat(64) },
+          childInput: { destination: "Kyoto" },
+          childInputDigest: "a".repeat(64),
+          grantDigest: "b".repeat(64),
+          reservationId: "reservation-1",
+          reservationDigest: "c".repeat(64),
+          childConversationId: childConversationIdFor(SUBMISSION_ID, CALL_ONE),
+          childPrincipal: "tenant-a",
+          childIdempotencyKey: childIdempotencyKeyFor(RUN_ID, CALL_ONE),
+        });
+        const started = auditRecord(`subagent-started:${RUN_ID}:call-1`, {
+          _tag: "SubagentStarted",
+          runId: RUN_ID,
+          toolCallId: "call-1",
+          childConversationId: childConversationIdFor(SUBMISSION_ID, CALL_ONE),
+          childSubmissionId: "submission-child-1",
+          childReceiptId: "receipt-child-1",
+          childRunId: "run:submission-child-1",
+        });
+        const joined = auditRecord(`subagent-joined:${RUN_ID}:call-1`, {
+          _tag: "SubagentJoined",
+          runId: RUN_ID,
+          toolCallId: "call-1",
+          childSubmissionId: "submission-child-1",
+          childSettlementId: "settlement:submission-child-1",
+          childOutcome: "completed",
+          childResultDigest: "a".repeat(64),
+          projectedResultDigest: "b".repeat(64),
+          usageSummary: { turns: 1, toolCalls: 0 },
+          reservationId: "reservation-1",
+          finalAccounting: { consumed: { turns: 1 }, released: { turns: 3 } },
+        });
+        const lineage = auditRecord(`subagent-lineage:${CONVERSATION_ID}`, {
+          _tag: "SubagentLineageRecorded",
+          parentLink: {
+            delegationId: "delegation-destination-research",
+            parentAgentId: "travel-coordinator",
+            parentConversationId: "conversation-parent",
+            parentRunId: RUN_ID,
+            parentToolCallId: "call-1",
+            depth: 1,
+          },
+          parentSubmissionId: SUBMISSION_ID,
+          childDefinitionDigests: {
+            agent: "a".repeat(64),
+            model: "b".repeat(64),
+            tools: "c".repeat(64),
+          },
+          childInputDigest: "a".repeat(64),
+          grantDigest: "b".repeat(64),
+        });
+
+        // The lifecycle records interleave everywhere a real coordinator can put them —
+        // including BETWEEN the two ToolCallSettled records, because the atomic join batch
+        // commits SubagentJoined beside the call's ToolCallSettled record (SUB-019). None of
+        // them adds prompt content, none splits the contiguous settled group, and the child
+        // transcript never enters the parent prompt (SUB-015).
+        const interleaved = [
+          response.records[0]!,
+          requested,
+          started,
+          firstSettled!,
+          joined,
+          secondSettled!,
+          lineage,
+        ].map((record, index) => envelopeAt(index + 1, record));
+
+        const plain = yield* projectRunJournal(envelopesOf([response, results]), RUN_ID);
+        const transparent = yield* projectRunJournal(interleaved, RUN_ID);
+
+        expect(transparent.committedTurns).toBe(plain.committedTurns);
+        expect(transparent.prompt).toEqual(plain.prompt);
+        const toolMessage = transparent.prompt.content.at(-1);
+        expect(toolMessage?.role === "tool" ? toolMessage.content.length : undefined).toBe(2);
+      }),
+    );
+
     it.effect("fails typed when a results batch has no terminal Tool results", () =>
       Effect.gen(function* () {
         const noToolTurn: ReadonlyArray<Prompt.Message> = [
@@ -294,5 +395,26 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(badTurn._tag).toBe("RunJournalError");
       }),
     );
+  });
+});
+
+describe("S2 subagent deterministic identities (plan §3.1)", () => {
+  it("derives the record, batch, and child identities from the parent Run and Tool Call pair", () => {
+    expect(subagentRequestedRecordId(RUN_ID, CALL_ONE)).toBe(`subagent-requested:${RUN_ID}:call-1`);
+    expect(subagentRequestedBatchId(RUN_ID, CALL_ONE)).toBe(`subagent-requested:${RUN_ID}:call-1`);
+    expect(subagentStartedRecordId(RUN_ID, CALL_ONE)).toBe(`subagent-started:${RUN_ID}:call-1`);
+    expect(subagentStartedBatchId(RUN_ID, CALL_ONE)).toBe(`subagent-started:${RUN_ID}:call-1`);
+    expect(subagentJoinBatchId(RUN_ID, CALL_ONE)).toBe(`subagent-join:${RUN_ID}:call-1`);
+    expect(subagentJoinedRecordId(RUN_ID, CALL_ONE)).toBe(`subagent-joined:${RUN_ID}:call-1`);
+    // The atomic join batch pairs the joined record with the EXISTING per-call settled
+    // identity, so `commitPendingTurn`'s record-identity dedupe covers both paths (SUB-019).
+    expect(toolCallSettledRecordId(RUN_ID, 1, CALL_ONE)).toBe(`tool-settled:${RUN_ID}:1:call-1`);
+    expect(subagentLineageRecordId(CONVERSATION_ID)).toBe(`subagent-lineage:${CONVERSATION_ID}`);
+    expect(subagentLineageBatchId(CONVERSATION_ID)).toBe(`subagent-lineage:${CONVERSATION_ID}`);
+    // D4 child identity derivations (SUB-016: idempotent establishment by construction).
+    expect(childConversationIdFor(SUBMISSION_ID, CALL_ONE)).toBe(
+      "subagent:submission-journal:call-1",
+    );
+    expect(childIdempotencyKeyFor(RUN_ID, CALL_ONE)).toBe("subagent:run:submission-journal:call-1");
   });
 });

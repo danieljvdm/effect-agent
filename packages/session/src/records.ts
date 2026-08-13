@@ -2,9 +2,11 @@ import {
   AgentId,
   AttemptId,
   ConversationId,
+  DelegationId,
   ReceiptId,
   RunId,
   SettlementId,
+  SubagentParentLink,
   SubmissionId,
   ToolCallId,
   TurnId,
@@ -388,9 +390,96 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
 }) {}
 
 /**
+ * PARENT-log record of one durable child establishment request (spec/subagents.md §12 step 3):
+ * the exact parent Tool Call, delegation and target identity, the digests that pin the child's
+ * Binding/input/grant, the fenced budget reservation, and the INTENDED child identity derived
+ * deterministically from the parent Run and Tool Call pair (D4). `childInput` carries the
+ * prepared child input in encoded form (D3) so recovery can complete child admission from this
+ * record alone — no live delegation handler is required. `childPrincipal`/`childIdempotencyKey`
+ * carry the ledger admission scope with the ledger's exact bounds; the layering keeps their
+ * branded Schemas in the ledger port.
+ */
+export class SubagentRequested extends Schema.TaggedClass<SubagentRequested>(
+  "@effect-agent/session/SubagentRequested",
+)("SubagentRequested", {
+  runId: RunId,
+  turnId: TurnId,
+  turn: TurnNumber,
+  toolCallId: ToolCallId,
+  delegationId: DelegationId,
+  targetAgentId: AgentId,
+  targetDigests: DefinitionDigests,
+  childInput: PersistedJson,
+  childInputDigest: Digest,
+  grantDigest: Digest,
+  reservationId: BoundedName,
+  reservationDigest: Digest,
+  childConversationId: ConversationId,
+  childPrincipal: BoundedName,
+  childIdempotencyKey: BoundedName,
+}) {}
+
+/**
+ * PARENT-log record that the intended child exists as accepted work (spec/subagents.md §12
+ * step 9): the full established child identity. It is appended only after the child Receipt
+ * exists — SUB-017 holds by construction because `childReceiptId` is a required field.
+ */
+export class SubagentStarted extends Schema.TaggedClass<SubagentStarted>(
+  "@effect-agent/session/SubagentStarted",
+)("SubagentStarted", {
+  runId: RunId,
+  toolCallId: ToolCallId,
+  childConversationId: ConversationId,
+  childSubmissionId: SubmissionId,
+  childReceiptId: ReceiptId,
+  childRunId: RunId,
+}) {}
+
+/**
+ * PARENT-log record of one verified child settlement join (spec/subagents.md §12 join step 5):
+ * the child's canonical Settlement identity and outcome, the digests pinning the verified child
+ * result and the bounded projected parent result, the child usage summary, and the FINAL
+ * consumed/released accounting decision for the reservation. It commits in ONE atomic batch with
+ * the parent `ToolCallSettled` record (SUB-019); `beginChildBudgetRelease` replays
+ * `finalAccounting` from this record, so canonical history authorizes the release (DUR-015).
+ */
+export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>(
+  "@effect-agent/session/SubagentJoined",
+)("SubagentJoined", {
+  runId: RunId,
+  toolCallId: ToolCallId,
+  childSubmissionId: SubmissionId,
+  childSettlementId: SettlementId,
+  childOutcome: SettlementOutcome,
+  childResultDigest: Digest,
+  projectedResultDigest: Digest,
+  usageSummary: PersistedJson,
+  reservationId: BoundedName,
+  finalAccounting: PersistedJson,
+}) {}
+
+/**
+ * CHILD-log immutable lineage (spec/subagents.md §11): the Parent Link plus the digests that pin
+ * the child's definition, input, and authority grant. It is the first record after the child's
+ * `ConversationCreated` (its own single-record batch, so the generic `conversation-created:{cid}`
+ * batch identity is never contradicted) and the join path verifies it fail-closed — a fabricated
+ * child or parent identity fails Parent Link verification (SUB-004, D10).
+ */
+export class SubagentLineageRecorded extends Schema.TaggedClass<SubagentLineageRecorded>(
+  "@effect-agent/session/SubagentLineageRecorded",
+)("SubagentLineageRecorded", {
+  parentLink: SubagentParentLink,
+  parentSubmissionId: SubmissionId,
+  childDefinitionDigests: DefinitionDigests,
+  childInputDigest: Digest,
+  grantDigest: Digest,
+}) {}
+
+/**
  * Current private-development canonical payload family. Phase 5 adds the seven durable-Tool tags
- * (prepared/unknown/resolved/step/approval-request/approval-decision/interrupted) additively, so
- * the envelope keeps `schemaVersion: 1` (P4 precedent for additive payload tags).
+ * (prepared/unknown/resolved/step/approval-request/approval-decision/interrupted) additively; S2
+ * adds the four durable-Subagent tags (requested/started/joined/lineage) additively, so the
+ * envelope keeps `schemaVersion: 1` (P4 precedent for additive payload tags).
  */
 export const CanonicalRecordPayload = Schema.Union([
   ConversationCreated,
@@ -410,6 +499,10 @@ export const CanonicalRecordPayload = Schema.Union([
   RunCompleted,
   AbortRequested,
   SubmissionSettled,
+  SubagentRequested,
+  SubagentStarted,
+  SubagentJoined,
+  SubagentLineageRecorded,
   RepairAnnotated,
 ]);
 export type CanonicalRecordPayload = typeof CanonicalRecordPayload.Type;

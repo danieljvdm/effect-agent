@@ -23,9 +23,14 @@ import {
   AdmissionRequest,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
+  AttachChildToReservationRequest,
+  BeginChildBudgetReleaseRequest,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
+  ChildBudgetReservationRequest,
+  ChildReservationId,
+  ChildSettledNotification,
   ClaimJoiningRequest,
   ClaimRequest,
   ConversationMaterialization,
@@ -45,11 +50,13 @@ import {
   MarkReadyRequest,
   MarkUnknownRequest,
   OwnershipLost,
+  ParentLinkage,
   Principal,
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
   RecoverySnapshotRequest,
+  ReleaseChildBudgetRequest,
   RenewOwnershipRequest,
   ReleaseOwnershipRequest,
   ResolutionCompletedWithResult,
@@ -63,6 +70,8 @@ import {
   SubmissionSettled,
   SuspendRequest,
   UnknownResolutionCommand,
+  WaitingChild,
+  WaitingForChildSuspension,
   submissionInputRecordId,
   submissionLedgerConformanceCases,
   submissionSettlementId,
@@ -122,6 +131,12 @@ const OTHER_PRODUCER = id(ProducerId, "producer-sqlite-ledger-other");
 const TEST_AGENT = id(AdmissionRequest.fields.agentId, "agent-sqlite-ledger");
 const TEST_DEPLOYMENT = id(DeploymentId, "deployment-sqlite-ledger");
 const TEST_DEFINITION_DIGEST = Schema.decodeSync(Digest)("a".repeat(64));
+const S2_REOPEN_RESERVATION = Schema.decodeSync(ChildReservationId)(
+  "child-reservation:run-s2:call-s2",
+);
+const S2_FAILPOINT_RESERVATION = Schema.decodeSync(ChildReservationId)(
+  "child-reservation:run-s2fp:call-1",
+);
 const TEST_DIGESTS = DefinitionDigests.make({
   agent: TEST_DEFINITION_DIGEST,
   model: TEST_DEFINITION_DIGEST,
@@ -132,6 +147,7 @@ const admission = Effect.fn("SqliteLedgerTest.admission")(function* (
   conversationId: string,
   idempotencyKey: string,
   input: PersistedJson,
+  parentLinkage?: ParentLinkage,
 ) {
   const inputDigest = yield* digestJson(input);
   return AdmissionRequest.make({
@@ -143,6 +159,7 @@ const admission = Effect.fn("SqliteLedgerTest.admission")(function* (
     deploymentId: TEST_DEPLOYMENT,
     inputPayload: input,
     inputDigest,
+    ...(parentLinkage === undefined ? {} : { parentLinkage }),
   });
 });
 
@@ -483,9 +500,9 @@ describe("SqliteSubmissionLedger", () => {
   );
 
   it.effect(
-    "rejects v1 and v2 files exactly with reset guidance and still rejects newer versions",
+    "rejects v1-v3 files exactly with reset guidance and still rejects newer versions",
     () =>
-      Effect.forEach([1, 2, 4, 99], (storedVersion) =>
+      Effect.forEach([1, 2, 3, 5, 99], (storedVersion) =>
         withTemporaryDatabase((filename) =>
           Effect.gen(function* () {
             yield* withSql(
@@ -503,7 +520,7 @@ describe("SqliteSubmissionLedger", () => {
               expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
               if (error instanceof SqliteStorageCompatibilityError) {
                 expect(error.actualVersion).toBe(storedVersion);
-                expect(error.supportedVersion).toBe(3);
+                expect(error.supportedVersion).toBe(4);
                 expect(error.message).toContain("Reset the database file explicitly");
               }
             }
@@ -1049,10 +1066,12 @@ describe("SqliteSubmissionLedger", () => {
             );
             expect(gatedSnapshot.submission.state).toBe("suspended");
             expect(gatedSnapshot.suspension?.reason._tag).toBe("ApprovalPending");
-            expect(gatedSnapshot.suspension?.reason.toolCallIds).toEqual([
-              toolCall("call-reopen-s1"),
-              toolCall("call-reopen-s2"),
-            ]);
+            if (gatedSnapshot.suspension?.reason._tag === "ApprovalPending") {
+              expect(gatedSnapshot.suspension.reason.toolCallIds).toEqual([
+                toolCall("call-reopen-s1"),
+                toolCall("call-reopen-s2"),
+              ]);
+            }
             expect(gatedSnapshot.approvalDecisions).toHaveLength(1);
             expect(gatedSnapshot.approvalDecisions[0]?.toolCallId).toBe(toolCall("call-reopen-s1"));
             expect(gatedSnapshot.approvalDecisions[0]?.decision).toBe("approved");
@@ -1493,6 +1512,473 @@ describe("SqliteSubmissionLedger", () => {
         const replayedResolution = yield* resolveOnce("call-fp-d", "completed");
         expect(replayedResolution.resolution._tag).toBe("CompletedWithResult");
         expect(yield* resolutionRows).toHaveLength(2);
+      }),
+    ),
+  );
+
+  it.effect("persists child reservations and parent linkage across reopen", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const parentLane = "conversation-s2-reopen-parent";
+        const childLane = "conversation-s2-reopen-child";
+        const reservationId = S2_REOPEN_RESERVATION;
+        const delegationCall = toolCall("call-s2");
+
+        const seeded = yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const parent = yield* ledger.admit(
+              yield* admission(parentLane, "s2-parent-key", { work: "parent" }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
+            const parentClaim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(parentLane),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            if (Option.isNone(parentClaim)) return yield* Effect.die("missing parent claim");
+
+            const child = yield* ledger.admit(
+              yield* admission(
+                childLane,
+                "s2-child-key",
+                { task: "research" },
+                ParentLinkage.make({
+                  parentSubmissionId: parent.submissionId,
+                  parentToolCallId: delegationCall,
+                }),
+              ),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
+
+            const allocation = { turns: 2, toolCalls: 4 };
+            yield* ledger.reserveChildBudget(
+              ChildBudgetReservationRequest.make({
+                reservationId,
+                parentSubmissionId: parent.submissionId,
+                parentToolCallId: delegationCall,
+                ownershipToken: parentClaim.value.ownershipToken,
+                allocation,
+                allocationDigest: yield* digestJson(allocation),
+              }),
+            );
+            yield* ledger.attachChildToReservation(
+              AttachChildToReservationRequest.make({
+                reservationId,
+                ownershipToken: parentClaim.value.ownershipToken,
+                childSubmissionId: child.submissionId,
+              }),
+            );
+            const suspended = yield* ledger.suspend(
+              SuspendRequest.make({
+                submissionId: parent.submissionId,
+                ownershipToken: parentClaim.value.ownershipToken,
+                reason: WaitingForChildSuspension.make({
+                  children: [
+                    WaitingChild.make({
+                      toolCallId: delegationCall,
+                      childSubmissionId: child.submissionId,
+                    }),
+                  ],
+                }),
+              }),
+            );
+            expect(suspended).toBe("suspended");
+            return { parent, child };
+          }),
+        );
+        if (seeded === undefined) return;
+
+        // A fresh process reads every S2 marker back through the storage schemas, and the
+        // durable wake still works after reopen.
+        yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+
+            const parentSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: seeded.parent.submissionId }),
+            );
+            expect(parentSnapshot.submission.state).toBe("suspended");
+            expect(parentSnapshot.suspension?.reason._tag).toBe("WaitingForChild");
+            if (parentSnapshot.suspension?.reason._tag === "WaitingForChild") {
+              expect(parentSnapshot.suspension.reason.children).toHaveLength(1);
+              expect(parentSnapshot.suspension.reason.children[0]?.childSubmissionId).toBe(
+                seeded.child.submissionId,
+              );
+            }
+            expect(parentSnapshot.childReservations).toHaveLength(1);
+            expect(parentSnapshot.childReservations[0]?.reservationId).toBe(reservationId);
+            expect(parentSnapshot.childReservations[0]?.status).toBe("reserved");
+            expect(parentSnapshot.childReservations[0]?.childSubmissionId).toBe(
+              seeded.child.submissionId,
+            );
+            expect(parentSnapshot.childReservations[0]?.allocation).toEqual({
+              turns: 2,
+              toolCalls: 4,
+            });
+            expect(parentSnapshot.childAttachments).toHaveLength(1);
+            expect(parentSnapshot.childAttachments[0]?.toolCallId).toBe(delegationCall);
+            expect(parentSnapshot.childAttachments[0]?.childState).toBe("ready");
+
+            const childSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: seeded.child.submissionId }),
+            );
+            expect(childSnapshot.parentLinkage?.parentSubmissionId).toBe(
+              seeded.parent.submissionId,
+            );
+            expect(childSnapshot.parentLinkage?.parentToolCallId).toBe(delegationCall);
+
+            const resolved = yield* ledger.resolveAdmission(
+              SubmissionLookupByKey.make({
+                conversationId: conversation(childLane),
+                principal: TEST_PRINCIPAL,
+                idempotencyKey: id(IdempotencyKey, "s2-child-key"),
+              }),
+            );
+            expect(resolved._tag).toBe("Admitted");
+            if (resolved._tag === "Admitted") {
+              expect(resolved.submission.submissionId).toBe(seeded.child.submissionId);
+              expect(resolved.submission.receiptId).toBe(seeded.child.receiptId);
+            }
+
+            // The suspended parent stays dormant; the child settles on its own lane and the
+            // recorded settlement durably wakes the parent (spec §12 step 10).
+            const blocked = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(parentLane),
+                producerId: OTHER_PRODUCER,
+              }),
+            );
+            expect(Option.isNone(blocked)).toBe(true);
+            const childClaim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(childLane),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            expect(Option.isSome(childClaim)).toBe(true);
+            if (Option.isNone(childClaim)) return;
+            const reservation = yield* settlementReservation(
+              seeded.child,
+              childClaim.value.ownershipToken,
+              "completed",
+            );
+            yield* ledger.reserveSettlement(reservation);
+            yield* ledger.finalizeSettlement(
+              SettlementFinalization.make({
+                submissionId: seeded.child.submissionId,
+                settlementId: reservation.settlementId,
+              }),
+            );
+            const woken = yield* ledger.recordChildSettled(
+              ChildSettledNotification.make({
+                parentSubmissionId: seeded.parent.submissionId,
+                childSubmissionId: seeded.child.submissionId,
+              }),
+            );
+            expect(woken).toBe("woken");
+            const parentClaim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(parentLane),
+                producerId: OTHER_PRODUCER,
+              }),
+            );
+            expect(Option.isSome(parentClaim)).toBe(true);
+
+            // The reservation accounting decision freezes and releases exactly once after
+            // reopen (spec §12 join step 6).
+            const accounting = { consumed: { turns: 1 }, released: { turns: 1 } };
+            const frozen = yield* ledger.beginChildBudgetRelease(
+              BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+            );
+            expect(frozen.status).toBe("releasePending");
+            const released = yield* ledger.releaseChildBudget(
+              ReleaseChildBudgetRequest.make({ reservationId }),
+            );
+            expect(released.status).toBe("released");
+            expect(released.accounting).toEqual(accounting);
+          }),
+        );
+      }),
+    ),
+  );
+
+  it.effect("leaves a recovery-classifiable state at every S2 ledger failpoint", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const active = yield* Ref.make<SqliteStorageFailpointLocation | undefined>(undefined);
+        const select = (location: SqliteStorageFailpointLocation | undefined) =>
+          Ref.set(active, location);
+        const failingLedger = <A, E>(
+          effect: Effect.Effect<A, E, SubmissionLedger | Crypto.Crypto>,
+        ) =>
+          Effect.provide(effect, [
+            ledgerLayer({
+              filename,
+              failpoint: (location) =>
+                Ref.get(active).pipe(
+                  Effect.flatMap((selected) =>
+                    selected === location
+                      ? Effect.fail(SqliteStorageFailpointError.make({ location }))
+                      : Effect.void,
+                  ),
+                ),
+            }),
+            NodeCrypto.layer,
+          ]);
+        const expectInjectedFailure = <A>(
+          exit: Exit.Exit<A, unknown>,
+          location: SqliteStorageFailpointLocation,
+        ) => {
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const error = Cause.squash(exit.cause);
+            expect(error).toBeInstanceOf(LedgerError);
+            if (error instanceof LedgerError) {
+              expect(error.cause).toBeInstanceOf(SqliteStorageFailpointError);
+              if (error.cause instanceof SqliteStorageFailpointError) {
+                expect(error.cause.location).toBe(location);
+              }
+            }
+          }
+        };
+        const reservationRows = withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<Record<string, unknown>>`
+              SELECT
+                reservation_id,
+                status,
+                child_submission_id,
+                accounting_json,
+                release_began_at,
+                released_at
+              FROM effect_agent_child_reservations
+            `;
+          }),
+        );
+        const parentMarkers = (submissionId: string) =>
+          withSql(
+            filename,
+            Effect.gen(function* () {
+              const sql = yield* SqlClientService.SqlClient;
+              return yield* sql<Record<string, unknown>>`
+                SELECT state, suspended_reason_json
+                FROM effect_agent_submissions
+                WHERE submission_id = ${submissionId}
+              `;
+            }),
+          );
+
+        const parentLane = "conversation-s2-failpoints";
+        const childLane = "conversation-s2-failpoints-child";
+        const reservationId = S2_FAILPOINT_RESERVATION;
+        const delegationCall = toolCall("call-s2-fp");
+        const { child, parent, parentClaim } = yield* failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const parent = yield* ledger.admit(
+              yield* admission(parentLane, "s2-fp-parent-key", { work: "parent" }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
+            const child = yield* ledger.admit(
+              yield* admission(childLane, "s2-fp-child-key", { task: "child" }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
+            const claim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(parentLane),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            if (Option.isNone(claim)) return yield* Effect.die("missing parent claim");
+            return { parent, child, parentClaim: claim.value };
+          }),
+        );
+
+        // reserveChildBudget: before → no row, nothing to repair; after → the reservation is
+        // durable ('reserved') even though the caller never saw it; the retry replays it.
+        const allocation = { turns: 2 };
+        const allocationDigest = yield* digestJson(allocation).pipe(
+          Effect.provide(NodeCrypto.layer),
+        );
+        const reserveOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.reserveChildBudget(
+              ChildBudgetReservationRequest.make({
+                reservationId,
+                parentSubmissionId: parent.submissionId,
+                parentToolCallId: delegationCall,
+                ownershipToken: parentClaim.ownershipToken,
+                allocation,
+                allocationDigest,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:child-reservation:before");
+        expectInjectedFailure(
+          yield* reserveOnce.pipe(Effect.exit),
+          "ledger:child-reservation:before",
+        );
+        expect(yield* reservationRows).toEqual([]);
+        yield* select("ledger:child-reservation:after");
+        expectInjectedFailure(
+          yield* reserveOnce.pipe(Effect.exit),
+          "ledger:child-reservation:after",
+        );
+        const reservedRows = yield* reservationRows;
+        expect(reservedRows).toHaveLength(1);
+        expect(reservedRows[0]?.status).toBe("reserved");
+        expect(reservedRows[0]?.child_submission_id).toBeNull();
+        yield* select(undefined);
+        const replayedReserve = yield* reserveOnce;
+        expect(replayedReserve.replayed).toBe(true);
+
+        // attachChildToReservation: before → no child recorded; after → the attachment is
+        // durable; the retry is an idempotent no-op.
+        const attachOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.attachChildToReservation(
+              AttachChildToReservationRequest.make({
+                reservationId,
+                ownershipToken: parentClaim.ownershipToken,
+                childSubmissionId: child.submissionId,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:child-attach:before");
+        expectInjectedFailure(yield* attachOnce.pipe(Effect.exit), "ledger:child-attach:before");
+        expect((yield* reservationRows)[0]?.child_submission_id).toBeNull();
+        yield* select("ledger:child-attach:after");
+        expectInjectedFailure(yield* attachOnce.pipe(Effect.exit), "ledger:child-attach:after");
+        expect((yield* reservationRows)[0]?.child_submission_id).toBe(child.submissionId);
+        yield* select(undefined);
+        const replayedAttach = yield* attachOnce;
+        expect(replayedAttach.childSubmissionId).toBe(child.submissionId);
+
+        // beginChildBudgetRelease: before → status reserved with no frozen accounting; after →
+        // releasePending with the frozen decision; the retry is an idempotent no-op.
+        const accounting = { consumed: { turns: 1 }, released: { turns: 1 } };
+        const beginOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.beginChildBudgetRelease(
+              BeginChildBudgetReleaseRequest.make({ reservationId, accounting }),
+            );
+          }),
+        );
+        yield* select("ledger:child-release-pending:before");
+        expectInjectedFailure(
+          yield* beginOnce.pipe(Effect.exit),
+          "ledger:child-release-pending:before",
+        );
+        expect((yield* reservationRows)[0]?.status).toBe("reserved");
+        expect((yield* reservationRows)[0]?.accounting_json).toBeNull();
+        yield* select("ledger:child-release-pending:after");
+        expectInjectedFailure(
+          yield* beginOnce.pipe(Effect.exit),
+          "ledger:child-release-pending:after",
+        );
+        const frozenRows = yield* reservationRows;
+        expect(frozenRows[0]?.status).toBe("releasePending");
+        expect(frozenRows[0]?.accounting_json).not.toBeNull();
+        yield* select(undefined);
+        const replayedBegin = yield* beginOnce;
+        expect(replayedBegin.status).toBe("releasePending");
+
+        // releaseChildBudget: before → still releasePending; after → released durably; the
+        // retry replays the released row: the unused allocation never returns twice.
+        const releaseOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.releaseChildBudget(
+              ReleaseChildBudgetRequest.make({ reservationId }),
+            );
+          }),
+        );
+        yield* select("ledger:child-release:before");
+        expectInjectedFailure(yield* releaseOnce.pipe(Effect.exit), "ledger:child-release:before");
+        expect((yield* reservationRows)[0]?.status).toBe("releasePending");
+        expect((yield* reservationRows)[0]?.released_at).toBeNull();
+        yield* select("ledger:child-release:after");
+        expectInjectedFailure(yield* releaseOnce.pipe(Effect.exit), "ledger:child-release:after");
+        expect((yield* reservationRows)[0]?.status).toBe("released");
+        expect((yield* reservationRows)[0]?.released_at).not.toBeNull();
+        yield* select(undefined);
+        const replayedRelease = yield* releaseOnce;
+        expect(replayedRelease.status).toBe("released");
+
+        // recordChildSettled: before → the parent stays suspended; after → the wake transition
+        // is durable even though the caller never saw it; the retry answers not-waiting.
+        yield* failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const suspended = yield* ledger.suspend(
+              SuspendRequest.make({
+                submissionId: parent.submissionId,
+                ownershipToken: parentClaim.ownershipToken,
+                reason: WaitingForChildSuspension.make({
+                  children: [
+                    WaitingChild.make({
+                      toolCallId: delegationCall,
+                      childSubmissionId: child.submissionId,
+                    }),
+                  ],
+                }),
+              }),
+            );
+            expect(suspended).toBe("suspended");
+            const childClaim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(childLane),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            if (Option.isNone(childClaim)) return yield* Effect.die("missing child claim");
+            const reservation = yield* settlementReservation(
+              child,
+              childClaim.value.ownershipToken,
+              "completed",
+            );
+            yield* ledger.reserveSettlement(reservation);
+            yield* ledger.finalizeSettlement(
+              SettlementFinalization.make({
+                submissionId: child.submissionId,
+                settlementId: reservation.settlementId,
+              }),
+            );
+          }),
+        );
+        const notifyOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.recordChildSettled(
+              ChildSettledNotification.make({
+                parentSubmissionId: parent.submissionId,
+                childSubmissionId: child.submissionId,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:child-settled:before");
+        expectInjectedFailure(yield* notifyOnce.pipe(Effect.exit), "ledger:child-settled:before");
+        expect((yield* parentMarkers(parent.submissionId))[0]?.state).toBe("suspended");
+        yield* select("ledger:child-settled:after");
+        expectInjectedFailure(yield* notifyOnce.pipe(Effect.exit), "ledger:child-settled:after");
+        const wokenMarkers = yield* parentMarkers(parent.submissionId);
+        expect(wokenMarkers[0]?.state).toBe("input-applied");
+        expect(wokenMarkers[0]?.suspended_reason_json).toBeNull();
+        yield* select(undefined);
+        const replayedNotification = yield* notifyOnce;
+        expect(replayedNotification).toBe("not-waiting");
       }),
     ),
   );

@@ -2,9 +2,14 @@ import { Clock, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 import {
   AgentId,
+  ConversationId,
   type Definition,
   DelegationId,
+  delegationToolPrefix,
   IdGenerator,
+  isDelegationToolName,
+  RunId,
+  SubmissionId,
   ToolCallId,
 } from "@effect-agent/core";
 import {
@@ -14,11 +19,17 @@ import {
   type AgentSpawnerParent,
   type RunBudgetHook,
   RunEventSink,
+  type RunSubagentChildIdentity,
+  type RunSubagentDigests,
   type RuntimeBinding,
   type RunUsageDelta,
   type SpawnRunOptions,
+  SubagentDurability,
+  type SubagentDurabilityDurable,
+  SubagentDurabilityError,
   type SubagentEventBasePayload,
   type SubagentEventPayload,
+  ToolCallWaiting,
 } from "@effect-agent/engine";
 
 import {
@@ -131,8 +142,63 @@ export class SubagentProjectionFailure extends Schema.TaggedErrorClass<SubagentP
   },
 ) {}
 
-/** Model-visible naming convention that marks every delegation Tool recognizably. */
-export const delegationToolPrefix = "delegate_";
+/**
+ * Classification of one bounded durable delegation failure (S2 D5,
+ * spec/subagents.md §15). `"child-failed"` and `"child-aborted"` project the
+ * child's canonical failed/aborted Settlement; `"child-compatibility"`
+ * projects the framework's `ChildCompatibilityFailure` child Settlement (the
+ * stored child Binding digest was unavailable — recovery never substituted
+ * current code); `"establishment-denied"` is a fail-closed coordinator
+ * refusal (lineage/digest verification, divergent replay); and
+ * `"declaration-unavailable"` marks a durable coordinator driving a
+ * delegation Layer that was constructed without its durable declaration.
+ */
+export const SubagentExecutionFailureClassification = Schema.Literals([
+  "child-failed",
+  "child-aborted",
+  "child-compatibility",
+  "establishment-denied",
+  "declaration-unavailable",
+]);
+export type SubagentExecutionFailureClassification =
+  typeof SubagentExecutionFailureClassification.Type;
+
+const maxErrorTagLength = 256;
+const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(maxErrorTagLength));
+
+/**
+ * Bounded framework projection of a durable attached-child failure
+ * (spec/subagents.md §11, §15; S2 plan D5). A failed or aborted durable child
+ * joins its parent Tool Call as exactly this typed failure: a classification,
+ * the child references, and the coordinator's bounded `{errorTag, message}`
+ * projection — never a raw Cause, stack, provider response, secret, or child
+ * payload. The typed child failure union does not survive a durable
+ * Settlement, so `mapChildFailure` remains the ephemeral-path contract;
+ * Schema-declared durable domain-failure mapping is a recorded later
+ * extension.
+ */
+export class SubagentExecutionFailure extends Schema.TaggedErrorClass<SubagentExecutionFailure>()(
+  "SubagentExecutionFailure",
+  {
+    delegationId: DelegationId,
+    targetAgentId: AgentId,
+    classification: SubagentExecutionFailureClassification,
+    /** Child references, present once establishment reached a child identity. */
+    childConversationId: Schema.optionalKey(ConversationId),
+    childSubmissionId: Schema.optionalKey(SubmissionId),
+    childRunId: Schema.optionalKey(RunId),
+    errorTag: BoundedErrorTag,
+    message: BoundedFailureText,
+  },
+) {}
+
+/**
+ * The delegation naming rule (`delegationToolPrefix`/`isDelegationToolName`)
+ * is core-owned (plan §4.1) so session recovery can classify delegation calls
+ * without importing capabilities; re-exported here unchanged for existing
+ * consumers.
+ */
+export { delegationToolPrefix, isDelegationToolName } from "@effect-agent/core";
 
 const DelegationToolName = Schema.String.pipe(
   Schema.refine(
@@ -143,21 +209,6 @@ const DelegationToolName = Schema.String.pipe(
 );
 const decodeDelegationToolName = Schema.decodeSync(DelegationToolName);
 const decodeDelegationId = Schema.decodeSync(DelegationId);
-
-/**
- * Names of every Delegation Definition created by `Subagent.define` in this
- * process. This is detection metadata for nested-delegation preflight, not an
- * execution registry: Bindings still arrive only through explicit Layers.
- */
-const delegationToolNames = new Map<string, DelegationId>();
-
-/**
- * Fail-closed delegation-Tool detection used by nested-delegation preflight
- * (SUB-029): a Tool is treated as a delegation when it was registered by
- * `Subagent.define` or merely follows the delegation naming convention.
- */
-export const isDelegationToolName = (toolName: string): boolean =>
-  delegationToolNames.has(toolName) || toolName.startsWith(delegationToolPrefix);
 
 /**
  * Bounded parent metadata visible to `prepareInput` (spec/subagents.md §4.1).
@@ -171,9 +222,16 @@ export interface SubagentPrepareContext {
 
 /**
  * The delegation Tool failure Schema: the author's declared failure plus the
- * framework's S1 preflight/budget/projection failure family
+ * framework's preflight/budget/projection/durable-execution failure family
  * (spec/subagents.md §15). With the default `failureMode: "error"`, exactly
  * this union (plus Effect AI's own error) can enter the parent handler `E`.
+ *
+ * The engine-owned `ToolCallWaiting` suspension signal and the typed
+ * `SubagentDurabilityError` are members so the durable branch's waiting
+ * signal and coordinator-seam failures travel typed through
+ * `failureMode: "error"` (S2 plan §2); neither ever reaches an ephemeral
+ * caller, and a waiting signal is not a Tool failure — the batch executor
+ * keeps the raising call open and suspends the Run.
  */
 export type SubagentToolFailure<Failure extends Schema.Top> = Schema.Union<
   readonly [
@@ -181,14 +239,19 @@ export type SubagentToolFailure<Failure extends Schema.Top> = Schema.Union<
     typeof SubagentPrestartDenied,
     typeof SubagentBudgetExhausted,
     typeof SubagentProjectionFailure,
+    typeof SubagentExecutionFailure,
+    typeof ToolCallWaiting,
+    typeof SubagentDurabilityError,
   ]
 >;
 
 /**
  * The native Effect AI Tool created by `Subagent.define` (SUB-001, SUB-003).
- * Its per-call dependencies are exactly the engine-provided `AgentSpawner`
- * and `RunEventSink` plus `IdGenerator`; every child requirement is a
- * construction requirement of `SubagentRuntime.layer` instead.
+ * Its per-call dependencies are exactly the engine-provided `AgentSpawner`,
+ * `RunEventSink`, and `SubagentDurability` plus `IdGenerator`; every child
+ * requirement is a construction requirement of `SubagentRuntime.layer`
+ * instead. The engine excludes its own per-batch services from the runtime's
+ * public requirements, so the visible per-call surface stays `IdGenerator`.
  */
 export type SubagentTool<
   Name extends string,
@@ -203,7 +266,7 @@ export type SubagentTool<
     readonly failure: SubagentToolFailure<Failure>;
     readonly failureMode: "error";
   },
-  AgentSpawner | RunEventSink | IdGenerator
+  AgentSpawner | RunEventSink | SubagentDurability | IdGenerator
 >;
 
 /** Singleton Tool record provided by one `SubagentRuntime.layer`. */
@@ -382,13 +445,16 @@ const define = <
       SubagentPrestartDenied,
       SubagentBudgetExhausted,
       SubagentProjectionFailure,
+      SubagentExecutionFailure,
+      ToolCallWaiting,
+      SubagentDurabilityError,
     ]),
     needsApproval: options.needsApproval,
   })
     .addDependency(AgentSpawner)
     .addDependency(RunEventSink)
+    .addDependency(SubagentDurability)
     .addDependency(IdGenerator);
-  delegationToolNames.set(name, delegationId);
   return Object.freeze({
     ...options,
     name,
@@ -539,12 +605,64 @@ export type SubagentLayerRequirements<
   | ProjectRequirements
   | SubagentReservations;
 
+/**
+ * Construction-fixed durable delegation declaration (S2, spec/subagents.md
+ * §11-§12). Supplying it makes the delegation Layer establishable under a
+ * durable coordinator; a durable-mode invocation of a Layer constructed
+ * without it fails closed with `SubagentExecutionFailure`
+ * (`"declaration-unavailable"`) instead of inventing digests or degrading to
+ * an in-process spawn.
+ */
+export interface SubagentDurableOptions {
+  /**
+   * Application-computed digests of the exact child Agent Binding this Layer
+   * pairs with the delegation — the same digest authority the host uses for
+   * durable admission (`DurableSubmitOptions.definitions`) and for
+   * registering the child Binding with its resolver. Fixed once at
+   * handler-Layer construction; the coordinator stores them in
+   * `SubagentRequested` and recovery resolves the child Binding by stable
+   * identity and exact stored digest, fail-closed (SUB-023): a changed or
+   * missing Binding produces a typed compatibility failure, never
+   * silently-substituted current code.
+   */
+  readonly targetDigests: RunSubagentDigests;
+}
+
+/**
+ * The conservative final accounting summary the durable delegation handler
+ * attaches to every settlement join (spec/subagents.md §7, §12 join step 6;
+ * S2 plan D11). The handler has no live child usage stream at durable join
+ * time, so every dimension conservatively consumes its full reservation and
+ * releases nothing — unreported usage never creates budget. The coordinator
+ * owns the canonical accounting decision on `SubagentJoined` and may replace
+ * structural dimensions from canonical child evidence; this value is opaque
+ * encoded policy math to the engine and to storage adapters (D8).
+ */
+export class SubagentDurableAccounting extends Schema.Class<SubagentDurableAccounting>(
+  "@effect-agent/capabilities/SubagentDurableAccounting",
+)({
+  /** The per-invocation allocation reserved at establishment. */
+  allocation: SubagentReservationAmounts,
+  /** Final consumed decision per dimension. */
+  consumed: SubagentReservationAmounts,
+  /** Amounts returned to the parent: `allocation - consumed` per dimension. */
+  released: SubagentReservationAmounts,
+  /** How the decision was computed; the handler only ever reports conservatively. */
+  basis: Schema.Literals(["reserved-conservative"]),
+}) {}
+
 /** Options accepted by `SubagentRuntime.layer`. */
 export interface SubagentRuntimeOptions<
   Failure extends Schema.Top,
   ChildFailure,
   HookRequirements = never,
 > {
+  /**
+   * Durable delegation declaration (S2). Absent, the Layer remains fully
+   * functional for ephemeral runs; under a durable coordinator every
+   * invocation then fails closed instead of establishing.
+   */
+  readonly durable?: SubagentDurableOptions | undefined;
   /**
    * Total mapping from every expected child Run failure to the declared Tool
    * failure (SUB-028). The parameter type is the child Binding's complete
@@ -587,6 +705,50 @@ const errorTagOf = (error: unknown): string =>
     onNone: () => "UnknownError",
     onSome: ({ _tag }) => _tag,
   });
+
+const boundedErrorTag = (tag: string): string => {
+  const nonEmpty = tag.length === 0 ? "UnknownError" : tag;
+  return nonEmpty.length <= maxErrorTagLength ? nonEmpty : nonEmpty.slice(0, maxErrorTagLength);
+};
+
+/**
+ * The coordinator's bounded projection of a failed/aborted child Settlement
+ * result (S2 plan §1.6, D5): `{errorTag, message}`, never a raw Cause. The
+ * fallback tolerates any other bounded shape without ever surfacing the raw
+ * value beyond a tag and message.
+ */
+const ChildFailureProjection = Schema.Struct({
+  errorTag: Schema.NonEmptyString,
+  message: Schema.String,
+});
+
+const childFailureProjectionOf = (
+  encodedResult: unknown,
+): { readonly errorTag: string; readonly message: string } =>
+  Option.match(Schema.decodeUnknownOption(ChildFailureProjection)(encodedResult), {
+    onNone: () => ({
+      errorTag: errorTagOf(encodedResult),
+      message: errorMessageOf(encodedResult),
+    }),
+    onSome: (projection) => projection,
+  });
+
+const zeroReservationAmounts = SubagentReservationAmounts.make({
+  turns: 0,
+  toolCalls: 0,
+  durationMillis: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  costMicrousd: 0,
+  resultBytes: 0,
+});
+
+const encodeDurableAccounting = Schema.encodeEffect(SubagentDurableAccounting);
+const encodeProjectionFailure = Schema.encodeEffect(SubagentProjectionFailure);
+const encodeBudgetFailure = Schema.encodeEffect(SubagentBudgetExhausted);
+const encodeExecutionFailure = Schema.encodeEffect(SubagentExecutionFailure);
+const encodeGrant = Schema.encodeEffect(SubagentGrant);
+const encodeAllocationAmounts = Schema.encodeEffect(SubagentReservationAmounts);
 
 const utf8ByteLength = (value: string): number => {
   let total = 0;
@@ -662,16 +824,27 @@ type SubagentHandler<
 
 /**
  * Build the Toolkit handler Layer for one delegation Tool from an explicit
- * child Agent Binding (spec/subagents.md §4, §8, §9, §15).
+ * child Agent Binding (spec/subagents.md §4, §8, §9, §12, §15).
  *
  * Construction requirements carry the child Binding's full runtime needs and
  * both projections; they are captured once via `Effect.context` so the
  * per-call handler requirements stay exactly the Tool's declared engine
- * dependencies. The handler preflights depth, nested delegation, grant, and
- * budget; runs the child in a handler-owned scoped region (SUB-011/012);
- * emits the stable Subagent lifecycle events; total-maps expected child
- * failures; and settles the budget reservation through Scope finalizers on
- * every exit path.
+ * dependencies. The handler dispatches on the engine-provided per-batch
+ * `SubagentDurability` service mode:
+ *
+ * - **ephemeral** (the explicit engine default when no durable coordinator
+ *   supplied `RunOptions.subagent`): the S1 path unchanged — preflight, an
+ *   in-process scoped child Run (SUB-011/012), stable lifecycle events,
+ *   total-mapped expected child failures, and Scope-finalizer reservation
+ *   settlement on every exit path.
+ * - **durable** (S2): the same fail-closed preflight and input projection,
+ *   then idempotent establishment through the coordinator (spec §12 steps
+ *   2-9) with construction-fixed child Binding digests, encoded grant, and
+ *   encoded allocation; the engine-owned waiting signal while the attached
+ *   child is nonterminal; and, on re-entry with a settled child, output
+ *   decoding, `projectResult`, and ONE atomic settlement join carrying the
+ *   conservative accounting summary. Failed children join as the bounded
+ *   `SubagentExecutionFailure`; no in-process child fiber ever starts.
  */
 const layer = <
   Name extends string,
@@ -758,7 +931,42 @@ const layer = <
   >;
   const encodeChildInput = Schema.encodeEffect(delegation.target.input);
   const encodeSuccess = Schema.encodeEffect(delegation.success);
+  const decodeChildOutput = Schema.decodeUnknownEffect(delegation.target.output);
+  const encodeDeclaredFailure = Schema.encodeEffect(delegation.failure);
   const childToolNames = Object.keys(delegation.target.toolkit.tools);
+  // Construction-fixed durable declaration (S2): the exact digest strings the
+  // establishment request carries on every Attempt, including batch resume.
+  const durableDeclaration: SubagentDurableOptions | undefined =
+    options.durable === undefined
+      ? undefined
+      : {
+          targetDigests: {
+            agent: options.durable.targetDigests.agent,
+            model: options.durable.targetDigests.model,
+            tools: options.durable.targetDigests.tools,
+          },
+        };
+
+  const executionFailure = (
+    classification: SubagentExecutionFailureClassification,
+    errorTag: string,
+    message: string,
+    child?: RunSubagentChildIdentity,
+  ): SubagentExecutionFailure =>
+    SubagentExecutionFailure.make({
+      delegationId: delegation.delegationId,
+      targetAgentId: delegation.target.id,
+      classification,
+      errorTag: boundedErrorTag(errorTag),
+      message: boundedEventText(message),
+      ...(child === undefined
+        ? {}
+        : {
+            childConversationId: child.childConversationId,
+            childSubmissionId: child.childSubmissionId,
+            childRunId: child.childRunId,
+          }),
+    });
 
   const prestartDenied = (
     reason: SubagentPrestartDenied["reason"],
@@ -789,6 +997,23 @@ const layer = <
           InstructionRequirements
         >
       >();
+
+    // Durable establishment statics, computed once at Layer construction
+    // (S2 plan §5 WP5): the encoded grant and per-invocation allocation the
+    // coordinator digests into `SubagentRequested`, and the conservative
+    // accounting summary attached to every settlement join. These schemas
+    // carry plain fields, so an encoding failure is a defect, not an
+    // expected delegation failure.
+    const encodedGrant = yield* encodeGrant(delegation.grant).pipe(Effect.orDie);
+    const encodedAllocation = yield* encodeAllocationAmounts(allocation).pipe(Effect.orDie);
+    const conservativeAccounting = yield* encodeDurableAccounting(
+      SubagentDurableAccounting.make({
+        allocation,
+        consumed: allocation,
+        released: zeroReservationAmounts,
+        basis: "reserved-conservative",
+      }),
+    ).pipe(Effect.orDie);
 
     const invoke = Effect.fn(`SubagentRuntime.${delegation.name}`)(function* (
       parameters: Parameters["Type"],
@@ -1033,6 +1258,235 @@ const layer = <
       );
     });
 
+    /**
+     * Durable branch (S2, spec/subagents.md §12): establishment through the
+     * coordinator's idempotent protocol instead of an in-process spawn. No
+     * child fiber ever starts here, and the S1 in-memory reservation service
+     * is deliberately not consulted — its Scope-finalizer settlement
+     * contradicts a handler that exits with the waiting signal while the
+     * child keeps running; durable budget lives in the coordinator's fenced
+     * ledger reservation built from `encodedAllocation`.
+     */
+    const invokeDurable = Effect.fn(`SubagentRuntime.${delegation.name}.durable`)(function* (
+      parameters: Parameters["Type"],
+      handlerContext: Toolkit.HandlerContext<SubagentTool<Name, Parameters, Success, Failure>>,
+      durability: SubagentDurabilityDurable,
+    ) {
+      const spawner = yield* AgentSpawner;
+      const sink = yield* RunEventSink;
+      const toolCallId = yield* Schema.decodeUnknownEffect(ToolCallId)(
+        handlerContext.toolCallId,
+      ).pipe(Effect.orDie);
+      const emit = (event: SubagentEventPayload): Effect.Effect<void> =>
+        sink.emit(event).pipe(Effect.orDie);
+
+      // A durable coordinator driving a Layer constructed without its durable
+      // declaration can never establish: fail closed with the framework
+      // failure (spec/subagents.md §11 — never invent digests, never load the
+      // latest declaration, never degrade to an in-process spawn).
+      if (durableDeclaration === undefined) {
+        return yield* executionFailure(
+          "declaration-unavailable",
+          "SubagentDeclarationUnavailable",
+          `Delegation ${delegation.name} runs under a durable coordinator but its handler Layer was constructed without SubagentRuntimeOptions.durable`,
+        );
+      }
+
+      // Preflight re-runs on every Attempt, including batch resume (SUB-026
+      // per-action reauthorization): a narrowed or revoked grant denies the
+      // next action typed before any establishment replay.
+      const depth = spawner.depth + 1;
+      if (depth > delegation.grant.maxDepth) {
+        return yield* prestartDenied(
+          "nested-delegation",
+          `Delegation ${delegation.name} was requested at depth ${spawner.depth}; S2 rejects every nested delegation`,
+        );
+      }
+      for (const childToolName of childToolNames) {
+        if (isDelegationToolName(childToolName)) {
+          return yield* prestartDenied(
+            "nested-delegation",
+            `Child Toolkit exposes delegation Tool ${childToolName}; S2 rejects every nested delegation`,
+          );
+        }
+        if (!delegation.grant.allowedToolNames.includes(childToolName)) {
+          return yield* prestartDenied(
+            "grant-violation",
+            `Child Tool ${childToolName} is outside the delegation grant ceiling`,
+          );
+        }
+      }
+
+      const prepared = yield* delegation.prepareInput(parameters, {
+        delegationId: delegation.delegationId,
+        toolCallId,
+        parent: spawner.parent,
+      });
+      const encodedInput = yield* encodeChildInput(prepared).pipe(
+        Effect.mapError(() =>
+          SubagentProjectionFailure.make({
+            delegationId: delegation.delegationId,
+            stage: "input",
+            message: "Prepared child input did not satisfy the target Agent input Schema",
+          }),
+        ),
+      );
+
+      // Establishment is idempotent by construction (SUB-016): the identical
+      // request replays spec §12 steps 2-9 under the parent fence and
+      // converges on the one existing child; a divergent replay (changed
+      // digests, grant, allocation, or input) is denied fail-closed by the
+      // coordinator and surfaces below as `"establishment-denied"`.
+      const status = yield* durability.establish({
+        toolCallId,
+        delegationId: delegation.delegationId,
+        targetAgentId: delegation.target.id,
+        depth,
+        targetDigests: durableDeclaration.targetDigests,
+        encodedChildInput: encodedInput,
+        encodedGrant,
+        encodedAllocation,
+      });
+
+      switch (status._tag) {
+        case "denied": {
+          return yield* executionFailure("establishment-denied", status.errorTag, status.message);
+        }
+        case "waiting": {
+          const payload: SubagentEventBasePayload = {
+            toolCallId,
+            delegationId: delegation.delegationId,
+            childConversationId: status.childConversationId,
+            childRunId: status.childRunId,
+            targetAgentId: delegation.target.id,
+            depth,
+          };
+          yield* emit({ _tag: "SubagentRequested", ...payload });
+          yield* emit({ _tag: "SubagentStarted", ...payload });
+          // The handler ends here and never returns: the engine keeps the
+          // call open (no Tool failure, no batch failure policy), siblings
+          // finish, and the Run suspends waitingForChild — never polling,
+          // never respawning (SUB-018, SUB-030).
+          return yield* durability.waiting(toolCallId, status);
+        }
+        case "settled": {
+          const payload: SubagentEventBasePayload = {
+            toolCallId,
+            delegationId: delegation.delegationId,
+            childConversationId: status.childConversationId,
+            childRunId: status.childRunId,
+            targetAgentId: delegation.target.id,
+            depth,
+          };
+          // Every terminal projection of a settled child — success or typed
+          // failure — goes through ONE atomic join (SUB-019): the coordinator
+          // appends `SubagentJoined` + the parent `ToolCallSettled` in one
+          // canonical batch and applies the accounting decision. The handler
+          // then fails/returns the same value so the live batch continues
+          // with exactly what canonical history recorded.
+          const settleFailure = <F>(
+            failure: F,
+            encodedFailure: unknown,
+          ): Effect.Effect<never, F | SubagentDurabilityError> =>
+            emit({
+              _tag: "SubagentFailed",
+              ...payload,
+              errorTag: errorTagOf(failure),
+              message: boundedEventText(errorMessageOf(failure)),
+            }).pipe(
+              Effect.andThen(
+                durability.join({
+                  toolCallId,
+                  encodedResult: encodedFailure,
+                  isFailure: true,
+                  encodedAccounting: conservativeAccounting,
+                }),
+              ),
+              Effect.andThen(Effect.fail(failure)),
+            );
+
+          if (status.outcome !== "completed") {
+            const projection = childFailureProjectionOf(status.encodedResult);
+            const failure = executionFailure(
+              status.outcome === "aborted"
+                ? "child-aborted"
+                : projection.errorTag === "ChildCompatibilityFailure"
+                  ? "child-compatibility"
+                  : "child-failed",
+              projection.errorTag,
+              projection.message,
+              status,
+            );
+            const encodedFailure = yield* encodeExecutionFailure(failure).pipe(Effect.orDie);
+            return yield* settleFailure(failure, encodedFailure);
+          }
+
+          // The coordinator already verified lineage, target, digests, and
+          // settlement identity fail-closed (spec §12 join steps 1-2); the
+          // handler still refuses settled output that escapes the target
+          // output Schema — hostile child output cannot cross the
+          // declassification boundary undecoded, and the fixed message never
+          // carries the raw value.
+          const decoded = yield* decodeChildOutput(status.encodedResult).pipe(
+            Effect.catch(() => {
+              const failure = SubagentProjectionFailure.make({
+                delegationId: delegation.delegationId,
+                stage: "result",
+                message: "Settled child output did not satisfy the target Agent output Schema",
+              });
+              return encodeProjectionFailure(failure).pipe(
+                Effect.orDie,
+                Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)),
+              );
+            }),
+          );
+          const projected = yield* delegation.projectResult(decoded).pipe(
+            Effect.catch((declared) =>
+              encodeDeclaredFailure(declared).pipe(
+                Effect.orDie,
+                Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)),
+              ),
+            ),
+          );
+          const encodedResult = yield* encodeSuccess(projected).pipe(
+            Effect.catch(() => {
+              const failure = SubagentProjectionFailure.make({
+                delegationId: delegation.delegationId,
+                stage: "result",
+                message: "Projected child result did not satisfy the delegation success Schema",
+              });
+              return encodeProjectionFailure(failure).pipe(
+                Effect.orDie,
+                Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)),
+              );
+            }),
+          );
+          const resultBytes = utf8ByteLength(JSON.stringify(encodedResult) ?? "");
+          if (
+            delegation.policy.maxResultBytes !== undefined &&
+            resultBytes > delegation.policy.maxResultBytes
+          ) {
+            const failure = SubagentBudgetExhausted.make({
+              parentRunId: spawner.parent.runId,
+              dimension: "result-bytes",
+              limitValue: delegation.policy.maxResultBytes,
+              observedValue: resultBytes,
+            });
+            const encodedFailure = yield* encodeBudgetFailure(failure).pipe(Effect.orDie);
+            return yield* settleFailure(failure, encodedFailure);
+          }
+          yield* durability.join({
+            toolCallId,
+            encodedResult,
+            isFailure: false,
+            encodedAccounting: conservativeAccounting,
+          });
+          yield* emit({ _tag: "SubagentJoined", ...payload });
+          return projected;
+        }
+      }
+    });
+
     const handler: SubagentHandler<Name, Parameters, Success, Failure> = (
       parameters,
       handlerContext,
@@ -1042,13 +1496,28 @@ const layer = <
         // captured construction context and re-provide them innermost: if the
         // Layer was constructed inside another Run's Tool batch, the captured
         // context would otherwise shadow this Run's `AgentSpawner` (and its
-        // delegation depth) and this batch's live `RunEventSink`.
+        // delegation depth), this batch's live `RunEventSink`, and this
+        // batch's live `SubagentDurability` mode.
         const spawner = yield* AgentSpawner;
         const sink = yield* RunEventSink;
+        const durability = yield* SubagentDurability;
+        // Service-mode dispatch (S2 plan §2): the engine states ephemeral
+        // mode explicitly when no durable coordinator supplied the hook, so
+        // absence keeps the S1 in-process spawn semantics honestly.
+        if (durability.mode === "durable") {
+          return yield* invokeDurable(parameters, handlerContext, durability).pipe(
+            Effect.scoped,
+            Effect.provideService(AgentSpawner, spawner),
+            Effect.provideService(RunEventSink, sink),
+            Effect.provideService(SubagentDurability, durability),
+            Effect.provide(captured),
+          );
+        }
         return yield* invoke(parameters, handlerContext).pipe(
           Effect.scoped,
           Effect.provideService(AgentSpawner, spawner),
           Effect.provideService(RunEventSink, sink),
+          Effect.provideService(SubagentDurability, durability),
           Effect.provide(captured),
         );
       });

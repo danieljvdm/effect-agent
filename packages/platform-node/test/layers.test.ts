@@ -1,6 +1,7 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
 import {
   AdmissionRequest,
+  AgentBindingResolver,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -89,7 +90,7 @@ type RuntimeInitializationErrorProof = Assert<
 type HostLayerRequirementsProof = Assert<
   Equal<
     Layer.Services<typeof NodeDurableHost.layer>,
-    DurableAgentRuntime | NodeDurableRuntimeConfig
+    DurableAgentRuntime | NodeDurableRuntimeConfig | AgentBindingResolver
   >
 >;
 

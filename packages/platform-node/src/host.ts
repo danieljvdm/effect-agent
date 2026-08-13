@@ -1,4 +1,5 @@
 import {
+  AgentBindingResolver,
   DurableAgentRuntime,
   type AbortCommand,
   type AbortIntent,
@@ -7,6 +8,7 @@ import {
   type ConversationStoreError,
   type DurableAbortFailure,
   type DurableAwaitFailure,
+  type DurableBindingFailure,
   type DurableObserveOptions,
   type DurableSubmitAgent,
   type DurableSubmitFailure,
@@ -37,6 +39,7 @@ export class AdmissionClosed extends Schema.TaggedErrorClass<AdmissionClosed>()(
 const makeHost = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
   const config = yield* NodeDurableRuntimeConfig;
+  const bindingResolver = yield* AgentBindingResolver;
 
   // Startup gate (deployment §5, plan §host): configuration decoding and storage compatibility
   // already gated this Layer's dependencies; the last gate before admission opens is recovering
@@ -78,6 +81,14 @@ const makeHost = Effect.gen(function* () {
       { concurrency: "unbounded", discard: true },
     );
 
+  // S2 multi-binding pool: every claimed head resolves its exact registered Binding through
+  // the host's `AgentBindingResolver` (`NodeDurableRuntimeOptions.bindings`), so ONE bounded
+  // pool serves parent and child lanes — the spec §12 smallest-pool suspension/wakeup proof
+  // runs `workerConcurrency: 1` over exactly this loop.
+  const runResolvedWorkers = runWorkers(
+    runtime.runResolvedWorker.pipe(Effect.provideService(AgentBindingResolver, bindingResolver)),
+  );
+
   return NodeDurableHost.of({
     startupRecovery,
     admissionOpen: Ref.get(admission),
@@ -86,6 +97,7 @@ const makeHost = Effect.gen(function* () {
     observe: runtime.observe,
     abort: runtime.abort,
     runWorkers,
+    runResolvedWorkers,
   });
 });
 
@@ -139,13 +151,19 @@ export class NodeDurableHost extends Context.Service<
      * bound is the validated finite configuration value; the host never forks daemon fibers.
      */
     readonly runWorkers: <A, E, R>(worker: Effect.Effect<A, E, R>) => Effect.Effect<void, E, R>;
+    /**
+     * Run `workerConcurrency` copies of `DurableAgentRuntime.runResolvedWorker` over the host's
+     * registered Bindings (S2): every claimed head resolves its exact stored Binding before any
+     * code runs (SUB-023), so one bounded pool serves parent and attached-child lanes.
+     */
+    readonly runResolvedWorkers: Effect.Effect<void, DurableWorkerFailure | DurableBindingFailure>;
   }
 >()("@effect-agent/platform-node/NodeDurableHost") {
   /** Host gates over an already-assembled `NodeDurableRuntime` stack. */
   static readonly layer: Layer.Layer<
     NodeDurableHost,
     DurableWorkerFailure,
-    DurableAgentRuntime | NodeDurableRuntimeConfig
+    DurableAgentRuntime | NodeDurableRuntimeConfig | AgentBindingResolver
   > = Layer.effect(NodeDurableHost)(makeHost);
 
   /** The complete DN host: `NodeDurableRuntime.layer(options)` plus the host lifecycle gates. */

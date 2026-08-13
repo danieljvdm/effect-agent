@@ -1,13 +1,18 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 import { AgentId, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import {
   AdmissionRequest,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
+  AttachChildToReservationRequest,
+  BeginChildBudgetReleaseRequest,
   CanonicalSequence,
+  ChildBudgetReservationRequest,
+  ChildReservationId,
+  ChildSettledNotification,
   ClaimJoiningRequest,
   ClaimRequest,
   DefinitionDigests,
@@ -23,19 +28,23 @@ import {
   Principal,
   ProducerId,
   RecoverySnapshotRequest,
+  ReleaseChildBudgetRequest,
   RenewOwnershipRequest,
   ResolutionNeverHappened,
   RevertJoiningRequest,
   SettlementFinalization,
   SubmissionLedger,
+  SubmissionLookupByKey,
   SuspendRequest,
   UnknownResolutionCommand,
+  WaitingChild,
+  WaitingForChildSuspension,
   submissionInputRecordId,
   submissionLedgerConformanceCases,
   submissionSettlementId,
 } from "@effect-agent/session";
 
-import { MemorySubmissionLedgerLive } from "../src/index.ts";
+import { MemorySubmissionLedgerLive, memorySubmissionLedgerLayer } from "../src/index.ts";
 
 const testLayer = Layer.mergeAll(MemorySubmissionLedgerLive, NodeCrypto.layer);
 
@@ -48,7 +57,15 @@ const definitionDigest = Schema.decodeSync(Digest)("e".repeat(64));
 const unknownSubmission = Schema.decodeSync(SubmissionId)("submission-memory-unknown");
 const unknownToken = Schema.decodeSync(OwnershipToken)("ownership-memory-unknown");
 const unknownCall = Schema.decodeSync(ToolCallId)("call-memory-unknown");
+const unknownReservation = Schema.decodeSync(ChildReservationId)("child-reservation-unknown");
 const sequenceOne = Schema.decodeSync(CanonicalSequence)(1);
+const waitingParentLane = Schema.decodeSync(ConversationId)("conversation-memory-waiting");
+const waitingChildLane = Schema.decodeSync(ConversationId)("conversation-memory-waiting-child");
+const indeterminateKey = Schema.decodeSync(IdempotencyKey)("indeterminate-key");
+const waitingParentKey = Schema.decodeSync(IdempotencyKey)("waiting-parent");
+const waitingChildKey = Schema.decodeSync(IdempotencyKey)("waiting-child");
+const waitingParentDigest = Schema.decodeSync(Digest)("d1".padEnd(64, "0"));
+const waitingChildDigest = Schema.decodeSync(Digest)("d2".padEnd(64, "0"));
 const agentDigests = DefinitionDigests.make({
   agent: definitionDigest,
   model: definitionDigest,
@@ -319,6 +336,209 @@ describe("MemorySubmissionLedger", () => {
           _tag: "LedgerError",
           operation: "recordUnknownResolution",
         });
+
+        const reserveFailure = yield* ledger
+          .reserveChildBudget(
+            ChildBudgetReservationRequest.make({
+              reservationId: unknownReservation,
+              parentSubmissionId: unknownSubmission,
+              parentToolCallId: unknownCall,
+              ownershipToken: unknownToken,
+              allocation: { turns: 1 },
+              allocationDigest: definitionDigest,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(reserveFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "reserveChildBudget",
+        });
+
+        const attachFailure = yield* ledger
+          .attachChildToReservation(
+            AttachChildToReservationRequest.make({
+              reservationId: unknownReservation,
+              ownershipToken: unknownToken,
+              childSubmissionId: unknownSubmission,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(attachFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "attachChildToReservation",
+        });
+
+        const beginFailure = yield* ledger
+          .beginChildBudgetRelease(
+            BeginChildBudgetReleaseRequest.make({
+              reservationId: unknownReservation,
+              accounting: { consumed: {} },
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(beginFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "beginChildBudgetRelease",
+        });
+
+        const releaseFailure = yield* ledger
+          .releaseChildBudget(ReleaseChildBudgetRequest.make({ reservationId: unknownReservation }))
+          .pipe(Effect.flip);
+        expect(releaseFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "releaseChildBudget",
+        });
+
+        const settledFailure = yield* ledger
+          .recordChildSettled(
+            ChildSettledNotification.make({
+              parentSubmissionId: unknownSubmission,
+              childSubmissionId: unknownSubmission,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(settledFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "recordChildSettled",
+        });
+      }),
+    );
+  });
+
+  it.layer(testLayer)((it) => {
+    it.effect("rejects a premature child settlement notification fail-closed", () =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const parent = yield* ledger.admit(admissionRequest("premature-parent-key", "b1"));
+        const child = yield* ledger.admit(admissionRequest("premature-child-key", "b2"));
+
+        // The child is admitted but NOT settled: the single-store adapter verifies the
+        // canonical settlement authority instead of trusting the caller.
+        const premature = yield* ledger
+          .recordChildSettled(
+            ChildSettledNotification.make({
+              parentSubmissionId: parent.submissionId,
+              childSubmissionId: child.submissionId,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(premature).toMatchObject({
+          _tag: "LedgerError",
+          operation: "recordChildSettled",
+        });
+      }),
+    );
+  });
+
+  it.effect("answers Indeterminate from the fault seam and never treats it as absence", () =>
+    Effect.gen(function* () {
+      const fault = yield* Ref.make<Option.Option<string>>(Option.none());
+      const faultLayer = Layer.mergeAll(
+        memorySubmissionLedgerLayer({ resolveAdmissionFault: Ref.get(fault) }),
+        NodeCrypto.layer,
+      );
+      yield* Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const key = SubmissionLookupByKey.make({
+          conversationId,
+          principal,
+          idempotencyKey: indeterminateKey,
+        });
+
+        const beforeAdmission = yield* ledger.resolveAdmission(key);
+        expect(beforeAdmission._tag).toBe("NotAdmitted");
+
+        const admitted = yield* ledger.admit(admissionRequest("indeterminate-key", "c1"));
+
+        // The authoritative owner becomes unreachable: the adapter answers Indeterminate —
+        // a typed "cannot prove either", never NotAdmitted (SUB-031).
+        yield* Ref.set(fault, Option.some("the authoritative child owner is unreachable"));
+        const during = yield* ledger.resolveAdmission(key);
+        expect(during._tag).toBe("Indeterminate");
+        if (during._tag === "Indeterminate") {
+          expect(during.reason).toBe("the authoritative child owner is unreachable");
+        }
+
+        // Once reachable again, the SAME admission resolves: indeterminate was never absence,
+        // so no second child was ever permitted.
+        yield* Ref.set(fault, Option.none());
+        const after = yield* ledger.resolveAdmission(key);
+        expect(after._tag).toBe("Admitted");
+        if (after._tag === "Admitted") {
+          expect(after.submission.submissionId).toBe(admitted.submissionId);
+          expect(after.submission.receiptId).toBe(admitted.receiptId);
+        }
+      }).pipe(Effect.provide(faultLayer));
+    }),
+  );
+
+  it.layer(testLayer)((it) => {
+    it.effect("keeps a waitingForChild parent dormant while children run in their own lanes", () =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+
+        const parent = yield* ledger.admit(
+          AdmissionRequest.make({
+            conversationId: waitingParentLane,
+            principal,
+            idempotencyKey: waitingParentKey,
+            agentId,
+            agentDigests,
+            deploymentId,
+            inputPayload: { work: "parent" },
+            inputDigest: waitingParentDigest,
+          }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
+        const child = yield* ledger.admit(
+          AdmissionRequest.make({
+            conversationId: waitingChildLane,
+            principal,
+            idempotencyKey: waitingChildKey,
+            agentId,
+            agentDigests,
+            deploymentId,
+            inputPayload: { work: "child" },
+            inputDigest: waitingChildDigest,
+            parentLinkage: {
+              parentSubmissionId: parent.submissionId,
+              parentToolCallId: unknownCall,
+            },
+          }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
+
+        const parentClaim = yield* ledger.claim(
+          ClaimRequest.make({ conversationId: waitingParentLane, producerId: producerA }),
+        );
+        expect(Option.isSome(parentClaim)).toBe(true);
+        if (Option.isNone(parentClaim)) return;
+        const suspended = yield* ledger.suspend(
+          SuspendRequest.make({
+            submissionId: parent.submissionId,
+            ownershipToken: parentClaim.value.ownershipToken,
+            reason: WaitingForChildSuspension.make({
+              children: [
+                WaitingChild.make({
+                  toolCallId: unknownCall,
+                  childSubmissionId: child.submissionId,
+                }),
+              ],
+            }),
+          }),
+        );
+        expect(suspended).toBe("suspended");
+
+        // Independent fencing (SUB-020): the child lane claims under its OWN epoch while the
+        // suspended parent lane produces no claim at all.
+        const childClaim = yield* ledger.claim(
+          ClaimRequest.make({ conversationId: waitingChildLane, producerId: producerA }),
+        );
+        expect(Option.isSome(childClaim)).toBe(true);
+        const blockedParent = yield* ledger.claim(
+          ClaimRequest.make({ conversationId: waitingParentLane, producerId: producerA }),
+        );
+        expect(Option.isNone(blockedParent)).toBe(true);
       }),
     );
   });

@@ -14,6 +14,7 @@ import {
 } from "@effect-agent/core";
 import {
   AgentRuntime,
+  type AgentChildPending,
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
 } from "@effect-agent/engine";
@@ -53,7 +54,8 @@ type ExpectedFailure =
   | AgentPolicyError
   | ModelProtocolError
   | AgentApprovalDenied
-  | AgentApprovalPending;
+  | AgentApprovalPending
+  | AgentChildPending;
 type RequirementsProof = Assert<
   Equal<Effect.Services<typeof fixtureProgram>, ExpectedRequirements>
 >;

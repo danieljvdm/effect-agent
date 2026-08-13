@@ -3,14 +3,24 @@ import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   AbortCommand,
   AbortIntent,
+  AdmissionAdmitted,
   AdmissionConflict,
+  AdmissionNotAdmitted,
   AdmissionRequest,
   AdmissionResult,
   ApprovalConflict,
   ApprovalDecision,
   ApprovalDecisionCommand,
   ApprovalDecisionIntent,
+  AttachChildToReservationRequest,
+  BeginChildBudgetReleaseRequest,
   CanonicalSequence,
+  ChildAttachmentSnapshot,
+  ChildBudgetReservationRequest,
+  ChildBudgetReservationSnapshot,
+  ChildReservationConflict,
+  ChildReservationStatus,
+  ChildSettledNotification,
   Claim,
   ClaimJoiningRequest,
   ClaimRequest,
@@ -30,14 +40,17 @@ import {
   OwnershipLost,
   OwnershipRenewal,
   OwnershipSnapshot,
+  ParentLinkage,
   PersistedJson,
   ProducerEpoch,
   QueueSequence,
   RecordEnvelope,
   RecoverySnapshot,
   RecoverySnapshotRequest,
+  ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
+  ReservedChildBudget,
   ReservedSettlement,
   RevertJoiningRequest,
   Settlement,
@@ -47,6 +60,7 @@ import {
   SettlementReservation,
   SubmissionLedger,
   SubmissionLookup,
+  SubmissionLookupByKey,
   SubmissionSnapshot,
   SubmissionState,
   SettlementReservationSnapshot,
@@ -58,6 +72,7 @@ import {
   UnknownResolutionConflict,
   UnknownResolutionIntent,
   submissionAbortRecordId,
+  type ChildSettledOutcome,
   type SuspensionOutcome,
 } from "@effect-agent/session";
 import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
@@ -112,6 +127,22 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   suspended_at: Schema.NullOr(BoundedTimestamp),
   unknown_reason: Schema.NullOr(BoundedStoredText),
   unknown_tool_call_ids_json: Schema.NullOr(BoundedStoredText),
+  parent_submission_id: Schema.NullOr(BoundedIdentifier),
+  parent_tool_call_id: Schema.NullOr(BoundedIdentifier),
+}) {}
+
+class ChildReservationRow extends Schema.Class<ChildReservationRow>("ChildReservationRow")({
+  reservation_id: BoundedIdentifier,
+  parent_submission_id: BoundedIdentifier,
+  parent_tool_call_id: BoundedIdentifier,
+  child_submission_id: Schema.NullOr(BoundedIdentifier),
+  status: ChildReservationStatus,
+  allocation_json: BoundedStoredText,
+  allocation_digest: Digest,
+  accounting_json: Schema.NullOr(BoundedStoredText),
+  reserved_at: BoundedTimestamp,
+  release_began_at: Schema.NullOr(BoundedTimestamp),
+  released_at: Schema.NullOr(BoundedTimestamp),
 }) {}
 
 class ApprovalDecisionRow extends Schema.Class<ApprovalDecisionRow>("ApprovalDecisionRow")({
@@ -190,7 +221,23 @@ const SUBMISSION_COLUMNS = `
   suspended_reason_json,
   suspended_at,
   unknown_reason,
-  unknown_tool_call_ids_json
+  unknown_tool_call_ids_json,
+  parent_submission_id,
+  parent_tool_call_id
+`;
+
+const CHILD_RESERVATION_COLUMNS = `
+  reservation_id,
+  parent_submission_id,
+  parent_tool_call_id,
+  child_submission_id,
+  status,
+  allocation_json,
+  allocation_digest,
+  accounting_json,
+  reserved_at,
+  release_began_at,
+  released_at
 `;
 
 /** The branded ToolCallId schema, reached through the session port so no core import is needed. */
@@ -222,6 +269,11 @@ const decodeJoinSnapshot = Schema.decodeUnknownEffect(JoinSnapshot);
 const decodeSuspensionSnapshot = Schema.decodeUnknownEffect(SuspensionSnapshot);
 const decodeApprovalDecisionIntent = Schema.decodeUnknownEffect(ApprovalDecisionIntent);
 const decodeUnknownResolutionIntent = Schema.decodeUnknownEffect(UnknownResolutionIntent);
+const decodeParentLinkage = Schema.decodeUnknownEffect(ParentLinkage);
+const decodeChildReservationSnapshotUnknown = Schema.decodeUnknownEffect(
+  ChildBudgetReservationSnapshot,
+);
+const decodeChildAttachmentSnapshot = Schema.decodeUnknownEffect(ChildAttachmentSnapshot);
 
 /** Wrap an adapter-internal failure into the port's LedgerError without erasing its tag. */
 const internalFailure =
@@ -275,6 +327,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     E extends
       | AdmissionConflict
       | ApprovalConflict
+      | ChildReservationConflict
       | JoinedToHost
       | OwnershipLost
       | SettlementConflict
@@ -441,6 +494,14 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           ),
         ),
       );
+      if ((row.parent_submission_id === null) !== (row.parent_tool_call_id === null)) {
+        return yield* corruptionFailure(
+          operation,
+          "effect_agent_submissions",
+          row.submission_id,
+          "A parent linkage must record both the parent Submission and the parent Tool Call.",
+        );
+      }
       return yield* decodeSubmissionSnapshotUnknown({
         submissionId: row.submission_id,
         conversationId: row.conversation_id,
@@ -457,6 +518,14 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         createdAt: row.created_at,
         ...(row.settled_outcome === null ? {} : { settledOutcome: row.settled_outcome }),
         ...(row.ready_at === null ? {} : { readyAt: row.ready_at }),
+        ...(row.parent_submission_id === null || row.parent_tool_call_id === null
+          ? {}
+          : {
+              parentLinkage: {
+                parentSubmissionId: row.parent_submission_id,
+                parentToolCallId: row.parent_tool_call_id,
+              },
+            }),
       }).pipe(
         Effect.mapError((error) =>
           corruptionFailure(
@@ -533,6 +602,99 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       );
     }
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+  });
+
+  const decodeChildReservationRows = (operation: string, rowKey: string, rows: unknown) =>
+    decodeRows(
+      Schema.Array(ChildReservationRow),
+      "effect_agent_child_reservations",
+      rowKey,
+      rows,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+
+  const readChildReservation = Effect.fn("SqliteSubmissionLedger.readChildReservation")(function* (
+    operation: string,
+    reservationId: string,
+  ): Effect.fn.Return<Option.Option<ChildReservationRow>, LedgerError> {
+    const rows = yield* sql<Record<string, unknown>>`
+      SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
+      FROM effect_agent_child_reservations
+      WHERE reservation_id = ${reservationId}
+    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const decoded = yield* decodeChildReservationRows(operation, reservationId, rows);
+    if (decoded.length > 1) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_child_reservations",
+        reservationId,
+        "A child reservation primary key returned more than one row.",
+      );
+    }
+    return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+  });
+
+  const readChildReservationForCall = Effect.fn(
+    "SqliteSubmissionLedger.readChildReservationForCall",
+  )(function* (
+    operation: string,
+    parentSubmissionId: string,
+    parentToolCallId: string,
+  ): Effect.fn.Return<Option.Option<ChildReservationRow>, LedgerError> {
+    const rows = yield* sql<Record<string, unknown>>`
+      SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
+      FROM effect_agent_child_reservations
+      WHERE parent_submission_id = ${parentSubmissionId}
+        AND parent_tool_call_id = ${parentToolCallId}
+    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const decoded = yield* decodeChildReservationRows(
+      operation,
+      `${parentSubmissionId}/${parentToolCallId}`,
+      rows,
+    );
+    if (decoded.length > 1) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_child_reservations",
+        `${parentSubmissionId}/${parentToolCallId}`,
+        "A parent Tool Call returned more than one child reservation.",
+      );
+    }
+    return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
+  });
+
+  const childReservationSnapshotFromRow = Effect.fn(
+    "SqliteSubmissionLedger.childReservationSnapshotFromRow",
+  )(function* (
+    operation: string,
+    row: ChildReservationRow,
+  ): Effect.fn.Return<ChildBudgetReservationSnapshot, LedgerError> {
+    const rowFailure = (error: { readonly message: string }) =>
+      corruptionFailure(
+        operation,
+        "effect_agent_child_reservations",
+        row.reservation_id,
+        error.message,
+      );
+    const allocation = yield* parseStoredJsonText(row.allocation_json).pipe(
+      Effect.mapError(rowFailure),
+    );
+    const accounting =
+      row.accounting_json === null
+        ? undefined
+        : yield* parseStoredJsonText(row.accounting_json).pipe(Effect.mapError(rowFailure));
+    return yield* decodeChildReservationSnapshotUnknown({
+      reservationId: row.reservation_id,
+      parentSubmissionId: row.parent_submission_id,
+      parentToolCallId: row.parent_tool_call_id,
+      status: row.status,
+      allocation,
+      allocationDigest: row.allocation_digest,
+      reservedAt: row.reserved_at,
+      ...(row.child_submission_id === null ? {} : { childSubmissionId: row.child_submission_id }),
+      ...(accounting === undefined ? {} : { accounting }),
+      ...(row.release_began_at === null ? {} : { releaseBeganAt: row.release_began_at }),
+      ...(row.released_at === null ? {} : { releasedAt: row.released_at }),
+    }).pipe(Effect.mapError(rowFailure));
   });
 
   const readApprovalDecisions = Effect.fn("SqliteSubmissionLedger.readApprovalDecisions")(
@@ -762,7 +924,15 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             );
           }
           if (existing.length === 1) {
-            if (existing[0].input_digest !== validated.inputDigest) {
+            // A replay must repeat the exact canonical input AND the exact parent linkage (or
+            // its absence): linkage is immutable child lineage (spec §12 step 5, SUB-016).
+            const sameLinkage =
+              validated.parentLinkage === undefined
+                ? existing[0].parent_submission_id === null &&
+                  existing[0].parent_tool_call_id === null
+                : existing[0].parent_submission_id === validated.parentLinkage.parentSubmissionId &&
+                  existing[0].parent_tool_call_id === validated.parentLinkage.parentToolCallId;
+            if (existing[0].input_digest !== validated.inputDigest || !sameLinkage) {
               return yield* AdmissionConflict.make({
                 conversationId: validated.conversationId,
                 principal: validated.principal,
@@ -810,7 +980,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               input_digest,
               receipt_id,
               state,
-              created_at
+              created_at,
+              parent_submission_id,
+              parent_tool_call_id
             ) VALUES (
               ${mintedSubmissionId},
               ${validated.conversationId},
@@ -824,7 +996,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               ${validated.inputDigest},
               ${mintedReceiptId},
               'admitted',
-              ${now.iso}
+              ${now.iso},
+              ${validated.parentLinkage?.parentSubmissionId ?? null},
+              ${validated.parentLinkage?.parentToolCallId ?? null}
             )
           `.pipe(Effect.mapError(sqlFailure(operation)));
 
@@ -901,6 +1075,42 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       return Option.some(yield* decodeSubmissionSnapshot(operation, decoded[0]));
     },
   );
+
+  // A single strongly consistent SQLite file always answers authoritatively (SUB-031): the
+  // key-scoped read IS the admission truth, so the tri-state degenerates to NotAdmitted or
+  // Admitted here — Indeterminate exists for adapters that can fail to reach the owner.
+  const resolveAdmission: SubmissionLedger["Service"]["resolveAdmission"] = Effect.fn(
+    "SqliteSubmissionLedger.resolveAdmission",
+  )(function* (request: SubmissionLookupByKey) {
+    const operation = "ledger resolve admission";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SubmissionLookupByKey))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    const rows = yield* sql<Record<string, unknown>>`
+      SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+      FROM effect_agent_submissions
+      WHERE conversation_id = ${validated.conversationId}
+        AND principal = ${validated.principal}
+        AND idempotency_key = ${validated.idempotencyKey}
+    `.pipe(Effect.mapError(sqlFailure(operation)));
+    const decoded = yield* decodeSubmissionRows(
+      operation,
+      `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`,
+      rows,
+    );
+    if (decoded.length > 1) {
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_submissions",
+        `${validated.conversationId}/${validated.principal}/${validated.idempotencyKey}`,
+        "An admission idempotency key returned more than one row.",
+      );
+    }
+    if (decoded.length === 0) return AdmissionNotAdmitted.make();
+    return AdmissionAdmitted.make({
+      submission: yield* decodeSubmissionSnapshot(operation, decoded[0]),
+    });
+  });
 
   const claim: SubmissionLedger["Service"]["claim"] = Effect.fn("SqliteSubmissionLedger.claim")(
     function* (request: ClaimRequest) {
@@ -1620,12 +1830,27 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           });
         }
         yield* requireOwnership(operation, submission, validated.ownershipToken);
-        // A decision that raced ahead of the suspend transaction already covers the reason:
-        // the caller resumes immediately WITHOUT releasing the lane (plan §2.6).
-        const decisions = yield* readApprovalDecisions(operation, validated.submissionId);
-        const decided = new Set(decisions.map((row) => row.tool_call_id));
-        if (validated.reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) {
-          return "resume-immediately" as SuspensionOutcome;
+        // A covering event that raced ahead of the suspend transaction (an approval decision,
+        // or a child settlement observed directly from the child's row in this single-store
+        // file) resumes the caller immediately WITHOUT releasing the lane (plan §2.6, §12).
+        if (validated.reason._tag === "ApprovalPending") {
+          const decisions = yield* readApprovalDecisions(operation, validated.submissionId);
+          const decided = new Set(decisions.map((row) => row.tool_call_id));
+          if (validated.reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) {
+            return "resume-immediately" as SuspensionOutcome;
+          }
+        } else {
+          let allSettled = true;
+          for (const child of validated.reason.children) {
+            const childRow = yield* readSubmission(operation, child.childSubmissionId);
+            if (Option.isNone(childRow) || childRow.value.state !== "settled") {
+              allSettled = false;
+              break;
+            }
+          }
+          if (allSettled) {
+            return "resume-immediately" as SuspensionOutcome;
+          }
         }
         const now = yield* currentInstant;
         yield* sql`
@@ -1650,8 +1875,9 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
   });
 
   /**
-   * Once every pending call of the recorded suspension reason has a decision intent, the lane
-   * wakes: suspended → input-applied, suspension cleared (plan §2.6). Runs inside the caller's
+   * Once every pending call of a recorded ApprovalPending suspension has a decision intent,
+   * the lane wakes: suspended → input-applied, suspension cleared (plan §2.6). A
+   * WaitingForChild suspension wakes only through recordChildSettled. Runs inside the caller's
    * write transaction.
    */
   const wakeSuspendedIfCovered = Effect.fn("SqliteSubmissionLedger.wakeSuspendedIfCovered")(
@@ -1669,6 +1895,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           ),
         ),
       );
+      if (reason._tag !== "ApprovalPending") return;
       const decisions = yield* readApprovalDecisions(operation, submission.submission_id);
       const decided = new Set(decisions.map((row) => row.tool_call_id));
       if (!reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) return;
@@ -1913,6 +2140,343 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     return intent;
   });
 
+  const recordChildSettled: SubmissionLedger["Service"]["recordChildSettled"] = Effect.fn(
+    "SqliteSubmissionLedger.recordChildSettled",
+  )(function* (request: ChildSettledNotification) {
+    const operation = "ledger record child settled";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ChildSettledNotification))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:child-settled:before", operation);
+    const outcome = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
+        // The child's canonical Settlement is the authority for this wake; a notification for
+        // an unsettled (or unknown) child is a caller error in a single-store adapter.
+        const child = yield* readSubmission(operation, validated.childSubmissionId);
+        if (Option.isNone(child) || child.value.state !== "settled") {
+          return yield* LedgerError.make({
+            operation,
+            message: `Child submission ${validated.childSubmissionId} has no recorded settlement.`,
+          });
+        }
+        if (parent.state !== "suspended" || parent.suspended_reason_json === null) {
+          return "not-waiting" as ChildSettledOutcome;
+        }
+        const reason = yield* Schema.decodeEffect(Schema.fromJsonString(SuspensionReason))(
+          parent.suspended_reason_json,
+        ).pipe(
+          Effect.mapError((error) =>
+            corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              parent.submission_id,
+              error.message,
+            ),
+          ),
+        );
+        if (reason._tag !== "WaitingForChild") {
+          return "not-waiting" as ChildSettledOutcome;
+        }
+        if (
+          !reason.children.some((entry) => entry.childSubmissionId === validated.childSubmissionId)
+        ) {
+          return "not-waiting" as ChildSettledOutcome;
+        }
+        // The parent wakes exactly when EVERY listed child is settled (spec §12 step 10);
+        // replays re-run the coverage check so a recovering caller wakes the lane idempotently.
+        for (const entry of reason.children) {
+          const listed = yield* readSubmission(operation, entry.childSubmissionId);
+          if (Option.isNone(listed) || listed.value.state !== "settled") {
+            return "still-waiting" as ChildSettledOutcome;
+          }
+        }
+        yield* sql`
+          UPDATE effect_agent_submissions
+          SET
+            state = 'input-applied',
+            suspended_reason_json = NULL,
+            suspended_at = NULL
+          WHERE submission_id = ${validated.parentSubmissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        return "woken" as ChildSettledOutcome;
+      }),
+    );
+    yield* hitFailpoint("ledger:child-settled:after", operation);
+    return outcome;
+  });
+
+  const reserveChildBudget: SubmissionLedger["Service"]["reserveChildBudget"] = Effect.fn(
+    "SqliteSubmissionLedger.reserveChildBudget",
+  )(function* (request: ChildBudgetReservationRequest) {
+    const operation = "ledger reserve child budget";
+    const validated = yield* Schema.decodeUnknownEffect(
+      Schema.toType(ChildBudgetReservationRequest),
+    )(request).pipe(Effect.mapError(internalFailure(operation)));
+    const allocationJson = yield* encodePersistedJsonText(validated.allocation).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
+    yield* hitFailpoint("ledger:child-reservation:before", operation);
+    const reserved = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const existing = yield* readChildReservation(operation, validated.reservationId);
+        if (Option.isSome(existing)) {
+          // Identical replays short-circuit before the fence, mirroring reserveSettlement: a
+          // replay creates nothing, so a recovering caller resumes rather than duplicates.
+          const identical =
+            existing.value.parent_submission_id === validated.parentSubmissionId &&
+            existing.value.parent_tool_call_id === validated.parentToolCallId &&
+            existing.value.allocation_digest === validated.allocationDigest &&
+            existing.value.allocation_json === allocationJson;
+          if (!identical) {
+            return yield* ChildReservationConflict.make({
+              reservationId: validated.reservationId,
+              status: existing.value.status,
+              message:
+                "A reservation with this identity exists with a different parent Tool Call or allocation.",
+            });
+          }
+          return ReservedChildBudget.make({
+            reservation: yield* childReservationSnapshotFromRow(operation, existing.value),
+            replayed: true,
+          });
+        }
+        const collision = yield* readChildReservationForCall(
+          operation,
+          validated.parentSubmissionId,
+          validated.parentToolCallId,
+        );
+        if (Option.isSome(collision)) {
+          return yield* ChildReservationConflict.make({
+            reservationId: validated.reservationId,
+            status: collision.value.status,
+            message: `Parent Tool Call ${validated.parentToolCallId} already owns reservation ${collision.value.reservation_id}.`,
+          });
+        }
+        const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
+        // Creation is fenced by the parent lane's live ownership (spec §12 step 2): a stale
+        // parent Attempt can never create new reservation state.
+        yield* requireOwnership(operation, parent, validated.ownershipToken);
+        const now = yield* currentInstant;
+        yield* sql`
+          INSERT INTO effect_agent_child_reservations (
+            reservation_id,
+            parent_submission_id,
+            parent_tool_call_id,
+            status,
+            allocation_json,
+            allocation_digest,
+            reserved_at
+          ) VALUES (
+            ${validated.reservationId},
+            ${validated.parentSubmissionId},
+            ${validated.parentToolCallId},
+            'reserved',
+            ${allocationJson},
+            ${validated.allocationDigest},
+            ${now.iso}
+          )
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        const inserted = yield* readChildReservation(operation, validated.reservationId);
+        if (Option.isNone(inserted)) {
+          return yield* corruptionFailure(
+            operation,
+            "effect_agent_child_reservations",
+            validated.reservationId,
+            "An inserted child reservation row is missing inside its own transaction.",
+          );
+        }
+        return ReservedChildBudget.make({
+          reservation: yield* childReservationSnapshotFromRow(operation, inserted.value),
+          replayed: false,
+        });
+      }),
+    );
+    yield* hitFailpoint("ledger:child-reservation:after", operation);
+    return reserved;
+  });
+
+  const attachChildToReservation: SubmissionLedger["Service"]["attachChildToReservation"] =
+    Effect.fn("SqliteSubmissionLedger.attachChildToReservation")(function* (
+      request: AttachChildToReservationRequest,
+    ) {
+      const operation = "ledger attach child to reservation";
+      const validated = yield* Schema.decodeUnknownEffect(
+        Schema.toType(AttachChildToReservationRequest),
+      )(request).pipe(Effect.mapError(internalFailure(operation)));
+      yield* hitFailpoint("ledger:child-attach:before", operation);
+      const attached = yield* inWriteTransaction(
+        operation,
+        Effect.gen(function* () {
+          const existing = yield* readChildReservation(operation, validated.reservationId);
+          if (Option.isNone(existing)) {
+            return yield* LedgerError.make({
+              operation,
+              message: `Unknown child reservation ${validated.reservationId}.`,
+            });
+          }
+          if (existing.value.child_submission_id !== null) {
+            // Idempotent replay of the recorded attachment (unfenced — it mutates nothing).
+            if (existing.value.child_submission_id === validated.childSubmissionId) {
+              return yield* childReservationSnapshotFromRow(operation, existing.value);
+            }
+            return yield* ChildReservationConflict.make({
+              reservationId: validated.reservationId,
+              status: existing.value.status,
+              message: `Reservation ${validated.reservationId} already records child ${existing.value.child_submission_id}.`,
+            });
+          }
+          const parent = yield* requireSubmission(operation, existing.value.parent_submission_id);
+          yield* requireOwnership(operation, parent, validated.ownershipToken);
+          if (existing.value.status !== "reserved") {
+            return yield* ChildReservationConflict.make({
+              reservationId: validated.reservationId,
+              status: existing.value.status,
+              message: `Cannot attach a child to a ${existing.value.status} reservation.`,
+            });
+          }
+          // Single-store latitude: the admitted child must exist here, so a dangling
+          // attachment can never enter the recovery view.
+          const child = yield* readSubmission(operation, validated.childSubmissionId);
+          if (Option.isNone(child)) {
+            return yield* LedgerError.make({
+              operation,
+              message: `Unknown child submission ${validated.childSubmissionId}.`,
+            });
+          }
+          yield* sql`
+            UPDATE effect_agent_child_reservations
+            SET child_submission_id = ${validated.childSubmissionId}
+            WHERE reservation_id = ${validated.reservationId}
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          const updated = yield* readChildReservation(operation, validated.reservationId);
+          if (Option.isNone(updated)) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_child_reservations",
+              validated.reservationId,
+              "An updated child reservation row is missing inside its own transaction.",
+            );
+          }
+          return yield* childReservationSnapshotFromRow(operation, updated.value);
+        }),
+      );
+      yield* hitFailpoint("ledger:child-attach:after", operation);
+      return attached;
+    });
+
+  const beginChildBudgetRelease: SubmissionLedger["Service"]["beginChildBudgetRelease"] = Effect.fn(
+    "SqliteSubmissionLedger.beginChildBudgetRelease",
+  )(function* (request: BeginChildBudgetReleaseRequest) {
+    const operation = "ledger begin child budget release";
+    const validated = yield* Schema.decodeUnknownEffect(
+      Schema.toType(BeginChildBudgetReleaseRequest),
+    )(request).pipe(Effect.mapError(internalFailure(operation)));
+    const accountingJson = yield* encodePersistedJsonText(validated.accounting).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
+    yield* hitFailpoint("ledger:child-release-pending:before", operation);
+    const frozen = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const existing = yield* readChildReservation(operation, validated.reservationId);
+        if (Option.isNone(existing)) {
+          return yield* LedgerError.make({
+            operation,
+            message: `Unknown child reservation ${validated.reservationId}.`,
+          });
+        }
+        if (existing.value.status !== "reserved") {
+          // The accounting decision was already frozen exactly once; an identical replay is a
+          // no-op and a divergent decision conflicts (spec §12 join step 6).
+          if (existing.value.accounting_json === accountingJson) {
+            return yield* childReservationSnapshotFromRow(operation, existing.value);
+          }
+          return yield* ChildReservationConflict.make({
+            reservationId: validated.reservationId,
+            status: existing.value.status,
+            message: "A different accounting decision is already frozen for this reservation.",
+          });
+        }
+        const now = yield* currentInstant;
+        yield* sql`
+          UPDATE effect_agent_child_reservations
+          SET
+            status = 'releasePending',
+            accounting_json = ${accountingJson},
+            release_began_at = ${now.iso}
+          WHERE reservation_id = ${validated.reservationId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        const updated = yield* readChildReservation(operation, validated.reservationId);
+        if (Option.isNone(updated)) {
+          return yield* corruptionFailure(
+            operation,
+            "effect_agent_child_reservations",
+            validated.reservationId,
+            "An updated child reservation row is missing inside its own transaction.",
+          );
+        }
+        return yield* childReservationSnapshotFromRow(operation, updated.value);
+      }),
+    );
+    yield* hitFailpoint("ledger:child-release-pending:after", operation);
+    return frozen;
+  });
+
+  const releaseChildBudget: SubmissionLedger["Service"]["releaseChildBudget"] = Effect.fn(
+    "SqliteSubmissionLedger.releaseChildBudget",
+  )(function* (request: ReleaseChildBudgetRequest) {
+    const operation = "ledger release child budget";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ReleaseChildBudgetRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:child-release:before", operation);
+    const released = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const existing = yield* readChildReservation(operation, validated.reservationId);
+        if (Option.isNone(existing)) {
+          return yield* LedgerError.make({
+            operation,
+            message: `Unknown child reservation ${validated.reservationId}.`,
+          });
+        }
+        // Applied exactly once: replaying a released reservation returns the stored row
+        // unchanged (spec §12: "never available twice").
+        if (existing.value.status === "released") {
+          return yield* childReservationSnapshotFromRow(operation, existing.value);
+        }
+        if (existing.value.status !== "releasePending") {
+          return yield* ChildReservationConflict.make({
+            reservationId: validated.reservationId,
+            status: existing.value.status,
+            message: "Cannot release a reservation whose accounting decision is not frozen.",
+          });
+        }
+        const now = yield* currentInstant;
+        yield* sql`
+          UPDATE effect_agent_child_reservations
+          SET status = 'released', released_at = ${now.iso}
+          WHERE reservation_id = ${validated.reservationId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        const updated = yield* readChildReservation(operation, validated.reservationId);
+        if (Option.isNone(updated)) {
+          return yield* corruptionFailure(
+            operation,
+            "effect_agent_child_reservations",
+            validated.reservationId,
+            "An updated child reservation row is missing inside its own transaction.",
+          );
+        }
+        return yield* childReservationSnapshotFromRow(operation, updated.value);
+      }),
+    );
+    yield* hitFailpoint("ledger:child-release:after", operation);
+    return released;
+  });
+
   interface ScanCursor {
     readonly conversationId: string;
     readonly queueSequence: number;
@@ -2105,11 +2669,59 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             unknownResolutionIntentFromRow(operation, row),
           );
 
+          // Parent-side subagent view: this Submission's child budget reservations in parent
+          // Tool Call order, plus each attached child's current lane state (a disposable
+          // derived view; canonical records stay the recovery truth, DUR-015).
+          const childReservationRows = yield* sql<Record<string, unknown>>`
+            SELECT ${sql.literal(CHILD_RESERVATION_COLUMNS)}
+            FROM effect_agent_child_reservations
+            WHERE parent_submission_id = ${validated.submissionId}
+            ORDER BY parent_tool_call_id ASC
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          const decodedChildReservations = yield* decodeChildReservationRows(
+            operation,
+            validated.submissionId,
+            childReservationRows,
+          );
+          const childReservations = yield* Effect.forEach(decodedChildReservations, (row) =>
+            childReservationSnapshotFromRow(operation, row),
+          );
+          const childAttachments: Array<ChildAttachmentSnapshot> = [];
+          for (const row of decodedChildReservations) {
+            if (row.child_submission_id === null) continue;
+            const child = yield* readSubmission(operation, row.child_submission_id);
+            if (Option.isNone(child)) continue;
+            childAttachments.push(
+              yield* decodeChildAttachmentSnapshot({
+                toolCallId: row.parent_tool_call_id,
+                childSubmissionId: row.child_submission_id,
+                childState: child.value.state,
+                ...(child.value.settled_outcome === null
+                  ? {}
+                  : { childOutcome: child.value.settled_outcome }),
+              }).pipe(Effect.mapError(internalFailure(operation))),
+            );
+          }
+
+          let parentLinkage: ParentLinkage | undefined;
+          if (
+            submissionRow.parent_submission_id !== null &&
+            submissionRow.parent_tool_call_id !== null
+          ) {
+            parentLinkage = yield* decodeParentLinkage({
+              parentSubmissionId: submissionRow.parent_submission_id,
+              parentToolCallId: submissionRow.parent_tool_call_id,
+            }).pipe(Effect.mapError(internalFailure(operation)));
+          }
+
           return RecoverySnapshot.make({
             submission,
             joins,
             approvalDecisions,
             unknownResolutions,
+            childReservations,
+            childAttachments,
+            ...(parentLinkage === undefined ? {} : { parentLinkage }),
             ...(hostSubmissionId === undefined ? {} : { hostSubmissionId }),
             ...(suspension === undefined ? {} : { suspension }),
             ...(ownership === undefined ? {} : { ownership }),
@@ -2129,6 +2741,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       admit,
       markReady,
       lookup,
+      resolveAdmission,
       claim,
       renewOwnership,
       releaseOwnership,
@@ -2143,6 +2756,11 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       recordApprovalDecision,
       markUnknown,
       recordUnknownResolution,
+      recordChildSettled,
+      reserveChildBudget,
+      attachChildToReservation,
+      beginChildBudgetRelease,
+      releaseChildBudget,
       scanNonterminal,
       loadRecoverySnapshot,
     }),
