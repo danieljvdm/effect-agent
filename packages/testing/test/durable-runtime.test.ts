@@ -72,7 +72,7 @@ import {
   turnIdForRun,
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
-} from "../src/index.ts";
+} from "@effect-agent/session";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable");
