@@ -9,6 +9,7 @@ import {
   ProducerId,
   ReleaseOwnershipRequest,
   SubmissionLedger,
+  ToolReconciler,
   WakeScheduler,
   type DurableRuntimeFailpointHandler,
   type OwnershipToken,
@@ -113,6 +114,13 @@ export interface NodeDurableRuntimeOptions {
   readonly storageFailpoint?: SqliteStorageFailpointHandler | undefined;
   /** Coordinator fault injection (`submit:*` / `terminalize:*` locations); default none. */
   readonly runtimeFailpoint?: DurableRuntimeFailpointHandler | undefined;
+  /**
+   * Reconciliation policy consulted for open ordinary Tool Calls before an Unknown Outcome is
+   * recorded (durability §10, DUR-009). Defaults to the fail-closed `ToolReconciler.uncertain`:
+   * with no registered policy, every open call stays Unknown and routes to the authorized
+   * DUR-017 resolution path.
+   */
+  readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
 }
 
 /** Every construction failure of the assembled Node durable runtime stack. */
@@ -284,6 +292,15 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
         finalizeSettlement: (request) =>
           ledger.finalizeSettlement(request).pipe(Effect.tap(() => untrack(request.submissionId))),
         requestAbort: ledger.requestAbort,
+        claimJoining: ledger.claimJoining,
+        markJoined: ledger.markJoined,
+        revertJoining: ledger.revertJoining,
+        // Suspension ends the ownership period by contract, so the drain stops tracking it.
+        suspend: (request) =>
+          ledger.suspend(request).pipe(Effect.tap(() => untrack(request.submissionId))),
+        recordApprovalDecision: ledger.recordApprovalDecision,
+        markUnknown: ledger.markUnknown,
+        recordUnknownResolution: ledger.recordUnknownResolution,
         scanNonterminal: ledger.scanNonterminal,
         loadRecoverySnapshot: ledger.loadRecoverySnapshot,
       });
@@ -295,7 +312,9 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
  * `layer(options)` decodes the configuration, opens ONE SQLite database serving both the
  * Conversation Log and the Submission Ledger (so claims fence the same producer epochs), wires
  * the Node wake scheduler with its ledger-scan fallback, wraps the ledger with the shutdown
- * ownership drain, and provides a ready `DurableAgentRuntime` on top. Storage compatibility is
+ * ownership drain, defaults the Tool reconciliation policy to the fail-closed
+ * `ToolReconciler.uncertain` (override via `options.toolReconciler`), and provides a ready
+ * `DurableAgentRuntime` on top. Storage compatibility is
  * verified during construction: an incompatible database file fails the Layer with
  * `SqliteStorageCompatibilityError` before anything is mutated (DEPLOY-008).
  */
@@ -321,6 +340,7 @@ export class NodeDurableRuntime {
       options.runtimeFailpoint === undefined
         ? DurableRuntimeFailpoint.layer
         : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint });
+    const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
     const ports = Layer.mergeAll(
       conversationStoreLayer,
       nodeWakeSchedulerLayer.pipe(
@@ -329,7 +349,9 @@ export class NodeDurableRuntime {
     );
     return DurableAgentRuntime.layer.pipe(
       Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer)),
-      Layer.provide(Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer)),
+      Layer.provide(
+        Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
+      ),
       Layer.provideMerge(infrastructure),
       Layer.provideMerge(NodeDurableRuntime.configLayer(options)),
     );

@@ -1,15 +1,16 @@
 ---
 title: Durable execution
-description: The implemented Receipt, Attempt, recovery, and Settlement contracts, plus the planned durable Tool and Step contracts.
+description: The implemented Receipt, Attempt, recovery, and Settlement contracts, plus the durable Tool uncertainty and Step contracts.
 ---
 
 # Durable execution
 
-<StatusCallout status="available" phase="P4 implemented; P5 planned" title="The base durable runtime exists on Node/SQLite.">
+<StatusCallout status="available" phase="P4–P5 implemented" title="The durable runtime exists on Node/SQLite.">
 
 The `DN` submit/await/observe/abort surface below is implemented and tested
-([Phase 4 evidence](../PHASE-4-EVIDENCE)). Ordinary-Tool uncertainty records, unknown outcomes,
-and durable Steps remain Phase 5 targets and are marked planned.
+([Phase 4 evidence](../PHASE-4-EVIDENCE)), and so are ordinary-Tool uncertainty records, unknown
+outcomes, durable Steps, durable approval suspension, and joined queued input
+([Phase 5 evidence](../PHASE-5-EVIDENCE)).
 
 </StatusCallout>
 
@@ -18,9 +19,10 @@ The durable runtime makes one bounded promise:
 > After a Submission is durably accepted, the runtime owes exactly one durable terminal Settlement:
 > `completed`, `failed`, or `aborted`.
 
-That is exactly-once **recording** over at-least-once Attempt execution. In Phase 4 recovery
-resumes from the last committed Turn boundary and may re-invoke the model, so the `DN` claim is
-valid for safe-to-repeat toolkits; consequential external mutations wait for Phase 5.
+That is exactly-once **recording** over at-least-once Attempt execution. Recovery resumes from
+the last committed durable boundary and may re-invoke the model, so duplicate provider cost stays
+possible and observable. Since Phase 5, consequential external mutations are covered by an
+explicit uncertainty protocol instead of being excluded from the claim.
 
 ## Submit accepted work
 
@@ -79,8 +81,13 @@ sequence allocated at admission, not wall-clock arrival. Different Conversations
 concurrently.
 
 When claimed, the Submission's exact input is appended canonically before the Model can consume
-it. Later input joining an active Run at safe Turn seams (`joining`/`joined`) remains Phase 5
-scope.
+it. Later queued input can **join** an active Run at safe Turn seams: the contiguous ready prefix
+behind the head transitions `joining`, its content is appended canonically as the deterministic
+`input:{submissionId}` record, and the now-`joined` Submission settles with its host Run — each
+accepted Submission still receives its own Settlement record. Recovery returns pre-append
+`joining` input to ready and reattaches post-append `joined` input without duplicate delivery
+(DUR-016). Aborting a `joined` Submission fails with a typed host-linkage conflict; the abort
+target is the host.
 
 ## Attempts and fencing
 
@@ -115,48 +122,73 @@ coordinator and the SQLite ledger.
 
 ## Ordinary Tool uncertainty
 
-<StatusBadge status="planned" />
+<StatusBadge status="available" />
 
-Before an ordinary external Tool runs, the future engine records `ToolCallPrepared`. After
-validated completion, it records `ToolCallSettled`.
+Tools declare an execution class with `Tool.annotate(ToolExecutionClass, ...)`:
+`"readonly"` (no external mutation — a crash is a free re-run), `"idempotent"` (a declared
+external idempotency contract — recovery may re-execute without proof), or `"uncertain"` — the
+fail-closed default for unannotated Tools.
 
-If recovery finds only the prepared record, it may proceed only when policy can prove that:
+Before a non-readonly Tool Call's handler starts, the coordinator commits `ToolCallPrepared`;
+after validated completion it commits `ToolCallSettled`. If recovery finds only the prepared
+record, it consults the registered `ToolReconciler` and proceeds only when the policy can prove
+that:
 
 - invocation never started;
-- the external result can be reconciled; or
+- the external result can be recovered (it then settles canonically without executing); or
 - retry is safe under a stable external idempotency contract.
 
-Otherwise the Submission enters an operational `Unknown` state and automatic continuation stops.
-The framework will not lie to the Model about whether the effect happened. The `MarkUnknown`
-recovery branch already exists in the classifier, but no Phase 4 flow can trigger it: Phase 4
-commits ordinary Tool results atomically inside the Turn batch.
+Otherwise the Submission enters the operational `unknown` state, the lane blocks without
+consuming a worker permit, and the canonical `ToolCallUnknown` records the uncertainty. The
+framework will not lie to the Model about whether the effect happened. Resolution is a durable,
+audited operation — `resolveUnknown` with supplier truth (`CompletedWithResult`,
+`NeverHappened`, `SafeToRetry`, or `AbortSubmission`) converges the lane to one Settlement
+([Phase 5 evidence](../PHASE-5-EVIDENCE)).
 
 ## Durable Steps
 
-<StatusBadge status="planned" />
+<StatusBadge status="available" />
 
 ```ts
 const result = yield * step.do("charge-customer", ChargeResult, chargeEffect);
 ```
 
-The exact API remains subject to implementation, but its contract is settled: a named Step may
-execute at least once while exactly one accepted result is durably recorded. A previously committed
-result replays without executing the body.
+Declaring `DurableStep` in a Tool's `dependencies` is what makes it a Durable Tool. A named Step
+may execute at least once while exactly one accepted result is durably recorded
+(`ToolStepSettled`, identity `step:{runId}:{toolCallId}:{stepName}`); a previously committed
+result decodes through the declared output Schema and replays without executing the body. Only
+success is ever recorded. Without a durable runtime the engine provides a pass-through that
+executes once and records nothing — the durable claim attaches to the runtime, not the Tool.
 
 This does not turn a non-idempotent external API into an exactly-once system. Step authors still
-provide idempotency, reconciliation, or compensation.
+provide idempotency (for example, keys derived from `(toolCallId, stepName)`), reconciliation, or
+compensation.
+
+## Durable approval suspension
+
+<StatusBadge status="available" />
+
+An approval-gated Tool Call whose decision is not yet known suspends the Submission durably: the
+canonical `ToolApprovalRequested` is the safe boundary, ownership ends, and the lane consumes no
+worker permit. `resolveApproval` records the durable decision idempotently; the resuming Attempt
+appends the canonical `ToolApprovalDecided` and replays the declared batch without re-invoking
+the model. Denial remains terminal (the P2 policy default).
 
 ## Proof behind the claim
 
-The `DN` label rests on executable evidence ([Phase 4 evidence](../PHASE-4-EVIDENCE)):
+The `DN` label rests on executable evidence ([Phase 4](../PHASE-4-EVIDENCE) and
+[Phase 5](../PHASE-5-EVIDENCE) evidence):
 
-- before/after failpoints exist for every durable mutation;
-- deterministic failpoint-kill tests cover admission through Settlement, including the full
-  recovery-classifier crash matrix;
+- before/after failpoints exist for every durable mutation, including the Phase 5 prepared,
+  step, approval, join, and resolution seams;
+- deterministic failpoint-kill tests and a real process-kill harness cover admission through
+  Settlement, including the full recovery-classifier crash matrix;
 - stale owners are fenced out of canonical history;
 - later FIFO work cannot pass an unsettled head;
-- both ledger adapters pass one shared conformance suite.
+- both ledger adapters pass one shared conformance suite;
+- crash tests never fabricate a booking result: they recover confirmed supplier truth, repeat
+  safely under a declared idempotency contract, or stop at an Unknown Outcome.
 
-What `DN` still does not claim: exactly-once model inference or external Tool execution,
-automatic replay of unresolved ordinary Tools, or safe recovery through consequential external
-mutations — those are the Phase 5 gates above.
+What `DN` still does not claim: exactly-once model inference or external Tool or Step execution,
+and automatic replay of unresolved ordinary Tools remains forbidden by construction (DUR-009).
+The operator surface, aging, and alerting for Unknown Outcomes are Phase 7 scope.

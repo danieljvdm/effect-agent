@@ -2,7 +2,7 @@ import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-export const CurrentSqliteStorageVersion = 2;
+export const CurrentSqliteStorageVersion = 3;
 
 export const sqliteMigrations = SqliteMigrator.fromRecord({
   "1_current_persistent_conversation_foundation": Effect.gen(function* () {
@@ -156,5 +156,76 @@ export const sqliteMigrations = SqliteMigrator.fromRecord({
     `.withoutTransform;
 
     yield* sql`PRAGMA user_version = 2`.withoutTransform;
+  }),
+  "3_durable_tools_and_joined_input": Effect.gen(function* () {
+    const sql = yield* SqlClient.SqlClient;
+
+    // Joined queued input (plan §2.5, DUR-016): a joining/joined Submission records which host
+    // Run claimed it. The canonical input marker reuses input_applied_record_id/_sequence
+    // because the joined input IS the Submission's own canonical `input:{sid}` record.
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN joined_host_submission_id TEXT
+    `.withoutTransform;
+
+    // Durable approval suspension (plan §2.6): the reason is the Schema-encoded
+    // SuspensionReason union so later suspension families stay additive.
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN suspended_reason_json TEXT
+    `.withoutTransform;
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN suspended_at TEXT
+    `.withoutTransform;
+
+    // Unknown Outcome marking (DUR-009/DUR-017): the marked open Tool Call identities are
+    // stored so `recordUnknownResolution` can reopen the lane only when every marked call
+    // has a durable resolution intent.
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN unknown_reason TEXT
+    `.withoutTransform;
+    yield* sql`
+      ALTER TABLE effect_agent_submissions
+        ADD COLUMN unknown_tool_call_ids_json TEXT
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE INDEX effect_agent_submissions_joined_host
+        ON effect_agent_submissions (joined_host_submission_id)
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE TABLE effect_agent_approval_decisions (
+        submission_id TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        decision TEXT NOT NULL,
+        resolver TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        decided_at TEXT NOT NULL,
+        PRIMARY KEY (submission_id, tool_call_id),
+        FOREIGN KEY (submission_id)
+          REFERENCES effect_agent_submissions(submission_id)
+          ON DELETE RESTRICT
+      )
+    `.withoutTransform;
+
+    yield* sql`
+      CREATE TABLE effect_agent_unknown_resolutions (
+        submission_id TEXT NOT NULL,
+        tool_call_id TEXT NOT NULL,
+        author TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        resolution_json TEXT NOT NULL,
+        resolved_at TEXT NOT NULL,
+        PRIMARY KEY (submission_id, tool_call_id),
+        FOREIGN KEY (submission_id)
+          REFERENCES effect_agent_submissions(submission_id)
+          ON DELETE RESTRICT
+      )
+    `.withoutTransform;
+
+    yield* sql`PRAGMA user_version = 3`.withoutTransform;
   }),
 });

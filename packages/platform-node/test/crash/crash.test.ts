@@ -15,11 +15,19 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
+  modelResponseInterruptedRecordId,
   modelResponseRecordId,
   recoveryRepairRecordId,
   runIdForSubmission,
   submissionInputRecordId,
   submissionSettlementRecordId,
+  toolApprovalDecisionRecordId,
+  toolApprovalRequestRecordId,
+  toolCallPreparedRecordId,
+  toolCallResolvedRecordId,
+  toolCallSettledRecordId,
+  toolCallUnknownRecordId,
+  toolStepSettledRecordId,
   type CanonicalRecordEnvelope,
   type DurableRuntimeFailpointLocation,
   type SubmissionSnapshot,
@@ -47,6 +55,8 @@ import {
   type NodeDurableRuntimeOptions,
 } from "../../src/index.ts";
 import {
+  BOOK_CALL_ID,
+  BOOK_REF,
   CHILD_ANSWER,
   CRASH_DEPLOYMENT_ID,
   CRASH_QUESTION,
@@ -54,26 +64,49 @@ import {
   FENCED_EXIT_CODE,
   FRESH_ANSWER,
   HOST_PRODUCER_ID,
+  ITINERARY_CALL_ID,
+  JOIN_QUESTION,
   KILL_EXIT_CODE,
+  STEP_REF,
+  approvalDefinition,
+  approvalTools,
+  bookDefinition,
+  bookIdempotentDefinition,
+  bookIdempotentTools,
+  bookTools,
   crashSubmitOptions,
   decodeChildMessageOption,
   decodeConversationId,
+  decodeToolCallId,
   finalParts,
+  itineraryDefinition,
+  makeBookToolLayer,
+  makeItineraryToolLayer,
   makeScriptedModel,
   plannerDefinition,
   searchDefinition,
   searchToolLayer,
+  supplierCount,
+  supplierCounts,
+  supplierReconcilerLayer,
+  supplierValues,
   type ChildMessage,
   type CrashScenario,
 } from "./fixtures.ts";
 
 /**
- * Process-kill crash harness (plan §Crash matrix, durability §15). Every test spawns
+ * Process-kill crash harness (plan §Crash matrix + §4.3, durability §15). Every test spawns
  * `worker-entry.ts` as a REAL child process over a temp SQLite file, kills it at an armed
  * failpoint (`process.exit(137)` — no finalizers, no ownership drain) or with SIGKILL, then
  * restarts against the same file and asserts the required durable outcome, ending with the
  * convergence property: no accepted Submission disappears, no Submission has two terminal
  * outcomes, FIFO order holds, and stale producer epochs are fenced.
+ *
+ * The P5 rows add a file-backed external supplier store shared with the children: recorded Tool
+ * results must exist in that store (never fabricate, durability §10) and every row's per-call
+ * invocation counts are asserted exactly — at-least-once duplicates are OBSERVABLE, recovered
+ * results stay at one call, and unproven outcomes stop at Unknown until the authorized
+ * `resolveUnknown`/`resolveApproval` drivers decide them from a second real process.
  *
  * These tests use real clocks, real files, and real processes by necessity, so the suite runs
  * with `excludeTestServices` like the sandbox-local process tests.
@@ -136,6 +169,10 @@ interface ChildOptions {
   readonly leaseMillis?: number | undefined;
   readonly markerFile?: string | undefined;
   readonly releaseFile?: string | undefined;
+  readonly supplierDir?: string | undefined;
+  /** `{op}:{key}` gate: the armed kill fires only once the supplier store holds this call. */
+  readonly killRequiresSupplier?: string | undefined;
+  readonly decision?: "approved" | "denied" | undefined;
 }
 
 const childEnv = (options: ChildOptions): Record<string, string> => {
@@ -150,6 +187,11 @@ const childEnv = (options: ChildOptions): Record<string, string> => {
   if (options.leaseMillis !== undefined) env[CrashEnv.leaseMillis] = String(options.leaseMillis);
   if (options.markerFile !== undefined) env[CrashEnv.markerFile] = options.markerFile;
   if (options.releaseFile !== undefined) env[CrashEnv.releaseFile] = options.releaseFile;
+  if (options.supplierDir !== undefined) env[CrashEnv.supplierDir] = options.supplierDir;
+  if (options.killRequiresSupplier !== undefined) {
+    env[CrashEnv.killRequiresSupplier] = options.killRequiresSupplier;
+  }
+  if (options.decision !== undefined) env[CrashEnv.decision] = options.decision;
   return env;
 };
 
@@ -234,27 +276,39 @@ const expectKilled = (result: WorkerResult): void => {
 /** The dead child's short lease must lapse before a restarted owner can claim its lane. */
 const waitOutChildLease = Effect.sleep(Duration.millis(LEASE_WAIT_MS));
 
-const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
+const runtimeOptions = (
+  filename: string,
+  overrides?: Partial<NodeDurableRuntimeOptions>,
+): NodeDurableRuntimeOptions => ({
   filename,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: HOST_PRODUCER_ID,
   settlementPollInterval: 50,
   abortPollInterval: 50,
   wakeScanInterval: 1_000,
+  ...overrides,
 });
 
 /** One restarted host "process": startup recovery runs before the effect observes anything. */
-const withHost = <A, E, R>(db: string, effect: Effect.Effect<A, E, R>) =>
-  Effect.provide(effect, NodeDurableHost.layerStack(runtimeOptions(db)));
+const withHost = <A, E, R>(
+  db: string,
+  effect: Effect.Effect<A, E, R>,
+  overrides?: Partial<NodeDurableRuntimeOptions>,
+) => Effect.provide(effect, NodeDurableHost.layerStack(runtimeOptions(db, overrides)));
 
 /** A restarted "client-only" process: the DN stack WITHOUT the host recovery gate. */
-const withRuntime = <A, E, R>(db: string, effect: Effect.Effect<A, E, R>) =>
-  Effect.provide(effect, NodeDurableRuntime.layer(runtimeOptions(db)));
+const withRuntime = <A, E, R>(
+  db: string,
+  effect: Effect.Effect<A, E, R>,
+  overrides?: Partial<NodeDurableRuntimeOptions>,
+) => Effect.provide(effect, NodeDurableRuntime.layer(runtimeOptions(db, overrides)));
 
 interface CrashSite {
   readonly db: string;
   readonly marker: string;
   readonly release: string;
+  /** File-backed external supplier store shared with the child processes (plan §4.3). */
+  readonly supplier: string;
 }
 
 const withCrashSite = <A, E, R>(use: (site: CrashSite) => Effect.Effect<A, E, R>) =>
@@ -268,6 +322,7 @@ const withCrashSite = <A, E, R>(use: (site: CrashSite) => Effect.Effect<A, E, R>
         db: `${directory}/crash.sqlite`,
         marker: `${directory}/marker`,
         release: `${directory}/release`,
+        supplier: `${directory}/supplier`,
       });
     }),
   );
@@ -355,13 +410,136 @@ const drainSearch = (conversation: string, answer: string) =>
       .pipe(Effect.provide(searchToolLayer));
   });
 
+const drainUncertainBook = (site: CrashSite, conversation: string, answer: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    const model = yield* makeScriptedModel(() => finalParts(answer));
+    const agent = Agent.withModel(bookDefinition, model);
+    return yield* runtime
+      .processConversation(agent, decodeConversationId(conversation))
+      .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookTools)));
+  });
+
+const drainIdempotentBook = (site: CrashSite, conversation: string, answer: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    const model = yield* makeScriptedModel(() => finalParts(answer));
+    const agent = Agent.withModel(bookIdempotentDefinition, model);
+    return yield* runtime
+      .processConversation(agent, decodeConversationId(conversation))
+      .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookIdempotentTools)));
+  });
+
+const drainApprovalBook = (site: CrashSite, conversation: string, answer: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    const model = yield* makeScriptedModel(() => finalParts(answer));
+    const agent = Agent.withModel(approvalDefinition, model);
+    return yield* runtime
+      .processConversation(agent, decodeConversationId(conversation))
+      .pipe(Effect.provide(makeBookToolLayer(site.supplier, approvalTools)));
+  });
+
+const drainItinerary = (site: CrashSite, conversation: string, answer: string) =>
+  Effect.gen(function* () {
+    const runtime = yield* DurableAgentRuntime;
+    const model = yield* makeScriptedModel(() => finalParts(answer));
+    const agent = Agent.withModel(itineraryDefinition, model);
+    return yield* runtime
+      .processConversation(agent, decodeConversationId(conversation))
+      .pipe(Effect.provide(makeItineraryToolLayer(site.supplier)));
+  });
+
+/** Spawn a second-process resolution driver against the shared file and require success. */
+const runResolver = (options: ChildOptions) =>
+  Effect.gen(function* () {
+    const result = yield* runWorkerToExit(options);
+    expect(result.exit.code, `resolver stderr: ${result.stderr}`).toBe(0);
+    const resolved = childMessages(result.stdout).find((message) => message.kind === "resolved");
+    expect(resolved).toBeDefined();
+    return resolved;
+  });
+
+/** Occurrences of `needle` inside the committed model-response messages (coverage evidence). */
+const responseOccurrences = (
+  records: ReadonlyArray<CanonicalRecordEnvelope>,
+  needle: string,
+): number =>
+  records
+    .filter((envelope) => envelope.record.payload._tag === "ModelResponseRecorded")
+    .map((envelope) => JSON.stringify(envelope.record.payload).split(needle).length - 1)
+    .reduce((sum, count) => sum + count, 0);
+
+/** The supplier-store honesty claims of one crash row (plan §4.3, durability §10). */
+interface SupplierExpectation {
+  readonly site: CrashSite;
+  /** EXACT per-call invocation counts (`{op}:{key}` → n); `{}` claims no external call ever. */
+  readonly counts: Record<string, number>;
+}
+
+const BookResult = Schema.Struct({ confirmation: Schema.String });
+const ItineraryResult = Schema.Struct({ state: Schema.String });
+const decodeBookResult = Schema.decodeUnknownOption(BookResult);
+const decodeItineraryResult = Schema.decodeUnknownOption(ItineraryResult);
+const decodeStepOutput = Schema.decodeUnknownOption(Schema.String);
+
+/**
+ * Never-fabricate (durability §10: "the engine must not manufacture a result and continue"):
+ * every canonical success for a supplier-backed Tool must be a value the external store actually
+ * produced, and the per-call invocation counts must match the row's honesty claim exactly — an
+ * at-least-once duplicate is asserted as 2, never hidden; a recovered result is asserted as 1.
+ */
+const assertSupplierHonesty = (
+  records: ReadonlyArray<CanonicalRecordEnvelope>,
+  supplier: SupplierExpectation,
+): void => {
+  const produced = supplierValues(supplier.site.supplier);
+  const requireProduced = (value: string, label: string): void => {
+    expect(
+      produced.has(value),
+      `${label} "${value}" is absent from the supplier store — a fabricated result`,
+    ).toBe(true);
+  };
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag === "ToolCallSettled" && !payload.isFailure) {
+      if (payload.toolName === "book") {
+        const result = decodeBookResult(payload.result);
+        expect(Option.isSome(result)).toBe(true);
+        if (Option.isSome(result)) requireProduced(result.value.confirmation, "book result");
+      }
+      if (payload.toolName === "itinerary") {
+        const result = decodeItineraryResult(payload.result);
+        expect(Option.isSome(result)).toBe(true);
+        if (Option.isSome(result)) {
+          for (const part of result.value.state.split("+")) {
+            requireProduced(part, "itinerary step result");
+          }
+        }
+      }
+    }
+    if (payload._tag === "ToolStepSettled") {
+      const output = decodeStepOutput(payload.output);
+      expect(Option.isSome(output)).toBe(true);
+      if (Option.isSome(output)) requireProduced(output.value, "step output");
+    }
+  }
+  expect(supplierCounts(supplier.site.supplier)).toEqual(supplier.counts);
+};
+
 /**
  * The convergence property asserted after every kill (plan §Crash matrix): every accepted
  * Submission still exists and is settled; each has EXACTLY one canonical terminal outcome; no
  * canonical record identity was ever double-appended (stale epochs fenced by DUR-006/DUR-007);
- * and canonical inputs + settlements follow the admitted FIFO queue sequence (DUR-004).
+ * canonical inputs + settlements follow the admitted FIFO queue sequence (DUR-004); and, when
+ * the row involves the external supplier, no recorded Tool result was fabricated and every
+ * invocation count matches the row's honesty claim.
  */
-const assertConvergence = (conversation: string, submissionIds: ReadonlyArray<SubmissionId>) =>
+const assertConvergence = (
+  conversation: string,
+  submissionIds: ReadonlyArray<SubmissionId>,
+  supplier?: SupplierExpectation,
+) =>
   Effect.gen(function* () {
     const ledger = yield* SubmissionLedger;
     const snapshots: Array<SubmissionSnapshot> = [];
@@ -401,6 +579,7 @@ const assertConvergence = (conversation: string, submissionIds: ReadonlyArray<Su
       expectedSettlements.some((expected) => expected === recordId),
     );
     expect(settlementOrder).toEqual(expectedSettlements);
+    if (supplier !== undefined) assertSupplierHonesty(records, supplier);
   });
 
 layer(NodeFileSystem.layer, { excludeTestServices: true })(
@@ -625,9 +804,11 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
 
                 const settlements = yield* drainPlanner(conversation, CHILD_ANSWER);
+                // P5 (plan §2.5): the queued Submission joins the resumed head Run at its
+                // first Turn seam and settles WITH it — one head settlement, both settled in
+                // admitted FIFO order (assertConvergence pins the canonical ordering).
                 expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
                   head.submissionId,
-                  queued.submissionId,
                 ]);
                 const records = yield* readLog(conversation);
                 expect(
@@ -1124,6 +1305,994 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 );
                 expect(failureTag(conflict)).toBe("SettlementConflict");
                 yield* assertConvergence(conversation, [snapshot.submissionId]);
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    // ------------------------------------------------------------------------------------------
+    // P5 rows (plan §4.3): durable ordinary Tools, Durable Steps, approval suspension, joining.
+    // ------------------------------------------------------------------------------------------
+
+    it.effect(
+      "kill at turn:after-response-append: the declared batch resumes without model re-invocation",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-response";
+            const key = "kill-response-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-uncertain",
+              conversation,
+              key,
+              killAt: "turn:after-response-append",
+              leaseMillis: CHILD_LEASE_MS,
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+
+                // The provably-safe window (durability §15): the response is canonical, nothing
+                // is prepared, and the external supplier was never called.
+                const committed = yield* readLog(conversation);
+                expect(logTags(committed)).toEqual([
+                  "ConversationCreated",
+                  "UserInputRecorded",
+                  "ModelResponseRecorded",
+                ]);
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                expect(report?.decision._tag).toBe("ResumePendingToolBatch");
+                expect(report?.disposition).toBe("deferred");
+
+                const settlements = yield* drainUncertainBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+                // No model re-invocation for the declared Turn: exactly one ModelResponseRecorded
+                // for Turn 1 and no interruption audit — the resumed batch replayed the canonical
+                // declaration instead of asking the model again.
+                const records = yield* readLog(conversation);
+                const ids = records.map((envelope) => envelope.record.recordId);
+                expect(
+                  records.filter(
+                    (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
+                  ),
+                ).toHaveLength(1);
+                expect(
+                  logTags(records).filter((tag) => tag === "ModelResponseRecorded"),
+                ).toHaveLength(2);
+                expect(ids).toContain(
+                  toolCallPreparedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                expect(ids).toContain(
+                  toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                expect(ids).not.toContain(modelResponseInterruptedRecordId(runId, 1));
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 1 },
+                });
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at tools:after-prepared-append with NeverStarted proof: the deferred resume executes exactly once",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-prepared-proof";
+            const key = "kill-prepared-proof-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-uncertain",
+              conversation,
+              key,
+              killAt: "tools:after-prepared-append",
+              leaseMillis: CHILD_LEASE_MS,
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+
+                // The empty supplier store IS the marker: the handler provably never started.
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                expect(report?.decision._tag).toBe("MarkUnknown");
+                expect(report?.disposition).toBe("deferred");
+                expect(yield* lookupState(snapshot.submissionId)).not.toBe("unknown");
+
+                const settlements = yield* drainUncertainBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+                // A point-in-time proof records nothing: no Unknown Outcome, no resolution audit,
+                // exactly one canonical settled result.
+                const records = yield* readLog(conversation);
+                const tags = logTags(records);
+                expect(tags).not.toContain("ToolCallUnknown");
+                expect(tags).not.toContain("ToolCallResolved");
+                expect(
+                  records.filter(
+                    (envelope) =>
+                      envelope.record.recordId ===
+                      toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                  ),
+                ).toHaveLength(1);
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 1 },
+                });
+              }),
+              { toolReconciler: supplierReconcilerLayer(site.supplier) },
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at tools:after-prepared-append under the default reconciler: Unknown blocks the lane until resolveUnknown from a second process",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-prepared-unknown";
+            const key = "kill-prepared-unknown-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-uncertain",
+              conversation,
+              key,
+              killAt: "tools:after-prepared-append",
+              leaseMillis: CHILD_LEASE_MS,
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                // Fail-closed default (AGENTS rule 11): no registered policy proves anything, so
+                // the open call becomes a durable Unknown Outcome and the lane blocks.
+                expect(report?.decision._tag).toBe("MarkUnknown");
+                expect(report?.disposition).toBe("unknown");
+                expect(yield* lookupState(snapshot.submissionId)).toBe("unknown");
+                expect(
+                  (yield* readLog(conversation)).map((envelope) => envelope.record.recordId),
+                ).toContain(toolCallUnknownRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)));
+
+                // The unresolved ordinary call is never auto-replayed: draining grants nothing.
+                const blocked = yield* drainUncertainBook(site, conversation, FRESH_ANSWER);
+                expect(blocked).toEqual([]);
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+
+                // Authorized DUR-017 resolution arrives from a SECOND real process through the
+                // shared durable ledger.
+                yield* runResolver({
+                  db: site.db,
+                  scenario: "resolve-unknown",
+                  conversation,
+                  key,
+                });
+                expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
+
+                const settlements = yield* drainUncertainBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+                const records = yield* readLog(conversation);
+                const resolved = records.find(
+                  (envelope) =>
+                    envelope.record.recordId ===
+                    toolCallResolvedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                )?.record.payload;
+                expect(resolved?._tag).toBe("ToolCallResolved");
+                if (resolved?._tag === "ToolCallResolved") {
+                  expect(resolved.resolution).toBe("never-started");
+                  expect(resolved.author).toBe("operator");
+                }
+                expect(
+                  records.filter(
+                    (envelope) =>
+                      envelope.record.recordId ===
+                      toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                  ),
+                ).toHaveLength(1);
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 1 },
+                });
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "SIGKILL mid-handler: the reconciler recovers the supplier booking without a second call",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-midhandler";
+            const key = "kill-midhandler-1";
+            const exit = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const handle = yield* startWorker({
+                  db: site.db,
+                  scenario: "run-uncertain",
+                  conversation,
+                  key,
+                  leaseMillis: CHILD_LEASE_MS,
+                  supplierDir: site.supplier,
+                  markerFile: site.marker,
+                });
+                // The handler has performed the EXTERNAL booking (marker proves it) but will
+                // never return: kill the process while the call is prepared-but-unsettled.
+                yield* waitForFile(site.marker);
+                handle.kill();
+                return yield* handle.awaitExit;
+              }),
+            );
+            expect(exit.signal).toBe("SIGKILL");
+            yield* waitOutChildLease;
+            expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                // The supplier store shows the booking: recovery settles the recovered result
+                // canonically WITHOUT executing anything (never fabricate, durability §10).
+                expect(report?.decision._tag).toBe("MarkUnknown");
+                expect(report?.disposition).toBe("repaired");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+                const records = yield* readLog(conversation);
+                const settled = records.find(
+                  (envelope) =>
+                    envelope.record.recordId ===
+                    toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                )?.record.payload;
+                expect(settled?._tag).toBe("ToolCallSettled");
+                if (settled?._tag === "ToolCallSettled") {
+                  expect(settled.result).toEqual({ confirmation: `confirmed-${BOOK_REF}` });
+                  expect(settled.isFailure).toBe(false);
+                }
+                const resolved = records.find(
+                  (envelope) =>
+                    envelope.record.recordId ===
+                    toolCallResolvedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                )?.record.payload;
+                expect(resolved?._tag).toBe("ToolCallResolved");
+                if (resolved?._tag === "ToolCallResolved") {
+                  expect(resolved.resolution).toBe("completed-with-result");
+                  expect(resolved.author).toBe("reconciler");
+                }
+
+                const settlements = yield* drainUncertainBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+                // The supplier call count stays 1: the recovered outcome was never re-executed.
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 1 },
+                });
+              }),
+              { toolReconciler: supplierReconcilerLayer(site.supplier) },
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill after the handler returns, before the results append: the idempotent contract re-executes honestly",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-preresults";
+            const key = "kill-preresults-1";
+            // The supplier gate arms `append:before` to fire only once the booking exists, so the
+            // kill lands exactly between the handler's return and the Turn's results append.
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-idempotent",
+              conversation,
+              key,
+              killAtStorage: "append:before",
+              killRequiresSupplier: `book:${BOOK_REF}`,
+              leaseMillis: CHILD_LEASE_MS,
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+            expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+            // Deliberately NO recovery pass: a recovery pass has no Agent Binding, so the
+            // annotation is invisible there and the default reconciler would fail closed to
+            // Unknown. The WORKER resume owns the declared idempotency contract.
+            yield* withRuntime(
+              site.db,
+              Effect.gen(function* () {
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                expect(snapshot.state).not.toBe("settled");
+                const before = (yield* readLog(conversation)).map(
+                  (envelope) => envelope.record.recordId,
+                );
+                // The result was lost in memory: prepared is canonical, settled is not.
+                expect(before).toContain(
+                  toolCallPreparedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                expect(before).not.toContain(
+                  toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+
+                const settlements = yield* drainIdempotentBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+
+                // Honest at-least-once: the declared contract re-executed the external call and
+                // the duplicate is OBSERVABLE — supplier count 2, never hidden (rule 8).
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(2);
+                const records = yield* readLog(conversation);
+                expect(logTags(records)).not.toContain("ToolCallUnknown");
+                expect(
+                  records.filter(
+                    (envelope) =>
+                      envelope.record.recordId ===
+                      toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                  ),
+                ).toHaveLength(1);
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 2 },
+                });
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at step:after-step-append: step 1 replays from its record while step 2 executes once",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-step";
+            const key = "kill-step-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-steps",
+              conversation,
+              key,
+              killAt: "step:after-step-append",
+              leaseMillis: CHILD_LEASE_MS,
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+            // Step 1 executed and committed; step 2 never ran; the handler entered once.
+            expect(supplierCount(site.supplier, "itinerary-enter", STEP_REF)).toBe(1);
+            expect(supplierCount(site.supplier, "reserve-flight", STEP_REF)).toBe(1);
+            expect(supplierCount(site.supplier, "reserve-lodging", STEP_REF)).toBe(0);
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                const callId = decodeToolCallId(ITINERARY_CALL_ID);
+                const committed = yield* readLog(conversation);
+                expect(committed.map((envelope) => envelope.record.recordId)).toContain(
+                  toolStepSettledRecordId(runId, callId, "reserve-flight"),
+                );
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                // The Durable Tool is re-enterable (SafeToRetry proof): the worker resumes it.
+                expect(report?.decision._tag).toBe("MarkUnknown");
+                expect(report?.disposition).toBe("deferred");
+
+                const settlements = yield* drainItinerary(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+
+                // The handler re-entered honestly (at-least-once), step 1 replayed its recorded
+                // result WITHOUT executing (supplier count stays 1), step 2 executed exactly once.
+                expect(supplierCount(site.supplier, "itinerary-enter", STEP_REF)).toBe(2);
+                expect(supplierCount(site.supplier, "reserve-flight", STEP_REF)).toBe(1);
+                expect(supplierCount(site.supplier, "reserve-lodging", STEP_REF)).toBe(1);
+
+                const records = yield* readLog(conversation);
+                expect(
+                  records.filter(
+                    (envelope) =>
+                      envelope.record.recordId ===
+                      toolStepSettledRecordId(runId, callId, "reserve-flight"),
+                  ),
+                ).toHaveLength(1);
+                expect(records.map((envelope) => envelope.record.recordId)).toContain(
+                  toolStepSettledRecordId(runId, callId, "reserve-lodging"),
+                );
+                const settled = records.find(
+                  (envelope) =>
+                    envelope.record.recordId === toolCallSettledRecordId(runId, 1, callId),
+                )?.record.payload;
+                expect(settled?._tag).toBe("ToolCallSettled");
+                if (settled?._tag === "ToolCallSettled") {
+                  expect(settled.result).toEqual({
+                    state: `flight-${STEP_REF}+lodging-${STEP_REF}`,
+                  });
+                }
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: {
+                    [`itinerary-enter:${STEP_REF}`]: 2,
+                    [`reserve-flight:${STEP_REF}`]: 1,
+                    [`reserve-lodging:${STEP_REF}`]: 1,
+                  },
+                });
+              }),
+              { toolReconciler: supplierReconcilerLayer(site.supplier) },
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at approval:after-request-append: recovery repairs the suspension from history and nothing executes",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-approval-request";
+            const key = "kill-approval-request-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "suspend-approval",
+              conversation,
+              key,
+              killAt: "approval:after-request-append",
+              leaseMillis: CHILD_LEASE_MS,
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+
+            // Before recovery: the request is canonical, the ledger never suspended.
+            yield* withRuntime(
+              site.db,
+              Effect.gen(function* () {
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                expect(snapshot.state).toBe("input-applied");
+                expect(
+                  (yield* readLog(conversation)).map((envelope) => envelope.record.recordId),
+                ).toContain(toolApprovalRequestRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)));
+              }),
+            );
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                // The lost suspension is repaired from the canonical request (durability §8);
+                // no execution, no settlement.
+                expect(report?.decision._tag).toBe("AwaitApprovalDecision");
+                expect(report?.disposition).toBe("repaired");
+                expect(yield* lookupState(snapshot.submissionId)).toBe("suspended");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+
+                yield* runResolver({
+                  db: site.db,
+                  scenario: "resolve-approval",
+                  conversation,
+                  key,
+                  decision: "approved",
+                });
+                expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
+
+                const settlements = yield* drainApprovalBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+                // The request was appended exactly once across the crash and both Attempts.
+                const records = yield* readLog(conversation);
+                expect(
+                  records.filter(
+                    (envelope) => envelope.record.payload._tag === "ToolApprovalRequested",
+                  ),
+                ).toHaveLength(1);
+                const decision = records.find(
+                  (envelope) =>
+                    envelope.record.recordId ===
+                    toolApprovalDecisionRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                )?.record.payload;
+                expect(decision?._tag).toBe("ToolApprovalDecided");
+                if (decision?._tag === "ToolApprovalDecided") {
+                  expect(decision.decision).toBe("approved");
+                  expect(decision.resolver).toBe("operator");
+                }
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 1 },
+                });
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at approval:after-suspend: resolveApproval(approved) from a second process resumes the declared batch",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-approval-suspend";
+            const key = "kill-approval-suspend-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "suspend-approval",
+              conversation,
+              key,
+              killAt: "approval:after-suspend",
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                // The suspend transaction committed before the crash: the lane is durably
+                // suspended, permit-free, with nothing for recovery to repair.
+                expect(snapshot.state).toBe("suspended");
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === snapshot.submissionId,
+                );
+                expect(report?.decision._tag).toBe("AwaitApprovalDecision");
+                expect(report?.disposition).toBe("deferred");
+
+                yield* runResolver({
+                  db: site.db,
+                  scenario: "resolve-approval",
+                  conversation,
+                  key,
+                  decision: "approved",
+                });
+                expect(yield* lookupState(snapshot.submissionId)).toBe("input-applied");
+
+                const settlements = yield* drainApprovalBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                expect(settlements[0]?.outcome).toBe("completed");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
+
+                // Batch resume, not model re-invocation: exactly one ModelResponseRecorded for
+                // the declaring Turn; the gated call entered the ordinary uncertainty protocol.
+                const records = yield* readLog(conversation);
+                const ids = records.map((envelope) => envelope.record.recordId);
+                expect(
+                  records.filter(
+                    (envelope) => envelope.record.recordId === modelResponseRecordId(runId, 1),
+                  ),
+                ).toHaveLength(1);
+                expect(ids).toContain(
+                  toolCallPreparedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                expect(ids).toContain(
+                  toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: { [`book:${BOOK_REF}`]: 1 },
+                });
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at approval:after-suspend: a denial from a second process settles failed with the canonical decision",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-approval-deny";
+            const key = "kill-approval-deny-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "suspend-approval",
+              conversation,
+              key,
+              killAt: "approval:after-suspend",
+              supplierDir: site.supplier,
+            });
+            expectKilled(result);
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const snapshot = yield* lookupByKey(conversation, key);
+                const runId = runIdForSubmission(snapshot.submissionId);
+                expect(snapshot.state).toBe("suspended");
+
+                yield* runResolver({
+                  db: site.db,
+                  scenario: "resolve-approval",
+                  conversation,
+                  key,
+                  decision: "denied",
+                });
+
+                const settlements = yield* drainApprovalBook(site, conversation, FRESH_ANSWER);
+                expect(settlements).toHaveLength(1);
+                // Denial-terminal (P2 default): the Run fails with the denial canonical and the
+                // handler NEVER started — the supplier store stays empty.
+                expect(settlements[0]?.outcome).toBe("failed");
+                expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(0);
+
+                const records = yield* readLog(conversation);
+                const ids = records.map((envelope) => envelope.record.recordId);
+                const decision = records.find(
+                  (envelope) =>
+                    envelope.record.recordId ===
+                    toolApprovalDecisionRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                )?.record.payload;
+                expect(decision?._tag).toBe("ToolApprovalDecided");
+                if (decision?._tag === "ToolApprovalDecided") {
+                  expect(decision.decision).toBe("denied");
+                }
+                expect(ids).not.toContain(
+                  toolCallPreparedRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                expect(ids).not.toContain(
+                  toolCallSettledRecordId(runId, 1, decodeToolCallId(BOOK_CALL_ID)),
+                );
+                yield* assertConvergence(conversation, [snapshot.submissionId], {
+                  site,
+                  counts: {},
+                });
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at join:after-claim: RevertJoining returns the queued Submission and it joins exactly once",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-join-claim";
+            const key = "kill-join-claim";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-join",
+              conversation,
+              key,
+              killAt: "join:after-claim",
+              leaseMillis: CHILD_LEASE_MS,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+
+            // Before recovery: the claim is durable, the canonical input never committed.
+            const queuedId = yield* withRuntime(
+              site.db,
+              Effect.gen(function* () {
+                const queued = yield* lookupByKey(conversation, `${key}-2`);
+                expect(queued.state).toBe("joining");
+                expect(
+                  (yield* readLog(conversation)).map((envelope) => envelope.record.recordId),
+                ).not.toContain(submissionInputRecordId(queued.submissionId));
+                return queued.submissionId;
+              }),
+            );
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const headSnapshot = yield* lookupByKey(conversation, `${key}-1`);
+                const queuedReport = host.startupRecovery.find(
+                  (entry) => entry.submissionId === queuedId,
+                );
+                // DUR-016: joining without canonical input reverts to ready.
+                expect(queuedReport?.decision._tag).toBe("RevertJoining");
+                expect(queuedReport?.disposition).toBe("repaired");
+                expect(yield* lookupState(queuedId)).toBe("ready");
+
+                const settlements = yield* drainPlanner(conversation, FRESH_ANSWER);
+                // One HEAD settlement: the reverted Submission re-joined the resumed host Run.
+                expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
+                  headSnapshot.submissionId,
+                ]);
+                expect(yield* lookupState(queuedId)).toBe("settled");
+
+                // Delivered exactly once: one canonical input record ever, and the queued text
+                // entered exactly one committed model response (the coverage rule's evidence).
+                const records = yield* readLog(conversation);
+                expect(
+                  records.filter(
+                    (envelope) => envelope.record.recordId === submissionInputRecordId(queuedId),
+                  ),
+                ).toHaveLength(1);
+                expect(responseOccurrences(records, JOIN_QUESTION)).toBe(1);
+                yield* assertConvergence(conversation, [headSnapshot.submissionId, queuedId]);
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill at join:after-canonical-append: RepairJoinMarker reattaches the input without duplication",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-join-append";
+            const key = "kill-join-append";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-join",
+              conversation,
+              key,
+              killAt: "join:after-canonical-append",
+              leaseMillis: CHILD_LEASE_MS,
+            });
+            expectKilled(result);
+            yield* waitOutChildLease;
+
+            // Before recovery: the input is canonical, only the joined marker was lost.
+            const queuedId = yield* withRuntime(
+              site.db,
+              Effect.gen(function* () {
+                const queued = yield* lookupByKey(conversation, `${key}-2`);
+                expect(queued.state).toBe("joining");
+                expect(
+                  (yield* readLog(conversation)).map((envelope) => envelope.record.recordId),
+                ).toContain(submissionInputRecordId(queued.submissionId));
+                return queued.submissionId;
+              }),
+            );
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const headSnapshot = yield* lookupByKey(conversation, `${key}-1`);
+                const queuedReport = host.startupRecovery.find(
+                  (entry) => entry.submissionId === queuedId,
+                );
+                expect(queuedReport?.decision._tag).toBe("RepairJoinMarker");
+                expect(queuedReport?.disposition).toBe("repaired");
+                expect(yield* lookupState(queuedId)).toBe("joined");
+
+                const settlements = yield* drainPlanner(conversation, FRESH_ANSWER);
+                expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
+                  headSnapshot.submissionId,
+                ]);
+                expect(yield* lookupState(queuedId)).toBe("settled");
+
+                // Reattached, never duplicated: one canonical record, one prompt coverage.
+                const records = yield* readLog(conversation);
+                expect(
+                  records.filter(
+                    (envelope) => envelope.record.recordId === submissionInputRecordId(queuedId),
+                  ),
+                ).toHaveLength(1);
+                expect(responseOccurrences(records, JOIN_QUESTION)).toBe(1);
+                yield* assertConvergence(conversation, [headSnapshot.submissionId, queuedId]);
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "SIGKILL of the host after the join: the resumed host covers the joined input once and both settle",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-joined-host";
+            const key = "kill-joined-host";
+            const exit = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const handle = yield* startWorker({
+                  db: site.db,
+                  scenario: "run-join",
+                  conversation,
+                  key,
+                  leaseMillis: CHILD_LEASE_MS,
+                  markerFile: site.marker,
+                });
+                // The marker is written by Turn 1's model stream, which begins only after the
+                // pre-Turn join drain claimed, appended, and marked the queued input joined.
+                yield* waitForFile(site.marker);
+                handle.kill();
+                return yield* handle.awaitExit;
+              }),
+            );
+            expect(exit.signal).toBe("SIGKILL");
+            yield* waitOutChildLease;
+
+            // Durable state: `joined` with a nonterminal host and an uncovered canonical input.
+            const queuedId = yield* withRuntime(
+              site.db,
+              Effect.gen(function* () {
+                const queued = yield* lookupByKey(conversation, `${key}-2`);
+                expect(queued.state).toBe("joined");
+                const records = yield* readLog(conversation);
+                expect(records.map((envelope) => envelope.record.recordId)).toContain(
+                  submissionInputRecordId(queued.submissionId),
+                );
+                expect(logTags(records)).not.toContain("ModelResponseRecorded");
+                return queued.submissionId;
+              }),
+            );
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const headSnapshot = yield* lookupByKey(conversation, `${key}-1`);
+                const queuedReport = host.startupRecovery.find(
+                  (entry) => entry.submissionId === queuedId,
+                );
+                // A live host owns its joined Submissions: recovery defers to the host's resume.
+                expect(queuedReport?.decision._tag).toBe("AwaitHostSettlement");
+                expect(queuedReport?.disposition).toBe("deferred");
+
+                const settlements = yield* drainPlanner(conversation, FRESH_ANSWER);
+                expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
+                  headSnapshot.submissionId,
+                ]);
+                expect(settlements[0]?.outcome).toBe("completed");
+                expect(yield* lookupState(queuedId)).toBe("settled");
+
+                // The coverage rule across process death: the reattached input entered exactly
+                // one committed model response, and the joined settlement rides the host Run.
+                const records = yield* readLog(conversation);
+                expect(
+                  records.filter(
+                    (envelope) => envelope.record.recordId === submissionInputRecordId(queuedId),
+                  ),
+                ).toHaveLength(1);
+                expect(responseOccurrences(records, JOIN_QUESTION)).toBe(1);
+                const joinedSettlement = records.find(
+                  (envelope) => envelope.record.recordId === submissionSettlementRecordId(queuedId),
+                )?.record.payload;
+                expect(joinedSettlement?._tag).toBe("SubmissionSettled");
+                if (joinedSettlement?._tag === "SubmissionSettled") {
+                  expect(joinedSettlement.outcome).toBe("completed");
+                  expect(joinedSettlement.runId).toBe(
+                    runIdForSubmission(headSnapshot.submissionId),
+                  );
+                }
+                yield* assertConvergence(conversation, [headSnapshot.submissionId, queuedId]);
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
+      "kill between host finalization and joined settlement: SettleJoinedWithHost completes the obligation",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            const conversation = "conversation-kill-joined-settle";
+            const key = "kill-joined-settle";
+            // The FIRST ledger finalization of the run is the host's: the kill lands after the
+            // host is fully settled but before the joined settlement loop starts.
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "run-join",
+              conversation,
+              key,
+              killAtStorage: "ledger:finalize-settlement:after",
+              leaseMillis: CHILD_LEASE_MS,
+            });
+            expectKilled(result);
+
+            const ids = yield* withRuntime(
+              site.db,
+              Effect.gen(function* () {
+                const head = yield* lookupByKey(conversation, `${key}-1`);
+                const queued = yield* lookupByKey(conversation, `${key}-2`);
+                expect(head.state).toBe("settled");
+                expect(queued.state).toBe("joined");
+                const recordIds = (yield* readLog(conversation)).map(
+                  (envelope) => envelope.record.recordId,
+                );
+                expect(recordIds).toContain(submissionSettlementRecordId(head.submissionId));
+                expect(recordIds).not.toContain(submissionSettlementRecordId(queued.submissionId));
+                return { head: head.submissionId, queued: queued.submissionId };
+              }),
+            );
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const queuedReport = host.startupRecovery.find(
+                  (entry) => entry.submissionId === ids.queued,
+                );
+                // The canonical host settlement authorizes the joined settlement (DUR-015).
+                expect(queuedReport?.decision._tag).toBe("SettleJoinedWithHost");
+                expect(queuedReport?.disposition).toBe("repaired");
+                expect(yield* lookupState(ids.queued)).toBe("settled");
+
+                const records = yield* readLog(conversation);
+                const joinedSettlement = records.find(
+                  (envelope) =>
+                    envelope.record.recordId === submissionSettlementRecordId(ids.queued),
+                )?.record.payload;
+                expect(joinedSettlement?._tag).toBe("SubmissionSettled");
+                if (joinedSettlement?._tag === "SubmissionSettled") {
+                  expect(joinedSettlement.outcome).toBe("completed");
+                  expect(joinedSettlement.runId).toBe(runIdForSubmission(ids.head));
+                }
+                yield* assertConvergence(conversation, [ids.head, ids.queued]);
               }),
             );
           }),

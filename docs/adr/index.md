@@ -21,6 +21,7 @@ are authoritative; a Proposed ADR is design material, not an owner-approved feat
 | [0009](./0009-leaf-example-workspaces)                    | Accepted                                                                       | Keep runnable benches as leaf examples                                                |
 | [0010](./0010-declared-attached-subagents)                | **Proposed** — S1 implemented as proposed default ([evidence](../S1-EVIDENCE)) | Model attached Subagents as declared delegation Tools                                 |
 | [0011](./0011-durable-runtime-placement-and-leases)       | Accepted by default — pending owner review ([evidence](../PHASE-4-EVIDENCE))   | Place the durable coordinator in session; leases for liveness, epochs for correctness |
+| [0012](./0012-durable-tool-uncertainty-and-steps)         | Accepted by default — pending owner review ([evidence](../PHASE-5-EVIDENCE))   | Annotation-scoped Tool uncertainty, log-native Steps, and record-free suspension      |
 
 The [decision register](../DECISIONS) is the owner-facing status source. ADRs preserve rationale,
 consequences, rejected alternatives, and validation criteria.

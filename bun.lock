@@ -132,6 +132,7 @@
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@effect-agent/engine": "workspace:*",
         "@effect/vitest": "catalog:",
         "tsx": "catalog:",
         "typescript": "catalog:",

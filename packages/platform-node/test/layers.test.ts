@@ -23,6 +23,7 @@ import {
 } from "@effect-agent/session";
 import type { SubmissionId } from "@effect-agent/core";
 import {
+  CurrentSqliteStorageVersion,
   SqliteStorageCompatibilityError,
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite";
@@ -266,7 +267,7 @@ describe("NodeDurableRuntime", () => {
         expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
         if (error instanceof SqliteStorageCompatibilityError) {
           expect(error.actualVersion).toBe(1);
-          expect(error.supportedVersion).toBe(2);
+          expect(error.supportedVersion).toBe(CurrentSqliteStorageVersion);
           expect(error.message).toContain("Reset the database file explicitly");
         }
 

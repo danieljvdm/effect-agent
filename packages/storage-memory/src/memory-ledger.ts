@@ -2,6 +2,7 @@ import {
   AttemptId,
   ReceiptId,
   SubmissionId,
+  ToolCallId,
   type AgentId,
   type ConversationId,
   type SettlementId,
@@ -13,14 +14,23 @@ import {
   AdmissionConflict,
   AdmissionRequest,
   AdmissionResult,
+  ApprovalConflict,
+  ApprovalDecisionCommand,
+  ApprovalDecisionIntent,
   Claim,
+  ClaimJoiningRequest,
   ClaimRequest,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   InputAppliedMarker,
+  JoinSnapshot,
+  JoinedToHost,
+  JoiningClaim,
   LedgerCapabilities,
   LedgerError,
   MarkInputAppliedRequest,
+  MarkJoinedRequest,
   MarkReadyRequest,
+  MarkUnknownRequest,
   OwnershipLost,
   OwnershipRenewal,
   OwnershipSnapshot,
@@ -32,6 +42,7 @@ import {
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
   ReservedSettlement,
+  RevertJoiningRequest,
   Settlement,
   SettlementConflict,
   SettlementFinalization,
@@ -41,6 +52,12 @@ import {
   SubmissionLedger,
   SubmissionLookup,
   SubmissionSnapshot,
+  SuspendRequest,
+  SuspensionSnapshot,
+  UnknownResolution,
+  UnknownResolutionCommand,
+  UnknownResolutionConflict,
+  UnknownResolutionIntent,
   type DefinitionDigests,
   type DeploymentId,
   type Digest,
@@ -51,6 +68,8 @@ import {
   type RecordEnvelope,
   type SettlementOutcome,
   type SubmissionState,
+  type SuspensionOutcome,
+  type SuspensionReason,
 } from "@effect-agent/session";
 
 const MAX_SUBMISSIONS = 65_536;
@@ -63,10 +82,14 @@ const MAX_SUBMISSIONS = 65_536;
 const STATE_RANK: Record<SubmissionState, number> = {
   admitted: 0,
   ready: 1,
-  running: 2,
-  "input-applied": 3,
-  terminalizing: 4,
-  settled: 5,
+  joining: 2,
+  joined: 3,
+  running: 4,
+  "input-applied": 5,
+  suspended: 6,
+  unknown: 7,
+  terminalizing: 8,
+  settled: 9,
 };
 
 interface SubmissionRow {
@@ -103,13 +126,46 @@ interface StoredReservation {
   readonly finalizedAtMillis: number | undefined;
 }
 
+interface StoredSuspension {
+  readonly reason: SuspensionReason;
+  readonly suspendedAtMillis: number;
+}
+
+interface StoredUnknownMark {
+  readonly reason: MarkUnknownRequest["reason"];
+  readonly toolCallIds: ReadonlyArray<ToolCallId>;
+}
+
+interface StoredUnknownResolution {
+  readonly intent: UnknownResolutionIntent;
+  /** Canonical JSON of the Schema-encoded resolution, for divergent re-resolution detection. */
+  readonly resolutionJson: string;
+}
+
 interface StoredSubmission {
   readonly row: SubmissionRow;
   readonly ownership: StoredOwnership | undefined;
   readonly inputApplied: InputAppliedMarker | undefined;
   readonly reservation: StoredReservation | undefined;
   readonly abortIntent: AbortIntent | undefined;
+  /** Host linkage recorded at `claimJoining` time; cleared by `revertJoining` (DUR-016). */
+  readonly joinedHostSubmissionId: SubmissionId | undefined;
+  readonly suspension: StoredSuspension | undefined;
+  readonly unknownMark: StoredUnknownMark | undefined;
+  readonly approvalDecisions: ReadonlyMap<ToolCallId, ApprovalDecisionIntent>;
+  readonly unknownResolutions: ReadonlyMap<ToolCallId, StoredUnknownResolution>;
 }
+
+/**
+ * States in which `claim` never grants the head: the lane is host-owned (`joining`/`joined`)
+ * or durably blocked (`suspended`/`unknown`) rather than worker-claimable.
+ */
+const BLOCKED_HEAD_STATES: ReadonlySet<SubmissionState> = new Set([
+  "joining",
+  "joined",
+  "suspended",
+  "unknown",
+]);
 
 interface LaneState {
   readonly nextQueueSequence: number;
@@ -229,6 +285,14 @@ const findHead = (
  *   progress markers from an earlier Attempt survive a reclaim.
  * - `renewOwnership` keeps the token stable (the port allows rotation); a replayed admission
  *   reports the Submission's current state alongside the original identities.
+ * - `claimJoining` walks the strictly-later queue: rows already `joining`/`joined` to the
+ *   SAME host extend the claimed prefix and are skipped; any other non-`ready` row (an
+ *   `admitted` gap, a settled row, foreign-host linkage) breaks the prefix conservatively.
+ * - `markJoined` verifies the token against the HOST's live ownership (the lane is
+ *   host-owned), so a later host Attempt can repair a lost marker from history (DUR-016). The
+ *   join marker reuses the input-applied marker: the joined input IS `input:{sid}`.
+ * - `suspend` and `markUnknown` refuse when an exact settlement is already reserved
+ *   (`SettlementConflict` with the reserved outcome) — DUR-011's reservation wins.
  */
 const makeSubmissionLedger = Effect.gen(function* () {
   const state = yield* Ref.make<LedgerState>({
@@ -328,6 +392,11 @@ const makeSubmissionLedger = Effect.gen(function* () {
               inputApplied: undefined,
               reservation: undefined,
               abortIntent: undefined,
+              joinedHostSubmissionId: undefined,
+              suspension: undefined,
+              unknownMark: undefined,
+              approvalDecisions: new Map<ToolCallId, ApprovalDecisionIntent>(),
+              unknownResolutions: new Map<ToolCallId, StoredUnknownResolution>(),
             });
             const admissionIndex = new Map(current.admissionIndex).set(key, row.submissionId);
             const lanes = new Map(current.lanes).set(request.conversationId, {
@@ -410,6 +479,9 @@ const makeSubmissionLedger = Effect.gen(function* () {
           (current): readonly [Decision<Option.Option<Claim>, LedgerError>, LedgerState] => {
             const head = findHead(current, request.conversationId);
             if (head === undefined) return [success(Option.none()), current];
+            // A joining/joined head is host-owned and a suspended/unknown head is durably
+            // blocked; the lane produces no claim and later ready work is never skipped.
+            if (BLOCKED_HEAD_STATES.has(head.row.state)) return [success(Option.none()), current];
             if (
               head.ownership !== undefined &&
               head.ownership.leaseExpiresAtMillis > nowMillis &&
@@ -590,7 +662,13 @@ const makeSubmissionLedger = Effect.gen(function* () {
               current,
             ];
           }
-          if (!ownsLane(stored, request.ownershipToken)) {
+          // A `joined` Submission settles WITH its host (plan §2.5) and its lane is never
+          // worker-claimable, so no ownership token can exist for it: the recorded host
+          // linkage authorizes the reservation and the presented token is not consulted.
+          // Every other reservation stays fenced by the target lane's live ownership.
+          const joinedSettlement =
+            stored.row.state === "joined" && stored.joinedHostSubmissionId !== undefined;
+          if (!joinedSettlement && !ownsLane(stored, request.ownershipToken)) {
             return [failure(ownershipLost(current, stored)), current];
           }
           const existing = stored.reservation;
@@ -747,11 +825,39 @@ const makeSubmissionLedger = Effect.gen(function* () {
         state,
         (
           current,
-        ): readonly [Decision<AbortIntent, SettlementConflict | LedgerError>, LedgerState] => {
+        ): readonly [
+          Decision<AbortIntent, SettlementConflict | JoinedToHost | LedgerError>,
+          LedgerState,
+        ] => {
           const stored = current.submissions.get(request.submissionId);
           if (stored === undefined) {
             return [
               failure(ledgerError("requestAbort", `Unknown Submission ${request.submissionId}`)),
+              current,
+            ];
+          }
+          // A joined Submission settles WITH its host; the abort target is the host (plan
+          // §2.5). A joining Submission still records the intent: it is honored only if the
+          // host has not consumed the input (revert-then-abort).
+          if (stored.row.state === "joined") {
+            if (stored.joinedHostSubmissionId === undefined) {
+              return [
+                failure(
+                  ledgerError(
+                    "requestAbort",
+                    `Joined Submission ${request.submissionId} is missing its host linkage`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            return [
+              failure(
+                JoinedToHost.make({
+                  submissionId: request.submissionId,
+                  hostSubmissionId: stored.joinedHostSubmissionId,
+                }),
+              ),
               current,
             ];
           }
@@ -792,6 +898,581 @@ const makeSubmissionLedger = Effect.gen(function* () {
     }),
   );
 
+  const claimJoining: SubmissionLedger["Service"]["claimJoining"] = Effect.fn(
+    "MemorySubmissionLedger.claimJoining",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(ClaimJoiningRequest, "claimJoining", unvalidated);
+      const decision = yield* Ref.modify(
+        state,
+        (
+          current,
+        ): readonly [
+          Decision<ReadonlyArray<JoiningClaim>, OwnershipLost | LedgerError>,
+          LedgerState,
+        ] => {
+          const host = current.submissions.get(request.hostSubmissionId);
+          if (host === undefined) {
+            return [
+              failure(
+                ledgerError("claimJoining", `Unknown Submission ${request.hostSubmissionId}`),
+              ),
+              current,
+            ];
+          }
+          if (host.row.conversationId !== request.conversationId) {
+            return [
+              failure(
+                ledgerError(
+                  "claimJoining",
+                  `Host Submission ${request.hostSubmissionId} does not belong to Conversation ${request.conversationId}`,
+                ),
+              ),
+              current,
+            ];
+          }
+          if (!ownsLane(host, request.ownershipToken)) {
+            return [failure(ownershipLost(current, host)), current];
+          }
+          const later = [...current.submissions.values()]
+            .filter(
+              (stored) =>
+                stored.row.conversationId === request.conversationId &&
+                stored.row.queueSequence > host.row.queueSequence,
+            )
+            .sort((left, right) => left.row.queueSequence - right.row.queueSequence);
+          const claims: Array<JoiningClaim> = [];
+          const submissions = new Map(current.submissions);
+          for (const stored of later) {
+            if (claims.length >= request.maxCount) break;
+            // Rows already claimed by THIS host extend its contiguous prefix and are skipped;
+            // the coordinator re-delivers already-joined input through the coverage rule.
+            if (
+              (stored.row.state === "joining" || stored.row.state === "joined") &&
+              stored.joinedHostSubmissionId === request.hostSubmissionId
+            ) {
+              continue;
+            }
+            // Any other non-ready row — an admitted-not-ready gap in particular — breaks the
+            // contiguous ready prefix (plan §2.5); later ready work stays queued (DUR-004).
+            if (stored.row.state !== "ready") break;
+            submissions.set(stored.row.submissionId, {
+              ...stored,
+              row: { ...stored.row, state: "joining" },
+              joinedHostSubmissionId: request.hostSubmissionId,
+            });
+            claims.push(
+              JoiningClaim.make({
+                submissionId: stored.row.submissionId,
+                queueSequence: stored.row.queueSequence,
+                inputPayload: stored.row.inputPayload,
+              }),
+            );
+          }
+          return [success(claims), { ...current, submissions }];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+      return decision.value;
+    }),
+  );
+
+  const markJoined: SubmissionLedger["Service"]["markJoined"] = Effect.fn(
+    "MemorySubmissionLedger.markJoined",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(MarkJoinedRequest, "markJoined", unvalidated);
+      const decision = yield* Ref.modify(
+        state,
+        (current): readonly [Decision<void, OwnershipLost | LedgerError>, LedgerState] => {
+          const stored = current.submissions.get(request.submissionId);
+          if (stored === undefined) {
+            return [
+              failure(ledgerError("markJoined", `Unknown Submission ${request.submissionId}`)),
+              current,
+            ];
+          }
+          if (stored.joinedHostSubmissionId === undefined) {
+            return [
+              failure(
+                ledgerError(
+                  "markJoined",
+                  `Submission ${request.submissionId} was never claimed for joining`,
+                ),
+              ),
+              current,
+            ];
+          }
+          const host = current.submissions.get(stored.joinedHostSubmissionId);
+          if (host === undefined) {
+            return [
+              failure(
+                ledgerError(
+                  "markJoined",
+                  `Host Submission ${stored.joinedHostSubmissionId} is missing`,
+                ),
+              ),
+              current,
+            ];
+          }
+          // The lane is host-owned: the presented token must own the HOST's ownership period,
+          // which also lets a later host Attempt repair a lost marker from history (DUR-016).
+          if (!ownsLane(host, request.ownershipToken)) {
+            return [failure(ownershipLost(current, host)), current];
+          }
+          if (stored.inputApplied !== undefined) {
+            if (
+              stored.inputApplied.recordId === request.recordId &&
+              stored.inputApplied.sequence === request.sequence
+            ) {
+              return [success(undefined), current];
+            }
+            return [
+              failure(
+                ledgerError(
+                  "markJoined",
+                  `A different join marker is already recorded for Submission ${request.submissionId}`,
+                ),
+              ),
+              current,
+            ];
+          }
+          if (stored.row.state !== "joining" && stored.row.state !== "joined") {
+            return [
+              failure(
+                ledgerError(
+                  "markJoined",
+                  `Cannot mark Submission ${request.submissionId} joined from state ${stored.row.state}`,
+                ),
+              ),
+              current,
+            ];
+          }
+          const marker = InputAppliedMarker.make({
+            recordId: request.recordId,
+            sequence: request.sequence,
+          });
+          return [
+            success(undefined),
+            withSubmission(current, {
+              ...stored,
+              row: { ...stored.row, state: "joined" },
+              inputApplied: marker,
+            }),
+          ];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+    }),
+  );
+
+  const revertJoining: SubmissionLedger["Service"]["revertJoining"] = Effect.fn(
+    "MemorySubmissionLedger.revertJoining",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(RevertJoiningRequest, "revertJoining", unvalidated);
+      const decision = yield* Ref.modify(
+        state,
+        (current): readonly [Decision<void, LedgerError>, LedgerState] => {
+          const stored = current.submissions.get(request.submissionId);
+          if (stored === undefined) {
+            return [
+              failure(ledgerError("revertJoining", `Unknown Submission ${request.submissionId}`)),
+              current,
+            ];
+          }
+          // Idempotent and recovery-only: only a still-`joining` Submission reverts; an
+          // already-joined (or already-reverted) Submission is a no-op (DUR-016).
+          if (stored.row.state !== "joining") return [success(undefined), current];
+          return [
+            success(undefined),
+            withSubmission(current, {
+              ...stored,
+              row: { ...stored.row, state: "ready" },
+              joinedHostSubmissionId: undefined,
+            }),
+          ];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+    }),
+  );
+
+  const suspend: SubmissionLedger["Service"]["suspend"] = Effect.fn(
+    "MemorySubmissionLedger.suspend",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(SuspendRequest, "suspend", unvalidated);
+      const nowMillis = yield* Clock.currentTimeMillis;
+      const decision = yield* Ref.modify(
+        state,
+        (
+          current,
+        ): readonly [
+          Decision<SuspensionOutcome, OwnershipLost | SettlementConflict | LedgerError>,
+          LedgerState,
+        ] => {
+          const stored = current.submissions.get(request.submissionId);
+          if (stored === undefined) {
+            return [
+              failure(ledgerError("suspend", `Unknown Submission ${request.submissionId}`)),
+              current,
+            ];
+          }
+          if (stored.row.state === "settled") {
+            if (stored.row.settledOutcome === undefined) {
+              return [
+                failure(
+                  ledgerError(
+                    "suspend",
+                    `Settled Submission ${request.submissionId} is missing its outcome`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            return [
+              failure(
+                SettlementConflict.make({
+                  submissionId: request.submissionId,
+                  existingOutcome: stored.row.settledOutcome,
+                }),
+              ),
+              current,
+            ];
+          }
+          // An exact terminal outcome is already reserved (DUR-011); suspension would
+          // contradict it, so the reservation wins.
+          if (stored.reservation !== undefined) {
+            return [
+              failure(
+                SettlementConflict.make({
+                  submissionId: request.submissionId,
+                  existingOutcome: stored.reservation.outcome,
+                }),
+              ),
+              current,
+            ];
+          }
+          if (!ownsLane(stored, request.ownershipToken)) {
+            return [failure(ownershipLost(current, stored)), current];
+          }
+          // A decision that raced ahead of the suspend transaction already covers the reason:
+          // the caller resumes immediately WITHOUT releasing the lane (plan §2.6).
+          if (
+            request.reason.toolCallIds.every((toolCallId) =>
+              stored.approvalDecisions.has(toolCallId),
+            )
+          ) {
+            return [success("resume-immediately" as const), current];
+          }
+          return [
+            success("suspended" as const),
+            withSubmission(current, {
+              ...stored,
+              row: { ...stored.row, state: "suspended" },
+              ownership: undefined,
+              suspension: { reason: request.reason, suspendedAtMillis: nowMillis },
+            }),
+          ];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+      return decision.value;
+    }),
+  );
+
+  const recordApprovalDecision: SubmissionLedger["Service"]["recordApprovalDecision"] = Effect.fn(
+    "MemorySubmissionLedger.recordApprovalDecision",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const command = yield* validate(
+        ApprovalDecisionCommand,
+        "recordApprovalDecision",
+        unvalidated,
+      );
+      const nowMillis = yield* Clock.currentTimeMillis;
+      const decision = yield* Ref.modify(
+        state,
+        (
+          current,
+        ): readonly [
+          Decision<ApprovalDecisionIntent, ApprovalConflict | SettlementConflict | LedgerError>,
+          LedgerState,
+        ] => {
+          const stored = current.submissions.get(command.submissionId);
+          if (stored === undefined) {
+            return [
+              failure(
+                ledgerError("recordApprovalDecision", `Unknown Submission ${command.submissionId}`),
+              ),
+              current,
+            ];
+          }
+          if (stored.row.state === "settled") {
+            if (stored.row.settledOutcome === undefined) {
+              return [
+                failure(
+                  ledgerError(
+                    "recordApprovalDecision",
+                    `Settled Submission ${command.submissionId} is missing its outcome`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            return [
+              failure(
+                SettlementConflict.make({
+                  submissionId: command.submissionId,
+                  existingOutcome: stored.row.settledOutcome,
+                }),
+              ),
+              current,
+            ];
+          }
+          const existing = stored.approvalDecisions.get(command.toolCallId);
+          if (existing !== undefined) {
+            if (existing.decision !== command.decision) {
+              return [
+                failure(
+                  ApprovalConflict.make({
+                    submissionId: command.submissionId,
+                    toolCallId: command.toolCallId,
+                    existingDecision: existing.decision,
+                  }),
+                ),
+                current,
+              ];
+            }
+            return [success(existing), current];
+          }
+          const intent = ApprovalDecisionIntent.make({
+            submissionId: command.submissionId,
+            toolCallId: command.toolCallId,
+            decision: command.decision,
+            resolver: command.resolver,
+            reason: command.reason,
+            decidedAt: utc(nowMillis),
+          });
+          const approvalDecisions = new Map(stored.approvalDecisions).set(
+            command.toolCallId,
+            intent,
+          );
+          // Once every pending call of the suspension reason is decided, the lane wakes:
+          // suspended → input-applied (plan §2.6).
+          const wakes =
+            stored.row.state === "suspended" &&
+            stored.suspension !== undefined &&
+            stored.suspension.reason.toolCallIds.every((toolCallId) =>
+              approvalDecisions.has(toolCallId),
+            );
+          return [
+            success(intent),
+            withSubmission(current, {
+              ...stored,
+              row: wakes ? { ...stored.row, state: "input-applied" } : stored.row,
+              suspension: wakes ? undefined : stored.suspension,
+              approvalDecisions,
+            }),
+          ];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+      return decision.value;
+    }),
+  );
+
+  const markUnknown: SubmissionLedger["Service"]["markUnknown"] = Effect.fn(
+    "MemorySubmissionLedger.markUnknown",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(MarkUnknownRequest, "markUnknown", unvalidated);
+      const decision = yield* Ref.modify(
+        state,
+        (current): readonly [Decision<void, SettlementConflict | LedgerError>, LedgerState] => {
+          const stored = current.submissions.get(request.submissionId);
+          if (stored === undefined) {
+            return [
+              failure(ledgerError("markUnknown", `Unknown Submission ${request.submissionId}`)),
+              current,
+            ];
+          }
+          if (stored.row.state === "settled") {
+            if (stored.row.settledOutcome === undefined) {
+              return [
+                failure(
+                  ledgerError(
+                    "markUnknown",
+                    `Settled Submission ${request.submissionId} is missing its outcome`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            return [
+              failure(
+                SettlementConflict.make({
+                  submissionId: request.submissionId,
+                  existingOutcome: stored.row.settledOutcome,
+                }),
+              ),
+              current,
+            ];
+          }
+          // A reserved exact outcome wins over a late Unknown marking (DUR-011); the recovery
+          // classifier orders reservation ahead of MarkUnknown for the same reason.
+          if (stored.reservation !== undefined) {
+            return [
+              failure(
+                SettlementConflict.make({
+                  submissionId: request.submissionId,
+                  existingOutcome: stored.reservation.outcome,
+                }),
+              ),
+              current,
+            ];
+          }
+          // Idempotent merge: repeating is a no-op; additional open calls extend the marked
+          // set while the first recorded reason is kept.
+          const existing = stored.unknownMark;
+          const known = new Set(existing?.toolCallIds ?? []);
+          const merged = [
+            ...(existing?.toolCallIds ?? []),
+            ...request.toolCallIds.filter((toolCallId) => !known.has(toolCallId)),
+          ];
+          return [
+            success(undefined),
+            withSubmission(current, {
+              ...stored,
+              row:
+                stored.row.state === "unknown" ? stored.row : { ...stored.row, state: "unknown" },
+              unknownMark: { reason: existing?.reason ?? request.reason, toolCallIds: merged },
+            }),
+          ];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+    }),
+  );
+
+  const recordUnknownResolution: SubmissionLedger["Service"]["recordUnknownResolution"] = Effect.fn(
+    "MemorySubmissionLedger.recordUnknownResolution",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const command = yield* validate(
+        UnknownResolutionCommand,
+        "recordUnknownResolution",
+        unvalidated,
+      );
+      const nowMillis = yield* Clock.currentTimeMillis;
+      const encodedResolution = yield* Schema.encodeUnknownEffect(UnknownResolution)(
+        command.resolution,
+      ).pipe(
+        Effect.mapError((error) =>
+          ledgerError("recordUnknownResolution", "Invalid unknown-outcome resolution", error),
+        ),
+      );
+      const resolutionJson = JSON.stringify(encodedResolution);
+      const decision = yield* Ref.modify(
+        state,
+        (
+          current,
+        ): readonly [
+          Decision<
+            UnknownResolutionIntent,
+            UnknownResolutionConflict | SettlementConflict | LedgerError
+          >,
+          LedgerState,
+        ] => {
+          const stored = current.submissions.get(command.submissionId);
+          if (stored === undefined) {
+            return [
+              failure(
+                ledgerError(
+                  "recordUnknownResolution",
+                  `Unknown Submission ${command.submissionId}`,
+                ),
+              ),
+              current,
+            ];
+          }
+          if (stored.row.state === "settled") {
+            if (stored.row.settledOutcome === undefined) {
+              return [
+                failure(
+                  ledgerError(
+                    "recordUnknownResolution",
+                    `Settled Submission ${command.submissionId} is missing its outcome`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            return [
+              failure(
+                SettlementConflict.make({
+                  submissionId: command.submissionId,
+                  existingOutcome: stored.row.settledOutcome,
+                }),
+              ),
+              current,
+            ];
+          }
+          const existing = stored.unknownResolutions.get(command.toolCallId);
+          if (existing !== undefined && existing.resolutionJson !== resolutionJson) {
+            return [
+              failure(
+                UnknownResolutionConflict.make({
+                  submissionId: command.submissionId,
+                  toolCallId: command.toolCallId,
+                }),
+              ),
+              current,
+            ];
+          }
+          const intent =
+            existing?.intent ??
+            UnknownResolutionIntent.make({
+              submissionId: command.submissionId,
+              toolCallId: command.toolCallId,
+              author: command.author,
+              reason: command.reason,
+              resolution: command.resolution,
+              resolvedAt: utc(nowMillis),
+            });
+          const unknownResolutions =
+            existing !== undefined
+              ? stored.unknownResolutions
+              : new Map(stored.unknownResolutions).set(command.toolCallId, {
+                  intent,
+                  resolutionJson,
+                });
+          // The lane reopens only when EVERY marked open call has a durable resolution
+          // intent: unknown → input-applied (DUR-017). Replays re-run the coverage check so
+          // a recovering caller can wake the lane idempotently.
+          const wakes =
+            stored.row.state === "unknown" &&
+            stored.unknownMark !== undefined &&
+            stored.unknownMark.toolCallIds.every((toolCallId) =>
+              unknownResolutions.has(toolCallId),
+            );
+          return [
+            success(intent),
+            withSubmission(current, {
+              ...stored,
+              row: wakes ? { ...stored.row, state: "input-applied" } : stored.row,
+              unknownMark: wakes ? undefined : stored.unknownMark,
+              unknownResolutions,
+            }),
+          ];
+        },
+      );
+      if (decision._tag === "failure") return yield* decision.error;
+      return decision.value;
+    }),
+  );
+
   const scanNonterminal: SubmissionLedger["Service"]["scanNonterminal"] = Stream.unwrap(
     Ref.get(state).pipe(
       Effect.map((current) => {
@@ -823,8 +1504,39 @@ const makeSubmissionLedger = Effect.gen(function* () {
           `Unknown Submission ${request.submissionId}`,
         );
       }
+      const joins = [...current.submissions.values()]
+        .filter((candidate) => candidate.joinedHostSubmissionId === request.submissionId)
+        .sort((left, right) => left.row.queueSequence - right.row.queueSequence)
+        .map((candidate) =>
+          JoinSnapshot.make({
+            submissionId: candidate.row.submissionId,
+            state: candidate.row.state,
+            hostSubmissionId: request.submissionId,
+          }),
+        );
+      const byToolCallId = <A extends { readonly toolCallId: ToolCallId }>(
+        left: A,
+        right: A,
+      ): number =>
+        left.toolCallId < right.toolCallId ? -1 : left.toolCallId > right.toolCallId ? 1 : 0;
       return RecoverySnapshot.make({
         submission: toSnapshot(stored.row),
+        joins,
+        approvalDecisions: [...stored.approvalDecisions.values()].sort(byToolCallId),
+        unknownResolutions: [...stored.unknownResolutions.values()]
+          .map((resolution) => resolution.intent)
+          .sort(byToolCallId),
+        ...(stored.joinedHostSubmissionId === undefined
+          ? {}
+          : { hostSubmissionId: stored.joinedHostSubmissionId }),
+        ...(stored.suspension === undefined
+          ? {}
+          : {
+              suspension: SuspensionSnapshot.make({
+                reason: stored.suspension.reason,
+                suspendedAt: utc(stored.suspension.suspendedAtMillis),
+              }),
+            }),
         ...(stored.ownership === undefined
           ? {}
           : {
@@ -864,6 +1576,13 @@ const makeSubmissionLedger = Effect.gen(function* () {
     reserveSettlement,
     finalizeSettlement,
     requestAbort,
+    claimJoining,
+    markJoined,
+    revertJoining,
+    suspend,
+    recordApprovalDecision,
+    markUnknown,
+    recordUnknownResolution,
     scanNonterminal,
     loadRecoverySnapshot,
   });

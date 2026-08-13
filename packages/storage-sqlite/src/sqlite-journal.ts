@@ -297,7 +297,9 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
         'effect_agent_submission_ownership',
         'effect_agent_attempts',
         'effect_agent_settlement_reservations',
-        'effect_agent_abort_intents'
+        'effect_agent_abort_intents',
+        'effect_agent_approval_decisions',
+        'effect_agent_unknown_resolutions'
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
@@ -307,7 +309,7 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     "required_tables",
     requiredRows,
   );
-  if (required.length !== 9) {
+  if (required.length !== 11) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,

@@ -5,11 +5,13 @@ import {
   ReceiptId,
   SettlementId,
   SubmissionId,
+  ToolCallId,
 } from "@effect-agent/core";
 import { Context, Duration, Effect, Option, Schema, Stream } from "effect";
 
 import {
   AbortRequested,
+  ApprovalDecision,
   BatchId,
   CanonicalSequence,
   DefinitionDigests,
@@ -21,6 +23,9 @@ import {
   RecordEnvelope,
   RecordId,
   SettlementOutcome,
+  ToolApprovalDecided,
+  ToolCallResolved,
+  ToolCallUnknown,
 } from "./records.ts";
 
 const identifier = <const Name extends string>(name: Name) =>
@@ -52,12 +57,30 @@ export type QueueSequence = typeof QueueSequence.Type;
 /**
  * Ledger lifecycle states for one Submission. `settled` is the only terminal state; every other
  * state carries an outstanding accepted-work obligation (Accepted-work Contract, DUR-002).
+ *
+ * Phase 5 states:
+ *
+ * - `joining` — a queued Submission claimed by an active host Run, before its canonical
+ *   `UserInputRecorded` append; recovery reverts it to `ready` (DUR-016).
+ * - `joined` — the input is canonical and linked to its host; the Submission settles WITH the
+ *   host Run's outcome.
+ * - `suspended` — durably waiting for explicit approval decisions; the ownership period has
+ *   ended and the lane consumes no worker permit while the obligation stays owed.
+ * - `unknown` — at least one ordinary Tool Call has a durable Unknown Outcome; the lane is
+ *   blocked until an authorized resolution covers every open call (DUR-017).
+ *
+ * `claim` never grants a `joining`, `joined`, `suspended`, or `unknown` head: the lane is
+ * host-owned or blocked, never worker-claimable.
  */
 export const SubmissionState = Schema.Literals([
   "admitted",
   "ready",
+  "joining",
+  "joined",
   "running",
   "input-applied",
+  "suspended",
+  "unknown",
   "terminalizing",
   "settled",
 ]);
@@ -293,6 +316,194 @@ export class AbortIntent extends Schema.Class<AbortIntent>("@effect-agent/sessio
   canonicalRecordId: Schema.optionalKey(RecordId),
 }) {}
 
+/**
+ * Atomic claim of the contiguous ready prefix of strictly-later queued Submissions for joining
+ * into the active host Run (plan §2.5). Fenced by the host Attempt's ownership token — no epoch
+ * bump, the host already owns the lane. An `admitted`-but-not-`ready` row breaks the prefix.
+ */
+export class ClaimJoiningRequest extends Schema.Class<ClaimJoiningRequest>(
+  "@effect-agent/session/ClaimJoiningRequest",
+)({
+  conversationId: ConversationId,
+  hostSubmissionId: SubmissionId,
+  ownershipToken: OwnershipToken,
+  maxCount: Schema.Int.check(Schema.isGreaterThan(0)),
+}) {}
+
+/** One queued Submission transitioned to `joining` under the host's ownership. */
+export class JoiningClaim extends Schema.Class<JoiningClaim>("@effect-agent/session/JoiningClaim")({
+  submissionId: SubmissionId,
+  queueSequence: QueueSequence,
+  inputPayload: PersistedJson,
+}) {}
+
+/**
+ * The canonical position of one joined Submission's `UserInputRecorded` record (`input:{sid}`).
+ * Marking transitions `joining → joined` and records the host linkage established at claim time.
+ */
+export class MarkJoinedRequest extends Schema.Class<MarkJoinedRequest>(
+  "@effect-agent/session/MarkJoinedRequest",
+)({
+  submissionId: SubmissionId,
+  ownershipToken: OwnershipToken,
+  recordId: RecordId,
+  sequence: CanonicalSequence,
+}) {}
+
+/**
+ * Recovery-only revert of a `joining` Submission whose canonical input append never committed
+ * (DUR-016): `joining → ready`, idempotent, a no-op when the Submission already joined.
+ */
+export class RevertJoiningRequest extends Schema.Class<RevertJoiningRequest>(
+  "@effect-agent/session/RevertJoiningRequest",
+)({
+  submissionId: SubmissionId,
+}) {}
+
+/**
+ * Why one Submission is durably suspended. Approval is the only Phase 5 reason; the union keeps
+ * later suspension families (e.g. operator quarantine) additive.
+ */
+export class ApprovalPendingSuspension extends Schema.TaggedClass<ApprovalPendingSuspension>(
+  "@effect-agent/session/ApprovalPendingSuspension",
+)("ApprovalPending", {
+  toolCallIds: Schema.NonEmptyArray(ToolCallId),
+}) {}
+
+export const SuspensionReason = Schema.Union([ApprovalPendingSuspension]);
+export type SuspensionReason = typeof SuspensionReason.Type;
+
+/**
+ * Durable suspension of owned work (plan §2.6): `input-applied`/`running` → `suspended`, the
+ * ownership period ends, NO settlement occurs — the accepted-work obligation stays owed while
+ * the lane consumes no worker permit.
+ */
+export class SuspendRequest extends Schema.Class<SuspendRequest>(
+  "@effect-agent/session/SuspendRequest",
+)({
+  submissionId: SubmissionId,
+  ownershipToken: OwnershipToken,
+  reason: SuspensionReason,
+}) {}
+
+/**
+ * `suspended` when the lane is now durably waiting; `resume-immediately` when recorded decision
+ * intents already cover every pending call of the suspension reason (a decision raced ahead of
+ * the suspend transaction), so the caller resumes without releasing the lane.
+ */
+export const SuspensionOutcome = Schema.Literals(["suspended", "resume-immediately"]);
+export type SuspensionOutcome = typeof SuspensionOutcome.Type;
+
+/**
+ * A durable approval decision command (plan §2.6, `abort`-shaped). Field bounds are exactly those
+ * of the canonical `ToolApprovalDecided` payload so the intent can become canonical without
+ * re-validation.
+ */
+export class ApprovalDecisionCommand extends Schema.Class<ApprovalDecisionCommand>(
+  "@effect-agent/session/ApprovalDecisionCommand",
+)({
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+  decision: ApprovalDecision,
+  resolver: ToolApprovalDecided.fields.resolver,
+  reason: ToolApprovalDecided.fields.reason,
+}) {}
+
+/**
+ * The recorded approval-decision intent, idempotent per `(submissionId, toolCallId)`.
+ * `canonicalRecordId` is present once the corresponding canonical `ToolApprovalDecided` record
+ * has been appended (see `toolApprovalDecisionRecordId`).
+ */
+export class ApprovalDecisionIntent extends Schema.Class<ApprovalDecisionIntent>(
+  "@effect-agent/session/ApprovalDecisionIntent",
+)({
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+  decision: ApprovalDecision,
+  resolver: ToolApprovalDecided.fields.resolver,
+  reason: ToolApprovalDecided.fields.reason,
+  decidedAt: Schema.DateTimeUtcFromString,
+  canonicalRecordId: Schema.optionalKey(RecordId),
+}) {}
+
+/**
+ * Durable Unknown marking for one Submission's open ordinary Tool Calls (DUR-009): state →
+ * `unknown`, the lane blocks, ownership-free (recovery may mark without a claim). Idempotent.
+ */
+export class MarkUnknownRequest extends Schema.Class<MarkUnknownRequest>(
+  "@effect-agent/session/MarkUnknownRequest",
+)({
+  submissionId: SubmissionId,
+  toolCallIds: Schema.NonEmptyArray(ToolCallId),
+  reason: ToolCallUnknown.fields.reason,
+}) {}
+
+/** The recovered supplier truth: the external effect completed with this exact result. */
+export class ResolutionCompletedWithResult extends Schema.TaggedClass<ResolutionCompletedWithResult>(
+  "@effect-agent/session/ResolutionCompletedWithResult",
+)("CompletedWithResult", {
+  result: PersistedJson,
+  isFailure: Schema.Boolean,
+}) {}
+
+/** The external effect provably never happened; the call may re-execute on resume. */
+export class ResolutionNeverHappened extends Schema.TaggedClass<ResolutionNeverHappened>(
+  "@effect-agent/session/ResolutionNeverHappened",
+)("NeverHappened", {}) {}
+
+/** The call is safe to repeat under the external system's idempotency contract. */
+export class ResolutionSafeToRetry extends Schema.TaggedClass<ResolutionSafeToRetry>(
+  "@effect-agent/session/ResolutionSafeToRetry",
+)("SafeToRetry", {}) {}
+
+/** Give up on the Submission: route into the abort path (unknown calls stay recorded; abort
+ * never claims external rollback, durability §13). */
+export class ResolutionAbortSubmission extends Schema.TaggedClass<ResolutionAbortSubmission>(
+  "@effect-agent/session/ResolutionAbortSubmission",
+)("AbortSubmission", {}) {}
+
+/** How an authorized resolver closed one Unknown Outcome (DUR-017). */
+export const UnknownResolution = Schema.Union([
+  ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
+  ResolutionSafeToRetry,
+  ResolutionAbortSubmission,
+]);
+export type UnknownResolution = typeof UnknownResolution.Type;
+
+/**
+ * A durable Unknown-Outcome resolution command (DUR-017, `abort`-shaped). Possession of the
+ * runtime service plus the mandatory `author`/`reason` audit fields is the Phase 5 authorization
+ * boundary — identical to `abort`; the authenticated operator surface is a P7 deliverable.
+ * Field bounds are exactly those of the canonical `ToolCallResolved` payload.
+ */
+export class UnknownResolutionCommand extends Schema.Class<UnknownResolutionCommand>(
+  "@effect-agent/session/UnknownResolutionCommand",
+)({
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+  author: ToolCallResolved.fields.author,
+  reason: ToolCallResolved.fields.reason,
+  resolution: UnknownResolution,
+}) {}
+
+/**
+ * The recorded resolution intent, idempotent per `(submissionId, toolCallId)`. The canonical
+ * `ToolCallResolved` (+ `ToolCallSettled` for `CompletedWithResult`) is appended by the recovery
+ * pass or the next owning Attempt; `canonicalRecordId` is present once it is.
+ */
+export class UnknownResolutionIntent extends Schema.Class<UnknownResolutionIntent>(
+  "@effect-agent/session/UnknownResolutionIntent",
+)({
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+  author: ToolCallResolved.fields.author,
+  reason: ToolCallResolved.fields.reason,
+  resolution: UnknownResolution,
+  resolvedAt: Schema.DateTimeUtcFromString,
+  canonicalRecordId: Schema.optionalKey(RecordId),
+}) {}
+
 /** Current ownership as recovery sees it. The live owner's token is never exposed here. */
 export class OwnershipSnapshot extends Schema.Class<OwnershipSnapshot>(
   "@effect-agent/session/OwnershipSnapshot",
@@ -320,9 +531,29 @@ export class RecoverySnapshotRequest extends Schema.Class<RecoverySnapshotReques
   submissionId: SubmissionId,
 }) {}
 
+/** One joined/joining Submission of a host Run, as the host's recovery sees it. */
+export class JoinSnapshot extends Schema.Class<JoinSnapshot>("@effect-agent/session/JoinSnapshot")({
+  submissionId: SubmissionId,
+  state: SubmissionState,
+  hostSubmissionId: SubmissionId,
+}) {}
+
+/** A durable suspension as recovery sees it. */
+export class SuspensionSnapshot extends Schema.Class<SuspensionSnapshot>(
+  "@effect-agent/session/SuspensionSnapshot",
+)({
+  reason: SuspensionReason,
+  suspendedAt: Schema.DateTimeUtcFromString,
+}) {}
+
 /**
  * Everything the pure recovery classifier needs about one Submission, read strongly consistently
  * (STORE-003). Canonical history still wins over every marker in this snapshot (DUR-015).
+ *
+ * Phase 5 fields: `joins` is the host-side view (every Submission `joining`/`joined` to this
+ * one); `hostSubmissionId` is the joined-side view; `suspension` mirrors the `suspended` state;
+ * `approvalDecisions` and `unknownResolutions` are the durable intents recorded against this
+ * Submission (empty when none exist).
  */
 export class RecoverySnapshot extends Schema.Class<RecoverySnapshot>(
   "@effect-agent/session/RecoverySnapshot",
@@ -332,6 +563,11 @@ export class RecoverySnapshot extends Schema.Class<RecoverySnapshot>(
   inputApplied: Schema.optionalKey(InputAppliedMarker),
   reservation: Schema.optionalKey(SettlementReservationSnapshot),
   abortIntent: Schema.optionalKey(AbortIntent),
+  joins: Schema.Array(JoinSnapshot),
+  hostSubmissionId: Schema.optionalKey(SubmissionId),
+  suspension: Schema.optionalKey(SuspensionSnapshot),
+  approvalDecisions: Schema.Array(ApprovalDecisionIntent),
+  unknownResolutions: Schema.Array(UnknownResolutionIntent),
 }) {}
 
 /** The same idempotency key was admitted with different canonical input content. */
@@ -364,6 +600,40 @@ export class SettlementConflict extends Schema.TaggedErrorClass<SettlementConfli
   },
 ) {}
 
+/**
+ * A divergent approval re-decision for an already-decided `(submissionId, toolCallId)` pair.
+ * Repeating the SAME decision replays the recorded intent instead (idempotency).
+ */
+export class ApprovalConflict extends Schema.TaggedErrorClass<ApprovalConflict>()(
+  "ApprovalConflict",
+  {
+    submissionId: SubmissionId,
+    toolCallId: ToolCallId,
+    existingDecision: ApprovalDecision,
+  },
+) {}
+
+/**
+ * A divergent unknown-outcome re-resolution for an already-resolved `(submissionId, toolCallId)`
+ * pair (DUR-017). Repeating the SAME resolution replays the recorded intent instead.
+ */
+export class UnknownResolutionConflict extends Schema.TaggedErrorClass<UnknownResolutionConflict>()(
+  "UnknownResolutionConflict",
+  {
+    submissionId: SubmissionId,
+    toolCallId: ToolCallId,
+  },
+) {}
+
+/**
+ * The target Submission is `joined` to a host Run: it settles with the host, so the abort target
+ * is the host Submission carried here (plan §2.5).
+ */
+export class JoinedToHost extends Schema.TaggedErrorClass<JoinedToHost>()("JoinedToHost", {
+  submissionId: SubmissionId,
+  hostSubmissionId: SubmissionId,
+}) {}
+
 /** Adapter-level ledger failure (storage unavailable, unknown submission, corrupt row, ...). */
 export class LedgerError extends Schema.TaggedErrorClass<LedgerError>()("LedgerError", {
   operation: Schema.String,
@@ -375,6 +645,9 @@ export type SubmissionLedgerFailure =
   | AdmissionConflict
   | OwnershipLost
   | SettlementConflict
+  | ApprovalConflict
+  | UnknownResolutionConflict
+  | JoinedToHost
   | LedgerError;
 
 /**
@@ -412,13 +685,41 @@ export type SubmissionLedgerFailure =
  * - `reserveSettlement` — reserves the Submission's single exact settlement record
  *   (state → terminalizing). Idempotent: an identical reservation replays with `replayed` set; a
  *   different outcome or content fails with `SettlementConflict{existingOutcome}` (DUR-011).
+ *   For a `joined` Submission the reservation is authorized by its recorded host linkage — a
+ *   joined lane is never worker-claimable, so no ownership token can exist for it and the
+ *   presented token is not consulted (plan §2.5: joined Submissions settle with the host).
  * - `finalizeSettlement` — idempotent terminal transition (state → settled) after the reserved
  *   record is canonical; releases the lane so the next `queueSequence` becomes claimable. It
  *   requires no ownership token: canonical history authorizes finalization (DUR-015). A
  *   finalization that disagrees with the recorded outcome fails with `SettlementConflict`.
  * - `requestAbort` — durable, idempotent by `submissionId`: repeating returns the recorded
  *   intent unchanged (DUR-012). Fails with `SettlementConflict` once the Submission is settled;
- *   abort never rewrites a terminal outcome.
+ *   abort never rewrites a terminal outcome. Fails with `JoinedToHost` for a `joined` Submission
+ *   — it settles with its host, so the abort target is the host (plan §2.5). Abort of a
+ *   `joining` Submission records the intent; it is honored only if the host has not consumed the
+ *   input (revert-then-abort).
+ * - `claimJoining` — atomic: transitions the contiguous `ready` prefix of strictly-later
+ *   `queueSequence`s (up to `maxCount`) to `joining` under the host's ownership token, recording
+ *   the host linkage; no epoch bump (the host Attempt already owns the lane). An
+ *   `admitted`-not-`ready` row breaks the prefix. Fails with `OwnershipLost` once superseded.
+ * - `markJoined` — idempotent `joining → joined` with the canonical input record position;
+ *   repairable from history when the append committed but the marker write was lost (DUR-016).
+ * - `revertJoining` — recovery-only, idempotent `joining → ready`; a no-op when already joined.
+ * - `suspend` — `input-applied`/`running` → `suspended`; ends the ownership period WITHOUT
+ *   settling (the obligation stays owed, the lane consumes no worker permit). Returns
+ *   `resume-immediately` when recorded decisions already cover the reason's pending calls.
+ *   Fails with `SettlementConflict` once settled.
+ * - `recordApprovalDecision` — durable, idempotent per `(submissionId, toolCallId)`: repeating
+ *   the same decision replays the intent; a divergent re-decision fails with `ApprovalConflict`.
+ *   Transitions `suspended → input-applied` once every pending call of the suspension reason is
+ *   decided, waking the lane. Fails with `SettlementConflict` once settled.
+ * - `markUnknown` — idempotent, ownership-free (canonical evidence authorizes it): state →
+ *   `unknown`, the lane blocks and stops consuming worker permits while the accepted settlement
+ *   obligation stays visible (DUR-009/DUR-017). Fails with `SettlementConflict` once settled.
+ * - `recordUnknownResolution` — durable, idempotent per `(submissionId, toolCallId)`; a
+ *   divergent re-resolution fails with `UnknownResolutionConflict`. Transitions
+ *   `unknown → input-applied` once no open call remains, waking the lane. Fails with
+ *   `SettlementConflict` once settled.
  * - `scanNonterminal` — streams every Submission whose state is not `settled`, ordered by
  *   (conversationId, queueSequence); recovery's admission-independent worklist (DUR-014).
  * - `loadRecoverySnapshot` — strongly consistent full snapshot for the pure recovery classifier.
@@ -455,7 +756,29 @@ export class SubmissionLedger extends Context.Service<
     ) => Effect.Effect<Settlement, SettlementConflict | LedgerError>;
     readonly requestAbort: (
       request: AbortCommand,
-    ) => Effect.Effect<AbortIntent, SettlementConflict | LedgerError>;
+    ) => Effect.Effect<AbortIntent, SettlementConflict | JoinedToHost | LedgerError>;
+    readonly claimJoining: (
+      request: ClaimJoiningRequest,
+    ) => Effect.Effect<ReadonlyArray<JoiningClaim>, OwnershipLost | LedgerError>;
+    readonly markJoined: (
+      request: MarkJoinedRequest,
+    ) => Effect.Effect<void, OwnershipLost | LedgerError>;
+    readonly revertJoining: (request: RevertJoiningRequest) => Effect.Effect<void, LedgerError>;
+    readonly suspend: (
+      request: SuspendRequest,
+    ) => Effect.Effect<SuspensionOutcome, OwnershipLost | SettlementConflict | LedgerError>;
+    readonly recordApprovalDecision: (
+      command: ApprovalDecisionCommand,
+    ) => Effect.Effect<ApprovalDecisionIntent, ApprovalConflict | SettlementConflict | LedgerError>;
+    readonly markUnknown: (
+      request: MarkUnknownRequest,
+    ) => Effect.Effect<void, SettlementConflict | LedgerError>;
+    readonly recordUnknownResolution: (
+      command: UnknownResolutionCommand,
+    ) => Effect.Effect<
+      UnknownResolutionIntent,
+      UnknownResolutionConflict | SettlementConflict | LedgerError
+    >;
     readonly scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError>;
     readonly loadRecoverySnapshot: (
       request: RecoverySnapshotRequest,

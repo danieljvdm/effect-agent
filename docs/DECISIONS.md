@@ -229,6 +229,29 @@ records were rejected for volume and remain a Phase 5 consideration.
 Record: [ADR-0011](adr/0011-durable-runtime-placement-and-leases.md)
 Evidence: [Phase 4 evidence](PHASE-4-EVIDENCE.md)
 
+### D-030 — Durable Tool uncertainty, Steps, and suspension records
+
+**Status:** Accepted by default (adopted as the Phase 5 implementation default; pending owner
+review)
+
+**Decision:** Which Tool Calls enter the prepared/settled uncertainty protocol is declared by an
+Effect AI execution-class annotation (`readonly` | `idempotent` | `uncertain`) with a fail-closed
+`uncertain` default for unannotated Tools; always-prepared was rejected for volume and for
+converting free re-runs into Unknown Outcomes. The Durable Step service tag and API
+(`step.do(name, OutputSchema, effect)` — the Schema is the canonical codec for the recorded
+result) live in `@effect-agent/engine`, provided locally per Tool Call over a session-implemented
+`RunStepHook`. Step results persist as settled-success-only `ToolStepSettled` canonical records
+in the Conversation Log — no separate Step Store port, no prepared Step records, no recorded Step
+failures. A superseding Attempt audits an incomplete prior response with a first-class
+`ModelResponseInterrupted` canonical record. Durable approval suspension writes no canonical
+suspension record: the canonical `ToolApprovalRequested` is the boundary evidence and suspension
+is rebuildable ledger state. Unknown/approval resolution authorization in P5 is service-possession
+plus mandatory author/reason audit fields — the same trust boundary as `abort`; the authenticated
+operator surface, aging, and alerting are P7 scope.
+
+Record: [ADR-0012](adr/0012-durable-tool-uncertainty-and-steps.md)
+Evidence: [Phase 5 evidence](PHASE-5-EVIDENCE.md)
+
 ## Integration and project boundaries
 
 ### D-021 — Reference-material role

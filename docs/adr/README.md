@@ -17,9 +17,10 @@ The records below reflect explicit owner decisions.
 
 ## Accepted by default
 
-| ADR                                                      | Decision                                                                                                                                                                                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [ADR-0011](0011-durable-runtime-placement-and-leases.md) | Durable coordinator in session; leases as liveness, epochs as correctness; exact-match storage v2; Turn-granular canonical model records — adopted as the P4 plan default, pending owner review ([evidence](../PHASE-4-EVIDENCE.md)) |
+| ADR                                                      | Decision                                                                                                                                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ADR-0011](0011-durable-runtime-placement-and-leases.md) | Durable coordinator in session; leases as liveness, epochs as correctness; exact-match storage v2; Turn-granular canonical model records — adopted as the P4 plan default, pending owner review ([evidence](../PHASE-4-EVIDENCE.md))                                                                                                                                                  |
+| [ADR-0012](0012-durable-tool-uncertainty-and-steps.md)   | Execution-class-scoped prepared/settled Tool records with a fail-closed `uncertain` default; engine-owned Durable Steps recorded as settled-success-only canonical records; `step.do(name, OutputSchema, effect)`; first-class `ModelResponseInterrupted`; no canonical suspension record — adopted as the P5 plan default, pending owner review ([evidence](../PHASE-5-EVIDENCE.md)) |
 
 ## Proposed
 

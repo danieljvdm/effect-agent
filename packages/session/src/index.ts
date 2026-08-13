@@ -4,6 +4,7 @@ export * from "./durable-failpoint.ts";
 export * from "./durable-runtime.ts";
 export * from "./ledger-conformance.ts";
 export * from "./ledger.ts";
+export * from "./reconciler.ts";
 export * from "./records.ts";
 export * from "./recovery.ts";
 export * from "./reducer.ts";

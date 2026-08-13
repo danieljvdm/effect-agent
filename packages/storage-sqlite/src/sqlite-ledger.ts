@@ -6,17 +6,27 @@ import {
   AdmissionConflict,
   AdmissionRequest,
   AdmissionResult,
+  ApprovalConflict,
+  ApprovalDecision,
+  ApprovalDecisionCommand,
+  ApprovalDecisionIntent,
   CanonicalSequence,
   Claim,
+  ClaimJoiningRequest,
   ClaimRequest,
   DefinitionDigests,
   Digest,
   EMPTY_TAIL_DIGEST,
   InputAppliedMarker,
+  JoinSnapshot,
+  JoinedToHost,
+  JoiningClaim,
   LedgerCapabilities,
   LedgerError,
   MarkInputAppliedRequest,
+  MarkJoinedRequest,
   MarkReadyRequest,
+  MarkUnknownRequest,
   OwnershipLost,
   OwnershipRenewal,
   OwnershipSnapshot,
@@ -29,6 +39,7 @@ import {
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
   ReservedSettlement,
+  RevertJoiningRequest,
   Settlement,
   SettlementConflict,
   SettlementFinalization,
@@ -39,7 +50,15 @@ import {
   SubmissionSnapshot,
   SubmissionState,
   SettlementReservationSnapshot,
+  SuspendRequest,
+  SuspensionReason,
+  SuspensionSnapshot,
+  UnknownResolution,
+  UnknownResolutionCommand,
+  UnknownResolutionConflict,
+  UnknownResolutionIntent,
   submissionAbortRecordId,
+  type SuspensionOutcome,
 } from "@effect-agent/session";
 import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
@@ -88,6 +107,29 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   ready_at: Schema.NullOr(BoundedTimestamp),
   input_applied_record_id: Schema.NullOr(BoundedIdentifier),
   input_applied_sequence: Schema.NullOr(CanonicalSequence),
+  joined_host_submission_id: Schema.NullOr(BoundedIdentifier),
+  suspended_reason_json: Schema.NullOr(BoundedStoredText),
+  suspended_at: Schema.NullOr(BoundedTimestamp),
+  unknown_reason: Schema.NullOr(BoundedStoredText),
+  unknown_tool_call_ids_json: Schema.NullOr(BoundedStoredText),
+}) {}
+
+class ApprovalDecisionRow extends Schema.Class<ApprovalDecisionRow>("ApprovalDecisionRow")({
+  submission_id: BoundedIdentifier,
+  tool_call_id: BoundedIdentifier,
+  decision: ApprovalDecision,
+  resolver: BoundedIdentifier,
+  reason: BoundedStoredText,
+  decided_at: BoundedTimestamp,
+}) {}
+
+class UnknownResolutionRow extends Schema.Class<UnknownResolutionRow>("UnknownResolutionRow")({
+  submission_id: BoundedIdentifier,
+  tool_call_id: BoundedIdentifier,
+  author: BoundedIdentifier,
+  reason: BoundedStoredText,
+  resolution_json: BoundedStoredText,
+  resolved_at: BoundedTimestamp,
 }) {}
 
 class OwnershipRow extends Schema.Class<OwnershipRow>("OwnershipRow")({
@@ -143,13 +185,26 @@ const SUBMISSION_COLUMNS = `
   created_at,
   ready_at,
   input_applied_record_id,
-  input_applied_sequence
+  input_applied_sequence,
+  joined_host_submission_id,
+  suspended_reason_json,
+  suspended_at,
+  unknown_reason,
+  unknown_tool_call_ids_json
 `;
+
+/** The branded ToolCallId schema, reached through the session port so no core import is needed. */
+const ToolCallIdSchema = ApprovalDecisionCommand.fields.toolCallId;
+const ToolCallIdList = Schema.Array(ToolCallIdSchema);
 
 const encodePersistedJsonText = Schema.encodeEffect(Schema.fromJsonString(PersistedJson));
 const encodeDefinitionDigestsText = Schema.encodeEffect(Schema.fromJsonString(DefinitionDigests));
 const encodeRecordEnvelopeText = Schema.encodeEffect(Schema.fromJsonString(RecordEnvelope));
 const decodeRecordEnvelopeText = Schema.decodeEffect(Schema.fromJsonString(RecordEnvelope));
+const encodeSuspensionReasonText = Schema.encodeEffect(Schema.fromJsonString(SuspensionReason));
+const encodeUnknownResolutionText = Schema.encodeEffect(Schema.fromJsonString(UnknownResolution));
+const encodeToolCallIdsText = Schema.encodeEffect(Schema.fromJsonString(ToolCallIdList));
+const decodeToolCallIdsText = Schema.decodeEffect(Schema.fromJsonString(ToolCallIdList));
 const parseStoredJsonText = Schema.decodeEffect(Schema.fromJsonString(Schema.Json));
 const decodeAdmissionResult = Schema.decodeUnknownEffect(AdmissionResult);
 const decodeClaim = Schema.decodeUnknownEffect(Claim);
@@ -159,8 +214,14 @@ const decodeAbortIntent = Schema.decodeUnknownEffect(AbortIntent);
 const decodeOwnershipSnapshot = Schema.decodeUnknownEffect(OwnershipSnapshot);
 const decodeInputAppliedMarker = Schema.decodeUnknownEffect(InputAppliedMarker);
 const decodeSubmissionSnapshotUnknown = Schema.decodeUnknownEffect(SubmissionSnapshot);
+const decodeSubmissionId = Schema.decodeUnknownEffect(SubmissionSnapshot.fields.submissionId);
 const decodeQueueSequence = Schema.decodeUnknownEffect(QueueSequence);
 const decodeUtcInstant = Schema.decodeUnknownEffect(Schema.DateTimeUtcFromString);
+const decodeJoiningClaim = Schema.decodeUnknownEffect(JoiningClaim);
+const decodeJoinSnapshot = Schema.decodeUnknownEffect(JoinSnapshot);
+const decodeSuspensionSnapshot = Schema.decodeUnknownEffect(SuspensionSnapshot);
+const decodeApprovalDecisionIntent = Schema.decodeUnknownEffect(ApprovalDecisionIntent);
+const decodeUnknownResolutionIntent = Schema.decodeUnknownEffect(UnknownResolutionIntent);
 
 /** Wrap an adapter-internal failure into the port's LedgerError without erasing its tag. */
 const internalFailure =
@@ -211,7 +272,14 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
    */
   const inWriteTransaction = <
     A,
-    E extends AdmissionConflict | OwnershipLost | SettlementConflict | LedgerError,
+    E extends
+      | AdmissionConflict
+      | ApprovalConflict
+      | JoinedToHost
+      | OwnershipLost
+      | SettlementConflict
+      | UnknownResolutionConflict
+      | LedgerError,
   >(
     operation: string,
     effect: Effect.Effect<A, E>,
@@ -466,6 +534,138 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     }
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
+
+  const readApprovalDecisions = Effect.fn("SqliteSubmissionLedger.readApprovalDecisions")(
+    function* (
+      operation: string,
+      submissionId: string,
+    ): Effect.fn.Return<ReadonlyArray<ApprovalDecisionRow>, LedgerError> {
+      const rows = yield* sql<Record<string, unknown>>`
+        SELECT
+          submission_id,
+          tool_call_id,
+          decision,
+          resolver,
+          reason,
+          decided_at
+        FROM effect_agent_approval_decisions
+        WHERE submission_id = ${submissionId}
+        ORDER BY tool_call_id ASC
+      `.pipe(Effect.mapError(sqlFailure(operation)));
+      return yield* decodeRows(
+        Schema.Array(ApprovalDecisionRow),
+        "effect_agent_approval_decisions",
+        submissionId,
+        rows,
+      ).pipe(Effect.mapError(internalFailure(operation)));
+    },
+  );
+
+  const approvalIntentFromRow = Effect.fn("SqliteSubmissionLedger.approvalIntentFromRow")(
+    function* (
+      operation: string,
+      row: ApprovalDecisionRow,
+    ): Effect.fn.Return<ApprovalDecisionIntent, LedgerError> {
+      return yield* decodeApprovalDecisionIntent({
+        submissionId: row.submission_id,
+        toolCallId: row.tool_call_id,
+        decision: row.decision,
+        resolver: row.resolver,
+        reason: row.reason,
+        decidedAt: row.decided_at,
+      }).pipe(
+        Effect.mapError((error) =>
+          corruptionFailure(
+            operation,
+            "effect_agent_approval_decisions",
+            `${row.submission_id}/${row.tool_call_id}`,
+            error.message,
+          ),
+        ),
+      );
+    },
+  );
+
+  const readUnknownResolutions = Effect.fn("SqliteSubmissionLedger.readUnknownResolutions")(
+    function* (
+      operation: string,
+      submissionId: string,
+    ): Effect.fn.Return<ReadonlyArray<UnknownResolutionRow>, LedgerError> {
+      const rows = yield* sql<Record<string, unknown>>`
+        SELECT
+          submission_id,
+          tool_call_id,
+          author,
+          reason,
+          resolution_json,
+          resolved_at
+        FROM effect_agent_unknown_resolutions
+        WHERE submission_id = ${submissionId}
+        ORDER BY tool_call_id ASC
+      `.pipe(Effect.mapError(sqlFailure(operation)));
+      return yield* decodeRows(
+        Schema.Array(UnknownResolutionRow),
+        "effect_agent_unknown_resolutions",
+        submissionId,
+        rows,
+      ).pipe(Effect.mapError(internalFailure(operation)));
+    },
+  );
+
+  const unknownResolutionIntentFromRow = Effect.fn(
+    "SqliteSubmissionLedger.unknownResolutionIntentFromRow",
+  )(function* (
+    operation: string,
+    row: UnknownResolutionRow,
+  ): Effect.fn.Return<UnknownResolutionIntent, LedgerError> {
+    const resolution = yield* parseStoredJsonText(row.resolution_json).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(
+          operation,
+          "effect_agent_unknown_resolutions",
+          `${row.submission_id}/${row.tool_call_id}`,
+          error.message,
+        ),
+      ),
+    );
+    return yield* decodeUnknownResolutionIntent({
+      submissionId: row.submission_id,
+      toolCallId: row.tool_call_id,
+      author: row.author,
+      reason: row.reason,
+      resolution,
+      resolvedAt: row.resolved_at,
+    }).pipe(
+      Effect.mapError((error) =>
+        corruptionFailure(
+          operation,
+          "effect_agent_unknown_resolutions",
+          `${row.submission_id}/${row.tool_call_id}`,
+          error.message,
+        ),
+      ),
+    );
+  });
+
+  /** The Submission's marked-unknown open Tool Call identities, empty when never marked. */
+  const storedUnknownToolCallIds = Effect.fn("SqliteSubmissionLedger.storedUnknownToolCallIds")(
+    function* (
+      operation: string,
+      submission: SubmissionRow,
+    ): Effect.fn.Return<ReadonlyArray<typeof ToolCallIdSchema.Type>, LedgerError> {
+      if (submission.unknown_tool_call_ids_json === null) return [];
+      return yield* decodeToolCallIdsText(submission.unknown_tool_call_ids_json).pipe(
+        Effect.mapError((error) =>
+          corruptionFailure(
+            operation,
+            "effect_agent_submissions",
+            submission.submission_id,
+            error.message,
+          ),
+        ),
+      );
+    },
+  );
 
   /**
    * Canonical history is the abort authority (DUR-015): the intent's canonicalRecordId is
@@ -725,6 +925,18 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           const heads = yield* decodeSubmissionRows(operation, validated.conversationId, headRows);
           if (heads.length === 0) return Option.none<Claim>();
           const head = heads[0];
+
+          // A joining/joined head is host-owned and a suspended/unknown head is durably
+          // blocked (DUR-017); the lane produces no claim and later ready work is never
+          // skipped past the blocked head (DUR-004).
+          if (
+            head.state === "joining" ||
+            head.state === "joined" ||
+            head.state === "suspended" ||
+            head.state === "unknown"
+          ) {
+            return Option.none<Claim>();
+          }
 
           const now = yield* currentInstant;
           const ownership = yield* readOwnership(operation, head.submission_id);
@@ -1014,7 +1226,13 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             existingOutcome: submission.settled_outcome,
           });
         }
-        yield* requireOwnership(operation, submission, validated.ownershipToken);
+        // A `joined` Submission settles WITH its host (plan §2.5) and its lane is never
+        // worker-claimable, so no ownership token can exist for it: the recorded host linkage
+        // authorizes the reservation and the presented token is not consulted. Every other
+        // reservation stays fenced by the target lane's live ownership.
+        if (!(submission.state === "joined" && submission.joined_host_submission_id !== null)) {
+          yield* requireOwnership(operation, submission, validated.ownershipToken);
+        }
         const now = yield* currentInstant;
         yield* sql`
           INSERT INTO effect_agent_settlement_reservations (
@@ -1150,6 +1368,26 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             existingOutcome: submission.settled_outcome,
           });
         }
+        // A joined Submission settles WITH its host; the abort target is the host (plan
+        // §2.5). A joining Submission still records the intent: it is honored only if the
+        // host has not consumed the input (revert-then-abort).
+        if (submission.state === "joined") {
+          if (submission.joined_host_submission_id === null) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "A joined Submission carries no host linkage.",
+            );
+          }
+          const hostSubmissionId = yield* decodeSubmissionId(
+            submission.joined_host_submission_id,
+          ).pipe(Effect.mapError(internalFailure(operation)));
+          return yield* JoinedToHost.make({
+            submissionId: validated.submissionId,
+            hostSubmissionId,
+          });
+        }
         const existing = yield* readAbortIntent(operation, validated.submissionId);
         if (Option.isSome(existing)) {
           return yield* abortIntentFromRow(
@@ -1188,6 +1426,490 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       }),
     );
     yield* hitFailpoint("ledger:request-abort:after", operation);
+    return intent;
+  });
+
+  const claimJoining: SubmissionLedger["Service"]["claimJoining"] = Effect.fn(
+    "SqliteSubmissionLedger.claimJoining",
+  )(function* (request: ClaimJoiningRequest) {
+    const operation = "ledger claim joining";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ClaimJoiningRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:claim-joining:before", operation);
+    const claims = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const host = yield* requireSubmission(operation, validated.hostSubmissionId);
+        if (host.conversation_id !== validated.conversationId) {
+          return yield* LedgerError.make({
+            operation,
+            message: `Host submission ${validated.hostSubmissionId} does not belong to conversation ${validated.conversationId}.`,
+          });
+        }
+        // The host Attempt already owns the lane; no epoch bump happens here (plan §2.5).
+        yield* requireOwnership(operation, host, validated.ownershipToken);
+        const laterRows = yield* sql<Record<string, unknown>>`
+          SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+          FROM effect_agent_submissions
+          WHERE conversation_id = ${validated.conversationId}
+            AND queue_sequence > ${host.queue_sequence}
+          ORDER BY queue_sequence ASC
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        const later = yield* decodeSubmissionRows(operation, validated.conversationId, laterRows);
+        const claimed: Array<JoiningClaim> = [];
+        for (const row of later) {
+          if (claimed.length >= validated.maxCount) break;
+          // Rows already claimed by THIS host extend its contiguous prefix and are skipped;
+          // the coordinator re-delivers already-joined input through the coverage rule.
+          if (
+            (row.state === "joining" || row.state === "joined") &&
+            row.joined_host_submission_id === validated.hostSubmissionId
+          ) {
+            continue;
+          }
+          // Any other non-ready row — an admitted-not-ready gap in particular — breaks the
+          // contiguous ready prefix (plan §2.5); later ready work stays queued (DUR-004).
+          if (row.state !== "ready") break;
+          yield* sql`
+            UPDATE effect_agent_submissions
+            SET state = 'joining', joined_host_submission_id = ${validated.hostSubmissionId}
+            WHERE submission_id = ${row.submission_id}
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          const inputPayload = yield* parseStoredJsonText(row.input_json).pipe(
+            Effect.mapError((error) =>
+              corruptionFailure(
+                operation,
+                "effect_agent_submissions",
+                row.submission_id,
+                error.message,
+              ),
+            ),
+          );
+          claimed.push(
+            yield* decodeJoiningClaim({
+              submissionId: row.submission_id,
+              queueSequence: row.queue_sequence,
+              inputPayload,
+            }).pipe(Effect.mapError(internalFailure(operation))),
+          );
+        }
+        return claimed as ReadonlyArray<JoiningClaim>;
+      }),
+    );
+    yield* hitFailpoint("ledger:claim-joining:after", operation);
+    return claims;
+  });
+
+  const markJoined: SubmissionLedger["Service"]["markJoined"] = Effect.fn(
+    "SqliteSubmissionLedger.markJoined",
+  )(function* (request: MarkJoinedRequest) {
+    const operation = "ledger mark joined";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(MarkJoinedRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:mark-joined:before", operation);
+    yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        if (submission.joined_host_submission_id === null) {
+          return yield* LedgerError.make({
+            operation,
+            message: `Submission ${validated.submissionId} was never claimed for joining.`,
+          });
+        }
+        const host = yield* requireSubmission(operation, submission.joined_host_submission_id);
+        // The lane is host-owned: the presented token must own the HOST's ownership period,
+        // which also lets a later host Attempt repair a lost marker from history (DUR-016).
+        yield* requireOwnership(operation, host, validated.ownershipToken);
+        if (submission.input_applied_record_id !== null) {
+          if (
+            submission.input_applied_record_id === validated.recordId &&
+            submission.input_applied_sequence === validated.sequence
+          ) {
+            return;
+          }
+          return yield* corruptionFailure(
+            operation,
+            "effect_agent_submissions",
+            validated.submissionId,
+            "A different join marker is already recorded for this Submission.",
+          );
+        }
+        if (submission.state !== "joining" && submission.state !== "joined") {
+          return yield* LedgerError.make({
+            operation,
+            message: `Cannot mark submission ${validated.submissionId} joined from state ${submission.state}.`,
+          });
+        }
+        yield* sql`
+          UPDATE effect_agent_submissions
+          SET
+            input_applied_record_id = ${validated.recordId},
+            input_applied_sequence = ${validated.sequence},
+            state = 'joined'
+          WHERE submission_id = ${validated.submissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+      }),
+    );
+    yield* hitFailpoint("ledger:mark-joined:after", operation);
+  });
+
+  const revertJoining: SubmissionLedger["Service"]["revertJoining"] = Effect.fn(
+    "SqliteSubmissionLedger.revertJoining",
+  )(function* (request: RevertJoiningRequest) {
+    const operation = "ledger revert joining";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(RevertJoiningRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:revert-joining:before", operation);
+    yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        // Idempotent and recovery-only: only a still-`joining` Submission reverts; an
+        // already-joined (or already-reverted) Submission is a no-op (DUR-016).
+        if (submission.state !== "joining") return;
+        yield* sql`
+          UPDATE effect_agent_submissions
+          SET state = 'ready', joined_host_submission_id = NULL
+          WHERE submission_id = ${validated.submissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+      }),
+    );
+    yield* hitFailpoint("ledger:revert-joining:after", operation);
+  });
+
+  const suspend: SubmissionLedger["Service"]["suspend"] = Effect.fn(
+    "SqliteSubmissionLedger.suspend",
+  )(function* (request: SuspendRequest) {
+    const operation = "ledger suspend";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(SuspendRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    const reasonJson = yield* encodeSuspensionReasonText(validated.reason).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
+    yield* hitFailpoint("ledger:suspend:before", operation);
+    const outcome = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        if (submission.state === "settled") {
+          if (submission.settled_outcome === null) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "A settled Submission carries no terminal outcome.",
+            );
+          }
+          return yield* SettlementConflict.make({
+            submissionId: validated.submissionId,
+            existingOutcome: submission.settled_outcome,
+          });
+        }
+        // An exact terminal outcome is already reserved (DUR-011); suspension would
+        // contradict it, so the reservation wins.
+        const reservation = yield* readReservation(operation, validated.submissionId);
+        if (Option.isSome(reservation)) {
+          return yield* SettlementConflict.make({
+            submissionId: validated.submissionId,
+            existingOutcome: reservation.value.outcome,
+          });
+        }
+        yield* requireOwnership(operation, submission, validated.ownershipToken);
+        // A decision that raced ahead of the suspend transaction already covers the reason:
+        // the caller resumes immediately WITHOUT releasing the lane (plan §2.6).
+        const decisions = yield* readApprovalDecisions(operation, validated.submissionId);
+        const decided = new Set(decisions.map((row) => row.tool_call_id));
+        if (validated.reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) {
+          return "resume-immediately" as SuspensionOutcome;
+        }
+        const now = yield* currentInstant;
+        yield* sql`
+          UPDATE effect_agent_submissions
+          SET
+            state = 'suspended',
+            suspended_reason_json = ${reasonJson},
+            suspended_at = ${now.iso}
+          WHERE submission_id = ${validated.submissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        // Suspension ends the ownership period WITHOUT settling: the accepted-work
+        // obligation stays owed while the lane consumes no worker permit (plan §2.6).
+        yield* sql`
+          DELETE FROM effect_agent_submission_ownership
+          WHERE submission_id = ${validated.submissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        return "suspended" as SuspensionOutcome;
+      }),
+    );
+    yield* hitFailpoint("ledger:suspend:after", operation);
+    return outcome;
+  });
+
+  /**
+   * Once every pending call of the recorded suspension reason has a decision intent, the lane
+   * wakes: suspended → input-applied, suspension cleared (plan §2.6). Runs inside the caller's
+   * write transaction.
+   */
+  const wakeSuspendedIfCovered = Effect.fn("SqliteSubmissionLedger.wakeSuspendedIfCovered")(
+    function* (operation: string, submission: SubmissionRow): Effect.fn.Return<void, LedgerError> {
+      if (submission.state !== "suspended" || submission.suspended_reason_json === null) return;
+      const reason = yield* Schema.decodeEffect(Schema.fromJsonString(SuspensionReason))(
+        submission.suspended_reason_json,
+      ).pipe(
+        Effect.mapError((error) =>
+          corruptionFailure(
+            operation,
+            "effect_agent_submissions",
+            submission.submission_id,
+            error.message,
+          ),
+        ),
+      );
+      const decisions = yield* readApprovalDecisions(operation, submission.submission_id);
+      const decided = new Set(decisions.map((row) => row.tool_call_id));
+      if (!reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) return;
+      yield* sql`
+        UPDATE effect_agent_submissions
+        SET
+          state = 'input-applied',
+          suspended_reason_json = NULL,
+          suspended_at = NULL
+        WHERE submission_id = ${submission.submission_id}
+      `.pipe(Effect.mapError(sqlFailure(operation)));
+    },
+  );
+
+  const recordApprovalDecision: SubmissionLedger["Service"]["recordApprovalDecision"] = Effect.fn(
+    "SqliteSubmissionLedger.recordApprovalDecision",
+  )(function* (command: ApprovalDecisionCommand) {
+    const operation = "ledger record approval decision";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ApprovalDecisionCommand))(
+      command,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:approval-decision:before", operation);
+    const intent = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        if (submission.state === "settled") {
+          if (submission.settled_outcome === null) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "A settled Submission carries no terminal outcome.",
+            );
+          }
+          return yield* SettlementConflict.make({
+            submissionId: validated.submissionId,
+            existingOutcome: submission.settled_outcome,
+          });
+        }
+        const decisions = yield* readApprovalDecisions(operation, validated.submissionId);
+        const existing = decisions.find((row) => row.tool_call_id === validated.toolCallId);
+        if (existing !== undefined) {
+          // Idempotent per (submissionId, toolCallId): repeating the SAME decision replays
+          // the recorded intent unchanged; a divergent re-decision conflicts.
+          if (existing.decision !== validated.decision) {
+            return yield* ApprovalConflict.make({
+              submissionId: validated.submissionId,
+              toolCallId: validated.toolCallId,
+              existingDecision: existing.decision,
+            });
+          }
+          return yield* approvalIntentFromRow(operation, existing);
+        }
+        const now = yield* currentInstant;
+        yield* sql`
+          INSERT INTO effect_agent_approval_decisions (
+            submission_id,
+            tool_call_id,
+            decision,
+            resolver,
+            reason,
+            decided_at
+          ) VALUES (
+            ${validated.submissionId},
+            ${validated.toolCallId},
+            ${validated.decision},
+            ${validated.resolver},
+            ${validated.reason},
+            ${now.iso}
+          )
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        yield* wakeSuspendedIfCovered(operation, submission);
+        return yield* decodeApprovalDecisionIntent({
+          submissionId: validated.submissionId,
+          toolCallId: validated.toolCallId,
+          decision: validated.decision,
+          resolver: validated.resolver,
+          reason: validated.reason,
+          decidedAt: now.iso,
+        }).pipe(Effect.mapError(internalFailure(operation)));
+      }),
+    );
+    yield* hitFailpoint("ledger:approval-decision:after", operation);
+    return intent;
+  });
+
+  const markUnknown: SubmissionLedger["Service"]["markUnknown"] = Effect.fn(
+    "SqliteSubmissionLedger.markUnknown",
+  )(function* (request: MarkUnknownRequest) {
+    const operation = "ledger mark unknown";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(MarkUnknownRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    yield* hitFailpoint("ledger:mark-unknown:before", operation);
+    yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        if (submission.state === "settled") {
+          if (submission.settled_outcome === null) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "A settled Submission carries no terminal outcome.",
+            );
+          }
+          return yield* SettlementConflict.make({
+            submissionId: validated.submissionId,
+            existingOutcome: submission.settled_outcome,
+          });
+        }
+        // A reserved exact outcome wins over a late Unknown marking (DUR-011); the recovery
+        // classifier orders reservation ahead of MarkUnknown for the same reason.
+        const reservation = yield* readReservation(operation, validated.submissionId);
+        if (Option.isSome(reservation)) {
+          return yield* SettlementConflict.make({
+            submissionId: validated.submissionId,
+            existingOutcome: reservation.value.outcome,
+          });
+        }
+        // Idempotent merge: repeating is a no-op; additional open calls extend the marked
+        // set while the first recorded reason is kept.
+        const existingIds = yield* storedUnknownToolCallIds(operation, submission);
+        const known = new Set(existingIds);
+        const merged = [
+          ...existingIds,
+          ...validated.toolCallIds.filter((toolCallId) => !known.has(toolCallId)),
+        ];
+        const idsJson = yield* encodeToolCallIdsText(merged).pipe(
+          Effect.mapError(internalFailure(operation)),
+        );
+        yield* sql`
+          UPDATE effect_agent_submissions
+          SET
+            state = 'unknown',
+            unknown_reason = ${submission.unknown_reason ?? validated.reason},
+            unknown_tool_call_ids_json = ${idsJson}
+          WHERE submission_id = ${validated.submissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+      }),
+    );
+    yield* hitFailpoint("ledger:mark-unknown:after", operation);
+  });
+
+  const recordUnknownResolution: SubmissionLedger["Service"]["recordUnknownResolution"] = Effect.fn(
+    "SqliteSubmissionLedger.recordUnknownResolution",
+  )(function* (command: UnknownResolutionCommand) {
+    const operation = "ledger record unknown resolution";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(UnknownResolutionCommand))(
+      command,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    const resolutionJson = yield* encodeUnknownResolutionText(validated.resolution).pipe(
+      Effect.mapError(internalFailure(operation)),
+    );
+    yield* hitFailpoint("ledger:unknown-resolution:before", operation);
+    const intent = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        if (submission.state === "settled") {
+          if (submission.settled_outcome === null) {
+            return yield* corruptionFailure(
+              operation,
+              "effect_agent_submissions",
+              validated.submissionId,
+              "A settled Submission carries no terminal outcome.",
+            );
+          }
+          return yield* SettlementConflict.make({
+            submissionId: validated.submissionId,
+            existingOutcome: submission.settled_outcome,
+          });
+        }
+        const resolutions = yield* readUnknownResolutions(operation, validated.submissionId);
+        const existing = resolutions.find((row) => row.tool_call_id === validated.toolCallId);
+        if (existing !== undefined && existing.resolution_json !== resolutionJson) {
+          return yield* UnknownResolutionConflict.make({
+            submissionId: validated.submissionId,
+            toolCallId: validated.toolCallId,
+          });
+        }
+        let resolved: UnknownResolutionIntent;
+        if (existing !== undefined) {
+          // Idempotent replay of the recorded intent (author/reason may differ; the stored
+          // audit fields win, exactly like requestAbort).
+          resolved = yield* unknownResolutionIntentFromRow(operation, existing);
+        } else {
+          const now = yield* currentInstant;
+          yield* sql`
+            INSERT INTO effect_agent_unknown_resolutions (
+              submission_id,
+              tool_call_id,
+              author,
+              reason,
+              resolution_json,
+              resolved_at
+            ) VALUES (
+              ${validated.submissionId},
+              ${validated.toolCallId},
+              ${validated.author},
+              ${validated.reason},
+              ${resolutionJson},
+              ${now.iso}
+            )
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          const resolution = yield* parseStoredJsonText(resolutionJson).pipe(
+            Effect.mapError(internalFailure(operation)),
+          );
+          resolved = yield* decodeUnknownResolutionIntent({
+            submissionId: validated.submissionId,
+            toolCallId: validated.toolCallId,
+            author: validated.author,
+            reason: validated.reason,
+            resolution,
+            resolvedAt: now.iso,
+          }).pipe(Effect.mapError(internalFailure(operation)));
+        }
+        // The lane reopens only when EVERY marked open call has a durable resolution intent:
+        // unknown → input-applied (DUR-017). Replays re-run the coverage check so a
+        // recovering caller can wake the lane idempotently.
+        if (submission.state === "unknown" && submission.unknown_tool_call_ids_json !== null) {
+          const markedIds = yield* storedUnknownToolCallIds(operation, submission);
+          const covering = yield* readUnknownResolutions(operation, validated.submissionId);
+          const coveredIds = new Set(covering.map((row) => row.tool_call_id));
+          if (markedIds.every((toolCallId) => coveredIds.has(toolCallId))) {
+            yield* sql`
+              UPDATE effect_agent_submissions
+              SET
+                state = 'input-applied',
+                unknown_reason = NULL,
+                unknown_tool_call_ids_json = NULL
+              WHERE submission_id = ${validated.submissionId}
+            `.pipe(Effect.mapError(sqlFailure(operation)));
+          }
+        }
+        return resolved;
+      }),
+    );
+    yield* hitFailpoint("ledger:unknown-resolution:after", operation);
     return intent;
   });
 
@@ -1318,8 +2040,78 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             );
           }
 
+          // Host-side view: every Submission whose host linkage points here, in queue order
+          // (the terminalize loop settles them with the host outcome, DUR-002).
+          const joinRows = yield* sql<Record<string, unknown>>`
+            SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+            FROM effect_agent_submissions
+            WHERE joined_host_submission_id = ${validated.submissionId}
+            ORDER BY queue_sequence ASC
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          const joinSubmissions = yield* decodeSubmissionRows(
+            operation,
+            validated.submissionId,
+            joinRows,
+          );
+          const joins = yield* Effect.forEach(joinSubmissions, (row) =>
+            decodeJoinSnapshot({
+              submissionId: row.submission_id,
+              state: row.state,
+              hostSubmissionId: validated.submissionId,
+            }).pipe(Effect.mapError(internalFailure(operation))),
+          );
+
+          let hostSubmissionId: RecoverySnapshot["hostSubmissionId"];
+          if (submissionRow.joined_host_submission_id !== null) {
+            hostSubmissionId = yield* decodeSubmissionId(
+              submissionRow.joined_host_submission_id,
+            ).pipe(Effect.mapError(internalFailure(operation)));
+          }
+
+          let suspension: SuspensionSnapshot | undefined;
+          if (submissionRow.suspended_reason_json !== null && submissionRow.suspended_at !== null) {
+            const reason = yield* parseStoredJsonText(submissionRow.suspended_reason_json).pipe(
+              Effect.mapError((error) =>
+                corruptionFailure(
+                  operation,
+                  "effect_agent_submissions",
+                  validated.submissionId,
+                  error.message,
+                ),
+              ),
+            );
+            suspension = yield* decodeSuspensionSnapshot({
+              reason,
+              suspendedAt: submissionRow.suspended_at,
+            }).pipe(
+              Effect.mapError((error) =>
+                corruptionFailure(
+                  operation,
+                  "effect_agent_submissions",
+                  validated.submissionId,
+                  error.message,
+                ),
+              ),
+            );
+          }
+
+          const decisionRows = yield* readApprovalDecisions(operation, validated.submissionId);
+          const approvalDecisions = yield* Effect.forEach(decisionRows, (row) =>
+            approvalIntentFromRow(operation, row),
+          );
+
+          const resolutionRows = yield* readUnknownResolutions(operation, validated.submissionId);
+          const unknownResolutions = yield* Effect.forEach(resolutionRows, (row) =>
+            unknownResolutionIntentFromRow(operation, row),
+          );
+
           return RecoverySnapshot.make({
             submission,
+            joins,
+            approvalDecisions,
+            unknownResolutions,
+            ...(hostSubmissionId === undefined ? {} : { hostSubmissionId }),
+            ...(suspension === undefined ? {} : { suspension }),
             ...(ownership === undefined ? {} : { ownership }),
             ...(inputApplied === undefined ? {} : { inputApplied }),
             ...(reservation === undefined ? {} : { reservation }),
@@ -1344,6 +2136,13 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       reserveSettlement,
       finalizeSettlement,
       requestAbort,
+      claimJoining,
+      markJoined,
+      revertJoining,
+      suspend,
+      recordApprovalDecision,
+      markUnknown,
+      recordUnknownResolution,
       scanNonterminal,
       loadRecoverySnapshot,
     }),

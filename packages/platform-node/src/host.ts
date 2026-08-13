@@ -41,7 +41,9 @@ const makeHost = Effect.gen(function* () {
   // Startup gate (deployment §5, plan §host): configuration decoding and storage compatibility
   // already gated this Layer's dependencies; the last gate before admission opens is recovering
   // EVERY nonterminal Submission. Work needing a live Agent Binding is reported `deferred` and
-  // stays a visible obligation for `runWorkers`.
+  // stays a visible obligation for `runWorkers`; lanes durably blocked on an Unknown Outcome are
+  // reported `unknown` and wait for the authorized `resolveUnknown` path (DUR-017) — they consume
+  // no worker permit while the settlement obligation stays owed.
   const startupRecovery = yield* runtime.runRecovery;
 
   const admission = yield* Ref.make(true);
@@ -104,7 +106,11 @@ const makeHost = Effect.gen(function* () {
 export class NodeDurableHost extends Context.Service<
   NodeDurableHost,
   {
-    /** The recovery decisions executed (or deferred) by this host's startup reconciliation. */
+    /**
+     * The recovery decisions executed (or deferred) by this host's startup reconciliation.
+     * Reports with the `unknown` disposition identify lanes blocked on Unknown Outcomes that
+     * only the authorized DUR-017 resolution path can release.
+     */
     readonly startupRecovery: ReadonlyArray<RecoveryReport>;
     /** Admission-role readiness (deployment §7): true until shutdown begins. */
     readonly admissionOpen: Effect.Effect<boolean>;

@@ -3,6 +3,7 @@ import { expect, layer } from "@effect/vitest";
 import {
   Cause,
   Context,
+  DateTime,
   Deferred,
   Effect,
   Exit,
@@ -2676,5 +2677,174 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         const replayed = yield* detached.observe.pipe(Stream.runCollect);
         expect(replayed.map((event) => event._tag)).toEqual(expectedTrace);
       }),
+  );
+
+  it.effect("official history carries encoded tool-call parameters for class-shaped schemas", () =>
+    Effect.gen(function* () {
+      class ItineraryParams extends Schema.Class<ItineraryParams>("ItineraryParams")({
+        city: Schema.String,
+        departAt: Schema.DateTimeUtcFromString,
+      }) {}
+      const Plan = Tool.make("plan_itinerary", {
+        parameters: ItineraryParams,
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Plan);
+      const definition = Agent.define("class-shaped-parameters", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Plan the itinerary.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const turns = yield* Ref.make(0);
+      const model = Model.make(
+        "scripted",
+        "class-shaped-parameters",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turns, (value) => value + 1).pipe(
+                  Effect.map((turn) =>
+                    Stream.fromIterable<Response.StreamPartEncoded>(
+                      turn === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "plan-1",
+                              name: "plan_itinerary",
+                              params: { city: "Kyoto", departAt: "2026-08-12T09:00:00Z" },
+                              providerExecuted: false,
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ]
+                        : finalParts('{"answer":"planned"}'),
+                    ),
+                  ),
+                ),
+              ),
+          }),
+        ),
+      );
+      const histories = yield* Ref.make<ReadonlyArray<Prompt.Prompt>>([]);
+
+      const result = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "plan" },
+        { onHistory: (history) => Ref.update(histories, (all) => [...all, history]) },
+      ).pipe(
+        Effect.provide(tools.toLayer({ plan_itinerary: () => Effect.succeed("planned") })),
+        Effect.scoped,
+      );
+
+      const finalHistory = (yield* Ref.get(histories)).at(-1);
+      expect(finalHistory).toBeDefined();
+      if (finalHistory === undefined) {
+        throw new Error("Expected official history to advance");
+      }
+      const callPart = finalHistory.content
+        .filter((message) => message.role === "assistant")
+        .flatMap((message) => message.content)
+        .find((part) => part.type === "tool-call");
+      expect(callPart).toBeDefined();
+      if (callPart === undefined || callPart.type !== "tool-call") {
+        throw new Error("Expected the official history to carry the tool-call part");
+      }
+      // Official history carries the wire form: plain JSON, not the decoded
+      // Schema.Class instance with its DateTime field.
+      expect(Option.isSome(Schema.decodeUnknownOption(Schema.Json)(callPart.params))).toBe(true);
+      const params = callPart.params as { readonly city: string; readonly departAt: unknown };
+      expect(params.city).toBe("Kyoto");
+      expect(typeof params.departAt).toBe("string");
+      // The full official history round-trips through the Prompt codec into
+      // plain JSON — the property the canonical persistence boundary needs.
+      const encodedHistory = yield* Schema.encodeEffect(Prompt.Prompt)(finalHistory);
+      expect(Option.isSome(Schema.decodeUnknownOption(Schema.Json)(encodedHistory))).toBe(true);
+      expect(result.output).toEqual({ answer: "planned" });
+    }),
+  );
+
+  it.effect("handlers still receive decoded class-shaped parameters", () =>
+    Effect.gen(function* () {
+      class ItineraryParams extends Schema.Class<ItineraryParams>("ItineraryParams")({
+        city: Schema.String,
+        departAt: Schema.DateTimeUtcFromString,
+      }) {}
+      let handlerParams: ItineraryParams | undefined;
+      const Plan = Tool.make("plan_itinerary", {
+        parameters: ItineraryParams,
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Plan);
+      const definition = Agent.define("decoded-handler-parameters", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Plan the itinerary.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const turns = yield* Ref.make(0);
+      const model = Model.make(
+        "scripted",
+        "decoded-handler-parameters",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turns, (value) => value + 1).pipe(
+                  Effect.map((turn) =>
+                    Stream.fromIterable<Response.StreamPartEncoded>(
+                      turn === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "plan-1",
+                              name: "plan_itinerary",
+                              params: { city: "Kyoto", departAt: "2026-08-12T09:00:00Z" },
+                              providerExecuted: false,
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ]
+                        : finalParts('{"answer":"planned"}'),
+                    ),
+                  ),
+                ),
+              ),
+          }),
+        ),
+      );
+
+      yield* AgentRuntime.run(Agent.withModel(definition, model), { question: "plan" }).pipe(
+        Effect.provide(
+          tools.toLayer({
+            plan_itinerary: (params) =>
+              Effect.sync(() => {
+                handlerParams = params;
+                return "planned";
+              }),
+          }),
+        ),
+        Effect.scoped,
+      );
+
+      expect(handlerParams).toBeInstanceOf(ItineraryParams);
+      expect(handlerParams?.city).toBe("Kyoto");
+      expect(DateTime.isDateTime(handlerParams?.departAt)).toBe(true);
+    }),
   );
 });

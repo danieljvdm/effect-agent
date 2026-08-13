@@ -180,7 +180,14 @@ The scheduler may safely resume automatically at these boundaries:
 - after every requested tool has a canonical result;
 - after a committed compaction artifact;
 - after a committed durable step result;
+- after a committed model response whose declared tool batch has no prepared records yet — the
+  batch resumes from the canonical declaration without re-invoking the model;
 - while waiting for explicit approval, if the approval request is canonical.
+
+The canonical approval request record is the suspension's entire canonical footprint: suspension
+itself is operational ledger state, rebuildable from history, and no canonical "suspended" record
+exists (ADR-0012). The resumed Attempt appends the canonical approval decision before honoring
+it.
 
 The scheduler must classify recovery rather than blindly retry when failure occurs:
 
@@ -235,6 +242,13 @@ Its guarantee is:
 The store may return a prior result for the same step identity without executing the
 body. Concurrent executions race to commit; only the fenced winning result becomes
 canonical.
+
+Only **success** is ever recorded. A failing step body fails the call into the handler's error
+channel and re-entry re-executes it; recording failures would replay a transient failure forever.
+Steps carry no prepared records: under an at-least-once body contract, "may have executed" is the
+normal case and a prepared marker adds no recovery information (ADR-0012). Step results persist
+as canonical records in the Conversation Log under stable step identity — the Step Store of
+persistence §2.5 is a logical record family, not a separate physical store.
 
 Durable steps do not make a non-idempotent external API exactly once. The step
 implementation must use the external system's idempotency key, reconciliation API,
@@ -307,6 +321,11 @@ snapshot.
 | After settlement reservation, before canonical append         | Settlement obligation                                             | Append reserved record                            |
 | After canonical settlement append, before ledger finalization | Canonical terminal outcome                                        | Rebuild/finalize ledger from history              |
 | After ledger finalization, before client notification         | Terminal                                                          | Return recorded settlement                        |
+
+As of Phase 5 every row of this matrix — including the tool preparation, invocation, and
+result-commit rows — is realized by executable evidence: each row exists as a pure
+recovery-classifier case and as a deterministic failpoint or real process-kill test
+([Phase 4](../PHASE-4-EVIDENCE.md) and [Phase 5](../PHASE-5-EVIDENCE.md) evidence).
 
 ## 16. Liveness and poison work
 

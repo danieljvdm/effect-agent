@@ -29,6 +29,7 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
+  ToolReconciler,
   WakeScheduler,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
@@ -90,6 +91,7 @@ const memoryRuntimeLayer = DurableAgentRuntime.layer.pipe(
       MemoryConversationStoreLive,
       WakeScheduler.layerNoop,
       DurableRuntimeFailpoint.layer,
+      ToolReconciler.uncertain,
       DurableRuntimeConfig.layer({
         deploymentId: phase4TravelPlannerDeploymentId,
         producerId: phase4TravelPlannerProducerId,
@@ -223,7 +225,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
   );
 
   it.effect(
-    "serializes two Submissions on one trip lane FIFO: the second is not claimable until the first settles",
+    "keeps one trip lane FIFO: the second Submission is never claimable and joins the active Run",
     () =>
       withTemporaryDirectory((directory) =>
         Effect.gen(function* () {
@@ -271,25 +273,26 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           );
 
           const settlements = yield* runtime.processConversation(agent, conversationId);
+          // P5 (plan §2.5): the active host Run claims the contiguous ready prefix, so the
+          // second Submission JOINS the first Run — one head settlement, and the joined
+          // Submission settles with the host (DUR-002) in admitted FIFO order (DUR-004).
           expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
             first.submissionId,
-            second.submissionId,
           ]);
-          expect(settlements.map((settlement) => settlement.outcome)).toEqual([
-            "completed",
-            "completed",
-          ]);
+          expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+          const joinedSettlement = yield* runtime.awaitSettlement(second);
+          expect(joinedSettlement.outcome).toBe("completed");
 
-          // Canonical order matches the admitted FIFO order: the second Submission's input and
-          // Turns commit only after the first Submission's settlement record.
+          // Canonical order keeps the admitted FIFO order: both inputs are canonical before
+          // the host Run's Turns (the joined input joins BEFORE the next model request), and
+          // the settlement records commit host-first.
           const records = yield* readLog(conversationId);
           expect(logTags(records)).toEqual([
             "ConversationCreated",
             "UserInputRecorded",
-            ...RUN_TAGS,
-            "SubmissionSettled",
             "UserInputRecorded",
             ...RUN_TAGS,
+            "SubmissionSettled",
             "SubmissionSettled",
           ]);
           expect(settledSubmissionIds(records)).toEqual([first.submissionId, second.submissionId]);

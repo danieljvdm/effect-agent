@@ -1,4 +1,4 @@
-import { ConversationId, RunId } from "@effect-agent/core";
+import { ConversationId, RunId, ToolCallId } from "@effect-agent/core";
 import { Schema } from "effect";
 
 import { EMPTY_TAIL_DIGEST } from "./digest.ts";
@@ -9,17 +9,37 @@ import {
   Digest,
   PersistedJson,
   SubmissionSettled,
+  ToolApprovalDecided,
+  ToolApprovalRequested,
+  ToolCallPrepared,
+  ToolCallUnknown,
 } from "./records.ts";
+
+/** One prepared ordinary Tool Call still awaiting a canonical settled/resolved outcome. */
+export class OpenToolCallState extends Schema.Class<OpenToolCallState>(
+  "@effect-agent/session/OpenToolCallState",
+)({
+  toolCallId: ToolCallId,
+  toolName: ToolCallPrepared.fields.toolName,
+  turn: ToolCallPrepared.fields.turn,
+  runId: RunId,
+}) {}
+
+/** The canonical approval trail: requests and decisions in canonical order. */
+export const ApprovalRecord = Schema.Union([ToolApprovalRequested, ToolApprovalDecided]);
+export type ApprovalRecord = typeof ApprovalRecord.Type;
 
 /**
  * Rebuildable canonical projection. It contains only canonical values and can be discarded and
  * reconstructed from the record stream at any time.
  *
- * Phase 4 adds `settlements` and `abortRequests`. A Phase 3 checkpoint whose persisted state
- * lacks these fields fails to decode against this schema; the checkpoint is rejected and the
- * projection is rebuilt from canonical records (documented disposable-checkpoint behavior,
- * STORE-007/STORE-008). `ModelResponseRecorded` advances `throughSequence` without dedicated
- * projection state: Prompt reconstruction reads canonical records directly.
+ * Phase 4 added `settlements` and `abortRequests`; Phase 5 adds `openToolCalls` (the
+ * prepared-minus-settled/resolved fold), `unknownToolCalls`, and `approvals`. A Phase 3/4
+ * checkpoint whose persisted state lacks these fields fails to decode against this schema; the
+ * checkpoint is rejected and the projection is rebuilt from canonical records (documented
+ * disposable-checkpoint behavior, STORE-007/STORE-008). `ModelResponseRecorded` advances
+ * `throughSequence` without dedicated projection state: Prompt reconstruction reads canonical
+ * records directly.
  */
 export class ConversationProjection extends Schema.Class<ConversationProjection>(
   "@effect-agent/session/ConversationProjection",
@@ -33,6 +53,9 @@ export class ConversationProjection extends Schema.Class<ConversationProjection>
   failedRuns: Schema.Array(RunId),
   settlements: Schema.Array(SubmissionSettled),
   abortRequests: Schema.Array(AbortRequested),
+  openToolCalls: Schema.Array(OpenToolCallState),
+  unknownToolCalls: Schema.Array(ToolCallUnknown),
+  approvals: Schema.Array(ApprovalRecord),
 }) {}
 
 export const initialConversationProjection = (
@@ -48,6 +71,9 @@ export const initialConversationProjection = (
     failedRuns: [],
     settlements: [],
     abortRequests: [],
+    openToolCalls: [],
+    unknownToolCalls: [],
+    approvals: [],
   });
 
 /** Pure one-record Conversation transition. */
@@ -81,6 +107,33 @@ export const reduceConversationRecord = (
     payload._tag === "AbortRequested"
       ? [...projection.abortRequests, payload]
       : projection.abortRequests;
+  // `ToolCallPrepared` opens a call; `ToolCallSettled` (results batch or late settle) and
+  // `ToolCallResolved` (DUR-017) close it. `ToolCallUnknown` does NOT close it: the call stays
+  // open until an authorized resolution or a recovered result arrives.
+  const openToolCalls =
+    payload._tag === "ToolCallPrepared"
+      ? projection.openToolCalls.some((call) => call.toolCallId === payload.toolCallId)
+        ? projection.openToolCalls
+        : [
+            ...projection.openToolCalls,
+            OpenToolCallState.make({
+              toolCallId: payload.toolCallId,
+              toolName: payload.toolName,
+              turn: payload.turn,
+              runId: payload.runId,
+            }),
+          ]
+      : payload._tag === "ToolCallSettled" || payload._tag === "ToolCallResolved"
+        ? projection.openToolCalls.filter((call) => call.toolCallId !== payload.toolCallId)
+        : projection.openToolCalls;
+  const unknownToolCalls =
+    payload._tag === "ToolCallUnknown"
+      ? [...projection.unknownToolCalls, payload]
+      : projection.unknownToolCalls;
+  const approvals =
+    payload._tag === "ToolApprovalRequested" || payload._tag === "ToolApprovalDecided"
+      ? [...projection.approvals, payload]
+      : projection.approvals;
 
   return ConversationProjection.make({
     conversationId: projection.conversationId,
@@ -92,6 +145,9 @@ export const reduceConversationRecord = (
     failedRuns,
     settlements,
     abortRequests,
+    openToolCalls,
+    unknownToolCalls,
+    approvals,
   });
 };
 

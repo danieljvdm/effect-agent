@@ -3,11 +3,17 @@ import * as fs from "node:fs";
 import { Agent } from "@effect-agent/core";
 import {
   AbortCommand,
+  ApprovalDecisionCommand,
   DurableAgentRuntime,
   DurableRuntimeFailpointLocation,
+  ResolutionNeverHappened,
+  SubmissionLedger,
+  SubmissionLookupByKey,
+  UnknownResolutionCommand,
   type DurableRuntimeFailpointHandler,
   type Receipt,
   type Settlement,
+  type SubmissionSnapshot,
 } from "@effect-agent/session";
 import {
   SqliteStorageFailpointLocation,
@@ -22,19 +28,35 @@ import {
   CHILD_PRODUCER_ID,
   CRASH_DEPLOYMENT_ID,
   CRASH_QUESTION,
+  BOOK_CALL_ID,
   CrashScenario,
+  JOIN_QUESTION,
   KILL_EXIT_CODE,
   FENCED_EXIT_CODE,
   STALE_ANSWER,
+  bookDefinition,
+  bookIdempotentDefinition,
+  bookIdempotentTools,
+  bookToolCallParts,
+  bookTools,
+  approvalDefinition,
+  approvalTools,
   crashSubmitOptions,
   decodeConversationId,
+  decodeToolCallId,
   encodeChildMessage,
   finalParts,
+  itineraryDefinition,
+  itineraryToolCallParts,
+  makeBlockedBookToolLayer,
+  makeBookToolLayer,
+  makeItineraryToolLayer,
   makeScriptedModel,
   makeScriptedStreamModel,
   plannerDefinition,
   searchDefinition,
   searchToolLayer,
+  supplierCount,
   toolCallParts,
   type ChildMessage,
 } from "./fixtures.ts";
@@ -63,24 +85,49 @@ const WorkerEnv = Schema.Struct({
   EFFECT_AGENT_LEASE_MS: Schema.optionalKey(MillisFromString),
   EFFECT_AGENT_MARKER_FILE: Schema.optionalKey(Schema.NonEmptyString),
   EFFECT_AGENT_RELEASE_FILE: Schema.optionalKey(Schema.NonEmptyString),
+  EFFECT_AGENT_SUPPLIER_DIR: Schema.optionalKey(Schema.NonEmptyString),
+  EFFECT_AGENT_KILL_REQUIRES_SUPPLIER: Schema.optionalKey(Schema.NonEmptyString),
+  EFFECT_AGENT_DECISION: Schema.optionalKey(Schema.Literals(["approved", "denied"])),
 });
 
 const env = Schema.decodeUnknownSync(WorkerEnv)(process.env);
 const conversationId = decodeConversationId(env.EFFECT_AGENT_CONVERSATION);
 const idempotencyKey = env.EFFECT_AGENT_KEY;
 
+/**
+ * Optional supplier-store gate on an armed kill (`{op}:{key}`): the kill fires only once the
+ * external effect is already in the store. Arming `append:before` with the book gate kills at
+ * the FIRST canonical append AFTER the handler returned — the response/prepared appends precede
+ * the handler, so the gated hit is exactly the Turn's results append (plan §4.3 "after handler
+ * return, before turn:after-results-append").
+ */
+const killGateSatisfied = (): boolean => {
+  const gate = env.EFFECT_AGENT_KILL_REQUIRES_SUPPLIER;
+  if (gate === undefined) return true;
+  const dir = env.EFFECT_AGENT_SUPPLIER_DIR;
+  if (dir === undefined) throw new Error("A supplier kill gate requires EFFECT_AGENT_SUPPLIER_DIR");
+  const separator = gate.indexOf(":");
+  const op = gate.slice(0, separator);
+  const key = gate.slice(separator + 1);
+  return supplierCount(dir, op, key) >= 1;
+};
+
 /** A kill failpoint is a crash, not a failure: exit immediately, skipping every finalizer. */
 const hardKill: Effect.Effect<never> = Effect.sync(() => process.exit(KILL_EXIT_CODE));
+
+const killIfGated: Effect.Effect<void> = Effect.suspend(() =>
+  killGateSatisfied() ? hardKill : Effect.void,
+);
 
 const runtimeKill: DurableRuntimeFailpointHandler | undefined =
   env.EFFECT_AGENT_KILL_AT === undefined
     ? undefined
-    : (location) => (location === env.EFFECT_AGENT_KILL_AT ? hardKill : Effect.void);
+    : (location) => (location === env.EFFECT_AGENT_KILL_AT ? killIfGated : Effect.void);
 
 const storageKill: SqliteStorageFailpointHandler | undefined =
   env.EFFECT_AGENT_KILL_AT_STORAGE === undefined
     ? undefined
-    : (location) => (location === env.EFFECT_AGENT_KILL_AT_STORAGE ? hardKill : Effect.void);
+    : (location) => (location === env.EFFECT_AGENT_KILL_AT_STORAGE ? killIfGated : Effect.void);
 
 const options: NodeDurableRuntimeOptions = {
   filename: env.EFFECT_AGENT_DB,
@@ -138,22 +185,48 @@ const blockedForeverScript = (
   return () => Stream.fromEffect(touch(markerFile).pipe(Effect.andThen(Effect.never)));
 };
 
-const submitPlanner = (key: string) =>
+const submitPlannerQuestion = (key: string, question: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
     const agent = Agent.withModel(plannerDefinition, model);
     const receipt: Receipt = yield* runtime.submit(
       agent,
-      { question: CRASH_QUESTION },
+      { question },
       crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, key),
     );
     yield* emit({ kind: "receipt", key, receipt });
     return receipt;
   });
 
+const submitPlanner = (key: string) => submitPlannerQuestion(key, CRASH_QUESTION);
+
 const emitSettlements = (settlements: ReadonlyArray<Settlement>) =>
   emit({ kind: "settlements", settlements });
+
+/** Second-process drivers address the Submission by its durable identity, not shared memory. */
+const lookupSubmission: Effect.Effect<SubmissionSnapshot, never, SubmissionLedger> = Effect.gen(
+  function* () {
+    const ledger = yield* SubmissionLedger;
+    const options = crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey);
+    const snapshot = yield* ledger
+      .lookup(
+        SubmissionLookupByKey.make({
+          conversationId,
+          principal: options.principal,
+          idempotencyKey: options.idempotencyKey,
+        }),
+      )
+      .pipe(Effect.orDie);
+    if (Option.isNone(snapshot)) {
+      return yield* Effect.die(new Error(`No accepted Submission exists for ${idempotencyKey}`));
+    }
+    return snapshot.value;
+  },
+);
+
+const requireSupplierDir = (): string =>
+  requireEnv(env.EFFECT_AGENT_SUPPLIER_DIR, "EFFECT_AGENT_SUPPLIER_DIR");
 
 const scenario = Effect.gen(function* () {
   const runtime = yield* DurableAgentRuntime;
@@ -213,6 +286,128 @@ const scenario = Effect.gen(function* () {
       );
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      return;
+    }
+    case "run-uncertain": {
+      const dir = requireSupplierDir();
+      const model = yield* makeScriptedModel((call) =>
+        call === 0 ? bookToolCallParts : finalParts(CHILD_ANSWER),
+      );
+      const agent = Agent.withModel(bookDefinition, model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: CRASH_QUESTION },
+        crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey),
+      );
+      yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
+      const toolLayer =
+        env.EFFECT_AGENT_MARKER_FILE === undefined
+          ? makeBookToolLayer(dir, bookTools)
+          : makeBlockedBookToolLayer(dir, bookTools, env.EFFECT_AGENT_MARKER_FILE);
+      yield* emitSettlements(
+        yield* runtime.processConversation(agent, conversationId).pipe(Effect.provide(toolLayer)),
+      );
+      return;
+    }
+    case "run-idempotent": {
+      const dir = requireSupplierDir();
+      const model = yield* makeScriptedModel((call) =>
+        call === 0 ? bookToolCallParts : finalParts(CHILD_ANSWER),
+      );
+      const agent = Agent.withModel(bookIdempotentDefinition, model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: CRASH_QUESTION },
+        crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey),
+      );
+      yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
+      yield* emitSettlements(
+        yield* runtime
+          .processConversation(agent, conversationId)
+          .pipe(Effect.provide(makeBookToolLayer(dir, bookIdempotentTools))),
+      );
+      return;
+    }
+    case "suspend-approval": {
+      const dir = requireSupplierDir();
+      const model = yield* makeScriptedModel((call) =>
+        call === 0 ? bookToolCallParts : finalParts(CHILD_ANSWER),
+      );
+      const agent = Agent.withModel(approvalDefinition, model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: CRASH_QUESTION },
+        crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey),
+      );
+      yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
+      yield* emitSettlements(
+        yield* runtime
+          .processConversation(agent, conversationId)
+          .pipe(Effect.provide(makeBookToolLayer(dir, approvalTools))),
+      );
+      return;
+    }
+    case "run-steps": {
+      const dir = requireSupplierDir();
+      const model = yield* makeScriptedModel((call) =>
+        call === 0 ? itineraryToolCallParts : finalParts(CHILD_ANSWER),
+      );
+      const agent = Agent.withModel(itineraryDefinition, model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: CRASH_QUESTION },
+        crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey),
+      );
+      yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
+      yield* emitSettlements(
+        yield* runtime
+          .processConversation(agent, conversationId)
+          .pipe(Effect.provide(makeItineraryToolLayer(dir))),
+      );
+      return;
+    }
+    case "run-join": {
+      // Host plus one queued Submission with a DISTINCT payload: the join rows count prompt
+      // coverage of the queued text from canonical records alone.
+      yield* submitPlanner(`${idempotencyKey}-1`);
+      yield* submitPlannerQuestion(`${idempotencyKey}-2`, JOIN_QUESTION);
+      const model =
+        env.EFFECT_AGENT_MARKER_FILE === undefined
+          ? yield* makeScriptedModel(() => finalParts(CHILD_ANSWER))
+          : // The model blocks AFTER the pre-Turn join drain claimed, appended, and marked the
+            // queued input joined — SIGKILL then leaves `joined` + a nonterminal host.
+            yield* makeScriptedStreamModel(blockedForeverScript(env.EFFECT_AGENT_MARKER_FILE));
+      const agent = Agent.withModel(plannerDefinition, model);
+      yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      return;
+    }
+    case "resolve-approval": {
+      const decision = requireEnv(env.EFFECT_AGENT_DECISION, "EFFECT_AGENT_DECISION");
+      const submission = yield* lookupSubmission;
+      const intent = yield* runtime.resolveApproval(
+        ApprovalDecisionCommand.make({
+          submissionId: submission.submissionId,
+          toolCallId: decodeToolCallId(BOOK_CALL_ID),
+          decision: decision === "approved" ? "approved" : "denied",
+          resolver: "operator",
+          reason: "crash-harness decision from a second process",
+        }),
+      );
+      yield* emit({ kind: "resolved", value: intent.decision });
+      return;
+    }
+    case "resolve-unknown": {
+      const submission = yield* lookupSubmission;
+      const intent = yield* runtime.resolveUnknown(
+        UnknownResolutionCommand.make({
+          submissionId: submission.submissionId,
+          toolCallId: decodeToolCallId(BOOK_CALL_ID),
+          author: "operator",
+          reason: "the supplier store shows the call never started",
+          resolution: ResolutionNeverHappened.make(),
+        }),
+      );
+      yield* emit({ kind: "resolved", value: intent.resolution._tag });
       return;
     }
   }

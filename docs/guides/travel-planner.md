@@ -1,6 +1,6 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 4 durable Node/SQLite runtime implemented; Phase 5 and later increments remain design targets
+Status: Phase 5 durable booking implemented; Phase 6 and later increments remain design targets
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -111,13 +111,21 @@ insufficient without `DN` or `DC` and the tested adapter.
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
 
-P0 through P4 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
+P0 through P5 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
 adds a separate `P` profile that stores and reconstructs planning history while keeping accepted
 work explicitly non-durable. P4 adds the `DN` profile: a durable planning Submission that returns
 a Receipt, keeps one FIFO trip lane, survives restart to the same projection, supports durable
 abort, and settles exactly once — while its fixture pins `supplierBookingReplaySafe: false`
 because replay-safe booking is P5 scope (`packages/testing/src/fixtures/travel-planner/phase4.ts`,
 `packages/testing/test/travel-planner-phase4.test.ts`; [Phase 4 evidence](../PHASE-4-EVIDENCE.md)).
+P5 adds the durable booking slice: an idempotency-keyed supplier desk, an approval-gated
+`uncertain` `book_flight`, an `idempotent`-by-`bookingRef` `cancel_booking`, the `book_itinerary`
+Durable Tool whose named Steps derive supplier idempotency keys from `(toolCallId, stepName)`,
+a supplier reconciliation Layer, explicit Unknown Outcomes with audited resolution, durable
+approval suspension, and joined traveler follow-ups — with crash tests that never fabricate a
+booking result (`packages/testing/src/fixtures/travel-planner/phase5.ts`,
+`packages/testing/test/travel-planner-phase5.test.ts`,
+`packages/platform-node/test/crash/crash.test.ts`; [Phase 5 evidence](../PHASE-5-EVIDENCE.md)).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Layer, Ref, Schema } from "effect";
+import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
   ActivityCatalog,
@@ -163,6 +163,227 @@ export const ActivityCatalogLayer = Layer.effect(
     });
   }),
 );
+/** Stable supplier-side booking identity, minted deterministically from the idempotency key. */
+export const BookingRef = Schema.NonEmptyString.pipe(
+  Schema.brand("@effect-agent/testing/travel-planner/BookingRef"),
+);
+export type BookingRef = typeof BookingRef.Type;
+
+/** The supplier desk operations the P5 booking Tools and Steps invoke. */
+export const SupplierOperation = Schema.Literals([
+  "book-flight",
+  "cancel-booking",
+  "reserve-flight",
+  "reserve-lodging",
+  "issue-confirmation",
+]);
+export type SupplierOperation = typeof SupplierOperation.Type;
+
+/**
+ * One row of external supplier truth. The desk deduplicates by `idempotencyKey` — replaying a
+ * call with the same key returns this exact record without creating a second booking — which is
+ * precisely the honesty model of DUR-010: the framework never makes an external call
+ * exactly-once; the supplier's idempotency key does.
+ */
+export class SupplierBookingRecord extends Schema.Class<SupplierBookingRecord>(
+  "@effect-agent/testing/travel-planner/SupplierBookingRecord",
+)({
+  bookingRef: BookingRef,
+  idempotencyKey: Schema.NonEmptyString,
+  operation: SupplierOperation,
+  detail: Schema.NonEmptyString,
+  status: Schema.Literals(["confirmed", "cancelled"]),
+}) {}
+
+export class SupplierUnavailable extends Schema.TaggedErrorClass<SupplierUnavailable>()(
+  "SupplierUnavailable",
+  { message: Schema.String },
+) {}
+
+export interface SupplierBookRequest {
+  readonly operation: SupplierOperation;
+  readonly idempotencyKey: string;
+  readonly detail: string;
+}
+
+/** Controls returned by an armed crash window (`holdAfterWrite`). */
+export interface SupplierHoldControls {
+  /** Resolves once the armed call has performed its supplier write and is blocked. */
+  readonly held: Effect.Effect<void>;
+  /** Releases the blocked call (tests that interrupt the Attempt never call this). */
+  readonly release: Effect.Effect<void>;
+}
+
+/** The desk-internal idempotency key of one cancellation: cancel is idempotent by bookingRef. */
+export const cancelBookingIdempotencyKey = (bookingRef: string): string =>
+  `cancel-booking:${bookingRef}`;
+
+/** The deterministic bookingRef the desk mints for one idempotency key. */
+export const supplierBookingRefFor = (idempotencyKey: string): BookingRef =>
+  Schema.decodeSync(BookingRef)(`ref:${idempotencyKey}`);
+
+interface SupplierHoldWindow {
+  readonly held: Deferred.Deferred<void>;
+  readonly release: Deferred.Deferred<void>;
+}
+
+interface SupplierDeskState {
+  readonly bookings: ReadonlyMap<string, SupplierBookingRecord>;
+  readonly counts: ReadonlyMap<string, number>;
+  readonly holds: ReadonlyMap<string, SupplierHoldWindow>;
+}
+
+/**
+ * The deterministic in-memory supplier: an idempotency-keyed booking store with per-key call
+ * counters and injectable crash windows.
+ *
+ * - `book`/`cancel` always count the call (at-least-once execution stays observable), then
+ *   dedupe the external effect by idempotency key — the supplier-side contract the P5 Tools and
+ *   Steps rely on.
+ * - `holdAfterWrite` arms a one-shot crash window: the next call with that key performs its
+ *   supplier write, signals `held`, and never returns. Interrupting the Attempt at that point
+ *   models "the external effect happened but no outcome was recorded" without any wall clock.
+ * - `bookings`/`lookup` expose external truth for the reconciler and for never-fabricate
+ *   assertions.
+ */
+export class SupplierBookingDesk extends Context.Service<
+  SupplierBookingDesk,
+  {
+    readonly book: (
+      request: SupplierBookRequest,
+    ) => Effect.Effect<SupplierBookingRecord, SupplierUnavailable>;
+    readonly cancel: (
+      bookingRef: BookingRef,
+    ) => Effect.Effect<SupplierBookingRecord, SupplierUnavailable>;
+    readonly lookup: (
+      idempotencyKey: string,
+    ) => Effect.Effect<Option.Option<SupplierBookingRecord>>;
+    readonly bookings: Effect.Effect<ReadonlyArray<SupplierBookingRecord>>;
+    readonly callCount: (idempotencyKey: string) => Effect.Effect<number>;
+    readonly holdAfterWrite: (idempotencyKey: string) => Effect.Effect<SupplierHoldControls>;
+  }
+>()("@effect-agent/testing/travel-planner/SupplierBookingDesk") {
+  static readonly layer: Layer.Layer<SupplierBookingDesk> = Layer.effect(
+    this,
+    Effect.gen(function* () {
+      const state = yield* Ref.make<SupplierDeskState>({
+        bookings: new Map(),
+        counts: new Map(),
+        holds: new Map(),
+      });
+
+      const enterHold = (hold: Option.Option<SupplierHoldWindow>) =>
+        Option.isSome(hold)
+          ? Deferred.succeed(hold.value.held, undefined).pipe(
+              Effect.andThen(Deferred.await(hold.value.release)),
+            )
+          : Effect.void;
+
+      const book = (request: SupplierBookRequest) =>
+        Ref.modify(state, (current) => {
+          const counts = new Map(current.counts).set(
+            request.idempotencyKey,
+            (current.counts.get(request.idempotencyKey) ?? 0) + 1,
+          );
+          const existing = current.bookings.get(request.idempotencyKey);
+          const record =
+            existing ??
+            SupplierBookingRecord.make({
+              bookingRef: supplierBookingRefFor(request.idempotencyKey),
+              idempotencyKey: request.idempotencyKey,
+              operation: request.operation,
+              detail: request.detail,
+              status: "confirmed",
+            });
+          const bookings =
+            existing === undefined
+              ? new Map(current.bookings).set(request.idempotencyKey, record)
+              : current.bookings;
+          const hold = Option.fromNullishOr(current.holds.get(request.idempotencyKey));
+          const holds = Option.isSome(hold)
+            ? (() => {
+                const next = new Map(current.holds);
+                next.delete(request.idempotencyKey);
+                return next;
+              })()
+            : current.holds;
+          return [
+            { record, hold },
+            { bookings, counts, holds },
+          ] as const;
+        }).pipe(Effect.flatMap(({ hold, record }) => enterHold(hold).pipe(Effect.as(record))));
+
+      const cancel = (bookingRef: BookingRef) =>
+        Ref.modify(state, (current) => {
+          const key = cancelBookingIdempotencyKey(bookingRef);
+          const counts = new Map(current.counts).set(key, (current.counts.get(key) ?? 0) + 1);
+          const existingEntry = [...current.bookings.entries()].find(
+            ([, record]) => record.bookingRef === bookingRef,
+          );
+          if (existingEntry === undefined) {
+            return [
+              { record: Option.none<SupplierBookingRecord>(), hold: Option.none() },
+              { ...current, counts },
+            ] as const;
+          }
+          const [storeKey, existing] = existingEntry;
+          const cancelled =
+            existing.status === "cancelled"
+              ? existing
+              : SupplierBookingRecord.make({ ...existing, status: "cancelled" });
+          const bookings = new Map(current.bookings).set(storeKey, cancelled);
+          const hold = Option.fromNullishOr(current.holds.get(key));
+          const holds = Option.isSome(hold)
+            ? (() => {
+                const next = new Map(current.holds);
+                next.delete(key);
+                return next;
+              })()
+            : current.holds;
+          return [
+            { record: Option.some(cancelled), hold },
+            { bookings, counts, holds },
+          ] as const;
+        }).pipe(
+          Effect.flatMap(({ hold, record }) =>
+            Option.isNone(record)
+              ? Effect.fail(
+                  SupplierUnavailable.make({
+                    message: `The supplier desk has no booking under ${bookingRef}.`,
+                  }),
+                )
+              : enterHold(hold).pipe(Effect.as(record.value)),
+          ),
+        );
+
+      return SupplierBookingDesk.of({
+        book,
+        cancel,
+        lookup: (idempotencyKey) =>
+          Ref.get(state).pipe(
+            Effect.map((current) => Option.fromNullishOr(current.bookings.get(idempotencyKey))),
+          ),
+        bookings: Ref.get(state).pipe(Effect.map((current) => [...current.bookings.values()])),
+        callCount: (idempotencyKey) =>
+          Ref.get(state).pipe(Effect.map((current) => current.counts.get(idempotencyKey) ?? 0)),
+        holdAfterWrite: (idempotencyKey) =>
+          Effect.gen(function* () {
+            const held = yield* Deferred.make<void>();
+            const release = yield* Deferred.make<void>();
+            yield* Ref.update(state, (current) => ({
+              ...current,
+              holds: new Map(current.holds).set(idempotencyKey, { held, release }),
+            }));
+            return {
+              held: Deferred.await(held),
+              release: Deferred.succeed(release, undefined).pipe(Effect.asVoid),
+            };
+          }),
+      });
+    }),
+  );
+}
+
 export const TravelGuidanceLayer = Layer.succeed(
   TravelGuidance,
   TravelGuidance.of({

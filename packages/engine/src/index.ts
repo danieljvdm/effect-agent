@@ -129,9 +129,20 @@ import {
   type RunApprovalDecision,
   type RunOptions,
   type RunSchedulingHook,
+  type RunToolCallDescriptor,
+  type RunTurnResume,
   type RunUsageDelta,
 } from "./run-options.ts";
+import {
+  DurableStep,
+  DurableStepError,
+  getToolExecutionClass,
+  type DurableStepService,
+  type RunStepHook,
+  type RunStepKey,
+} from "./durable-step.ts";
 
+export * from "./durable-step.ts";
 export * from "./run-events.ts";
 export * from "./run-options.ts";
 
@@ -173,12 +184,12 @@ export type AgentRuntimeFailure<
 
 /**
  * Services the engine itself provides locally to every Run: `AgentSpawner`
- * bound to the Run's immutable identity and delegation depth, and
- * `RunEventSink` bound to the active Tool batch. They are excluded from the
- * runtime's public requirements and MUST NOT be satisfied from an application
- * Layer.
+ * bound to the Run's immutable identity and delegation depth, `RunEventSink`
+ * bound to the active Tool batch, and `DurableStep` bound to the active Tool
+ * Call. They are excluded from the runtime's public requirements and MUST NOT
+ * be satisfied from an application Layer.
  */
-export type EngineProvidedToolServices = AgentSpawner | RunEventSink;
+export type EngineProvidedToolServices = AgentSpawner | RunEventSink | DurableStep;
 
 /**
  * Inferred agent services plus the runtime's identity-generation authority.
@@ -234,6 +245,14 @@ const toolCounter = Metric.counter("effect_agent_tool_calls_total", {
     "Agent tool handlers started; no content or high-cardinality identifiers are recorded.",
 });
 
+/**
+ * Tool Call parameters live in two intentionally divergent forms on the
+ * trace: `parts` carries the prompt/canonical form (parameters encoded back
+ * through the owning Schema — the wire form official history and canonical
+ * records persist), while `applicationToolCalls` keeps the handler form
+ * (Schema-decoded parameters, because the pinned `Toolkit.handle` expects the
+ * value `prepareToolCall` re-encodes for it).
+ */
 interface TurnTrace {
   readonly parts: Array<Response.AnyPart>;
   readonly text: Array<string>;
@@ -256,6 +275,8 @@ interface TurnTrace {
   >;
   readonly finalToolResultIds: Set<string>;
   readonly applicationToolCalls: Array<Response.ToolCallPart<string, unknown>>;
+  /** Durable-hook view of the application calls, in declaration order (encoded parameters). */
+  readonly applicationCallDescriptors: Array<RunToolCallDescriptor>;
   readonly applicationToolResults: Array<{
     readonly id: string;
     readonly name: string;
@@ -274,6 +295,7 @@ type ToolUnion<Tools extends Record<string, Tool.Any>> = Tools[keyof Tools];
 interface PreparedToolCall<Tools extends Record<string, Tool.Any>> {
   readonly call: Response.ToolCallPart<string, unknown>;
   readonly name: keyof Tools & string;
+  readonly toolCallId: ToolCallId;
   readonly decodedParams: Tool.Parameters<ToolUnion<Tools>>;
   readonly nativeHandlerParams: Tool.Parameters<ToolUnion<Tools>>;
   readonly tool: ToolUnion<Tools>;
@@ -400,15 +422,54 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
   }
   const tool = toolkit.tools[name] as ToolUnion<Tools>;
   const decodedParams = call.params as Tool.Parameters<ToolUnion<Tools>>;
-  return encodeToolCallParameters<Tools>(tool, call.name, decodedParams).pipe(
-    Effect.map((encodedParams) => ({
-      call,
-      name,
-      decodedParams,
-      nativeHandlerParams: encodedParams as Tool.Parameters<ToolUnion<Tools>>,
-      tool,
-      declarationIndex,
-    })),
+  return decodeToolCallId(call.id).pipe(
+    Effect.flatMap((toolCallId) =>
+      encodeToolCallParameters<Tools>(tool, call.name, decodedParams).pipe(
+        Effect.map((encodedParams) => ({
+          call,
+          name,
+          toolCallId,
+          decodedParams,
+          nativeHandlerParams: encodedParams as Tool.Parameters<ToolUnion<Tools>>,
+          tool,
+          declarationIndex,
+        })),
+      ),
+    ),
+  );
+};
+
+/**
+ * Re-validate one canonically recorded Tool Call's encoded parameters through
+ * the owning parameter Schema before a resumed batch may execute anything.
+ * Declarations were validated when they entered the log (RUN-004), but a
+ * resumed Attempt re-validates on read (STORE-006); a decode failure is a
+ * strict no-start boundary. The same private assertion contract as
+ * `encodeToolCallParameters` applies: correlation lost by dynamic record
+ * lookup is restored only around a successful Schema decode.
+ */
+const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>(
+  tool: ToolUnion<Tools>,
+  toolName: string,
+  encodedParams: unknown,
+): Effect.Effect<
+  Tool.Parameters<ToolUnion<Tools>>,
+  ModelProtocolError,
+  Tool.HandlerServices<ToolUnion<Tools>>
+> => {
+  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
+    input: unknown,
+  ) => Effect.Effect<
+    Tool.Parameters<ToolUnion<Tools>>,
+    Schema.SchemaError,
+    Tool.HandlerServices<ToolUnion<Tools>>
+  >;
+  return decodeParameters(encodedParams).pipe(
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`,
+      }),
+    ),
   );
 };
 
@@ -775,6 +836,12 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   trace: TurnTrace,
   concurrency: number,
   options: RunOptions<HookError, HookRequirements>,
+  /**
+   * Call IDs already settled canonically (batch-resume seam). Their recorded
+   * results were injected into the trace by the caller; approval preflight
+   * and durable preparation still cover them, but no handler starts.
+   */
+  settledCallIds?: ReadonlySet<string>,
 ): Stream.Stream<
   RunEvent,
   | HookError
@@ -804,9 +871,58 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         Stream.empty,
       );
 
+      const durability = options.durability;
+      // The hook's requirements are captured here (they are already part of
+      // this stream's requirements) so the per-call `DurableStep` service can
+      // run hook effects without leaking `HookRequirements` into handler
+      // signatures.
+      const hookServices = yield* Effect.context<HookRequirements>();
+
+      // Durable preparation runs strictly after every approval resolved
+      // approved and before any handler acquires a permit. `readonly` calls
+      // need no uncertainty protocol; a batch whose calls are all `readonly`
+      // skips the hook entirely. A resumed batch replays the identical full
+      // descriptor list so the prepared batch identity stays stable.
+      const preparation: Stream.Stream<never, HookError, HookRequirements> =
+        durability === undefined
+          ? Stream.empty
+          : Stream.fromEffect(
+              Effect.suspend(() => {
+                const descriptors = prepared.flatMap((call) => {
+                  const executionClass = getToolExecutionClass(call.tool);
+                  return executionClass === "readonly"
+                    ? []
+                    : [
+                        {
+                          toolCallId: call.toolCallId,
+                          toolName: call.name,
+                          parameters: call.nativeHandlerParams,
+                          executionClass,
+                        } satisfies RunToolCallDescriptor,
+                      ];
+                });
+                return descriptors.length === 0
+                  ? Effect.void
+                  : durability.prepareToolCalls(descriptors);
+              }),
+            ).pipe(Stream.drain);
+
+      // Each executable call gets its own locally provided `DurableStep`,
+      // bound to that call's identity: durable over the coordinator's step
+      // hook, honest pass-through otherwise.
+      const stepServiceFor = (call: PreparedToolCall<Tools>): DurableStepService =>
+        durability === undefined
+          ? passthroughDurableStep()
+          : makeDurableStepService(call.toolCallId, durability.step, hookServices);
+
+      const executable =
+        settledCallIds === undefined
+          ? prepared
+          : prepared.filter((call) => !settledCallIds.has(call.call.id));
+
       const groups: Array<ReadonlyArray<PreparedToolCall<Tools>>> = [];
       let parallel: Array<PreparedToolCall<Tools>> = [];
-      for (const call of prepared) {
+      for (const call of executable) {
         if (options.scheduling?.toolRequiresSequential?.(call.name) === true) {
           if (parallel.length > 0) {
             groups.push(parallel);
@@ -832,7 +948,9 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           group.map((call) =>
             withSemaphorePermit(
               semaphore,
-              executePreparedToolCall(context, turnId, toolkit, call, trace),
+              executePreparedToolCall(context, turnId, toolkit, call, trace).pipe(
+                Stream.provideService(DurableStep, stepServiceFor(call)),
+              ),
             ),
           ),
           { concurrency: "unbounded" },
@@ -895,7 +1013,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ).pipe(Stream.drain),
         ),
       );
-      return approvalPreflight.pipe(Stream.concat(settled));
+      return approvalPreflight.pipe(Stream.concat(preparation), Stream.concat(settled));
     }),
   );
 
@@ -1433,12 +1551,29 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         part.params as Tool.Parameters<ToolUnion<Tools>>,
       );
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
+      // Official history carries the wire form: rebuild the just-pushed trace
+      // part with the Schema-encoded parameters (the provider re-serializes
+      // them on the next request regardless), while `applicationToolCalls`
+      // below keeps the decoded part for the handler path — see TurnTrace.
+      trace.parts[trace.parts.length - 1] = Response.makePart("tool-call", {
+        id: part.id,
+        name: part.name,
+        params: parameters,
+        providerExecuted: part.providerExecuted,
+        metadata: part.metadata,
+      });
       trace.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted,
       });
       if (!part.providerExecuted) {
         trace.applicationToolCalls.push(part);
+        trace.applicationCallDescriptors.push({
+          toolCallId,
+          toolName: part.name,
+          parameters,
+          executionClass: getToolExecutionClass(tool),
+        });
       }
       const declared = ToolCallDeclared.make({
         ...(yield* eventBase(context)),
@@ -1633,6 +1768,7 @@ const makeTurn = <
         toolCalls: new Map(),
         finalToolResultIds: new Set(),
         applicationToolCalls: [],
+        applicationCallDescriptors: [],
         applicationToolResults: [],
         finished: false,
         finishReason: undefined,
@@ -1813,6 +1949,21 @@ const makeTurn = <
               agent.definition.policy.toolConcurrency,
               options.scheduling,
             );
+            if (options.durability !== undefined) {
+              // Durable turn-commit seam: the response becomes canonical
+              // after the finish-part validations and before approval
+              // preflight or preparation, creating the provably-safe window
+              // of durability §15 ("after model item commit, before tool
+              // preparation" resumes the declared batch without model
+              // re-invocation). No-tool Turns never reach this branch and
+              // keep their late single-batch commit.
+              yield* options.durability.commitResponse({
+                turn,
+                turnId,
+                responseMessages: promptFromTurnParts(trace),
+                calls: trace.applicationCallDescriptors,
+              });
+            }
             const toolResults = guardBudgetStream(
               executeToolBatch(
                 context,
@@ -1825,46 +1976,11 @@ const makeTurn = <
               ),
               options.budget,
             );
-            const continuationAfterTools = Stream.unwrap(
-              Effect.gen(function* () {
-                if (trace.finalToolResultIds.size !== trace.toolCalls.size) {
-                  return failRunEventStream(
-                    ModelProtocolError.make({
-                      message: "A Tool Call turn completed without one final result per Tool Call",
-                    }),
-                  );
-                }
-                const orderedResults: Array<(typeof trace.applicationToolResults)[number]> = [];
-                for (const call of trace.applicationToolCalls) {
-                  const result = trace.applicationToolResults.find(
-                    (candidate) => candidate.id === call.id,
-                  );
-                  if (result === undefined) {
-                    return failRunEventStream(
-                      ModelProtocolError.make({ message: "Tool batch did not settle completely" }),
-                    );
-                  }
-                  orderedResults.push(result);
-                }
-                yield* applyRepeatedFailurePolicy(
-                  context,
-                  trace,
-                  agent.definition.policy.repeatedFailureLimit,
-                );
-                const toolMessage = Prompt.makeMessage("tool", {
-                  content: orderedResults.map((result) =>
-                    Prompt.makePart("tool-result", {
-                      id: result.id,
-                      name: result.name,
-                      result: result.encodedResult,
-                      isFailure: result.isFailure,
-                    }),
-                  ),
-                });
-                return yield* continueTurn(historyWithResponse(toolMessage));
-              }),
+            return toolResults.pipe(
+              Stream.concat(
+                toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
+              ),
             );
-            return toolResults.pipe(Stream.concat(continuationAfterTools));
           }
 
           if (trace.finishReason !== "stop") {
@@ -1879,6 +1995,326 @@ const makeTurn = <
       );
 
       return started.pipe(Stream.concat(response), Stream.concat(continuation));
+    }),
+  );
+
+/**
+ * Settle a completed application Tool batch and continue the Run: verify one
+ * final result per declared call, fold outcomes into the repeated-failure
+ * Stop Policy, advance official history with the Tool message in declaration
+ * order, drain steering at the safe seam, and start the next Turn. Shared by
+ * the ordinary model-declared path (`makeTurn`) and the durable batch-resume
+ * path (`makeResumeTurn`).
+ */
+const toolBatchContinuation = <
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookError,
+  HookRequirements,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+>(
+  agent: RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements
+  >,
+  context: RunContext,
+  trace: TurnTrace,
+  prompt: Prompt.Prompt,
+  turn: number,
+  toolCalls: number,
+  options: RunOptions<HookError, HookRequirements>,
+): Stream.Stream<
+  RunEvent,
+  AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+  InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      if (trace.finalToolResultIds.size !== trace.toolCalls.size) {
+        return failRunEventStream(
+          ModelProtocolError.make({
+            message: "A Tool Call turn completed without one final result per Tool Call",
+          }),
+        );
+      }
+      const orderedResults: Array<(typeof trace.applicationToolResults)[number]> = [];
+      for (const call of trace.applicationToolCalls) {
+        const result = trace.applicationToolResults.find((candidate) => candidate?.id === call.id);
+        if (result === undefined) {
+          return failRunEventStream(
+            ModelProtocolError.make({ message: "Tool batch did not settle completely" }),
+          );
+        }
+        orderedResults.push(result);
+      }
+      yield* applyRepeatedFailurePolicy(
+        context,
+        trace,
+        agent.definition.policy.repeatedFailureLimit,
+      );
+      const toolMessage = Prompt.makeMessage("tool", {
+        content: orderedResults.map((result) =>
+          Prompt.makePart("tool-result", {
+            id: result.id,
+            name: result.name,
+            result: result.encodedResult,
+            isFailure: result.isFailure,
+          }),
+        ),
+      });
+      const history = Prompt.fromMessages([
+        ...prompt.content,
+        ...promptFromTurnParts(trace).content,
+        toolMessage,
+      ]);
+      yield* advanceHistory(context, history, options);
+      const steering = yield* drainInputs(context, options);
+      const nextPrompt = yield* appendInputs(context, history, steering, options);
+      return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
+    }),
+  );
+
+/**
+ * Resume one canonically declared Tool batch without re-invoking the model
+ * (the durable batch-resume seam consumed via `RunOptions.resume`).
+ *
+ * The declared calls are re-validated through their Tool parameter Schemas
+ * before anything executes; a decode failure is a strict no-start boundary
+ * (RUN-004/STORE-006). The resumed Turn's response messages are rebuilt in
+ * canonical encoded form so official history matches the recorded response.
+ * Calls listed in `settled` are injected as final results without starting
+ * their handlers — recorded Tool outcomes never rerun — while approval
+ * preflight and durable preparation still cover the complete declared batch.
+ * No model request is made and no usage is consumed for the resumed Turn.
+ */
+const makeResumeTurn = <
+  InputSchema extends Schema.Top,
+  OutputSchema extends Schema.Top,
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+  HookError,
+  HookRequirements,
+  InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+  InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+>(
+  agent: RuntimeBinding<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    Tools,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    InstructionError,
+    InstructionRequirements
+  >,
+  context: RunContext,
+  prompt: Prompt.Prompt,
+  resume: RunTurnResume,
+  options: RunOptions<HookError, HookRequirements>,
+): Stream.Stream<
+  RunEvent,
+  AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+  InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const tools = agent.definition.toolkit.tools;
+      const turn = resume.turn;
+      const turnId = resume.turnId;
+      if (!Number.isInteger(turn) || turn <= 0) {
+        return failRunEventStream(
+          ModelProtocolError.make({
+            message: "Turn resume requires a positive integer turn number",
+          }),
+        );
+      }
+      if (resume.calls.length === 0) {
+        return failRunEventStream(
+          ModelProtocolError.make({
+            message: "Turn resume requires at least one declared Tool Call",
+          }),
+        );
+      }
+      const trace: TurnTrace = {
+        parts: [],
+        text: [],
+        textParts: new Map(),
+        reasoningParts: new Map(),
+        toolParameterParts: new Map(),
+        toolCalls: new Map(),
+        finalToolResultIds: new Set(),
+        applicationToolCalls: [],
+        applicationCallDescriptors: [],
+        applicationToolResults: [],
+        finished: true,
+        finishReason: "tool-calls",
+        usage: undefined,
+      };
+      const declarationByCallId = new Map<
+        string,
+        { readonly index: number; readonly name: string }
+      >();
+      for (const call of resume.calls) {
+        if (!hasTool(tools, call.name)) {
+          return failRunEventStream(
+            ModelProtocolError.make({ message: `Turn resume declared unknown Tool ${call.name}` }),
+          );
+        }
+        if (trace.toolCalls.has(call.id)) {
+          return failRunEventStream(
+            ModelProtocolError.make({ message: `Turn resume repeated Tool Call ID ${call.id}` }),
+          );
+        }
+        const tool = tools[call.name] as ToolUnion<Tools>;
+        const toolCallId = yield* decodeToolCallId(call.id);
+        const decodedParams = yield* decodeResumedToolCallParameters<Tools>(
+          tool,
+          call.name,
+          call.params,
+        );
+        const parameters = yield* decodeEventJson(call.params, "Tool parameters");
+        declarationByCallId.set(call.id, {
+          index: trace.applicationToolCalls.length,
+          name: call.name,
+        });
+        trace.parts.push(
+          Response.makePart("tool-call", {
+            id: call.id,
+            name: call.name,
+            params: parameters,
+            providerExecuted: false,
+          }),
+        );
+        trace.toolCalls.set(call.id, { name: call.name, providerExecuted: false });
+        trace.applicationToolCalls.push(
+          Response.makePart("tool-call", {
+            id: call.id,
+            name: call.name,
+            params: decodedParams,
+            providerExecuted: false,
+          }),
+        );
+        trace.applicationCallDescriptors.push({
+          toolCallId,
+          toolName: call.name,
+          parameters,
+          executionClass: getToolExecutionClass(tool),
+        });
+      }
+      const settledIds = new Set<string>();
+      for (const settledCall of resume.settled) {
+        const declared = declarationByCallId.get(settledCall.id);
+        if (declared === undefined) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message: `Turn resume settled an undeclared Tool Call ${settledCall.id}`,
+            }),
+          );
+        }
+        if (settledIds.has(settledCall.id)) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message: `Turn resume settled Tool Call ${settledCall.id} more than once`,
+            }),
+          );
+        }
+        settledIds.add(settledCall.id);
+        trace.finalToolResultIds.add(settledCall.id);
+        trace.applicationToolResults[declared.index] = {
+          id: settledCall.id,
+          name: declared.name,
+          encodedResult: settledCall.result,
+          isFailure: settledCall.isFailure,
+        };
+      }
+      const toolCalls = trace.toolCalls.size;
+      if (toolCalls > agent.definition.policy.maxToolCalls) {
+        return failRunEventStream(
+          AgentPolicyError.make({
+            limit: "tool-calls",
+            message: `Agent exceeded its ${agent.definition.policy.maxToolCalls} Tool Call limit`,
+          }),
+        );
+      }
+      if (turn >= agent.definition.policy.maxTurns) {
+        return failRunEventStream(
+          AgentPolicyError.make({
+            limit: "turns",
+            message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+          }),
+        );
+      }
+      const toolkit = yield* agent.definition.toolkit;
+      const concurrency = yield* schedulingConcurrency(
+        agent.definition.policy.toolConcurrency,
+        options.scheduling,
+      );
+
+      // The resumed Turn made its model call in a prior Attempt: no
+      // ModelStarted event, no model metric, and no usage is consumed. The
+      // TurnCompleted seam is re-emitted so downstream commit seams observe
+      // the normal ordering (a Turn completes before its Tool batch executes).
+      const started = Stream.fromEffect(
+        Effect.gen(function* () {
+          yield* Effect.logDebug("agent resumed a declared Tool batch").pipe(
+            Effect.annotateLogs({
+              agentId: context.agentId,
+              runId: context.runId,
+              turnId,
+            }),
+          );
+          return [
+            TurnStarted.make({
+              ...(yield* eventBase(context)),
+              turnId,
+              turn,
+            }),
+            TurnCompleted.make({
+              ...(yield* eventBase(context)),
+              turnId,
+              turn,
+              finishReason: "tool-calls",
+            }),
+          ] satisfies ReadonlyArray<RunEvent>;
+        }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
+      ).pipe(Stream.flatMap(Stream.fromIterable));
+
+      const toolResults = guardBudgetStream(
+        executeToolBatch(
+          context,
+          turnId,
+          toolkit,
+          trace.applicationToolCalls,
+          trace,
+          concurrency,
+          options,
+          settledIds,
+        ),
+        options.budget,
+      );
+      return started.pipe(
+        Stream.concat(toolResults),
+        Stream.concat(
+          toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
+        ),
+      );
     }),
   );
 
@@ -1975,6 +2411,12 @@ const stream = <
           const encodedInput = yield* encodeInput(agent, decodedInput);
           const prompt = yield* makeInitialPrompt(instructions, encodedInput, context.history);
           yield* advanceHistory(context, prompt, options);
+          if (options.resume !== undefined) {
+            // A declared-batch resume re-enters mid-Turn: steering seams
+            // reopen only after the resumed batch settles, so the initial
+            // drain is skipped and the continuation drains at the safe seam.
+            return makeResumeTurn(agent, context, prompt, options.resume, options);
+          }
           const steering = yield* drainInputs(context, options);
           const initialPrompt = yield* appendInputs(context, prompt, steering, options);
           return makeTurn(agent, context, initialPrompt, 1, 0, options);
@@ -1997,10 +2439,11 @@ const stream = <
       const deadline = execution.pipe(Stream.interruptWhen(deadlineEffect));
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
-      // bound to the Run's immutable identity and delegation depth, and the
-      // fail-closed `RunEventSink` default that each Tool batch shadows with
-      // its live sink. Providing them here is what removes both services
-      // from the runtime's public requirements.
+      // bound to the Run's immutable identity and delegation depth, plus the
+      // fail-closed `RunEventSink` and `DurableStep` defaults that each Tool
+      // batch shadows with per-batch / per-call live services. Providing them
+      // here is what removes these services from the runtime's public
+      // requirements.
       const engineToolServices = Context.make(
         AgentSpawner,
         makeAgentSpawner(
@@ -2011,7 +2454,10 @@ const stream = <
           },
           options.parentLink?.depth ?? 0,
         ),
-      ).pipe(Context.add(RunEventSink, closedRunEventSink));
+      ).pipe(
+        Context.add(RunEventSink, closedRunEventSink),
+        Context.add(DurableStep, closedDurableStep),
+      );
 
       return started.pipe(
         Stream.concat(deadline),
@@ -2234,6 +2680,156 @@ const closedRunEventSink: RunEventSinkService = {
         message: `Subagent event ${payload._tag} was emitted outside an active Tool batch`,
       }),
     ),
+};
+
+/**
+ * Fail-closed Run-level `DurableStep` default. Every executable Tool Call
+ * shadows it with a live per-call service; a Step executed outside an active
+ * Tool Call fails typed instead of silently running unrecorded.
+ */
+const closedDurableStep: DurableStepService = {
+  do: (name) =>
+    Effect.fail(
+      DurableStepError.make({
+        stepName: name,
+        reason: "no-active-tool-call",
+        message: `Durable Step ${name} was executed outside an active Tool Call`,
+      }),
+    ),
+};
+
+/**
+ * Ephemeral pass-through `DurableStep` provided when `RunOptions.durability`
+ * is absent: each Step body executes exactly once in-process and nothing is
+ * recorded. Durable Tools stay runnable on the ephemeral runtime with honest
+ * (weaker) semantics — the durable claim attaches to the runtime, not the
+ * Tool. Duplicate Step names remain the same typed identity conflict as under
+ * the durable service so authoring bugs fail identically on both runtimes.
+ */
+const passthroughDurableStep = (): DurableStepService => {
+  const usedNames = new Set<string>();
+  return {
+    do: <Output extends Schema.Top, BodyError, BodyServices>(
+      name: string,
+      _output: Output,
+      execute: Effect.Effect<Output["Type"], BodyError, BodyServices>,
+    ) =>
+      Effect.suspend(
+        (): Effect.Effect<Output["Type"], DurableStepError | BodyError, BodyServices> => {
+          if (usedNames.has(name)) {
+            return Effect.fail(
+              DurableStepError.make({
+                stepName: name,
+                reason: "duplicate-step-name",
+                message: `Durable Step name ${name} was reused within one Tool Call`,
+              }),
+            );
+          }
+          usedNames.add(name);
+          return execute;
+        },
+      ),
+  };
+};
+
+/**
+ * Durable `DurableStep` service bound to one Tool Call over the coordinator's
+ * `RunStepHook`.
+ *
+ * Semantics per durability §11: a committed result decodes through the
+ * declared output Schema and returns without executing the body
+ * (exactly-once-recorded); otherwise the body runs (at-least-once-executed —
+ * a crash mid-body re-executes on the next Attempt and duplicate external
+ * effects stay observable), the success is encoded through the Schema, and
+ * only then committed. Failures are never recorded: a failing body fails the
+ * Step call into the handler's error channel and re-entry re-executes it.
+ * Step names must be deterministic and unique within one Tool Call; reuse is
+ * a typed identity conflict because the second call would silently replay the
+ * first call's recorded result. Hook failures and codec conflicts surface as
+ * `DurableStepError` without widening the handler's error channel.
+ */
+/**
+ * Provide a captured hook Context to a hook effect. TypeScript cannot reduce
+ * the deferred conditional `Exclude<HookRequirements, HookRequirements>` on
+ * an unresolved generic, so this private assertion pins the identity that
+ * providing `Context<R>` to an `Effect<_, _, R>` leaves no requirements; it
+ * never bypasses validation.
+ */
+const provideHookServices = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  services: Context.Context<R>,
+): Effect.Effect<A, E> =>
+  effect.pipe(Effect.provideContext(services)) as unknown as Effect.Effect<A, E>;
+
+const makeDurableStepService = <HookError, HookRequirements>(
+  toolCallId: ToolCallId,
+  hook: RunStepHook<HookError, HookRequirements>,
+  hookServices: Context.Context<HookRequirements>,
+): DurableStepService => {
+  const usedNames = new Set<string>();
+  return {
+    do: <Output extends Schema.Top, BodyError, BodyServices>(
+      name: string,
+      output: Output,
+      execute: Effect.Effect<Output["Type"], BodyError, BodyServices>,
+    ) =>
+      Effect.gen(function* () {
+        if (usedNames.has(name)) {
+          return yield* DurableStepError.make({
+            toolCallId,
+            stepName: name,
+            reason: "duplicate-step-name",
+            message: `Durable Step name ${name} was reused within Tool Call ${toolCallId}`,
+          });
+        }
+        usedNames.add(name);
+        const key: RunStepKey = { toolCallId, stepName: name };
+        const recorded = yield* provideHookServices(hook.lookup(key), hookServices).pipe(
+          Effect.mapError((cause) =>
+            DurableStepError.make({
+              toolCallId,
+              stepName: name,
+              reason: "lookup-failed",
+              message: `Durable Step lookup failed: ${errorMessage(cause)}`,
+            }),
+          ),
+        );
+        if (Option.isSome(recorded)) {
+          return yield* Schema.decodeUnknownEffect(output)(recorded.value.encodedOutput).pipe(
+            Effect.mapError((cause) =>
+              DurableStepError.make({
+                toolCallId,
+                stepName: name,
+                reason: "recorded-result-invalid",
+                message: `Recorded Durable Step result did not decode through the declared output Schema: ${cause.message}`,
+              }),
+            ),
+          );
+        }
+        const value = yield* execute;
+        const encodedOutput = yield* Schema.encodeEffect(output)(value).pipe(
+          Effect.mapError((cause) =>
+            DurableStepError.make({
+              toolCallId,
+              stepName: name,
+              reason: "output-encoding-failed",
+              message: `Durable Step output did not encode through the declared output Schema: ${cause.message}`,
+            }),
+          ),
+        );
+        yield* provideHookServices(hook.commit(key, encodedOutput), hookServices).pipe(
+          Effect.mapError((cause) =>
+            DurableStepError.make({
+              toolCallId,
+              stepName: name,
+              reason: "commit-failed",
+              message: `Durable Step commit failed: ${errorMessage(cause)}`,
+            }),
+          ),
+        );
+        return value;
+      }),
+  };
 };
 
 /** Stable delegation identity supplied by the invoking delegation Tool handler. */

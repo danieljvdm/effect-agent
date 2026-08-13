@@ -30,6 +30,7 @@ import {
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
 
+import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
   AdmissionConflict,
@@ -59,6 +60,7 @@ import {
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
+  ToolReconciler,
   WakeScheduler,
   modelResponseRecordId,
   projectRunJournal,
@@ -150,10 +152,12 @@ const plannerDefinition = Agent.define("durable-planner", {
   }),
 });
 
+// `readonly` keeps the P4 canonical record shape byte-stable (plan §4.3): an unannotated tool
+// fails closed to `uncertain` and gains `ToolCallPrepared` records under the P5 split commits.
 const Search = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.Struct({ available: Schema.Boolean }),
-});
+}).annotate(ToolExecutionClass, "readonly");
 const searchTools = Toolkit.make(Search);
 const searchDefinition = Agent.define("durable-search", {
   input: Schema.Struct({ question: Schema.String }),
@@ -184,6 +188,7 @@ const baseLayer = Layer.mergeAll(
   MemoryConversationStoreLive,
   WakeScheduler.layerNoop,
   DurableRuntimeFailpoint.layerTest,
+  ToolReconciler.uncertain,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
@@ -367,7 +372,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
-  it.effect("keeps one Conversation lane FIFO by admitted queue sequence", () =>
+  it.effect("keeps one Conversation lane FIFO: contiguous queued work joins the active Run", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"next"}'));
@@ -391,10 +396,14 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         agent,
         decodeConversationId(conversation),
       );
+      // P5 (plan §2.5): the active host Run claims the contiguous ready prefix, so the second
+      // Submission JOINS the first Run instead of waiting for its own claim — one head
+      // settlement, and the joined Submission settles with the host in admitted FIFO order.
       expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
         first.submissionId,
-        second.submissionId,
       ]);
+      const joinedSettlement = yield* runtime.awaitSettlement(second);
+      expect(joinedSettlement.outcome).toBe("completed");
 
       const records = yield* readLog(conversation);
       const settledIds = records
@@ -880,7 +889,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "resume?" },
         submitOptions(conversation, "resume-turn-1"),
       );
-      yield* armFailpoint("turn:after-canonical-append");
+      // P5 split commits: the readonly tool Turn commits its response batch at the finish part
+      // and its results batch at the next TurnStarted seam — kill right after the results append
+      // so Turn 1 is fully canonical and the run is not settled (the P4 boundary, same shape).
+      yield* armFailpoint("turn:after-results-append");
       const killed = yield* Effect.exit(
         runtime
           .processConversation(agent, decodeConversationId(conversation))

@@ -16,16 +16,16 @@ review expectations.
 The roadmap remains normative and **Draft**. This table records implementation evidence; it does
 not change the specified scope of later phases.
 
-| Phase  | Implementation status                                                                                                             |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| P0     | Complete — [design proof](PHASE-0-EVIDENCE.md)                                                                                    |
-| P1     | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md)                                                                       |
-| P2     | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                       |
-| P3     | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                        |
-| S1     | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
-| P4     | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                     |
-| **P5** | **Next — durable Tools and joined input**                                                                                         |
-| P6–P7  | Planned — not yet implemented                                                                                                     |
+| Phase | Implementation status                                                                                                             |
+| ----- | --------------------------------------------------------------------------------------------------------------------------------- |
+| P0    | Complete — [design proof](PHASE-0-EVIDENCE.md)                                                                                    |
+| P1    | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md)                                                                       |
+| P2    | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                       |
+| P3    | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                        |
+| S1    | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
+| P4    | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                     |
+| P5    | Complete — [durable Tools and joined input](PHASE-5-EVIDENCE.md)                                                                  |
+| P6–P7 | Planned — not yet implemented; the proposed S2 Subagent slice is recommended to precede P6                                        |
 
 ## Proposed Subagent insertion
 

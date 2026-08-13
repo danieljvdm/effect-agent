@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
 import { Duration, Effect, Schema } from "effect";
-import { ConversationId, SubmissionId } from "@effect-agent/core";
+import { ConversationId, RunId, SubmissionId, ToolCallId } from "@effect-agent/core";
 
 import {
   AbortCommand,
@@ -9,9 +9,13 @@ import {
   AdmissionConflict,
   AdmissionRequest,
   AdmissionResult,
+  ApprovalConflict,
+  ApprovalDecisionCommand,
+  ApprovalDecisionIntent,
   CanonicalBatch,
   CanonicalRecordEnvelope,
   Claim,
+  ClaimJoiningRequest,
   ConversationProjection,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DefinitionDigestInput,
@@ -21,17 +25,24 @@ import {
   digestDefinitions,
   digestJson,
   EMPTY_TAIL_DIGEST,
+  JoinedToHost,
+  JoiningClaim,
   LedgerCapabilities,
+  MarkJoinedRequest,
+  MarkUnknownRequest,
   MAX_PERSISTED_JSON_BYTES,
   MAX_PERSISTED_JSON_DEPTH,
   OwnershipLost,
   PersistedJson,
+  PreparedToolCallEvidence,
   ProducerEpoch,
+  ReconciliationDecision,
   RecordEnvelope,
   RecoverySnapshot,
   replayConversation,
   replayConversationFromCheckpoint,
   ReservedSettlement,
+  RevertJoiningRequest,
   Settlement,
   SettlementConflict,
   SettlementReservation,
@@ -44,7 +55,31 @@ import {
   submissionSettlementBatchId,
   submissionSettlementId,
   submissionSettlementRecordId,
+  SuspendRequest,
+  ToolReconciler,
+  UnknownResolution,
+  UnknownResolutionCommand,
+  UnknownResolutionConflict,
+  UnknownResolutionIntent,
   WakeScheduler,
+  approvalDecisionBatchId,
+  markUnknownBatchId,
+  modelResponseInterruptedBatchId,
+  modelResponseInterruptedRecordId,
+  toolApprovalDecisionRecordId,
+  toolApprovalRequestRecordId,
+  toolCallPreparedRecordId,
+  toolCallResolutionBatchId,
+  toolCallResolvedRecordId,
+  toolCallResultBatchId,
+  toolCallSettledRecordId,
+  toolCallUnknownRecordId,
+  toolStepSettledBatchId,
+  toolStepSettledRecordId,
+  turnApprovalsBatchId,
+  turnPreparedBatchId,
+  turnResponseBatchId,
+  turnResultsBatchId,
 } from "../src/index.ts";
 
 const SHA_256_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -458,15 +493,49 @@ describe("SubmissionLedger port schemas", () => {
         leaseExpiresAt: "2026-08-12T00:00:30.000Z",
       },
       inputApplied: { recordId: "input:submission-1", sequence: 2 },
+      joins: [{ submissionId: "submission-2", state: "joined", hostSubmissionId: "submission-1" }],
+      approvalDecisions: [
+        {
+          submissionId: "submission-1",
+          toolCallId: "call-1",
+          decision: "approved",
+          resolver: "operator",
+          reason: "reviewed",
+          decidedAt: "2026-08-12T00:00:20.000Z",
+        },
+      ],
+      unknownResolutions: [
+        {
+          submissionId: "submission-1",
+          toolCallId: "call-2",
+          author: "operator",
+          reason: "supplier store checked",
+          resolution: { _tag: "SafeToRetry" },
+          resolvedAt: "2026-08-12T00:00:25.000Z",
+        },
+      ],
+      suspension: {
+        reason: { _tag: "ApprovalPending", toolCallIds: ["call-1"] },
+        suspendedAt: "2026-08-12T00:00:15.000Z",
+      },
     };
     const recovery = Schema.decodeUnknownSync(RecoverySnapshot)(encodedRecovery);
     expect(Schema.encodeSync(RecoverySnapshot)(recovery)).toEqual(encodedRecovery);
     const minimalRecovery = Schema.decodeUnknownSync(RecoverySnapshot)({
       submission: encodedSubmissionSnapshot,
+      joins: [],
+      approvalDecisions: [],
+      unknownResolutions: [],
     });
     expect(minimalRecovery.ownership).toBeUndefined();
     expect(minimalRecovery.reservation).toBeUndefined();
     expect(minimalRecovery.abortIntent).toBeUndefined();
+    expect(minimalRecovery.hostSubmissionId).toBeUndefined();
+    expect(minimalRecovery.suspension).toBeUndefined();
+    // The P5 snapshot fields are required: a P4-shaped snapshot value no longer decodes.
+    expect(
+      Schema.decodeUnknownExit(RecoverySnapshot)({ submission: encodedSubmissionSnapshot })._tag,
+    ).toBe("Failure");
   });
 
   it("round-trips settlement reservation values carrying the exact canonical record", () => {
@@ -589,5 +658,415 @@ describe("SubmissionLedger port schemas", () => {
       yield* scheduler.notify(wakeConversationId);
       yield* scheduler.notify(wakeConversationId);
     }).pipe(Effect.provide(WakeScheduler.layerNoop)),
+  );
+});
+
+describe("phase 5 durable canonical payloads", () => {
+  const encodedToolCallPrepared = {
+    _tag: "ToolCallPrepared",
+    runId: "run-1",
+    turnId: "turn-1",
+    turn: 2,
+    toolCallId: "call-1",
+    toolName: "book_flight",
+    parameters: { destination: "Kyoto", travelerRef: "traveler-7" },
+    parametersDigest: SHA_256_A,
+  } as const;
+  const encodedToolCallUnknown = {
+    _tag: "ToolCallUnknown",
+    runId: "run-1",
+    turn: 2,
+    toolCallId: "call-1",
+    toolName: "book_flight",
+    reason: "worker lost after preparation without a canonical outcome",
+  } as const;
+  const encodedToolCallResolved = {
+    _tag: "ToolCallResolved",
+    runId: "run-1",
+    toolCallId: "call-1",
+    resolution: "completed-with-result",
+    author: "operator",
+    reason: "supplier store shows the booking",
+  } as const;
+  const encodedToolStepSettled = {
+    _tag: "ToolStepSettled",
+    runId: "run-1",
+    toolCallId: "call-1",
+    stepName: "reserve-flight",
+    output: { bookingRef: "booking-42" },
+    outputDigest: SHA_256_B,
+  } as const;
+  const encodedApprovalRequested = {
+    _tag: "ToolApprovalRequested",
+    runId: "run-1",
+    turnId: "turn-1",
+    turn: 2,
+    toolCallId: "call-1",
+    toolName: "book_flight",
+    parametersDigest: SHA_256_A,
+  } as const;
+  const encodedApprovalDecided = {
+    _tag: "ToolApprovalDecided",
+    runId: "run-1",
+    turn: 2,
+    toolCallId: "call-1",
+    decision: "approved",
+    resolver: "operator",
+    reason: "reviewed and approved",
+  } as const;
+  const encodedInterrupted = {
+    _tag: "ModelResponseInterrupted",
+    runId: "run-1",
+    supersededEpoch: 3,
+    attemptId: "attempt-1",
+    reason: "superseded a prior owner without a complete canonical turn",
+  } as const;
+
+  const payloads = [
+    encodedToolCallPrepared,
+    encodedToolCallUnknown,
+    encodedToolCallResolved,
+    encodedToolStepSettled,
+    encodedApprovalRequested,
+    encodedApprovalDecided,
+    encodedInterrupted,
+  ] as const;
+
+  it("round-trips the seven new payload tags through the version-1 record envelope", () => {
+    for (const [index, payload] of payloads.entries()) {
+      const record = decodeRecord(`record-p5-${index}`, payload);
+      expect(record.schemaVersion).toBe(1);
+      const encoded = Schema.encodeSync(RecordEnvelope)(record);
+      expect(encoded.payload).toEqual(payload);
+      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+    }
+  });
+
+  it("rejects malformed durable-tool payloads", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-p5-invalid",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-08-12T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const failures: ReadonlyArray<unknown> = [
+      { ...encodedToolCallPrepared, turn: 0 },
+      { ...encodedToolCallPrepared, parametersDigest: "not-a-digest" },
+      { ...encodedToolCallPrepared, toolName: "" },
+      { ...encodedToolCallUnknown, reason: "x".repeat(64 * 1024 + 1) },
+      { ...encodedToolCallResolved, resolution: "made-up-result" },
+      { ...encodedToolCallResolved, author: "" },
+      { ...encodedToolStepSettled, stepName: "" },
+      { ...encodedToolStepSettled, outputDigest: "not-a-digest" },
+      { ...encodedApprovalDecided, decision: "maybe" },
+      { ...encodedInterrupted, supersededEpoch: -1 },
+    ];
+    for (const payload of failures) {
+      expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
+    }
+  });
+
+  it("folds prepared/settled/resolved, unknown, and approval records into the projection", () => {
+    const created = decodeEnvelope(
+      1,
+      decodeRecord("record-p5-created", {
+        _tag: "ConversationCreated",
+        agentId: "travel-planner",
+        definitions: Schema.encodeSync(DefinitionDigests)(definitionDigests),
+      }),
+    );
+    const prepared = decodeEnvelope(2, decodeRecord("record-p5-prepared", encodedToolCallPrepared));
+    const preparedTwo = decodeEnvelope(
+      3,
+      decodeRecord("record-p5-prepared-2", { ...encodedToolCallPrepared, toolCallId: "call-2" }),
+    );
+    const requested = decodeEnvelope(
+      4,
+      decodeRecord("record-p5-requested", encodedApprovalRequested),
+    );
+    const decided = decodeEnvelope(5, decodeRecord("record-p5-decided", encodedApprovalDecided));
+    const unknown = decodeEnvelope(6, decodeRecord("record-p5-unknown", encodedToolCallUnknown));
+    const settled = decodeEnvelope(
+      7,
+      decodeRecord("record-p5-settled", {
+        _tag: "ToolCallSettled",
+        runId: "run-1",
+        toolCallId: "call-2",
+        toolName: "book_flight",
+        result: { bookingRef: "booking-43" },
+        isFailure: false,
+      }),
+    );
+    const resolved = decodeEnvelope(8, decodeRecord("record-p5-resolved", encodedToolCallResolved));
+
+    const afterPrepared = replayConversation(created.conversationId, [
+      created,
+      prepared,
+      preparedTwo,
+      requested,
+      decided,
+      unknown,
+    ]);
+    expect(afterPrepared.openToolCalls.map((call) => call.toolCallId)).toEqual([
+      "call-1",
+      "call-2",
+    ]);
+    expect(afterPrepared.unknownToolCalls).toEqual([unknown.record.payload]);
+    expect(afterPrepared.approvals).toEqual([requested.record.payload, decided.record.payload]);
+
+    // `ToolCallSettled` and `ToolCallResolved` close their calls; `ToolCallUnknown` does not.
+    const full = replayConversation(created.conversationId, [
+      created,
+      prepared,
+      preparedTwo,
+      requested,
+      decided,
+      unknown,
+      settled,
+      resolved,
+    ]);
+    expect(full.openToolCalls).toEqual([]);
+
+    const resumed = replayConversationFromCheckpoint(afterPrepared, [settled, resolved]);
+    expect(resumed).toEqual(full);
+    expect(
+      Schema.decodeSync(ConversationProjection)(Schema.encodeSync(ConversationProjection)(full)),
+    ).toEqual(full);
+  });
+
+  it("rejects a Phase 4 checkpoint projection state so callers rebuild from canonical records", () => {
+    const phase4State = {
+      conversationId: "travel-conversation",
+      throughSequence: 2,
+      tailDigest: SHA_256_A,
+      inputs: [{ destination: "Kyoto" }],
+      modelOutputs: [],
+      completedRuns: [],
+      failedRuns: [],
+      settlements: [],
+      abortRequests: [],
+    };
+    expect(Schema.decodeUnknownExit(ConversationProjection)(phase4State)._tag).toBe("Failure");
+  });
+});
+
+describe("phase 5 ledger port schemas", () => {
+  const submissionId = Schema.decodeSync(SubmissionId)("submission-1");
+  const hostSubmissionId = Schema.decodeSync(SubmissionId)("submission-host");
+  const toolCallId = Schema.decodeSync(ToolCallId)("call-1");
+
+  it("round-trips joining requests and claims", () => {
+    const encodedClaimJoining = {
+      conversationId: "travel-conversation",
+      hostSubmissionId: "submission-host",
+      ownershipToken: "token-1",
+      maxCount: 1,
+    } as const;
+    const request = Schema.decodeUnknownSync(ClaimJoiningRequest)(encodedClaimJoining);
+    expect(Schema.encodeSync(ClaimJoiningRequest)(request)).toEqual(encodedClaimJoining);
+    expect(
+      Schema.decodeUnknownExit(ClaimJoiningRequest)({ ...encodedClaimJoining, maxCount: 0 })._tag,
+    ).toBe("Failure");
+
+    const claim = Schema.decodeUnknownSync(JoiningClaim)({
+      submissionId: "submission-2",
+      queueSequence: 2,
+      inputPayload: { note: "also add a museum day" },
+    });
+    expect(claim.queueSequence).toBe(2);
+
+    const marked = Schema.decodeUnknownSync(MarkJoinedRequest)({
+      submissionId: "submission-2",
+      ownershipToken: "token-1",
+      recordId: "input:submission-2",
+      sequence: 9,
+    });
+    expect(marked.recordId).toBe("input:submission-2");
+    expect(
+      Schema.decodeUnknownSync(RevertJoiningRequest)({ submissionId: "submission-2" }).submissionId,
+    ).toBe("submission-2");
+  });
+
+  it("round-trips suspension requests and approval decisions with typed conflicts", () => {
+    const encodedSuspend = {
+      submissionId: "submission-1",
+      ownershipToken: "token-1",
+      reason: { _tag: "ApprovalPending", toolCallIds: ["call-1", "call-2"] },
+    } as const;
+    const suspend = Schema.decodeUnknownSync(SuspendRequest)(encodedSuspend);
+    expect(Schema.encodeSync(SuspendRequest)(suspend)).toEqual(encodedSuspend);
+    expect(
+      Schema.decodeUnknownExit(SuspendRequest)({
+        ...encodedSuspend,
+        reason: { _tag: "ApprovalPending", toolCallIds: [] },
+      })._tag,
+    ).toBe("Failure");
+
+    const encodedCommand = {
+      submissionId: "submission-1",
+      toolCallId: "call-1",
+      decision: "approved",
+      resolver: "operator",
+      reason: "reviewed",
+    } as const;
+    const command = Schema.decodeUnknownSync(ApprovalDecisionCommand)(encodedCommand);
+    expect(Schema.encodeSync(ApprovalDecisionCommand)(command)).toEqual(encodedCommand);
+    expect(
+      Schema.decodeUnknownExit(ApprovalDecisionCommand)({
+        ...encodedCommand,
+        decision: "vetoed",
+      })._tag,
+    ).toBe("Failure");
+
+    const encodedIntent = {
+      ...encodedCommand,
+      decidedAt: "2026-08-12T00:00:10.000Z",
+      canonicalRecordId: "approval-decision:run-1:2:call-1",
+    };
+    const intent = Schema.decodeUnknownSync(ApprovalDecisionIntent)(encodedIntent);
+    expect(Schema.encodeSync(ApprovalDecisionIntent)(intent)).toEqual(encodedIntent);
+
+    const conflict = ApprovalConflict.make({
+      submissionId,
+      toolCallId,
+      existingDecision: "denied",
+    });
+    expect(conflict.existingDecision).toBe("denied");
+  });
+
+  it("round-trips unknown marking, resolutions, and the joined-abort conflict", () => {
+    const marked = Schema.decodeUnknownSync(MarkUnknownRequest)({
+      submissionId: "submission-1",
+      toolCallIds: ["call-1"],
+      reason: "prepared without a canonical outcome",
+    });
+    expect(marked.toolCallIds).toEqual(["call-1"]);
+    expect(
+      Schema.decodeUnknownExit(MarkUnknownRequest)({
+        submissionId: "submission-1",
+        toolCallIds: [],
+        reason: "empty",
+      })._tag,
+    ).toBe("Failure");
+
+    const resolutions: ReadonlyArray<unknown> = [
+      { _tag: "CompletedWithResult", result: { bookingRef: "booking-42" }, isFailure: false },
+      { _tag: "NeverHappened" },
+      { _tag: "SafeToRetry" },
+      { _tag: "AbortSubmission" },
+    ];
+    for (const encoded of resolutions) {
+      const resolution = Schema.decodeUnknownSync(UnknownResolution)(encoded);
+      expect(Schema.encodeSync(UnknownResolution)(resolution)).toEqual(encoded);
+    }
+    expect(Schema.decodeUnknownExit(UnknownResolution)({ _tag: "JustGuess" })._tag).toBe("Failure");
+
+    const encodedCommand = {
+      submissionId: "submission-1",
+      toolCallId: "call-1",
+      author: "operator",
+      reason: "supplier store shows the booking",
+      resolution: {
+        _tag: "CompletedWithResult",
+        result: { bookingRef: "booking-42" },
+        isFailure: false,
+      },
+    } as const;
+    const command = Schema.decodeUnknownSync(UnknownResolutionCommand)(encodedCommand);
+    expect(Schema.encodeSync(UnknownResolutionCommand)(command)).toEqual(encodedCommand);
+
+    const intent = Schema.decodeUnknownSync(UnknownResolutionIntent)({
+      ...encodedCommand,
+      resolvedAt: "2026-08-12T00:00:30.000Z",
+    });
+    expect(intent.resolution._tag).toBe("CompletedWithResult");
+
+    const conflict = UnknownResolutionConflict.make({ submissionId, toolCallId });
+    expect(conflict.toolCallId).toBe("call-1");
+    const joined = JoinedToHost.make({ submissionId, hostSubmissionId });
+    expect(joined.hostSubmissionId).toBe("submission-host");
+  });
+
+  it("derives the deterministic Phase 5 identities shared by adapters and the coordinator", () => {
+    const runId = Schema.decodeSync(RunId)("run:submission-1");
+    expect(turnResponseBatchId(runId, 2)).toBe("turn-response:run:submission-1:2");
+    expect(turnResultsBatchId(runId, 2)).toBe("turn-results:run:submission-1:2");
+    expect(turnPreparedBatchId(runId, 2)).toBe("turn-prepared:run:submission-1:2");
+    expect(toolCallResultBatchId(runId, 2, toolCallId)).toBe(
+      "turn-results:run:submission-1:2:call-1",
+    );
+    expect(toolCallPreparedRecordId(runId, 2, toolCallId)).toBe(
+      "tool-prepared:run:submission-1:2:call-1",
+    );
+    expect(toolCallSettledRecordId(runId, 2, toolCallId)).toBe(
+      "tool-settled:run:submission-1:2:call-1",
+    );
+    expect(markUnknownBatchId(submissionId, 2)).toBe("mark-unknown:submission-1:2");
+    expect(toolCallUnknownRecordId(runId, 2, toolCallId)).toBe(
+      "tool-unknown:run:submission-1:2:call-1",
+    );
+    expect(toolCallResolutionBatchId(submissionId, toolCallId)).toBe("resolve:submission-1:call-1");
+    expect(toolCallResolvedRecordId(runId, 2, toolCallId)).toBe(
+      "tool-resolved:run:submission-1:2:call-1",
+    );
+    expect(toolStepSettledRecordId(runId, toolCallId, "reserve-flight")).toBe(
+      "step:run:submission-1:call-1:reserve-flight",
+    );
+    expect(toolStepSettledBatchId(runId, toolCallId, "reserve-flight")).toBe(
+      toolStepSettledRecordId(runId, toolCallId, "reserve-flight"),
+    );
+    expect(turnApprovalsBatchId(runId, 2)).toBe("turn-approvals:run:submission-1:2");
+    expect(toolApprovalRequestRecordId(runId, 2, toolCallId)).toBe(
+      "approval-request:run:submission-1:2:call-1",
+    );
+    expect(approvalDecisionBatchId(submissionId, toolCallId)).toBe(
+      "approval-decision:submission-1:call-1",
+    );
+    expect(toolApprovalDecisionRecordId(runId, 2, toolCallId)).toBe(
+      "approval-decision:run:submission-1:2:call-1",
+    );
+    expect(modelResponseInterruptedRecordId(runId, 3)).toBe("interrupted:run:submission-1:3");
+    expect(modelResponseInterruptedBatchId(runId, 3)).toBe(
+      modelResponseInterruptedRecordId(runId, 3),
+    );
+  });
+});
+
+describe("ToolReconciler", () => {
+  const preparedEvidence = Schema.decodeUnknownSync(PreparedToolCallEvidence)({
+    conversationId: "travel-conversation",
+    submissionId: "submission-1",
+    runId: "run:submission-1",
+    turn: 2,
+    toolCallId: "call-1",
+    toolName: "book_flight",
+    parameters: { destination: "Kyoto" },
+    parametersDigest: SHA_256_A,
+  });
+
+  it("round-trips reconciliation decisions", () => {
+    const decisions: ReadonlyArray<unknown> = [
+      { _tag: "NeverStarted" },
+      { _tag: "CompletedWithResult", result: { bookingRef: "booking-42" }, isFailure: false },
+      { _tag: "SafeToRetry" },
+      { _tag: "Uncertain", reason: "supplier unreachable" },
+    ];
+    for (const encoded of decisions) {
+      const decision = Schema.decodeUnknownSync(ReconciliationDecision)(encoded);
+      expect(Schema.encodeSync(ReconciliationDecision)(decision)).toEqual(encoded);
+    }
+    expect(Schema.decodeUnknownExit(ReconciliationDecision)({ _tag: "Probably" })._tag).toBe(
+      "Failure",
+    );
+  });
+
+  it.effect("defaults to Uncertain for every open call (fail-closed)", () =>
+    Effect.gen(function* () {
+      const reconciler = yield* ToolReconciler;
+      const decision = yield* reconciler.reconcile(preparedEvidence);
+      expect(decision._tag).toBe("Uncertain");
+    }).pipe(Effect.provide(ToolReconciler.uncertain)),
   );
 });

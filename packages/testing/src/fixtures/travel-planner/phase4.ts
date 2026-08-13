@@ -2,6 +2,7 @@ import { Effect, Layer, Schema } from "effect";
 import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
+import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   CanonicalRecordEnvelope,
   DefinitionDigests,
@@ -95,12 +96,15 @@ export const phase4TravelPlannerSubmitOptions = (
 });
 
 /**
- * The P4 read-only search Tools. They call the same deterministic catalogs as the P1 toolkit but
- * declare their parameters as plain Structs (the exact P1 query fields): the DN coordinator
- * persists each Turn's model-visible prompt canonically, and decoded Tool-call parameters enter
- * that prompt as-is — `Schema.Class` parameter instances do not survive the canonical
- * `PersistedJson` bounds, so a DN toolkit keeps its parameter codecs JSON-plain. Results stay
- * class-typed because history carries their Schema-encoded form.
+ * The P4 read-only search Tools, calling the same deterministic catalogs as the P1 toolkit.
+ *
+ * The plain-Struct parameter shape is a historical remnant of the P4 carry-in workaround: since
+ * the P5 engine fix, official history carries Schema-ENCODED Tool-call parameters, so class-typed
+ * parameter codecs persist canonically too — the Structs simply need no change here. The
+ * `ToolExecutionClass` `readonly` annotation is the deliberate P5 migration (plan §4.3): these
+ * Tools perform no external mutation, so a crash between start and settlement is a free re-run
+ * and they never enter the prepared/settled uncertainty protocol — keeping the P4 canonical
+ * history byte-stable (an unannotated Tool fails closed to `uncertain`).
  */
 export const DurableSearchFlights = Tool.make("search_flights", {
   parameters: Schema.Struct(FlightQuery.fields),
@@ -108,21 +112,21 @@ export const DurableSearchFlights = Tool.make("search_flights", {
   failure: FlightUnavailable,
   failureMode: "error",
   dependencies: [FlightCatalog],
-});
+}).annotate(ToolExecutionClass, "readonly");
 export const DurableSearchLodging = Tool.make("search_lodging", {
   parameters: Schema.Struct(LodgingQuery.fields),
   success: LodgingOption,
   failure: LodgingUnavailable,
   failureMode: "error",
   dependencies: [LodgingCatalog],
-});
+}).annotate(ToolExecutionClass, "readonly");
 export const DurableSearchActivities = Tool.make("search_activities", {
   parameters: Schema.Struct(ActivityQuery.fields),
   success: ActivitySearchResult,
   failure: ActivityUnavailable,
   failureMode: "error",
   dependencies: [ActivityCatalog],
-});
+}).annotate(ToolExecutionClass, "readonly");
 
 export const TravelPlannerPhase4Toolkit = Toolkit.make(
   DurableSearchFlights,

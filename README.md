@@ -13,11 +13,13 @@ The working product thesis is:
 
 This repository contains the product and technical specification plus the completed Phase 0 design
 proof, Phase 1 interpreter, Phase 2 operational local runtime, Phase 3 persistent Conversation
-foundation, and Phase 4 durable Node/SQLite runtime. The workspace includes schema-first Agent
-contracts, one shared `run`/`stream` interpreter, scoped operational capabilities, a narrow local
-sandbox adapter, replayable canonical Conversation records with memory and SQLite adapters, the
-durable Submission Ledger, recovery classifier, and `DurableAgentRuntime` coordinator with the
-Node host assembly, deterministic scripted model Layers, the progressive Travel Planner reference
+foundation, Phase 4 durable Node/SQLite runtime, and Phase 5 durable Tools and joined input. The
+workspace includes schema-first Agent contracts, one shared `run`/`stream` interpreter, scoped
+operational capabilities, a narrow local sandbox adapter, replayable canonical Conversation
+records with memory and SQLite adapters, the durable Submission Ledger, recovery classifier, and
+`DurableAgentRuntime` coordinator with the Node host assembly — now covering prepared/settled
+ordinary Tool records, Unknown Outcomes, Durable Steps, durable approval suspension, and joined
+queued input — deterministic scripted model Layers, the progressive Travel Planner reference
 slice, provider-binding compile examples, and a browser test bench under `examples/demo`.
 
 ## Status
@@ -30,9 +32,9 @@ slice, provider-binding compile examples, and a browser test bench under `exampl
   benches in `examples/*`, and no `apps/`
 - Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
   `storage-memory`, `storage-sqlite`, `platform-node`, and `testing`
-- Current implementation milestone: **Phase 4 complete** (durable Node/SQLite runtime,
-  [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral Subagents implemented**;
-  **Phase 5 next**
+- Current implementation milestone: **Phase 5 complete** (durable Tools and joined input,
+  [evidence](docs/PHASE-5-EVIDENCE.md), on the Phase 4 durable Node/SQLite runtime,
+  [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral Subagents implemented**
 - Subagents: declared attached delegation Tools, the engine spawner seam, and in-memory budget
   reservations are implemented for ephemeral (`E`) execution as the roadmap-assigned proposed
   default ([S1 evidence](docs/S1-EVIDENCE.md)); ADR-0010 remains Proposed and durable attached
@@ -44,9 +46,11 @@ slice, provider-binding compile examples, and a browser test bench under `exampl
   opaque resumable offsets, export, and memory/SQLite Conversation Store Layers
 - Durable runtime: class `DN` on the tested Node/SQLite assembly — durable admission and Receipt,
   FIFO Conversation lanes, fenced Attempts with liveness leases, pure recovery classification,
-  and exactly one Settlement per accepted Submission; recovery resumes at Turn boundaries and may
-  re-invoke the model, so the claim covers safe-to-repeat toolkits only — durable Tools, unknown
-  outcomes, and Steps arrive in Phase 5
+  and exactly one Settlement per accepted Submission; consequential external mutation runs under
+  the Phase 5 uncertainty protocol (prepared/settled ordinary Tool records, Unknown Outcomes with
+  an audited resolution path, Durable Steps, durable approval suspension, and joined queued
+  input); execution stays honestly at-least-once — recovery may re-invoke the model and never
+  claims exactly-once external side effects
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
 Decisions labeled **Proposed** are recommendations, not settled owner decisions.
@@ -73,6 +77,7 @@ interfaces. The specifications below remain the normative design source.
 14. [Phase 2 evidence](docs/PHASE-2-EVIDENCE.md)
 15. [Phase 3 evidence](docs/PHASE-3-EVIDENCE.md)
 16. [Phase 4 evidence](docs/PHASE-4-EVIDENCE.md)
+17. [Phase 5 evidence](docs/PHASE-5-EVIDENCE.md)
 
 ## Detailed specifications
 

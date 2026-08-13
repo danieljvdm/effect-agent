@@ -2,24 +2,35 @@ import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Option, Schema, Stream } from "effect";
 
-import { AgentId, ConversationId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import {
   AdmissionRequest,
+  ApprovalDecisionCommand,
+  ApprovalPendingSuspension,
+  CanonicalSequence,
+  ClaimJoiningRequest,
   ClaimRequest,
   DefinitionDigests,
   DeploymentId,
   Digest,
   IdempotencyKey,
   LedgerError,
+  MarkJoinedRequest,
   MarkReadyRequest,
+  MarkUnknownRequest,
   OwnershipLost,
   OwnershipToken,
   Principal,
   ProducerId,
   RecoverySnapshotRequest,
   RenewOwnershipRequest,
+  ResolutionNeverHappened,
+  RevertJoiningRequest,
   SettlementFinalization,
   SubmissionLedger,
+  SuspendRequest,
+  UnknownResolutionCommand,
+  submissionInputRecordId,
   submissionLedgerConformanceCases,
   submissionSettlementId,
 } from "@effect-agent/session";
@@ -36,6 +47,8 @@ const producerA = Schema.decodeSync(ProducerId)("producer-memory-ledger-a");
 const definitionDigest = Schema.decodeSync(Digest)("e".repeat(64));
 const unknownSubmission = Schema.decodeSync(SubmissionId)("submission-memory-unknown");
 const unknownToken = Schema.decodeSync(OwnershipToken)("ownership-memory-unknown");
+const unknownCall = Schema.decodeSync(ToolCallId)("call-memory-unknown");
+const sequenceOne = Schema.decodeSync(CanonicalSequence)(1);
 const agentDigests = DefinitionDigests.make({
   agent: definitionDigest,
   model: definitionDigest,
@@ -216,6 +229,95 @@ describe("MemorySubmissionLedger", () => {
         expect(snapshotFailure).toMatchObject({
           _tag: "LedgerError",
           operation: "loadRecoverySnapshot",
+        });
+
+        const claimJoiningFailure = yield* ledger
+          .claimJoining(
+            ClaimJoiningRequest.make({
+              conversationId,
+              hostSubmissionId: unknownSubmission,
+              ownershipToken: unknownToken,
+              maxCount: 1,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(claimJoiningFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "claimJoining",
+        });
+
+        const markJoinedFailure = yield* ledger
+          .markJoined(
+            MarkJoinedRequest.make({
+              submissionId: unknownSubmission,
+              ownershipToken: unknownToken,
+              recordId: submissionInputRecordId(unknownSubmission),
+              sequence: sequenceOne,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(markJoinedFailure).toMatchObject({ _tag: "LedgerError", operation: "markJoined" });
+
+        const revertFailure = yield* ledger
+          .revertJoining(RevertJoiningRequest.make({ submissionId: unknownSubmission }))
+          .pipe(Effect.flip);
+        expect(revertFailure).toMatchObject({ _tag: "LedgerError", operation: "revertJoining" });
+
+        const suspendFailure = yield* ledger
+          .suspend(
+            SuspendRequest.make({
+              submissionId: unknownSubmission,
+              ownershipToken: unknownToken,
+              reason: ApprovalPendingSuspension.make({ toolCallIds: [unknownCall] }),
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(suspendFailure).toMatchObject({ _tag: "LedgerError", operation: "suspend" });
+
+        const decisionFailure = yield* ledger
+          .recordApprovalDecision(
+            ApprovalDecisionCommand.make({
+              submissionId: unknownSubmission,
+              toolCallId: unknownCall,
+              decision: "approved",
+              resolver: "memory-ledger-test",
+              reason: "unknown submission",
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(decisionFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "recordApprovalDecision",
+        });
+
+        const markUnknownFailure = yield* ledger
+          .markUnknown(
+            MarkUnknownRequest.make({
+              submissionId: unknownSubmission,
+              toolCallIds: [unknownCall],
+              reason: "unknown submission",
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(markUnknownFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "markUnknown",
+        });
+
+        const resolutionFailure = yield* ledger
+          .recordUnknownResolution(
+            UnknownResolutionCommand.make({
+              submissionId: unknownSubmission,
+              toolCallId: unknownCall,
+              author: "memory-ledger-test",
+              reason: "unknown submission",
+              resolution: ResolutionNeverHappened.make(),
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(resolutionFailure).toMatchObject({
+          _tag: "LedgerError",
+          operation: "recordUnknownResolution",
         });
       }),
     );

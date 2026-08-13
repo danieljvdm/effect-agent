@@ -1,4 +1,4 @@
-import { AgentId, ConversationId, ReceiptId, SubmissionId } from "@effect-agent/core";
+import { AgentId, ConversationId, ReceiptId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import { Clock, Crypto, DateTime, Duration, Effect, Option, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 
@@ -8,25 +8,39 @@ import {
   AdmissionConflict,
   AdmissionRequest,
   AdmissionResult,
+  ApprovalConflict,
+  ApprovalDecisionCommand,
+  ApprovalPendingSuspension,
+  ClaimJoiningRequest,
   ClaimRequest,
   IdempotencyKey,
+  JoinedToHost,
   MarkInputAppliedRequest,
+  MarkJoinedRequest,
   MarkReadyRequest,
+  MarkUnknownRequest,
   OwnershipLost,
+  OwnershipToken,
   Principal,
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
+  ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
+  ResolutionSafeToRetry,
+  RevertJoiningRequest,
   SettlementConflict,
   SettlementFinalization,
   SettlementReservation,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
+  SuspendRequest,
+  UnknownResolutionCommand,
+  UnknownResolutionConflict,
   submissionInputRecordId,
   submissionSettlementId,
   submissionSettlementRecordId,
-  type OwnershipToken,
   type SubmissionLedgerFailure,
 } from "./ledger.ts";
 import {
@@ -75,6 +89,13 @@ const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeSequence = Schema.decodeSync(CanonicalSequence);
+const decodeToolCallId = Schema.decodeSync(ToolCallId);
+
+/** A token that never owned any lane, for ownership-fencing assertions. */
+const BOGUS_TOKEN = Schema.decodeSync(OwnershipToken)("ownership-ledger-conformance-bogus");
+
+const sameJson = (left: unknown, right: unknown): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
 
 const CONFORMANCE_PRINCIPAL = Schema.decodeSync(Principal)("principal-ledger-conformance");
 const OTHER_PRINCIPAL = Schema.decodeSync(Principal)("principal-ledger-conformance-other");
@@ -1158,6 +1179,1033 @@ const recoverySnapshotConsistency = conformanceCase(
     }),
 );
 
+const joiningPrefixClaim = conformanceCase(
+  "claims a contiguous joining prefix and stops at a gap",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-joining-prefix");
+      const ledger = yield* SubmissionLedger;
+
+      const host = yield* admitReady(conversationId, "join-prefix-host", { work: "host" });
+      const second = yield* admitReady(conversationId, "join-prefix-2", { queued: 2 });
+      const third = yield* admitReady(conversationId, "join-prefix-3", { queued: 3 });
+      // Admitted but never marked ready: the gap that breaks the contiguous prefix.
+      const fourth = yield* ledger.admit(
+        yield* admissionRequest(conversationId, "join-prefix-4", { queued: 4 }),
+      );
+      const fifth = yield* admitReady(conversationId, "join-prefix-5", { queued: 5 });
+
+      const hostClaim = yield* expectSome(
+        "the host claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      yield* ensure(
+        hostClaim.submissionId === host.submissionId,
+        "The host must head the lane before joining later work",
+      );
+
+      const foreign = yield* expectFailure(
+        "claiming joining work without owning the host lane",
+        ledger.claimJoining(
+          ClaimJoiningRequest.make({
+            conversationId,
+            hostSubmissionId: host.submissionId,
+            ownershipToken: BOGUS_TOKEN,
+            maxCount: 8,
+          }),
+        ),
+      );
+      yield* ensure(
+        foreign instanceof OwnershipLost,
+        "claimJoining must be fenced by the host's ownership token",
+      );
+
+      const first = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 1,
+        }),
+      );
+      yield* ensure(
+        first.length === 1 &&
+          first[0].submissionId === second.submissionId &&
+          first[0].queueSequence === second.queueSequence &&
+          sameJson(first[0].inputPayload, { queued: 2 }),
+        "maxCount must bound the claim to exactly the next queued Submission with its input",
+      );
+
+      const rest = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+      yield* ensure(
+        rest.length === 1 && rest[0].submissionId === third.submissionId,
+        "A repeated claim must skip already-joining rows and stop at the admitted gap",
+      );
+
+      const blocked = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+      yield* ensure(
+        blocked.length === 0,
+        "An admitted-not-ready row must break the contiguous prefix and hide later ready work",
+      );
+
+      const secondState = yield* expectSome(
+        "lookup of a claimed joining Submission",
+        yield* lookupById(second.submissionId),
+      );
+      const fourthState = yield* expectSome(
+        "lookup of the gap Submission",
+        yield* lookupById(fourth.submissionId),
+      );
+      const fifthState = yield* expectSome(
+        "lookup of the ready Submission after the gap",
+        yield* lookupById(fifth.submissionId),
+      );
+      yield* ensure(
+        secondState.state === "joining" &&
+          fourthState.state === "admitted" &&
+          fifthState.state === "ready",
+        "Claiming must transition exactly the claimed prefix to joining",
+      );
+
+      const hostSnapshot = yield* recoverySnapshot(host.submissionId);
+      yield* ensure(
+        hostSnapshot.joins.length === 2 &&
+          hostSnapshot.joins[0].submissionId === second.submissionId &&
+          hostSnapshot.joins[0].state === "joining" &&
+          hostSnapshot.joins[0].hostSubmissionId === host.submissionId &&
+          hostSnapshot.joins[1].submissionId === third.submissionId,
+        "The host recovery snapshot must expose the claimed prefix in queue order",
+      );
+      const joinedSide = yield* recoverySnapshot(second.submissionId);
+      yield* ensure(
+        joinedSide.hostSubmissionId === host.submissionId,
+        "A joining Submission's recovery snapshot must expose its host linkage",
+      );
+
+      yield* ledger.markReady(MarkReadyRequest.make({ submissionId: fourth.submissionId }));
+      const afterGap = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+      yield* ensure(
+        afterGap.length === 2 &&
+          afterGap[0].submissionId === fourth.submissionId &&
+          afterGap[1].submissionId === fifth.submissionId,
+        "Once the gap closes, the claim must extend past already-claimed rows in queue order",
+      );
+    }),
+);
+
+const revertJoiningReturnsToReady = conformanceCase(
+  "revertJoining returns exactly the pre-append claims to ready",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-revert-joining");
+      const ledger = yield* SubmissionLedger;
+
+      const host = yield* admitReady(conversationId, "revert-host", { work: "host" });
+      const second = yield* admitReady(conversationId, "revert-2", { queued: 2 });
+      const third = yield* admitReady(conversationId, "revert-3", { queued: 3 });
+      const hostClaim = yield* expectSome(
+        "the host claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+
+      const claims = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+      yield* ensure(claims.length === 2, "Both queued Submissions must join the host's prefix");
+
+      // third's canonical input is appended; second's never is.
+      yield* ledger.markJoined(
+        MarkJoinedRequest.make({
+          submissionId: third.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          recordId: submissionInputRecordId(third.submissionId),
+          sequence: decodeSequence(7),
+        }),
+      );
+
+      yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: second.submissionId }));
+      const reverted = yield* expectSome(
+        "lookup after revert",
+        yield* lookupById(second.submissionId),
+      );
+      yield* ensure(
+        reverted.state === "ready",
+        "Reverting a pre-append joining Submission must return it to ready",
+      );
+      const revertedSnapshot = yield* recoverySnapshot(second.submissionId);
+      yield* ensure(
+        revertedSnapshot.hostSubmissionId === undefined,
+        "Reverting must clear the host linkage",
+      );
+      const hostSnapshot = yield* recoverySnapshot(host.submissionId);
+      yield* ensure(
+        hostSnapshot.joins.length === 1 &&
+          hostSnapshot.joins[0].submissionId === third.submissionId &&
+          hostSnapshot.joins[0].state === "joined",
+        "The reverted Submission must leave the host's join view",
+      );
+
+      yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: second.submissionId }));
+      const stillReady = yield* expectSome(
+        "lookup after repeating the revert",
+        yield* lookupById(second.submissionId),
+      );
+      yield* ensure(stillReady.state === "ready", "Repeating revertJoining must be a no-op");
+
+      // A post-append joined Submission must NOT revert (DUR-016: it reattaches instead).
+      yield* ledger.revertJoining(RevertJoiningRequest.make({ submissionId: third.submissionId }));
+      const joined = yield* expectSome(
+        "lookup of the joined Submission after an attempted revert",
+        yield* lookupById(third.submissionId),
+      );
+      yield* ensure(
+        joined.state === "joined",
+        "revertJoining must be a no-op for an already-joined Submission",
+      );
+
+      const reclaimed = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+      yield* ensure(
+        reclaimed.length === 1 && reclaimed[0].submissionId === second.submissionId,
+        "A reverted Submission must be claimable again exactly once",
+      );
+    }),
+);
+
+const markJoinedIdempotency = conformanceCase(
+  "markJoined is idempotent and repairable from history",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-mark-joined");
+      const ledger = yield* SubmissionLedger;
+
+      const host = yield* admitReady(conversationId, "mark-joined-host", { work: "host" });
+      const second = yield* admitReady(conversationId, "mark-joined-2", { queued: 2 });
+      const third = yield* admitReady(conversationId, "mark-joined-3", { queued: 3 });
+      const hostClaim = yield* expectSome(
+        "the host claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+
+      const marker = MarkJoinedRequest.make({
+        submissionId: second.submissionId,
+        ownershipToken: hostClaim.ownershipToken,
+        recordId: submissionInputRecordId(second.submissionId),
+        sequence: decodeSequence(4),
+      });
+      yield* ledger.markJoined(marker);
+      const joined = yield* expectSome(
+        "lookup after marking joined",
+        yield* lookupById(second.submissionId),
+      );
+      yield* ensure(
+        joined.state === "joined",
+        "Marking the canonical input position must transition joining to joined",
+      );
+
+      yield* ledger.markJoined(marker);
+      const snapshot = yield* recoverySnapshot(second.submissionId);
+      yield* ensure(
+        snapshot.submission.state === "joined" &&
+          snapshot.hostSubmissionId === host.submissionId &&
+          snapshot.inputApplied !== undefined &&
+          snapshot.inputApplied.recordId === marker.recordId &&
+          snapshot.inputApplied.sequence === marker.sequence,
+        "Repeating the identical join marker must be a no-op with the marker retained",
+      );
+
+      const divergent = yield* expectFailure(
+        "re-marking with a different canonical position",
+        ledger.markJoined(
+          MarkJoinedRequest.make({
+            submissionId: second.submissionId,
+            ownershipToken: hostClaim.ownershipToken,
+            recordId: marker.recordId,
+            sequence: decodeSequence(5),
+          }),
+        ),
+      );
+      yield* ensure(
+        !(divergent instanceof OwnershipLost),
+        "A divergent join marker must fail as a ledger integrity error, not ownership loss",
+      );
+
+      const stale = yield* expectFailure(
+        "marking joined without owning the host lane",
+        ledger.markJoined(
+          MarkJoinedRequest.make({
+            submissionId: third.submissionId,
+            ownershipToken: BOGUS_TOKEN,
+            recordId: submissionInputRecordId(third.submissionId),
+            sequence: decodeSequence(6),
+          }),
+        ),
+      );
+      yield* ensure(
+        stale instanceof OwnershipLost,
+        "markJoined must be fenced by the host's ownership",
+      );
+
+      // Repairable from history: the host Attempt dies and a later host Attempt repairs the
+      // lost marker under its fresh ownership token (DUR-016).
+      yield* ledger.releaseOwnership(
+        ReleaseOwnershipRequest.make({
+          submissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+        }),
+      );
+      const reclaim = yield* expectSome(
+        "the host reclaim after release",
+        yield* claimLane(conversationId, PRODUCER_B),
+      );
+      yield* ensure(
+        reclaim.submissionId === host.submissionId &&
+          reclaim.producerEpoch > hostClaim.producerEpoch,
+        "The host must be reclaimable while its joined work is pending",
+      );
+      const superseded = yield* expectFailure(
+        "repairing the marker with the superseded host token",
+        ledger.markJoined(
+          MarkJoinedRequest.make({
+            submissionId: third.submissionId,
+            ownershipToken: hostClaim.ownershipToken,
+            recordId: submissionInputRecordId(third.submissionId),
+            sequence: decodeSequence(6),
+          }),
+        ),
+      );
+      yield* ensure(
+        superseded instanceof OwnershipLost,
+        "A superseded host token must not repair a join marker",
+      );
+      yield* ledger.markJoined(
+        MarkJoinedRequest.make({
+          submissionId: third.submissionId,
+          ownershipToken: reclaim.ownershipToken,
+          recordId: submissionInputRecordId(third.submissionId),
+          sequence: decodeSequence(6),
+        }),
+      );
+      const repaired = yield* expectSome(
+        "lookup after the repair",
+        yield* lookupById(third.submissionId),
+      );
+      yield* ensure(
+        repaired.state === "joined",
+        "A later host Attempt must repair the lost join marker from history",
+      );
+    }),
+);
+
+const claimNeverGrantsBlockedHead = conformanceCase(
+  "claim never grants a suspended, unknown, joining, or joined head",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const ledger = yield* SubmissionLedger;
+
+      // joining head: the host settled while a claimed-but-unappended join was pending.
+      const joiningLane = decodeConversationId("ledger-conformance-head-joining");
+      const joiningHost = yield* admitReady(joiningLane, "head-joining-host", { work: "host" });
+      const joiningSub = yield* admitReady(joiningLane, "head-joining-2", { queued: 2 });
+      yield* admitReady(joiningLane, "head-joining-3", { queued: 3 });
+      const joiningHostClaim = yield* expectSome(
+        "the joining lane's host claim",
+        yield* claimLane(joiningLane, PRODUCER_A),
+      );
+      yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId: joiningLane,
+          hostSubmissionId: joiningHost.submissionId,
+          ownershipToken: joiningHostClaim.ownershipToken,
+          maxCount: 1,
+        }),
+      );
+      yield* settleClaimed(joiningHost, joiningHostClaim.ownershipToken);
+      yield* ensure(
+        Option.isNone(yield* claimLane(joiningLane, PRODUCER_B)),
+        "A joining head must block the lane; later ready work is never skipped past it",
+      );
+      yield* ledger.revertJoining(
+        RevertJoiningRequest.make({ submissionId: joiningSub.submissionId }),
+      );
+      const afterRevert = yield* expectSome(
+        "the claim after reverting the joining head",
+        yield* claimLane(joiningLane, PRODUCER_B),
+      );
+      yield* ensure(
+        afterRevert.submissionId === joiningSub.submissionId,
+        "Reverting the joining head must make it claimable in FIFO order",
+      );
+
+      // joined head: the host settled between its finalization and the joined settlement.
+      const joinedLane = decodeConversationId("ledger-conformance-head-joined");
+      const joinedHost = yield* admitReady(joinedLane, "head-joined-host", { work: "host" });
+      const joinedSub = yield* admitReady(joinedLane, "head-joined-2", { queued: 2 });
+      const joinedHostClaim = yield* expectSome(
+        "the joined lane's host claim",
+        yield* claimLane(joinedLane, PRODUCER_A),
+      );
+      yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId: joinedLane,
+          hostSubmissionId: joinedHost.submissionId,
+          ownershipToken: joinedHostClaim.ownershipToken,
+          maxCount: 1,
+        }),
+      );
+      yield* ledger.markJoined(
+        MarkJoinedRequest.make({
+          submissionId: joinedSub.submissionId,
+          ownershipToken: joinedHostClaim.ownershipToken,
+          recordId: submissionInputRecordId(joinedSub.submissionId),
+          sequence: decodeSequence(3),
+        }),
+      );
+      const joinedAbort = yield* expectFailure(
+        "aborting a joined Submission",
+        ledger.requestAbort(
+          AbortCommand.make({
+            submissionId: joinedSub.submissionId,
+            author: "conformance-operator",
+            reason: "joined abort target",
+          }),
+        ),
+      );
+      yield* ensure(
+        joinedAbort instanceof JoinedToHost &&
+          joinedAbort.hostSubmissionId === joinedHost.submissionId,
+        "Abort of a joined Submission must fail with the host linkage — the abort target is the host",
+      );
+      yield* settleClaimed(joinedHost, joinedHostClaim.ownershipToken);
+      yield* ensure(
+        Option.isNone(yield* claimLane(joinedLane, PRODUCER_B)),
+        "A joined head must block the lane; it settles with the host, never with a worker claim",
+      );
+
+      // suspended head: durable approval waiting consumes no worker permit.
+      const suspendedLane = decodeConversationId("ledger-conformance-head-suspended");
+      const suspendedHost = yield* admitReady(suspendedLane, "head-suspended-host", {
+        work: "host",
+      });
+      const suspendedClaim = yield* expectSome(
+        "the suspended lane's claim",
+        yield* claimLane(suspendedLane, PRODUCER_A),
+      );
+      const gatedCall = decodeToolCallId("call-head-suspended");
+      const suspendOutcome = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: suspendedHost.submissionId,
+          ownershipToken: suspendedClaim.ownershipToken,
+          reason: ApprovalPendingSuspension.make({ toolCallIds: [gatedCall] }),
+        }),
+      );
+      yield* ensure(suspendOutcome === "suspended", "An undecided approval must suspend durably");
+      yield* ensure(
+        Option.isNone(yield* claimLane(suspendedLane, PRODUCER_B)),
+        "A suspended head must produce no claim",
+      );
+      yield* ledger.recordApprovalDecision(
+        ApprovalDecisionCommand.make({
+          submissionId: suspendedHost.submissionId,
+          toolCallId: gatedCall,
+          decision: "approved",
+          resolver: "conformance-approver",
+          reason: "unblock the suspended head",
+        }),
+      );
+      const wokenClaim = yield* expectSome(
+        "the claim after the covering decision",
+        yield* claimLane(suspendedLane, PRODUCER_B),
+      );
+      yield* ensure(
+        wokenClaim.submissionId === suspendedHost.submissionId &&
+          wokenClaim.producerEpoch > suspendedClaim.producerEpoch,
+        "A covering decision must wake the lane for a fresh fenced Attempt",
+      );
+
+      // unknown head: the DUR-017 blocked lane outlives lease expiry.
+      const unknownLane = decodeConversationId("ledger-conformance-head-unknown");
+      const unknownHost = yield* admitReady(unknownLane, "head-unknown-host", { work: "host" });
+      const unknownClaim = yield* expectSome(
+        "the unknown lane's claim",
+        yield* claimLane(unknownLane, PRODUCER_A),
+      );
+      const unknownCall = decodeToolCallId("call-head-unknown");
+      yield* ledger.markUnknown(
+        MarkUnknownRequest.make({
+          submissionId: unknownHost.submissionId,
+          toolCallIds: [unknownCall],
+          reason: "an ordinary call may have executed",
+        }),
+      );
+      yield* advancePastLease(unknownClaim.leaseExpiresAt);
+      yield* ensure(
+        Option.isNone(yield* claimLane(unknownLane, PRODUCER_B)),
+        "An unknown head must stay blocked even after the stale lease expires",
+      );
+      yield* ledger.recordUnknownResolution(
+        UnknownResolutionCommand.make({
+          submissionId: unknownHost.submissionId,
+          toolCallId: unknownCall,
+          author: "conformance-operator",
+          reason: "supplier store shows no effect",
+          resolution: ResolutionNeverHappened.make(),
+        }),
+      );
+      const reopened = yield* expectSome(
+        "the claim after the covering resolution",
+        yield* claimLane(unknownLane, PRODUCER_B),
+      );
+      yield* ensure(
+        reopened.submissionId === unknownHost.submissionId,
+        "A covering resolution must reopen the blocked lane",
+      );
+    }),
+);
+
+const approvalDecisionIdempotency = conformanceCase(
+  "approval decisions are idempotent and conflict on divergence",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-approval");
+      const ledger = yield* SubmissionLedger;
+      const admitted = yield* admitReady(conversationId, "approval-key-1", { work: "approve" });
+      const claim = yield* expectSome(
+        "the claim before decisions",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      const callA = decodeToolCallId("call-approval-a");
+      const callB = decodeToolCallId("call-approval-b");
+
+      const first = yield* ledger.recordApprovalDecision(
+        ApprovalDecisionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: callA,
+          decision: "approved",
+          resolver: "conformance-approver",
+          reason: "policy allows the booking",
+        }),
+      );
+      yield* ensure(
+        first.decision === "approved" && first.toolCallId === callA,
+        "The first decision must record the intent",
+      );
+
+      yield* TestClock.adjust("1 second");
+      const replayed = yield* ledger.recordApprovalDecision(
+        ApprovalDecisionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: callA,
+          decision: "approved",
+          resolver: "conformance-approver-second",
+          reason: "a different reason text",
+        }),
+      );
+      yield* ensure(
+        replayed.reason === first.reason &&
+          replayed.resolver === first.resolver &&
+          sameInstant(replayed.decidedAt, first.decidedAt),
+        "Repeating the same decision must replay the recorded intent unchanged",
+      );
+
+      const conflict = yield* expectFailure(
+        "re-deciding the same call divergently",
+        ledger.recordApprovalDecision(
+          ApprovalDecisionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: callA,
+            decision: "denied",
+            resolver: "conformance-approver",
+            reason: "changed my mind",
+          }),
+        ),
+      );
+      yield* ensure(
+        conflict instanceof ApprovalConflict &&
+          conflict.toolCallId === callA &&
+          conflict.existingDecision === "approved",
+        "A divergent re-decision must conflict with the recorded decision",
+      );
+
+      yield* ledger.recordApprovalDecision(
+        ApprovalDecisionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: callB,
+          decision: "denied",
+          resolver: "conformance-approver",
+          reason: "policy denies the cancellation",
+        }),
+      );
+      const snapshot = yield* recoverySnapshot(admitted.submissionId);
+      yield* ensure(
+        snapshot.approvalDecisions.length === 2 &&
+          snapshot.approvalDecisions.some(
+            (intent) => intent.toolCallId === callA && intent.decision === "approved",
+          ) &&
+          snapshot.approvalDecisions.some(
+            (intent) => intent.toolCallId === callB && intent.decision === "denied",
+          ),
+        "The recovery snapshot must expose every recorded decision intent",
+      );
+
+      yield* settleClaimed(admitted, claim.ownershipToken);
+      const late = yield* expectFailure(
+        "deciding an approval for a settled Submission",
+        ledger.recordApprovalDecision(
+          ApprovalDecisionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: decodeToolCallId("call-approval-late"),
+            decision: "approved",
+            resolver: "conformance-approver",
+            reason: "too late",
+          }),
+        ),
+      );
+      yield* ensure(
+        late instanceof SettlementConflict && late.existingOutcome === "completed",
+        "A decision must never land on a settled Submission",
+      );
+    }),
+);
+
+const unknownResolutionLifecycle = conformanceCase(
+  "unknown resolutions reopen the lane only when no open call remains",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-unknown");
+      const ledger = yield* SubmissionLedger;
+      const admitted = yield* admitReady(conversationId, "unknown-key-1", { work: "unknown" });
+      const claim = yield* expectSome(
+        "the claim before the unknown marking",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      const call1 = decodeToolCallId("call-unknown-1");
+      const call2 = decodeToolCallId("call-unknown-2");
+      const call3 = decodeToolCallId("call-unknown-3");
+
+      const marking = MarkUnknownRequest.make({
+        submissionId: admitted.submissionId,
+        toolCallIds: [call1, call2],
+        reason: "the worker died during two supplier calls",
+      });
+      yield* ledger.markUnknown(marking);
+      yield* ledger.markUnknown(marking);
+      const marked = yield* expectSome(
+        "lookup after marking unknown",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        marked.state === "unknown",
+        "Marking unknown must be idempotent and block the lane",
+      );
+
+      yield* advancePastLease(claim.leaseExpiresAt);
+      yield* ensure(
+        Option.isNone(yield* claimLane(conversationId, PRODUCER_B)),
+        "An unknown lane must consume no worker permit",
+      );
+
+      const first = yield* ledger.recordUnknownResolution(
+        UnknownResolutionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: call1,
+          author: "conformance-operator",
+          reason: "supplier store shows no booking",
+          resolution: ResolutionNeverHappened.make(),
+        }),
+      );
+      const partiallyResolved = yield* expectSome(
+        "lookup after a partial resolution",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        partiallyResolved.state === "unknown" &&
+          Option.isNone(yield* claimLane(conversationId, PRODUCER_B)),
+        "A partial resolution must keep the lane blocked while calls remain open",
+      );
+
+      yield* TestClock.adjust("1 second");
+      const divergent = yield* expectFailure(
+        "re-resolving the same call divergently",
+        ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: call1,
+            author: "conformance-operator",
+            reason: "changed my mind",
+            resolution: ResolutionSafeToRetry.make(),
+          }),
+        ),
+      );
+      yield* ensure(
+        divergent instanceof UnknownResolutionConflict && divergent.toolCallId === call1,
+        "A divergent re-resolution must conflict",
+      );
+      const replayed = yield* ledger.recordUnknownResolution(
+        UnknownResolutionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: call1,
+          author: "conformance-operator-second",
+          reason: "a different reason text",
+          resolution: ResolutionNeverHappened.make(),
+        }),
+      );
+      yield* ensure(
+        sameInstant(replayed.resolvedAt, first.resolvedAt) && replayed.reason === first.reason,
+        "Repeating the same resolution must replay the recorded intent unchanged",
+      );
+
+      // A later marking extends the open set; the lane must not reopen until it is covered too.
+      yield* ledger.markUnknown(
+        MarkUnknownRequest.make({
+          submissionId: admitted.submissionId,
+          toolCallIds: [call3],
+          reason: "a second wave of uncertainty",
+        }),
+      );
+      yield* ledger.recordUnknownResolution(
+        UnknownResolutionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: call2,
+          author: "conformance-operator",
+          reason: "supplier confirmed the booking",
+          resolution: ResolutionCompletedWithResult.make({
+            result: { bookingRef: "booking-1" },
+            isFailure: false,
+          }),
+        }),
+      );
+      const stillBlocked = yield* expectSome(
+        "lookup while the extended set stays open",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        stillBlocked.state === "unknown" &&
+          Option.isNone(yield* claimLane(conversationId, PRODUCER_B)),
+        "The lane must stay blocked while any marked call lacks a resolution",
+      );
+
+      yield* ledger.recordUnknownResolution(
+        UnknownResolutionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: call3,
+          author: "conformance-operator",
+          reason: "idempotency key covers a repeat",
+          resolution: ResolutionSafeToRetry.make(),
+        }),
+      );
+      const reopenedState = yield* expectSome(
+        "lookup after the covering resolution",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        reopenedState.state === "input-applied",
+        "Covering every marked call must reopen the lane as input-applied",
+      );
+      const snapshot = yield* recoverySnapshot(admitted.submissionId);
+      yield* ensure(
+        snapshot.unknownResolutions.length === 3,
+        "The recovery snapshot must expose every recorded resolution intent",
+      );
+      const reclaim = yield* expectSome(
+        "the claim after the lane reopened",
+        yield* claimLane(conversationId, PRODUCER_B),
+      );
+      yield* ensure(
+        reclaim.submissionId === admitted.submissionId &&
+          reclaim.producerEpoch > claim.producerEpoch,
+        "The reopened lane must grant a fresh fenced Attempt",
+      );
+
+      yield* settleClaimed(admitted, reclaim.ownershipToken);
+      const late = yield* expectFailure(
+        "resolving an unknown call for a settled Submission",
+        ledger.recordUnknownResolution(
+          UnknownResolutionCommand.make({
+            submissionId: admitted.submissionId,
+            toolCallId: decodeToolCallId("call-unknown-late"),
+            author: "conformance-operator",
+            reason: "too late",
+            resolution: ResolutionNeverHappened.make(),
+          }),
+        ),
+      );
+      yield* ensure(
+        late instanceof SettlementConflict,
+        "A resolution must never land on a settled Submission",
+      );
+    }),
+);
+
+const suspendResumesImmediatelyWhenDecided = conformanceCase(
+  "suspend with an already-present decision resumes immediately",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-suspend");
+      const ledger = yield* SubmissionLedger;
+      const admitted = yield* admitReady(conversationId, "suspend-key-1", { work: "suspend" });
+      const claim = yield* expectSome(
+        "the claim before suspension",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      const callA = decodeToolCallId("call-suspend-a");
+      const callB = decodeToolCallId("call-suspend-b");
+
+      const foreign = yield* expectFailure(
+        "suspending without owning the lane",
+        ledger.suspend(
+          SuspendRequest.make({
+            submissionId: admitted.submissionId,
+            ownershipToken: BOGUS_TOKEN,
+            reason: ApprovalPendingSuspension.make({ toolCallIds: [callA] }),
+          }),
+        ),
+      );
+      yield* ensure(foreign instanceof OwnershipLost, "suspend must be fenced by the owning token");
+
+      // The decision raced ahead of the suspend transaction (plan §2.6).
+      yield* ledger.recordApprovalDecision(
+        ApprovalDecisionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: callA,
+          decision: "approved",
+          resolver: "conformance-approver",
+          reason: "decided before the suspend committed",
+        }),
+      );
+      const immediate = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: admitted.submissionId,
+          ownershipToken: claim.ownershipToken,
+          reason: ApprovalPendingSuspension.make({ toolCallIds: [callA] }),
+        }),
+      );
+      yield* ensure(
+        immediate === "resume-immediately",
+        "A fully-decided suspension reason must resume immediately",
+      );
+      const notSuspended = yield* expectSome(
+        "lookup after the immediate resume",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        notSuspended.state === "running",
+        "An immediate resume must not transition the Submission to suspended",
+      );
+      // The ownership period must survive an immediate resume: the caller keeps working.
+      yield* ledger.renewOwnership(
+        RenewOwnershipRequest.make({
+          submissionId: admitted.submissionId,
+          ownershipToken: claim.ownershipToken,
+        }),
+      );
+
+      const suspended = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: admitted.submissionId,
+          ownershipToken: claim.ownershipToken,
+          reason: ApprovalPendingSuspension.make({ toolCallIds: [callA, callB] }),
+        }),
+      );
+      yield* ensure(
+        suspended === "suspended",
+        "An undecided call in the reason must suspend durably",
+      );
+      const suspendedState = yield* expectSome(
+        "lookup after the suspension",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(suspendedState.state === "suspended", "The suspension must be durable");
+      const suspendedSnapshot = yield* recoverySnapshot(admitted.submissionId);
+      yield* ensure(
+        suspendedSnapshot.suspension !== undefined &&
+          suspendedSnapshot.suspension.reason._tag === "ApprovalPending" &&
+          suspendedSnapshot.suspension.reason.toolCallIds.length === 2 &&
+          suspendedSnapshot.approvalDecisions.length === 1,
+        "The recovery snapshot must expose the suspension reason and prior decisions",
+      );
+      const ended = yield* expectFailure(
+        "renewing after the suspension ended the ownership period",
+        ledger.renewOwnership(
+          RenewOwnershipRequest.make({
+            submissionId: admitted.submissionId,
+            ownershipToken: claim.ownershipToken,
+          }),
+        ),
+      );
+      yield* ensure(
+        ended instanceof OwnershipLost,
+        "Suspension must end the ownership period without settling",
+      );
+
+      yield* ledger.recordApprovalDecision(
+        ApprovalDecisionCommand.make({
+          submissionId: admitted.submissionId,
+          toolCallId: callB,
+          decision: "denied",
+          resolver: "conformance-approver",
+          reason: "the covering decision",
+        }),
+      );
+      const woken = yield* expectSome(
+        "lookup after the covering decision",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        woken.state === "input-applied",
+        "The covering decision must wake the suspended lane",
+      );
+      const wokenSnapshot = yield* recoverySnapshot(admitted.submissionId);
+      yield* ensure(
+        wokenSnapshot.suspension === undefined,
+        "Waking must clear the durable suspension",
+      );
+
+      const reclaim = yield* expectSome(
+        "the claim after waking",
+        yield* claimLane(conversationId, PRODUCER_B),
+      );
+      yield* settleClaimed(admitted, reclaim.ownershipToken);
+      const terminal = yield* expectFailure(
+        "suspending a settled Submission",
+        ledger.suspend(
+          SuspendRequest.make({
+            submissionId: admitted.submissionId,
+            ownershipToken: reclaim.ownershipToken,
+            reason: ApprovalPendingSuspension.make({ toolCallIds: [callA] }),
+          }),
+        ),
+      );
+      yield* ensure(
+        terminal instanceof SettlementConflict && terminal.existingOutcome === "completed",
+        "Suspension must never land on a settled Submission",
+      );
+    }),
+);
+
+const joinedSettlementLinkageAuthority = conformanceCase(
+  "a joined Submission's settlement reservation is authorized by host linkage",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-joined-settlement");
+      const ledger = yield* SubmissionLedger;
+
+      const host = yield* admitReady(conversationId, "joined-settle-host", { work: "host" });
+      const queued = yield* admitReady(conversationId, "joined-settle-2", { queued: 2 });
+      const hostClaim = yield* expectSome(
+        "the host claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      const claims = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 1,
+        }),
+      );
+      yield* ensure(
+        claims.length === 1 && claims[0]?.submissionId === queued.submissionId,
+        "The queued Submission must join the host's contiguous prefix",
+      );
+
+      // A merely-`joining` Submission is still revertible: its reservation stays fenced by
+      // lane ownership like any other row.
+      const joiningReservation = yield* settlementReservation({
+        submissionId: queued.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: queued.receiptId,
+        outcome: "completed",
+      });
+      const fenced = yield* expectFailure(
+        "reserving a joining Submission's settlement without lane ownership",
+        ledger.reserveSettlement(joiningReservation),
+      );
+      yield* ensure(
+        fenced instanceof OwnershipLost,
+        "A joining Submission's settlement reservation must stay ownership-fenced",
+      );
+
+      yield* ledger.markJoined(
+        MarkJoinedRequest.make({
+          submissionId: queued.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          recordId: submissionInputRecordId(queued.submissionId),
+          sequence: decodeSequence(7),
+        }),
+      );
+      // A `joined` lane is never worker-claimable, so no ownership token can exist for it:
+      // the recorded host linkage authorizes the reservation and the presented token is not
+      // consulted (plan §2.5 — the coordinator's joined-settlement loop and the
+      // SettleJoinedWithHost recovery executor both rely on this).
+      const joinedReservation = yield* settlementReservation({
+        submissionId: queued.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: queued.receiptId,
+        outcome: "completed",
+      });
+      yield* ledger.reserveSettlement(joinedReservation);
+      const settlement = yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: queued.submissionId,
+          settlementId: submissionSettlementId(queued.submissionId),
+        }),
+      );
+      yield* ensure(
+        settlement.outcome === "completed",
+        "The joined settlement must finalize with the reserved outcome",
+      );
+      const settled = yield* expectSome(
+        "lookup after the joined settlement",
+        yield* lookupById(queued.submissionId),
+      );
+      yield* ensure(
+        settled.state === "settled" && settled.settledOutcome === "completed",
+        "The joined Submission must settle terminally",
+      );
+    }),
+);
+
 /**
  * The shared, adapter-parameterized SubmissionLedger contract suite (STORE-010). Every durable
  * ledger adapter test suite must execute each case against its own ledger provisioning, inside
@@ -1176,4 +2224,12 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   scanNonterminalWorklist,
   lookupByIdAndKey,
   recoverySnapshotConsistency,
+  joiningPrefixClaim,
+  revertJoiningReturnsToReady,
+  markJoinedIdempotency,
+  claimNeverGrantsBlockedHead,
+  approvalDecisionIdempotency,
+  unknownResolutionLifecycle,
+  suspendResumesImmediatelyWhenDecided,
+  joinedSettlementLinkageAuthority,
 ];

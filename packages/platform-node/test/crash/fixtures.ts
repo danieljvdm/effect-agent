@@ -1,14 +1,22 @@
-import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
+import * as fs from "node:fs";
+
+import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
+import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
 import {
   DefinitionDigests,
   Digest,
   IdempotencyKey,
   Principal,
   Receipt,
+  ReconciliationCompleted,
+  ReconciliationNeverStarted,
+  ReconciliationSafeToRetry,
+  ReconciliationUncertain,
   Settlement,
+  ToolReconciler,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
-import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 /**
@@ -28,6 +36,9 @@ export const CrashEnv = {
   leaseMillis: "EFFECT_AGENT_LEASE_MS",
   markerFile: "EFFECT_AGENT_MARKER_FILE",
   releaseFile: "EFFECT_AGENT_RELEASE_FILE",
+  supplierDir: "EFFECT_AGENT_SUPPLIER_DIR",
+  killRequiresSupplier: "EFFECT_AGENT_KILL_REQUIRES_SUPPLIER",
+  decision: "EFFECT_AGENT_DECISION",
 } as const;
 
 /**
@@ -42,6 +53,19 @@ export const CrashEnv = {
  *   `EFFECT_AGENT_RELEASE_FILE` appears (writing `EFFECT_AGENT_MARKER_FILE` first).
  * - `abort-active` — submit, then block inside Turn 1's model stream forever (marker written),
  *   waiting to be aborted through the durable ledger.
+ * - `run-uncertain` — submit, then drain with the UNANNOTATED (fail-closed `uncertain`) book
+ *   Tool whose handler writes the file-backed supplier store; with `EFFECT_AGENT_MARKER_FILE`
+ *   set the handler books, touches the marker, and blocks forever (SIGKILL mid-handler row).
+ * - `run-idempotent` — same flow with the `idempotent`-annotated book Tool.
+ * - `suspend-approval` — same flow with the approval-gated book Tool (`needsApproval: true`).
+ * - `run-steps` — submit, then drain the Durable Tool `itinerary` (two named Steps, each
+ *   recording its supplier call).
+ * - `run-join` — submit a host and one queued Submission, then drain; with
+ *   `EFFECT_AGENT_MARKER_FILE` set the model blocks forever after the join (marker written).
+ * - `resolve-approval` — second-process driver: look the Submission up by key and record the
+ *   durable `resolveApproval` intent named by `EFFECT_AGENT_DECISION`.
+ * - `resolve-unknown` — second-process driver: record `resolveUnknown(NeverHappened)` for the
+ *   book Tool Call through the shared ledger.
  */
 export const CrashScenario = Schema.Literals([
   "submit",
@@ -50,6 +74,13 @@ export const CrashScenario = Schema.Literals([
   "run-two",
   "run-blocked",
   "abort-active",
+  "run-uncertain",
+  "run-idempotent",
+  "suspend-approval",
+  "run-steps",
+  "run-join",
+  "resolve-approval",
+  "resolve-unknown",
 ]);
 export type CrashScenario = typeof CrashScenario.Type;
 
@@ -63,6 +94,8 @@ export const CHILD_PRODUCER_ID = "producer-crash-child";
 export const HOST_PRODUCER_ID = "producer-crash-host";
 /** The canonical question; both sides must submit the exact same payload for digest replay. */
 export const CRASH_QUESTION = "does accepted work survive a process kill?";
+/** Distinct queued-input payload for join rows so prompt coverage is countable from records. */
+export const JOIN_QUESTION = "please fold in the queued follow-up constraint";
 export const CHILD_ANSWER = '{"answer":"child"}';
 export const STALE_ANSWER = '{"answer":"stale"}';
 export const FRESH_ANSWER = '{"answer":"fresh"}';
@@ -73,6 +106,7 @@ export const CRASH_PRINCIPAL = Schema.decodeSync(Principal)("principal-crash");
 
 export const decodeConversationId = Schema.decodeSync(ConversationId);
 export const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
+export const decodeToolCallId = Schema.decodeSync(ToolCallId);
 
 export const crashSubmitOptions = (
   conversationId: string,
@@ -105,6 +139,97 @@ export const toolCallParts: ReadonlyArray<Response.StreamPartEncoded> = [
   },
   { type: "finish", reason: "tool-calls", usage },
 ];
+
+export const BOOK_CALL_ID = "book-1";
+export const BOOK_REF = "crash-booking";
+
+export const bookToolCallParts: ReadonlyArray<Response.StreamPartEncoded> = [
+  {
+    type: "tool-call",
+    id: BOOK_CALL_ID,
+    name: "book",
+    params: { ref: BOOK_REF },
+    providerExecuted: false,
+  },
+  { type: "finish", reason: "tool-calls", usage },
+];
+
+export const ITINERARY_CALL_ID = "itinerary-1";
+export const STEP_REF = "crash-trip";
+
+export const itineraryToolCallParts: ReadonlyArray<Response.StreamPartEncoded> = [
+  {
+    type: "tool-call",
+    id: ITINERARY_CALL_ID,
+    name: "itinerary",
+    params: { ref: STEP_REF },
+    providerExecuted: false,
+  },
+  { type: "finish", reason: "tool-calls", usage },
+];
+
+/**
+ * File-backed external supplier store shared by the child worker processes and the harness
+ * (plan §4.3 "supplier-marker files"). Every handler/Step invocation appends one line, so
+ * external truth SURVIVES a SIGKILL exactly like a real supplier's ledger would: the harness
+ * asserts per-call invocation counts honestly (at-least-once is observable, never hidden) and
+ * the reconciler recovers completed outcomes from this store alone (durability §10).
+ */
+export interface SupplierRecord {
+  readonly op: string;
+  readonly key: string;
+  readonly value: string;
+}
+
+const SupplierRecordSchema = Schema.Struct({
+  op: Schema.String,
+  key: Schema.String,
+  value: Schema.String,
+});
+const decodeSupplierRecord = Schema.decodeUnknownOption(SupplierRecordSchema);
+
+const supplierLogPath = (dir: string): string => `${dir}/supplier-log.jsonl`;
+
+export const recordSupplierCall = (dir: string, op: string, key: string, value: string): void => {
+  fs.mkdirSync(dir, { recursive: true });
+  fs.appendFileSync(supplierLogPath(dir), `${JSON.stringify({ op, key, value })}\n`);
+};
+
+export const readSupplierRecords = (dir: string): ReadonlyArray<SupplierRecord> => {
+  if (!fs.existsSync(supplierLogPath(dir))) return [];
+  return fs
+    .readFileSync(supplierLogPath(dir), "utf8")
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .flatMap((line) => {
+      try {
+        const parsed: unknown = JSON.parse(line);
+        return Option.match(decodeSupplierRecord(parsed), {
+          onNone: () => [],
+          onSome: (record) => [record],
+        });
+      } catch {
+        return [];
+      }
+    });
+};
+
+/** Exact per-operation invocation counts, keyed `{op}:{key}` — the honesty-claim currency. */
+export const supplierCounts = (dir: string): Record<string, number> => {
+  const counts: Record<string, number> = {};
+  for (const record of readSupplierRecords(dir)) {
+    const key = `${record.op}:${record.key}`;
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return counts;
+};
+
+export const supplierCount = (dir: string, op: string, key: string): number =>
+  supplierCounts(dir)[`${op}:${key}`] ?? 0;
+
+/** Every value the external supplier ever produced (the never-fabricate reference set). */
+export const supplierValues = (dir: string): ReadonlySet<string> =>
+  new Set(readSupplierRecords(dir).map((record) => record.value));
 
 /** Scripted model whose per-call scripts are full streams (so a call can block on a file). */
 export const makeScriptedStreamModel = Effect.fn("CrashFixtures.makeScriptedStreamModel")(
@@ -145,10 +270,13 @@ export const plannerDefinition = Agent.define("crash-planner", {
   }),
 });
 
+// `readonly` is a deliberate P5 migration (plan §4.3): the crash matrix's search tool performs
+// no external mutation, so annotating it keeps the P4 rows' canonical record shape byte-stable —
+// an unannotated tool would fail closed to `uncertain` and gain `ToolCallPrepared` records.
 const Search = Tool.make("search", {
   parameters: Schema.Struct({ query: Schema.String }),
   success: Schema.Struct({ available: Schema.Boolean }),
-});
+}).annotate(ToolExecutionClass, "readonly");
 export const searchTools = Toolkit.make(Search);
 
 export const searchDefinition = Agent.define("crash-search", {
@@ -168,6 +296,163 @@ export const searchToolLayer = searchTools.toLayer({
   search: () => Effect.succeed({ available: true }),
 });
 
+const bookPolicy = AgentPolicy.make({
+  maxTurns: 3,
+  maxToolCalls: 2,
+  maxDuration: "30 seconds",
+  toolConcurrency: 1,
+});
+
+/** UNANNOTATED booking tool: fails closed to `uncertain` and enters the prepared/settled protocol. */
+const BookUncertain = Tool.make("book", {
+  parameters: Schema.Struct({ ref: Schema.String }),
+  success: Schema.Struct({ confirmation: Schema.String }),
+});
+export const bookTools = Toolkit.make(BookUncertain);
+export const bookDefinition = Agent.define("crash-book", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Book it.",
+  toolkit: bookTools,
+  policy: bookPolicy,
+});
+
+/** The declared external idempotency contract: recovery may re-execute without proof. */
+const BookIdempotent = Tool.make("book", {
+  parameters: Schema.Struct({ ref: Schema.String }),
+  success: Schema.Struct({ confirmation: Schema.String }),
+}).annotate(ToolExecutionClass, "idempotent");
+export const bookIdempotentTools = Toolkit.make(BookIdempotent);
+export const bookIdempotentDefinition = Agent.define("crash-book-idempotent", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Book it idempotently.",
+  toolkit: bookIdempotentTools,
+  policy: bookPolicy,
+});
+
+/** Approval-gated booking tool; unannotated → fail-closed `uncertain` execution class. */
+const BookApproval = Tool.make("book", {
+  parameters: Schema.Struct({ ref: Schema.String }),
+  success: Schema.Struct({ confirmation: Schema.String }),
+  needsApproval: true,
+});
+export const approvalTools = Toolkit.make(BookApproval);
+export const approvalDefinition = Agent.define("crash-book-approval", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Book after approval.",
+  toolkit: approvalTools,
+  policy: bookPolicy,
+});
+
+/** Durable Tool: declaring `DurableStep` as a dependency is what makes it durable. */
+const Itinerary = Tool.make("itinerary", {
+  parameters: Schema.Struct({ ref: Schema.String }),
+  success: Schema.Struct({ state: Schema.String }),
+  failure: DurableStepError,
+  dependencies: [DurableStep],
+});
+export const itineraryTools = Toolkit.make(Itinerary);
+export const itineraryDefinition = Agent.define("crash-itinerary", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Reserve the itinerary.",
+  toolkit: itineraryTools,
+  policy: bookPolicy,
+});
+
+type BookToolkit = typeof bookTools | typeof bookIdempotentTools | typeof approvalTools;
+
+/** Booking handler over the file-backed supplier store: one appended line per invocation. */
+export const makeBookToolLayer = (dir: string, tools: BookToolkit) =>
+  tools.toLayer({
+    book: ({ ref }) =>
+      Effect.sync(() => {
+        const confirmation = `confirmed-${ref}`;
+        recordSupplierCall(dir, "book", ref, confirmation);
+        return { confirmation };
+      }),
+  });
+
+/**
+ * SIGKILL-mid-handler variant (plan §4.3): the handler performs the external booking, proves it
+ * with the marker file, then never returns — the parent kills the process while the Tool Call is
+ * prepared-but-unsettled with the external effect already done.
+ */
+export const makeBlockedBookToolLayer = (dir: string, tools: BookToolkit, markerFile: string) =>
+  tools.toLayer({
+    book: ({ ref }) =>
+      Effect.sync(() => {
+        recordSupplierCall(dir, "book", ref, `confirmed-${ref}`);
+        fs.writeFileSync(markerFile, "1");
+      }).pipe(Effect.andThen(Effect.never)),
+  });
+
+/** Durable-Step handler: entry and each Step invocation are observable supplier calls. */
+export const makeItineraryToolLayer = (dir: string) =>
+  itineraryTools.toLayer({
+    itinerary: ({ ref }) =>
+      Effect.gen(function* () {
+        yield* Effect.sync(() => recordSupplierCall(dir, "itinerary-enter", ref, `enter-${ref}`));
+        const step = yield* DurableStep;
+        const flight = yield* step.do(
+          "reserve-flight",
+          Schema.String,
+          Effect.sync(() => {
+            const value = `flight-${ref}`;
+            recordSupplierCall(dir, "reserve-flight", ref, value);
+            return value;
+          }),
+        );
+        const lodging = yield* step.do(
+          "reserve-lodging",
+          Schema.String,
+          Effect.sync(() => {
+            const value = `lodging-${ref}`;
+            recordSupplierCall(dir, "reserve-lodging", ref, value);
+            return value;
+          }),
+        );
+        return { state: `${flight}+${lodging}` };
+      }),
+  });
+
+const BookParameters = Schema.Struct({ ref: Schema.String });
+const decodeBookParameters = Schema.decodeUnknownOption(BookParameters);
+
+/**
+ * Reconciliation policy backed by the supplier store (durability §10): a decision is a claim
+ * about EXTERNAL truth read from the store the killed process actually mutated — a present
+ * booking is recovered `CompletedWithResult`, an absent one is proof the handler `NeverStarted`,
+ * the re-enterable Durable Tool is `SafeToRetry`, and anything else stays fail-closed Uncertain.
+ */
+export const supplierReconcilerLayer = (dir: string): Layer.Layer<ToolReconciler> =>
+  Layer.succeed(ToolReconciler)({
+    reconcile: (evidence) =>
+      Effect.sync(() => {
+        if (evidence.toolName === "book") {
+          const params = decodeBookParameters(evidence.parameters);
+          if (Option.isNone(params)) {
+            return ReconciliationUncertain.make({ reason: "Unreadable book parameters" });
+          }
+          const booking = readSupplierRecords(dir).find(
+            (record) => record.op === "book" && record.key === params.value.ref,
+          );
+          return booking !== undefined
+            ? ReconciliationCompleted.make({
+                result: { confirmation: booking.value },
+                isFailure: false,
+              })
+            : ReconciliationNeverStarted.make();
+        }
+        if (evidence.toolName === "itinerary") return ReconciliationSafeToRetry.make();
+        return ReconciliationUncertain.make({
+          reason: `No supplier proof exists for ${evidence.toolName}`,
+        });
+      }),
+  });
+
 /** Line-framed JSON messages the child prints on stdout for the harness to decode. */
 export const ChildMessage = Schema.Union([
   Schema.Struct({
@@ -182,6 +467,10 @@ export const ChildMessage = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("worker-failure"),
     tag: Schema.String,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("resolved"),
+    value: Schema.String,
   }),
 ]);
 export type ChildMessage = typeof ChildMessage.Type;

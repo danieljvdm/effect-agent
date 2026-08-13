@@ -9,6 +9,8 @@ import type {
   TurnId,
 } from "@effect-agent/core";
 
+import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
+
 /** Number of queued inputs consumed at one documented Turn seam. */
 export type CommandDrainPolicy = "one" | "all";
 
@@ -111,6 +113,93 @@ export interface RunBudgetHook<Error = never, Requirements = never> {
   readonly consume: (delta: RunUsageDelta) => Effect.Effect<void, Error, Requirements>;
 }
 
+/**
+ * One application Tool Call of a completed Turn as the durable runtime sees
+ * it: stable identity, the encoded (wire-form) parameters exactly as official
+ * history carries them, and the Tool's declared execution class (fail-closed
+ * `"uncertain"` for unannotated Tools).
+ */
+export interface RunToolCallDescriptor {
+  readonly toolCallId: ToolCallId;
+  readonly toolName: string;
+  /** Encoded JSON parameters — the same value official history and canonical records carry. */
+  readonly parameters: unknown;
+  readonly executionClass: ToolExecutionClassValue;
+}
+
+/**
+ * Payload of one durable response commit: the completed Turn's identity, its
+ * response messages in official (encoded) form, and every application Tool
+ * Call it declared. The engine invokes it only for Turns that declare
+ * application Tool Calls; no-tool Turns keep their late single-batch commit.
+ */
+export interface RunTurnResponseCommit {
+  readonly turn: number;
+  readonly turnId: TurnId;
+  /** The Turn's response messages in official history form (encoded Tool parameters). */
+  readonly responseMessages: Prompt.Prompt;
+  readonly calls: ReadonlyArray<RunToolCallDescriptor>;
+}
+
+/**
+ * Dependency-neutral durability seam implemented by a durable coordinator.
+ *
+ * Invocation ordering inside one Tool-declaring Turn is normative:
+ * `commitResponse` fires after the finish part's continuation validations and
+ * before approval preflight (making the response canonical before any Tool
+ * work — the provably-safe resume window); `prepareToolCalls` fires after
+ * every approval resolved approved and before any handler acquires a
+ * scheduler permit, with the non-`readonly` calls of the batch (it is skipped
+ * entirely when no call needs preparation); `step` persists Durable Step
+ * results mid-flight. When the hook is absent the engine behaves exactly as
+ * the ephemeral runtime always has.
+ */
+export interface RunDurabilityHook<Error = never, Requirements = never> {
+  /** After the finish part's validations, before approval preflight. */
+  readonly commitResponse: (
+    commit: RunTurnResponseCommit,
+  ) => Effect.Effect<void, Error, Requirements>;
+  /** After every approval resolved approved, before any handler starts. */
+  readonly prepareToolCalls: (
+    calls: ReadonlyArray<RunToolCallDescriptor>,
+  ) => Effect.Effect<void, Error, Requirements>;
+  readonly step: RunStepHook<Error, Requirements>;
+}
+
+/** One declared Tool Call of a Turn being resumed, in canonical encoded form. */
+export interface RunTurnResumeCall {
+  readonly id: string;
+  readonly name: string;
+  /** Canonical encoded parameters; re-validated through the Tool's parameter Schema before anything executes. */
+  readonly params: unknown;
+}
+
+/** One already-settled Tool Call of a Turn being resumed; injected without execution. */
+export interface RunTurnResumeSettledCall {
+  readonly id: string;
+  /** The recorded encoded result, exactly as the Tool message will carry it. */
+  readonly result: unknown;
+  readonly isFailure: boolean;
+}
+
+/**
+ * Resume one canonically declared Tool batch without re-invoking the model.
+ *
+ * When present, the engine's first Turn skips the model request entirely: the
+ * declared calls are re-validated through their Tool parameter Schemas (a
+ * decode failure executes nothing), approval preflight runs against recorded
+ * decisions, `prepareToolCalls` replays the full prepared batch idempotently,
+ * calls listed in `settled` are injected as final results without starting
+ * their handlers, and only the remaining open calls execute. The Run then
+ * proceeds through the normal continuation.
+ */
+export interface RunTurnResume {
+  readonly turn: number;
+  readonly turnId: TurnId;
+  readonly calls: ReadonlyArray<RunTurnResumeCall>;
+  readonly settled: ReadonlyArray<RunTurnResumeSettledCall>;
+}
+
 /** Run-level scheduler override; it may only make the Agent's finite bound stricter. */
 export type RunSchedulingOverride =
   | {
@@ -159,6 +248,17 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly approval?: RunApprovalHook<HookError, HookRequirements> | undefined;
   readonly context?: RunContextHook<HookError, HookRequirements> | undefined;
   readonly budget?: RunBudgetHook<HookError, HookRequirements> | undefined;
+  /**
+   * Durable turn-commit seam (P5). When absent the engine behaves exactly as
+   * the ephemeral runtime: no response/prepared commits, and `DurableStep`
+   * executes pass-through.
+   */
+  readonly durability?: RunDurabilityHook<HookError, HookRequirements> | undefined;
+  /**
+   * Resume a declared, canonically committed Tool batch without re-invoking
+   * the model (durable batch-resume seam). Consumed by the Run's first Turn.
+   */
+  readonly resume?: RunTurnResume | undefined;
   /** Required when the core policy declares `costBudgetMicrousd`. */
   readonly estimateCostMicrousd?:
     | ((usage: Response.Usage) => Effect.Effect<number, HookError, HookRequirements>)

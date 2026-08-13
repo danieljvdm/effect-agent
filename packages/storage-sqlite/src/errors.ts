@@ -124,6 +124,20 @@ export const SqliteStorageFailpointLocation = Schema.Literals([
   "ledger:request-abort:after",
   "ledger:release:before",
   "ledger:release:after",
+  "ledger:claim-joining:before",
+  "ledger:claim-joining:after",
+  "ledger:mark-joined:before",
+  "ledger:mark-joined:after",
+  "ledger:revert-joining:before",
+  "ledger:revert-joining:after",
+  "ledger:suspend:before",
+  "ledger:suspend:after",
+  "ledger:approval-decision:before",
+  "ledger:approval-decision:after",
+  "ledger:mark-unknown:before",
+  "ledger:mark-unknown:after",
+  "ledger:unknown-resolution:before",
+  "ledger:unknown-resolution:after",
 ]);
 export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
 

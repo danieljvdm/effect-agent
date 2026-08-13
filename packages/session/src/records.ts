@@ -1,5 +1,6 @@
 import {
   AgentId,
+  AttemptId,
   ConversationId,
   ReceiptId,
   RunId,
@@ -53,6 +54,9 @@ export type ProducerEpoch = typeof ProducerEpoch.Type;
 
 const BoundedText = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const BoundedName = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+
+/** Positive canonical (Run-relative, Attempt-independent) Turn number. */
+const TurnNumber = Schema.Int.check(Schema.isGreaterThan(0));
 
 export const MAX_PERSISTED_JSON_DEPTH = 64;
 export const MAX_PERSISTED_JSON_COLLECTION_LENGTH = 4_096;
@@ -191,9 +195,134 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
 )("ModelResponseRecorded", {
   runId: RunId,
   turnId: TurnId,
-  turn: Schema.Int.check(Schema.isGreaterThan(0)),
+  turn: TurnNumber,
   messages: PersistedJson,
   messagesDigest: Digest,
+}) {}
+
+/**
+ * One approved uncertain/idempotent ordinary Tool Call made durable BEFORE any handler starts
+ * (durability §10). `parameters` is the Schema-encoded wire form of the declared call and
+ * `parametersDigest` pins it; recovery that sees this record without a matching `ToolCallSettled`
+ * (or `ToolCallUnknown` → `ToolCallResolved`) must reconcile or mark unknown, never silently
+ * replay (DUR-009). `readonly`-class Tools never produce this record (P4 parity).
+ */
+export class ToolCallPrepared extends Schema.TaggedClass<ToolCallPrepared>(
+  "@effect-agent/session/ToolCallPrepared",
+)("ToolCallPrepared", {
+  runId: RunId,
+  turnId: TurnId,
+  turn: TurnNumber,
+  toolCallId: ToolCallId,
+  toolName: BoundedName,
+  parameters: PersistedJson,
+  parametersDigest: Digest,
+}) {}
+
+/**
+ * A durable Unknown Outcome: the external effect of one prepared ordinary Tool Call may have
+ * happened but was not confirmed canonically (DUR-009/DUR-017). It is neither success nor
+ * ordinary failure; automatic continuation stops until an authorized resolution arrives.
+ */
+export class ToolCallUnknown extends Schema.TaggedClass<ToolCallUnknown>(
+  "@effect-agent/session/ToolCallUnknown",
+)("ToolCallUnknown", {
+  runId: RunId,
+  turn: TurnNumber,
+  toolCallId: ToolCallId,
+  toolName: BoundedName,
+  reason: BoundedText,
+}) {}
+
+/** How one open/unknown Tool Call was authoritatively closed (DUR-017 resolution audit). */
+export const ToolCallResolution = Schema.Literals([
+  "completed-with-result",
+  "failed-with-error",
+  "never-started",
+  "safe-retry",
+]);
+export type ToolCallResolution = typeof ToolCallResolution.Type;
+
+/**
+ * The canonical audit record closing one open or unknown Tool Call: reconciler-recovered supplier
+ * truth or an authorized `resolveUnknown` command. `author`/`reason` make every resolution an
+ * attributable decision (DUR-017); a `completed-with-result` resolution is accompanied by the
+ * per-call `ToolCallSettled` record carrying the recovered result.
+ */
+export class ToolCallResolved extends Schema.TaggedClass<ToolCallResolved>(
+  "@effect-agent/session/ToolCallResolved",
+)("ToolCallResolved", {
+  runId: RunId,
+  toolCallId: ToolCallId,
+  resolution: ToolCallResolution,
+  author: BoundedName,
+  reason: BoundedText,
+}) {}
+
+/**
+ * One accepted Durable Step result (durability §11): exactly-once-recorded while the Step's
+ * external side effect stays honestly at-least-once-executed. Only success is recorded — a failing
+ * Step body fails into the handler's error channel and re-executes on re-entry. `output` is the
+ * Schema-encoded Step output; `outputDigest` pins it for replay-divergence detection.
+ */
+export class ToolStepSettled extends Schema.TaggedClass<ToolStepSettled>(
+  "@effect-agent/session/ToolStepSettled",
+)("ToolStepSettled", {
+  runId: RunId,
+  toolCallId: ToolCallId,
+  stepName: BoundedName,
+  output: PersistedJson,
+  outputDigest: Digest,
+}) {}
+
+/**
+ * A canonical approval request for one declared Tool Call (CAP-006, durability §8): with this
+ * record durable, "waiting for explicit approval" is a safe suspension boundary — the resumed
+ * Attempt replays the declared batch instead of re-invoking the model.
+ */
+export class ToolApprovalRequested extends Schema.TaggedClass<ToolApprovalRequested>(
+  "@effect-agent/session/ToolApprovalRequested",
+)("ToolApprovalRequested", {
+  runId: RunId,
+  turnId: TurnId,
+  turn: TurnNumber,
+  toolCallId: ToolCallId,
+  toolName: BoundedName,
+  parametersDigest: Digest,
+}) {}
+
+/** The two-valued approval decision family shared by canonical records and ledger intents. */
+export const ApprovalDecision = Schema.Literals(["approved", "denied"]);
+export type ApprovalDecision = typeof ApprovalDecision.Type;
+
+/**
+ * The canonical decision for one requested approval. Appended by the deciding Attempt (policy
+ * auto-decisions) or by the resuming Attempt after a durable `resolveApproval` intent; it is the
+ * deterministic decision authority for every later Attempt of the same Run.
+ */
+export class ToolApprovalDecided extends Schema.TaggedClass<ToolApprovalDecided>(
+  "@effect-agent/session/ToolApprovalDecided",
+)("ToolApprovalDecided", {
+  runId: RunId,
+  turn: TurnNumber,
+  toolCallId: ToolCallId,
+  decision: ApprovalDecision,
+  resolver: BoundedName,
+  reason: BoundedText,
+}) {}
+
+/**
+ * First-class interruption audit (durability §9): appended by a superseding Attempt before it
+ * re-invokes the model for a Turn whose prior owner died without a complete canonical response.
+ * Duplicate provider cost is thereby possible AND observable in canonical history.
+ */
+export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseInterrupted>(
+  "@effect-agent/session/ModelResponseInterrupted",
+)("ModelResponseInterrupted", {
+  runId: RunId,
+  supersededEpoch: ProducerEpoch,
+  attemptId: AttemptId,
+  reason: BoundedText,
 }) {}
 
 export class CompactionCreated extends Schema.TaggedClass<CompactionCreated>(
@@ -258,13 +387,24 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
   result: Schema.optionalKey(PersistedJson),
 }) {}
 
-/** Current private-development canonical payload family. */
+/**
+ * Current private-development canonical payload family. Phase 5 adds the seven durable-Tool tags
+ * (prepared/unknown/resolved/step/approval-request/approval-decision/interrupted) additively, so
+ * the envelope keeps `schemaVersion: 1` (P4 precedent for additive payload tags).
+ */
 export const CanonicalRecordPayload = Schema.Union([
   ConversationCreated,
   UserInputRecorded,
   ModelCompleted,
   ModelResponseRecorded,
+  ToolCallPrepared,
   ToolCallSettled,
+  ToolCallUnknown,
+  ToolCallResolved,
+  ToolStepSettled,
+  ToolApprovalRequested,
+  ToolApprovalDecided,
+  ModelResponseInterrupted,
   CompactionCreated,
   RunFailed,
   RunCompleted,

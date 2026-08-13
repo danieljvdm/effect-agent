@@ -122,6 +122,14 @@ An approval provider may be interactive, policy-based, remote, or test-controlle
 Approval decisions are canonical audit events. A timeout is a denial unless the
 configured policy explicitly says otherwise.
 
+On the durable runtime (Phase 5), an unresolved approval is a **durable suspension**: the
+canonical approval request record is the safe boundary (durability §8), ownership ends, and the
+lane consumes no worker permit — durable suspension itself has no implicit timeout. Suspension
+is operational ledger state with no canonical "suspended" record (ADR-0012); the resuming
+Attempt appends the canonical decision before honoring it and replays the declared Tool batch
+without re-invoking the model. An immediate policy decision commits atomically with its request.
+Denial remains terminal per the P2 policy default.
+
 ## 6. Compaction
 
 Compaction converts a prefix of conversation history into a smaller context

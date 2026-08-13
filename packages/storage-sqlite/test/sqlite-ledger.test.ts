@@ -21,9 +21,12 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import {
   AbortCommand,
   AdmissionRequest,
+  ApprovalDecisionCommand,
+  ApprovalPendingSuspension,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
+  ClaimJoiningRequest,
   ClaimRequest,
   ConversationMaterialization,
   ConversationStore,
@@ -38,19 +41,28 @@ import {
   IdempotencyKey,
   LedgerError,
   MarkInputAppliedRequest,
+  MarkJoinedRequest,
   MarkReadyRequest,
+  MarkUnknownRequest,
   OwnershipLost,
   Principal,
   ProducerEpoch,
   ProducerId,
   RecordEnvelope,
+  RecoverySnapshotRequest,
   RenewOwnershipRequest,
   ReleaseOwnershipRequest,
+  ResolutionCompletedWithResult,
+  ResolutionNeverHappened,
+  RevertJoiningRequest,
   SettlementFinalization,
   SettlementReservation,
   SubmissionLedger,
+  SubmissionLookupById,
   SubmissionLookupByKey,
   SubmissionSettled,
+  SuspendRequest,
+  UnknownResolutionCommand,
   submissionInputRecordId,
   submissionLedgerConformanceCases,
   submissionSettlementId,
@@ -101,6 +113,8 @@ const conversation = (value: string) =>
 const epoch = (value: number) => Schema.decodeSync(ProducerEpoch)(value);
 const sequence = (value: number) => Schema.decodeSync(CanonicalSequence)(value);
 const at = (millis: number) => DateTime.toUtc(DateTime.makeUnsafe(millis));
+
+const toolCall = (value: string) => id(ApprovalDecisionCommand.fields.toolCallId, value);
 
 const TEST_PRINCIPAL = id(Principal, "principal-sqlite-ledger");
 const TEST_PRODUCER = id(ProducerId, "producer-sqlite-ledger");
@@ -468,47 +482,49 @@ describe("SqliteSubmissionLedger", () => {
     ),
   );
 
-  it.effect("rejects a v1 file exactly with reset guidance and still rejects newer versions", () =>
-    Effect.forEach([1, 3, 99], (storedVersion) =>
-      withTemporaryDatabase((filename) =>
-        Effect.gen(function* () {
-          yield* withSql(
-            filename,
-            Effect.gen(function* () {
-              const sql = yield* SqlClientService.SqlClient;
-              yield* sql.unsafe(`PRAGMA user_version = ${storedVersion}`);
-            }),
-          );
+  it.effect(
+    "rejects v1 and v2 files exactly with reset guidance and still rejects newer versions",
+    () =>
+      Effect.forEach([1, 2, 4, 99], (storedVersion) =>
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            yield* withSql(
+              filename,
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+                yield* sql.unsafe(`PRAGMA user_version = ${storedVersion}`);
+              }),
+            );
 
-          const opened = yield* withLedger(filename, SubmissionLedger).pipe(Effect.exit);
-          expect(Exit.isFailure(opened)).toBe(true);
-          if (Exit.isFailure(opened)) {
-            const error = Cause.squash(opened.cause);
-            expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
-            if (error instanceof SqliteStorageCompatibilityError) {
-              expect(error.actualVersion).toBe(storedVersion);
-              expect(error.supportedVersion).toBe(2);
-              expect(error.message).toContain("Reset the database file explicitly");
+            const opened = yield* withLedger(filename, SubmissionLedger).pipe(Effect.exit);
+            expect(Exit.isFailure(opened)).toBe(true);
+            if (Exit.isFailure(opened)) {
+              const error = Cause.squash(opened.cause);
+              expect(error).toBeInstanceOf(SqliteStorageCompatibilityError);
+              if (error instanceof SqliteStorageCompatibilityError) {
+                expect(error.actualVersion).toBe(storedVersion);
+                expect(error.supportedVersion).toBe(3);
+                expect(error.message).toContain("Reset the database file explicitly");
+              }
             }
-          }
 
-          // Failing closed must not mutate the incompatible file.
-          const tables = yield* withSql(
-            filename,
-            Effect.gen(function* () {
-              const sql = yield* SqlClientService.SqlClient;
-              return yield* sql<Record<string, unknown>>`
+            // Failing closed must not mutate the incompatible file.
+            const tables = yield* withSql(
+              filename,
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+                return yield* sql<Record<string, unknown>>`
                 SELECT name
                 FROM sqlite_master
                 WHERE type = 'table'
                   AND name LIKE 'effect_agent_%'
               `;
-            }),
-          );
-          expect(tables).toEqual([]);
-        }),
+              }),
+            );
+            expect(tables).toEqual([]);
+          }),
+        ),
       ),
-    ),
   );
 
   it.effect("leaves a recovery-classifiable state at every ledger failpoint", () =>
@@ -884,6 +900,599 @@ describe("SqliteSubmissionLedger", () => {
         if (Exit.isFailure(retriedRelease)) {
           expect(Cause.squash(retriedRelease.cause)).toBeInstanceOf(OwnershipLost);
         }
+      }),
+    ),
+  );
+
+  it.effect("persists joins, suspensions, approvals, and unknown resolutions across reopen", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const seeded = yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+
+            // Joined queued input.
+            const host = yield* ledger.admit(
+              yield* admission("conversation-reopen-join", "reopen-host-key", { work: "host" }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: host.submissionId }));
+            const queued = yield* ledger.admit(
+              yield* admission("conversation-reopen-join", "reopen-queued-key", { queued: 2 }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
+            const hostClaim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation("conversation-reopen-join"),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            expect(Option.isSome(hostClaim)).toBe(true);
+            if (Option.isNone(hostClaim)) return yield* Effect.die("missing host claim");
+            const claims = yield* ledger.claimJoining(
+              ClaimJoiningRequest.make({
+                conversationId: conversation("conversation-reopen-join"),
+                hostSubmissionId: host.submissionId,
+                ownershipToken: hostClaim.value.ownershipToken,
+                maxCount: 4,
+              }),
+            );
+            expect(claims.map((claim) => claim.submissionId)).toEqual([queued.submissionId]);
+            yield* ledger.markJoined(
+              MarkJoinedRequest.make({
+                submissionId: queued.submissionId,
+                ownershipToken: hostClaim.value.ownershipToken,
+                recordId: submissionInputRecordId(queued.submissionId),
+                sequence: sequence(3),
+              }),
+            );
+
+            // Durable approval suspension with one of two calls decided.
+            const gated = yield* ledger.admit(
+              yield* admission("conversation-reopen-suspend", "reopen-gated-key", {
+                work: "gated",
+              }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: gated.submissionId }));
+            const gatedClaim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation("conversation-reopen-suspend"),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            expect(Option.isSome(gatedClaim)).toBe(true);
+            if (Option.isNone(gatedClaim)) return yield* Effect.die("missing gated claim");
+            yield* ledger.recordApprovalDecision(
+              ApprovalDecisionCommand.make({
+                submissionId: gated.submissionId,
+                toolCallId: toolCall("call-reopen-s1"),
+                decision: "approved",
+                resolver: "reopen-approver",
+                reason: "first of two calls",
+              }),
+            );
+            const suspended = yield* ledger.suspend(
+              SuspendRequest.make({
+                submissionId: gated.submissionId,
+                ownershipToken: gatedClaim.value.ownershipToken,
+                reason: ApprovalPendingSuspension.make({
+                  toolCallIds: [toolCall("call-reopen-s1"), toolCall("call-reopen-s2")],
+                }),
+              }),
+            );
+            expect(suspended).toBe("suspended");
+
+            // Unknown Outcome with one of two calls resolved.
+            const uncertain = yield* ledger.admit(
+              yield* admission("conversation-reopen-unknown", "reopen-uncertain-key", {
+                work: "uncertain",
+              }),
+            );
+            yield* ledger.markReady(
+              MarkReadyRequest.make({ submissionId: uncertain.submissionId }),
+            );
+            yield* ledger.markUnknown(
+              MarkUnknownRequest.make({
+                submissionId: uncertain.submissionId,
+                toolCallIds: [toolCall("call-reopen-u1"), toolCall("call-reopen-u2")],
+                reason: "the worker died during two supplier calls",
+              }),
+            );
+            yield* ledger.recordUnknownResolution(
+              UnknownResolutionCommand.make({
+                submissionId: uncertain.submissionId,
+                toolCallId: toolCall("call-reopen-u1"),
+                author: "reopen-operator",
+                reason: "supplier store shows the booking",
+                resolution: ResolutionCompletedWithResult.make({
+                  result: { bookingRef: "booking-reopen-1" },
+                  isFailure: false,
+                }),
+              }),
+            );
+
+            return {
+              host: host.submissionId,
+              queued: queued.submissionId,
+              gated: gated.submissionId,
+              uncertain: uncertain.submissionId,
+            };
+          }),
+        );
+
+        // A fresh process reads every Phase 5 marker back through the storage schemas.
+        yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+
+            const hostSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: seeded.host }),
+            );
+            expect(hostSnapshot.joins).toHaveLength(1);
+            expect(hostSnapshot.joins[0]?.submissionId).toBe(seeded.queued);
+            expect(hostSnapshot.joins[0]?.state).toBe("joined");
+            expect(hostSnapshot.joins[0]?.hostSubmissionId).toBe(seeded.host);
+
+            const queuedSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: seeded.queued }),
+            );
+            expect(queuedSnapshot.submission.state).toBe("joined");
+            expect(queuedSnapshot.hostSubmissionId).toBe(seeded.host);
+            expect(queuedSnapshot.inputApplied?.recordId).toBe(
+              submissionInputRecordId(seeded.queued),
+            );
+            expect(queuedSnapshot.inputApplied?.sequence).toBe(3);
+
+            const gatedSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: seeded.gated }),
+            );
+            expect(gatedSnapshot.submission.state).toBe("suspended");
+            expect(gatedSnapshot.suspension?.reason._tag).toBe("ApprovalPending");
+            expect(gatedSnapshot.suspension?.reason.toolCallIds).toEqual([
+              toolCall("call-reopen-s1"),
+              toolCall("call-reopen-s2"),
+            ]);
+            expect(gatedSnapshot.approvalDecisions).toHaveLength(1);
+            expect(gatedSnapshot.approvalDecisions[0]?.toolCallId).toBe(toolCall("call-reopen-s1"));
+            expect(gatedSnapshot.approvalDecisions[0]?.decision).toBe("approved");
+            const blockedSuspended = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation("conversation-reopen-suspend"),
+                producerId: OTHER_PRODUCER,
+              }),
+            );
+            expect(Option.isNone(blockedSuspended)).toBe(true);
+
+            const uncertainSnapshot = yield* ledger.loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: seeded.uncertain }),
+            );
+            expect(uncertainSnapshot.submission.state).toBe("unknown");
+            expect(uncertainSnapshot.unknownResolutions).toHaveLength(1);
+            const resolution = uncertainSnapshot.unknownResolutions[0]?.resolution;
+            expect(resolution?._tag).toBe("CompletedWithResult");
+            if (resolution?._tag === "CompletedWithResult") {
+              expect(resolution.result).toEqual({ bookingRef: "booking-reopen-1" });
+              expect(resolution.isFailure).toBe(false);
+            }
+
+            // The durable intents keep working after reopen: covering decisions and
+            // resolutions wake the respective lanes.
+            yield* ledger.recordApprovalDecision(
+              ApprovalDecisionCommand.make({
+                submissionId: seeded.gated,
+                toolCallId: toolCall("call-reopen-s2"),
+                decision: "denied",
+                resolver: "reopen-approver",
+                reason: "second of two calls",
+              }),
+            );
+            const wokenGated = yield* ledger.lookup(
+              SubmissionLookupById.make({ submissionId: seeded.gated }),
+            );
+            expect(Option.isSome(wokenGated)).toBe(true);
+            if (Option.isSome(wokenGated)) expect(wokenGated.value.state).toBe("input-applied");
+
+            yield* ledger.recordUnknownResolution(
+              UnknownResolutionCommand.make({
+                submissionId: seeded.uncertain,
+                toolCallId: toolCall("call-reopen-u2"),
+                author: "reopen-operator",
+                reason: "supplier store shows nothing",
+                resolution: ResolutionNeverHappened.make(),
+              }),
+            );
+            const wokenUncertain = yield* ledger.lookup(
+              SubmissionLookupById.make({ submissionId: seeded.uncertain }),
+            );
+            expect(Option.isSome(wokenUncertain)).toBe(true);
+            if (Option.isSome(wokenUncertain)) {
+              expect(wokenUncertain.value.state).toBe("input-applied");
+            }
+          }),
+        );
+      }),
+    ),
+  );
+
+  it.effect("leaves a recovery-classifiable state at every Phase 5 ledger failpoint", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const active = yield* Ref.make<SqliteStorageFailpointLocation | undefined>(undefined);
+        const select = (location: SqliteStorageFailpointLocation | undefined) =>
+          Ref.set(active, location);
+        const failingLedger = <A, E>(
+          effect: Effect.Effect<A, E, SubmissionLedger | Crypto.Crypto>,
+        ) =>
+          Effect.provide(effect, [
+            ledgerLayer({
+              filename,
+              failpoint: (location) =>
+                Ref.get(active).pipe(
+                  Effect.flatMap((selected) =>
+                    selected === location
+                      ? Effect.fail(SqliteStorageFailpointError.make({ location }))
+                      : Effect.void,
+                  ),
+                ),
+            }),
+            NodeCrypto.layer,
+          ]);
+        const expectInjectedFailure = <A>(
+          exit: Exit.Exit<A, unknown>,
+          location: SqliteStorageFailpointLocation,
+        ) => {
+          expect(Exit.isFailure(exit)).toBe(true);
+          if (Exit.isFailure(exit)) {
+            const error = Cause.squash(exit.cause);
+            expect(error).toBeInstanceOf(LedgerError);
+            if (error instanceof LedgerError) {
+              expect(error.cause).toBeInstanceOf(SqliteStorageFailpointError);
+              if (error.cause instanceof SqliteStorageFailpointError) {
+                expect(error.cause.location).toBe(location);
+              }
+            }
+          }
+        };
+        const submissionMarkers = withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<Record<string, unknown>>`
+              SELECT
+                submission_id,
+                state,
+                joined_host_submission_id,
+                input_applied_record_id,
+                suspended_reason_json,
+                unknown_reason,
+                unknown_tool_call_ids_json
+              FROM effect_agent_submissions
+              ORDER BY conversation_id, queue_sequence
+            `;
+          }),
+        );
+        const ownershipRows = withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<Record<string, unknown>>`
+              SELECT submission_id, ownership_token
+              FROM effect_agent_submission_ownership
+            `;
+          }),
+        );
+        const approvalRows = withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<Record<string, unknown>>`
+              SELECT submission_id, tool_call_id, decision, decided_at
+              FROM effect_agent_approval_decisions
+              ORDER BY tool_call_id
+            `;
+          }),
+        );
+        const resolutionRows = withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<Record<string, unknown>>`
+              SELECT submission_id, tool_call_id, resolution_json
+              FROM effect_agent_unknown_resolutions
+              ORDER BY tool_call_id
+            `;
+          }),
+        );
+        const markerFor = (rows: ReadonlyArray<Record<string, unknown>>, submissionId: string) =>
+          rows.find((row) => row.submission_id === submissionId);
+
+        const lane = "conversation-p5-failpoints";
+        const { host, hostClaim, queued, queuedSecond } = yield* failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const host = yield* ledger.admit(
+              yield* admission(lane, "p5-host-key", { work: "host" }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: host.submissionId }));
+            const queued = yield* ledger.admit(
+              yield* admission(lane, "p5-queued-key", { queued: 2 }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: queued.submissionId }));
+            const queuedSecond = yield* ledger.admit(
+              yield* admission(lane, "p5-queued-second-key", { queued: 3 }),
+            );
+            yield* ledger.markReady(
+              MarkReadyRequest.make({ submissionId: queuedSecond.submissionId }),
+            );
+            const claim = yield* ledger.claim(
+              ClaimRequest.make({ conversationId: conversation(lane), producerId: TEST_PRODUCER }),
+            );
+            if (Option.isNone(claim)) return yield* Effect.die("missing host claim");
+            return { host, hostClaim: claim.value, queued, queuedSecond };
+          }),
+        );
+
+        // claimJoining: before → nothing claimed; after → the joining transition and host
+        // linkage are durable even though the caller never saw the claims (recovery sees a
+        // joining Submission without canonical input → RevertJoining).
+        const claimJoiningOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.claimJoining(
+              ClaimJoiningRequest.make({
+                conversationId: conversation(lane),
+                hostSubmissionId: host.submissionId,
+                ownershipToken: hostClaim.ownershipToken,
+                maxCount: 1,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:claim-joining:before");
+        expectInjectedFailure(
+          yield* claimJoiningOnce.pipe(Effect.exit),
+          "ledger:claim-joining:before",
+        );
+        expect(markerFor(yield* submissionMarkers, queued.submissionId)?.state).toBe("ready");
+        yield* select("ledger:claim-joining:after");
+        expectInjectedFailure(
+          yield* claimJoiningOnce.pipe(Effect.exit),
+          "ledger:claim-joining:after",
+        );
+        const joiningMarker = markerFor(yield* submissionMarkers, queued.submissionId);
+        expect(joiningMarker?.state).toBe("joining");
+        expect(joiningMarker?.joined_host_submission_id).toBe(host.submissionId);
+        expect(joiningMarker?.input_applied_record_id).toBeNull();
+        yield* select(undefined);
+        const secondClaims = yield* claimJoiningOnce;
+        expect(secondClaims.map((claim) => claim.submissionId)).toEqual([
+          queuedSecond.submissionId,
+        ]);
+
+        // markJoined: before → still joining without a marker; after → joined durably;
+        // the retry is an idempotent no-op.
+        const markJoinedOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            yield* ledger.markJoined(
+              MarkJoinedRequest.make({
+                submissionId: queued.submissionId,
+                ownershipToken: hostClaim.ownershipToken,
+                recordId: submissionInputRecordId(queued.submissionId),
+                sequence: sequence(2),
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:mark-joined:before");
+        expectInjectedFailure(yield* markJoinedOnce.pipe(Effect.exit), "ledger:mark-joined:before");
+        expect(
+          markerFor(yield* submissionMarkers, queued.submissionId)?.input_applied_record_id,
+        ).toBeNull();
+        yield* select("ledger:mark-joined:after");
+        expectInjectedFailure(yield* markJoinedOnce.pipe(Effect.exit), "ledger:mark-joined:after");
+        const joinedMarker = markerFor(yield* submissionMarkers, queued.submissionId);
+        expect(joinedMarker?.state).toBe("joined");
+        expect(joinedMarker?.input_applied_record_id).toBe(
+          submissionInputRecordId(queued.submissionId),
+        );
+        yield* select(undefined);
+        yield* markJoinedOnce;
+
+        // revertJoining: before → still joining; after → ready with the linkage cleared;
+        // the retry is an idempotent no-op.
+        const revertOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            yield* ledger.revertJoining(
+              RevertJoiningRequest.make({ submissionId: queuedSecond.submissionId }),
+            );
+          }),
+        );
+        yield* select("ledger:revert-joining:before");
+        expectInjectedFailure(yield* revertOnce.pipe(Effect.exit), "ledger:revert-joining:before");
+        expect(markerFor(yield* submissionMarkers, queuedSecond.submissionId)?.state).toBe(
+          "joining",
+        );
+        yield* select("ledger:revert-joining:after");
+        expectInjectedFailure(yield* revertOnce.pipe(Effect.exit), "ledger:revert-joining:after");
+        const revertedMarker = markerFor(yield* submissionMarkers, queuedSecond.submissionId);
+        expect(revertedMarker?.state).toBe("ready");
+        expect(revertedMarker?.joined_host_submission_id).toBeNull();
+        yield* select(undefined);
+        yield* revertOnce;
+
+        // recordApprovalDecision: before → no intent; after → intent durable; the retry
+        // replays the recorded intent unchanged.
+        const decideOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.recordApprovalDecision(
+              ApprovalDecisionCommand.make({
+                submissionId: host.submissionId,
+                toolCallId: toolCall("call-fp-a"),
+                decision: "approved",
+                resolver: "failpoint-approver",
+                reason: "failpoint decision",
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:approval-decision:before");
+        expectInjectedFailure(
+          yield* decideOnce.pipe(Effect.exit),
+          "ledger:approval-decision:before",
+        );
+        expect(yield* approvalRows).toEqual([]);
+        yield* select("ledger:approval-decision:after");
+        expectInjectedFailure(
+          yield* decideOnce.pipe(Effect.exit),
+          "ledger:approval-decision:after",
+        );
+        const decidedRows = yield* approvalRows;
+        expect(decidedRows).toHaveLength(1);
+        yield* select(undefined);
+        const replayedIntent = yield* decideOnce;
+        expect(replayedIntent.decision).toBe("approved");
+        expect(yield* approvalRows).toHaveLength(1);
+
+        // suspend: before → ownership retained, no suspension; after → suspended durably
+        // with the ownership period ended; the retry observes OwnershipLost exactly as a
+        // recovering caller would.
+        const suspendOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.suspend(
+              SuspendRequest.make({
+                submissionId: host.submissionId,
+                ownershipToken: hostClaim.ownershipToken,
+                reason: ApprovalPendingSuspension.make({ toolCallIds: [toolCall("call-fp-b")] }),
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:suspend:before");
+        expectInjectedFailure(yield* suspendOnce.pipe(Effect.exit), "ledger:suspend:before");
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("running");
+        expect(yield* ownershipRows).toHaveLength(1);
+        yield* select("ledger:suspend:after");
+        expectInjectedFailure(yield* suspendOnce.pipe(Effect.exit), "ledger:suspend:after");
+        const suspendedMarker = markerFor(yield* submissionMarkers, host.submissionId);
+        expect(suspendedMarker?.state).toBe("suspended");
+        expect(suspendedMarker?.suspended_reason_json).not.toBeNull();
+        expect(yield* ownershipRows).toEqual([]);
+        yield* select(undefined);
+        const retriedSuspend = yield* suspendOnce.pipe(Effect.exit);
+        expect(Exit.isFailure(retriedSuspend)).toBe(true);
+        if (Exit.isFailure(retriedSuspend)) {
+          expect(Cause.squash(retriedSuspend.cause)).toBeInstanceOf(OwnershipLost);
+        }
+
+        // Wake the lane and reclaim it for the unknown-outcome failpoints.
+        yield* failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            yield* ledger.recordApprovalDecision(
+              ApprovalDecisionCommand.make({
+                submissionId: host.submissionId,
+                toolCallId: toolCall("call-fp-b"),
+                decision: "approved",
+                resolver: "failpoint-approver",
+                reason: "wake the suspended lane",
+              }),
+            );
+          }),
+        );
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("input-applied");
+
+        // markUnknown: before → state unchanged; after → the unknown mark is durable; the
+        // retry is an idempotent no-op.
+        const markUnknownOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            yield* ledger.markUnknown(
+              MarkUnknownRequest.make({
+                submissionId: host.submissionId,
+                toolCallIds: [toolCall("call-fp-c"), toolCall("call-fp-d")],
+                reason: "failpoint uncertainty",
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:mark-unknown:before");
+        expectInjectedFailure(
+          yield* markUnknownOnce.pipe(Effect.exit),
+          "ledger:mark-unknown:before",
+        );
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.unknown_reason).toBeNull();
+        yield* select("ledger:mark-unknown:after");
+        expectInjectedFailure(
+          yield* markUnknownOnce.pipe(Effect.exit),
+          "ledger:mark-unknown:after",
+        );
+        const unknownMarker = markerFor(yield* submissionMarkers, host.submissionId);
+        expect(unknownMarker?.state).toBe("unknown");
+        expect(unknownMarker?.unknown_reason).toBe("failpoint uncertainty");
+        expect(unknownMarker?.unknown_tool_call_ids_json).not.toBeNull();
+        yield* select(undefined);
+        yield* markUnknownOnce;
+
+        // recordUnknownResolution: before → no intent; after → the intent is durable while
+        // the lane stays blocked; the covering resolution's wake transition commits
+        // atomically with its intent.
+        const resolveOnce = (call: string, resolution: "never" | "completed") =>
+          failingLedger(
+            Effect.gen(function* () {
+              const ledger = yield* SubmissionLedger;
+              return yield* ledger.recordUnknownResolution(
+                UnknownResolutionCommand.make({
+                  submissionId: host.submissionId,
+                  toolCallId: toolCall(call),
+                  author: "failpoint-operator",
+                  reason: "failpoint resolution",
+                  resolution:
+                    resolution === "never"
+                      ? ResolutionNeverHappened.make()
+                      : ResolutionCompletedWithResult.make({
+                          result: { bookingRef: "booking-fp-1" },
+                          isFailure: false,
+                        }),
+                }),
+              );
+            }),
+          );
+        yield* select("ledger:unknown-resolution:before");
+        expectInjectedFailure(
+          yield* resolveOnce("call-fp-c", "never").pipe(Effect.exit),
+          "ledger:unknown-resolution:before",
+        );
+        expect(yield* resolutionRows).toEqual([]);
+        yield* select("ledger:unknown-resolution:after");
+        expectInjectedFailure(
+          yield* resolveOnce("call-fp-c", "never").pipe(Effect.exit),
+          "ledger:unknown-resolution:after",
+        );
+        expect(yield* resolutionRows).toHaveLength(1);
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("unknown");
+        yield* select(undefined);
+        yield* resolveOnce("call-fp-c", "never");
+
+        yield* select("ledger:unknown-resolution:after");
+        expectInjectedFailure(
+          yield* resolveOnce("call-fp-d", "completed").pipe(Effect.exit),
+          "ledger:unknown-resolution:after",
+        );
+        // The covering resolution and its wake transition are one atomic durable step.
+        expect(yield* resolutionRows).toHaveLength(2);
+        const wokenMarker = markerFor(yield* submissionMarkers, host.submissionId);
+        expect(wokenMarker?.state).toBe("input-applied");
+        expect(wokenMarker?.unknown_reason).toBeNull();
+        expect(wokenMarker?.unknown_tool_call_ids_json).toBeNull();
+        yield* select(undefined);
+        const replayedResolution = yield* resolveOnce("call-fp-d", "completed");
+        expect(replayedResolution.resolution._tag).toBe("CompletedWithResult");
+        expect(yield* resolutionRows).toHaveLength(2);
       }),
     ),
   );
