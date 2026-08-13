@@ -1,6 +1,9 @@
 # ADR-0010: Model Subagents as declared attached delegation Tools
 
 - Status: Proposed
+- Status note (2026-08-12): the S1 ephemeral slice is implemented as the roadmap-assigned proposed
+  default ([S1 evidence](../S1-EVIDENCE.md)); this decision remains unresolved pending owner
+  acceptance
 - Date: 2026-07-30
 - Decision owners: Project owner
 - Related decisions: D-002, D-004, D-006, D-007, D-008, D-013, D-020

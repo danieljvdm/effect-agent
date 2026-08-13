@@ -16,27 +16,31 @@ review expectations.
 The roadmap remains normative and **Draft**. This table records implementation evidence; it does
 not change the specified scope of later phases.
 
-| Phase  | Implementation status                                       |
-| ------ | ----------------------------------------------------------- |
-| P0     | Complete — [design proof](PHASE-0-EVIDENCE.md)              |
-| P1     | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md) |
-| P2     | Complete — [operational local runtime](PHASE-2-EVIDENCE.md) |
-| P3     | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)  |
-| **P4** | **Next — durable Node/SQLite runtime**                      |
-| P5–P7  | Planned — not yet implemented                               |
+| Phase  | Implementation status                                                                                                             |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| P0     | Complete — [design proof](PHASE-0-EVIDENCE.md)                                                                                    |
+| P1     | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md)                                                                       |
+| P2     | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                       |
+| P3     | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                        |
+| S1     | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
+| **P4** | **Next — durable Node/SQLite runtime**                                                                                            |
+| P5–P7  | Planned — not yet implemented                                                                                                     |
 
 ## Proposed Subagent insertion
 
 [ADR-0010](adr/0010-declared-attached-subagents.md) and
 [the Subagent specification](spec/subagents.md) recommend two bounded slices. This proposal does
-not change phase status until the owner accepts it.
+not change phase status until the owner accepts it. The S1 slice is now implemented as the
+roadmap-assigned proposed default ([S1 evidence](S1-EVIDENCE.md)); ADR-0010 itself remains
+Proposed, and the S2 recommendation below is unchanged.
 
 - **S1 — attached ephemeral Subagents:** implement immediately after Phase 3, before or alongside
   early Phase 4 work. Deliver declared Effect AI delegation Tools with an explicit engine service,
   preallocated child identity, explicit child Bindings, fresh child Conversations, context/result
   projection, per-action authorization, non-transitive approval, a real reservation service,
   normative nested-delegation rejection, bounded child concurrency, scoped interruption, and
-  deterministic parent result order.
+  deterministic parent result order. Implemented — see the [S1 evidence](S1-EVIDENCE.md) for the
+  delivered surface, its deviations, and its explicit non-claims.
 - **S2 — durable attached Subagents:** implement after Phase 5 establishes admission, Tool
   uncertainty, durable Steps, approval suspension, and joined-input recovery, but before Phase 6
   claims platform equivalence. It additionally depends on the Phase 4 ownership-token/epoch and

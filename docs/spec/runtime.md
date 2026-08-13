@@ -250,7 +250,64 @@ Local `stream` uses a bounded queue:
 
 Durable transports observe from the journal/projection and do not own execution liveness.
 
-## 12. Runtime invariants
+## 12. S1 Subagent execution seam
+
+This section documents the S1 surface added for attached ephemeral Subagents
+([Subagent specification §4.3, §10.1](./subagents.md)). The engine owns the one
+interpreter and exposes delegation through execution options and two
+engine-provided services; it implements no second child loop and no
+delegation policy.
+
+### Execution options
+
+`RunOptions` accepts preallocated identity and non-model-visible lineage:
+
+- `conversationId` reuses an existing ephemeral Conversation identity;
+- `runId` is used instead of `IdGenerator` when supplied, so a delegating
+  handler can know the intended child identity;
+- `parentLink` carries the core `SubagentParentLink` for a delegated child
+  Run. It never enters the model prompt or event payloads; the engine uses it
+  only to fix the Run's delegation depth (`parentLink.depth` for a child, `0`
+  when absent), and future durable work persists it as child lineage.
+
+### Run event sink
+
+`RunEventSink` is an engine-owned `Context.Service` provided locally to Tool
+handlers so a delegation handler can emit the seven Subagent lifecycle events
+into the parent Run's semantic stream. `emit` accepts a pre-base payload (the
+core event minus `eventVersion`, `runId`, `conversationId`, `agentId`,
+`sequence`, `timestamp`, and `turnId`); the engine stamps those fields through
+the same `eventBase` path as every other event, so the base identity and the
+emitting batch's Turn are authoritative and the Run sequence stays monotonic.
+Each Tool batch owns one sink backed by an unbounded queue drained by the
+Run's own stream — consistent with the Run's existing buffering, the Run
+stream is the only consumer, so no external observer can backpressure the
+batch. Sink events surface inside the batch, and the batch settles (including
+by failure) only after already-emitted events have surfaced. Emission after
+the batch settled, or outside any Tool batch, fails closed with the typed
+`RunEventSinkClosedError`.
+
+### AgentSpawner
+
+`AgentSpawner` is the engine-owned service contract through which a declared
+delegation Tool runs an Attached Child on the same interpreter. The engine
+provides it locally to every Run, bound to a narrow immutable parent value
+(`agentId`, `conversationId`, `runId`) and the Run's delegation depth (`0`
+for a root Run); it exposes neither the engine's mutable Run state nor a root
+Layer Context. `spawn(binding, input, delegation, options?)` allocates a
+fresh child `ConversationId`/`RunId` through `IdGenerator` (no Conversation
+reuse), constructs the immutable Parent Link at `depth + 1`, and starts the
+child eagerly inside the caller-provided `Scope`, so parent interruption
+reaches the child and its finalizers (SUB-011). It returns the child identity
+and Parent Link plus the `DetachedRun` observation surface (`await`,
+`events`, `observe`) with the child's full `E`/`R` visible. Depth exposure is
+the seam the delegation preflight uses to reject nested delegation (SUB-029);
+the engine itself enforces no delegation policy.
+
+Both services are excluded from `AgentRuntimeRequirements` because the
+interpreter supplies them itself; an application Layer must not provide them.
+
+## 13. Runtime invariants
 
 - **RUN-001:** `run` and `stream` share one interpreter.
 - **RUN-002:** A Run settles its state exactly once, and any complete observed event trace contains

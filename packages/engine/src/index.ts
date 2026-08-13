@@ -1,6 +1,7 @@
 import {
   Cause,
   Clock,
+  Context,
   DateTime,
   Duration,
   Effect,
@@ -10,6 +11,7 @@ import {
   Metric,
   Option,
   PubSub,
+  Queue,
   Schema,
   Scope,
   Semaphore,
@@ -23,9 +25,12 @@ import {
   AgentInputError,
   AgentOutputError,
   AgentPolicyError,
+  type AgentId,
   ApprovalRequested,
   ConversationId,
   type Definition,
+  DelegationDepth,
+  type DelegationId,
   IdGenerator,
   type InstructionSource,
   ModelStarted,
@@ -35,6 +40,14 @@ import {
   RunFailed,
   RunStarted,
   RunSuspended,
+  SubagentCompleted,
+  SubagentFailed,
+  SubagentInterrupted,
+  SubagentJoined,
+  SubagentParentLink,
+  SubagentProgress,
+  SubagentRequested,
+  SubagentStarted,
   TextDelta,
   ToolCallDeclared,
   ToolCallFailed,
@@ -58,7 +71,12 @@ import {
   type Toolkit,
 } from "effect/unstable/ai";
 
-type RuntimeBinding<
+/**
+ * Structural shape of an Agent Binding accepted by the interpreter and by
+ * `AgentSpawner.spawn`: a model-agnostic Definition paired with an explicit
+ * Effect AI Model whose requirements stay visible.
+ */
+export type RuntimeBinding<
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions,
@@ -114,7 +132,15 @@ import {
   type RunUsageDelta,
 } from "./run-options.ts";
 
+export * from "./run-events.ts";
 export * from "./run-options.ts";
+
+import {
+  RunEventSink,
+  RunEventSinkClosedError,
+  type RunEventSinkService,
+  type SubagentEventPayload,
+} from "./run-events.ts";
 
 /** Schema factory for the terminal value produced by reducing a completed agent event stream. */
 export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
@@ -145,8 +171,38 @@ export type AgentRuntimeFailure<
   | HookError
   | InstructionError;
 
-/** Inferred agent services plus the runtime's identity-generation authority. */
+/**
+ * Services the engine itself provides locally to every Run: `AgentSpawner`
+ * bound to the Run's immutable identity and delegation depth, and
+ * `RunEventSink` bound to the active Tool batch. They are excluded from the
+ * runtime's public requirements and MUST NOT be satisfied from an application
+ * Layer.
+ */
+export type EngineProvidedToolServices = AgentSpawner | RunEventSink;
+
+/**
+ * Inferred agent services plus the runtime's identity-generation authority.
+ * Engine-provided Tool handler services are excluded because the interpreter
+ * supplies them itself, bound to the current Run's identity. Output decoding
+ * services stay listed unexcluded: `run`/`start` re-decode the terminal
+ * output outside the Run stream's provision boundary.
+ */
 export type AgentRuntimeRequirements<
+  AgentValue extends Agent.Any,
+  HookRequirements = never,
+  InstructionRequirements = never,
+> =
+  | Exclude<Agent.Requirements<AgentValue>, EngineProvidedToolServices>
+  | AgentValue["definition"]["output"]["DecodingServices"]
+  | IdGenerator
+  | HookRequirements
+  | InstructionRequirements;
+
+/**
+ * Interpreter-internal requirements before the Run boundary in `stream`
+ * provides the engine-owned Tool services and the bound Model.
+ */
+type InterpreterRequirements<
   AgentValue extends Agent.Any,
   HookRequirements = never,
   InstructionRequirements = never,
@@ -372,6 +428,61 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
     message: errorMessage(error),
     providerExecuted: false,
   });
+});
+
+/**
+ * Stamp one pre-base Subagent payload into a first-class Run event through
+ * the same `eventBase` path as every other event, so the Run's sequence stays
+ * monotonic across handler-emitted and engine-emitted events. The engine is
+ * authoritative for the base identity and the emitting batch's `turnId`; a
+ * handler cannot forge either.
+ */
+const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function* (
+  context: RunContext,
+  turnId: TurnId,
+  payload: SubagentEventPayload,
+): Effect.fn.Return<RunEvent> {
+  const shared = {
+    ...(yield* eventBase(context)),
+    turnId,
+    toolCallId: payload.toolCallId,
+    delegationId: payload.delegationId,
+    childConversationId: payload.childConversationId,
+    childRunId: payload.childRunId,
+    targetAgentId: payload.targetAgentId,
+    depth: payload.depth,
+  };
+  switch (payload._tag) {
+    case "SubagentRequested": {
+      return SubagentRequested.make(shared);
+    }
+    case "SubagentStarted": {
+      return SubagentStarted.make(shared);
+    }
+    case "SubagentProgress": {
+      return SubagentProgress.make({ ...shared, summary: payload.summary });
+    }
+    case "SubagentCompleted": {
+      return SubagentCompleted.make({
+        ...shared,
+        turns: payload.turns,
+        finishReason: payload.finishReason,
+      });
+    }
+    case "SubagentFailed": {
+      return SubagentFailed.make({
+        ...shared,
+        errorTag: payload.errorTag,
+        message: payload.message,
+      });
+    }
+    case "SubagentInterrupted": {
+      return SubagentInterrupted.make({ ...shared, reason: payload.reason });
+    }
+    case "SubagentJoined": {
+      return SubagentJoined.make(shared);
+    }
+  }
 });
 
 const approvalDecision = <Tools extends Record<string, Tool.Any>, Error, Requirements>(
@@ -645,7 +756,17 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   );
 };
 
-/** Execute a wholly preflighted native Toolkit batch under one finite engine semaphore. */
+/**
+ * Execute a wholly preflighted native Toolkit batch under one finite engine
+ * semaphore.
+ *
+ * The engine provides this batch's `RunEventSink` locally to the handler
+ * streams, bound to the batch's Turn. Sink emissions are drained into the
+ * batch stream and stamped through `eventBase`; the batch settles (including
+ * by failure) only after every already-emitted Subagent event has surfaced.
+ * The public exclusion of engine-provided services happens once at the Run
+ * boundary in `stream`, so this signature keeps the naked handler services.
+ */
 const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, HookRequirements>(
   context: RunContext,
   turnId: TurnId,
@@ -718,7 +839,63 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         );
         return stream.pipe(Stream.concat(next));
       }, Stream.empty);
-      return approvalPreflight.pipe(Stream.concat(handlers));
+
+      // This batch's live sink. The queue is unbounded and drained by the
+      // Run's own stream below, matching the Run's existing buffering:
+      // emission never blocks a handler and no external observer can
+      // backpressure the batch. Emitting after the batch settled fails closed
+      // with `RunEventSinkClosedError`.
+      const sinkQueue = yield* Queue.unbounded<SubagentEventPayload, Cause.Done>();
+      const batchSink: RunEventSinkService = {
+        emit: (payload) =>
+          Queue.offer(sinkQueue, payload).pipe(
+            Effect.flatMap((accepted) =>
+              accepted
+                ? Effect.void
+                : Effect.fail(
+                    RunEventSinkClosedError.make({
+                      message: `Subagent event ${payload._tag} was emitted after its Tool batch settled`,
+                    }),
+                  ),
+            ),
+          ),
+      };
+
+      // The batch fails only after already-emitted Subagent events surface:
+      // a handler failure cause is held back, the sink queue is ended and
+      // fully drained through the merge, and the cause is rethrown once both
+      // sides finish. External interruption bypasses the capture and tears
+      // the whole batch down through ordinary Scope closure. The widened
+      // annotation reabsorbs the local `RunEventSink` exclusion because the
+      // Run boundary in `stream` owns the public exclusion.
+      let settledCause:
+        | Cause.Cause<ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>>
+        | undefined;
+      const settling: Stream.Stream<
+        RunEvent,
+        never,
+        Tool.HandlerServices<ToolUnion<Tools>>
+      > = handlers.pipe(
+        Stream.provideService(RunEventSink, batchSink),
+        Stream.catchCause((cause) => {
+          settledCause = cause;
+          return Stream.empty;
+        }),
+        Stream.ensuring(Queue.end(sinkQueue)),
+      );
+      const sinkEvents = Stream.fromQueue(sinkQueue).pipe(
+        Stream.mapEffect((payload) => stampSubagentEvent(context, turnId, payload)),
+      );
+      const settled = Stream.merge(settling, sinkEvents).pipe(
+        Stream.concat(
+          Stream.fromEffect(
+            Effect.suspend(() =>
+              settledCause === undefined ? Effect.void : Effect.failCause(settledCause),
+            ),
+          ).pipe(Stream.drain),
+        ),
+      );
+      return approvalPreflight.pipe(Stream.concat(settled));
     }),
   );
 
@@ -1431,7 +1608,7 @@ const makeTurn = <
 ): Stream.Stream<
   RunEvent,
   AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
-  AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements>
+  InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -1756,7 +1933,7 @@ const stream = <
         options.conversationId === undefined
           ? yield* ids.nextConversationId
           : options.conversationId;
-      const runId = yield* ids.nextRunId;
+      const runId = options.runId === undefined ? yield* ids.nextRunId : options.runId;
       const context: RunContext = {
         agentId: agent.definition.id,
         conversationId,
@@ -1818,6 +1995,24 @@ const stream = <
         return yield* durationLimit;
       });
       const deadline = execution.pipe(Stream.interruptWhen(deadlineEffect));
+
+      // Engine-provided Tool services for this Run: a real `AgentSpawner`
+      // bound to the Run's immutable identity and delegation depth, and the
+      // fail-closed `RunEventSink` default that each Tool batch shadows with
+      // its live sink. Providing them here is what removes both services
+      // from the runtime's public requirements.
+      const engineToolServices = Context.make(
+        AgentSpawner,
+        makeAgentSpawner(
+          {
+            agentId: context.agentId,
+            conversationId: context.conversationId,
+            runId: context.runId,
+          },
+          options.parentLink?.depth ?? 0,
+        ),
+      ).pipe(Context.add(RunEventSink, closedRunEventSink));
+
       return started.pipe(
         Stream.concat(deadline),
         Stream.catch((error) => {
@@ -1844,6 +2039,7 @@ const stream = <
             runId: context.runId,
           },
         }),
+        Stream.provide(engineToolServices),
       );
     }),
   );
@@ -2014,6 +2210,164 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     events: Fiber.await(fiber).pipe(Effect.andThen(Effect.sync(() => captured.slice()))),
     observe: Stream.fromPubSubTake(pubsub),
   };
+});
+
+/**
+ * Immutable parent Run identity carried by the locally provided
+ * `AgentSpawner`. It exposes no mutable engine state and no Layer Context.
+ */
+export interface AgentSpawnerParent {
+  readonly agentId: AgentId;
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
+}
+
+/**
+ * Fail-closed Run-level `RunEventSink` default. Each Tool batch shadows it
+ * with a live sink; any emission outside an active Tool batch fails with the
+ * same typed error as emitting after a batch settled.
+ */
+const closedRunEventSink: RunEventSinkService = {
+  emit: (payload) =>
+    Effect.fail(
+      RunEventSinkClosedError.make({
+        message: `Subagent event ${payload._tag} was emitted outside an active Tool batch`,
+      }),
+    ),
+};
+
+/** Stable delegation identity supplied by the invoking delegation Tool handler. */
+export interface SpawnDelegation {
+  readonly delegationId: DelegationId;
+  readonly parentToolCallId: ToolCallId;
+}
+
+/**
+ * Child Run options accepted by `AgentSpawner.spawn`. Child Conversation/Run
+ * identity and the Parent Link are spawner-owned and cannot be overridden.
+ */
+export interface SpawnRunOptions<HookError = never, HookRequirements = never> extends Omit<
+  RunOptions<HookError, HookRequirements>,
+  "conversationId" | "runId" | "parentLink"
+> {}
+
+/**
+ * Handle to one spawned Attached Child: its preallocated child identity, its
+ * immutable Parent Link, and the same observation surface as `DetachedRun`.
+ * The child fiber belongs to the Scope the caller provided to `spawn`.
+ */
+export interface SpawnedChildRun<Output, Error> extends DetachedRun<Output, Error> {
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
+  readonly parentLink: SubagentParentLink;
+}
+
+/**
+ * Run one child Agent Binding through the same interpreter as a top-level
+ * Run.
+ *
+ * The spawner allocates a fresh child `ConversationId` and `RunId` through
+ * `IdGenerator` (guaranteeing a fresh child Conversation per invocation, with
+ * no Conversation reuse), constructs the immutable Parent Link at
+ * `depth + 1`, and starts the child eagerly with `AgentRuntime.start` inside
+ * the caller-provided Scope, so parent interruption always reaches the child
+ * and its finalizers. Preflight policy (including S1's normative
+ * nested-delegation rejection) belongs to the delegation capability and runs
+ * before `spawn` is called.
+ */
+const spawnWithParent = (parent: AgentSpawnerParent, depth: number) =>
+  Effect.fn("AgentSpawner.spawn")(function* <
+    InputSchema extends Schema.Top,
+    OutputSchema extends Schema.Top,
+    Instructions,
+    Tools extends Record<string, Tool.Any>,
+    Provider,
+    ModelProvides,
+    ModelRequires,
+    HookError = never,
+    HookRequirements = never,
+    InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
+    InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  >(
+    binding: RuntimeBinding<
+      InputSchema,
+      OutputSchema,
+      Instructions,
+      Tools,
+      Provider,
+      ModelProvides,
+      ModelRequires,
+      InstructionError,
+      InstructionRequirements
+    >,
+    input: unknown,
+    delegation: SpawnDelegation,
+    options?: SpawnRunOptions<HookError, HookRequirements>,
+  ): Effect.fn.Return<
+    SpawnedChildRun<
+      Agent.Output<typeof binding>,
+      AgentRuntimeFailure<typeof binding, HookError, InstructionError>
+    >,
+    never,
+    | Scope.Scope
+    | AgentRuntimeRequirements<typeof binding, HookRequirements, InstructionRequirements>
+  > {
+    const ids = yield* IdGenerator;
+    const conversationId = yield* ids.nextConversationId;
+    const runId = yield* ids.nextRunId;
+    // `depth + 1` is always an integer >= 1, so a decode failure is a defect.
+    const childDepth = yield* Schema.decodeEffect(DelegationDepth)(depth + 1).pipe(Effect.orDie);
+    const parentLink = SubagentParentLink.make({
+      delegationId: delegation.delegationId,
+      parentAgentId: parent.agentId,
+      parentConversationId: parent.conversationId,
+      parentRunId: parent.runId,
+      parentToolCallId: delegation.parentToolCallId,
+      depth: childDepth,
+    });
+    const child = yield* start(binding, input, {
+      ...options,
+      conversationId,
+      runId,
+      parentLink,
+    });
+    return {
+      ...child,
+      conversationId,
+      runId,
+      parentLink,
+    };
+  });
+
+/**
+ * Narrow parent execution value visible to Tool handlers. `depth` is the
+ * current Run's root-relative delegation depth: `0` for a root Run and
+ * `parentLink.depth` for a child, which the delegation preflight uses to
+ * reject nested delegation (SUB-029).
+ */
+export interface AgentSpawnerService {
+  readonly depth: number;
+  readonly parent: AgentSpawnerParent;
+  readonly spawn: ReturnType<typeof spawnWithParent>;
+}
+
+/**
+ * Engine-owned service contract through which a declared delegation Tool
+ * runs an Attached Child on the same interpreter.
+ *
+ * The engine provides this service locally to every Run, bound to the Run's
+ * immutable identity and delegation depth; it is never satisfied from an
+ * application Layer, is excluded from the runtime's public requirements, and
+ * exposes neither the engine's mutable Run state nor any root Layer Context.
+ */
+export class AgentSpawner extends Context.Service<AgentSpawner, AgentSpawnerService>()(
+  "@effect-agent/engine/AgentSpawner",
+) {}
+
+const makeAgentSpawner = (parent: AgentSpawnerParent, depth: number): AgentSpawnerService => ({
+  depth,
+  parent,
+  spawn: spawnWithParent(parent, depth),
 });
 
 /**

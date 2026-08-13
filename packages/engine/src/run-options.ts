@@ -1,7 +1,13 @@
 import type { Effect } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
-import type { ConversationId, RunId, ToolCallId, TurnId } from "@effect-agent/core";
+import type {
+  ConversationId,
+  RunId,
+  SubagentParentLink,
+  ToolCallId,
+  TurnId,
+} from "@effect-agent/core";
 
 /** Number of queued inputs consumed at one documented Turn seam. */
 export type CommandDrainPolicy = "one" | "all";
@@ -128,6 +134,20 @@ export interface RunSchedulingHook {
 export interface RunOptions<HookError = never, HookRequirements = never> {
   /** Reuse an existing ephemeral Conversation identity instead of allocating one. */
   readonly conversationId?: ConversationId | undefined;
+  /**
+   * Preallocated Run identity used instead of `IdGenerator` when supplied.
+   * The S1 Subagent seam preallocates child Run identity through this option
+   * so `SubagentRequested` can carry the intended child identity.
+   */
+  readonly runId?: RunId | undefined;
+  /**
+   * Non-model-visible Parent Link for a delegated child Run (S1 seam). It
+   * never enters the model prompt or the Run's event payloads directly; the
+   * engine uses it only to fix the Run's delegation depth (`parentLink.depth`
+   * for a child, `0` when absent) exposed through the locally provided
+   * `AgentSpawner`, and future durable work persists it as child lineage.
+   */
+  readonly parentLink?: SubagentParentLink | undefined;
   /**
    * Official prior history. The engine preserves it as the exact initial
    * prefix, then appends this Run's evaluated instructions and decoded input.

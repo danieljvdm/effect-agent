@@ -1,6 +1,7 @@
 import { Schema } from "effect";
 
-import { AgentId, ConversationId, RunId, ToolCallId, TurnId } from "./identifiers.ts";
+import { AgentId, ConversationId, DelegationId, RunId, ToolCallId, TurnId } from "./identifiers.ts";
+import { DelegationDepth } from "./subagent.ts";
 
 const RunEventBase = {
   eventVersion: Schema.Literal(1),
@@ -140,6 +141,69 @@ export class RunSuspended extends Schema.TaggedClass<RunSuspended>()("RunSuspend
   reason: Schema.String,
 }) {}
 
+const SubagentText = Schema.String.check(Schema.isMaxLength(4 * 1024));
+
+const SubagentEventBase = {
+  ...RunEventBase,
+  turnId: TurnId,
+  toolCallId: ToolCallId,
+  delegationId: DelegationId,
+  childConversationId: ConversationId,
+  childRunId: RunId,
+  targetAgentId: AgentId,
+  depth: DelegationDepth,
+};
+
+/** Signals that a delegation Tool Call passed preflight with preallocated child identity. */
+export class SubagentRequested extends Schema.TaggedClass<SubagentRequested>()(
+  "SubagentRequested",
+  SubagentEventBase,
+) {}
+
+/** Signals that the child run has started inside its parent-owned scoped region. */
+export class SubagentStarted extends Schema.TaggedClass<SubagentStarted>()(
+  "SubagentStarted",
+  SubagentEventBase,
+) {}
+
+/** Carries a bounded child progress summary without duplicating the child event stream. */
+export class SubagentProgress extends Schema.TaggedClass<SubagentProgress>()("SubagentProgress", {
+  ...SubagentEventBase,
+  summary: SubagentText,
+}) {}
+
+/** Records the child run's successful terminal outcome before the parent join. */
+export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
+  "SubagentCompleted",
+  {
+    ...SubagentEventBase,
+    turns: Schema.Int.check(Schema.isGreaterThan(0)),
+    finishReason: Schema.Literals(["completed", "model-stop"]),
+  },
+) {}
+
+/** Records the child run's expected terminal failure using safe, serializable diagnostics. */
+export class SubagentFailed extends Schema.TaggedClass<SubagentFailed>()("SubagentFailed", {
+  ...SubagentEventBase,
+  errorTag: Schema.NonEmptyString,
+  message: SubagentText,
+}) {}
+
+/** Records that the child run was stopped by interruption before a terminal outcome. */
+export class SubagentInterrupted extends Schema.TaggedClass<SubagentInterrupted>()(
+  "SubagentInterrupted",
+  {
+    ...SubagentEventBase,
+    reason: SubagentText,
+  },
+) {}
+
+/** Records that the child's terminal outcome was joined into its parent delegation Tool Call. */
+export class SubagentJoined extends Schema.TaggedClass<SubagentJoined>()(
+  "SubagentJoined",
+  SubagentEventBase,
+) {}
+
 /** Versioned union of stable semantic run events, excluding raw provider chunks. */
 export const RunEvent = Schema.Union([
   RunStarted,
@@ -158,5 +222,12 @@ export const RunEvent = Schema.Union([
   RunFailed,
   RunInterrupted,
   RunSuspended,
+  SubagentRequested,
+  SubagentStarted,
+  SubagentProgress,
+  SubagentCompleted,
+  SubagentFailed,
+  SubagentInterrupted,
+  SubagentJoined,
 ]);
 export type RunEvent = typeof RunEvent.Type;

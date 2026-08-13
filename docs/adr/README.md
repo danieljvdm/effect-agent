@@ -17,9 +17,9 @@ The records below reflect explicit owner decisions.
 
 ## Proposed
 
-| ADR                                             | Recommendation                                        |
-| ----------------------------------------------- | ----------------------------------------------------- |
-| [ADR-0010](0010-declared-attached-subagents.md) | Model Subagents as declared attached delegation Tools |
+| ADR                                             | Recommendation                                                                                                             |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [ADR-0010](0010-declared-attached-subagents.md) | Model Subagents as declared attached delegation Tools — S1 implemented as proposed default ([evidence](../S1-EVIDENCE.md)) |
 
 ## Status transitions
 

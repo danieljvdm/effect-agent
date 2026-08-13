@@ -5,6 +5,10 @@ Related decisions: D-002, D-004, D-006, D-007, D-008, D-013, D-020
 Proposed record: [ADR-0010](../adr/0010-declared-attached-subagents.md)
 Research basis: [REFERENCE-ANALYSIS.md](../REFERENCE-ANALYSIS.md#subagent-research-addendum)
 
+Status note (2026-08-12): the §17 S1 slice (attached ephemeral Subagents) has
+[implementation evidence](../S1-EVIDENCE.md), delivered as the roadmap-assigned proposed default.
+This document remains **Proposed** pending owner resolution of ADR-0010.
+
 This document specifies how one Agent delegates bounded work to another Agent while preserving
 Effect typing, structured concurrency, least authority, deterministic parent history, and the
 accepted-work contract. Its requirements are proposed until the owner accepts the decision and

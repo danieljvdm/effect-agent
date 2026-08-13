@@ -30,7 +30,11 @@ bench under `examples/demo`.
 - Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
   `storage-memory`, `storage-sqlite`, and `testing`
 - Current implementation milestone: **Phase 3 complete** (persistent Conversation foundation);
-  **Phase 4 next**
+  **S1 attached ephemeral Subagents implemented**; **Phase 4 next**
+- Subagents: declared attached delegation Tools, the engine spawner seam, and in-memory budget
+  reservations are implemented for ephemeral (`E`) execution as the roadmap-assigned proposed
+  default ([S1 evidence](docs/S1-EVIDENCE.md)); ADR-0010 remains Proposed and durable attached
+  Subagents (S2) remain a later proposal
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral multi-Run Conversations with safe-seam input, approval,
   context, budget, MCP, and sandbox capabilities

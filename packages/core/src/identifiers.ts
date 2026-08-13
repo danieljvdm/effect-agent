@@ -31,6 +31,10 @@ export type TurnId = typeof TurnId.Type;
 export const ToolCallId = identifier("ToolCallId");
 export type ToolCallId = typeof ToolCallId.Type;
 
+/** Stable identity of one immutable Delegation Definition. */
+export const DelegationId = identifier("DelegationId");
+export type DelegationId = typeof DelegationId.Type;
+
 /** Opaque position in a semantic event sequence. */
 export const EventOffset = identifier("EventOffset");
 export type EventOffset = typeof EventOffset.Type;
