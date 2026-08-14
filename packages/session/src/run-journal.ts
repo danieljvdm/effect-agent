@@ -294,9 +294,9 @@ const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
  *   first `ModelResponseRecorded`. The projection consumes it only for Run correlation.
  */
 export interface RunJournalProjection {
-  /** Full canonical model-visible prompt across every committed Turn of every Run. */
+  /** Canonical projection for the requested Run; may end at its resumable Tool declaration. */
   readonly prompt: Prompt.Prompt;
-  /** Canonical prompt excluding the projected Run's records: the resuming Attempt's history. */
+  /** Valid prior-Run history excluding the projected Run's records and orphan Tool batches. */
   readonly historyBefore: Prompt.Prompt;
   /** Number of canonical Turns already committed for the projected Run. */
   readonly committedTurns: number;
@@ -309,6 +309,26 @@ interface FoldState {
   readonly pendingToolsForRun: boolean;
   readonly committedTurns: number;
 }
+
+const decodeToolCallId = Schema.decodeSync(ToolCallId);
+
+const declaredApplicationToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> => {
+  const ids: Array<string> = [];
+  for (const message of prompt.content) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type === "tool-call" && !part.providerExecuted) ids.push(part.id);
+    }
+  }
+  return ids;
+};
+
+const withoutApplicationToolCallMessages = (prompt: Prompt.Prompt): ReadonlyArray<Prompt.Message> =>
+  prompt.content.filter(
+    (message) =>
+      message.role !== "assistant" ||
+      !message.content.some((part) => part.type === "tool-call" && !part.providerExecuted),
+  );
 
 /**
  * Phase 5 audit tags that are prompt-transparent: they carry durability evidence (preparation,
@@ -338,16 +358,23 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
 
 /**
  * Pure projection: rebuild one Run's resume state from canonical records (DUR-015). Canonical
- * order is authoritative; the fold appends each `ModelResponseRecorded`'s messages and flushes
- * each contiguous group of `ToolCallSettled` records into one Tool message, exactly mirroring the
- * per-Turn commit shape produced by `turnCanonicalBatch` (no-tool Turns) and by the
+ * order is authoritative; the fold projects each complete `ModelResponseRecorded` Turn and the
+ * owning Run's resumable incomplete Tool Turn, while excluding incomplete Tool batches from prior
+ * Runs. It flushes each contiguous group of valid `ToolCallSettled` records into one Tool message,
+ * exactly mirroring the per-Turn commit shape produced by `turnCanonicalBatch` (no-tool Turns) and
+ * by the
  * `turnResponseBatch`/`turnResultsBatch` split (tool-declaring Turns). The Phase 5 audit tags
  * are skipped transparently, so split-batch commits replay to the same prompt as P4 single-batch
  * commits.
+ *
+ * An incomplete application Tool turn remains visible while projecting its owning Run so active
+ * recovery can resume the declared batch. It is not a valid model-visible Turn boundary for a
+ * later Run: the orphan assistant Tool declaration and any partial Tool results from that Turn
+ * are excluded, while preceding instruction/user messages in the response record remain history.
  */
-export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(function* (
+const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwner")(function* (
   records: ReadonlyArray<CanonicalRecordEnvelope>,
-  runId: RunId,
+  ownerRunId: RunId | undefined,
 ): Effect.fn.Return<RunJournalProjection, RunJournalError> {
   let state: FoldState = {
     all: [],
@@ -356,6 +383,36 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(funct
     pendingToolsForRun: false,
     committedTurns: 0,
   };
+
+  const settledToolCallRecordIds = new Set<string>();
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag !== "ToolCallSettled") continue;
+    settledToolCallRecordIds.add(envelope.record.recordId);
+  }
+
+  const decodedResponses = new Map<string, Prompt.Prompt>();
+  const incompleteToolTurns = new Set<string>();
+  const incompleteToolCalls = new Set<string>();
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag !== "ModelResponseRecorded") continue;
+    const messages = yield* decodePromptMessages(payload.messages);
+    decodedResponses.set(envelope.record.recordId, messages);
+    const declared = declaredApplicationToolCallIds(messages);
+    const declaredRecordIds: Array<RecordId> = [];
+    for (const id of declared) {
+      const toolCallId = yield* Effect.try({
+        try: () => decodeToolCallId(id),
+        catch: (cause) => journalError("Failed to decode a declared Tool Call ID", cause),
+      });
+      declaredRecordIds.push(toolCallSettledRecordId(payload.runId, payload.turn, toolCallId));
+    }
+    if (declaredRecordIds.some((recordId) => !settledToolCallRecordIds.has(recordId))) {
+      incompleteToolTurns.add(envelope.record.recordId);
+      for (const recordId of declaredRecordIds) incompleteToolCalls.add(recordId);
+    }
+  }
 
   const flushTools = Effect.fn("RunJournal.flushTools")(function* (
     current: FoldState,
@@ -375,24 +432,37 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(funct
     const payload = envelope.record.payload;
     if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) continue;
     if (payload._tag === "ToolCallSettled") {
-      if (state.pendingTools.length > 0 && state.pendingToolsForRun !== (payload.runId === runId)) {
+      if (payload.runId !== ownerRunId && incompleteToolCalls.has(envelope.record.recordId)) {
+        continue;
+      }
+      if (
+        state.pendingTools.length > 0 &&
+        state.pendingToolsForRun !== (payload.runId === ownerRunId)
+      ) {
         state = yield* flushTools(state);
       }
       state = {
         ...state,
         pendingTools: [...state.pendingTools, payload],
-        pendingToolsForRun: payload.runId === runId,
+        pendingToolsForRun: payload.runId === ownerRunId,
       };
       continue;
     }
     state = yield* flushTools(state);
     if (payload._tag !== "ModelResponseRecorded") continue;
-    const messages = yield* decodePromptMessages(payload.messages);
-    const forRun = payload.runId === runId;
+    const messages = decodedResponses.get(envelope.record.recordId);
+    if (messages === undefined) {
+      return yield* journalError("A canonical ModelResponseRecorded was not decoded");
+    }
+    const forRun = payload.runId === ownerRunId;
+    const visibleMessages =
+      !forRun && incompleteToolTurns.has(envelope.record.recordId)
+        ? withoutApplicationToolCallMessages(messages)
+        : messages.content;
     state = {
       ...state,
-      all: [...state.all, ...messages.content],
-      before: forRun ? state.before : [...state.before, ...messages.content],
+      all: [...state.all, ...visibleMessages],
+      before: forRun ? state.before : [...state.before, ...visibleMessages],
       committedTurns: forRun ? Math.max(state.committedTurns, payload.turn) : state.committedTurns,
     };
   }
@@ -405,17 +475,27 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(funct
   };
 });
 
-const NO_RUN = decodeRunId("run:none");
+/** Pure projection of one Run's durable recovery state from canonical records. */
+export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(
+  (
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+    runId: RunId,
+  ): Effect.Effect<RunJournalProjection, RunJournalError> =>
+    projectRunJournalForOwner(records, runId),
+);
 
 /**
- * Pure prompt reconstruction from canonical records: `UserInputRecorded` + `ModelResponseRecorded`
- * + `ToolCallSettled` → the deterministic model-visible Prompt (plan §Coordinator flow step 3).
+ * Pure valid-prompt projection from canonical records: `UserInputRecorded` +
+ * `ModelResponseRecorded` + complete `ToolCallSettled` batches → the deterministic model-visible
+ * Prompt (plan §Coordinator flow step 3).
  */
 export const promptFromCanonicalRecords = Effect.fn("RunJournal.promptFromCanonicalRecords")(
   (
     records: ReadonlyArray<CanonicalRecordEnvelope>,
   ): Effect.Effect<Prompt.Prompt, RunJournalError> =>
-    projectRunJournal(records, NO_RUN).pipe(Effect.map((projection) => projection.prompt)),
+    projectRunJournalForOwner(records, undefined).pipe(
+      Effect.map((projection) => projection.prompt),
+    ),
 );
 
 /** Everything one committed Turn contributes to its canonical batch. */
@@ -435,7 +515,6 @@ export interface TurnCommitInput {
   readonly createdAt: DateTime.Utc;
 }
 
-const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const decodePersistedJson = Schema.decodeUnknownEffect(PersistedJson);
 const encodePrompt = Schema.encodeEffect(Prompt.Prompt);
 
