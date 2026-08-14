@@ -447,7 +447,23 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
       const attachment = attachments.get(reservation.childSubmissionId);
       if (attachment !== undefined) ordered.push(attachment);
     }
-    return RecoverySnapshot.make({ ...snapshot, childAttachments: ordered });
+    return RecoverySnapshot.make({
+      submission: snapshot.submission,
+      joins: snapshot.joins,
+      approvalDecisions: snapshot.approvalDecisions,
+      unknownResolutions: snapshot.unknownResolutions,
+      childReservations: snapshot.childReservations,
+      childAttachments: ordered,
+      ...(snapshot.ownership === undefined ? {} : { ownership: snapshot.ownership }),
+      ...(snapshot.inputApplied === undefined ? {} : { inputApplied: snapshot.inputApplied }),
+      ...(snapshot.reservation === undefined ? {} : { reservation: snapshot.reservation }),
+      ...(snapshot.abortIntent === undefined ? {} : { abortIntent: snapshot.abortIntent }),
+      ...(snapshot.hostSubmissionId === undefined
+        ? {}
+        : { hostSubmissionId: snapshot.hostSubmissionId }),
+      ...(snapshot.suspension === undefined ? {} : { suspension: snapshot.suspension }),
+      ...(snapshot.parentLinkage === undefined ? {} : { parentLinkage: snapshot.parentLinkage }),
+    });
   });
 
   const routed = SubmissionLedger.of({

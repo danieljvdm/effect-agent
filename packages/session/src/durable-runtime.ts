@@ -280,7 +280,7 @@ type InstructionRequirementsOf<Instructions, Input> =
 
 const decodeBatchId = Schema.decodeSync(BatchId);
 const decodeRecordId = Schema.decodeSync(RecordId);
-const decodeToolCallIdUnknown = Schema.decodeUnknownEffect(ToolCallId);
+const decodeToolCallIdUnknown = (input: unknown) => Schema.decodeUnknownEffect(ToolCallId)(input);
 const ZERO_EPOCH = Schema.decodeSync(ProducerEpoch)(0);
 const READ_PAGE = 1_024;
 /** Stale-tail append retries per batch before the conflict propagates (see `appendBatch`). */
@@ -324,7 +324,8 @@ const boundedText = (value: string): string =>
 const decodePrincipalSync = Schema.decodeSync(Principal);
 const decodeIdempotencyKeySync = Schema.decodeSync(IdempotencyKey);
 const decodeChildReservationIdSync = Schema.decodeSync(ChildReservationId);
-const decodeDefinitionDigests = Schema.decodeUnknownEffect(DefinitionDigests);
+const decodeDefinitionDigests = (input: unknown) =>
+  Schema.decodeUnknownEffect(DefinitionDigests)(input);
 
 /**
  * Deterministic parent-owned child budget reservation identity (spec
@@ -646,8 +647,8 @@ class CoordinatorHalt {
 
 const ErrorMessage = Schema.Struct({ message: Schema.String });
 const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
-const decodeErrorMessage = Schema.decodeUnknownOption(ErrorMessage);
-const decodeErrorTag = Schema.decodeUnknownOption(ErrorTag);
+const decodeErrorMessage = (input: unknown) => Schema.decodeUnknownOption(ErrorMessage)(input);
+const decodeErrorTag = (input: unknown) => Schema.decodeUnknownOption(ErrorTag)(input);
 
 const errorMessageOf = (error: unknown): string =>
   Option.match(decodeErrorMessage(error), {
@@ -665,8 +666,8 @@ const nowUtc: Effect.Effect<DateTime.Utc> = Effect.map(Clock.currentTimeMillis, 
   DateTime.toUtc(DateTime.makeUnsafe(millis)),
 );
 
-const decodePrompt = Schema.decodeUnknownEffect(Prompt.Prompt);
-const decodePersisted = Schema.decodeUnknownEffect(PersistedJson);
+const decodePrompt = (input: unknown) => Schema.decodeUnknownEffect(Prompt.Prompt)(input);
+const decodePersisted = (input: unknown) => Schema.decodeUnknownEffect(PersistedJson)(input);
 
 /** One application Tool Call declared inside a canonical `ModelResponseRecorded`'s messages. */
 interface DeclaredApplicationCall {

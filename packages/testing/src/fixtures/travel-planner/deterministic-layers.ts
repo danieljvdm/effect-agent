@@ -331,7 +331,13 @@ export class SupplierBookingDesk extends Context.Service<
           const cancelled =
             existing.status === "cancelled"
               ? existing
-              : SupplierBookingRecord.make({ ...existing, status: "cancelled" });
+              : SupplierBookingRecord.make({
+                  bookingRef: existing.bookingRef,
+                  idempotencyKey: existing.idempotencyKey,
+                  operation: existing.operation,
+                  detail: existing.detail,
+                  status: "cancelled",
+                });
           const bookings = new Map(current.bookings).set(storeKey, cancelled);
           const hold = Option.fromNullishOr(current.holds.get(key));
           const holds = Option.isSome(hold)

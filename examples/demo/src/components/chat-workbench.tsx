@@ -213,7 +213,8 @@ export function ChatWorkbench() {
                   onChange={(event) =>
                     setModelSettings(
                       DemoModelSettings.make({
-                        ...modelSettings,
+                        reasoningEffort: modelSettings.reasoningEffort,
+                        fast: modelSettings.fast,
                         model: event.target.value as DemoModelSettings["model"],
                       }),
                     )
@@ -230,7 +231,8 @@ export function ChatWorkbench() {
                   onChange={(event) =>
                     setModelSettings(
                       DemoModelSettings.make({
-                        ...modelSettings,
+                        model: modelSettings.model,
+                        fast: modelSettings.fast,
                         reasoningEffort: event.target.value as DemoModelSettings["reasoningEffort"],
                       }),
                     )
@@ -247,7 +249,11 @@ export function ChatWorkbench() {
                 <Button
                   onClick={() =>
                     setModelSettings(
-                      DemoModelSettings.make({ ...modelSettings, fast: !modelSettings.fast }),
+                      DemoModelSettings.make({
+                        model: modelSettings.model,
+                        reasoningEffort: modelSettings.reasoningEffort,
+                        fast: !modelSettings.fast,
+                      }),
                     )
                   }
                   size="sm"

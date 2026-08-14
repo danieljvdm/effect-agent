@@ -272,7 +272,9 @@ const runCoverage = Effect.fn("requirementsCoverage")(function* (options: {
       referencedBy.set(id, [...(referencedBy.get(id) ?? []), testFile]);
     }
   }
-  for (const [id, files] of [...referencedBy.entries()].sort()) {
+  for (const [id, files] of [...referencedBy.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     if (!definedBy.has(id)) {
       problems.push(`${id} is referenced by ${files.join(", ")} but no specification defines it.`);
     }
@@ -329,7 +331,9 @@ const runCoverage = Effect.fn("requirementsCoverage")(function* (options: {
 
   // 4. Every defined requirement is either test-referenced or documented.
   const entries: Array<RequirementCoverageEntry> = [];
-  for (const [id, specPath] of [...definedBy.entries()].sort()) {
+  for (const [id, specPath] of [...definedBy.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
     const references = referencedBy.get(id);
     if (references !== undefined) {
       entries.push(RequirementCoverageEntry.make({ id, references, specPath, status: "tested" }));

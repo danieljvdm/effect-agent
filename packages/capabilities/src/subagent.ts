@@ -931,7 +931,8 @@ const layer = <
   >;
   const encodeChildInput = Schema.encodeEffect(delegation.target.input);
   const encodeSuccess = Schema.encodeEffect(delegation.success);
-  const decodeChildOutput = Schema.decodeUnknownEffect(delegation.target.output);
+  const decodeChildOutput = (input: unknown) =>
+    Schema.decodeUnknownEffect(delegation.target.output)(input);
   const encodeDeclaredFailure = Schema.encodeEffect(delegation.failure);
   const childToolNames = Object.keys(delegation.target.toolkit.tools);
   // Construction-fixed durable declaration (S2): the exact digest strings the

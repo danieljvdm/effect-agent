@@ -769,7 +769,7 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
         ).pipe(Stream.runCollect, Effect.provide(Layer.merge(toolLayer, makeIdentifiers())));
 
       const normalize = (events: ReadonlyArray<RunEvent>) =>
-        events.map((event) => ({ ...event, timestamp: "normalized" }));
+        events.map((event) => Object.assign({}, event, { timestamp: "normalized" }));
 
       const baseline = yield* runWith(baselineLayer);
       const dispatched = yield* runWith(dispatchingLayer);

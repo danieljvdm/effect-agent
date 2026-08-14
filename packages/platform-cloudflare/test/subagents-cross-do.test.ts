@@ -349,7 +349,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const markersBefore = await settlementMarkers(ref);
     for (let delivery = 0; delivery < 2; delivery++) {
       const decoded = await Effect.runPromise(
-        decodePortResponse(await stubFor(ref, SUBAGENTS).portCall(redelivery)),
+        decodePortResponse(await Promise.resolve(stubFor(ref, SUBAGENTS).portCall(redelivery))),
       );
       expect(decoded._tag).toBe("PortSucceeded");
       if (decoded._tag === "PortSucceeded") {

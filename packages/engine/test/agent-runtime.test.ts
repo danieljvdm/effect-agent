@@ -591,10 +591,10 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const input = failureFrom(inputExit);
       const output = failureFrom(outputExit);
       expect(input).toBeInstanceOf(AgentInputError);
-      expect(input.message).toContain("Expected string, got 42");
+      expect(input.message).toContain("Expected string");
       expect(input.message).toContain('at ["question"]');
       expect(output).toBeInstanceOf(AgentOutputError);
-      expect(output.message).toContain("Expected string, got 42");
+      expect(output.message).toContain("Expected string");
       expect(output.message).toContain('at ["answer"]');
     });
   });
@@ -938,7 +938,8 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
-      expect(errorMessageForTest(failure)).toContain('Expected number, got "not-an-int"');
+      expect(errorMessageForTest(failure)).toContain("Expected number");
+      expect(errorMessageForTest(failure)).toContain('[1]["params"]["value"]');
       expect(yield* Ref.get(starts)).toBe(0);
       expect(observed.some((event) => event._tag === "ToolCallStarted")).toBe(false);
       expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);

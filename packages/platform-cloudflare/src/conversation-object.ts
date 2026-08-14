@@ -627,7 +627,7 @@ export const makeConversationObjectClass = (options: ConversationObjectOptions) 
       );
       // The constructor gate: local-only checks; never the recovery pass (deadlock argument,
       // plan §1.4). A failure here fails every delivery with the typed construction error.
-      ctx.blockConcurrencyWhile(() => this.#runtime.runPromise(gateEndpoint));
+      void ctx.blockConcurrencyWhile(() => this.#runtime.runPromise(gateEndpoint));
     }
 
     async submitEncoded(encoded: unknown): Promise<unknown> {

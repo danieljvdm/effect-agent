@@ -1,0 +1,55 @@
+diff --git a/dist/Schema.d.ts b/dist/Schema.d.ts
+index 3bcbc1b1ce4daa5bd2a1340b519dc3cab0da8c19..4c0914440df83a0069be64d106cbcca94cf8413c 100644
+--- a/dist/Schema.d.ts
++++ b/dist/Schema.d.ts
+@@ -9856,6 +9856,13 @@ export declare const TaggedError: {
+         } & S["fields"]>>, Cause_.YieldableError & Brand>;
+     };
+ };
++/**
++ * Compatibility alias for integrations compiled against Effect versions prior
++ * to 4.0.0-beta.104.
++ *
++ * @deprecated Use {@link TaggedError}.
++ */
++export declare const TaggedErrorClass: typeof TaggedError;
+ /**
+  * A thunk that, given the `fast-check` module, returns an `Arbitrary<T>`.
+  * Use this type when you need to defer instantiation of the arbitrary, for
+diff --git a/dist/Schema.js b/dist/Schema.js
+index 930782e7a5de26bf66b002097f00f35a823fd2e3..c66b7c254bbf0f2a869d0879f3f46e1172768a2e 100644
+--- a/dist/Schema.js
++++ b/dist/Schema.js
+@@ -9211,6 +9211,13 @@ export const TaggedError = identifier => {
+     return Error(identifier ?? tagValue)(struct, annotations);
+   };
+ };
++/**
++ * Compatibility alias for integrations compiled against Effect versions prior
++ * to 4.0.0-beta.104.
++ *
++ * @deprecated Use {@link TaggedError}.
++ */
++export const TaggedErrorClass = TaggedError;
+ /**
+  * Derives a {@link LazyArbitrary} from a schema. The result is memoized so
+  * repeated calls with the same schema are cheap.
+diff --git a/src/Schema.ts b/src/Schema.ts
+index c061fa13cdd5d73c45494cdbb62caa3f23bbfbfb..10e72d4c614f63b45d2e0f96a8484f740eb9bdc6 100644
+--- a/src/Schema.ts
++++ b/src/Schema.ts
+@@ -14952,6 +14952,14 @@ export const TaggedError: {
+   }
+ }
+ 
++/**
++ * Compatibility alias for integrations compiled against Effect versions prior
++ * to 4.0.0-beta.104.
++ *
++ * @deprecated Use {@link TaggedError}.
++ */
++export const TaggedErrorClass: typeof TaggedError = TaggedError
++
+ // -----------------------------------------------------------------------------
+ // Arbitrary
+ // -----------------------------------------------------------------------------

@@ -19,18 +19,18 @@ The root `package.json` is the only version source for shared dependencies.
 | Bun                               |           `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
 | Vite+                             |            `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
 | Vitest                            |           `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
-| Effect                            |   `4.0.0-beta.102` | Runtime, Schema, services, and Effect AI                                          |
-| `@effect/platform-node`           |   `4.0.0-beta.102` | Node services used by repository scripts                                          |
-| `@effect/platform-browser`        |   `4.0.0-beta.102` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
-| `@effect/sql-sqlite-do`           |   `4.0.0-beta.102` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
-| `@effect/vitest`                  |   `4.0.0-beta.102` | Effect-aware test execution and scoped Layer composition                          |
+| Effect                            |   `4.0.0-beta.105` | Runtime, Schema, services, and Effect AI                                          |
+| `@effect/platform-node`           |   `4.0.0-beta.105` | Node services used by repository scripts                                          |
+| `@effect/platform-browser`        |   `4.0.0-beta.105` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
+| `@effect/sql-sqlite-do`           |   `4.0.0-beta.105` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
+| `@effect/vitest`                  |   `4.0.0-beta.105` | Effect-aware test execution and scoped Layer composition                          |
 | `@cloudflare/vitest-pool-workers` |           `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
 | `@cloudflare/workers-types`       |     `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
 | Miniflare                         |     `4.20260730.0` | Programmatic workerd runtimes for the restart-persistence test lane               |
 | esbuild                           |           `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
 | Node.js                           | `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
 | TypeScript                        |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
-| `@effect/tsgo`                    |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
+| `@effect/tsgo`                    |           `0.33.0` | Effect-aware TypeScript diagnostics                                               |
 | `@types/node`                     |           `26.1.2` | Node types for repository scripts                                                 |
 | `tsx`                             |           `4.23.1` | TypeScript script runner                                                          |
 | VitePress                         |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
@@ -47,6 +47,17 @@ Vitest remains supplied by Vite+ rather than becoming a separate workspace depen
 probed exception: `vp test` cannot drive the Cloudflare Workers pool runner, so
 `storage-cloudflare` and `platform-cloudflare` declare the catalog-pinned `vitest` directly and
 run `vitest run` as their `test` scripts (P6 WP0 probe, decision D-P6-7).
+
+Effect `4.0.0-beta.105` is temporarily installed with the same narrow compatibility patch used by
+Kommunikasie. The patch restores `Schema.TaggedErrorClass` as a deprecated alias of
+`Schema.TaggedError`, allowing the two repositories to share the beta.105 runtime before their
+existing tagged errors are migrated together. Remove the patch once those call sites use the
+upstream name directly.
+
+The beta.105-aligned `@effect/tsgo` 0.33.0 upgrade also temporarily disables only its
+`preferTypedSchemaDecoder` suggestion. Version 0.33.0 panics while analyzing the repository's
+valid curried unknown-input decoders; TypeScript checking and every other Effect diagnostic remain
+enabled. Remove this exception when the upstream analyzer handles those decoder applications.
 
 ## Current workspace
 

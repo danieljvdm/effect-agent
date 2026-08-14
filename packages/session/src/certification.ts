@@ -61,7 +61,8 @@ export interface ConversationInvariantInput {
 }
 
 const encodeEnvelope = Schema.encodeEffect(CanonicalRecordEnvelope);
-const decodeEnvelope = Schema.decodeUnknownEffect(CanonicalRecordEnvelope);
+const decodeEnvelope = (input: unknown) =>
+  Schema.decodeUnknownEffect(CanonicalRecordEnvelope)(input);
 
 const check = (
   name: IntegrityCheckName,

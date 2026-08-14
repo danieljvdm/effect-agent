@@ -147,6 +147,7 @@ describe("capability contracts", () => {
             name: "search",
             isFailure: false,
             result: { hotel: "Harbor" },
+            providerExecuted: false,
           }),
         ],
       });
@@ -167,6 +168,7 @@ describe("capability contracts", () => {
             name: "reserve",
             isFailure: false,
             result: { held: true },
+            providerExecuted: false,
           }),
         ],
       });

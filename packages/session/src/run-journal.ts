@@ -270,6 +270,7 @@ const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
               name: record.toolName,
               result: record.result,
               isFailure: record.isFailure,
+              providerExecuted: false,
             }),
           ),
         }),
@@ -435,7 +436,7 @@ export interface TurnCommitInput {
 }
 
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
-const decodePersistedJson = Schema.decodeUnknownEffect(PersistedJson);
+const decodePersistedJson = (input: unknown) => Schema.decodeUnknownEffect(PersistedJson)(input);
 const encodePrompt = Schema.encodeEffect(Prompt.Prompt);
 
 const requireCanonicalTurn = (turn: number): Effect.Effect<void, RunJournalError> =>

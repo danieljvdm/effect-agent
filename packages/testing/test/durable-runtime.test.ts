@@ -1104,6 +1104,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             name: "search",
             result: { available: true },
             isFailure: false,
+            providerExecuted: false,
           }),
         ],
       }),

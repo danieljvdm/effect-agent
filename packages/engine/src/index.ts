@@ -1486,6 +1486,7 @@ const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
             name: part.name,
             isFailure: part.isFailure,
             result: part.encodedResult,
+            providerExecuted: false,
           }),
         ]
       : [],
@@ -2166,6 +2167,7 @@ const toolBatchContinuation = <
             name: result.name,
             result: result.encodedResult,
             isFailure: result.isFailure,
+            providerExecuted: false,
           }),
         ),
       });
@@ -2268,7 +2270,9 @@ const makeResumeTurn = <
       for (const call of resume.calls) {
         if (!hasTool(tools, call.name)) {
           return failRunEventStream(
-            ModelProtocolError.make({ message: `Turn resume declared unknown Tool ${call.name}` }),
+            ModelProtocolError.make({
+              message: `Turn resume declared unknown Tool ${String(call.name)}`,
+            }),
           );
         }
         if (trace.toolCalls.has(call.id)) {

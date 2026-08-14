@@ -25,7 +25,7 @@ describe("ConversationStore port schemas", () => {
     Effect.gen(function* () {
       const request = ConversationTailRequest.make({ conversationId });
       const decodedRequest = yield* Schema.encodeEffect(ConversationTailRequest)(request).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(ConversationTailRequest)),
+        Effect.flatMap((input) => Schema.decodeUnknownEffect(ConversationTailRequest)(input)),
       );
       expect(decodedRequest).toEqual(request);
 
@@ -36,7 +36,7 @@ describe("ConversationStore port schemas", () => {
         producerEpoch: epoch(2),
       });
       const decodedTail = yield* Schema.encodeEffect(ConversationTail)(tail).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(ConversationTail)),
+        Effect.flatMap((input) => Schema.decodeUnknownEffect(ConversationTail)(input)),
       );
       expect(decodedTail).toEqual(tail);
 
@@ -48,7 +48,7 @@ describe("ConversationStore port schemas", () => {
       });
       expect(
         yield* Schema.encodeEffect(ConversationTail)(emptyTail).pipe(
-          Effect.flatMap(Schema.decodeUnknownEffect(ConversationTail)),
+          Effect.flatMap((input) => Schema.decodeUnknownEffect(ConversationTail)(input)),
         ),
       ).toEqual(emptyTail);
     }),
@@ -63,7 +63,7 @@ describe("ConversationStore port schemas", () => {
           Effect.gen(function* () {
             const bare = AppendConflict.make({ conversationId, batchId, reason });
             const decodedBare = yield* Schema.encodeEffect(AppendConflict)(bare).pipe(
-              Effect.flatMap(Schema.decodeUnknownEffect(AppendConflict)),
+              Effect.flatMap((input) => Schema.decodeUnknownEffect(AppendConflict)(input)),
             );
             expect(decodedBare.reason).toBe(reason);
             expect(decodedBare.actualTailSequence).toBeUndefined();
@@ -80,7 +80,7 @@ describe("ConversationStore port schemas", () => {
         actualTailDigest: digest,
       });
       const decodedHinted = yield* Schema.encodeEffect(AppendConflict)(hinted).pipe(
-        Effect.flatMap(Schema.decodeUnknownEffect(AppendConflict)),
+        Effect.flatMap((input) => Schema.decodeUnknownEffect(AppendConflict)(input)),
       );
       expect(decodedHinted.actualTailSequence).toBe(sequence(7));
       expect(decodedHinted.actualTailDigest).toBe(digest);
