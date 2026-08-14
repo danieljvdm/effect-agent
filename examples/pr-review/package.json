@@ -10,12 +10,10 @@
     "review": "bun src/cli.ts"
   },
   "dependencies": {
-    "@effect-agent/capabilities": "workspace:*",
-    "@effect-agent/core": "workspace:*",
-    "@effect-agent/engine": "workspace:*",
     "@effect/ai-openai": "catalog:",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "effect-agent": "workspace:*"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

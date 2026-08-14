@@ -1,7 +1,9 @@
 import { Schema } from "effect";
 
-import { ChangedFile, commentableLines } from "./diff.ts";
-import { CodeReview, ReviewFinding } from "./review-agent.ts";
+import type { ChangedFile } from "./diff.ts";
+import { commentableLines } from "./diff.ts";
+import type { CodeReview } from "./review-agent.ts";
+import { ReviewFinding } from "./review-agent.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is

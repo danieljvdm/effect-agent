@@ -22,6 +22,7 @@ const repositoryRoot = "../..";
 const packageNames = [
   "capabilities",
   "core",
+  "effect-agent",
   "engine",
   "platform-cloudflare",
   "platform-node",
@@ -49,6 +50,7 @@ const effectTestPackageNames = [
 const productionPackageNames = [
   "capabilities",
   "core",
+  "effect-agent",
   "engine",
   "platform-cloudflare",
   "platform-node",
@@ -272,8 +274,8 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
       // The pr-review GitHub Action bot is the fourth leaf example workspace.
       expect(prReview.name).toBe("@effect-agent/example-pr-review");
-      expect(prReview.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
-      expect(prReview.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
+      // The example consumes the framework through the umbrella package.
+      expect(prReview.dependencies?.["effect-agent"]).toBe("workspace:*");
       expect(prReview.dependencies?.effect).toBe("catalog:");
       expect(prReview.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(prReviewDependencies).not.toContain("wrangler");

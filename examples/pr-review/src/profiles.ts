@@ -1,6 +1,6 @@
-import { Agent } from "@effect-agent/core";
 import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Agent } from "effect-agent";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
 import { CodeReview, PullRequestReviewer } from "./review-agent.ts";

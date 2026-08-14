@@ -36,7 +36,7 @@ and a browser test bench under `examples/demo`.
 - Working package scope: `@effect-agent/*`
 - Repository shape: **Vite+ monorepo** with framework packages in `packages/*`, leaf consumer
   benches in `examples/*`, and no `apps/`
-- Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
+- Current packages: `effect-agent` (umbrella over the pure surface), `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
   `storage-memory`, `storage-sqlite`, `storage-cloudflare`, `platform-node`,
   `platform-cloudflare`, and `testing`
 - Current implementation milestone: **the roadmap table is complete** — Phase 7 internal

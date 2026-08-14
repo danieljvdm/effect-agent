@@ -53,6 +53,7 @@ Only packages required by the active roadmap phase exist:
 
 ```text
 packages/
+  effect-agent/         Umbrella: the pure authoring/interpreter/capabilities surface as one package
   core/                 Domain and Agent authoring package
   engine/               Ephemeral Agent interpreter
   capabilities/         Operational policy and capability adapters

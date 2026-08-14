@@ -1,6 +1,11 @@
-import { makeUsageBudget, toRunBudgetHook, UsageBudgetLimits } from "@effect-agent/capabilities";
-import { AgentRuntime, type RuntimeBinding } from "@effect-agent/engine";
 import { Effect, Schema } from "effect";
+import {
+  makeUsageBudget,
+  toRunBudgetHook,
+  UsageBudgetLimits,
+  AgentRuntime,
+  type RuntimeBinding,
+} from "effect-agent";
 import { type Toolkit } from "effect/unstable/ai";
 
 import { PublishedReview, ReviewPublisher } from "./github.ts";
