@@ -50,6 +50,8 @@ describe("OpenAI tool schema compatibility", () => {
 // real patch, plus one binary file without a textual diff.
 // ---------------------------------------------------------------------------
 
+const FIXTURE_SHA = "0123456789abcdef0123456789abcdef01234567";
+
 const HELLO_PATCH = [
   "@@ -1,3 +1,4 @@",
   " const one = 1;",
@@ -75,6 +77,7 @@ const fixture = FixturePullRequest.make({
     baseRef: "main",
     headRef: "fix/sum",
     headSha: "0123456789abcdef0123456789abcdef01234567",
+    totalChangedFiles: 2,
   }),
   files: [
     FixtureFile.make({
@@ -239,7 +242,11 @@ describe("publication planning", () => {
   });
 
   it("plans inline comments for valid anchors and demotes the rest", () => {
-    const plan = planPublication(scriptedReview, files, { applyVerdict: false });
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
     expect(plan.event).toBe("COMMENT");
     expect(plan.comments).toHaveLength(1);
     expect(plan.comments[0]?.path).toBe("src/hello.ts");
@@ -259,10 +266,28 @@ describe("publication planning", () => {
       verdict: "request-changes",
       findings: [],
     });
-    expect(planPublication(blocking, files, { applyVerdict: false }).event).toBe("COMMENT");
-    expect(planPublication(blocking, files, { applyVerdict: true }).event).toBe("REQUEST_CHANGES");
+    expect(
+      planPublication(blocking, files, {
+        applyVerdict: false,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+      }).event,
+    ).toBe("COMMENT");
+    expect(
+      planPublication(blocking, files, {
+        applyVerdict: true,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+      }).event,
+    ).toBe("REQUEST_CHANGES");
     const approving = CodeReview.make({ summary: "Fine.", verdict: "approve", findings: [] });
-    expect(planPublication(approving, files, { applyVerdict: true }).event).toBe("APPROVE");
+    expect(
+      planPublication(approving, files, {
+        applyVerdict: true,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+      }).event,
+    ).toBe("APPROVE");
   });
 
   it("extends the suggestion fence past any backticks in the replacement", () => {
@@ -276,8 +301,38 @@ describe("publication planning", () => {
         }),
       ],
     });
-    const body = planPublication(tricky, files, { applyVerdict: false }).comments[0]?.body ?? "";
+    const body =
+      planPublication(tricky, files, {
+        applyVerdict: false,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+      }).comments[0]?.body ?? "";
     expect(body).toContain("````suggestion");
+  });
+
+  it("pins the plan to the fetched head commit and reports it in the footer", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+    expect(plan.commitSha).toBe(FIXTURE_SHA);
+    expect(plan.body).toContain(`reviewed at ${FIXTURE_SHA.slice(0, 7)}`);
+  });
+
+  it("reports changeset truncation instead of claiming completeness", () => {
+    const truncatedPlan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 310,
+    });
+    expect(truncatedPlan.body).toContain("Reviewed 2 of 310 changed files");
+    const completePlan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+    expect(completePlan.body).not.toContain("changed files —");
   });
 
   it("comments a multi-line range with start_line strictly below line", () => {
@@ -286,7 +341,11 @@ describe("publication planning", () => {
       verdict: "comment",
       findings: [ReviewFinding.make({ ...validFinding, startLine: 2, endLine: 3 })],
     });
-    const comment = planPublication(ranged, files, { applyVerdict: false }).comments[0];
+    const comment = planPublication(ranged, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    }).comments[0];
     expect(comment?.startLine).toBe(2);
     expect(comment?.line).toBe(3);
   });

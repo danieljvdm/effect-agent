@@ -62,6 +62,7 @@ const GitHubPullRequestWire = Schema.Struct({
   number: Schema.Int,
   title: Schema.String,
   body: Schema.NullOr(Schema.String),
+  changed_files: Schema.Int,
   base: Schema.Struct({ ref: Schema.String }),
   head: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
 });
@@ -203,6 +204,7 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
           baseRef: wire.base.ref,
           headRef: wire.head.ref,
           headSha: wire.head.sha,
+          totalChangedFiles: wire.changed_files,
         }),
       ),
     );
@@ -293,6 +295,7 @@ export const gitHubReviewPublisherLayer: Layer.Layer<
           const payload = {
             event: plan.event,
             body: plan.body,
+            commit_id: plan.commitSha,
             comments: plan.comments.map((comment) => ({
               path: comment.path,
               line: comment.line,

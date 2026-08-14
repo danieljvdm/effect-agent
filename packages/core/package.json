@@ -1,8 +1,8 @@
 {
   "name": "@effect-agent/core",
-  "version": "0.0.1-beta.1",
+  "version": "0.0.1-beta.3",
   "description": "Schema-first Agent authoring for Effect Agent: immutable definitions, explicit model bindings, policies, and core domain values.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/danieljvdm/effect-agent.git",

@@ -608,8 +608,37 @@ const gateEndpoint: Effect.Effect<void, unknown, EndpointServices> = Effect.gen(
   yield* maintenance.ensureAlarm;
 });
 
-/** Build the application's Conversation Object class (export it from the Worker entry). */
-export const makeConversationObjectClass = (options: ConversationObjectOptions) => {
+/** The public endpoint surface of one Conversation Object instance. */
+export interface ConversationObjectInstance extends DurableObject {
+  submitEncoded(encoded: unknown): Promise<unknown>;
+  awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
+  observePage(encoded: unknown): Promise<unknown>;
+  abortEncoded(encoded: unknown): Promise<unknown>;
+  resolveApprovalEncoded(encoded: unknown): Promise<unknown>;
+  resolveUnknownEncoded(encoded: unknown): Promise<unknown>;
+  explainEncoded(encoded: unknown): Promise<unknown>;
+  verifyEncoded(encoded: unknown): Promise<unknown>;
+  retryEncoded(encoded: unknown): Promise<unknown>;
+  obligationsEncoded(encoded: unknown): Promise<unknown>;
+  portCall(encoded: unknown): Promise<unknown>;
+  wake(): Promise<void>;
+  alarm(): Promise<void>;
+}
+
+/** The constructor shape workerd instantiates for each Conversation Object. */
+export interface ConversationObjectClass {
+  new (ctx: DurableObjectState, env: Cloudflare.Env): ConversationObjectInstance;
+}
+
+/**
+ * Build the application's Conversation Object class (export it from the
+ * Worker entry). The explicit return type is what makes declaration emit
+ * possible: the class body carries a private runtime field, and TS4094
+ * rejects inferring an exported anonymous class type around it.
+ */
+export const makeConversationObjectClass = (
+  options: ConversationObjectOptions,
+): ConversationObjectClass => {
   class ConversationObject extends DurableObject {
     readonly #runtime: ManagedRuntime.ManagedRuntime<EndpointServices, ConversationObjectError>;
 
