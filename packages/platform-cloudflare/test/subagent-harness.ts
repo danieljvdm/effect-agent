@@ -280,6 +280,14 @@ export const assertDelegationConverged = async (
       child_submission_id: started.childSubmissionId,
     },
   ]);
+  // NOTE (issue #12): this exact count is a cadence-conditioned expectation,
+  // not a durability invariant. Model invocation is honestly at-least-once:
+  // an alarm redelivered while the child's turn is in flight (workerd input
+  // gates open during non-storage awaits) may legally re-drive the head, with
+  // producer-epoch fencing keeping canonical records exactly-once — observed
+  // once on a loaded CI runner at 3x drain rounds, where every canonical
+  // exactly-once assertion above still held. Under the default drain cadence
+  // the count stays exact and still catches unbounded re-execution.
   expect(childModelInvocations(expectation.ref)).toBe(expectation.childModelCalls);
 
   await assertConvergence(parent, { namespace: SUBAGENTS });
