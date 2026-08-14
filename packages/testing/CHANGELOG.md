@@ -1,5 +1,15 @@
 # @effect-agent/testing
 
+## 0.0.1-beta.4
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/session@0.0.1-beta.4
+  - @effect-agent/platform-node@0.0.1-beta.4
+  - @effect-agent/storage-memory@0.0.1-beta.4
+  - @effect-agent/storage-sqlite@0.0.1-beta.4
+
 ## 0.0.1-beta.2
 
 ### Patch Changes

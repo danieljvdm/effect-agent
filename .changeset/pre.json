@@ -20,6 +20,7 @@
     "@effect-agent/testing": "0.0.0"
   },
   "changesets": [
+    "clean-durable-tool-history",
     "initial-live-test-release",
     "kommunikasie-cloudflare-runtime",
     "pin-internal-dependency-versions"
