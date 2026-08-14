@@ -6,11 +6,11 @@ import {
   AgentRuntime,
   type RuntimeBinding,
 } from "effect-agent";
-import { type Toolkit } from "effect/unstable/ai";
+import { type Tool } from "effect/unstable/ai";
 
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
-import { CodeReview, ReviewMission, type ReviewToolkit } from "./review-agent.ts";
+import { CodeReview, ReviewMission } from "./review-agent.ts";
 import { PullRequestSource } from "./source.ts";
 
 // ---------------------------------------------------------------------------
@@ -33,6 +33,22 @@ export const reviewBudgetLimits = UsageBudgetLimits.make({
   maxDurationMillis: 480_000,
 });
 
+/**
+ * Run-level bounds for the fan-out coordinator. This budget observes only
+ * the COORDINATOR'S own usage — delegated children are bounded separately by
+ * the delegation's `SubagentPolicy` reservation and the child definition's
+ * own `AgentPolicy`, never silently by the parent's budget. The duration
+ * ceiling is wider because delegation Tool Calls hold the parent turn open
+ * while bounded children run.
+ */
+export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
+  maxInputTokens: 400_000,
+  maxOutputTokens: 16_000,
+  maxToolCalls: 24,
+  maxCostMicrousd: 2_000_000,
+  maxDurationMillis: 900_000,
+});
+
 /** Everything one review run produced, publication receipt included. */
 export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   "@effect-agent/example-pr-review/ReviewRunOutcome",
@@ -48,20 +64,30 @@ export interface ExecuteReviewOptions {
   readonly post: boolean;
   /** Map the model's verdict onto APPROVE/REQUEST_CHANGES instead of COMMENT. */
   readonly applyVerdict: boolean;
+  /** Run-level usage bounds; defaults to `reviewBudgetLimits`. */
+  readonly limits?: UsageBudgetLimits | undefined;
 }
 
 /**
- * Execute one review with any explicit Agent Binding for the reviewer
- * definition. The binding stays a parameter (D-027): tests pass a scripted
- * model, the CLI passes a live OpenAI binding, and the model Layer's
- * requirements stay visible in this Effect's `R`.
+ * Execute one review with any explicit Agent Binding whose contract is
+ * `ReviewMission -> CodeReview` — the flat reviewer or the fan-out
+ * coordinator; the toolkit stays generic because publication only depends on
+ * the shared output contract. The binding stays a parameter (D-027): tests
+ * pass scripted models, the CLI passes live OpenAI bindings, and the model
+ * Layer's requirements stay visible in this Effect's `R`.
  */
-export const executeReview = <Instructions, Provider, ModelProvides, ModelRequires>(
+export const executeReview = <
+  Instructions,
+  Tools extends Record<string, Tool.Any>,
+  Provider,
+  ModelProvides,
+  ModelRequires,
+>(
   binding: RuntimeBinding<
     typeof ReviewMission,
     typeof CodeReview,
     Instructions,
-    Toolkit.Tools<typeof ReviewToolkit>,
+    Tools,
     Provider,
     ModelProvides,
     ModelRequires
@@ -82,7 +108,7 @@ export const executeReview = <Instructions, Provider, ModelProvides, ModelRequir
       changedFileCount: files.length,
     });
 
-    const budget = yield* makeUsageBudget(reviewBudgetLimits);
+    const budget = yield* makeUsageBudget(options.limits ?? reviewBudgetLimits);
     const result = yield* AgentRuntime.run(binding, mission, {
       budget: toRunBudgetHook(budget),
       estimateCostMicrousd: () => Effect.succeed(500),

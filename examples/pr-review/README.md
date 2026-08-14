@@ -6,6 +6,11 @@ back as a pull-request review. It runs as a GitHub Action via
 [`action.yml`](action.yml) and the repository workflow
 `.github/workflows/pr-review.yml`.
 
+It ships two reviewer variants over the same `ReviewMission -> CodeReview`
+contract: the flat single-agent reviewer, and a subagent **fan-out** variant
+(the repository's first real S1 attached-delegation consumer) for changesets
+one context window cannot hold.
+
 ## Shape
 
 - **Definition** (`src/review-agent.ts`): `Agent.define("pr-reviewer")` with a
@@ -28,6 +33,42 @@ back as a pull-request review. It runs as a GitHub Action via
   publishes nothing, and the bot defaults to `COMMENT` events
   (`--apply-verdict` opts into APPROVE/REQUEST_CHANGES).
 
+## Fan-out variant (S1 attached delegation)
+
+The flat reviewer reads every diff in one context window, so a large pull
+request hits its 24-tool-call bound and truncates (observed on a 310-file PR).
+The fan-out variant (`src/fan-out-review-agent.ts`, `src/review-units.ts`,
+`src/fan-out-profiles.ts`) removes that wall without removing any bound:
+
+- **Deterministic unit planning**: `planReviewUnits` groups the changeset by
+  path order (directory affinity) into size-budgeted units — at most
+  8 units of at most 12 files. Grouping is host code surfaced through the
+  read-only `list_review_units` tool, not model prose. Files without a
+  textual diff and files beyond the fan-out capacity are reported in the
+  plan, never silently dropped.
+- **One child per unit**: `delegate_file_review` is a real
+  `Subagent.define` delegation targeting the `FileReviewer` child, whose
+  toolkit is only `read_file_diff` + `read_file` (no changeset listing).
+  Children are bounded by `SubagentPolicy` (≤ 8 children, ≤ 3 concurrent,
+  per-child turn/tool/duration budgets aligned with the child's own
+  `AgentPolicy`) and see only their briefed unit — `projectResult` is the
+  declassification boundary, so only bounded findings cross back.
+- **Failure containment, honestly reported**: `Subagent.define` fixes
+  `failureMode: "error"`, which would abort the whole run on one failed
+  unit. The coordinator's toolkit therefore carries a same-name Tool value
+  with `failureMode: "return"` (handlers resolve by Tool name), so a typed
+  unit failure reaches the model as a failed tool result; the coordinator
+  must name it in its summary ("unit-002 unreviewed: AgentPolicyError") and
+  never retries it.
+- **Same trust boundary**: the coordinator returns the same `CodeReview`,
+  merged by the pinned dedupe/rank policy (`rankAndDedupeFindings`), and the
+  host validates every anchor against the parsed diff before publishing —
+  child output is untrusted input like everything else.
+
+Offline tests script BOTH models (coordinator and children) prompt-keyed, so
+fan-out, merging, honest unit failure, and budget enforcement all run
+deterministically on every gate.
+
 ## Profiles
 
 | Profile                       | Model                       | Gate                                           |
@@ -42,6 +83,7 @@ Run the live smoke: `EFFECT_AGENT_LIVE=1 OPENAI_API_KEY=... bun run test`.
 ```sh
 bun src/cli.ts --repo owner/name --pr 123            # dry run: prints the plan
 bun src/cli.ts --repo owner/name --pr 123 --post     # posts the review
+bun src/cli.ts --repo owner/name --pr 123 --fan-out  # subagent fan-out variant
 bun src/cli.ts --model gpt-5.6-terra --post          # inside Actions: target from event payload
 ```
 
@@ -76,3 +118,8 @@ absent, so forks and credential-less clones stay green.
   full tree.
 - Pull requests beyond 300 changed files or 200k-character files are refused
   typed, never silently truncated.
+- The fan-out variant's capacity is 8 units × 12 files; diffable files
+  beyond it are reported as unreviewed in the plan and summary. The run-level
+  `UsageBudget` observes only the coordinator's own usage — children are
+  bounded by the delegation `SubagentPolicy` and the child `AgentPolicy`,
+  not silently by the parent's budget.

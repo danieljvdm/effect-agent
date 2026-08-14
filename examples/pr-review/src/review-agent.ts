@@ -132,6 +132,65 @@ export const ReadFile = Tool.make("read_file", {
 
 export const ReviewToolkit = Toolkit.make(ListChangedFiles, ReadFileDiff, ReadFile);
 
+/**
+ * The `read_file_diff` handler, shared verbatim by the flat reviewer's
+ * toolkit and the fan-out child's toolkit (fan-out-review-agent.ts).
+ */
+export const readFileDiffHandler = (query: FileDiffQuery) =>
+  Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const relative = yield* normalizeRepoRelativePath(query.path);
+    const files = yield* source.changedFiles;
+    const file = files.find((candidate) => candidate.path === relative);
+    if (file === undefined) {
+      return yield* ReviewInputViolation.make({
+        input: relative,
+        reason: "Path is not part of this pull request's changeset.",
+      });
+    }
+    const annotated = file.patch === undefined ? "" : annotatePatch(file.patch);
+    const truncated = annotated.length > MAX_PATCH_CHARS;
+    return FileDiffView.make({
+      path: file.path,
+      status: file.status,
+      annotatedPatch: truncated
+        ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
+        : annotated,
+      truncated,
+    });
+  });
+
+/**
+ * The `read_file` handler, shared verbatim by the flat reviewer's toolkit
+ * and the fan-out child's toolkit (fan-out-review-agent.ts).
+ */
+export const readFileHandler = (query: FileSliceQuery) =>
+  Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const relative = yield* normalizeRepoRelativePath(query.path);
+    const content = yield* source.readFile(relative);
+    const lines = content.split("\n");
+    const startLine = query.startLine ?? 1;
+    const maxLines = query.maxLines ?? DEFAULT_SLICE_LINES;
+    if (startLine > lines.length) {
+      return yield* ReviewInputViolation.make({
+        input: `${relative}:${startLine}`,
+        reason: `startLine is beyond the end of the file (${lines.length} lines).`,
+      });
+    }
+    const slice = lines.slice(startLine - 1, startLine - 1 + maxLines);
+    const endLine = startLine + slice.length - 1;
+    return FileSlice.make({
+      path: relative,
+      startLine,
+      endLine,
+      totalLines: lines.length,
+      content: slice
+        .map((text, index) => `${String(startLine + index).padStart(5)}  ${text}`)
+        .join("\n"),
+    });
+  });
+
 export const ReviewToolkitLayer = ReviewToolkit.toLayer({
   list_changed_files: () =>
     Effect.gen(function* () {
@@ -152,55 +211,8 @@ export const ReviewToolkitLayer = ReviewToolkit.toLayer({
         ),
       });
     }),
-  read_file_diff: (query) =>
-    Effect.gen(function* () {
-      const source = yield* PullRequestSource;
-      const relative = yield* normalizeRepoRelativePath(query.path);
-      const files = yield* source.changedFiles;
-      const file = files.find((candidate) => candidate.path === relative);
-      if (file === undefined) {
-        return yield* ReviewInputViolation.make({
-          input: relative,
-          reason: "Path is not part of this pull request's changeset.",
-        });
-      }
-      const annotated = file.patch === undefined ? "" : annotatePatch(file.patch);
-      const truncated = annotated.length > MAX_PATCH_CHARS;
-      return FileDiffView.make({
-        path: file.path,
-        status: file.status,
-        annotatedPatch: truncated
-          ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
-          : annotated,
-        truncated,
-      });
-    }),
-  read_file: (query) =>
-    Effect.gen(function* () {
-      const source = yield* PullRequestSource;
-      const relative = yield* normalizeRepoRelativePath(query.path);
-      const content = yield* source.readFile(relative);
-      const lines = content.split("\n");
-      const startLine = query.startLine ?? 1;
-      const maxLines = query.maxLines ?? DEFAULT_SLICE_LINES;
-      if (startLine > lines.length) {
-        return yield* ReviewInputViolation.make({
-          input: `${relative}:${startLine}`,
-          reason: `startLine is beyond the end of the file (${lines.length} lines).`,
-        });
-      }
-      const slice = lines.slice(startLine - 1, startLine - 1 + maxLines);
-      const endLine = startLine + slice.length - 1;
-      return FileSlice.make({
-        path: relative,
-        startLine,
-        endLine,
-        totalLines: lines.length,
-        content: slice
-          .map((text, index) => `${String(startLine + index).padStart(5)}  ${text}`)
-          .join("\n"),
-      });
-    }),
+  read_file_diff: readFileDiffHandler,
+  read_file: readFileHandler,
 });
 
 // ---------------------------------------------------------------------------
