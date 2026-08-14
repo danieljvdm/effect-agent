@@ -56,17 +56,15 @@ jobs:
         with:
           title: "chore: version packages (beta)"
           commit: "chore: version packages (beta)"
-          version: bun run changeset:version && bun install
+          # The changesets action does not shell-interpret its command
+          # strings ('&&' arrives as a literal argument), so both commands
+          # live in package.json scripts, which bun runs through a shell.
+          version: bun run ci:version
           # Branch protection already requires the full `ready` gate on the
           # exact merged tree, so the publish path re-verifies only what it
-          # consumes: the built artifacts. Re-running the whole test suite
-          # here would only add a second chance for slow-runner flakes to
-          # block a release the merge gate already validated.
-          publish: >-
-            bun run build &&
-            bun run release:publish -- --ci &&
-            bun x changeset tag &&
-            git push --follow-tags
+          # consumes (the build), then publishes, tags, and pushes tags —
+          # all inside one package.json script for real shell chaining.
+          publish: bun run ci:publish
           createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
