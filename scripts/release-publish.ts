@@ -25,6 +25,27 @@ import { ChildProcess } from "effect/unstable/process";
 
 const REGISTRY = "https://registry.npmjs.org";
 
+// Publish internal dependencies before their consumers. npm accepts manifests
+// that temporarily reference an unpublished version, but dependency-first
+// ordering keeps every successfully published prefix installable if a later
+// package fails and the command needs to be resumed.
+const PUBLISH_PRIORITY = new Map(
+  [
+    "core",
+    "engine",
+    "session",
+    "capabilities",
+    "sandbox",
+    "sandbox-local",
+    "storage-cloudflare",
+    "storage-memory",
+    "storage-sqlite",
+    "platform-cloudflare",
+    "platform-node",
+    "testing",
+  ].map((name, index) => [name, index]),
+);
+
 class ReleaseError extends Schema.TaggedError<ReleaseError>()("ReleaseError", {
   package: Schema.String,
   reason: Schema.String,
@@ -61,7 +82,8 @@ const runCommand = Effect.fn("runCommand")(function* (
   args: ReadonlyArray<string>,
   env?: Record<string, string>,
 ) {
-  const formatted = [command, ...args].join(" ");
+  const safeArgs = args.map((arg, index) => (args[index - 1] === "--otp" ? "<redacted>" : arg));
+  const formatted = [command, ...safeArgs].join(" ");
   const child = yield* ChildProcess.make(command, args, {
     cwd,
     stderr: "pipe",
@@ -230,6 +252,9 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
     fs.writeFileString(manifestPath, JSON.stringify(parsed, null, 2)),
     () => fs.writeFileString(manifestPath, originalBytes).pipe(Effect.orDie),
   );
+  if (!options.dryRun) {
+    yield* Console.log(`- ${manifest.name}@${manifest.version}: publishing (tag: ${distTag})...`);
+  }
   yield* runCommand(options.directory, "bun", args, yield* publishEnvironment());
   yield* Console.log(
     `- ${manifest.name}@${manifest.version}: ${
@@ -255,7 +280,11 @@ const command = CliCommand.make(
       const fs = yield* FileSystem.FileSystem;
       const directories = (yield* fs.readDirectory("packages"))
         .filter((entry) => !entry.startsWith("."))
-        .sort()
+        .sort(
+          (left, right) =>
+            (PUBLISH_PRIORITY.get(left) ?? Number.MAX_SAFE_INTEGER) -
+              (PUBLISH_PRIORITY.get(right) ?? Number.MAX_SAFE_INTEGER) || left.localeCompare(right),
+        )
         .map((entry) => `packages/${entry}`);
       yield* Console.log(
         `Publishing ${directories.length} workspaces to ${REGISTRY}${dryRun ? " (dry run)" : ""}...`,
