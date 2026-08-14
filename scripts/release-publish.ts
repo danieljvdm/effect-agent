@@ -143,6 +143,7 @@ const distExport = (sourcePath: string): { types: string; default: string } | un
 const publishOne = Effect.fn("publishOne")(function* (options: {
   readonly directory: string;
   readonly dryRun: boolean;
+  readonly ci: boolean;
   readonly otp: string | undefined;
   readonly workspaceVersions: ReadonlyMap<string, string>;
 }) {
@@ -212,18 +213,9 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
   mutable.exports = rewritten;
 
   // Dry runs validate the packed artifact without registry credentials;
-  // real publishes require an authenticated npm session (`bunx npm login`).
+  // real publishes require an authenticated npm session (`bunx npm login`)
+  // or, in CI mode, npm's OIDC trusted-publisher exchange.
   const distTag = distTagFor(manifest.version);
-  const args = options.dryRun
-    ? ["pm", "pack", "--dry-run"]
-    : [
-        "publish",
-        "--access",
-        "public",
-        "--tag",
-        distTag,
-        ...(options.otp !== undefined ? ["--otp", options.otp] : []),
-      ];
 
   yield* Console.log(
     `- ${manifest.name}@${manifest.version}: ${options.dryRun ? "packing (dry run)" : "publishing"}...`,
@@ -235,16 +227,72 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
     fs.writeFileString(manifestPath, JSON.stringify(parsed, null, 2)),
     () => fs.writeFileString(manifestPath, originalBytes).pipe(Effect.orDie),
   );
-  yield* runCommand(options.directory, "bun", args, yield* publishEnvironment()).pipe(
-    Effect.mapError((error) =>
-      error._tag === "CommandError"
-        ? ReleaseError.make({
-            package: manifest.name,
-            reason: `${error.message} (an expired --otp is the usual cause; re-run with a fresh code — published versions are skipped)`,
-          })
-        : error,
-    ),
-  );
+  const environment = yield* publishEnvironment();
+  const publishFailure = (error: { readonly _tag: string; readonly message: string }) =>
+    error._tag === "CommandError"
+      ? ReleaseError.make({
+          package: manifest.name,
+          reason: `${error.message} (an expired --otp is the usual cause locally; re-run with a fresh code — published versions are skipped)`,
+        })
+      : (error as ReleaseError);
+  if (options.dryRun) {
+    yield* runCommand(options.directory, "bun", ["pm", "pack", "--dry-run"], environment).pipe(
+      Effect.mapError(publishFailure),
+    );
+  } else if (options.ci) {
+    // Trusted publishing: bun packs (resolving workspace:/catalog: protocols
+    // into the tarball), and the npm CLI uploads it — only npm implements the
+    // OIDC trusted-publisher exchange and provenance attestation.
+    const packDirectory = `${options.directory}/dist/.release-pack`;
+    yield* fs.makeDirectory(packDirectory, { recursive: true });
+    yield* runCommand(
+      options.directory,
+      "bun",
+      ["pm", "pack", "--destination", "dist/.release-pack"],
+      environment,
+    ).pipe(Effect.mapError(publishFailure));
+    const tarballs = (yield* fs.readDirectory(packDirectory).pipe(Effect.orDie)).filter((entry) =>
+      entry.endsWith(".tgz"),
+    );
+    const tarball = tarballs[0];
+    if (tarball === undefined || tarballs.length !== 1) {
+      return yield* ReleaseError.make({
+        package: manifest.name,
+        reason: `Expected exactly one packed tarball in ${packDirectory}, found ${tarballs.length}.`,
+      });
+    }
+    yield* runCommand(
+      options.directory,
+      "npm",
+      [
+        "publish",
+        `dist/.release-pack/${tarball}`,
+        "--access",
+        "public",
+        "--tag",
+        distTag,
+        "--provenance",
+      ],
+      environment,
+    ).pipe(
+      Effect.mapError(publishFailure),
+      Effect.ensuring(fs.remove(packDirectory, { recursive: true }).pipe(Effect.ignore)),
+    );
+  } else {
+    yield* runCommand(
+      options.directory,
+      "bun",
+      [
+        "publish",
+        "--access",
+        "public",
+        "--tag",
+        distTag,
+        ...(options.otp !== undefined ? ["--otp", options.otp] : []),
+      ],
+      environment,
+    ).pipe(Effect.mapError(publishFailure));
+  }
   yield* Console.log(
     `- ${manifest.name}@${manifest.version}: ${
       options.dryRun ? `dry-run ok (tag: ${distTag})` : `published (tag: ${distTag})`
@@ -260,11 +308,16 @@ const otpFlag = Flag.string("otp").pipe(
   Flag.optional,
   Flag.withDescription("npm one-time password forwarded to every bun publish."),
 );
+const ciFlag = Flag.boolean("ci").pipe(
+  Flag.withDescription(
+    "Trusted-publishing mode: bun packs the tarball, the npm CLI uploads it via the OIDC trusted-publisher exchange with provenance.",
+  ),
+);
 
 const command = CliCommand.make(
   "release-publish",
-  { dryRun: dryRunFlag, otp: otpFlag },
-  ({ dryRun, otp }) =>
+  { dryRun: dryRunFlag, ci: ciFlag, otp: otpFlag },
+  ({ ci, dryRun, otp }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const directories = (yield* fs.readDirectory("packages"))
@@ -287,6 +340,7 @@ const command = CliCommand.make(
           publishOne({
             directory,
             dryRun,
+            ci,
             otp: otp._tag === "Some" ? otp.value : undefined,
             workspaceVersions,
           }),

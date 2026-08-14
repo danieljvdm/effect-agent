@@ -135,7 +135,18 @@ install with `bun add @effect-agent/core@beta` (or an exact version).
 Leaving the channel for a stable release is `bun x changeset pre exit`
 followed by the normal sequence.
 
-The release sequence from an authenticated npm session (`bunx npm login`, an
+Releases are automated: on every push to `main`, `.github/workflows/release.yml`
+maintains a "Version Packages (beta)" PR from the pending changesets, and
+merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
+identity is exchanged for short-lived credentials (no npm token, no OTP), with
+provenance attached. Each package on npmjs.com lists `release.yml` in
+`danieljvdm/effect-agent` as its trusted publisher (package Settings, a
+one-time registration; "Allow npm publish" only). In CI the publish script
+runs in `--ci` mode: `bun pm pack` resolves the `workspace:`/`catalog:`
+protocols into the tarball and the npm CLI uploads it, because only npm
+implements the OIDC exchange.
+
+The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
 
 1. `bun run changeset` — describe the change (one exists for `0.0.1-beta.0`);

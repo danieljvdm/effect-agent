@@ -1,0 +1,65 @@
+# Automated beta releases via changesets + npm trusted publishing.
+#
+# On every push to main: with unreleased changesets present, the changesets
+# action opens/updates a "Version Packages (beta)" PR (running `changeset
+# version` in the repository's pre mode, so versions mint as 0.0.1-beta.N).
+# Merging that PR is the release: the action then runs the publish command,
+# which gates on `bun run ready`, packs each workspace with bun (resolving
+# workspace:/catalog: protocols), and uploads with the npm CLI via the OIDC
+# trusted-publisher exchange — no npm token or OTP anywhere. Each package on
+# npmjs.com must list this workflow file (release.yml) as its trusted
+# publisher for the exchange to succeed.
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      VITE_GIT_HOOKS: "0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      # Trusted publishing lives in the npm CLI; the runner's default npm
+      # predates the OIDC exchange, so pin a current one.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install -g npm@latest
+
+      - run: bun install --frozen-lockfile
+
+      - name: Version or publish
+        uses: changesets/action@v1
+        with:
+          title: "chore: version packages (beta)"
+          commit: "chore: version packages (beta)"
+          version: bun run changeset:version && bun install
+          publish: >-
+            bun run ready &&
+            bun run release:publish -- --ci &&
+            bun x changeset tag &&
+            git push --follow-tags
+          createGithubReleases: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
