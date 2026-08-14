@@ -5,6 +5,7 @@ import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { IdGenerator } from "@effect-agent/core";
+import { BudgetExceeded } from "@effect-agent/capabilities";
 
 import {
   GitHubReviewTarget,
@@ -160,7 +161,13 @@ const command = CliCommand.make(
 );
 
 const program = CliCommand.run(command, { version: "0.0.0" }).pipe(
-  Effect.tapError((error) => Console.error(String(error))),
+  Effect.tapError((error) =>
+    Console.error(
+      Schema.is(BudgetExceeded)(error)
+        ? `Budget exceeded: ${error.limit} observed ${error.observedValue}, limit ${error.limitValue}.`
+        : String(error),
+    ),
+  ),
   Effect.scoped,
   Effect.provide(NodeServices.layer),
 );
