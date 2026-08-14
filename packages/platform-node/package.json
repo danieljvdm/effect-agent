@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-node",
-  "version": "0.0.1",
+  "version": "0.0.1-beta.0",
   "description": "Class DN layer assembly for Effect Agent: the durable Node/SQLite runtime host, wake scheduler, and ownership drain.",
   "license": "UNLICENSED",
   "repository": {
