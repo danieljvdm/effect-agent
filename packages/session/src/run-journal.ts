@@ -310,6 +310,27 @@ interface FoldState {
   readonly committedTurns: number;
 }
 
+const runTurnKey = (runId: RunId, turn: number): string => `${runId}\u0000${turn}`;
+const runToolCallKey = (runId: RunId, toolCallId: string): string => `${runId}\u0000${toolCallId}`;
+
+const declaredApplicationToolCallIds = (prompt: Prompt.Prompt): ReadonlyArray<string> => {
+  const ids: Array<string> = [];
+  for (const message of prompt.content) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type === "tool-call" && !part.providerExecuted) ids.push(part.id);
+    }
+  }
+  return ids;
+};
+
+const withoutApplicationToolCallMessages = (prompt: Prompt.Prompt): ReadonlyArray<Prompt.Message> =>
+  prompt.content.filter(
+    (message) =>
+      message.role !== "assistant" ||
+      !message.content.some((part) => part.type === "tool-call" && !part.providerExecuted),
+  );
+
 /**
  * Phase 5 audit tags that are prompt-transparent: they carry durability evidence (preparation,
  * unknown marking, resolution, Step results, approvals, interruption) but contribute nothing to
@@ -344,6 +365,11 @@ const PROMPT_TRANSPARENT_TAGS: ReadonlySet<string> = new Set([
  * `turnResponseBatch`/`turnResultsBatch` split (tool-declaring Turns). The Phase 5 audit tags
  * are skipped transparently, so split-batch commits replay to the same prompt as P4 single-batch
  * commits.
+ *
+ * An incomplete application Tool turn remains visible while projecting its owning Run so active
+ * recovery can resume the declared batch. It is not a valid model-visible Turn boundary for a
+ * later Run: the orphan assistant Tool declaration and any partial Tool results from that Turn
+ * are excluded, while preceding instruction/user messages in the response record remain history.
  */
 export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(function* (
   records: ReadonlyArray<CanonicalRecordEnvelope>,
@@ -356,6 +382,32 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(funct
     pendingToolsForRun: false,
     committedTurns: 0,
   };
+
+  const settledByRun = new Map<RunId, Set<string>>();
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag !== "ToolCallSettled") continue;
+    const settled = settledByRun.get(payload.runId) ?? new Set<string>();
+    settled.add(payload.toolCallId);
+    settledByRun.set(payload.runId, settled);
+  }
+
+  const decodedResponses = new Map<string, Prompt.Prompt>();
+  const incompleteToolTurns = new Set<string>();
+  const incompleteToolCalls = new Set<string>();
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag !== "ModelResponseRecorded") continue;
+    const messages = yield* decodePromptMessages(payload.messages);
+    decodedResponses.set(envelope.record.recordId, messages);
+    const key = runTurnKey(payload.runId, payload.turn);
+    const declared = declaredApplicationToolCallIds(messages);
+    const settled = settledByRun.get(payload.runId);
+    if (declared.some((id) => !settled?.has(id))) {
+      incompleteToolTurns.add(key);
+      for (const id of declared) incompleteToolCalls.add(runToolCallKey(payload.runId, id));
+    }
+  }
 
   const flushTools = Effect.fn("RunJournal.flushTools")(function* (
     current: FoldState,
@@ -375,6 +427,12 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(funct
     const payload = envelope.record.payload;
     if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) continue;
     if (payload._tag === "ToolCallSettled") {
+      if (
+        payload.runId !== runId &&
+        incompleteToolCalls.has(runToolCallKey(payload.runId, payload.toolCallId))
+      ) {
+        continue;
+      }
       if (state.pendingTools.length > 0 && state.pendingToolsForRun !== (payload.runId === runId)) {
         state = yield* flushTools(state);
       }
@@ -387,12 +445,19 @@ export const projectRunJournal = Effect.fn("RunJournal.projectRunJournal")(funct
     }
     state = yield* flushTools(state);
     if (payload._tag !== "ModelResponseRecorded") continue;
-    const messages = yield* decodePromptMessages(payload.messages);
+    const messages = decodedResponses.get(envelope.record.recordId);
+    if (messages === undefined) {
+      return yield* journalError("A canonical ModelResponseRecorded was not decoded");
+    }
     const forRun = payload.runId === runId;
+    const visibleMessages =
+      !forRun && incompleteToolTurns.has(runTurnKey(payload.runId, payload.turn))
+        ? withoutApplicationToolCallMessages(messages)
+        : messages.content;
     state = {
       ...state,
-      all: [...state.all, ...messages.content],
-      before: forRun ? state.before : [...state.before, ...messages.content],
+      all: [...state.all, ...visibleMessages],
+      before: forRun ? state.before : [...state.before, ...visibleMessages],
       committedTurns: forRun ? Math.max(state.committedTurns, payload.turn) : state.committedTurns,
     };
   }

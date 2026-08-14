@@ -38,6 +38,7 @@ import {
 
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
 const RUN_ID = runIdForSubmission(SUBMISSION_ID);
+const LATER_RUN_ID = runIdForSubmission(Schema.decodeSync(SubmissionId)("submission-later"));
 const CALL_ONE = Schema.decodeSync(ToolCallId)("call-1");
 const CALL_TWO = Schema.decodeSync(ToolCallId)("call-2");
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-journal");
@@ -174,6 +175,33 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(splitProjection.committedTurns).toBe(singleProjection.committedTurns);
         expect(splitProjection.prompt).toEqual(singleProjection.prompt);
         expect(splitProjection.historyBefore).toEqual(singleProjection.historyBefore);
+      }),
+    );
+
+    it.effect("does not replay an incomplete assistant Tool turn into a later Run", () =>
+      Effect.gen(function* () {
+        const failedResponse = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const records = envelopesOf([failedResponse]);
+
+        const recovering = yield* projectRunJournal(records, RUN_ID);
+        expect(
+          recovering.prompt.content.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "tool-call" && part.id === CALL_ONE),
+          ),
+        ).toBe(true);
+
+        const later = yield* projectRunJournal(records, LATER_RUN_ID);
+        expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(
+          later.prompt.content.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "tool-call"),
+          ),
+        ).toBe(false);
+        expect(later.historyBefore).toEqual(later.prompt);
       }),
     );
 

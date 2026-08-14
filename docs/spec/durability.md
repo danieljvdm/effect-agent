@@ -232,6 +232,12 @@ unknown unless a registered reconciliation policy can prove one of:
 Otherwise the run enters `Unknown` and requires operator or application resolution.
 The engine must not manufacture an error result and continue.
 
+A committed assistant response that declares application Tool Calls remains visible to recovery
+of its owning Run even before every call settles. If that Run instead terminates failed, a later
+Run MUST NOT replay the orphan assistant Tool declaration or partial Tool results from that
+incomplete batch as model history. Instruction and user messages committed before the declaration
+remain visible.
+
 ## 11. Durable steps
 
 A durable step is a named, versioned unit with a stable `StepId`, Effect Schema
