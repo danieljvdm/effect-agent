@@ -1,8 +1,8 @@
 {
   "name": "@effect-agent/engine",
-  "version": "0.0.1-beta.1",
+  "version": "0.0.1-beta.3",
   "description": "The Effect Agent ephemeral interpreter: a bounded agent loop over Effect AI with typed run events, budgets, and deterministic tool scheduling.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/danieljvdm/effect-agent.git",

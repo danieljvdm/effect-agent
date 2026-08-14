@@ -34,6 +34,8 @@ export class ReviewPublicationPlan extends Schema.Class<ReviewPublicationPlan>(
   comments: Schema.Array(ReviewCommentDraft),
   /** Findings whose anchors failed diff validation; folded into `body`. */
   demoted: Schema.Array(ReviewFinding),
+  /** The head commit the diffs were fetched at; pins the posted review. */
+  commitSha: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
 }) {}
 
 const severityLabel: Record<ReviewFinding["severity"], string> = {
@@ -95,7 +97,13 @@ export const anchorViolation = (
 export const planPublication = (
   review: CodeReview,
   files: ReadonlyArray<ChangedFile>,
-  options: { readonly applyVerdict: boolean },
+  options: {
+    readonly applyVerdict: boolean;
+    /** Head commit the changeset was fetched at (pins the posted review). */
+    readonly headSha: string;
+    /** GitHub's changed-file total, for honest truncation reporting. */
+    readonly totalChangedFiles: number;
+  },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
   const demoted: Array<ReviewFinding> = [];
@@ -115,10 +123,19 @@ export const planPublication = (
   }
 
   const bodyParts = [review.summary];
+  if (files.length < options.totalChangedFiles) {
+    bodyParts.push(
+      "",
+      `⚠️ Reviewed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
+    );
+  }
   if (demoted.length > 0) {
     bodyParts.push("", "### Findings without a valid diff anchor", ...demoted.map(renderDemoted));
   }
-  bodyParts.push("", "_Automated review by the effect-agent pr-review example._");
+  bodyParts.push(
+    "",
+    `_Automated review by the effect-agent pr-review example · reviewed at ${options.headSha.slice(0, 7)}._`,
+  );
 
   const event: ReviewEvent = options.applyVerdict
     ? review.verdict === "approve"
@@ -133,5 +150,6 @@ export const planPublication = (
     body: bodyParts.join("\n").slice(0, 60_000),
     comments,
     demoted,
+    commitSha: options.headSha,
   });
 };

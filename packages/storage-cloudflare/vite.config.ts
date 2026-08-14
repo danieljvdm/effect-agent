@@ -8,6 +8,13 @@ import { defineConfig } from "vite-plus";
 // Object storage is SHARED across tests within a run, so every suite mints a unique Durable
 // Object name per case.
 export default defineConfig({
+  // A package-level Vite config suppresses `vp pack`'s zero-config library
+  // defaults, so the published artifact's declarations and sourcemap are
+  // pinned explicitly here.
+  pack: {
+    dts: true,
+    sourcemap: true,
+  },
   plugins: [
     cloudflareTest({
       main: "./test/worker.ts",

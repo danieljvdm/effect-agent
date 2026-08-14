@@ -146,12 +146,14 @@ owner of the `@effect-agent` scope):
    (append `--otp <code>` when npm 2FA asks);
 5. `bun x changeset tag && git push --follow-tags`.
 
-`@effect-agent/platform-cloudflare` and `@effect-agent/storage-cloudflare`
-remain `private` in the 0.0.1 release: their Durable Object class factories
-return classes with private fields, which TypeScript declaration emit rejects
-(TS4094), so `vp pack` produces no `.d.mts` for them. Publishing them
-requires annotating the factories' public return types (and scoping
-declaration builds to `src/`) first.
+All twelve packages publish under the MIT license (owner decision
+2026-08-14, resolving the licensing half of D-023). The Cloudflare pair
+joined the channel after their declaration-emit fix: the Durable Object
+class factory carries an explicit `ConversationObjectClass` return type
+because TS4094 rejects inferring an exported anonymous class type around a
+private field, and both packages pin `pack: { dts, sourcemap }` in their
+Vite configs since a package-level config suppresses `vp pack`'s
+zero-config defaults.
 
 ## Post-install setup
 

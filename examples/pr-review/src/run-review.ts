@@ -86,7 +86,11 @@ export const executeReview = <Instructions, Provider, ModelProvides, ModelRequir
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
     const review = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
-    const plan = planPublication(review, files, { applyVerdict: options.applyVerdict });
+    const plan = planPublication(review, files, {
+      applyVerdict: options.applyVerdict,
+      headSha: metadata.headSha,
+      totalChangedFiles: metadata.totalChangedFiles,
+    });
 
     if (!options.post) {
       return ReviewRunOutcome.make({ review, plan, turns: result.turns });

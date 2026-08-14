@@ -1,8 +1,8 @@
 {
   "name": "@effect-agent/testing",
-  "version": "0.0.1-beta.1",
+  "version": "0.0.1-beta.3",
   "description": "Scripted models, deterministic fixtures, and adapter conformance kits for testing Effect Agent applications.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/danieljvdm/effect-agent.git",
