@@ -1,11 +1,24 @@
 {
   "name": "@effect-agent/storage-memory",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
+  "description": "In-memory Conversation store and submission ledger reference adapters for Effect Agent tests and conformance suites.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/storage-memory"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./testing": "./src/testing.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",

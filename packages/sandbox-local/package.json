@@ -1,10 +1,23 @@
 {
   "name": "@effect-agent/sandbox-local",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
+  "description": "Node-local child-process Sandbox adapter for Effect Agent; honestly labeled unisolated development tooling, not a security boundary.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/sandbox-local"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",

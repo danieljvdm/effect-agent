@@ -1,10 +1,23 @@
 {
   "name": "@effect-agent/sandbox",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
+  "description": "Platform-neutral sandbox contracts for Effect Agent: schema-first requests, events, errors, and the streaming Sandbox service.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/sandbox"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",
