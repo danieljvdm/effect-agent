@@ -1,11 +1,10 @@
+import { Agent, IdGenerator } from "@effect-agent/core";
+import { OpenAiClient } from "@effect/ai-openai";
 import { describe, expect, it } from "@effect/vitest";
 import { Config, Effect, Exit, Layer, Ref, Schema } from "effect";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 import { FetchHttpClient } from "effect/unstable/http";
-import { OpenAiClient } from "@effect/ai-openai";
-
-import { Agent, IdGenerator } from "@effect-agent/core";
 
 import {
   anchorViolation,

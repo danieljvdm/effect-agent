@@ -2,6 +2,7 @@ import { Context, Effect, Layer, Option, Redacted, Ref, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { ChangedFile } from "./diff.ts";
+import { ReviewPublicationPlan } from "./render.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
@@ -11,7 +12,6 @@ import {
   PullRequestSourceFailure,
   ReviewInputViolation,
 } from "./source.ts";
-import { ReviewPublicationPlan } from "./render.ts";
 
 // ---------------------------------------------------------------------------
 // GitHub REST adapters for the PullRequestSource port and the ReviewPublisher.

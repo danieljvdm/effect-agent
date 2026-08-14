@@ -1,8 +1,7 @@
-import { Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
-
 import { Agent, AgentPolicy } from "@effect-agent/core";
 import { ToolExecutionClass } from "@effect-agent/engine";
+import { Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { annotatePatch, ChangedFileStatus, ChangedPath } from "./diff.ts";
 import {
