@@ -8,11 +8,13 @@ import {
 } from "effect-agent";
 import { type Tool } from "effect/unstable/ai";
 
+import type { ChangedFile } from "./diff.ts";
+import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
 import { clampMaxFindings, CodeReview, ReviewMission } from "./review-agent.ts";
 import { rankAndDedupeFindings } from "./review-units.ts";
-import { PullRequestSource } from "./source.ts";
+import { PullRequestSource, type PullRequestMetadata } from "./source.ts";
 
 // ---------------------------------------------------------------------------
 // One review run, end to end: read the pull request, run the bounded agent,
@@ -73,7 +75,28 @@ export interface ExecuteReviewOptions {
    * anchor, and trimmed — never published oversized. Clamped to the schema cap.
    */
   readonly maxFindings?: number | undefined;
+  /**
+   * Prompt signature for changeset fingerprinting. When present, the
+   * changeset fingerprint is computed and embedded invisibly in the review
+   * body so later runs can skip an unchanged changeset.
+   */
+  readonly signature?: ((mission: ReviewMission) => string) | undefined;
 }
+
+/** Build the mission one review run frames from the source's snapshot. */
+export const buildReviewMission = (
+  metadata: PullRequestMetadata,
+  files: ReadonlyArray<ChangedFile>,
+): ReviewMission =>
+  ReviewMission.make({
+    repository: metadata.repository,
+    number: metadata.number,
+    title: metadata.title,
+    body: metadata.body,
+    baseRef: metadata.baseRef,
+    headRef: metadata.headRef,
+    changedFileCount: files.length,
+  });
 
 /** Enforce the configured findings bound on an already-validated review. */
 export const enforceFindingsBound = (review: CodeReview, maxFindings: number): CodeReview =>
@@ -115,15 +138,11 @@ export const executeReview = <
     const source = yield* PullRequestSource;
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
-    const mission = ReviewMission.make({
-      repository: metadata.repository,
-      number: metadata.number,
-      title: metadata.title,
-      body: metadata.body,
-      baseRef: metadata.baseRef,
-      headRef: metadata.headRef,
-      changedFileCount: files.length,
-    });
+    const mission = buildReviewMission(metadata, files);
+    const fingerprint =
+      options.signature === undefined
+        ? undefined
+        : yield* computeChangesetFingerprint(files, options.signature(mission));
 
     const budget = yield* makeUsageBudget(options.limits ?? reviewBudgetLimits);
     const result = yield* AgentRuntime.run(binding, mission, {
@@ -139,6 +158,7 @@ export const executeReview = <
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,
       totalChangedFiles: metadata.totalChangedFiles,
+      fingerprint,
     });
 
     if (!options.post) {

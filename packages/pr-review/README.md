@@ -84,6 +84,19 @@ Deterministic in-memory adapters for both ports plus prompt-keyed scripted
 models that walk the real tool surface — no network, no credentials, every
 ordinary gate.
 
+## Skip unchanged changesets
+
+Repositories that auto-merge the base branch into open pull requests fire
+`synchronize` on every base update — but the effective diff usually hasn't
+changed. Every posted review embeds an invisible changeset fingerprint
+(SHA-256 over the ignore-filtered changeset plus the prompt signature), and
+the action skips typed when the current fingerprint matches the last posted
+review (`skip-unchanged` input, default `true`; `--skip-unchanged` on the
+CLI). Real changes, conflict-resolution merges, and configuration changes
+(guidance, ignore globs, bounds) produce a new fingerprint and review again.
+The check reads prior reviews through the `PriorReviews` port and fails open:
+a lookup fault reviews instead of skipping.
+
 ## Hosts
 
 - **GitHub Actions**: the repository ships a prebuilt node-runtime action
