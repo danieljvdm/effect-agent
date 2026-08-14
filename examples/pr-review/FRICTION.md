@@ -26,10 +26,9 @@ path, recorded for the API-simplification backlog (same convention as
    text" constructor usable by leaf examples.
 
 4. **Live-gate helper is fixture-coupled.** `phase7LiveProfileEnabled` pins
-   `OPENAI_API_KEY`, so an Anthropic example re-implements the same
-   two-line gate with a different credential name. A parameterized
-   `liveProfileEnabled(credentialEnv)` in `@effect-agent/testing` would keep
-   one convention.
+   `OPENAI_API_KEY`, so this example still re-implements the same two-line
+   gate. A parameterized `liveProfileEnabled(credentialEnv)` in
+   `@effect-agent/testing` would keep one convention.
 
 5. **No shared repo-relative path validator.** The fail-closed path
    normalization demanded by SEC-007 is hand-copied from repo-ops (third

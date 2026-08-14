@@ -3,16 +3,16 @@ description: >-
   Review the current pull request with the effect-agent pr-review example and
   post the validated result as a pull-request review.
 inputs:
-  anthropic-api-key:
-    description: "Anthropic API key for the review model."
+  openai-api-key:
+    description: "OpenAI API key for the review model."
     required: true
   github-token:
     description: "Token with pull-requests: write on this repository."
     required: true
   model:
-    description: "Anthropic model id."
+    description: "OpenAI model id."
     required: false
-    default: "claude-sonnet-5"
+    default: "gpt-5.6-sol"
   post:
     description: "Post the review ('true') or only print the plan ('false')."
     required: false
@@ -35,7 +35,7 @@ runs:
       shell: bash
       working-directory: ${{ github.action_path }}
       env:
-        ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
+        OPENAI_API_KEY: ${{ inputs.openai-api-key }}
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: >-
         bun src/cli.ts

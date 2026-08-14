@@ -1,4 +1,4 @@
-import { AnthropicClient } from "@effect/ai-anthropic";
+import { OpenAiClient } from "@effect/ai-openai";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
@@ -11,7 +11,7 @@ import {
   gitHubPullRequestSourceLayer,
   gitHubReviewPublisherLayer,
 } from "./github.ts";
-import { DEFAULT_REVIEW_MODEL, makeAnthropicReviewer } from "./profiles.ts";
+import { DEFAULT_REVIEW_MODEL, makeOpenAiReviewer } from "./profiles.ts";
 import { ReviewPublicationPlan } from "./render.ts";
 import { ReviewToolkitLayer } from "./review-agent.ts";
 import { executeReview } from "./run-review.ts";
@@ -49,7 +49,7 @@ const prFlag = Flag.integer("pr").pipe(
 );
 const modelFlag = Flag.string("model").pipe(
   Flag.withDefault(DEFAULT_REVIEW_MODEL),
-  Flag.withDescription(`Anthropic model id (default ${DEFAULT_REVIEW_MODEL}).`),
+  Flag.withDescription(`OpenAI model id (default ${DEFAULT_REVIEW_MODEL}).`),
 );
 const postFlag = Flag.boolean("post").pipe(
   Flag.withDescription("Post the review to GitHub; without it the plan prints to stdout."),
@@ -119,15 +119,15 @@ const command = CliCommand.make(
       const githubDeps = Layer.merge(targetLayer, FetchHttpClient.layer);
       const sourceLayer = gitHubPullRequestSourceLayer.pipe(Layer.provide(githubDeps));
       const publisherLayer = gitHubReviewPublisherLayer.pipe(Layer.provide(githubDeps));
-      const anthropicLayer = AnthropicClient.layerConfig({
-        apiKey: Config.redacted("ANTHROPIC_API_KEY"),
+      const openAiLayer = OpenAiClient.layerConfig({
+        apiKey: Config.redacted("OPENAI_API_KEY"),
       }).pipe(Layer.provide(FetchHttpClient.layer));
 
       yield* Console.log(
         `Reviewing ${repository}#${number} with ${flags.model} (${flags.post ? "posting" : "dry run"})...`,
       );
 
-      const outcome = yield* executeReview(makeAnthropicReviewer(flags.model), {
+      const outcome = yield* executeReview(makeOpenAiReviewer(flags.model), {
         post: flags.post,
         applyVerdict: flags.applyVerdict,
       }).pipe(
@@ -135,7 +135,7 @@ const command = CliCommand.make(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
             publisherLayer,
-            anthropicLayer,
+            openAiLayer,
             IdGenerator.layer,
           ),
         ),

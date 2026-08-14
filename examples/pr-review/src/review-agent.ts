@@ -50,10 +50,17 @@ export class ChangedFilesView extends Schema.Class<ChangedFilesView>(
   files: Schema.Array(ChangedFileSummary).check(Schema.isMaxLength(300)),
 }) {}
 
+export class ListChangedFilesQuery extends Schema.Class<ListChangedFilesQuery>(
+  "@effect-agent/example-pr-review/ListChangedFilesQuery",
+)({
+  /** Explicit constant keeps the zero-choice operation compatible with strict provider schemas. */
+  scope: Schema.Literal("all"),
+}) {}
+
 export const ListChangedFiles = Tool.make("list_changed_files", {
   description:
     "List every file changed by this pull request with its status, line counts, and whether a textual diff is available.",
-  parameters: Schema.Struct({}),
+  parameters: ListChangedFilesQuery,
   success: ChangedFilesView,
   failure: PullRequestSourceFailure,
   failureMode: "error",

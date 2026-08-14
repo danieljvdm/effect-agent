@@ -275,7 +275,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(prReview.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
       expect(prReview.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
       expect(prReview.dependencies?.effect).toBe("catalog:");
-      expect(prReview.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
+      expect(prReview.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(prReviewDependencies).not.toContain("wrangler");
       expect(prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,

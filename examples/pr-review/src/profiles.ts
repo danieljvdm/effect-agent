@@ -1,4 +1,4 @@
-import { AnthropicLanguageModel } from "@effect/ai-anthropic";
+import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
@@ -10,7 +10,7 @@ import { CodeReview, PullRequestReviewer } from "./review-agent.ts";
 // The reviewer's two profiles, mirroring the repo-ops shape: a deterministic
 // offline profile (prompt-aware scripted model over a fixture pull request)
 // that runs on every ordinary gate, and an opt-in live profile (real
-// Anthropic model) behind an explicit environment gate.
+// OpenAI model) behind an explicit environment gate.
 // ---------------------------------------------------------------------------
 
 /** The reviewer's committed capability claim, schema-first like every profile. */
@@ -44,24 +44,28 @@ export const pullRequestReviewerProfile = PullRequestReviewerProfile.make({
 // Live profile.
 // ---------------------------------------------------------------------------
 
-export const DEFAULT_REVIEW_MODEL = "claude-sonnet-5";
+export const DEFAULT_REVIEW_MODEL = "gpt-5.6-sol";
 
 export const LIVE_GATE_ENV = "EFFECT_AGENT_LIVE";
-export const LIVE_CREDENTIAL_ENV = "ANTHROPIC_API_KEY";
+export const LIVE_CREDENTIAL_ENV = "OPENAI_API_KEY";
 
 /** `EFFECT_AGENT_LIVE=1` plus a credential is the only enabling combination. */
 export const liveReviewProfileEnabled = (env: Record<string, string | undefined>): boolean =>
   env[LIVE_GATE_ENV] === "1" && (env[LIVE_CREDENTIAL_ENV] ?? "") !== "";
 
 /**
- * Live binding factory: one definition, caller-selected model. The Anthropic
- * client Layer (with its redacted ANTHROPIC_API_KEY) is supplied by the
+ * Live binding factory: one definition, caller-selected model. The OpenAI
+ * client Layer (with its redacted OPENAI_API_KEY) is supplied by the
  * application, never by the definition (D-027).
  */
-export const makeAnthropicReviewer = (model?: string | undefined) =>
+export const makeOpenAiReviewer = (model?: string) =>
   Agent.withModel(
     PullRequestReviewer,
-    AnthropicLanguageModel.model(model ?? DEFAULT_REVIEW_MODEL, { max_tokens: 8_000 }),
+    OpenAiLanguageModel.model(model ?? DEFAULT_REVIEW_MODEL, {
+      max_output_tokens: 8_000,
+      store: false,
+      strictJsonSchema: true,
+    }),
   );
 
 // ---------------------------------------------------------------------------
@@ -130,7 +134,7 @@ export const makeOfflineReviewerModel = (script: {
         type: "tool-call",
         id: OFFLINE_LIST_CALL_ID,
         name: "list_changed_files",
-        params: {},
+        params: { scope: "all" },
         providerExecuted: false,
       });
     };

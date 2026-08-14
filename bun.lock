@@ -81,7 +81,7 @@
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
-        "@effect/ai-anthropic": "catalog:",
+        "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
       },

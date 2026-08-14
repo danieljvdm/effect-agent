@@ -30,22 +30,22 @@ back as a pull-request review. It runs as a GitHub Action via
 
 ## Profiles
 
-| Profile                       | Model                        | Gate                                              |
-| ----------------------------- | ---------------------------- | ------------------------------------------------- |
-| Offline (every ordinary gate) | prompt-aware scripted model  | none — no network, no credentials                 |
-| Live (opt-in)                 | `claude-sonnet-5` by default | `EFFECT_AGENT_LIVE=1` **and** `ANTHROPIC_API_KEY` |
+| Profile                       | Model                       | Gate                                           |
+| ----------------------------- | --------------------------- | ---------------------------------------------- |
+| Offline (every ordinary gate) | prompt-aware scripted model | none — no network, no credentials              |
+| Live (opt-in)                 | `gpt-5.6-sol` by default    | `EFFECT_AGENT_LIVE=1` **and** `OPENAI_API_KEY` |
 
-Run the live smoke: `EFFECT_AGENT_LIVE=1 ANTHROPIC_API_KEY=... bun run test`.
+Run the live smoke: `EFFECT_AGENT_LIVE=1 OPENAI_API_KEY=... bun run test`.
 
 ## CLI
 
 ```sh
 bun src/cli.ts --repo owner/name --pr 123            # dry run: prints the plan
 bun src/cli.ts --repo owner/name --pr 123 --post     # posts the review
-bun src/cli.ts --model claude-opus-4-8 --post        # inside Actions: target from event payload
+bun src/cli.ts --model gpt-5.6-terra --post          # inside Actions: target from event payload
 ```
 
-Environment: `ANTHROPIC_API_KEY` (required for the model),
+Environment: `OPENAI_API_KEY` (required for the model),
 `GITHUB_TOKEN` (required to post; optional for public-repository reads),
 `GITHUB_REPOSITORY` / `GITHUB_EVENT_PATH` / `GITHUB_API_URL` (provided by
 GitHub Actions).
@@ -60,11 +60,11 @@ steps:
   - uses: actions/checkout@v4
   - uses: ./examples/pr-review
     with:
-      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      openai-api-key: ${{ secrets.OPENAI_API_KEY }}
       github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-The repository workflow skips silently when the `ANTHROPIC_API_KEY` secret is
+The repository workflow skips silently when the `OPENAI_API_KEY` secret is
 absent, so forks and credential-less clones stay green.
 
 ## Honest limits

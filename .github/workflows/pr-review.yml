@@ -1,5 +1,5 @@
 # Agentic pull-request review via the examples/pr-review leaf workspace.
-# The job runs only when the ANTHROPIC_API_KEY secret is configured (the
+# The job runs only when the OPENAI_API_KEY secret is configured (the
 # secrets context is unavailable in `if:` conditions, so presence is carried
 # through a job-level env var). Reviews always post as COMMENT events.
 name: PR Review
@@ -24,13 +24,13 @@ jobs:
     env:
       CI: "true"
       VITE_GIT_HOOKS: "0"
-      HAS_ANTHROPIC_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+      HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
-      - if: env.HAS_ANTHROPIC_KEY == 'true'
+      - if: env.HAS_OPENAI_KEY == 'true'
         uses: actions/checkout@v4
 
-      - if: env.HAS_ANTHROPIC_KEY == 'true'
+      - if: env.HAS_OPENAI_KEY == 'true'
         uses: ./examples/pr-review
         with:
-          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}

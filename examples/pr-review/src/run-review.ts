@@ -49,7 +49,7 @@ export interface ExecuteReviewOptions {
 /**
  * Execute one review with any explicit Agent Binding for the reviewer
  * definition. The binding stays a parameter (D-027): tests pass a scripted
- * model, the CLI passes a live Anthropic binding, and the model Layer's
+ * model, the CLI passes a live OpenAI binding, and the model Layer's
  * requirements stay visible in this Effect's `R`.
  */
 export const executeReview = <Instructions, Provider, ModelProvides, ModelRequires>(

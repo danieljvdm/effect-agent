@@ -1,7 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Config, Effect, Exit, Layer, Ref, Schema } from "effect";
+import { Tool } from "effect/unstable/ai";
+import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 import { FetchHttpClient } from "effect/unstable/http";
-import { AnthropicClient } from "@effect/ai-anthropic";
+import { OpenAiClient } from "@effect/ai-openai";
 
 import { Agent, IdGenerator } from "@effect-agent/core";
 
@@ -17,7 +19,8 @@ import {
   FixturePullRequest,
   fixturePullRequestSourceLayer,
   liveReviewProfileEnabled,
-  makeAnthropicReviewer,
+  ListChangedFiles,
+  makeOpenAiReviewer,
   makeOfflineReviewerModel,
   normalizeRepoRelativePath,
   parsePatch,
@@ -25,11 +28,23 @@ import {
   PullRequestMetadata,
   PullRequestReviewer,
   PullRequestReviewerProfile,
+  ReadFile,
+  ReadFileDiff,
   pullRequestReviewerProfile,
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewToolkitLayer,
 } from "../src/index.ts";
+
+describe("OpenAI tool schema compatibility", () => {
+  it("encodes every reviewer tool as a strict OpenAI object schema", () => {
+    for (const tool of [ListChangedFiles, ReadFileDiff, ReadFile]) {
+      const jsonSchema = Tool.getJsonSchema(tool, { transformer: toCodecOpenAI });
+      expect(jsonSchema.type).toBe("object");
+      expect(jsonSchema.anyOf).toBeUndefined();
+    }
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Deterministic fixture pull request: one reviewable TypeScript change with a
@@ -361,24 +376,24 @@ describe("offline review run", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Opt-in live profile: the SAME definition bound to a real Anthropic model
+// Opt-in live profile: the SAME definition bound to a real OpenAI model
 // over the fixture pull request, behind the explicit environment gate.
 // Ordinary gates make zero network calls and need zero credentials.
 // ---------------------------------------------------------------------------
 
 const liveEnabled = liveReviewProfileEnabled(process.env);
 
-const AnthropicClientLayer = AnthropicClient.layerConfig({
-  apiKey: Config.redacted("ANTHROPIC_API_KEY"),
+const OpenAiClientLayer = OpenAiClient.layerConfig({
+  apiKey: Config.redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
 describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
   it.live(
-    "reviews the fixture pull request with a live Anthropic model",
+    "reviews the fixture pull request with a live OpenAI model",
     () =>
       Effect.gen(function* () {
         const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
-        const outcome = yield* executeReview(makeAnthropicReviewer(), {
+        const outcome = yield* executeReview(makeOpenAiReviewer(), {
           post: false,
           applyVerdict: false,
         }).pipe(
@@ -386,7 +401,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
             Layer.mergeAll(
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
               collectingReviewPublisherLayer(published),
-              AnthropicClientLayer,
+              OpenAiClientLayer,
               IdGenerator.layer,
             ),
           ),
