@@ -106,8 +106,6 @@ Run commands from the repository root:
 | `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
 | `bun run format:write`                        | Apply repository formatting                                                    |
 | `bun run sync:effect`                         | Align the local Effect source checkout with the catalog pin                    |
-| `bun run sync:agent-skills`                   | Refresh checked-in contributor skills                                          |
-| `bun run sync:agent-skills:dry`               | Preview contributor skill changes                                              |
 
 Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
 package manifest so Vite+ can order and cache them from the actual workspace dependency graph.
@@ -213,15 +211,12 @@ To upgrade Effect:
 
 ## Contributor agent skills
 
-[`@danieljvdm/agent-skills`](https://github.com/danieljvdm/agent-skills) is a root development
-dependency. `agent-skills.jsonc` opts into its `effect` family:
-
-- `effect-ts`
-
-The sync command copies these into `.agents/skills` and creates `.claude/skills` symlinks to the
-copies. Both the copies and symlinks are committed so a fresh checkout gives agents the same
-instructions before dependency installation. Re-run the sync command after changing the manifest
-or updating the dependency.
+Contributor skills are managed by [`@danieljvdm/dev-kit`](https://github.com/danieljvdm/dev-kit)
+from `dev-kit.jsonc` (currently the `dev-kit`, `effect-ts`, `testing`, and `cloudflare`
+selections). `dev-kit apply` runs on postinstall and converges the committed copies in
+`.agents/skills` plus the `.claude/skills` symlinks; `dev-kit.lock.json` records the exact
+resolution, and CI verifies it with `dev-kit apply --locked` after a script-suppressed frozen
+install. Use the `dev-kit` skill before changing managed outputs.
 
 These are contributor instructions. They are not the runtime Skill abstraction described in the
 product specification and must not be imported by a framework package.

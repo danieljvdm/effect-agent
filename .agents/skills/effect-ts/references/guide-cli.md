@@ -99,7 +99,8 @@ Run the narrowest meaningful checks:
 
 - Confirm that every TypeScript entrypoint named by `package.json` belongs to
   one checked TypeScript project.
-- `bun run check:scripts` for root scripts.
+- The repository's root `check` or typecheck script when the entrypoint belongs
+  to the root project.
 - Package-level `bun run check` when the script lives under an app/package and is included in that TS config.
 - The command's `--help` path.
 - A dry-run or harmless invalid-input path that loads the entrypoint and

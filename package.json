@@ -9,8 +9,6 @@
   "type": "module",
   "scripts": {
     "postinstall": "dev-kit apply",
-    "sync:agent-skills": "agent-skills sync",
-    "sync:agent-skills:dry": "agent-skills sync --dry-run",
     "sync:effect": "dev-kit effect sync",
     "patch:tsgo": "dev-kit tsgo patch",
     "changeset": "bun x changeset",
@@ -35,7 +33,6 @@
   "devDependencies": {
     "@changesets/changelog-github": "0.7.0",
     "@changesets/cli": "2.31.0",
-    "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#e1cdbe5dbad7576617052285d0cad43091432e0f",
     "@danieljvdm/dev-kit": "0.11.3",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",

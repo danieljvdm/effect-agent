@@ -23,6 +23,10 @@ jobs:
         with:
           bun-version: 1.3.14
 
-      - run: bun install --frozen-lockfile
+      # One frozen, script-suppressed install, then locked Dev Kit
+      # convergence (tsgo patch, managed outputs) before any check runs.
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
       - run: bun run ready

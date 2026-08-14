@@ -44,17 +44,17 @@ Enumerate source and test files, then find:
 
 Record one row per discovered service or candidate:
 
-| Field | Question |
-| --- | --- |
-| Owner | Which module owns the capability's meaning? |
-| Contract | Where are its interface and tag? |
-| Construction | Does construction yield every runtime dependency? |
-| Production | Who owns the concrete implementation and Layer choice? |
-| Tests | Does it have an intentional and honest substitute strategy? |
-| Consumers | Are capabilities yielded or drilled as values? |
-| Requirements | Do requirements remain visible to the composition root? |
-| Type boundary | Who owns decoding, narrowing, and error translation? |
-| Verdict | Keep, deepen, relocate, merge, remove, or create? |
+| Field         | Question                                                    |
+| ------------- | ----------------------------------------------------------- |
+| Owner         | Which module owns the capability's meaning?                 |
+| Contract      | Where are its interface and tag?                            |
+| Construction  | Does construction yield every runtime dependency?           |
+| Production    | Who owns the concrete implementation and Layer choice?      |
+| Tests         | Does it have an intentional and honest substitute strategy? |
+| Consumers     | Are capabilities yielded or drilled as values?              |
+| Requirements  | Do requirements remain visible to the composition root?     |
+| Type boundary | Who owns decoding, narrowing, and error translation?        |
+| Verdict       | Keep, deepen, relocate, merge, remove, or create?           |
 
 Build a companion type-safety inventory using
 [`guide-type-safety-and-boundaries.md`](guide-type-safety-and-boundaries.md).

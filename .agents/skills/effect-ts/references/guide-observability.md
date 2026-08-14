@@ -45,22 +45,22 @@ Use `Effect.fn` as the default constructor for business-logic functions that ret
 Prefer this:
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  return { id: userId, name: "Ada" }
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  return { id: userId, name: "Ada" };
+});
 ```
 
 Over this:
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
 const loadUser = (userId: string) =>
-  Effect.gen(function*() {
-    return { id: userId, name: "Ada" }
-  })
+  Effect.gen(function* () {
+    return { id: userId, name: "Ada" };
+  });
 ```
 
 The second version works, but it throws away useful observability structure that `Effect.fn` gives you automatically.
@@ -72,17 +72,17 @@ For business-logic definitions, prefer `Effect.fn` over writing raw `Effect.gen`
 Prefer this:
 
 ```ts
-const refreshCache = Effect.fn("refreshCache")(function*() {
-  yield* Effect.logInfo("refreshing cache")
-})
+const refreshCache = Effect.fn("refreshCache")(function* () {
+  yield* Effect.logInfo("refreshing cache");
+});
 ```
 
 Over this:
 
 ```ts
-const refreshCache = Effect.gen(function*() {
-  yield* Effect.logInfo("refreshing cache")
-})
+const refreshCache = Effect.gen(function* () {
+  yield* Effect.logInfo("refreshing cache");
+});
 ```
 
 Why:
@@ -118,11 +118,11 @@ It is the preferred default because it adds:
 Example:
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
-const createUser = Effect.fn("createUser")(function*(name: string) {
-  return { id: "u_123", name }
-})
+const createUser = Effect.fn("createUser")(function* (name: string) {
+  return { id: "u_123", name };
+});
 ```
 
 Use this for:
@@ -145,17 +145,17 @@ If you do not want an explicit named span, prefer `Effect.fn` without a span nam
 Prefer this:
 
 ```ts
-const normalizeUser = Effect.fn(function*(input: string) {
-  return input.trim().toLowerCase()
-})
+const normalizeUser = Effect.fn(function* (input: string) {
+  return input.trim().toLowerCase();
+});
 ```
 
 Over this:
 
 ```ts
-const normalizeUser = Effect.fnUntraced(function*(input: string) {
-  return input.trim().toLowerCase()
-})
+const normalizeUser = Effect.fnUntraced(function* (input: string) {
+  return input.trim().toLowerCase();
+});
 ```
 
 Typical cases:
@@ -177,18 +177,18 @@ Preferred rule:
 Good:
 
 ```ts
-const parseCommand = Effect.fn("parseCommand")(function*(input: string) {
-  return input.trim()
-})
+const parseCommand = Effect.fn("parseCommand")(function* (input: string) {
+  return input.trim();
+});
 
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  return { id: userId, name: "Ada" }
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  return { id: userId, name: "Ada" };
+});
 
-const sendWelcomeEmail = Effect.fn("sendWelcomeEmail")(function*(userId: string) {
-  const user = yield* loadUser(userId)
-  return user.email
-})
+const sendWelcomeEmail = Effect.fn("sendWelcomeEmail")(function* (userId: string) {
+  const user = yield* loadUser(userId);
+  return user.email;
+});
 ```
 
 Why this is good:
@@ -223,17 +223,13 @@ Use `withSpan` when you need an explicit span around an effect that is not alrea
 Example:
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
-const syncUser = Effect.fn("syncUser")(function*(userId: string) {
-  const profile = yield* fetchProfile(userId).pipe(
-    Effect.withSpan("fetchProfile")
-  )
+const syncUser = Effect.fn("syncUser")(function* (userId: string) {
+  const profile = yield* fetchProfile(userId).pipe(Effect.withSpan("fetchProfile"));
 
-  return yield* persistProfile(profile).pipe(
-    Effect.withSpan("persistProfile")
-  )
-})
+  return yield* persistProfile(profile).pipe(Effect.withSpan("persistProfile"));
+});
 ```
 
 Use this when:
@@ -263,12 +259,12 @@ Use `annotateCurrentSpan` to attach important structured fields to the current s
 Example:
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  yield* Effect.annotateCurrentSpan({ userId })
-  return { id: userId, name: "Ada" }
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  yield* Effect.annotateCurrentSpan({ userId });
+  return { id: userId, name: "Ada" };
+});
 ```
 
 Good span annotations:
@@ -301,10 +297,10 @@ These integrate with the current Effect execution context.
 Example:
 
 ```ts
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  yield* Effect.logDebug("loading user", { userId })
-  return { id: userId, name: "Ada" }
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  yield* Effect.logDebug("loading user", { userId });
+  return { id: userId, name: "Ada" };
+});
 ```
 
 ### `Effect.withLogSpan`
@@ -314,9 +310,7 @@ Use `withLogSpan` when you want log messages to carry a local logical span label
 Example:
 
 ```ts
-const program = Effect.logInfo("starting sync").pipe(
-  Effect.withLogSpan("user-sync")
-)
+const program = Effect.logInfo("starting sync").pipe(Effect.withLogSpan("user-sync"));
 ```
 
 This is useful for:
@@ -348,19 +342,19 @@ site.
 
 ```ts
 const runCheckout = (request: CheckoutRequest) =>
-  Effect.gen(function*() {
-    yield* Effect.logInfo("loading checkout state")
-    yield* validateCart(request.cart)
-    yield* Effect.logInfo("submitting payment")
-    yield* submitPayment(request.payment)
+  Effect.gen(function* () {
+    yield* Effect.logInfo("loading checkout state");
+    yield* validateCart(request.cart);
+    yield* Effect.logInfo("submitting payment");
+    yield* submitPayment(request.payment);
   }).pipe(
     Effect.annotateLogs({
       operation: "checkout",
       requestId: request.id,
-      cartId: request.cart.id
+      cartId: request.cart.id,
     }),
-    Effect.withLogSpan("checkout")
-  )
+    Effect.withLogSpan("checkout"),
+  );
 ```
 
 Add narrower annotations only when metadata belongs to a nested item, attempt,
@@ -388,18 +382,13 @@ Repo reference:
 Example:
 
 ```ts
-import { Effect, Metric } from "effect"
+import { Effect, Metric } from "effect";
 
-const requests = Metric.counter("user_load_requests").pipe(
-  Metric.withConstantInput(1)
-)
+const requests = Metric.counter("user_load_requests").pipe(Metric.withConstantInput(1));
 
-const loadUser = Effect.fn("loadUser")(
-  function*(userId: string) {
-    return { id: userId, name: "Ada" }
-  },
-  Effect.track(requests)
-)
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  return { id: userId, name: "Ada" };
+}, Effect.track(requests));
 ```
 
 ### Prefer boundary metrics over micro-metrics
@@ -432,14 +421,10 @@ Repo references:
 Preferred composition style:
 
 ```ts
-const AppLayer = Layer.mergeAll(
-  UserLayer,
-  BillingLayer,
-  HttpLayer
-).pipe(
+const AppLayer = Layer.mergeAll(UserLayer, BillingLayer, HttpLayer).pipe(
   Layer.provide(Telemetry),
-  Layer.provide(NodeSdk)
-)
+  Layer.provide(NodeSdk),
+);
 ```
 
 Why:
@@ -628,19 +613,14 @@ Example shape:
 const TelemetryLayer = NodeSdk.layer(() => ({
   resource: {
     serviceName: "todo-service",
-    serviceVersion: "1.0.0"
+    serviceVersion: "1.0.0",
   },
   spanProcessor: mySpanProcessor,
   metricReader: myMetricReader,
-  logRecordProcessor: myLogProcessor
-}))
+  logRecordProcessor: myLogProcessor,
+}));
 
-const AppLayer = Layer.mergeAll(
-  DomainLayer,
-  HttpLayer
-).pipe(
-  Layer.provide(TelemetryLayer)
-)
+const AppLayer = Layer.mergeAll(DomainLayer, HttpLayer).pipe(Layer.provide(TelemetryLayer));
 ```
 
 This keeps:
@@ -666,9 +646,9 @@ Bad:
 
 ```ts
 const loadUser = (userId: string) =>
-  Effect.gen(function*() {
-    return { id: userId, name: "Ada" }
-  })
+  Effect.gen(function* () {
+    return { id: userId, name: "Ada" };
+  });
 ```
 
 Why this is bad:
@@ -680,9 +660,9 @@ Why this is bad:
 Preferred:
 
 ```ts
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  return { id: userId, name: "Ada" }
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  return { id: userId, name: "Ada" };
+});
 ```
 
 ### Anti-Pattern: using `Effect.fnUntraced` by default
@@ -729,36 +709,31 @@ Preferred order:
 ### Pattern: observable business operation
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
-const fetchUser = Effect.fn("fetchUser")(function*(userId: string) {
-  yield* Effect.annotateCurrentSpan({ userId })
-  yield* Effect.logDebug("fetching user", { userId })
-  return { id: userId, name: "Ada" }
-})
+const fetchUser = Effect.fn("fetchUser")(function* (userId: string) {
+  yield* Effect.annotateCurrentSpan({ userId });
+  yield* Effect.logDebug("fetching user", { userId });
+  return { id: userId, name: "Ada" };
+});
 ```
 
 ### Pattern: orchestration with nested spans
 
 ```ts
-const syncUser = Effect.fn("syncUser")(function*(userId: string) {
-  const profile = yield* fetchRemoteProfile(userId).pipe(
-    Effect.withSpan("fetchRemoteProfile")
-  )
+const syncUser = Effect.fn("syncUser")(function* (userId: string) {
+  const profile = yield* fetchRemoteProfile(userId).pipe(Effect.withSpan("fetchRemoteProfile"));
 
-  return yield* persistProfile(profile).pipe(
-    Effect.withSpan("persistProfile")
-  )
-})
+  return yield* persistProfile(profile).pipe(Effect.withSpan("persistProfile"));
+});
 ```
 
 ### Pattern: framework boundary with runtime
 
 ```ts
-const runtime = ManagedRuntime.make(AppLayer)
+const runtime = ManagedRuntime.make(AppLayer);
 
-const handleRequest = (userId: string) =>
-  runtime.runPromise(fetchUser(userId))
+const handleRequest = (userId: string) => runtime.runPromise(fetchUser(userId));
 ```
 
 ## Good Repo Examples To Study

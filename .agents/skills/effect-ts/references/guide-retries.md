@@ -70,9 +70,7 @@ This is explicitly covered in the module tests.
 Use this for the simplest bounded retry case.
 
 ```ts
-const retried = effect.pipe(
-  Effect.retry({ times: 3 })
-)
+const retried = effect.pipe(Effect.retry({ times: 3 }));
 ```
 
 Use this when:
@@ -93,9 +91,7 @@ The module tests show:
 Example:
 
 ```ts
-const retried = effect.pipe(
-  Effect.retry({ until: (error) => error._tag === "Done" })
-)
+const retried = effect.pipe(Effect.retry({ until: (error) => error._tag === "Done" }));
 ```
 
 ### `{ while: predicate }`
@@ -107,9 +103,7 @@ The tests also show pure and effectful `while` variants.
 Example:
 
 ```ts
-const retried = effect.pipe(
-  Effect.retry({ while: (error) => error._tag === "Retryable" })
-)
+const retried = effect.pipe(Effect.retry({ while: (error) => error._tag === "Retryable" }));
 ```
 
 ## Retry With Schedule
@@ -117,9 +111,7 @@ const retried = effect.pipe(
 Use a `Schedule` whenever timing matters.
 
 ```ts
-const retried = effect.pipe(
-  Effect.retry(Schedule.recurs(3))
-)
+const retried = effect.pipe(Effect.retry(Schedule.recurs(3)));
 ```
 
 Or with the richer object form:
@@ -128,9 +120,9 @@ Or with the richer object form:
 const retried = effect.pipe(
   Effect.retry({
     schedule: Schedule.recurs(3),
-    while: (error) => error._tag === "Retryable"
-  })
-)
+    while: (error) => error._tag === "Retryable",
+  }),
+);
 ```
 
 This is a very important repo pattern because it lets you combine:
@@ -178,13 +170,13 @@ The canonical source repeatedly uses these patterns:
 ### Fixed retry count
 
 ```ts
-Schedule.recurs(3)
+Schedule.recurs(3);
 ```
 
 ### Exponential backoff
 
 ```ts
-Schedule.exponential("500 millis", 1.5)
+Schedule.exponential("500 millis", 1.5);
 ```
 
 ### Exponential plus steady fallback spacing
@@ -193,7 +185,7 @@ Schedule.exponential("500 millis", 1.5)
 Schedule.exponential("500 millis", 1.5).pipe(
   Schedule.upTo({ times: 4 }),
   Schedule.andThen(Schedule.spaced("5 seconds")),
-)
+);
 ```
 
 This appears in production modules such as RPC and workflow code.
@@ -203,10 +195,8 @@ This appears in production modules such as RPC and workflow code.
 ```ts
 Schedule.forever.pipe(
   Schedule.setInputType<RetryableError>(),
-  Schedule.addDelay(({ input: error }) =>
-    Effect.succeed(error.retryAfter ?? "1 second")
-  ),
-)
+  Schedule.addDelay(({ input: error }) => Effect.succeed(error.retryAfter ?? "1 second")),
+);
 ```
 
 The OTLP exporter uses this shape to derive delays from actual HTTP failure details such as rate limits.
@@ -227,11 +217,11 @@ effect.pipe(
   Effect.retry(policy),
   Effect.catch((cause) => {
     if (!Cause.hasInterrupts(cause)) {
-      return Effect.failCause(cause)
+      return Effect.failCause(cause);
     }
-    return Effect.die("interrupted and retries exhausted")
-  })
-)
+    return Effect.die("interrupted and retries exhausted");
+  }),
+);
 ```
 
 Use this when:
@@ -298,17 +288,17 @@ const Plan = ExecutionPlan.make(
   {
     provide: FastLayer,
     attempts: 2,
-    schedule: Schedule.spaced("3 seconds")
+    schedule: Schedule.spaced("3 seconds"),
   },
   {
     provide: SafeLayer,
     attempts: 3,
-    schedule: Schedule.spaced("1 second")
+    schedule: Schedule.spaced("1 second"),
   },
   {
-    provide: FinalFallbackLayer
-  }
-)
+    provide: FinalFallbackLayer,
+  },
+);
 ```
 
 ### Step Semantics
@@ -358,7 +348,7 @@ one whose requirements are satisfied from the current context.
 Use this when the plan should be frozen with the current environment before being applied later.
 
 ```ts
-const capturedPlan = yield* Plan.captureRequirements
+const capturedPlan = yield * Plan.captureRequirements;
 ```
 
 ## `ExecutionPlan.merge`
@@ -385,9 +375,7 @@ Use `ExecutionPlan` when:
 ### Pattern: simple bounded retry
 
 ```ts
-const retried = effect.pipe(
-  Effect.retry({ times: 3 })
-)
+const retried = effect.pipe(Effect.retry({ times: 3 }));
 ```
 
 ### Pattern: retryable-error backoff
@@ -396,14 +384,14 @@ const retried = effect.pipe(
 const retryPolicy = Schedule.exponential("500 millis", 1.5).pipe(
   Schedule.upTo({ times: 4 }),
   Schedule.andThen(Schedule.spaced("5 seconds")),
-)
+);
 
 const retried = effect.pipe(
   Effect.retry({
     schedule: retryPolicy,
-    while: (error) => error._tag === "Retryable"
-  })
-)
+    while: (error) => error._tag === "Retryable",
+  }),
+);
 ```
 
 ### Pattern: fallback across providers
@@ -413,17 +401,17 @@ const Plan = ExecutionPlan.make(
   {
     provide: PrimaryLayer,
     attempts: 2,
-    schedule: Schedule.spaced("1 second")
+    schedule: Schedule.spaced("1 second"),
   },
   {
     provide: SecondaryLayer,
     attempts: 3,
-    schedule: Schedule.exponential(500, 1.5)
+    schedule: Schedule.exponential(500, 1.5),
   },
   {
-    provide: FinalFallbackLayer
-  }
-)
+    provide: FinalFallbackLayer,
+  },
+);
 ```
 
 ## Anti-Patterns

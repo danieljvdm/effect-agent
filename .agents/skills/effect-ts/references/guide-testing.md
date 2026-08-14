@@ -46,8 +46,8 @@ repository explicitly owns that workflow.
 Preferred imports for Effect tests:
 
 ```ts
-import { assert, describe, it, layer } from "@effect/vitest"
-import { Effect } from "effect"
+import { assert, describe, it, layer } from "@effect/vitest";
+import { Effect } from "effect";
 ```
 
 `@effect/vitest` re-exports Vitest, so it is the normal entrypoint for test APIs in an Effect codebase.
@@ -74,15 +74,15 @@ This comes directly from the internal implementation.
 Example:
 
 ```ts
-import { assert, it } from "@effect/vitest"
-import { Effect } from "effect"
+import { assert, it } from "@effect/vitest";
+import { Effect } from "effect";
 
 it.effect("loads a user", () =>
-  Effect.gen(function*() {
-    yield* Effect.void
-    assert.isTrue(true)
-  })
-)
+  Effect.gen(function* () {
+    yield* Effect.void;
+    assert.isTrue(true);
+  }),
+);
 ```
 
 Use `it.effect` when:
@@ -100,10 +100,10 @@ Example:
 
 ```ts
 it.live("uses live services", () =>
-  Effect.gen(function*() {
-    yield* Effect.void
-  })
-)
+  Effect.gen(function* () {
+    yield* Effect.void;
+  }),
+);
 ```
 
 Use `it.live` when:
@@ -123,11 +123,11 @@ Preferred pattern:
 
 ```ts
 it.effect("does something", () =>
-  Effect.gen(function*() {
-    const value = yield* someEffect
-    assert.strictEqual(value, 1)
-  })
-)
+  Effect.gen(function* () {
+    const value = yield* someEffect;
+    assert.strictEqual(value, 1);
+  }),
+);
 ```
 
 Prefer `Effect.gen` inside `it.effect` and `it.live` for readability.
@@ -147,9 +147,9 @@ The canonical source also uses `expect` in some tests, but for skill guidance pr
 Examples:
 
 ```ts
-assert.isTrue(value === 1)
-assert.strictEqual(a + b, b + a)
-assert.include(text, substring)
+assert.isTrue(value === 1);
+assert.strictEqual(a + b, b + a);
+assert.include(text, substring);
 ```
 
 ## Test Context
@@ -160,12 +160,12 @@ Example:
 
 ```ts
 it.effect("uses context", (ctx) =>
-  Effect.gen(function*() {
+  Effect.gen(function* () {
     ctx.onTestFailed(() => {
       // cleanup or diagnostics
-    })
-  })
-)
+    });
+  }),
+);
 ```
 
 Use this when you need:
@@ -201,12 +201,12 @@ Use `it.prop` for non-Effect property tests.
 Example:
 
 ```ts
-import { it } from "@effect/vitest"
-import { FastCheck } from "effect/testing"
+import { it } from "@effect/vitest";
+import { FastCheck } from "effect/testing";
 
-const realNumber = FastCheck.float({ noNaN: true, noDefaultInfinity: true })
+const realNumber = FastCheck.float({ noNaN: true, noDefaultInfinity: true });
 
-it.prop("symmetry", [realNumber, FastCheck.integer()], ([a, b]) => a + b === b + a)
+it.prop("symmetry", [realNumber, FastCheck.integer()], ([a, b]) => a + b === b + a);
 ```
 
 Important limitation from the internal implementation:
@@ -225,17 +225,17 @@ This is the more powerful property-testing mode for Effect code.
 Example:
 
 ```ts
-import { assert, it } from "@effect/vitest"
-import { Effect } from "effect"
-import { FastCheck } from "effect/testing"
+import { assert, it } from "@effect/vitest";
+import { Effect } from "effect";
+import { FastCheck } from "effect/testing";
 
-const realNumber = FastCheck.float({ noNaN: true, noDefaultInfinity: true })
+const realNumber = FastCheck.float({ noNaN: true, noDefaultInfinity: true });
 
 it.effect.prop("symmetry", [realNumber, FastCheck.integer()], ([a, b]) =>
-  Effect.gen(function*() {
-    assert.strictEqual(a + b, b + a)
-  })
-)
+  Effect.gen(function* () {
+    assert.strictEqual(a + b, b + a);
+  }),
+);
 ```
 
 Unlike top-level `it.prop`, `it.effect.prop` does support `Schema` inputs by converting them with `Schema.toArbitrary`.
@@ -260,23 +260,23 @@ This is one of the most important `@effect/vitest` features.
 Example:
 
 ```ts
-import { describe, it, layer } from "@effect/vitest"
-import { Context, Effect, Layer } from "effect"
+import { describe, it, layer } from "@effect/vitest";
+import { Context, Effect, Layer } from "effect";
 
 class Foo extends Context.Service<Foo, string>()("Foo") {
-  static readonly layer = Layer.succeed(Foo)("foo")
+  static readonly layer = Layer.succeed(Foo)("foo");
 }
 
 describe("foo", () => {
   layer(Foo.layer)((it) => {
     it.effect("gets foo", () =>
-      Effect.gen(function*() {
-        const foo = yield* Foo
-        return foo
-      })
-    )
-  })
-})
+      Effect.gen(function* () {
+        const foo = yield* Foo;
+        return foo;
+      }),
+    );
+  });
+});
 ```
 
 What it does internally:
@@ -314,14 +314,12 @@ If multiple tests use the same layer, do not write tests like this:
 
 ```ts
 it.effect("creates and lists todos", () =>
-  Effect.gen(function*() {
-    const service = yield* TodoService
-    yield* service.create("write tests")
-    yield* service.create("ship feature")
-  }).pipe(
-    Effect.provide(TodoService.inMemoryLayer)
-  )
-)
+  Effect.gen(function* () {
+    const service = yield* TodoService;
+    yield* service.create("write tests");
+    yield* service.create("ship feature");
+  }).pipe(Effect.provide(TodoService.inMemoryLayer)),
+);
 ```
 
 Why this is the wrong pattern:
@@ -338,23 +336,23 @@ Prefer:
 describe("TodoService", () => {
   layer(TodoService.inMemoryLayer)((it) => {
     it.effect("creates and lists todos", () =>
-      Effect.gen(function*() {
-        const service = yield* TodoService
-        yield* service.create("write tests")
-        yield* service.create("ship feature")
-      })
-    )
+      Effect.gen(function* () {
+        const service = yield* TodoService;
+        yield* service.create("write tests");
+        yield* service.create("ship feature");
+      }),
+    );
 
     it.effect("updates completion and deletes todos", () =>
-      Effect.gen(function*() {
-        const service = yield* TodoService
-        const todo = yield* service.create("close issue")
-        yield* service.setCompleted(todo.id, true)
-        yield* service.remove(todo.id)
-      })
-    )
-  })
-})
+      Effect.gen(function* () {
+        const service = yield* TodoService;
+        const todo = yield* service.create("close issue");
+        yield* service.setCompleted(todo.id, true);
+        yield* service.remove(todo.id);
+      }),
+    );
+  });
+});
 ```
 
 Rule:
@@ -381,14 +379,14 @@ Example:
 layer(Foo.layer)((it) => {
   it.layer(Bar.layer)("nested", (it) => {
     it.effect("gets both", () =>
-      Effect.gen(function*() {
-        const foo = yield* Foo
-        const bar = yield* Bar
-        return [foo, bar]
-      })
-    )
-  })
-})
+      Effect.gen(function* () {
+        const foo = yield* Foo;
+        const bar = yield* Bar;
+        return [foo, bar];
+      }),
+    );
+  });
+});
 ```
 
 Important behavior from the implementation:
@@ -476,11 +474,11 @@ It is not needed for ordinary test structure.
 
 ```ts
 it.effect("does work", () =>
-  Effect.gen(function*() {
-    const value = yield* Effect.succeed(1)
-    assert.strictEqual(value, 1)
-  })
-)
+  Effect.gen(function* () {
+    const value = yield* Effect.succeed(1);
+    assert.strictEqual(value, 1);
+  }),
+);
 ```
 
 ### Pattern: shared layer for a test group
@@ -488,33 +486,33 @@ it.effect("does work", () =>
 ```ts
 layer(AppLayer)("app", (it) => {
   it.effect("uses app services", () =>
-    Effect.gen(function*() {
-      yield* Effect.void
-    })
-  )
-})
+    Effect.gen(function* () {
+      yield* Effect.void;
+    }),
+  );
+});
 ```
 
 ### Pattern: property test with Effect
 
 ```ts
 it.effect.prop("law", [FastCheck.integer()], ([n]) =>
-  Effect.gen(function*() {
-    assert.strictEqual(n + 0, n)
-  })
-)
+  Effect.gen(function* () {
+    assert.strictEqual(n + 0, n);
+  }),
+);
 ```
 
 ### Pattern: use `TestClock`
 
 ```ts
 it.effect("uses TestClock", () =>
-  Effect.gen(function*() {
-    const fiber = yield* Effect.forkChild(Effect.sleep("1 second"))
-    yield* TestClock.adjust("1 second")
-    yield* Fiber.join(fiber)
-  })
-)
+  Effect.gen(function* () {
+    const fiber = yield* Effect.forkChild(Effect.sleep("1 second"));
+    yield* TestClock.adjust("1 second");
+    yield* Fiber.join(fiber);
+  }),
+);
 ```
 
 ## Anti-Patterns

@@ -49,9 +49,9 @@ attempt limits, and backoff in the schedule.
 Use the operator that matches the control flow:
 
 ```ts
-const retried = Effect.retry(loadRemote, retryPolicy)
-const repeated = Effect.repeat(refreshCache, refreshPolicy)
-const scheduled = Effect.schedule(runJob, nightly)
+const retried = Effect.retry(loadRemote, retryPolicy);
+const repeated = Effect.repeat(refreshCache, refreshPolicy);
+const scheduled = Effect.schedule(runJob, nightly);
 ```
 
 - `retry` steps the schedule when the effect fails; the schedule input is the
@@ -69,7 +69,7 @@ before the schedule is stepped, so `recurs(3)` permits one initial attempt and
 up to three retries.
 
 ```ts
-const retryThreeTimes = Schedule.recurs(3)
+const retryThreeTimes = Schedule.recurs(3);
 ```
 
 ### `Schedule.forever`
@@ -78,7 +78,7 @@ const retryThreeTimes = Schedule.recurs(3)
 combinators unless a tight loop is intentional.
 
 ```ts
-const unbounded = Schedule.forever
+const unbounded = Schedule.forever;
 ```
 
 ### `Schedule.spaced`
@@ -86,7 +86,7 @@ const unbounded = Schedule.forever
 Use `spaced` when each delay starts after the preceding action completes.
 
 ```ts
-const pollEverySecond = Schedule.spaced("1 second")
+const pollEverySecond = Schedule.spaced("1 second");
 ```
 
 ### `Schedule.fixed`
@@ -95,7 +95,7 @@ Use `fixed` for a regular cadence that accounts for the time spent running the
 action. This differs from naïve spacing when the action itself is slow.
 
 ```ts
-const everyMinute = Schedule.fixed("1 minute")
+const everyMinute = Schedule.fixed("1 minute");
 ```
 
 ### `Schedule.windowed`
@@ -103,7 +103,7 @@ const everyMinute = Schedule.fixed("1 minute")
 Use `windowed` to align work to the nearest interval boundary.
 
 ```ts
-const flushOnTenSecondWindows = Schedule.windowed("10 seconds")
+const flushOnTenSecondWindows = Schedule.windowed("10 seconds");
 ```
 
 ### `Schedule.duration`
@@ -111,7 +111,7 @@ const flushOnTenSecondWindows = Schedule.windowed("10 seconds")
 `duration` recurs once after the given delay, then completes.
 
 ```ts
-const onceAfterOneSecond = Schedule.duration("1 second")
+const onceAfterOneSecond = Schedule.duration("1 second");
 ```
 
 ### `Schedule.during`
@@ -119,7 +119,7 @@ const onceAfterOneSecond = Schedule.duration("1 second")
 `during` recurs only within an elapsed-time window.
 
 ```ts
-const forThirtySeconds = Schedule.during("30 seconds")
+const forThirtySeconds = Schedule.during("30 seconds");
 ```
 
 ### `Schedule.cron`
@@ -129,7 +129,7 @@ with `CronParseError`, so keep that failure visible where the expression is not
 a trusted constant.
 
 ```ts
-const nightly = Schedule.cron("0 0 * * *")
+const nightly = Schedule.cron("0 0 * * *");
 ```
 
 ## Backoff
@@ -139,7 +139,7 @@ const nightly = Schedule.cron("0 0 * * *")
 Use exponential backoff for transient external failures.
 
 ```ts
-const backoff = Schedule.exponential("100 millis", 2)
+const backoff = Schedule.exponential("100 millis", 2);
 ```
 
 Bound the policy explicitly:
@@ -148,7 +148,7 @@ Bound the policy explicitly:
 const boundedBackoff = Schedule.exponential("100 millis").pipe(
   Schedule.upTo({ duration: "30 seconds", times: 6 }),
   Schedule.jittered,
-)
+);
 ```
 
 ### `Schedule.fibonacci`
@@ -156,9 +156,7 @@ const boundedBackoff = Schedule.exponential("100 millis").pipe(
 Use Fibonacci backoff when growth should be gentler than exponential.
 
 ```ts
-const fibonacciBackoff = Schedule.fibonacci("100 millis").pipe(
-  Schedule.upTo({ times: 6 }),
-)
+const fibonacciBackoff = Schedule.fibonacci("100 millis").pipe(Schedule.upTo({ times: 6 }));
 ```
 
 ### `Schedule.jittered`
@@ -167,9 +165,7 @@ Use jitter for distributed clients, workers, or polling loops that might
 otherwise synchronize their retries.
 
 ```ts
-const jittered = Schedule.exponential("200 millis").pipe(
-  Schedule.jittered,
-)
+const jittered = Schedule.exponential("200 millis").pipe(Schedule.jittered);
 ```
 
 ## Bounding Policies
@@ -184,7 +180,7 @@ const bounded = Schedule.spaced("1 second").pipe(
     duration: "20 seconds",
     times: 5,
   }),
-)
+);
 ```
 
 Prefer `upTo` over rebuilding count and elapsed-time checks with mutable state.
@@ -198,10 +194,8 @@ Use `andThen` when one policy should complete before another begins.
 ```ts
 const quickThenSlow = Schedule.exponential("100 millis").pipe(
   Schedule.upTo({ times: 3 }),
-  Schedule.andThen(
-    Schedule.spaced("5 seconds").pipe(Schedule.upTo({ times: 5 })),
-  ),
-)
+  Schedule.andThen(Schedule.spaced("5 seconds").pipe(Schedule.upTo({ times: 5 }))),
+);
 ```
 
 This is the v4 replacement for older examples that used `Schedule.either` to
@@ -221,10 +215,7 @@ largest delay. Use it to enforce several stop conditions while retaining the
 slowest applicable cadence.
 
 ```ts
-const countedBackoff = Schedule.max([
-  Schedule.exponential("100 millis"),
-  Schedule.recurs(5),
-])
+const countedBackoff = Schedule.max([Schedule.exponential("100 millis"), Schedule.recurs(5)]);
 ```
 
 ### `Schedule.min`
@@ -234,10 +225,7 @@ smallest available delay. Use it only when that "any policy may continue"
 behavior is intended.
 
 ```ts
-const fastestAvailable = Schedule.min([
-  Schedule.spaced("1 second"),
-  Schedule.spaced("5 seconds"),
-])
+const fastestAvailable = Schedule.min([Schedule.spaced("1 second"), Schedule.spaced("5 seconds")]);
 ```
 
 Do not treat `max` and `min` as ordinary numeric delay combinators without
@@ -252,9 +240,9 @@ Use `modifyDelay` to replace the computed delay from schedule metadata.
 ```ts
 const cappedDelay = Schedule.exponential("100 millis").pipe(
   Schedule.modifyDelay(({ duration }) =>
-    Effect.succeed(Duration.min(duration, Duration.seconds(5)))
+    Effect.succeed(Duration.min(duration, Duration.seconds(5))),
   ),
-)
+);
 ```
 
 ### `Schedule.addDelay`
@@ -266,11 +254,9 @@ For retries, inspect the typed error through `metadata.input`.
 const serverAware = Schedule.spaced("1 second").pipe(
   Schedule.setInputType<RateLimitedError>(),
   Schedule.addDelay(({ input: error }) =>
-    error._tag === "RateLimited"
-      ? Effect.succeed(error.retryAfter)
-      : Effect.succeed(Duration.zero)
+    error._tag === "RateLimited" ? Effect.succeed(error.retryAfter) : Effect.succeed(Duration.zero),
   ),
-)
+);
 ```
 
 ### `Schedule.map`
@@ -299,9 +285,9 @@ const observed = Schedule.exponential("100 millis").pipe(
         delay: String(duration),
         errorTag: input._tag,
       }),
-    )
+    ),
   ),
-)
+);
 ```
 
 ## Advanced Construction And Inspection

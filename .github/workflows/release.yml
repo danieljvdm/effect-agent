@@ -47,7 +47,9 @@ jobs:
           node-version: 24
       - run: npm install -g npm@latest
 
-      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile --ignore-scripts
+
+      - run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
       - name: Version or publish
         uses: changesets/action@v1
