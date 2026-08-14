@@ -11,7 +11,7 @@ pageClass: ea-index
 <main class="ea-home">
   <section class="ea-home__hero">
     <div class="ea-home__intro">
-      <p class="ea-home__eyebrow"><span>●</span> Phase 4 available · Phase 5 next</p>
+      <p class="ea-home__eyebrow"><span>●</span> All roadmap phases (P0–P7) implemented · pre-1.0, specifications Draft</p>
       <h1 class="ea-home__title">Agents,<em>with cause.</em></h1>
       <p class="ea-home__lede">
         Build autonomous TypeScript agents without leaving Effect behind. Schemas stay canonical,
@@ -52,9 +52,9 @@ pageClass: ea-index
       <p>Replay, checkpoints, export, memory and SQLite stores.</p>
     </div>
     <div class="ea-status-strip__item">
-      <StatusBadge status="next" />
+      <StatusBadge status="available" />
       <strong>Durable accepted work</strong>
-      <p>Receipts, Attempts, fencing, recovery, and Settlement.</p>
+      <p>Receipts, Attempts, fencing, recovery, and Settlement on Node/SQLite and Cloudflare.</p>
     </div>
   </section>
 
@@ -92,8 +92,8 @@ pageClass: ea-index
       <a class="ea-path" href="/future/durable-execution">
         <span class="ea-path__index">04 / RECOVER</span>
         <h3>Design for interruption</h3>
-        <p>Follow the target path from durable admission to one honest terminal Settlement.</p>
-        <span class="ea-path__arrow">Inspect Phase 4–5 →</span>
+        <p>Follow the implemented path from durable admission to one honest terminal Settlement.</p>
+        <span class="ea-path__arrow">Inspect the durable runtime →</span>
       </a>
       <a class="ea-path" href="/guide/testing">
         <span class="ea-path__index">05 / PROVE</span>

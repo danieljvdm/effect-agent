@@ -453,9 +453,21 @@ export const assertConvergence = (
       expectedInputs.some((expected) => expected === recordId),
     );
     expect(inputOrder).toEqual(expectedInputs.filter((expected) => inputOrder.includes(expected)));
-    const expectedSettlements = ordered.map((snapshot) =>
-      submissionSettlementRecordId(snapshot.submissionId),
-    );
+    // P7 §7(c) exemption: an ABORTED settlement for never-run work (no canonical
+    // `input:{sid}` record) settles immediately by design — without waiting for the head —
+    // so it is excluded from the FIFO settlement comparison. DUR-004 bounds EXECUTION order,
+    // which never-run work has none of (mirrors `verifyConversationInvariants`).
+    const abortedNeverRan = (snapshot: SubmissionSnapshot): boolean =>
+      !recordIds.includes(submissionInputRecordId(snapshot.submissionId)) &&
+      records.some(
+        (envelope) =>
+          envelope.record.recordId === submissionSettlementRecordId(snapshot.submissionId) &&
+          envelope.record.payload._tag === "SubmissionSettled" &&
+          envelope.record.payload.outcome === "aborted",
+      );
+    const expectedSettlements = ordered
+      .filter((snapshot) => !abortedNeverRan(snapshot))
+      .map((snapshot) => submissionSettlementRecordId(snapshot.submissionId));
     const settlementOrder = recordIds.filter((recordId) =>
       expectedSettlements.some((expected) => expected === recordId),
     );

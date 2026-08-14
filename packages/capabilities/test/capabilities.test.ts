@@ -5,7 +5,15 @@ import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "e
 import { TestClock } from "effect/testing";
 import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
-import { ConversationId, RunId, ToolCallId, TurnId } from "@effect-agent/core";
+import {
+  AgentId,
+  ConversationId,
+  RunId,
+  RunStarted,
+  TextDelta,
+  ToolCallId,
+  TurnId,
+} from "@effect-agent/core";
 
 import {
   applyCompaction,
@@ -38,6 +46,7 @@ import {
   ModelContextMessage,
   prepareModelContext,
   requestApproval,
+  redactedTranscript,
   RetainedFact,
   RunCommandQueueConfig,
   SteeringCommand,
@@ -365,6 +374,32 @@ describe("capability contracts", () => {
           ),
         ),
       ),
+  );
+
+  it.effect("redactedTranscript composes encode + structural redaction for live Run Events", () =>
+    Effect.gen(function* () {
+      // P7 WP7 friction fix (travel-planner live-profile note): the safe path from live Run
+      // Events to a loggable transcript is ONE composed step — no call site hand-assembles
+      // the encode → redact pair or accidentally logs the raw event.
+      const base = {
+        eventVersion: 1 as const,
+        runId,
+        conversationId,
+        agentId: Schema.decodeSync(AgentId)("agent-redacted-transcript"),
+        sequence: 0,
+        timestamp: DateTime.toUtc(DateTime.makeUnsafe(1_000)),
+      };
+      const lines = yield* redactedTranscript([
+        RunStarted.make(base),
+        TextDelta.make({ ...base, sequence: 1, text: "secret itinerary sk-live-key" }),
+      ]);
+      expect(lines).toHaveLength(2);
+      for (const line of lines) {
+        expect(line).not.toContain("sk-live-key");
+        expect(line).not.toContain("secret itinerary");
+        expect(line).toContain("[REDACTED:string]");
+      }
+    }).pipe(Effect.provide(StructuralRedactorLive)),
   );
 
   it.effect("fails closed when an approval resolver returns another requestId", () =>

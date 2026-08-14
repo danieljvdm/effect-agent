@@ -43,6 +43,7 @@ import {
 
 import {
   AgentRuntime,
+  withTerminalDefectEvent,
   type RunBudgetHook,
   type RunTurnResume,
   type RunUsageDelta,
@@ -2959,5 +2960,112 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         );
         expect(bareLeading).toBe(-1);
       }),
+  );
+});
+
+/**
+ * P7 §7(h): the opt-in defect boundary. The engine keeps defects as defects — `RunFailed`
+ * covers expected failures only — and `withTerminalDefectEvent` lets a host boundary append
+ * ONE bounded terminal `RunFailed { errorTag: "Defect" }` before the cause is rethrown.
+ */
+layer(identifiers)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) => {
+  it.effect("a defect appends one bounded terminal RunFailed and rethrows the original cause", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const model = Model.make(
+        "scripted",
+        "defect-boundary",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.concat(
+                Stream.fromIterable<Response.StreamPartEncoded>([
+                  { type: "text-start", id: "answer" },
+                  { type: "text-delta", id: "answer", delta: "partial" },
+                ]),
+                Stream.fromEffect(Effect.die(new Error("the supplier catalog crashed"))),
+              ),
+          }),
+        ),
+      );
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(runtimeDefinition, model), {
+        question: "defect",
+      }).pipe(
+        withTerminalDefectEvent,
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+
+      // The defect stays a defect: the cause is rethrown unchanged, never converted into a
+      // typed failure or a successful stream end.
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isFailure(exit)) {
+        expect(Cause.hasDies(exit.cause)).toBe(true);
+      }
+
+      const observed = yield* Ref.get(events);
+      const failures = observed.filter((event) => event._tag === "RunFailed");
+      expect(failures).toHaveLength(1);
+      const terminal = observed.at(-1);
+      expect(terminal?._tag).toBe("RunFailed");
+      if (terminal?._tag === "RunFailed") {
+        expect(terminal.errorTag).toBe("Defect");
+        expect(terminal.message).toContain("the supplier catalog crashed");
+        // Identity comes from the already-streamed events, one sequence later.
+        const previous = observed.at(-2);
+        expect(previous).toBeDefined();
+        if (previous !== undefined) {
+          expect(terminal.runId).toBe(previous.runId);
+          expect(terminal.conversationId).toBe(previous.conversationId);
+          expect(terminal.sequence).toBe(previous.sequence + 1);
+        }
+      }
+    }),
+  );
+
+  it.effect(
+    "a typed failure is never double-terminalized — the engine's RunFailed stands alone",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        // Invalid final JSON fails typed (AgentOutputError): the engine already emits the
+        // terminal RunFailed, so the boundary helper must pass the cause through untouched.
+        const exit = yield* AgentRuntime.stream(makeAgent(finalParts("not json")), {
+          question: "typed",
+        }).pipe(
+          withTerminalDefectEvent,
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.exit,
+        );
+        const failure = failureFrom(exit);
+        expect(errorMessageForTest(failure)).toContain("not valid JSON");
+        const observed = yield* Ref.get(events);
+        const failures = observed.filter((event) => event._tag === "RunFailed");
+        expect(failures).toHaveLength(1);
+        if (failures[0]?._tag === "RunFailed") {
+          expect(failures[0].errorTag).not.toBe("Defect");
+        }
+      }),
+  );
+
+  it.effect("a completed Run streams unchanged through the boundary", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      yield* AgentRuntime.stream(makeAgent(finalParts('{"answer":"fine"}')), {
+        question: "ok",
+      }).pipe(
+        withTerminalDefectEvent,
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+      );
+      const observed = yield* Ref.get(events);
+      expect(observed.some((event) => event._tag === "RunFailed")).toBe(false);
+      expect(observed.at(-1)?._tag).toBe("RunCompleted");
+    }),
   );
 });

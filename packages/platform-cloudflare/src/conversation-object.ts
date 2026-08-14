@@ -1,16 +1,37 @@
 import { DurableObject } from "cloudflare:workers";
 
 import type { AgentId } from "@effect-agent/core";
+import { SubmissionId } from "@effect-agent/core";
 import {
+  AppendConflict,
+  ConversationNotMaterialized,
   ConversationRead,
   ConversationStore,
+  ConversationStoreError,
+  DigestError,
   DurableAgentRuntime,
+  DurableRuntimeFailpointError,
+  FenceRejected,
+  IntegrityReport,
+  LedgerError,
+  ObligationReport,
+  ObligationThresholds,
+  OperationAuthorizationRequest,
+  OperationAuthorizer,
+  OperationDenied,
+  OwnershipLost,
   PersistedJson,
+  RecoveryExplanation,
+  RecoveryReport,
+  RetryCommand,
+  RetryRefused,
+  RunJournalError,
+  SettlementConflict,
   SubmissionLedger,
   SubmissionLookupByKey,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
-import { Effect, Layer, ManagedRuntime, Option, Stream } from "effect";
+import { Effect, Layer, ManagedRuntime, Option, Schema, Stream } from "effect";
 
 import {
   ConversationObjectIdentity,
@@ -18,7 +39,7 @@ import {
   conversationNamespaceLayer,
   type CloudflareBindingError,
 } from "./bindings.ts";
-import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
+import { ConversationMaintenance, DurableAlarmError, DurableAlarmService } from "./alarm.ts";
 import { AdmissionLimitExceeded, CloudflareDurableRuntimeConfig } from "./config.ts";
 import {
   AbortRecorded,
@@ -253,6 +274,17 @@ const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
       Effect.gen(function* () {
         const identity = yield* ConversationObjectIdentity;
         const store = yield* ConversationStore;
+        // The same fail-closed authorization seam the runtime's `observe` consults (P7 WP1);
+        // the default reference preserves the possession behavior.
+        const authorizer = yield* OperationAuthorizer;
+        yield* authorizer
+          .authorize(
+            OperationAuthorizationRequest.make({
+              operation: "observe",
+              conversationId: identity.conversationId,
+            }),
+          )
+          .pipe(Effect.catchTag("OperationDenied", deniedToProtocolFailure));
         const records = yield* Stream.runCollect(
           store.read(
             ConversationRead.make({
@@ -287,6 +319,24 @@ const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.flatMap(encodeResponse),
   );
 
+/**
+ * The pre-P7 host protocol's failure union does not carry `OperationDenied` (the Worker client
+ * predates the authorizer). This assembly always runs the default possession authorizer — no
+ * `CloudflareDurableRuntimeOptions` authorizer lever exists yet — so a denial here is
+ * unreachable today; if one ever surfaces it degrades to the protocol failure instead of an
+ * out-of-contract throw. The four P7 admin entry points below carry `OperationDenied` typed.
+ */
+const deniedToProtocolFailure = (
+  denied: OperationDenied,
+): Effect.Effect<never, HostProtocolError> =>
+  Effect.fail(
+    HostProtocolError.make({
+      message: boundHostDiagnostic(
+        `The ${denied.operation} operation was denied: ${denied.reason}`,
+      ),
+    }),
+  );
+
 const resolveApprovalEndpoint = (
   encoded: unknown,
 ): Effect.Effect<unknown, never, EndpointServices> =>
@@ -297,7 +347,9 @@ const resolveApprovalEndpoint = (
         const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
         yield* maintenance.preArm;
-        const intent = yield* runtime.resolveApproval(command);
+        const intent = yield* runtime
+          .resolveApproval(command)
+          .pipe(Effect.catchTag("OperationDenied", deniedToProtocolFailure));
         return ApprovalRecorded.make({ intent });
       }),
     ),
@@ -315,12 +367,189 @@ const resolveUnknownEndpoint = (
         const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
         yield* maintenance.preArm;
-        const intent = yield* runtime.resolveUnknown(command);
+        const intent = yield* runtime
+          .resolveUnknown(command)
+          .pipe(Effect.catchTag("OperationDenied", deniedToProtocolFailure));
         return UnknownResolutionRecorded.make({ intent });
       }),
     ),
     respond,
     Effect.flatMap(encodeResponse),
+  );
+
+// ---------------------------------------------------------------------------
+// P7 administrative entry points (plan §3): explain/verify/retry/obligations over the SAME
+// envelope discipline as the host protocol — closed request/response Schema unions, typed
+// failures that re-decode to identical tags, protocol anomalies answered typed. The envelopes
+// live here (not `client.ts`) because no Worker-side client consumption exists yet; `wake`
+// already exists as the `wake()` entry point.
+// ---------------------------------------------------------------------------
+
+/** Explain one Submission (`submissionId` present) or every nonterminal lane member. */
+export class AdminExplainRequest extends Schema.Class<AdminExplainRequest>(
+  "@effect-agent/platform-cloudflare/AdminExplainRequest",
+)({
+  submissionId: Schema.optionalKey(SubmissionId),
+}) {}
+
+/** Verify carries no parameters — the addressed Object IS the lane. */
+export class AdminVerifyRequest extends Schema.Class<AdminVerifyRequest>(
+  "@effect-agent/platform-cloudflare/AdminVerifyRequest",
+)({}) {}
+
+/** Every typed failure of the four admin entry points, plus the protocol's own errors. */
+export const AdminFailure = Schema.Union([
+  OperationDenied,
+  RetryRefused,
+  LedgerError,
+  RunJournalError,
+  DigestError,
+  OwnershipLost,
+  SettlementConflict,
+  ConversationStoreError,
+  ConversationNotMaterialized,
+  AppendConflict,
+  FenceRejected,
+  DurableRuntimeFailpointError,
+  DurableAlarmError,
+  HostProtocolError,
+]);
+export type AdminFailure = typeof AdminFailure.Type;
+
+export class ExplainedRecovery extends Schema.TaggedClass<ExplainedRecovery>(
+  "@effect-agent/platform-cloudflare/ExplainedRecovery",
+)("ExplainedRecovery", {
+  explanations: Schema.Array(RecoveryExplanation).check(Schema.isMaxLength(1_024)),
+}) {}
+
+export class VerifiedIntegrity extends Schema.TaggedClass<VerifiedIntegrity>(
+  "@effect-agent/platform-cloudflare/VerifiedIntegrity",
+)("VerifiedIntegrity", {
+  report: IntegrityReport,
+}) {}
+
+export class RetryExecuted extends Schema.TaggedClass<RetryExecuted>(
+  "@effect-agent/platform-cloudflare/RetryExecuted",
+)("RetryExecuted", {
+  report: RecoveryReport,
+}) {}
+
+export class ObligationsScanned extends Schema.TaggedClass<ObligationsScanned>(
+  "@effect-agent/platform-cloudflare/ObligationsScanned",
+)("ObligationsScanned", {
+  report: ObligationReport,
+}) {}
+
+/** The admin entry point failed TYPED on the Object; the failure re-decodes verbatim. */
+export class AdminFailed extends Schema.TaggedClass<AdminFailed>(
+  "@effect-agent/platform-cloudflare/AdminFailed",
+)("AdminFailed", {
+  failure: AdminFailure,
+}) {}
+
+/** The uniform answer of one admin entry point. Callers narrow by the tag their call implies. */
+export const AdminResponse = Schema.Union([
+  ExplainedRecovery,
+  VerifiedIntegrity,
+  RetryExecuted,
+  ObligationsScanned,
+  AdminFailed,
+]);
+export type AdminResponse = typeof AdminResponse.Type;
+
+export const decodeAdminExplainRequest = Schema.decodeUnknownEffect(AdminExplainRequest);
+export const decodeAdminVerifyRequest = Schema.decodeUnknownEffect(AdminVerifyRequest);
+export const decodeRetryCommand = Schema.decodeUnknownEffect(RetryCommand);
+export const decodeObligationThresholds = Schema.decodeUnknownEffect(ObligationThresholds);
+export const encodeAdminResponse = Schema.encodeEffect(AdminResponse);
+export const decodeAdminResponse = Schema.decodeUnknownEffect(AdminResponse);
+
+/** Fold one admin endpoint's typed failures into the uniform `AdminResponse` envelope. */
+const respondAdmin = <Result extends AdminResponse, Failure extends AdminFailure>(
+  effect: Effect.Effect<Result, Failure, EndpointServices>,
+): Effect.Effect<AdminResponse, never, EndpointServices> =>
+  effect.pipe(
+    Effect.map((result): AdminResponse => result),
+    Effect.catch((failure) => Effect.succeed<AdminResponse>(AdminFailed.make({ failure }))),
+  );
+
+/** Encode the admin response envelope; an unencodable response degrades to a protocol failure. */
+const encodeAdminResponseTotal = (response: AdminResponse): Effect.Effect<unknown> =>
+  encodeAdminResponse(response).pipe(
+    Effect.catch((error) =>
+      Effect.succeed<unknown>({
+        _tag: "AdminFailed",
+        failure: {
+          _tag: "HostProtocolError",
+          message: boundHostDiagnostic(`The admin response could not be encoded: ${error.message}`),
+        },
+      }),
+    ),
+  );
+
+const explainEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeAdminExplainRequest(encoded).pipe(
+    Effect.mapError(protocolFailure("The explain request could not be decoded")),
+    Effect.flatMap((request) =>
+      Effect.gen(function* () {
+        const identity = yield* ConversationObjectIdentity;
+        const runtime = yield* DurableAgentRuntime;
+        const explanations =
+          request.submissionId === undefined
+            ? yield* runtime.explainConversation(identity.conversationId)
+            : [yield* runtime.explain(request.submissionId)];
+        return ExplainedRecovery.make({ explanations });
+      }),
+    ),
+    respondAdmin,
+    Effect.flatMap(encodeAdminResponseTotal),
+  );
+
+const verifyEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeAdminVerifyRequest(encoded).pipe(
+    Effect.mapError(protocolFailure("The verify request could not be decoded")),
+    Effect.flatMap(() =>
+      Effect.gen(function* () {
+        const identity = yield* ConversationObjectIdentity;
+        const runtime = yield* DurableAgentRuntime;
+        const report = yield* runtime.verify(identity.conversationId);
+        return VerifiedIntegrity.make({ report });
+      }),
+    ),
+    respondAdmin,
+    Effect.flatMap(encodeAdminResponseTotal),
+  );
+
+const retryEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeRetryCommand(encoded).pipe(
+    Effect.mapError(protocolFailure("The retry command could not be decoded")),
+    Effect.flatMap((command) =>
+      Effect.gen(function* () {
+        const maintenance = yield* ConversationMaintenance;
+        const runtime = yield* DurableAgentRuntime;
+        // Alarm invariant: retry may repair durable state, so the alarm that will finish the
+        // lane commits BEFORE the mutation (D-P6-2), exactly like abort.
+        yield* maintenance.preArm;
+        const report = yield* runtime.retry(command);
+        return RetryExecuted.make({ report });
+      }),
+    ),
+    respondAdmin,
+    Effect.flatMap(encodeAdminResponseTotal),
+  );
+
+const obligationsEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeObligationThresholds(encoded).pipe(
+    Effect.mapError(protocolFailure("The obligation thresholds could not be decoded")),
+    Effect.flatMap((thresholds) =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const report = yield* runtime.scanObligations(thresholds);
+        return ObligationsScanned.make({ report });
+      }),
+    ),
+    respondAdmin,
+    Effect.flatMap(encodeAdminResponseTotal),
   );
 
 /**
@@ -424,6 +653,22 @@ export const makeConversationObjectClass = (options: ConversationObjectOptions) 
 
     async resolveUnknownEncoded(encoded: unknown): Promise<unknown> {
       return this.#runtime.runPromise(resolveUnknownEndpoint(encoded));
+    }
+
+    async explainEncoded(encoded: unknown): Promise<unknown> {
+      return this.#runtime.runPromise(explainEndpoint(encoded));
+    }
+
+    async verifyEncoded(encoded: unknown): Promise<unknown> {
+      return this.#runtime.runPromise(verifyEndpoint(encoded));
+    }
+
+    async retryEncoded(encoded: unknown): Promise<unknown> {
+      return this.#runtime.runPromise(retryEndpoint(encoded));
+    }
+
+    async obligationsEncoded(encoded: unknown): Promise<unknown> {
+      return this.#runtime.runPromise(obligationsEndpoint(encoded));
     }
 
     async portCall(encoded: unknown): Promise<unknown> {

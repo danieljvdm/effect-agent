@@ -108,6 +108,7 @@ export const CrashEnv = {
 export const CrashScenario = Schema.Literals([
   "submit",
   "abort-ready",
+  "abort-queued",
   "run",
   "run-two",
   "run-blocked",

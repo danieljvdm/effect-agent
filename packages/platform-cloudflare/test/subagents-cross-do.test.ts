@@ -14,7 +14,11 @@ import {
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { CloudflareConversationClient } from "../src/index.ts";
+import {
+  CloudflareConversationClient,
+  decodeAdminResponse,
+  type AdminResponse,
+} from "../src/index.ts";
 import {
   armRuntimeEviction,
   armStorageEviction,
@@ -193,6 +197,88 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     expect(armedEvictionsRemaining(ref), "every armed ladder step must have fired").toBe(0);
     // Five doomed incarnations later: ONE child, ONE join, one researcher invocation.
     await assertDelegationConverged(completedDelegation(receipt, ref));
+  }, 60_000);
+
+  it("a child never runs a Turn before its lineage record is canonical", async () => {
+    // P7 §7(a), model-checked FIRST (WP3): under the pre-P7 discipline TLC reaches the
+    // interleaving in which the admitted child self-repairs readiness, claims, and runs a
+    // Turn with no canonical lineage record (`formal/SubagentEstablishmentRace.cfg`); under
+    // the AwaitParentEstablishment discipline the race is eliminated and liveness is
+    // preserved (`formal/SubagentEstablishmentFix.cfg`). This row pins the implemented
+    // discipline cross-Object: the parent Object dies at subagent:after-admit on EVERY pass
+    // while the child's own alarms run — the admitted, lineage-less child must defer to the
+    // parent's establishment (SUB-016), never run ahead of it.
+    const location: DurableRuntimeFailpointLocation = "subagent:after-admit";
+    const ref = lane("child-awaits-lineage");
+    const faultSuffix = `:${delegateCallIdFor(ref)}`;
+    // An after-admit eviction buffer covers the window between the admission committing and
+    // the transport fault arming (the pool auto-fires due alarms in the background, burning
+    // roughly one armed eviction per millisecond); once the fault is armed, every parent
+    // recovery pass answers Indeterminate (SUB-031) and the parent provably CANNOT complete
+    // establishment during the child-side probes.
+    armRuntimeEviction(ref, ...Array.from({ length: 64 }, () => location));
+    const receipt = await submitCoordinator("coordinator", ref, `${ref}-key`);
+    const child = childConversationOf(receipt, ref);
+
+    // Drive the parent until the routed admission is durable in the CHILD's Object — the
+    // same pass then dies at after-admit, so no lineage record exists there. Then cut the
+    // parent→child transport so the admission stays authoritative but unreachable.
+    await drainDelegationUntil([ref], async () => (await laneRows(child, SUBAGENTS)).length === 1);
+    armTransportFault(faultSuffix);
+
+    // The transport fault must actually be holding the parent back before the probe window
+    // means anything: the buffer stops burning once every parent pass answers Indeterminate.
+    await waitFor(async () => {
+      const before = armedEvictionsRemaining(ref);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return before > 0 && armedEvictionsRemaining(ref) === before;
+    }, "the armed-eviction burn to stop under the transport fault");
+
+    // Child-side probe window: fire ONLY the child's own alarm passes (the fault blocks its
+    // portCall/wake entry points, never its own alarm). The classifier must answer
+    // AwaitParentEstablishment — the child stays `admitted`, never claims, and the
+    // researcher model never runs.
+    for (let round = 0; round < 5; round++) {
+      try {
+        await runDurableObjectAlarm(stubFor(child, SUBAGENTS));
+      } catch {
+        // A child pass may reject while its cross-Object parent hint races the parent's own
+        // doomed incarnation; the probes below carry the claim.
+      }
+      const rows = await laneRows(child, SUBAGENTS);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.state, `child state in probe round ${round}`).toBe("admitted");
+    }
+    expect(childModelInvocations(ref)).toBe(0);
+
+    // The WP1 admin surface names the deferral: the child Object explains its own lane.
+    const explainedRaw: unknown = await Promise.resolve(
+      stubFor(child, SUBAGENTS).explainEncoded({}),
+    );
+    const explained: AdminResponse = await Effect.runPromise(decodeAdminResponse(explainedRaw));
+    expect(explained._tag).toBe("ExplainedRecovery");
+    if (explained._tag === "ExplainedRecovery") {
+      expect(explained.explanations).toHaveLength(1);
+      expect(explained.explanations[0]?.decision._tag).toBe("AwaitParentEstablishment");
+      expect(explained.explanations[0]?.disposition).toBe("deferred");
+    }
+
+    // Heal the transport: the parent's idempotent establishment burns the remaining armed
+    // evictions, completes the child (lineage BEFORE readiness), and the delegation
+    // converges on one invocation.
+    healTransportFault(faultSuffix);
+    await drainDelegationUntil([ref, child], allLanesSettled(ref, child));
+    expect(armedEvictionsRemaining(ref), "every armed eviction must have fired").toBe(0);
+    await assertDelegationConverged(completedDelegation(receipt, ref));
+    const childRecords = await readCanonical(child, SUBAGENTS);
+    const tags = childRecords.map((envelope) => envelope.record.payload._tag);
+    const lineageIndex = tags.indexOf("SubagentLineageRecorded");
+    const firstTurnIndex = tags.indexOf("ModelResponseRecorded");
+    expect(lineageIndex, "the child log must carry its lineage record").toBeGreaterThanOrEqual(0);
+    expect(firstTurnIndex, "the child must have run exactly after establishment").toBeGreaterThan(
+      lineageIndex,
+    );
+    expect(childModelInvocations(ref)).toBe(1);
   }, 60_000);
 
   // -------------------------------------------------------------------------

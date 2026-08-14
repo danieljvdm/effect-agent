@@ -95,13 +95,16 @@ export const DEFAULT_OWNERSHIP_LEASE_DURATION: Duration.Duration = Duration.seco
 
 /**
  * What a SubmissionLedger adapter claims about itself. `durable-node` asserts single-node
- * process-crash durability (fsync-backed storage); `non-durable` marks reference adapters whose
- * state does not survive the process (in-memory conformance/test adapters).
+ * process-crash durability (fsync-backed storage); `durable-cloudflare` asserts the same
+ * single-serialized-owner crash durability through Durable Object storage output gates;
+ * `non-durable` marks reference adapters whose state does not survive the process (in-memory
+ * conformance/test adapters). The label is an honest self-description for reports and
+ * evidence — no runtime behavior branches on it.
  */
 export class LedgerCapabilities extends Schema.Class<LedgerCapabilities>(
   "@effect-agent/session/LedgerCapabilities",
 )({
-  durability: Schema.Literals(["durable-node", "non-durable"]),
+  durability: Schema.Literals(["durable-node", "durable-cloudflare", "non-durable"]),
 }) {}
 
 /**
@@ -372,7 +375,8 @@ export class AbortIntent extends Schema.Class<AbortIntent>("@effect-agent/sessio
 /**
  * Atomic claim of the contiguous ready prefix of strictly-later queued Submissions for joining
  * into the active host Run (plan §2.5). Fenced by the host Attempt's ownership token — no epoch
- * bump, the host already owns the lane. An `admitted`-but-not-`ready` row breaks the prefix.
+ * bump, the host already owns the lane. An `admitted`-but-not-`ready` row breaks the prefix;
+ * an aborted-settled row is a closed obligation and is skipped as a non-gap (P7 §7(c)).
  */
 export class ClaimJoiningRequest extends Schema.Class<ClaimJoiningRequest>(
   "@effect-agent/session/ClaimJoiningRequest",
@@ -921,6 +925,10 @@ export type SubmissionLedgerFailure =
  *   For a `joined` Submission the reservation is authorized by its recorded host linkage — a
  *   joined lane is never worker-claimable, so no ownership token can exist for it and the
  *   presented token is not consulted (plan §2.5: joined Submissions settle with the host).
+ *   Likewise, an ABORTED reservation for a `ready`/`terminalizing` Submission that carries a
+ *   durable abort intent and holds no live ownership is authorized by that intent (P7 §7(c)):
+ *   recovery settles aborted never-claimed queued work immediately, without waiting for it to
+ *   head the lane. Both exceptions are outcome- and state-narrow; everything else stays fenced.
  * - `finalizeSettlement` — idempotent terminal transition (state → settled) after the reserved
  *   record is canonical; releases the lane so the next `queueSequence` becomes claimable. It
  *   requires no ownership token: canonical history authorizes finalization (DUR-015). A
@@ -934,7 +942,8 @@ export type SubmissionLedgerFailure =
  * - `claimJoining` — atomic: transitions the contiguous `ready` prefix of strictly-later
  *   `queueSequence`s (up to `maxCount`) to `joining` under the host's ownership token, recording
  *   the host linkage; no epoch bump (the host Attempt already owns the lane). An
- *   `admitted`-not-`ready` row breaks the prefix. Fails with `OwnershipLost` once superseded.
+ *   `admitted`-not-`ready` row breaks the prefix; an aborted-settled row is a closed obligation
+ *   and is skipped as a non-gap (P7 §7(c)). Fails with `OwnershipLost` once superseded.
  * - `markJoined` — idempotent `joining → joined` with the canonical input record position;
  *   repairable from history when the append committed but the marker write was lost (DUR-016).
  * - `revertJoining` — recovery-only, idempotent `joining → ready`; a no-op when already joined.

@@ -9,15 +9,26 @@ import {
   type DurableAbortFailure,
   type DurableAwaitFailure,
   type DurableBindingFailure,
+  type DurableExplainFailure,
   type DurableObserveOptions,
+  type DurableObligationFailure,
+  type DurableRetryFailure,
   type DurableSubmitAgent,
   type DurableSubmitFailure,
   type DurableSubmitOptions,
+  type DurableVerifyFailure,
   type DurableWorkerFailure,
+  type IntegrityReport,
+  type ObligationReport,
+  type ObligationThresholds,
+  type OperationDenied,
   type Receipt,
+  type RecoveryExplanation,
   type RecoveryReport,
+  type RetryCommand,
   type Settlement,
 } from "@effect-agent/session";
+import type { ConversationId, SubmissionId } from "@effect-agent/core";
 import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
 
 import {
@@ -96,6 +107,12 @@ const makeHost = Effect.gen(function* () {
     awaitSettlement: runtime.awaitSettlement,
     observe: runtime.observe,
     abort: runtime.abort,
+    explain: runtime.explain,
+    explainConversation: runtime.explainConversation,
+    verify: runtime.verify,
+    retry: runtime.retry,
+    wake: runtime.wake,
+    scanObligations: runtime.scanObligations,
     runWorkers,
     runResolvedWorkers,
   });
@@ -142,9 +159,29 @@ export class NodeDurableHost extends Context.Service<
       options?: DurableObserveOptions,
     ) => Stream.Stream<
       CanonicalRecordEnvelope,
-      ConversationStoreError | ConversationNotMaterialized
+      ConversationStoreError | ConversationNotMaterialized | OperationDenied
     >;
     readonly abort: (command: AbortCommand) => Effect.Effect<AbortIntent, DurableAbortFailure>;
+    /** `DurableAgentRuntime.explain` — read-only recovery explanation of one Submission (P7). */
+    readonly explain: (
+      submissionId: SubmissionId,
+    ) => Effect.Effect<RecoveryExplanation, DurableExplainFailure>;
+    /** `DurableAgentRuntime.explainConversation` — explain every nonterminal lane member. */
+    readonly explainConversation: (
+      conversationId: ConversationId,
+    ) => Effect.Effect<ReadonlyArray<RecoveryExplanation>, DurableExplainFailure>;
+    /** `DurableAgentRuntime.verify` — read-only integrity checks, never a repair (P7). */
+    readonly verify: (
+      conversationId: ConversationId,
+    ) => Effect.Effect<IntegrityReport, DurableVerifyFailure>;
+    /** `DurableAgentRuntime.retry` — audited single-Submission re-drive with typed refusals. */
+    readonly retry: (command: RetryCommand) => Effect.Effect<RecoveryReport, DurableRetryFailure>;
+    /** `DurableAgentRuntime.wake` — the documented operator liveness nudge for one lane. */
+    readonly wake: (conversationId: ConversationId) => Effect.Effect<void, OperationDenied>;
+    /** `DurableAgentRuntime.scanObligations` — the scan-based DUR-017/OPS-001 report. */
+    readonly scanObligations: (
+      thresholds: ObligationThresholds,
+    ) => Effect.Effect<ObligationReport, DurableObligationFailure>;
     /**
      * Run `workerConcurrency` copies of the given worker effect (typically
      * `DurableAgentRuntime.runWorker(agent)`) until the caller's Scope interrupts them. The

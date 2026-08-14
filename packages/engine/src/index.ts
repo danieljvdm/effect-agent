@@ -3281,6 +3281,65 @@ const makeAgentSpawner = (parent: AgentSpawnerParent, depth: number): AgentSpawn
   spawn: spawnWithParent(parent, depth),
 });
 
+/** Bound applied to the rendered defect message of `withTerminalDefectEvent` (SEC-013). */
+const DEFECT_MESSAGE_LIMIT = 2_048;
+
+/**
+ * Opt-in boundary combinator (P7 §7(h), decision point 8): the engine keeps defects as
+ * defects — `RunFailed` covers EXPECTED failures only, and a defect still fails the event
+ * stream with its full Cause (AGENTS.md: errors are never silently widened, and a defect is
+ * never converted into a typed failure by default). A host boundary that forwards Run Events
+ * to a UI or transport can wrap the stream with this helper to append ONE bounded terminal
+ * `RunFailed { errorTag: "Defect" }` event before the original cause is rethrown, so a viewer
+ * always observes a terminal event even when the Run dies.
+ *
+ * Contract (documented in docs/spec/runtime.md §10):
+ *
+ * - typed failures and interruptions pass through untouched — the engine already emitted
+ *   their terminal event, so nothing is duplicated;
+ * - a cause carrying a defect first emits `RunFailed` with `errorTag: "Defect"` and a
+ *   bounded string rendering of the defect (never the raw value; hosts owning stricter
+ *   redaction apply it downstream), then RETHROWS the original cause unchanged;
+ * - identity fields come from the last event already streamed (`sequence` advances by one);
+ *   a defect BEFORE the first event has no Run identity to attribute, so it is rethrown
+ *   without an event — the helper never fabricates identities.
+ */
+export const withTerminalDefectEvent = <E, R>(
+  events: Stream.Stream<RunEvent, E, R>,
+): Stream.Stream<RunEvent, E, R> =>
+  Stream.suspend(() => {
+    let last: RunEvent | undefined;
+    return events.pipe(
+      Stream.tap((event) =>
+        Effect.sync(() => {
+          last = event;
+        }),
+      ),
+      Stream.catchCause((cause): Stream.Stream<RunEvent, E, R> => {
+        const base = last;
+        if (base === undefined || !Cause.hasDies(cause) || Cause.hasInterruptsOnly(cause)) {
+          return Stream.failCause(cause);
+        }
+        const terminal = Stream.fromEffect(
+          Effect.gen(function* () {
+            const timestamp = DateTime.makeUnsafe(yield* Clock.currentTimeMillis);
+            return RunFailed.make({
+              eventVersion: 1,
+              runId: base.runId,
+              conversationId: base.conversationId,
+              agentId: base.agentId,
+              sequence: base.sequence + 1,
+              timestamp,
+              errorTag: "Defect",
+              message: errorMessage(Cause.squash(cause)).slice(0, DEFECT_MESSAGE_LIMIT),
+            });
+          }),
+        );
+        return terminal.pipe(Stream.concat(Stream.failCause(cause)));
+      }),
+    );
+  });
+
 /**
  * Ephemeral Agent interpreter whose `run` operation reduces the same semantic
  * event stream exposed by `stream`.

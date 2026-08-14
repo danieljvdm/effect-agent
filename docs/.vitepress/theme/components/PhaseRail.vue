@@ -7,7 +7,7 @@ const phases = [
   { id: "P4", title: "Node durability", status: "available" },
   { id: "P5", title: "Durable tools", status: "available" },
   { id: "P6", title: "Cloudflare", status: "available" },
-  { id: "P7", title: "Hardening", status: "next" },
+  { id: "P7", title: "Hardening", status: "available" },
 ] as const;
 </script>
 

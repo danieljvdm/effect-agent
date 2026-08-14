@@ -138,6 +138,17 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
   joinedInputCovered: Schema.Boolean,
   /** Joined-side view of the host's canonical settlement record, when it exists. */
   hostSettlementOutcome: Schema.optionalKey(SettlementOutcome),
+  /**
+   * The Conversation carries its canonical `SubagentLineageRecorded` record (P7 §7(a)). Only
+   * consulted for a parent-linked Submission: a child whose lineage is not yet canonical defers
+   * its own materialization/readiness repair to the parent's idempotent establishment
+   * (`AwaitParentEstablishment`). Defaults to `false` so an assembler that does not compute it
+   * stays fail-closed — deferring is safe (the parent's establishment completes the child),
+   * running a Turn before lineage is the model-checked race (`formal/SubagentEstablishmentRace.cfg`).
+   */
+  subagentLineageRecorded: Schema.Boolean.pipe(
+    Schema.withConstructorDefault(Effect.succeed(false)),
+  ),
 }) {}
 
 /** Ledger admission committed but the Conversation is not durable: finish materialization,
@@ -372,6 +383,25 @@ export class ReleaseOrphanChildReservation extends Schema.TaggedClass<ReleaseOrp
   reservationIds: Schema.NonEmptyArray(ChildReservationId),
 }) {}
 
+/**
+ * A parent-linked `admitted` Submission whose Conversation lacks the canonical
+ * `SubagentLineageRecorded` record: the child lane DEFERS its own materialization/readiness
+ * repair — the parent's idempotent establishment (admit → materialize → lineage → ready)
+ * completes it, so a child never runs a Turn before its lineage record is canonical (P7 §7(a)).
+ * Model-checked before implementation: under the pre-P7 discipline TLC reaches the
+ * lineage-less child Turn (`formal/SubagentEstablishmentRace.cfg`); under this decision the
+ * race is eliminated and liveness is preserved (`formal/SubagentEstablishmentFix.cfg`,
+ * `AwaitParentEstablishment = TRUE`). Ordering/liveness hygiene, not a safety repair — the
+ * join already fails closed without lineage (SUB-019).
+ */
+export class AwaitParentEstablishment extends Schema.TaggedClass<AwaitParentEstablishment>(
+  "@effect-agent/session/AwaitParentEstablishment",
+)("AwaitParentEstablishment", {
+  submissionId: SubmissionId,
+  parentSubmissionId: SubmissionId,
+  parentToolCallId: ToolCallId,
+}) {}
+
 /** The Submission is settled; nothing is owed. */
 export class NoAction extends Schema.TaggedClass<NoAction>("@effect-agent/session/NoAction")(
   "NoAction",
@@ -407,6 +437,7 @@ export const RecoveryDecision = Schema.Union([
   ApplyJoinAccounting,
   PropagateChildAbort,
   ReleaseOrphanChildReservation,
+  AwaitParentEstablishment,
   NoAction,
 ]);
 export type RecoveryDecision = typeof RecoveryDecision.Type;
@@ -777,7 +808,12 @@ const classifyDelegationAbort = (
  *    attached child gets PropagateChildAbort — the parent does NOT settle — terminal children
  *    are joined, incomplete releases applied, provably childless reservations released; ONLY a
  *    parent with no open child obligation reaches SettleAborted, where open ordinary calls
- *    become `ToolCallUnknown` audit records, never a rollback claim (§13).
+ *    become `ToolCallUnknown` audit records, never a rollback claim (§13). SettleAborted is
+ *    position-blind by design (P7 §7(c)): an aborted, never-claimed `ready` Submission earns it
+ *    ANYWHERE in the queue — the executor settles it immediately without waiting for it to head
+ *    the lane, because settlement order of never-run work is not execution order (DUR-004
+ *    bounds execution order; DUR-012 permits settling inactive accepted work without an
+ *    Attempt).
  * 6. ordinary open tool calls (state not yet `unknown`) → MarkUnknown — reconcile-then-mark,
  *    never an automatic replay (DUR-009). Delegation calls are EXCLUDED (plan §4.3's most
  *    important edit): their prepared-without-outcome state is provably replay-safe and routes
@@ -796,7 +832,10 @@ const classifyDelegationAbort = (
  *    EnsureWaitingForChild → ResumeWaitingParent → ReleaseOrphanChildReservation.
  * 10. declared-but-unprepared tool batch → ResumePendingToolBatch — no handler ran (no prepared
  *     records), so the batch resumes with no model re-invocation and no Unknown (§15).
- * 11. `admitted` → CompleteMaterialization / RepairReadiness by Conversation durability.
+ * 11. `admitted` → a parent-linked Submission whose Conversation lacks the canonical lineage
+ *     record defers (AwaitParentEstablishment, P7 §7(a) — the parent's idempotent establishment
+ *     completes it; model-checked in `formal/SubagentEstablishmentFix.cfg`); otherwise
+ *     CompleteMaterialization / RepairReadiness by Conversation durability.
  * 12. otherwise → ApplyInput / RepairInputMarker / ResumeFromTurnBoundary by canonical input
  *     evidence, with the ledger marker repaired from history, never the reverse.
  *
@@ -916,6 +955,18 @@ export const classifyRecovery = (
     });
   }
   if (state === "admitted") {
+    // P7 §7(a): a parent-linked child never self-repairs readiness before its immutable
+    // lineage record is canonical — the parent's establishment appends lineage BEFORE
+    // markReady, so deferring here is the exact fix discipline TLC verified
+    // (`formal/SubagentEstablishmentFix.cfg`); the parent completes the child idempotently.
+    const linkage = snapshot.submission.parentLinkage ?? snapshot.parentLinkage;
+    if (linkage !== undefined && !evidence.subagentLineageRecorded) {
+      return AwaitParentEstablishment.make({
+        submissionId,
+        parentSubmissionId: linkage.parentSubmissionId,
+        parentToolCallId: linkage.parentToolCallId,
+      });
+    }
     return evidence.conversationMaterialized
       ? RepairReadiness.make({ submissionId })
       : CompleteMaterialization.make({ submissionId });

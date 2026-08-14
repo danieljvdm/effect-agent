@@ -1,7 +1,8 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 6 (`DC` Cloudflare) implemented on top of the Phase 5 durable booking and S1/S2
-Subagent delegation slices; Phase 7 increments remain design targets
+Status: Phase 7 (certified internal profiles) implemented on top of the Phase 6 `DC` slice, the
+Phase 5 durable booking slice, and the S1/S2 Subagent delegation slices — every phase row in
+the progression table below is executable evidence
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -112,7 +113,7 @@ insufficient without `DN` or `DC` and the tested adapter.
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
 
-P0 through P6 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
+P0 through P7 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
 adds a separate `P` profile that stores and reconstructs planning history while keeping accepted
 work explicitly non-durable. P4 adds the `DN` profile: a durable planning Submission that returns
 a Receipt, keeps one FIFO trip lane, survives restart to the same projection, supports durable
@@ -151,6 +152,18 @@ while `exactlyOnceExternalEffects` stays `false`
 `packages/platform-cloudflare/test/travel-planner-dc.test.ts`,
 `packages/platform-cloudflare/test/restart/travel-planner-restart.test.ts`;
 [Phase 6 evidence](../PHASE-6-EVIDENCE.md)).
+P7 makes the Travel Planner one of the three certified internal Agents: the dual-profile pin
+`phase7TravelPlannerProfile` records as a decodable Schema value that the offline cumulative
+suites stay deterministic and credential-free while the live-model profile is opt-in
+(`EFFECT_AGENT_LIVE=1` plus `OPENAI_API_KEY`, applied with `describe.skipIf`) and emits only
+structurally redacted transcripts — with `liveSupplierLayers` pinned `false`, because no real
+supplier exists to integrate and the deterministic desk is retained deliberately; the red-team
+suites make supplier content and traveler data adversarial, and the operator surface explains
+its recovery lanes without editing storage
+(`packages/testing/src/fixtures/travel-planner/phase7.ts`,
+`examples/providers/test/live-smoke.test.ts`,
+`packages/testing/test/security/redteam-supplier-injection.test.ts`;
+[Phase 7 evidence](../PHASE-7-EVIDENCE.md)).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

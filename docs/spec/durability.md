@@ -121,7 +121,9 @@ An active run may claim a contiguous ready prefix of later queued Submissions:
 - after its exact canonical input is appended, it becomes `joined`;
 - joined Submissions settle with the host Run;
 - a crash before canonical input reverts the joining Submission to ready;
-- a crash after canonical input reattaches it to the host rather than duplicating it.
+- a crash after canonical input reattaches it to the host rather than duplicating it;
+- an aborted-settled queued row is a closed obligation, not a gap: the contiguous ready
+  prefix walks over it (an admitted-but-not-ready row still breaks the prefix).
 
 This join behavior comes after the base FIFO durable runtime; the ephemeral runtime
 proves the same Turn-boundary semantics first.
@@ -278,7 +280,11 @@ is recorded separately and cannot erase an accepted settlement.
 Abort is a durable command with identity, author, reason, and target.
 
 - If the submission is accepted but inactive, it may settle as aborted without an
-  execution attempt.
+  execution attempt. An aborted, never-claimed queued submission settles immediately —
+  without waiting to head its lane — because settlement order of never-run work is not
+  execution order (DUR-004 bounds execution order). Its durable abort intent authorizes
+  exactly its aborted settlement reservation, and the aborted-settled row is a closed
+  obligation that does not gap the contiguous joining prefix.
 - If active, the command becomes canonical before the worker is interrupted.
 - Ordinary tools already in flight may produce unknown outcomes.
 - Abort does not mean external side effects were rolled back.

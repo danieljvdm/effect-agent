@@ -6,6 +6,11 @@ Agents combine untrusted instructions, powerful credentials, external content, a
 side-effecting tools. Security is therefore part of the runtime contract rather
 than a collection of example-app concerns.
 
+This document is normative. The descriptive STRIDE walk of the trust boundaries below —
+one table per boundary, with the controls and the open findings — lives in
+[`docs/THREAT-MODEL.md`](../THREAT-MODEL.md); the P7 review's triaged findings register is
+[`docs/security/FINDINGS.md`](../security/FINDINGS.md).
+
 ## 1. Trust boundaries
 
 Treat all of these as distinct principals or trust zones:

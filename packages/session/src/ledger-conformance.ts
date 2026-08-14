@@ -370,6 +370,85 @@ const admissionIdempotency = conformanceCase(
     }),
 );
 
+const crossPrincipalAdmissionScoping = conformanceCase(
+  "scopes idempotency keys to their principal: a second principal reusing a key mints a distinct Submission",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      // SEC-002 (security-operations §2): "Client idempotency keys are scoped so one principal
+      // cannot discover or collide with another principal's submission." This is the COLLIDE
+      // half — a second principal reusing an existing (conversation, idempotency key) must not
+      // replay, overwrite, or conflict with the first principal's Submission, and must not learn
+      // its identity. (The DISCOVER half — scoped lookup/resolveAdmission — is covered by
+      // `lookupByIdAndKey` and `resolveAdmissionAuthority`.)
+      const conversationId = decodeConversationId("ledger-conformance-cross-principal");
+      const ledger = yield* SubmissionLedger;
+      const idempotencyKey = decodeIdempotencyKey("shared-key-1");
+
+      const mineRequest = yield* admissionRequest(conversationId, "shared-key-1", {
+        owner: "mine",
+      });
+      const mine = yield* ledger.admit(mineRequest);
+
+      // A DIFFERENT principal admits the SAME (conversation, key) with different canonical input.
+      // It is neither a replay nor an AdmissionConflict: keys are principal-scoped, so this mints
+      // a fresh, distinct Submission with its own identities and queue position.
+      const theirsRequest = AdmissionRequest.make({
+        conversationId,
+        principal: OTHER_PRINCIPAL,
+        idempotencyKey,
+        agentId: CONFORMANCE_AGENT,
+        agentDigests: CONFORMANCE_DIGESTS,
+        deploymentId: CONFORMANCE_DEPLOYMENT,
+        inputPayload: { owner: "theirs" },
+        inputDigest: yield* digestJson({ owner: "theirs" }),
+      });
+      const theirs = yield* ledger.admit(theirsRequest);
+      yield* ensure(
+        !theirs.replayed &&
+          theirs.submissionId !== mine.submissionId &&
+          theirs.receiptId !== mine.receiptId &&
+          theirs.queueSequence !== mine.queueSequence,
+        "A second principal reusing a key must mint a fresh, distinct Submission — never a replay or collision",
+      );
+
+      // The first principal's own replay is unaffected by the second principal's admission.
+      const mineReplay = yield* ledger.admit(mineRequest);
+      yield* ensure(
+        mineReplay.replayed && mineReplay.submissionId === mine.submissionId,
+        "The original principal's replay must still resolve to its own Submission after the other principal admitted",
+      );
+
+      // Each principal's scoped lookup resolves ONLY its own Submission — no cross-principal
+      // discovery through the shared key.
+      const mineByKey = yield* expectSome(
+        "the first principal's scoped lookup",
+        yield* ledger.lookup(
+          SubmissionLookupByKey.make({
+            conversationId,
+            principal: CONFORMANCE_PRINCIPAL,
+            idempotencyKey,
+          }),
+        ),
+      );
+      const theirsByKey = yield* expectSome(
+        "the second principal's scoped lookup",
+        yield* ledger.lookup(
+          SubmissionLookupByKey.make({
+            conversationId,
+            principal: OTHER_PRINCIPAL,
+            idempotencyKey,
+          }),
+        ),
+      );
+      yield* ensure(
+        mineByKey.submissionId === mine.submissionId &&
+          theirsByKey.submissionId === theirs.submissionId &&
+          mineByKey.submissionId !== theirsByKey.submissionId,
+        "Each principal's scoped lookup must resolve only its own Submission under the shared key",
+      );
+    }),
+);
+
 const concurrentAdmissionFifo = conformanceCase(
   "allocates distinct FIFO queue sequences under concurrent admission and claims in order",
   ({ ensure, expectSome }) =>
@@ -3067,6 +3146,161 @@ const resolveAdmissionAuthority = conformanceCase(
     }),
 );
 
+const queuedAbortSettlementAuthority = conformanceCase(
+  "reserveSettlement authorizes an aborted, unowned queued settlement by its durable intent",
+  ({ ensure, expectFailure }) =>
+    Effect.gen(function* () {
+      // P7 §7(c): an aborted, never-claimed, still-queued `ready` Submission has no live
+      // ownership to fence against, so its durable abort intent authorizes exactly its
+      // ABORTED settlement — recovery settles it without waiting for it to head the lane.
+      // The authorization is outcome- and state-narrow and stays fail-closed otherwise.
+      const conversationId = decodeConversationId("ledger-conformance-queued-abort");
+      const ledger = yield* SubmissionLedger;
+
+      const head = yield* admitReady(conversationId, "queued-abort-head", { work: "head" });
+      const second = yield* admitReady(conversationId, "queued-abort-2", { queued: 2 });
+      const third = yield* admitReady(conversationId, "queued-abort-3", { queued: 3 });
+
+      yield* ledger.requestAbort(
+        AbortCommand.make({
+          submissionId: second.submissionId,
+          author: "operator",
+          reason: "cancelled while queued",
+        }),
+      );
+
+      // Fail-closed control: a queued row WITHOUT an abort intent never accepts an unowned
+      // reservation, aborted or not.
+      const unaborted = yield* expectFailure(
+        "reserving an aborted settlement for a queued row without an abort intent",
+        settlementReservation({
+          submissionId: third.submissionId,
+          ownershipToken: BOGUS_TOKEN,
+          receiptId: third.receiptId,
+          outcome: "aborted",
+        }).pipe(Effect.flatMap((reservation) => ledger.reserveSettlement(reservation))),
+      );
+      yield* ensure(
+        unaborted instanceof OwnershipLost,
+        "A queued reservation without a durable abort intent must stay fenced (OwnershipLost)",
+      );
+
+      // Fail-closed control: the durable intent authorizes ONLY the aborted outcome.
+      const wrongOutcome = yield* expectFailure(
+        "reserving a completed settlement for the aborted queued row",
+        settlementReservation({
+          submissionId: second.submissionId,
+          ownershipToken: BOGUS_TOKEN,
+          receiptId: second.receiptId,
+          outcome: "completed",
+          result: { fabricated: true },
+        }).pipe(Effect.flatMap((reservation) => ledger.reserveSettlement(reservation))),
+      );
+      yield* ensure(
+        wrongOutcome instanceof OwnershipLost,
+        "An abort intent must never authorize a non-aborted settlement outcome",
+      );
+
+      const reservation = yield* settlementReservation({
+        submissionId: second.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: second.receiptId,
+        outcome: "aborted",
+      });
+      const reserved = yield* ledger.reserveSettlement(reservation);
+      yield* ensure(
+        reserved.replayed === false && reserved.outcome === "aborted",
+        "The abort intent must authorize the aborted reservation without lane ownership",
+      );
+      // The crash replay (`terminalizing` + committed reservation) is equally authorized.
+      const replayed = yield* ledger.reserveSettlement(reservation);
+      yield* ensure(
+        replayed.replayed === true,
+        "Replaying the identical aborted reservation must short-circuit idempotently",
+      );
+      yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: second.submissionId,
+          settlementId: submissionSettlementId(second.submissionId),
+        }),
+      );
+
+      const settled = yield* recoverySnapshot(second.submissionId);
+      yield* ensure(
+        settled.submission.state === "settled" && settled.submission.settledOutcome === "aborted",
+        "The aborted queued Submission must settle while the head is still unsettled",
+      );
+      const headState = yield* recoverySnapshot(head.submissionId);
+      yield* ensure(
+        headState.submission.state === "ready",
+        "Settling the aborted queued row must not disturb the unclaimed head",
+      );
+    }),
+);
+
+const abortedSettledRowIsNotAJoiningGap = conformanceCase(
+  "claimJoining treats an aborted-settled row as a non-gap",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      // P7 §7(c): an aborted-settled row is a CLOSED obligation — the contiguous joining
+      // prefix walks over it so later ready work still joins the host (the pre-P7 rule
+      // treated every settled row as a conservative gap).
+      const conversationId = decodeConversationId("ledger-conformance-aborted-non-gap");
+      const ledger = yield* SubmissionLedger;
+
+      const host = yield* admitReady(conversationId, "aborted-gap-host", { work: "host" });
+      const second = yield* admitReady(conversationId, "aborted-gap-2", { queued: 2 });
+      const third = yield* admitReady(conversationId, "aborted-gap-3", { queued: 3 });
+
+      yield* ledger.requestAbort(
+        AbortCommand.make({
+          submissionId: second.submissionId,
+          author: "operator",
+          reason: "cancelled while queued",
+        }),
+      );
+      const reservation = yield* settlementReservation({
+        submissionId: second.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: second.receiptId,
+        outcome: "aborted",
+      });
+      yield* ledger.reserveSettlement(reservation);
+      yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: second.submissionId,
+          settlementId: submissionSettlementId(second.submissionId),
+        }),
+      );
+
+      const hostClaim = yield* expectSome(
+        "the host claim",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      yield* ensure(
+        hostClaim.submissionId === host.submissionId,
+        "The host must head the lane (the aborted-settled row is out of the queue)",
+      );
+      const claims = yield* ledger.claimJoining(
+        ClaimJoiningRequest.make({
+          conversationId,
+          hostSubmissionId: host.submissionId,
+          ownershipToken: hostClaim.ownershipToken,
+          maxCount: 8,
+        }),
+      );
+      yield* ensure(
+        claims.length === 1 && claims[0].submissionId === third.submissionId,
+        "The joining prefix must skip the aborted-settled row and claim the later ready work",
+      );
+      const settled = yield* recoverySnapshot(second.submissionId);
+      yield* ensure(
+        settled.submission.state === "settled" && settled.submission.settledOutcome === "aborted",
+        "Walking the prefix must never disturb the aborted-settled row",
+      );
+    }),
+);
+
 /**
  * The shared, adapter-parameterized SubmissionLedger contract suite (STORE-010). Every durable
  * ledger adapter test suite must execute each case against its own ledger provisioning, inside
@@ -3074,6 +3308,7 @@ const resolveAdmissionAuthority = conformanceCase(
  */
 export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerConformanceCase> = [
   admissionIdempotency,
+  crossPrincipalAdmissionScoping,
   concurrentAdmissionFifo,
   fifoHeadClaim,
   leaseExpiryReclaim,
@@ -3102,4 +3337,6 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   suspendResumesImmediatelyForSettledChildren,
   admissionParentLinkage,
   resolveAdmissionAuthority,
+  queuedAbortSettlementAuthority,
+  abortedSettledRowIsNotAJoiningGap,
 ];

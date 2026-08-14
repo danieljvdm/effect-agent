@@ -258,7 +258,9 @@ and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted stora
 fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
 are implemented and green ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)). The tested harness is
 workerd/Miniflare; the hosted production service, its observability adapters, and live soak
-remain P7 scope.
+remain explicitly unclaimed — Phase 7 completed the roadmap without hosted-platform evidence
+([Phase 7 evidence](../PHASE-7-EVIDENCE.md)), and hosted-service operation stays outside the
+roadmap's claims until open-source preparation revisits it.
 
 Current platform references:
 

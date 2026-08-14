@@ -927,11 +927,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     );
   });
 
-  // The session-owned capability union currently names single-owner crash durability
-  // `durable-node`; Durable Object storage makes exactly that claim for its one serialized
-  // owner (writes confirm through output gates before any response is observable). Widening
-  // the union to a Cloudflare-specific label is an integrator-owned session change (WP6).
-  const capabilities = Effect.succeed(LedgerCapabilities.make({ durability: "durable-node" }));
+  // Durable Object storage is the single serialized owner: writes confirm through output
+  // gates before any response is observable, which is exactly the single-owner crash
+  // durability this adapter claims — under its own honest label (P7 WP0).
+  const capabilities = Effect.succeed(
+    LedgerCapabilities.make({ durability: "durable-cloudflare" }),
+  );
 
   const admit: SubmissionLedger["Service"]["admit"] = Effect.fn("DoSubmissionLedger.admit")(
     function* (request: AdmissionRequest) {
@@ -1507,10 +1508,26 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         }
         // A `joined` Submission settles WITH its host (plan §2.5) and its lane is never
         // worker-claimable, so no ownership token can exist for it: the recorded host linkage
-        // authorizes the reservation and the presented token is not consulted. Every other
-        // reservation stays fenced by the target lane's live ownership.
+        // authorizes the reservation and the presented token is not consulted.
         if (!(submission.state === "joined" && submission.joined_host_submission_id !== null)) {
-          yield* requireOwnership(operation, submission, validated.ownershipToken);
+          // P7 §7(c): an aborted, never-claimed, still-queued Submission likewise has no live
+          // ownership to fence against — its durable abort intent authorizes exactly its
+          // ABORTED settlement (`terminalizing` is the same pass's crash replay). Every other
+          // reservation stays fenced by the target lane's live ownership.
+          let queuedAbortSettlement = false;
+          if (
+            validated.outcome === "aborted" &&
+            (submission.state === "ready" || submission.state === "terminalizing")
+          ) {
+            const abortIntent = yield* readAbortIntent(operation, validated.submissionId);
+            if (Option.isSome(abortIntent)) {
+              const ownership = yield* readOwnership(operation, validated.submissionId);
+              queuedAbortSettlement = Option.isNone(ownership);
+            }
+          }
+          if (!queuedAbortSettlement) {
+            yield* requireOwnership(operation, submission, validated.ownershipToken);
+          }
         }
         const now = yield* currentInstant;
         yield* sql`
@@ -1747,6 +1764,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           ) {
             continue;
           }
+          // P7 §7(c): an aborted-settled row is a CLOSED obligation, not a gap — recovery
+          // settles aborted never-claimed queued work immediately, and settlement order of
+          // never-run work is not execution order (DUR-004 bounds execution).
+          if (row.state === "settled" && row.settled_outcome === "aborted") continue;
           // Any other non-ready row — an admitted-not-ready gap in particular — breaks the
           // contiguous ready prefix (plan §2.5); later ready work stays queued (DUR-004).
           if (row.state !== "ready") break;

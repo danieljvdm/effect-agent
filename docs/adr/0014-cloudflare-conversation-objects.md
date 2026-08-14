@@ -4,6 +4,10 @@
 - Status note (2026-08-13): adopted as the Phase 6 implementation default by the adopted P6 plan
   (decisions D-P6-1…D-P6-8) and implemented as such
   ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)); owner review may still amend it.
+- Revisit note (2026-08-13, P7): the D-P6-4 shared-SQL-core question was revisited as planned —
+  **not extracted**. No third SQL adapter appeared, extraction would churn two landed adapters
+  for zero behavior change, and the shared conformance suites remain the anti-drift guard
+  ([ADR-0015](0015-hardening-shape.md) D-P7-5, [D-033](../DECISIONS.md#d-033--phase-7-hardening-shape)).
 - Date: 2026-08-13
 - Decision owners: Project owner
 - Related decisions: D-014, D-020, D-029, D-030, D-031, D-032

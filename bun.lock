@@ -6,6 +6,9 @@
       "name": "effect-agent",
       "devDependencies": {
         "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#e1cdbe5dbad7576617052285d0cad43091432e0f",
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/platform-node": "workspace:*",
+        "@effect-agent/session": "workspace:*",
         "@effect/platform-node": "catalog:",
         "@effect/tsgo": "catalog:",
         "@fontsource-variable/ibm-plex-sans": "catalog:",
@@ -70,13 +73,38 @@
       "name": "@effect-agent/example-providers",
       "version": "0.0.0",
       "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect/ai-anthropic": "catalog:",
         "@effect/ai-openai": "catalog:",
         "effect": "catalog:",
       },
       "devDependencies": {
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "examples/repo-ops": {
+      "name": "@effect-agent/example-repo-ops",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
+        "@effect-agent/platform-node": "workspace:*",
+        "@effect-agent/sandbox": "workspace:*",
+        "@effect-agent/sandbox-local": "workspace:*",
+        "@effect-agent/session": "workspace:*",
+        "@effect-agent/testing": "workspace:*",
+        "@effect/ai-openai": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@effect/platform-node": "catalog:",
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
       },
@@ -218,6 +246,7 @@
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:",
         "@cloudflare/workers-types": "catalog:",
+        "@effect-agent/testing": "workspace:*",
         "@effect/vitest": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -269,6 +298,7 @@
       },
       "devDependencies": {
         "@effect/platform-node": "catalog:",
+        "@effect/sql-sqlite-node": "catalog:",
         "@effect/vitest": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -445,6 +475,8 @@
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 
     "@effect-agent/example-providers": ["@effect-agent/example-providers@workspace:examples/providers"],
+
+    "@effect-agent/example-repo-ops": ["@effect-agent/example-repo-ops@workspace:examples/repo-ops"],
 
     "@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@workspace:packages/platform-cloudflare"],
 

@@ -834,6 +834,84 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
+      "kill at abort:after-intent on a QUEUED submission: the aborted non-head settles without waiting for the head",
+      () =>
+        withCrashSite((site) =>
+          Effect.gen(function* () {
+            // P7 §7(c): settlement order of never-run work is not execution order — restart
+            // recovery settles the aborted, never-claimed, non-head `ready` Submission
+            // immediately, while the head is still unsettled (DUR-004 bounds execution;
+            // DUR-012 permits settling inactive accepted work without an Attempt).
+            const conversation = "conversation-abort-queued";
+            const key = "abort-queued-1";
+            const result = yield* runWorkerToExit({
+              db: site.db,
+              scenario: "abort-queued",
+              conversation,
+              key,
+              killAt: "abort:after-intent",
+            });
+            expectKilled(result);
+
+            yield* withHost(
+              site.db,
+              Effect.gen(function* () {
+                const host = yield* NodeDurableHost;
+                const runtime = yield* DurableAgentRuntime;
+                const head = yield* lookupByKey(conversation, `${key}-head`);
+                const queued = yield* lookupByKey(conversation, `${key}-queued`);
+                const report = host.startupRecovery.find(
+                  (entry) => entry.submissionId === queued.submissionId,
+                );
+                expect(report?.decision._tag).toBe("SettleAborted");
+                expect(report?.disposition).toBe("repaired");
+
+                // The aborted non-head is settled while the head is still nonterminal.
+                expect(queued.state).toBe("settled");
+                expect(queued.settledOutcome).toBe("aborted");
+                expect(head.state).not.toBe("settled");
+
+                const midRecords = yield* readLog(conversation);
+                const midIds = midRecords.map((envelope) => envelope.record.recordId);
+                // Never claimed: no canonical input, no model call; abort precedes settlement.
+                expect(midIds).not.toContain(submissionInputRecordId(queued.submissionId));
+                expect(midIds).toContain(
+                  recoveryRepairRecordId(queued.submissionId, "SettleAborted"),
+                );
+
+                // The head then completes normally behind the already-settled non-head.
+                const settlements = yield* drainPlanner(conversation, '{"answer":"post-abort"}');
+                expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
+                  head.submissionId,
+                ]);
+                expect(settlements[0]?.outcome).toBe("completed");
+
+                const records = yield* readLog(conversation);
+                const recordIds = records.map((envelope) => envelope.record.recordId);
+                expect(
+                  recordIds.indexOf(submissionSettlementRecordId(queued.submissionId)),
+                ).toBeLessThan(recordIds.indexOf(submissionSettlementRecordId(head.submissionId)));
+
+                // A settled Submission can never be aborted into a different outcome (DUR-012).
+                const conflict = yield* Effect.exit(
+                  runtime.abort(
+                    AbortCommand.make({
+                      submissionId: queued.submissionId,
+                      author: "operator",
+                      reason: "second abort",
+                    }),
+                  ),
+                );
+                expect(failureTag(conflict)).toBe("SettlementConflict");
+                yield* assertConvergence(conversation, [head.submissionId, queued.submissionId]);
+              }),
+            );
+          }),
+        ),
+      30_000,
+    );
+
+    it.effect(
       "abort of an active Run in another process: canonical AbortRequested precedes interruption",
       () =>
         withCrashSite((site) =>

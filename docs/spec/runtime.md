@@ -238,6 +238,19 @@ Terminal events are exactly one of:
 
 Raw provider chunks are never mixed into the stable event union.
 
+`RunFailed` covers expected failures. The engine keeps defects as defects: a defect fails the
+event stream with its full Cause and is never converted into a typed failure or a successful
+stream end. Host boundaries that forward Run Events to a UI or transport may opt in to the
+exported `withTerminalDefectEvent` combinator, whose contract is:
+
+- typed failures and interruptions pass through untouched (their terminal event was already
+  emitted — nothing is duplicated);
+- a cause carrying a defect first appends one bounded terminal
+  `RunFailed { errorTag: "Defect" }` — a bounded string rendering, never the raw defect value —
+  then rethrows the original cause unchanged;
+- identity fields come from the last event already streamed; a defect before the first event is
+  rethrown without an event, because the helper never fabricates Run identities.
+
 ## 11. Backpressure
 
 Local `stream` uses a bounded queue:

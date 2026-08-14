@@ -666,6 +666,9 @@ describe("SubmissionLedger port schemas", () => {
       durability: "durable-node",
     });
     expect(
+      Schema.decodeUnknownSync(LedgerCapabilities)({ durability: "durable-cloudflare" }),
+    ).toEqual({ durability: "durable-cloudflare" });
+    expect(
       Schema.decodeUnknownExit(LedgerCapabilities)({ durability: "durable-sqlite" })._tag,
     ).toBe("Failure");
 

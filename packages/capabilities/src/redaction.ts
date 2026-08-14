@@ -1,3 +1,4 @@
+import { RunEvent } from "@effect-agent/core";
 import { Context, Effect, Layer, Schema } from "effect";
 
 const MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
@@ -94,6 +95,29 @@ const truncateUtf8 = (value: string, maxBytes: number): string => {
   }
   return `${output}${suffix}`;
 };
+
+const encodeRunEvent = Schema.encodeEffect(RunEvent);
+
+/**
+ * One composed step from live Run Events to structurally redacted transcript lines
+ * (P7 WP7 friction fix; SEC-008/testing.md §12 "structurally redacted" live transcripts):
+ * Schema-encode each event through the canonical `RunEvent` union, then pass the encoded
+ * value through the configured `Redactor` — so the safe path is the short path and no live
+ * suite hand-assembles (or accidentally skips) the encode→redact pair. Engine-constructed
+ * events always encode, so an encode failure is a defect, never a silent omission.
+ */
+export const redactedTranscript = (
+  events: Iterable<RunEvent>,
+): Effect.Effect<ReadonlyArray<RedactedPreview>, RedactionError, Redactor> =>
+  Effect.gen(function* () {
+    const redactor = yield* Redactor;
+    const lines: Array<RedactedPreview> = [];
+    for (const event of events) {
+      const encoded = yield* encodeRunEvent(event).pipe(Effect.orDie);
+      lines.push(yield* redactor.redact(encoded));
+    }
+    return lines;
+  });
 
 /**
  * Default structural implementation. It exposes only collection shape and

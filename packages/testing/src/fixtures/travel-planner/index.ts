@@ -5,6 +5,7 @@ export * from "./phase3.ts";
 export * from "./phase4.ts";
 export * from "./phase5.ts";
 export * from "./phase6.ts";
+export * from "./phase7.ts";
 export * from "./scenarios.ts";
 export * from "./subagents.ts";
 export * from "./subagents-durable.ts";

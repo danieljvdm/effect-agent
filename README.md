@@ -11,10 +11,13 @@ The working product thesis is:
 > produces a `Stream`; its expected failures remain in `E`; its dependencies remain in `R`; every
 > resource belongs to a `Scope`.
 
-This repository contains the product and technical specification plus the completed Phase 0 design
-proof, Phase 1 interpreter, Phase 2 operational local runtime, Phase 3 persistent Conversation
-foundation, Phase 4 durable Node/SQLite runtime, Phase 5 durable Tools and joined input, and
-Phase 6 Cloudflare Durable Object runtime. The workspace includes schema-first Agent contracts,
+This repository contains the product and technical specification plus every completed roadmap
+phase: the Phase 0 design proof, Phase 1 interpreter, Phase 2 operational local runtime, Phase 3
+persistent Conversation foundation, Phase 4 durable Node/SQLite runtime, Phase 5 durable Tools
+and joined input, Phase 6 Cloudflare Durable Object runtime, and Phase 7 internal hardening
+(adapter certification, TLA+ model checking, administrative operations, threat model and
+security review, chaos/soak evidence, and three internal Agents). The workspace includes
+schema-first Agent contracts,
 one shared `run`/`stream` interpreter, scoped operational capabilities, a narrow local sandbox
 adapter, replayable canonical Conversation records with memory and SQLite adapters, the durable
 Submission Ledger, recovery classifier, and `DurableAgentRuntime` coordinator with the Node host
@@ -36,11 +39,19 @@ and a browser test bench under `examples/demo`.
 - Current packages: `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
   `storage-memory`, `storage-sqlite`, `storage-cloudflare`, `platform-node`,
   `platform-cloudflare`, and `testing`
-- Current implementation milestone: **Phase 6 complete** (Cloudflare Durable Object runtime,
-  [evidence](docs/PHASE-6-EVIDENCE.md), on the Phase 5 durable Tools and joined input,
-  [evidence](docs/PHASE-5-EVIDENCE.md), and the Phase 4 durable Node/SQLite runtime,
-  [evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral and S2 durable attached
+- Current implementation milestone: **the roadmap table is complete** — Phase 7 internal
+  hardening ([evidence](docs/PHASE-7-EVIDENCE.md)) closes the final phase on top of the Phase 6
+  Cloudflare runtime ([evidence](docs/PHASE-6-EVIDENCE.md)), Phase 5 durable Tools and joined
+  input ([evidence](docs/PHASE-5-EVIDENCE.md)), and the Phase 4 durable Node/SQLite runtime
+  ([evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral and S2 durable attached
   Subagents implemented**, with the S2 `DC` conformance row discharged by Phase 6
+- Open governance, stated plainly: roadmap completion is an engineering claim, not a governance
+  one — [ADR-0010](docs/adr/0010-declared-attached-subagents.md) is formally **Proposed**;
+  ADRs 0011–0015 and decisions D-029…D-033 are **accepted by default awaiting owner review**;
+  no hosted-Cloudflare evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in
+  live-model suites are implemented and gate-skipped, with live execution a release-lane
+  action; open-source preparation remains the deferred next chapter
+  ([roadmap](docs/ROADMAP.md))
 - Subagents: declared attached delegation Tools are implemented for both slices as
   roadmap-assigned proposed defaults — ephemeral (`E`) delegation with the engine spawner seam
   and in-memory budget reservations ([S1 evidence](docs/S1-EVIDENCE.md)), and durable (`DN`)
@@ -97,6 +108,7 @@ interfaces. The specifications below remain the normative design source.
 16. [Phase 4 evidence](docs/PHASE-4-EVIDENCE.md)
 17. [Phase 5 evidence](docs/PHASE-5-EVIDENCE.md)
 18. [Phase 6 evidence](docs/PHASE-6-EVIDENCE.md)
+19. [Phase 7 evidence](docs/PHASE-7-EVIDENCE.md)
 
 ## Detailed specifications
 

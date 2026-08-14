@@ -362,8 +362,10 @@ const findHead = (
  * - `renewOwnership` keeps the token stable (the port allows rotation); a replayed admission
  *   reports the Submission's current state alongside the original identities.
  * - `claimJoining` walks the strictly-later queue: rows already `joining`/`joined` to the
- *   SAME host extend the claimed prefix and are skipped; any other non-`ready` row (an
- *   `admitted` gap, a settled row, foreign-host linkage) breaks the prefix conservatively.
+ *   SAME host extend the claimed prefix and are skipped, and an aborted-settled row is a
+ *   closed obligation that is also skipped (P7 §7(c)); any other non-`ready` row (an
+ *   `admitted` gap, a non-aborted settled row, foreign-host linkage) breaks the prefix
+ *   conservatively.
  * - `markJoined` verifies the token against the HOST's live ownership (the lane is
  *   host-owned), so a later host Attempt can repair a lost marker from history (DUR-016). The
  *   join marker reuses the input-applied marker: the joined input IS `input:{sid}`.
@@ -790,10 +792,22 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // A `joined` Submission settles WITH its host (plan §2.5) and its lane is never
             // worker-claimable, so no ownership token can exist for it: the recorded host
             // linkage authorizes the reservation and the presented token is not consulted.
-            // Every other reservation stays fenced by the target lane's live ownership.
             const joinedSettlement =
               stored.row.state === "joined" && stored.joinedHostSubmissionId !== undefined;
-            if (!joinedSettlement && !ownsLane(stored, request.ownershipToken)) {
+            // P7 §7(c): an aborted, never-claimed, still-queued Submission likewise has no
+            // live ownership to fence against — its durable abort intent authorizes exactly
+            // its ABORTED settlement (`terminalizing` is the same pass's crash replay). Every
+            // other reservation stays fenced by the target lane's live ownership.
+            const queuedAbortSettlement =
+              request.outcome === "aborted" &&
+              stored.abortIntent !== undefined &&
+              stored.ownership === undefined &&
+              (stored.row.state === "ready" || stored.row.state === "terminalizing");
+            if (
+              !joinedSettlement &&
+              !queuedAbortSettlement &&
+              !ownsLane(stored, request.ownershipToken)
+            ) {
               return [failure(ownershipLost(current, stored)), current];
             }
             const existing = stored.reservation;
@@ -1076,6 +1090,12 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 (stored.row.state === "joining" || stored.row.state === "joined") &&
                 stored.joinedHostSubmissionId === request.hostSubmissionId
               ) {
+                continue;
+              }
+              // P7 §7(c): an aborted-settled row is a CLOSED obligation, not a gap — recovery
+              // settles aborted never-claimed queued work immediately, and settlement order of
+              // never-run work is not execution order (DUR-004 bounds execution).
+              if (stored.row.state === "settled" && stored.row.settledOutcome === "aborted") {
                 continue;
               }
               // Any other non-ready row — an admitted-not-ready gap in particular — breaks the

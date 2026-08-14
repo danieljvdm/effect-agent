@@ -27,7 +27,15 @@ not change the specified scope of later phases.
 | P5    | Complete — [durable Tools and joined input](PHASE-5-EVIDENCE.md)                                                                            |
 | S2    | Implemented — [durable attached Subagents](S2-EVIDENCE.md) (`DN` only), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
 | P6    | Complete — [Cloudflare Durable Object runtime](PHASE-6-EVIDENCE.md), including the deferred S2 `DC` Subagent conformance row                |
-| P7    | Planned — not yet implemented                                                                                                               |
+| P7    | Complete — [internal hardening](PHASE-7-EVIDENCE.md)                                                                                        |
+
+Every numbered phase in this table is now **Complete**, and both Subagent slices are implemented
+as roadmap-assigned proposed defaults — the roadmap table is fully discharged. That is an
+engineering statement, not a governance one: the specifications stay Draft, ADR-0010 remains
+Proposed, ADRs 0011–0015 (D-029…D-033) are accepted by default awaiting owner review, and the
+[deferred open-source-preparation items](#deferred-until-open-source-preparation) remain the
+next chapter. The [Phase 7 evidence](PHASE-7-EVIDENCE.md) states the final claim and its
+non-claims precisely.
 
 ## Proposed Subagent insertion
 

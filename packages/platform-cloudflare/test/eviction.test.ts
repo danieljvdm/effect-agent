@@ -675,6 +675,70 @@ describe("DC eviction matrix — client mutation entry points", () => {
     expect(await settlementOutcome(conversation)).toBe("aborted");
   }, 30_000);
 
+  it("an aborted non-head ready submission settles without waiting for the head", async () => {
+    // P7 §7(c): settlement order of never-run work is not execution order. The head suspends
+    // on a durable approval; a second Submission queues behind it; aborting the second
+    // settles it by alarm alone while the head is STILL suspended (DUR-004 bounds execution
+    // order; DUR-012 permits settling inactive accepted work without an Attempt).
+    const conversation = lane("abort-queued-non-head");
+    const head = await submitFixture("approval", conversation, `${conversation}-head`);
+    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
+
+    const queued = await submitFixture("planner", conversation, `${conversation}-queued`);
+    await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.abort(
+          decodeConversationId(conversation),
+          AbortCommand.make({
+            submissionId: queued.submissionId,
+            author: "cf-eviction-operator",
+            reason: "cancelled while queued behind a suspended head",
+          }),
+        );
+      }),
+    );
+    await drainAlarmsUntil(conversation, async () => {
+      const rows = await laneRows(conversation);
+      return rows.some(
+        (row) => row.submission_id === queued.submissionId && row.state === "settled",
+      );
+    });
+
+    // The aborted non-head settled while the head is still durably suspended.
+    const rows = await laneRows(conversation);
+    expect(
+      rows.find((row) => row.submission_id === head.submissionId)?.state,
+      "the suspended head must remain unsettled",
+    ).toBe("suspended");
+    const records = await readCanonical(conversation);
+    const queuedSettlement = records.find(
+      (envelope) =>
+        envelope.record.payload._tag === "SubmissionSettled" &&
+        envelope.record.payload.submissionId === queued.submissionId,
+    )?.record.payload;
+    expect(
+      queuedSettlement !== undefined &&
+        "outcome" in queuedSettlement &&
+        queuedSettlement.outcome === "aborted",
+    ).toBe(true);
+    // Never claimed: no canonical input exists for the aborted row.
+    expect(
+      records.some(
+        (envelope) =>
+          envelope.record.payload._tag === "UserInputRecorded" &&
+          envelope.record.payload.submissionId === queued.submissionId,
+      ),
+    ).toBe(false);
+
+    // The head then resumes through its own authorized decision and completes normally.
+    await approveBooking(conversation, head, "approved");
+    await drainAlarmsUntil(conversation, allSettled(conversation));
+    await assertConvergence(conversation, {
+      supplier: { ref: conversation, counts: { book: 1 } },
+    });
+  }, 30_000);
+
   it("eviction at ledger:request-abort:before: no intent exists, so the accepted work completes", async () => {
     const conversation = lane("ledger:request-abort:before");
     const receipt = await submitFixture("planner", conversation, `${conversation}-key`);

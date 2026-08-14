@@ -34,7 +34,7 @@ const packageNames = [
   "storage-sqlite",
   "testing",
 ] as const;
-const exampleNames = ["demo", "providers"] as const;
+const exampleNames = ["demo", "providers", "repo-ops"] as const;
 const effectTestPackageNames = [
   "capabilities",
   "engine",
@@ -228,8 +228,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       const root = yield* readManifest(`${repositoryRoot}/package.json`);
       const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
       const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
+      const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
       const demoDependencies = manifestDependencies(demo);
       const providerDependencies = manifestDependencies(providers);
+      const repoOpsDependencies = manifestDependencies(repoOps);
 
       expect(demo.name).toBe("@effect-agent/example-demo");
       expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
@@ -257,6 +259,16 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(providerDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
       );
+      // P7: the repo-ops evidence auditor is the third leaf example workspace.
+      expect(repoOps.name).toBe("@effect-agent/example-repo-ops");
+      expect(repoOps.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(repoOps.dependencies?.["@effect-agent/testing"]).toBe("workspace:*");
+      expect(repoOps.dependencies?.effect).toBe("catalog:");
+      expect(repoOps.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(repoOpsDependencies).not.toContain("wrangler");
+      expect(repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
 
       for (const packageName of packageNames) {
         const manifest = yield* readManifest(
@@ -264,6 +276,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         );
         expect(manifestDependencies(manifest)).not.toContain(demo.name);
         expect(manifestDependencies(manifest)).not.toContain(providers.name);
+        expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
         for (const adapter of providerAdapterDependencies) {
           expect(manifestDependencies(manifest)).not.toContain(adapter);
         }
@@ -320,12 +333,15 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           );
           // No production package ever SHIPS depending on the testing package.
           expect(Object.keys(manifest.dependencies ?? {})).not.toContain("@effect-agent/testing");
-          // platform-cloudflare alone may consume it as a devDependency: the DC Travel
-          // Planner equivalence suite must assemble the SAME fixtures the DN suite runs
-          // (P6 plan §6), and the in-workerd runner lives in that package's tests. The
-          // edge is dev-only and test-only; every other production package stays clean in
-          // every dependency section.
-          if (packageName !== "platform-cloudflare") {
+          // Exactly two packages may consume it as a devDependency: platform-cloudflare's
+          // DC Travel Planner equivalence suite must assemble the SAME fixtures the DN
+          // suite runs (P6 plan §6), and storage-cloudflare's in-workerd certification
+          // runner executes `certifyDurableAdapters` against the real Durable Object
+          // adapters (P7 WP2; the memory/SQLite runners live inside packages/testing
+          // because vp's task graph rejects the storage-* → testing dev-edge cycle).
+          // Both edges are dev-only and test-only; every other production package stays
+          // clean in every dependency section.
+          if (packageName !== "platform-cloudflare" && packageName !== "storage-cloudflare") {
             expect(manifestDependencies(manifest)).not.toContain("@effect-agent/testing");
           }
         }

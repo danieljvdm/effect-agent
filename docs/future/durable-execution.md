@@ -191,4 +191,7 @@ The `DN` label rests on executable evidence ([Phase 4](../PHASE-4-EVIDENCE) and
 
 What `DN` still does not claim: exactly-once model inference or external Tool or Step execution,
 and automatic replay of unresolved ordinary Tools remains forbidden by construction (DUR-009).
-The operator surface, aging, and alerting for Unknown Outcomes are Phase 7 scope.
+The operator surface for Unknown Outcomes was delivered by Phase 7: `scanObligations` reports
+aging and blocked lanes, the admin operations explain and resolve them, and hosts own the alert
+loop ([operations guide](../guides/operations.md),
+[Phase 7 evidence](../PHASE-7-EVIDENCE)).

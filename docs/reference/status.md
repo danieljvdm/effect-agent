@@ -22,25 +22,27 @@ beta release, and the user-facing specification remains Draft.
 
 ## Capability matrix
 
-| Surface                              | Phase | Status                             | Evidence                           | Explicit non-claim                                                                   |
-| ------------------------------------ | ----: | ---------------------------------- | ---------------------------------- | ------------------------------------------------------------------------------------ |
-| Agent Definition and Binding         | P0–P1 | <StatusBadge status="available" /> | type proofs, core tests            | no public compatibility window                                                       |
-| `run`, `stream`, `start`             |    P1 | <StatusBadge status="available" /> | shared-trace runtime tests         | no process-loss recovery                                                             |
-| bounded Tool batches                 |    P1 | <StatusBadge status="available" /> | scheduling and interruption tests  | no automatic external-effect retry                                                   |
-| provider Model Bindings              |    P1 | <StatusBadge status="available" /> | OpenAI/Anthropic compile examples  | examples make no live request                                                        |
-| steering and follow-up               |    P2 | <StatusBadge status="available" /> | safe-seam capability tests         | queues are process-local                                                             |
-| approval, budgets, context           |    P2 | <StatusBadge status="available" /> | adapter and policy tests           | ephemeral approvals do not suspend durably                                           |
-| MCP connector policy                 |    P2 | <StatusBadge status="available" /> | bounded discovery tests            | remote Tools are not exactly once                                                    |
-| local sandbox adapter                |    P2 | <StatusBadge status="available" /> | process/limit tests                | explicitly unisolated                                                                |
-| canonical Conversation Log           |    P3 | <StatusBadge status="available" /> | reducer and round-trip tests       | persistence is not accepted work                                                     |
-| memory and SQLite stores             |    P3 | <StatusBadge status="available" /> | shared adapter contracts           | current-version data only                                                            |
-| Receipt and durable admission        |    P4 | <StatusBadge status="available" /> | [P4 evidence](../PHASE-4-EVIDENCE) | no exactly-once external effects                                                     |
-| Attempt ownership and Settlement     |    P4 | <StatusBadge status="available" /> | [P4 evidence](../PHASE-4-EVIDENCE) | model calls may repeat at Turn boundaries                                            |
-| unknown Tool outcome and Steps       |    P5 | <StatusBadge status="available" /> | [P5 evidence](../PHASE-5-EVIDENCE) | at-least-once execution; operator surface for Unknown lanes is P7                    |
-| approval suspension and joined input |    P5 | <StatusBadge status="available" /> | [P5 evidence](../PHASE-5-EVIDENCE) | denial stays terminal; no suspension timeout                                         |
-| Cloudflare durable runtime           |    P6 | <StatusBadge status="available" /> | [P6 evidence](../PHASE-6-EVIDENCE) | workerd/Miniflare harness, not the hosted platform; no exactly-once external effects |
-| attached ephemeral Subagents         |    S1 | <StatusBadge status="available" /> | [S1 evidence](../S1-EVIDENCE)      | `E` only; ADR-0010 stays Proposed                                                    |
-| durable attached Subagents           |    S2 | <StatusBadge status="available" /> | [S2 evidence](../S2-EVIDENCE)      | no exactly-once child effects; `DC` row via [P6 evidence](../PHASE-6-EVIDENCE)       |
+| Surface                              | Phase | Status                             | Evidence                           | Explicit non-claim                                                                             |
+| ------------------------------------ | ----: | ---------------------------------- | ---------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Agent Definition and Binding         | P0–P1 | <StatusBadge status="available" /> | type proofs, core tests            | no public compatibility window                                                                 |
+| `run`, `stream`, `start`             |    P1 | <StatusBadge status="available" /> | shared-trace runtime tests         | no process-loss recovery                                                                       |
+| bounded Tool batches                 |    P1 | <StatusBadge status="available" /> | scheduling and interruption tests  | no automatic external-effect retry                                                             |
+| provider Model Bindings              |    P1 | <StatusBadge status="available" /> | OpenAI/Anthropic compile examples  | examples make no live request                                                                  |
+| steering and follow-up               |    P2 | <StatusBadge status="available" /> | safe-seam capability tests         | queues are process-local                                                                       |
+| approval, budgets, context           |    P2 | <StatusBadge status="available" /> | adapter and policy tests           | ephemeral approvals do not suspend durably                                                     |
+| MCP connector policy                 |    P2 | <StatusBadge status="available" /> | bounded discovery tests            | remote Tools are not exactly once                                                              |
+| local sandbox adapter                |    P2 | <StatusBadge status="available" /> | process/limit tests                | explicitly unisolated                                                                          |
+| canonical Conversation Log           |    P3 | <StatusBadge status="available" /> | reducer and round-trip tests       | persistence is not accepted work                                                               |
+| memory and SQLite stores             |    P3 | <StatusBadge status="available" /> | shared adapter contracts           | current-version data only                                                                      |
+| Receipt and durable admission        |    P4 | <StatusBadge status="available" /> | [P4 evidence](../PHASE-4-EVIDENCE) | no exactly-once external effects                                                               |
+| Attempt ownership and Settlement     |    P4 | <StatusBadge status="available" /> | [P4 evidence](../PHASE-4-EVIDENCE) | model calls may repeat at Turn boundaries                                                      |
+| unknown Tool outcome and Steps       |    P5 | <StatusBadge status="available" /> | [P5 evidence](../PHASE-5-EVIDENCE) | at-least-once execution; the P7 operator surface owns Unknown-lane aging                       |
+| approval suspension and joined input |    P5 | <StatusBadge status="available" /> | [P5 evidence](../PHASE-5-EVIDENCE) | denial stays terminal; no suspension timeout                                                   |
+| Cloudflare durable runtime           |    P6 | <StatusBadge status="available" /> | [P6 evidence](../PHASE-6-EVIDENCE) | workerd/Miniflare harness, not the hosted platform; no exactly-once external effects           |
+| attached ephemeral Subagents         |    S1 | <StatusBadge status="available" /> | [S1 evidence](../S1-EVIDENCE)      | `E` only; ADR-0010 stays Proposed                                                              |
+| durable attached Subagents           |    S2 | <StatusBadge status="available" /> | [S2 evidence](../S2-EVIDENCE)      | no exactly-once child effects; `DC` row via [P6 evidence](../PHASE-6-EVIDENCE)                 |
+| admin operations and obligations     |    P7 | <StatusBadge status="available" /> | [P7 evidence](../PHASE-7-EVIDENCE) | possession-default authorization; hosts own alerting; DC entry points lack an authorizer lever |
+| certification, formal model, chaos   |    P7 | <StatusBadge status="available" /> | [P7 evidence](../PHASE-7-EVIDENCE) | bounded-instance design check, not code proof; live suites opt-in and not executed here        |
 
 Both Subagent slices are implemented as roadmap-assigned proposed defaults: the owner has not
 accepted [ADR-0010](../adr/0010-declared-attached-subagents), so the delegation surface is
@@ -58,7 +60,12 @@ both platforms.
 
 <PhaseRail />
 
-The source of truth for completion evidence is:
+Every numbered roadmap phase (P0–P7) is Complete and both Subagent slices are implemented as
+roadmap-assigned proposed defaults; the roadmap table is fully discharged. This is an
+engineering claim, not a governance one — the specifications stay Draft, the project stays
+pre-1.0 and private, ADR-0010 remains Proposed, and ADRs 0011–0015 (D-029…D-033) are accepted by
+default awaiting owner review ([P7 evidence](../PHASE-7-EVIDENCE)). The source of truth for
+completion evidence is:
 
 - [Phase 0 evidence](../PHASE-0-EVIDENCE)
 - [Phase 1 evidence](../PHASE-1-EVIDENCE)
@@ -69,6 +76,8 @@ The source of truth for completion evidence is:
 - [S1 evidence](../S1-EVIDENCE) — attached ephemeral Subagents
 - [S2 evidence](../S2-EVIDENCE) — durable attached Subagents
 - [Phase 6 evidence](../PHASE-6-EVIDENCE) — Cloudflare Durable Object runtime
+- [Phase 7 evidence](../PHASE-7-EVIDENCE) — internal hardening (certification, formal model,
+  admin operations, security review, chaos/soak, internal agents)
 
 The [requirements index](../REQUIREMENTS) distinguishes specified, planned, implemented, verified,
 and released. Editing a specification to say “must” does not make the behavior available.

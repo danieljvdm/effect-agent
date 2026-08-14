@@ -128,9 +128,10 @@ before a deployment may claim durable liveness. Phase 5 scopes that claim honest
 - **Visibility exists; alerting does not.** Unknown lanes are visible accepted-work obligations:
   the ledger state is `unknown`, recovery reports the `"unknown"` disposition, and
   `NodeDurableHost.startupRecovery` surfaces it. Aging, alerting, and the authenticated
-  operator-facing admin surface (administrative explain/verify/retry/wake) are **Phase 7
-  deliverables** — until then, a deployment claiming durable liveness must supply its own
-  operational path to these two runtime operations.
+  operator-facing admin surface (administrative explain/verify/retry/wake) were **Phase 7
+  deliverables**, since delivered — `scanObligations` and the admin operations
+  ([Phase 7 evidence](PHASE-7-EVIDENCE.md)); at the Phase 5 boundary, a deployment claiming
+  durable liveness had to supply its own operational path to these two runtime operations.
 
 ## Stored-version policy
 
@@ -161,5 +162,7 @@ records — checkpoints remain disposable derivatives.
   above; P7 scope.
 - **Recoverable (non-terminal) approval denial is not implemented**: denial remains terminal per
   the P2 policy default.
-- **Durable attached Subagents (S2) remain unimplemented**; the S2 slice builds on this phase's
-  ledger and uncertainty machinery next.
+- **Durable attached Subagents (S2) were not part of this phase.** The S2 slice has since been
+  implemented on this phase's ledger and uncertainty machinery — see
+  [S2-EVIDENCE.md](./S2-EVIDENCE.md) for the `DN` evidence and
+  [PHASE-6-EVIDENCE.md](./PHASE-6-EVIDENCE.md) for the cross-Object `DC` matrix.

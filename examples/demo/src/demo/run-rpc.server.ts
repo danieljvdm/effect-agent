@@ -8,7 +8,7 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
-import { AgentRuntime } from "@effect-agent/engine";
+import { AgentRuntime, withTerminalDefectEvent } from "@effect-agent/engine";
 import { type DemoChatHistoryMessage } from "./contracts";
 import { toDemoRunFailure } from "./error-details";
 import {
@@ -38,18 +38,30 @@ export const chatHistoryPrompt = (history: ReadonlyArray<DemoChatHistoryMessage>
 
 /** Thin RPC adapters over the server-scoped interactive Phase 2 runtime. */
 export const DemoRunRpcHandlers = DemoRunRpcs.toLayer({
+  // The engine keeps defects as defects (P7 §7(h)); `withTerminalDefectEvent` is the
+  // documented boundary opt-in that appends one bounded terminal RunFailed{Defect} event
+  // before the cause is rethrown, so the browser always observes a terminal event. It
+  // replaces nothing about `toDemoRunFailure`, which still maps the TYPED wire failure.
   StreamChatRun: ({ history, message, mode }) =>
     mode === "openai"
       ? AgentRuntime.stream(
           OpenAiChatAgent,
           { message },
           { history: chatHistoryPrompt(history) },
-        ).pipe(Stream.provide(LiveChatServerLayer), Stream.mapError(toDemoRunFailure))
+        ).pipe(
+          withTerminalDefectEvent,
+          Stream.provide(LiveChatServerLayer),
+          Stream.mapError(toDemoRunFailure),
+        )
       : AgentRuntime.stream(
           makeFixtureChatAgent(message),
           { message },
           { history: chatHistoryPrompt(history) },
-        ).pipe(Stream.provide(FixtureChatRuntimeLayer), Stream.mapError(toDemoRunFailure)),
+        ).pipe(
+          withTerminalDefectEvent,
+          Stream.provide(FixtureChatRuntimeLayer),
+          Stream.mapError(toDemoRunFailure),
+        ),
   StreamOperationalRun: (request) =>
     DemoInteractiveRuntime.pipe(
       Effect.map((runtime) => runtime.start(request)),

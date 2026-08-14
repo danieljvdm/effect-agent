@@ -278,6 +278,7 @@ interface EvidenceOverrides {
   readonly approvalsPending?: ReadonlyArray<PendingApprovalEvidence>;
   readonly joinedInputCovered?: boolean;
   readonly hostSettlementOutcome?: SettlementOutcome;
+  readonly subagentLineageRecorded?: boolean;
 }
 
 const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence =>
@@ -289,6 +290,7 @@ const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence =>
     openDelegationCalls: overrides.openDelegationCalls ?? [],
     approvalsPending: overrides.approvalsPending ?? [],
     joinedInputCovered: overrides.joinedInputCovered ?? true,
+    subagentLineageRecorded: overrides.subagentLineageRecorded ?? false,
     ...(overrides.recordedSettlementOutcome === undefined
       ? {}
       : { recordedSettlementOutcome: overrides.recordedSettlementOutcome }),
@@ -1225,5 +1227,76 @@ describe("recovery classifier S2 abort rows (spec §13.1)", () => {
       evidence({ inputRecorded: true, openDelegationCalls: [delegationCall(CALL_DELEGATE)] }),
     );
     expect(decision._tag).toBe("SettleAborted");
+  });
+});
+
+/**
+ * P7 §7(a)/(c) classifier rows (plan §7 WP7): the AwaitParentEstablishment establishment-race
+ * fix — model-checked before implementation in `formal/SubagentEstablishmentFix.cfg` — and the
+ * position-blind SettleAborted precedence pin for queued-abort settlement.
+ */
+describe("recovery classifier P7 WP7 rows (SUB-016 establishment race, DUR-004/DUR-012 queued abort)", () => {
+  const parentLinkage = ParentLinkage.make({
+    parentSubmissionId: HOST_SUBMISSION_ID,
+    parentToolCallId: CALL_ONE,
+  });
+
+  it("a parent-linked admitted Submission without canonical lineage defers to AwaitParentEstablishment", () => {
+    const decision = classifyRecovery(
+      snapshot("admitted", { parentLinkage }),
+      evidence({ conversationMaterialized: false }),
+    );
+    expect(decision._tag).toBe("AwaitParentEstablishment");
+    if (decision._tag === "AwaitParentEstablishment") {
+      expect(decision.parentSubmissionId).toBe(HOST_SUBMISSION_ID);
+      expect(decision.parentToolCallId).toBe(CALL_ONE);
+    }
+  });
+
+  it("a parent-linked admitted Submission defers even when its Conversation is already materialized", () => {
+    // The race window includes a crash between the parent's materialize and its lineage
+    // append: readiness self-repair stays deferred until the lineage record is canonical.
+    const decision = classifyRecovery(snapshot("admitted", { parentLinkage }), evidence());
+    expect(decision._tag).toBe("AwaitParentEstablishment");
+  });
+
+  it("a parent-linked admitted Submission WITH canonical lineage repairs readiness normally", () => {
+    const decision = classifyRecovery(
+      snapshot("admitted", { parentLinkage }),
+      evidence({ subagentLineageRecorded: true }),
+    );
+    expect(decision._tag).toBe("RepairReadiness");
+  });
+
+  it("a parent-linked admitted Submission WITH lineage but no Conversation completes materialization", () => {
+    // Unreachable under this coordinator's establishment order (materialize precedes the
+    // lineage append) but the row stays total: lineage present means the parent finished the
+    // dangerous half, so the ordinary admitted repairs apply.
+    const decision = classifyRecovery(
+      snapshot("admitted", { parentLinkage }),
+      evidence({ conversationMaterialized: false, subagentLineageRecorded: true }),
+    );
+    expect(decision._tag).toBe("CompleteMaterialization");
+  });
+
+  it("a ROOT admitted Submission never consults lineage evidence", () => {
+    const decision = classifyRecovery(snapshot("admitted"), evidence());
+    expect(decision._tag).toBe("RepairReadiness");
+  });
+
+  it("an aborted never-claimed ready Submission classifies SettleAborted regardless of queue position", () => {
+    // P7 §7(c): the classifier is deliberately position-blind — SettleAborted names the one
+    // decision and the EXECUTOR settles a non-head ready row immediately at the current tail
+    // (settlement order of never-run work is not execution order; DUR-004 bounds execution).
+    const decision = classifyRecovery(snapshot("ready", { abortIntent }), evidence());
+    expect(decision._tag).toBe("SettleAborted");
+  });
+
+  it("a crashed queued-abort settlement (reservation committed) classifies AppendReservedSettlement", () => {
+    const decision = classifyRecovery(
+      snapshot("terminalizing", { reservation: reservation("aborted", false), abortIntent }),
+      evidence(),
+    );
+    expect(decision._tag).toBe("AppendReservedSettlement");
   });
 });

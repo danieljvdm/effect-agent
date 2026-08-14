@@ -309,6 +309,39 @@ restart lane, via direct `vitest run` (the probed `vp test` exception).
 Record: [ADR-0014](adr/0014-cloudflare-conversation-objects.md)
 Evidence: [Phase 6 evidence](PHASE-6-EVIDENCE.md)
 
+### D-033 — Phase 7 hardening shape
+
+**Status:** Accepted by default (adopted as the Phase 7 implementation default; pending owner
+review — Phase 7 completes the roadmap table, so resolving this record, ADRs 0011–0015, and the
+still-Proposed ADR-0010 is the owner review that roadmap completion now awaits)
+
+**Decision:** Adapter certification is one three-tier entry point (`certifyDurableAdapters`)
+producing a Schema-encoded certificate: the shared conformance arrays verbatim (Tier 1), the
+real coordinator swept across every failpoint location and six scenario shapes into the single
+shared invariant checker `verifyConversationInvariants` with a fully recomputed digest chain and
+a pinned unreachable-location list (Tier 2), and real loss recorded honestly as
+exercised / recorded-evidence / not-exercised / not-applicable (Tier 3) — certificates are
+committed evidence artifacts, never the assertion source. The formal model is TLA+/PlusCal
+checked by TLC on bounded committed instances with negative controls, run manually and on a
+schedule but never as a PR gate; its claim is about the protocol design under enumerated
+abstraction assumptions, explicitly not about the code, whose claim remains the linked test
+corpus. The administrative operations (explain/explainConversation, verify, retry, wake,
+scanObligations) are coordinator members over the two storage ports only — identical on DN and
+DC — with a scripts/ CLI rather than a new package; explain is provably read-only, verify never
+repairs and scopes honestly, retry re-drives exactly the classifier's one decision with the
+existing audit record, and obligation scanning is scan-based with host-owned alerting. Admin
+authorization is the minimal `OperationAuthorizer` port: possession-default, fail-closed typed
+denial before any read or write when a host supplies a real authorizer, mandatory author/reason
+on mutating operations. The closing semantic fixes: the model-vindicated
+`AwaitParentEstablishment` classifier decision (with the worker-claim gate) closes the
+cross-Object establishment race; aborted never-claimed non-head ready Submissions settle
+immediately with the gap rule treating them as non-gaps; defects stay defects with
+`withTerminalDefectEvent` as the bounded opt-in; `LedgerCapabilities.durability` gains
+`durable-cloudflare`; and the shared SQL core is deliberately not extracted (ADR-0014 revisit).
+
+Record: [ADR-0015](adr/0015-hardening-shape.md)
+Evidence: [Phase 7 evidence](PHASE-7-EVIDENCE.md)
+
 ## Integration and project boundaries
 
 ### D-021 — Reference-material role

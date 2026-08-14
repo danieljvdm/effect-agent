@@ -479,6 +479,93 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
+  it.effect("an aborted non-head ready submission settles without waiting for the head", () =>
+    Effect.gen(function* () {
+      // P7 §7(c): settlement order of never-run work is not execution order — the recovery
+      // pass settles an aborted, never-claimed, non-head `ready` Submission immediately, and
+      // the contiguous joining prefix later walks over the aborted-settled row as a non-gap
+      // (DUR-004 bounds execution order; DUR-012 permits settling inactive accepted work).
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"headline"}'));
+      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const conversation = "conversation-abort-non-head";
+
+      const head = yield* runtime.submit(
+        agent,
+        { question: "head" },
+        submitOptions(conversation, "non-head-1"),
+      );
+      const second = yield* runtime.submit(
+        agent,
+        { question: "cancel me" },
+        submitOptions(conversation, "non-head-2"),
+      );
+      const third = yield* runtime.submit(
+        agent,
+        { question: "after the gap" },
+        submitOptions(conversation, "non-head-3"),
+      );
+      yield* runtime.abort(
+        AbortCommand.make({
+          submissionId: second.submissionId,
+          author: "operator",
+          reason: "cancelled while queued",
+        }),
+      );
+
+      const reports = yield* runtime.runRecovery;
+      const report = reports.find((entry) => entry.submissionId === second.submissionId);
+      expect(report?.decision._tag).toBe("SettleAborted");
+      expect(report?.disposition).toBe("repaired");
+
+      // The aborted non-head settled immediately — the HEAD is still unsettled.
+      const settled = yield* runtime.awaitSettlement(second);
+      expect(settled.outcome).toBe("aborted");
+      const ledger = yield* SubmissionLedger;
+      const headRow = yield* ledger.lookup(
+        SubmissionLookupById.make({ submissionId: head.submissionId }),
+      );
+      expect(Option.isSome(headRow) && headRow.value.state !== "settled").toBe(true);
+
+      const midRecords = yield* readLog(conversation);
+      const midTags = logTags(midRecords);
+      // Never claimed: no model ran and no canonical input exists for the aborted row, and
+      // its abort record precedes its settlement (durability §13).
+      expect(midRecords.map((envelope) => envelope.record.recordId)).not.toContain(
+        submissionInputRecordId(second.submissionId),
+      );
+      expect(midTags.indexOf("AbortRequested")).toBeGreaterThanOrEqual(0);
+      expect(midRecords.map((envelope) => envelope.record.recordId)).toContain(
+        recoveryRepairRecordId(second.submissionId, "SettleAborted"),
+      );
+
+      // The head then runs normally and the THIRD Submission joins its Run across the
+      // aborted-settled row — the joining-prefix gap rule treats it as a non-gap.
+      const settlements = yield* runtime.processConversation(
+        agent,
+        decodeConversationId(conversation),
+      );
+      expect(settlements.map((settlement) => settlement.submissionId)).toEqual([head.submissionId]);
+      const headSettled = yield* runtime.awaitSettlement(head);
+      expect(headSettled.outcome).toBe("completed");
+      const thirdSettled = yield* runtime.awaitSettlement(third);
+      expect(thirdSettled.outcome).toBe("completed");
+
+      // Canonical order: the aborted settlement precedes the head's settlement — that is the
+      // documented §7(c) exemption, and the shared invariant checker accepts it.
+      const records = yield* readLog(conversation);
+      const recordIds = records.map((envelope) => envelope.record.recordId);
+      expect(recordIds.indexOf(submissionSettlementRecordId(second.submissionId))).toBeLessThan(
+        recordIds.indexOf(submissionSettlementRecordId(head.submissionId)),
+      );
+      const integrity = yield* runtime.verify(decodeConversationId(conversation));
+      expect(integrity.ok).toBe(true);
+      expect(integrity.checks.find((check) => check.name === "fifo-settlement-order")?.status).toBe(
+        "passed",
+      );
+    }),
+  );
+
   it.effect("aborts a running Submission canonically before interrupting its Run fiber", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

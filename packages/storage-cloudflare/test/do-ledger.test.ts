@@ -131,7 +131,7 @@ describe("DoSubmissionLedger", () => {
         }).pipe(Effect.provide([ledgerLayer({ storage: state.storage }), BrowserCrypto.layer])),
       ),
     );
-    expect(reread.capabilities.durability).toBe("durable-node");
+    expect(reread.capabilities.durability).toBe("durable-cloudflare");
     expect(reread.replayed.replayed).toBe(true);
     expect(Option.isSome(reread.byKey)).toBe(true);
     if (Option.isSome(reread.byKey)) {

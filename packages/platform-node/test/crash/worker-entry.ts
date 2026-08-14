@@ -338,6 +338,21 @@ const scenario = Effect.gen(function* () {
       );
       return;
     }
+    case "abort-queued": {
+      // P7 §7(c): a head plus a QUEUED second Submission; the abort targets the queued row
+      // and the kill fires at abort:after-intent, so restart recovery must settle the
+      // aborted non-head immediately — without waiting for the head to settle first.
+      yield* submitPlanner(`${idempotencyKey}-head`);
+      const queued = yield* submitPlanner(`${idempotencyKey}-queued`);
+      yield* runtime.abort(
+        AbortCommand.make({
+          submissionId: queued.submissionId,
+          author: "operator",
+          reason: "crash harness queued abort",
+        }),
+      );
+      return;
+    }
     case "run": {
       yield* submitPlanner(idempotencyKey);
       const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
