@@ -1,5 +1,23 @@
 # @effect-agent/testing
 
+## 0.0.1-beta.1
+
+### Patch Changes
+
+- Republish with correctly pinned internal dependencies. The 0.0.1-beta.0
+  artifacts depended on internal `@effect-agent/*` versions that were never
+  published (`workspace:*` ranges were resolved from a stale lockfile at
+  publish time); the release script now pins internal ranges to the exact
+  workspace versions itself.
+- Updated dependencies []:
+  - @effect-agent/core@0.0.1-beta.1
+  - @effect-agent/engine@0.0.1-beta.1
+  - @effect-agent/capabilities@0.0.1-beta.1
+  - @effect-agent/session@0.0.1-beta.1
+  - @effect-agent/storage-memory@0.0.1-beta.1
+  - @effect-agent/storage-sqlite@0.0.1-beta.1
+  - @effect-agent/platform-node@0.0.1-beta.1
+
 ## 0.0.1-beta.0
 
 ### Patch Changes

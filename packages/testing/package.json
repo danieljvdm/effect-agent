@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/testing",
-  "version": "0.0.1-beta.0",
+  "version": "0.0.1-beta.1",
   "description": "Scripted models, deterministic fixtures, and adapter conformance kits for testing Effect Agent applications.",
   "license": "UNLICENSED",
   "repository": {
