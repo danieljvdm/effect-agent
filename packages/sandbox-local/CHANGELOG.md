@@ -1,5 +1,17 @@
 # @effect-agent/sandbox-local
 
+## 0.0.1-beta.1
+
+### Patch Changes
+
+- Republish with correctly pinned internal dependencies. The 0.0.1-beta.0
+  artifacts depended on internal `@effect-agent/*` versions that were never
+  published (`workspace:*` ranges were resolved from a stale lockfile at
+  publish time); the release script now pins internal ranges to the exact
+  workspace versions itself.
+- Updated dependencies []:
+  - @effect-agent/sandbox@0.0.1-beta.1
+
 ## 0.0.1-beta.0
 
 ### Patch Changes

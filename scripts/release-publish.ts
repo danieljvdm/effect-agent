@@ -143,6 +143,7 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
   readonly directory: string;
   readonly dryRun: boolean;
   readonly otp: string | undefined;
+  readonly workspaceVersions: ReadonlyMap<string, string>;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const manifestPath = `${options.directory}/package.json`;
@@ -161,7 +162,32 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
   // Rewrite every source export to its dist entry, fail-closed on both an
   // unrecognized export shape and a missing built artifact.
   const parsed: unknown = JSON.parse(originalBytes);
-  const mutable = parsed as { exports?: Record<string, unknown> };
+  const mutable = parsed as {
+    exports?: Record<string, unknown>;
+    dependencies?: Record<string, string>;
+    optionalDependencies?: Record<string, string>;
+    peerDependencies?: Record<string, string>;
+  };
+
+  // Pin internal `workspace:*` ranges to the exact workspace versions
+  // ourselves: `bun publish` resolves them from the lockfile, which does not
+  // pick up changeset version bumps ("no changes" install), and 0.0.1-beta.0
+  // shipped with dependencies on unpublished internal versions as a result.
+  for (const section of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
+    const dependencies = mutable[section];
+    if (dependencies === undefined) continue;
+    for (const [dependency, range] of Object.entries(dependencies)) {
+      if (!range.startsWith("workspace:")) continue;
+      const version = options.workspaceVersions.get(dependency);
+      if (version === undefined) {
+        return yield* ReleaseError.make({
+          package: manifest.name,
+          reason: `Workspace dependency '${dependency}' has no known version to pin.`,
+        });
+      }
+      dependencies[dependency] = version;
+    }
+  }
   const exportsMap = manifest.exports ?? {};
   const rewritten: Record<string, { types: string; default: string }> = {};
   for (const [key, sourcePath] of Object.entries(exportsMap)) {
@@ -234,10 +260,22 @@ const command = CliCommand.make(
       yield* Console.log(
         `Publishing ${directories.length} workspaces to ${REGISTRY}${dryRun ? " (dry run)" : ""}...`,
       );
+      const workspaceVersions = new Map<string, string>();
+      for (const directory of directories) {
+        const manifest = yield* decodeManifest(
+          yield* fs.readFileString(`${directory}/package.json`),
+        );
+        workspaceVersions.set(manifest.name, manifest.version);
+      }
       let published = 0;
       for (const directory of directories) {
         const outcome = yield* Effect.scoped(
-          publishOne({ directory, dryRun, otp: otp._tag === "Some" ? otp.value : undefined }),
+          publishOne({
+            directory,
+            dryRun,
+            otp: otp._tag === "Some" ? otp.value : undefined,
+            workspaceVersions,
+          }),
         );
         if (outcome === "published") published += 1;
       }
