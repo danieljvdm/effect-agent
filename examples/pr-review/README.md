@@ -46,13 +46,17 @@ The fan-out variant (`src/fan-out-review-agent.ts`, `src/review-units.ts`,
   read-only `list_review_units` tool, not model prose. Files without a
   textual diff and files beyond the fan-out capacity are reported in the
   plan, never silently dropped.
-- **One child per unit**: `delegate_file_review` is a real
+- **One child per unit, plan-validated**: `delegate_file_review` is a real
   `Subagent.define` delegation targeting the `FileReviewer` child, whose
-  toolkit is only `read_file_diff` + `read_file` (no changeset listing).
-  Children are bounded by `SubagentPolicy` (≤ 8 children, ≤ 3 concurrent,
-  per-child turn/tool/duration budgets aligned with the child's own
-  `AgentPolicy`) and see only their briefed unit — `projectResult` is the
-  declassification boundary, so only bounded findings cross back.
+  toolkit is only `read_file_diff` + `read_file` (no changeset listing) over
+  a plan-scoped source view (`fanOutScopedSourceLayer`). Coordinator output
+  is untrusted: a delegation request must name a planned unit with exactly
+  its planned paths or it fails typed before any child budget is reserved,
+  and a child report claiming an unplanned unit — or findings outside its
+  unit's paths — fails typed at the declassification boundary. Children are
+  bounded by `SubagentPolicy` (≤ 8 children, ≤ 3 concurrent, per-child
+  turn/tool/duration budgets aligned with the child's own `AgentPolicy`,
+  plus explicit aggregate token/cost caps).
 - **Failure containment, honestly reported**: `Subagent.define` fixes
   `failureMode: "error"`, which would abort the whole run on one failed
   unit. The coordinator's toolkit therefore carries a same-name Tool value
@@ -60,10 +64,13 @@ The fan-out variant (`src/fan-out-review-agent.ts`, `src/review-units.ts`,
   unit failure reaches the model as a failed tool result; the coordinator
   must name it in its summary ("unit-002 unreviewed: AgentPolicyError") and
   never retries it.
-- **Same trust boundary**: the coordinator returns the same `CodeReview`,
-  merged by the pinned dedupe/rank policy (`rankAndDedupeFindings`), and the
-  host validates every anchor against the parsed diff before publishing —
-  child output is untrusted input like everything else.
+- **Host-enforced merge, same trust boundary**: the coordinator's findings
+  array is a proposal only. `projectResult` collects every validated child
+  finding host-side, and `finalizeFanOutReview` replaces the model's
+  findings with the mechanical merge (`rankAndDedupeFindings`) and
+  re-derives the verdict — the coordinator can neither invent a finding,
+  drop a blocking one, nor approve past one. The host then validates every
+  anchor against the parsed diff before publishing, unchanged.
 
 Offline tests script BOTH models (coordinator and children) prompt-keyed, so
 fan-out, merging, honest unit failure, and budget enforcement all run

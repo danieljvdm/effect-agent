@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Context, Effect, Layer, Ref, Schema } from "effect";
 import {
   Agent,
   AgentPolicy,
@@ -29,15 +29,28 @@ import {
   readFileHandler,
   ReviewFinding,
   ReviewMission,
+  type ReviewVerdict,
 } from "./review-agent.ts";
 import {
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
   planReviewUnits,
+  rankAndDedupeFindings,
+  type ReviewUnit,
   ReviewUnitId,
   ReviewUnitPlan,
 } from "./review-units.ts";
-import { PullRequestSource, PullRequestSourceFailure } from "./source.ts";
+import {
+  executeReview,
+  type ExecuteReviewOptions,
+  fanOutReviewBudgetLimits,
+} from "./run-review.ts";
+import {
+  normalizeRepoRelativePath,
+  PullRequestSource,
+  PullRequestSourceFailure,
+  ReviewInputViolation,
+} from "./source.ts";
 
 // ---------------------------------------------------------------------------
 // The fan-out reviewer: the same review contract as the flat reviewer, but
@@ -67,6 +80,49 @@ export const FileReviewToolkitLayer = FileReviewToolkit.toLayer({
   read_file: readFileHandler,
 });
 
+/**
+ * The children's view of the pull request: only files belonging to some
+ * planned review unit are observable. S1 cannot scope a service per
+ * invocation (child requirements are fixed at handler-Layer construction —
+ * FRICTION.md item 12), so per-UNIT scoping is enforced host-side at the
+ * projection boundary instead; this Layer still shrinks every child's
+ * observation surface from "the whole changeset" to "the planned, diffable
+ * files", fail-closed like the rest of the source port.
+ */
+export const fanOutScopedSourceLayer: Layer.Layer<PullRequestSource, never, PullRequestSource> =
+  Layer.effect(
+    PullRequestSource,
+    Effect.gen(function* () {
+      const source = yield* PullRequestSource;
+      const plannedPaths = source.changedFiles.pipe(
+        Effect.map((files) => {
+          const plan = planReviewUnits(files, { totalChangedFiles: files.length });
+          return new Set(plan.units.flatMap((unit) => [...unit.paths]));
+        }),
+      );
+      return PullRequestSource.of({
+        metadata: source.metadata,
+        changedFiles: Effect.gen(function* () {
+          const files = yield* source.changedFiles;
+          const allowed = yield* plannedPaths;
+          return files.filter((file) => allowed.has(file.path));
+        }),
+        readFile: (path) =>
+          Effect.gen(function* () {
+            const relative = yield* normalizeRepoRelativePath(path);
+            const allowed = yield* plannedPaths;
+            if (!allowed.has(relative)) {
+              return yield* ReviewInputViolation.make({
+                input: relative,
+                reason: "Path is outside the planned review units.",
+              });
+            }
+            return yield* source.readFile(relative);
+          }),
+      });
+    }),
+  );
+
 const UnitPaths = Schema.Array(ChangedPath)
   .check(Schema.isMinLength(1))
   .check(Schema.isMaxLength(MAX_UNIT_FILES));
@@ -90,7 +146,7 @@ export class FileReviewReport extends Schema.Class<FileReviewReport>(
 
 export const fileReviewerInstructions = (brief: FileReviewBrief): string =>
   [
-    `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
+    `You are a code reviewer for one unit of a pull request: [review-unit:${brief.unitId}], covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
     "Work in this order:",
     "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
     "2. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
@@ -160,7 +216,10 @@ export class FileReviewUnitFailed extends Schema.TaggedErrorClass<FileReviewUnit
 /**
  * Finite per-invocation bounds (SUB-009), aligned with the child's own
  * AgentPolicy: the child's policy is the limit that trips typed; the
- * reservation mirrors it so parent-side accounting stays honest.
+ * reservation mirrors it so parent-side accounting stays honest. The token
+ * and cost caps make the AGGREGATE child budget explicit — scaled by
+ * `maxChildren`, a fan-out run's children are bounded to 8 × these values,
+ * enforced as honestly as provider usage reporting allows.
  */
 export const fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
@@ -168,10 +227,62 @@ export const fileReviewPolicy = SubagentPolicy.make({
   maxTurns: 8,
   maxToolCalls: 16,
   maxDuration: "4 minutes",
+  maxInputTokens: 200_000,
+  maxOutputTokens: 16_000,
+  maxCostMicrousd: 250_000,
 });
 
 const delegationDescription =
   "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
+
+/**
+ * Host-side collector of validated child findings. `projectResult` records
+ * every finding that survived unit-scope validation, and the run's
+ * `finalizeReview` hook merges EXACTLY this collection mechanically — the
+ * coordinator model can therefore neither invent findings nor silently drop
+ * a delegated one.
+ */
+export class FanOutUnitOutcomes extends Context.Service<
+  FanOutUnitOutcomes,
+  {
+    readonly record: (findings: ReadonlyArray<ReviewFinding>) => Effect.Effect<void>;
+    readonly collected: Effect.Effect<ReadonlyArray<ReviewFinding>>;
+  }
+>()("@effect-agent/example-pr-review/FanOutUnitOutcomes") {}
+
+/** One collector per review run; the instance is shared with `finalizeFanOutReview`. */
+export const makeFanOutUnitOutcomes = Effect.gen(function* () {
+  const findings = yield* Ref.make<ReadonlyArray<ReviewFinding>>([]);
+  return FanOutUnitOutcomes.of({
+    record: (unitFindings) => Ref.update(findings, (previous) => [...previous, ...unitFindings]),
+    collected: Ref.get(findings),
+  });
+});
+
+const boundedFailureMessage = (message: string): string => message.slice(0, 400);
+
+/**
+ * The host-owned unit plan, recomputed deterministically from the source.
+ * Both projections consult it: coordinator-supplied delegation parameters
+ * and child-claimed unit identities are untrusted model output and must
+ * match the plan exactly (fail-closed, SEC-007 style).
+ */
+const plannedUnits: Effect.Effect<
+  ReadonlyArray<ReviewUnit>,
+  FileReviewUnitFailed,
+  PullRequestSource
+> = Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const files = yield* source.changedFiles.pipe(
+    Effect.mapError((failure) =>
+      FileReviewUnitFailed.make({
+        childErrorTag: failure._tag,
+        message: boundedFailureMessage(failure.message),
+      }),
+    ),
+  );
+  return planReviewUnits(files, { totalChangedFiles: files.length }).units;
+});
 
 export const fileReviewDelegation = Subagent.define("delegate_file_review", {
   description: delegationDescription,
@@ -179,24 +290,62 @@ export const fileReviewDelegation = Subagent.define("delegate_file_review", {
   parameters: FileReviewRequest,
   success: FileReviewUnitResult,
   failure: FileReviewUnitFailed,
+  // Coordinator output is untrusted: a delegation request must name a
+  // planned unit with exactly its planned paths, or it fails typed before
+  // any child budget is reserved. The brief is built from the HOST plan.
   prepareInput: (request) =>
-    Effect.succeed(
-      FileReviewBrief.make({
-        unitId: request.unitId,
-        paths: request.paths,
+    Effect.gen(function* () {
+      const units = yield* plannedUnits;
+      const unit = units.find((candidate) => candidate.unitId === request.unitId);
+      const matchesPlan =
+        unit !== undefined &&
+        unit.paths.length === request.paths.length &&
+        unit.paths.every((path, index) => path === request.paths[index]);
+      if (unit === undefined || !matchesPlan) {
+        return yield* FileReviewUnitFailed.make({
+          childErrorTag: "UnitPlanViolation",
+          message: boundedFailureMessage(
+            `Delegation request for ${request.unitId} does not match the host review-unit plan.`,
+          ),
+        });
+      }
+      return FileReviewBrief.make({
+        unitId: unit.unitId,
+        paths: unit.paths,
         focus: "defects-first: correctness, security, concurrency, resources, error handling",
-      }),
-    ),
-  // The explicit declassification boundary (SUB-015): exactly the bounded
-  // findings cross to the parent. Whether they may anchor anywhere is decided
-  // host-side by planPublication against the real diff, not here.
+      });
+    }),
+  // The explicit declassification boundary (SUB-015): exactly the bounded,
+  // unit-scoped findings cross to the parent. The claimed unit must be
+  // planned and every finding must anchor inside that unit's planned paths;
+  // whether an anchor names a real diff line stays a host publication check.
   projectResult: (report) =>
-    Effect.succeed(
-      FileReviewUnitResult.make({
+    Effect.gen(function* () {
+      const units = yield* plannedUnits;
+      const unit = units.find((candidate) => candidate.unitId === report.unitId);
+      if (unit === undefined) {
+        return yield* FileReviewUnitFailed.make({
+          childErrorTag: "UnitScopeViolation",
+          message: boundedFailureMessage(`Child report claims unplanned unit ${report.unitId}.`),
+        });
+      }
+      for (const finding of report.findings) {
+        if (!unit.paths.includes(finding.path)) {
+          return yield* FileReviewUnitFailed.make({
+            childErrorTag: "UnitScopeViolation",
+            message: boundedFailureMessage(
+              `Child report for ${report.unitId} includes a finding outside its unit.`,
+            ),
+          });
+        }
+      }
+      const outcomes = yield* FanOutUnitOutcomes;
+      yield* outcomes.record(report.findings);
+      return FileReviewUnitResult.make({
         unitId: report.unitId,
         findings: report.findings,
-      }),
-    ),
+      });
+    }),
   policy: fileReviewPolicy,
 });
 
@@ -320,11 +469,11 @@ export const fanOutReviewInstructions = (mission: ReviewMission): string =>
       : "The author provided no description.",
     "Work in this order:",
     "1. Call list_review_units once to get the planned review units.",
-    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
-    '3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan\'s undiffablePaths and unassignedPaths must also be named as not reviewed when present.',
-    "4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most 20 findings.",
-    '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}]}. Copy findings verbatim from the delegation results; never invent or edit anchors.',
-    'Use verdict "request-changes" only when at least one finding is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.',
+    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim — requests that deviate from the plan fail typed. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
+    '3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan\'s undiffablePaths and unassignedPaths must also be named as not reviewed when present, and if the plan reports truncated: true your summary must state the review is incomplete and your verdict must not be "approve".',
+    "4. Copy the successful units' findings into your findings array verbatim. The host merges the delegated findings mechanically (deduplicating shared anchors keeping the most severe, ranking blocking > important > nit, capping at 20) — findings you invent or edit are discarded, and findings you drop are restored.",
+    '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}]}.',
+    'Use verdict "request-changes" only when at least one finding is "blocking" (the host enforces this rule on the merged findings). An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.',
   ].join("\n");
 
 export const FanOutReviewer = Agent.define("pr-fanout-reviewer", {
@@ -343,3 +492,89 @@ export const FanOutReviewer = Agent.define("pr-fanout-reviewer", {
     "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
   metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" },
 });
+
+// ---------------------------------------------------------------------------
+// Host-side finalization: the coordinator model's findings array is a
+// proposal only. The published review carries exactly the mechanically
+// merged, host-collected child findings, and the verdict is re-derived from
+// them — a coordinator can neither invent a finding, drop a blocking one,
+// nor approve past one.
+// ---------------------------------------------------------------------------
+
+/** Deterministic merge of the collected child findings into the final review. */
+export const finalizeFanOutReview = (
+  review: CodeReview,
+  collected: ReadonlyArray<ReviewFinding>,
+): CodeReview => {
+  const findings = rankAndDedupeFindings(collected);
+  const hasBlocking = findings.some((finding) => finding.severity === "blocking");
+  const verdict: ReviewVerdict = hasBlocking
+    ? "request-changes"
+    : review.verdict === "request-changes"
+      ? "comment"
+      : review.verdict;
+  return CodeReview.make({ summary: review.summary, verdict, findings });
+};
+
+/**
+ * One fan-out review, end to end: the shared wiring the CLI and the offline
+ * tests both use. It owns the per-run findings collector, provides the
+ * coordinator toolkit and the delegation handler Layer (children observing
+ * the source only through `fanOutScopedSourceLayer`), and finalizes the
+ * decoded review against the collected child findings before publication
+ * planning. Source, publisher, model Layers, identifiers, and the
+ * reservation service stay caller-provided, exactly like `executeReview`.
+ */
+export const executeFanOutReview = <
+  ParentInstructions,
+  ParentTools extends Record<string, Tool.Any>,
+  ParentProvider,
+  ParentModelProvides,
+  ParentModelRequires,
+  ChildProvider,
+  ChildModelProvides,
+  ChildModelRequires,
+>(
+  parentBinding: RuntimeBinding<
+    typeof ReviewMission,
+    typeof CodeReview,
+    ParentInstructions,
+    ParentTools,
+    ParentProvider,
+    ParentModelProvides,
+    ParentModelRequires
+  >,
+  childBinding: RuntimeBinding<
+    typeof FileReviewBrief,
+    typeof FileReviewReport,
+    typeof fileReviewerInstructions,
+    Toolkit.Tools<typeof FileReviewToolkit>,
+    ChildProvider,
+    ChildModelProvides,
+    ChildModelRequires
+  >,
+  options: Omit<ExecuteReviewOptions, "finalizeReview">,
+) =>
+  Effect.gen(function* () {
+    const outcomes = yield* makeFanOutUnitOutcomes;
+    return yield* executeReview(parentBinding, {
+      ...options,
+      limits: options.limits ?? fanOutReviewBudgetLimits,
+      finalizeReview: (review) =>
+        outcomes.collected.pipe(Effect.map((collected) => finalizeFanOutReview(review, collected))),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          FanOutCoordinatorToolkitLayer,
+          fanOutHandlersLayer(childBinding).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                FileReviewToolkitLayer.pipe(Layer.provide(fanOutScopedSourceLayer)),
+                Layer.succeed(FanOutUnitOutcomes)(outcomes),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  });

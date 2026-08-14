@@ -84,7 +84,18 @@ SubagentDurabilityError`) verbatim — including two members that are
     from the travel-planner fixtures — `@effect-agent/testing` should export
     it.
 
-11. **Wiring the handler Layer takes framework-internals knowledge.** Getting
+11. **Per-invocation child capability scoping is not expressible.** The
+    fan-out design wants each child's `PullRequestSource` restricted to its
+    briefed unit's paths, but every child service is fixed once at
+    `SubagentRuntime.layer` construction and `prepareInput`/`projectResult`
+    run parent-side — there is no seam that provides a per-spawn Layer or
+    Context derived from the prepared input. The available fallbacks (a
+    static plan-scoped source for ALL children, plus host-side unit-scope
+    validation at the projection boundary) are implemented here, but a
+    `child.contextFor?: (input) => Layer` style option would make the
+    briefed capability set the enforced one.
+
+12. **Wiring the handler Layer takes framework-internals knowledge.** Getting
     `fanOutHandlersLayer(childBinding)` to build requires knowing that its
     construction wants the child toolkit handlers AND `SubagentReservations`
     AND `IdGenerator`, that `SubagentReservationsMemoryLive` exists for

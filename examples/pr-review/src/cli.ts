@@ -7,11 +7,7 @@ import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { makeOpenAiFanOutReviewer } from "./fan-out-profiles.ts";
-import {
-  FanOutCoordinatorToolkitLayer,
-  fanOutHandlersLayer,
-  FileReviewToolkitLayer,
-} from "./fan-out-review-agent.ts";
+import { executeFanOutReview } from "./fan-out-review-agent.ts";
 import {
   GitHubReviewTarget,
   gitHubPullRequestSourceLayer,
@@ -20,7 +16,7 @@ import {
 import { DEFAULT_REVIEW_MODEL, makeOpenAiReviewer } from "./profiles.ts";
 import { ReviewPublicationPlan } from "./render.ts";
 import { ReviewToolkitLayer } from "./review-agent.ts";
-import { executeReview, fanOutReviewBudgetLimits, type ReviewRunOutcome } from "./run-review.ts";
+import { executeReview, type ReviewRunOutcome } from "./run-review.ts";
 
 // ---------------------------------------------------------------------------
 // The GitHub Action entrypoint: resolve which pull request to review (flags
@@ -143,26 +139,14 @@ const command = CliCommand.make(
       let outcome: ReviewRunOutcome;
       if (flags.fanOut) {
         const { parent, child } = makeOpenAiFanOutReviewer(flags.model);
-        // The delegation handler Layer captures the child's complete runtime
-        // needs at construction: its toolkit over the same source, the OpenAI
-        // client, identifiers, and the in-memory delegation reservations.
-        const childSupportLayer = Layer.mergeAll(
-          FileReviewToolkitLayer,
-          SubagentReservationsMemoryLive,
-          IdGenerator.layer,
-          openAiLayer,
-        ).pipe(Layer.provideMerge(sourceLayer));
-        outcome = yield* executeReview(parent, {
-          ...runOptions,
-          limits: fanOutReviewBudgetLimits,
-        }).pipe(
+        outcome = yield* executeFanOutReview(parent, child, runOptions).pipe(
           Effect.provide(
             Layer.mergeAll(
-              FanOutCoordinatorToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
-              fanOutHandlersLayer(child).pipe(Layer.provide(childSupportLayer)),
+              sourceLayer,
               publisherLayer,
               openAiLayer,
               IdGenerator.layer,
+              SubagentReservationsMemoryLive,
             ),
           ),
           Effect.scoped,

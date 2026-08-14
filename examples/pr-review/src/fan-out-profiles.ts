@@ -114,11 +114,18 @@ export const makeOfflineFanOutCoordinatorModel = (script: {
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
     const firstUnitCallId = offlineUnitCallId(script.unitCalls[0]?.unitId ?? "unit-none");
+    const finalReview = (): ReadonlyArray<Response.StreamPartEncoded> =>
+      finalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
     const decide = (promptJson: string): ReadonlyArray<Response.StreamPartEncoded> => {
       if (promptJson.includes(firstUnitCallId)) {
-        return finalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
+        return finalReview();
       }
       if (promptJson.includes(OFFLINE_UNITS_CALL_ID)) {
+        // An empty plan is a valid planner outcome (nothing diffable):
+        // finalize immediately instead of declaring an empty tool batch.
+        if (script.unitCalls.length === 0) {
+          return finalReview();
+        }
         return toolTurn(
           ...script.unitCalls.map(
             (unit): Response.StreamPartEncoded => ({
@@ -194,7 +201,12 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
     const decide = (promptJson: string): ReadonlyArray<Response.StreamPartEncoded> | undefined => {
-      const script = scripts.find((candidate) => promptJson.includes(candidate.unitId));
+      // Select the script by the child's briefing marker, never by a bare
+      // unit-id substring: prompts carry untrusted diff content that could
+      // mention another unit's id and switch scripts mid-child.
+      const script = scripts.find((candidate) =>
+        promptJson.includes(`[review-unit:${candidate.unitId}]`),
+      );
       if (script === undefined) return undefined;
       switch (script.outcome._tag) {
         case "budget-runaway": {

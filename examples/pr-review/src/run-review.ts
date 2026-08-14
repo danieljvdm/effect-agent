@@ -66,6 +66,12 @@ export interface ExecuteReviewOptions {
   readonly applyVerdict: boolean;
   /** Run-level usage bounds; defaults to `reviewBudgetLimits`. */
   readonly limits?: UsageBudgetLimits | undefined;
+  /**
+   * Host-side review finalizer applied after the terminal decode and BEFORE
+   * publication planning. The fan-out variant uses it to replace the model's
+   * findings with the mechanically merged, host-collected child findings.
+   */
+  readonly finalizeReview?: ((review: CodeReview) => Effect.Effect<CodeReview>) | undefined;
 }
 
 /**
@@ -116,7 +122,9 @@ export const executeReview = <
 
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
-    const review = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
+    const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
+    const review =
+      options.finalizeReview === undefined ? decoded : yield* options.finalizeReview(decoded);
     const plan = planPublication(review, files, {
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,
