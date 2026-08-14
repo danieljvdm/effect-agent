@@ -59,9 +59,15 @@ const runCommand = Effect.fn("runCommand")(function* (
   cwd: string,
   command: string,
   args: ReadonlyArray<string>,
+  env?: Record<string, string>,
 ) {
   const formatted = [command, ...args].join(" ");
-  const child = yield* ChildProcess.make(command, args, { cwd, stderr: "pipe", stdout: "pipe" });
+  const child = yield* ChildProcess.make(command, args, {
+    cwd,
+    stderr: "pipe",
+    stdout: "pipe",
+    ...(env !== undefined ? { env, extendEnv: false } : {}),
+  });
   const [output, exitCode] = yield* Effect.all([
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
@@ -89,6 +95,27 @@ const alreadyPublished = Effect.fn("alreadyPublished")(function* (name: string, 
     package: name,
     reason: `Unexpected registry status ${response.status} for version lookup.`,
   });
+});
+
+/**
+ * Bun resolves the global npmrc from `$XDG_CONFIG_HOME/.npmrc` whenever that
+ * variable is set, ignoring `~/.npmrc` — where `npm login` writes the token.
+ * When no npmrc exists at the XDG location, drop the variable from the
+ * publish environment so bun falls back to `~/.npmrc` (verified on Bun
+ * 1.3.14: with it set, `bun publish` reports "missing authentication"
+ * despite a valid `npm whoami`).
+ */
+const publishEnvironment = Effect.fn("publishEnvironment")(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const xdgConfigHome = globalThis.process.env["XDG_CONFIG_HOME"];
+  if (xdgConfigHome === undefined || (yield* fs.exists(`${xdgConfigHome}/.npmrc`))) {
+    return undefined;
+  }
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries(globalThis.process.env)) {
+    if (key !== "XDG_CONFIG_HOME" && value !== undefined) env[key] = value;
+  }
+  return env;
 });
 
 /**
@@ -177,7 +204,7 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
     fs.writeFileString(manifestPath, JSON.stringify(parsed, null, 2)),
     () => fs.writeFileString(manifestPath, originalBytes).pipe(Effect.orDie),
   );
-  yield* runCommand(options.directory, "bun", args);
+  yield* runCommand(options.directory, "bun", args, yield* publishEnvironment());
   yield* Console.log(
     `- ${manifest.name}@${manifest.version}: ${
       options.dryRun ? `dry-run ok (tag: ${distTag})` : `published (tag: ${distTag})`
