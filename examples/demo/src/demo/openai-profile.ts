@@ -21,6 +21,13 @@ const UpstreamOpenAiWebSearch = OpenAiTool.WebSearch({
 /**
  * Compatibility projection for Effect beta.102, whose OpenAI adapter emits an
  * empty hosted-search declaration before returning the final action as result.
+ *
+ * The success schema is deliberately permissive: OpenAI keeps adding search
+ * action and source variants the pinned generated schema rejects (for example
+ * source type "api" on weather queries, where the strict schema expects only
+ * "url" and fails the whole Run). The demo renders the raw JSON result, so it
+ * accepts any JSON-shaped hosted-search payload instead of failing on shapes
+ * the pinned beta has never seen.
  */
 export const OpenAiWebSearch = Tool.providerDefined({
   id: UpstreamOpenAiWebSearch.id,
@@ -28,7 +35,7 @@ export const OpenAiWebSearch = Tool.providerDefined({
   providerName: UpstreamOpenAiWebSearch.providerName,
   args: UpstreamOpenAiWebSearch.argsSchema,
   parameters: Schema.Struct({}),
-  success: UpstreamOpenAiWebSearch.successSchema,
+  success: Schema.Unknown,
   failure: UpstreamOpenAiWebSearch.failureSchema,
 })(UpstreamOpenAiWebSearch.args);
 

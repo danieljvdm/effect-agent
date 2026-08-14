@@ -195,10 +195,10 @@ export function ChatWorkbench() {
             <Badge className="hidden sm:inline-flex">
               {state.activeExperience === "capability"
                 ? state.mode === "openai"
-                  ? "OpenAI agent · fixture tools"
+                  ? "OpenAI agent · live web research"
                   : "Scripted replay"
                 : state.mode === "openai"
-                  ? "OpenAI agent · fixture tools"
+                  ? "OpenAI agent · live web research"
                   : "Scripted replay"}
             </Badge>
             <Button onClick={reset} size="icon-sm" title="New chat" type="button" variant="ghost">
@@ -263,7 +263,7 @@ export function ChatWorkbench() {
                         </p>
                         <p className="mt-0.5 text-xs leading-5 text-cyan-800">
                           {state.mode === "openai"
-                            ? "The live model chooses and coordinates the tools. Supplier results are fixtures; no purchase is possible."
+                            ? "The live model researches real options with hosted web search and cites sources. Prices are public estimates; no purchase is possible."
                             : "Scripted replay is selected. It exercises the same runtime without a live model."}
                         </p>
                       </div>
@@ -420,7 +420,7 @@ export function ChatWorkbench() {
               </PromptInput>
               <p className="mt-2 text-center font-mono text-[9px] text-muted-foreground">
                 {state.mode === "openai"
-                  ? "Live OpenAI model · fixture supplier data · no real reservation"
+                  ? "Live OpenAI model · real web research · no real reservation"
                   : "Scripted replay · same schemas and event stream · no model call"}
               </p>
             </div>

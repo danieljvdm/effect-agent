@@ -52,7 +52,7 @@ export const initialChatState: ChatState = {
       id: "intro",
       role: "assistant",
       content:
-        "I’m an OpenAI-powered travel agent using repeatable demo suppliers. Ask me to plan or revise the fixed London trip; I’ll show my tool work and ask before any demo hold.",
+        "I’m an OpenAI-powered travel agent doing real web research. Ask me to plan any trip; I’ll cite my sources, show my tool work, and ask before any demo hold.",
     },
   ],
   events: [],
