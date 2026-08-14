@@ -32,7 +32,6 @@ The root `package.json` is the only version source for shared dependencies.
 | TypeScript                        |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
 | `@effect/tsgo`                    |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
 | `@types/node`                     |           `26.1.2` | Node types for repository scripts                                                 |
-| `tsx`                             |           `4.23.1` | TypeScript script runner                                                          |
 | VitePress                         |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
 | Vue                               |           `3.5.40` | VitePress theme components                                                        |
 
@@ -154,6 +153,17 @@ because TS4094 rejects inferring an exported anonymous class type around a
 private field, and both packages pin `pack: { dts, sourcemap }` in their
 Vite configs since a package-level config suppresses `vp pack`'s
 zero-config defaults.
+
+## Script runners
+
+Repository scripts run under **Bun** (`bun scripts/<name>.ts`) — there is no
+`tsx` in this repository. The one exception is anything that imports
+`@effect-agent/storage-sqlite`: Bun does not implement `node:sqlite`, so
+`admin:durable` runs under `node --experimental-transform-types` (plain
+strip-only mode rejects the framework's runtime `namespace` declarations),
+and the platform-node crash/soak harnesses spawn their TypeScript worker
+entries the same way (verified: the full process-kill matrix passes under
+transform-mode workers).
 
 ## Post-install setup
 

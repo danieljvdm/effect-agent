@@ -165,7 +165,7 @@ export const startWorker = (
 ): Effect.Effect<WorkerHandle, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const child = spawn(process.execPath, ["--import", "tsx", workerEntry], {
+      const child = spawn(process.execPath, ["--experimental-transform-types", workerEntry], {
         cwd: packageRoot,
         env: { ...process.env, ...childEnv(options) },
         stdio: ["ignore", "pipe", "pipe"],

@@ -36,7 +36,6 @@
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect/vitest": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }
