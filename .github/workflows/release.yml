@@ -57,8 +57,13 @@ jobs:
           title: "chore: version packages (beta)"
           commit: "chore: version packages (beta)"
           version: bun run changeset:version && bun install
+          # Branch protection already requires the full `ready` gate on the
+          # exact merged tree, so the publish path re-verifies only what it
+          # consumes: the built artifacts. Re-running the whole test suite
+          # here would only add a second chance for slow-runner flakes to
+          # block a release the merge gate already validated.
           publish: >-
-            bun run ready &&
+            bun run build &&
             bun run release:publish -- --ci &&
             bun x changeset tag &&
             git push --follow-tags
