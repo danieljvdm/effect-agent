@@ -86,7 +86,6 @@ import {
   QuoteId,
   ScriptedModel,
   type ScriptedTurnInput,
-  TravelGuidance,
   TravelGuidanceLayer,
   TravelPlan,
   TravelPlannerPhase2,
@@ -120,7 +119,7 @@ import {
   type StartLiveTravelChatRequest,
   type StartOperationalRunRequest,
 } from "./operational-contracts";
-import { OpenAiTravelPlannerAgent } from "./openai-profile";
+import { OpenAiRealTravelPlannerAgent, RealTravelHoldToolkit } from "./openai-profile";
 
 const guidedSteering = "Change the departure date to 2026-09-21.";
 const guidedFollowUp = "Prefer a quiet room away from the lift.";
@@ -288,6 +287,15 @@ const DemoTravelToolkitLayer = TravelPlannerPhase2Toolkit.toLayer({
     Effect.flatMap(ItineraryHoldGateway, (gateway) => gateway.hold(request)),
 });
 
+/**
+ * The real research agent's only application handler: web search executes
+ * provider-side, so its Tool needs no Layer here.
+ */
+const RealTravelToolkitLayer = RealTravelHoldToolkit.toLayer({
+  hold_itinerary: (request) =>
+    Effect.flatMap(ItineraryHoldGateway, (gateway) => gateway.hold(request)),
+});
+
 const DemoHoldGatewayLayer = Layer.effect(
   ItineraryHoldGateway,
   Effect.gen(function* () {
@@ -363,64 +371,16 @@ const ControlledCatalogLayers = Layer.mergeAll(
 );
 
 /**
- * Live OpenAI chooses the Tool batch, so these handlers cannot wait for a
- * predeclared scripted set. Staggered fixture latency still makes genuine
- * parallel completion order observable without coupling handler liveness.
- */
-const LiveFlightCatalogLayer = Layer.succeed(
-  FlightCatalog,
-  FlightCatalog.of({
-    search: () => Effect.sleep("6 seconds").pipe(Effect.as(controlledFlight)),
-  }),
-);
-const LiveLodgingCatalogLayer = Layer.succeed(
-  LodgingCatalog,
-  LodgingCatalog.of({
-    search: () => Effect.sleep("4500 millis").pipe(Effect.as(controlledLodging)),
-  }),
-);
-const LiveActivityCatalogLayer = Layer.succeed(
-  ActivityCatalog,
-  ActivityCatalog.of({
-    search: () => Effect.sleep("3 seconds").pipe(Effect.as(controlledActivities)),
-  }),
-);
-const LiveCatalogLayers = Layer.mergeAll(
-  LiveFlightCatalogLayer,
-  LiveLodgingCatalogLayer,
-  LiveActivityCatalogLayer,
-);
-
-/**
  * The tool-defect scenario proves a dying Tool handler cannot strand the
  * browser: every search handler dies as a defect, so only the producer
  * boundary's full-Cause handling can terminalize the client stream.
  */
 const defectiveSearch = Effect.die(new Error("The demo supplier catalog crashed while searching."));
+
 const DefectiveCatalogLayers = Layer.mergeAll(
   Layer.succeed(FlightCatalog, FlightCatalog.of({ search: () => defectiveSearch })),
   Layer.succeed(LodgingCatalog, LodgingCatalog.of({ search: () => defectiveSearch })),
   Layer.succeed(ActivityCatalog, ActivityCatalog.of({ search: () => defectiveSearch })),
-);
-
-const LiveTravelGuidanceLayer = Layer.succeed(
-  TravelGuidance,
-  TravelGuidance.of({
-    instructions: (input) =>
-      Effect.succeed(
-        [
-          "You are an OpenAI-powered travel agent coordinating repeatable demo suppliers.",
-          `The traveler asked: ${input.request}`,
-          "The fixed demo inventory is SFO to LHR. Be explicit that supplier results are fixtures and no real reservation is created.",
-          "For planning or revising this trip, call search_flights, search_lodging, and search_activities exactly once in one parallel Tool batch during this Run.",
-          "After that batch, never call a search Tool again in the same Run. If a queued steering or follow-up message arrives, revise the final itinerary from the Tool results already in the current history.",
-          "Only call hold_itinerary when the traveler explicitly asks for a temporary hold. The runtime will independently require human approval before its handler starts.",
-          "Use Tool results verbatim. Apply steering or follow-up messages that arrive at safe Turn boundaries.",
-          'Return only this JSON shape, with no omitted or additional keys: {"itineraries":[{"title":"string","route":"string","dates":"string","flight":"string","lodging":"string","activities":["string"],"estimatedTotalCents":1,"currency":"USD","quoteId":"string","assumptions":["string"],"unresolvedConstraints":["string"],"nextAction":"review"}]}.',
-          'The dates field is one human-readable string, for example "22–26 September 2026"; it is never an object. estimatedTotalCents is a positive integer. Do not wrap the JSON in Markdown.',
-        ].join("\n"),
-      ),
-  }),
 );
 
 const nowUtc = Clock.currentTimeMillis.pipe(
@@ -992,9 +952,12 @@ const InteractiveRuntimeLive = Layer.effect(
             TravelGuidanceLayer,
           ).pipe(Layer.provide(controlsLayer));
           const liveRuntimeLayer = Layer.mergeAll(
-            commonRuntimeLayers,
-            LiveCatalogLayers,
-            LiveTravelGuidanceLayer,
+            RealTravelToolkitLayer,
+            DemoHoldGatewayLayer,
+            makeIdLayer(conversationId, runId),
+            approvalResolver,
+            ApprovalAuditMemoryLive,
+            StructuralRedactorLive,
           ).pipe(Layer.provide(controlsLayer));
 
           const runPrelude =
@@ -1187,7 +1150,7 @@ const InteractiveRuntimeLive = Layer.effect(
                 budgetCents: phase1Trip.budgetCents,
                 currency: phase1Trip.currency,
               });
-              yield* AgentRuntime.stream(OpenAiTravelPlannerAgent, input, runOptions).pipe(
+              yield* AgentRuntime.stream(OpenAiRealTravelPlannerAgent, input, runOptions).pipe(
                 Stream.runForEach(inspectRunEvent),
                 Effect.provide(liveRuntimeLayer),
                 Effect.provideService(OpenAiClient.OpenAiClient, liveClient),
