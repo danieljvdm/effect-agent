@@ -21,6 +21,10 @@ inputs:
     description: "Map the model verdict onto APPROVE/REQUEST_CHANGES instead of always COMMENT."
     required: false
     default: "false"
+  fan-out:
+    description: "Fan the review out to bounded per-unit subagent reviewers (S1 attached delegation)."
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -42,3 +46,4 @@ runs:
         --model "${{ inputs.model }}"
         ${{ inputs.post == 'true' && '--post' || '' }}
         ${{ inputs.apply-verdict == 'true' && '--apply-verdict' || '' }}
+        ${{ inputs.fan-out == 'true' && '--fan-out' || '' }}
