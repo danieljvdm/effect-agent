@@ -59,10 +59,7 @@ export const drainDelegationUntil = async (
   predicate: () => Promise<boolean>,
   options?: { readonly rounds?: number },
 ): Promise<void> => {
-  // Bounded, but sized for loaded CI runners: cross-Object recovery under
-  // armed eviction failpoints can need far more alarm rounds there than on
-  // a local machine (observed: 600 rounds converge locally, time out in CI).
-  const rounds = options?.rounds ?? 1800;
+  const rounds = options?.rounds ?? 600;
   let lastDeliveryError: unknown;
   for (let round = 0; round < rounds; round++) {
     if (await predicate()) return;
