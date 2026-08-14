@@ -34,3 +34,5 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # Dogfood the subagent fan-out variant (S1 attached delegation).
+          fan-out: "true"

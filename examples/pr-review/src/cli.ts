@@ -2,9 +2,16 @@ import { OpenAiClient } from "@effect/ai-openai";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Layer, Option, Schema } from "effect";
 import { BudgetExceeded, IdGenerator } from "effect-agent";
+import { SubagentReservationsMemoryLive } from "effect-agent";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import { makeOpenAiFanOutReviewer } from "./fan-out-profiles.ts";
+import {
+  FanOutCoordinatorToolkitLayer,
+  fanOutHandlersLayer,
+  FileReviewToolkitLayer,
+} from "./fan-out-review-agent.ts";
 import {
   GitHubReviewTarget,
   gitHubPullRequestSourceLayer,
@@ -13,7 +20,7 @@ import {
 import { DEFAULT_REVIEW_MODEL, makeOpenAiReviewer } from "./profiles.ts";
 import { ReviewPublicationPlan } from "./render.ts";
 import { ReviewToolkitLayer } from "./review-agent.ts";
-import { executeReview } from "./run-review.ts";
+import { executeReview, fanOutReviewBudgetLimits, type ReviewRunOutcome } from "./run-review.ts";
 
 // ---------------------------------------------------------------------------
 // The GitHub Action entrypoint: resolve which pull request to review (flags
@@ -56,6 +63,11 @@ const postFlag = Flag.boolean("post").pipe(
 const applyVerdictFlag = Flag.boolean("apply-verdict").pipe(
   Flag.withDescription(
     "Map the model verdict onto APPROVE/REQUEST_CHANGES instead of always COMMENT.",
+  ),
+);
+const fanOutFlag = Flag.boolean("fan-out").pipe(
+  Flag.withDescription(
+    "Fan the review out to bounded per-unit subagent reviewers (S1 attached delegation) instead of one flat reviewer.",
   ),
 );
 
@@ -105,6 +117,7 @@ const command = CliCommand.make(
     model: modelFlag,
     post: postFlag,
     applyVerdict: applyVerdictFlag,
+    fanOut: fanOutFlag,
   },
   (flags) =>
     Effect.gen(function* () {
@@ -123,23 +136,50 @@ const command = CliCommand.make(
       }).pipe(Layer.provide(FetchHttpClient.layer));
 
       yield* Console.log(
-        `Reviewing ${repository}#${number} with ${flags.model} (${flags.post ? "posting" : "dry run"})...`,
+        `Reviewing ${repository}#${number} with ${flags.model} (${flags.post ? "posting" : "dry run"}${flags.fanOut ? ", fan-out" : ""})...`,
       );
 
-      const outcome = yield* executeReview(makeOpenAiReviewer(flags.model), {
-        post: flags.post,
-        applyVerdict: flags.applyVerdict,
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(
-            ReviewToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
-            publisherLayer,
-            openAiLayer,
-            IdGenerator.layer,
+      const runOptions = { post: flags.post, applyVerdict: flags.applyVerdict };
+      let outcome: ReviewRunOutcome;
+      if (flags.fanOut) {
+        const { parent, child } = makeOpenAiFanOutReviewer(flags.model);
+        // The delegation handler Layer captures the child's complete runtime
+        // needs at construction: its toolkit over the same source, the OpenAI
+        // client, identifiers, and the in-memory delegation reservations.
+        const childSupportLayer = Layer.mergeAll(
+          FileReviewToolkitLayer,
+          SubagentReservationsMemoryLive,
+          IdGenerator.layer,
+          openAiLayer,
+        ).pipe(Layer.provideMerge(sourceLayer));
+        outcome = yield* executeReview(parent, {
+          ...runOptions,
+          limits: fanOutReviewBudgetLimits,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              FanOutCoordinatorToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
+              fanOutHandlersLayer(child).pipe(Layer.provide(childSupportLayer)),
+              publisherLayer,
+              openAiLayer,
+              IdGenerator.layer,
+            ),
           ),
-        ),
-        Effect.scoped,
-      );
+          Effect.scoped,
+        );
+      } else {
+        outcome = yield* executeReview(makeOpenAiReviewer(flags.model), runOptions).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              ReviewToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
+              publisherLayer,
+              openAiLayer,
+              IdGenerator.layer,
+            ),
+          ),
+          Effect.scoped,
+        );
+      }
 
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
