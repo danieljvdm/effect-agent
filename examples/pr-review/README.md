@@ -104,6 +104,7 @@ steps:
     with:
       openai-api-key: ${{ secrets.OPENAI_API_KEY }}
       github-token: ${{ secrets.GITHUB_TOKEN }}
+      fan-out: "true" # optional: subagent fan-out variant (default flat reviewer)
 ```
 
 The repository workflow skips silently when the `OPENAI_API_KEY` secret is
