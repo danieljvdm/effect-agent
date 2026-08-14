@@ -19,5 +19,9 @@
     "@effect-agent/storage-sqlite": "0.0.0",
     "@effect-agent/testing": "0.0.0"
   },
-  "changesets": ["initial-live-test-release", "pin-internal-dependency-versions"]
+  "changesets": [
+    "initial-live-test-release",
+    "kommunikasie-cloudflare-runtime",
+    "pin-internal-dependency-versions"
+  ]
 }
