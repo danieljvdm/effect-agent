@@ -1,20 +1,53 @@
 {
   "files": [],
   "references": [
-    { "path": "./packages/core" },
-    { "path": "./packages/engine" },
-    { "path": "./packages/capabilities" },
-    { "path": "./packages/sandbox" },
-    { "path": "./packages/sandbox-local" },
-    { "path": "./packages/session" },
-    { "path": "./packages/storage-memory" },
-    { "path": "./packages/storage-sqlite" },
-    { "path": "./packages/storage-cloudflare" },
-    { "path": "./packages/platform-cloudflare" },
-    { "path": "./packages/testing" },
-    { "path": "./examples/demo" },
-    { "path": "./examples/pr-review" },
-    { "path": "./examples/providers" },
-    { "path": "./examples/repo-ops" }
+    {
+      "path": "./packages/effect-agent"
+    },
+    {
+      "path": "./packages/core"
+    },
+    {
+      "path": "./packages/engine"
+    },
+    {
+      "path": "./packages/capabilities"
+    },
+    {
+      "path": "./packages/sandbox"
+    },
+    {
+      "path": "./packages/sandbox-local"
+    },
+    {
+      "path": "./packages/session"
+    },
+    {
+      "path": "./packages/storage-memory"
+    },
+    {
+      "path": "./packages/storage-sqlite"
+    },
+    {
+      "path": "./packages/storage-cloudflare"
+    },
+    {
+      "path": "./packages/platform-cloudflare"
+    },
+    {
+      "path": "./packages/testing"
+    },
+    {
+      "path": "./examples/demo"
+    },
+    {
+      "path": "./examples/pr-review"
+    },
+    {
+      "path": "./examples/providers"
+    },
+    {
+      "path": "./examples/repo-ops"
+    }
   ]
 }

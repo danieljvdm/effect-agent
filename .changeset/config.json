@@ -1,8 +1,15 @@
 {
   "$schema": "https://unpkg.com/@changesets/config@3.1.4/schema.json",
-  "changelog": ["@changesets/changelog-github", { "repo": "danieljvdm/effect-agent" }],
+  "changelog": [
+    "@changesets/changelog-github",
+    {
+      "repo": "danieljvdm/effect-agent"
+    }
+  ],
   "commit": false,
-  "fixed": [],
+  "fixed": [
+    ["effect-agent", "@effect-agent/core", "@effect-agent/engine", "@effect-agent/capabilities"]
+  ],
   "linked": [],
   "access": "public",
   "baseBranch": "main",

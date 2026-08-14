@@ -76,12 +76,10 @@
       "name": "@effect-agent/example-pr-review",
       "version": "0.0.0",
       "dependencies": {
-        "@effect-agent/capabilities": "workspace:*",
-        "@effect-agent/core": "workspace:*",
-        "@effect-agent/engine": "workspace:*",
         "@effect/ai-openai": "catalog:",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
+        "effect-agent": "workspace:*",
       },
       "devDependencies": {
         "@effect/vitest": "catalog:",
@@ -149,6 +147,20 @@
       "name": "@effect-agent/core",
       "version": "0.0.1-beta.3",
       "dependencies": {
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "packages/effect-agent": {
+      "name": "effect-agent",
+      "version": "0.0.1-beta.3",
+      "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -1566,6 +1578,8 @@
     "ee-first": ["ee-first@1.1.1", "", {}, "sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow=="],
 
     "effect": ["effect@4.0.0-beta.102", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.9.0", "find-my-way-ts": "^0.1.6", "ini": "^7.0.0", "kubernetes-types": "^1.30.0", "msgpackr": "^2.0.4", "multipasta": "^0.2.8", "toml": "^4.1.2", "uuid": "^14.0.1", "yaml": "^2.9.0" } }, "sha512-z8Y+Q76Hh/kjLFZrXu8tGn6e+tDsg45R+UHhxd190pXxD53OGwf/G/zDxXTkse4HJ5mobNZfitLfUCp4fMvu6w=="],
+
+    "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.398", "", {}, "sha512-AsvhAxopJGh6museTDMIjn6JpDYOfgu4RLlygomt87MUwBUqTfd/1EiPtx10/LZE8xpTvkP2E9Gafq7lkLtodQ=="],
 

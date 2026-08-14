@@ -1,8 +1,9 @@
-import { Context, Effect, Layer, Option, Redacted, Ref, Schema } from "effect";
+import type { Redacted } from "effect";
+import { Context, Effect, Layer, Option, Ref, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { ChangedFile } from "./diff.ts";
-import { ReviewPublicationPlan } from "./render.ts";
+import type { ReviewPublicationPlan } from "./render.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,

@@ -1,5 +1,5 @@
 {
-  "name": "effect-agent",
+  "name": "effect-agent-monorepo",
   "version": "0.0.0",
   "private": true,
   "workspaces": [

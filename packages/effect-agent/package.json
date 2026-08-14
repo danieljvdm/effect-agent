@@ -1,0 +1,37 @@
+{
+  "name": "effect-agent",
+  "version": "0.0.1-beta.3",
+  "description": "Effect-native autonomous agents: the complete pure authoring and running surface of the Effect Agent framework in one package — schema-first definitions, the bounded interpreter, and operational capabilities.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/effect-agent"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/capabilities": "workspace:*",
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}
