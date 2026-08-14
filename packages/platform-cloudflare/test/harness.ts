@@ -17,6 +17,9 @@ import {
 } from "../src/index.ts";
 import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
+  ArrayBindingsConversationObject,
+  DynamicBindingsConversationObject,
+  EffectBindingsConversationObject,
   LimitedConversationObject,
   SubagentConversationObject,
   TestConversationObject,
@@ -30,6 +33,9 @@ declare global {
       LIMITED: DurableObjectNamespace<LimitedConversationObject>;
       TINYDB: DurableObjectNamespace<TinyDatabaseConversationObject>;
       SUBAGENTS: DurableObjectNamespace<SubagentConversationObject>;
+      DYNAMIC_BINDINGS: DurableObjectNamespace<DynamicBindingsConversationObject>;
+      ARRAY_BINDINGS: DurableObjectNamespace<ArrayBindingsConversationObject>;
+      EFFECT_BINDINGS: DurableObjectNamespace<EffectBindingsConversationObject>;
     }
   }
 }
@@ -41,7 +47,14 @@ declare global {
  * abort — the DC twin of the Node crash harness's helpers.
  */
 
-export type TestNamespace = "CONVERSATIONS" | "LIMITED" | "TINYDB" | "SUBAGENTS";
+export type TestNamespace =
+  | "CONVERSATIONS"
+  | "LIMITED"
+  | "TINYDB"
+  | "SUBAGENTS"
+  | "DYNAMIC_BINDINGS"
+  | "ARRAY_BINDINGS"
+  | "EFFECT_BINDINGS";
 
 /** A FRESH stub for the named Conversation (never cache stubs across aborts). */
 export const stubFor = (conversation: string, namespace: TestNamespace = "CONVERSATIONS") => {

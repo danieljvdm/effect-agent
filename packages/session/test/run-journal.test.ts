@@ -14,7 +14,9 @@ import {
   ObservationOffset,
   ProducerId,
   RecordEnvelope,
+  RunJournalError,
   modelResponseRecordId,
+  promptFromCanonicalRecords,
   projectRunJournal,
   runIdForSubmission,
   subagentJoinBatchId,
@@ -38,6 +40,7 @@ import {
 
 const SUBMISSION_ID = Schema.decodeSync(SubmissionId)("submission-journal");
 const RUN_ID = runIdForSubmission(SUBMISSION_ID);
+const LATER_RUN_ID = runIdForSubmission(Schema.decodeSync(SubmissionId)("submission-later"));
 const CALL_ONE = Schema.decodeSync(ToolCallId)("call-1");
 const CALL_TWO = Schema.decodeSync(ToolCallId)("call-2");
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-journal");
@@ -87,10 +90,10 @@ const toolTurnAppended: ReadonlyArray<Prompt.Message> = [
   }),
 ];
 
-const turnInput = (appended: ReadonlyArray<Prompt.Message>, turn = 1) => ({
-  runId: RUN_ID,
+const turnInput = (appended: ReadonlyArray<Prompt.Message>, turn = 1, runId = RUN_ID) => ({
+  runId,
   turn,
-  turnId: turnIdForRun(RUN_ID, turn),
+  turnId: turnIdForRun(runId, turn),
   appended,
   producerId: PRODUCER_ID,
   deploymentId: DEPLOYMENT_ID,
@@ -174,6 +177,217 @@ describe("run journal batch split (plan §2.1)", () => {
         expect(splitProjection.committedTurns).toBe(singleProjection.committedTurns);
         expect(splitProjection.prompt).toEqual(singleProjection.prompt);
         expect(splitProjection.historyBefore).toEqual(singleProjection.historyBefore);
+      }),
+    );
+
+    it.effect("does not replay an incomplete assistant Tool turn into a later Run", () =>
+      Effect.gen(function* () {
+        const failedResponse = yield* turnResponseBatch(turnInput(toolTurnAppended));
+        const records = envelopesOf([failedResponse]);
+
+        const recovering = yield* projectRunJournal(records, RUN_ID);
+        expect(
+          recovering.prompt.content.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "tool-call" && part.id === CALL_ONE),
+          ),
+        ).toBe(true);
+
+        const later = yield* projectRunJournal(records, LATER_RUN_ID);
+        expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(
+          later.prompt.content.some(
+            (message) =>
+              message.role === "assistant" &&
+              message.content.some((part) => part.type === "tool-call"),
+          ),
+        ).toBe(false);
+        expect(later.historyBefore).toEqual(later.prompt);
+      }),
+    );
+
+    it.effect("does not reserve the real run:none identity for canonical prompt projection", () =>
+      Effect.gen(function* () {
+        const runNone = runIdForSubmission(Schema.decodeSync(SubmissionId)("none"));
+        expect(runNone).toBe("run:none");
+        const response = yield* turnResponseBatch(turnInput(toolTurnAppended, 1, runNone));
+        const records = envelopesOf([response]);
+
+        const recovering = yield* projectRunJournal(records, runNone);
+        expect(recovering.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+        ]);
+
+        const canonicalPrompt = yield* promptFromCanonicalRecords(records);
+        expect(canonicalPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+      }),
+    );
+
+    it.effect("reports an invalid persisted Tool Call ID as a journal error", () =>
+      Effect.gen(function* () {
+        const malformedTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("assistant", {
+            content: [
+              Prompt.makePart("tool-call", {
+                id: "",
+                name: "book_flight",
+                params: { destination: "Kyoto" },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+        const response = yield* turnResponseBatch(turnInput(malformedTurn));
+
+        const error = yield* promptFromCanonicalRecords(envelopesOf([response])).pipe(Effect.flip);
+        expect(error).toBeInstanceOf(RunJournalError);
+        expect(error.message).toBe("Failed to decode a declared Tool Call ID");
+      }),
+    );
+
+    it.effect(
+      "omits a partially settled application Tool batch from later Runs without classifying provider calls",
+      () =>
+        Effect.gen(function* () {
+          const response = yield* turnResponseBatch(turnInput(toolTurnAppended));
+          const results = yield* turnResultsBatch(turnInput(toolTurnAppended));
+          const firstSettled = results.records[0]!;
+          const partialRecords = [response.records[0]!, firstSettled].map((record, index) =>
+            envelopeAt(index + 1, record),
+          );
+
+          const recovering = yield* projectRunJournal(partialRecords, RUN_ID);
+          const recoveringAssistant = recovering.prompt.content.find(
+            (message) => message.role === "assistant",
+          );
+          expect(
+            recoveringAssistant?.role === "assistant"
+              ? recoveringAssistant.content
+                  .filter((part) => part.type === "tool-call")
+                  .map((part) => part.id)
+              : [],
+          ).toEqual([CALL_ONE, CALL_TWO]);
+          const recoveringTool = recovering.prompt.content.find(
+            (message) => message.role === "tool",
+          );
+          expect(
+            recoveringTool?.role === "tool"
+              ? recoveringTool.content
+                  .filter((part) => part.type === "tool-result")
+                  .map((part) => part.id)
+              : [],
+          ).toEqual([CALL_ONE]);
+
+          const later = yield* projectRunJournal(partialRecords, LATER_RUN_ID);
+          expect(later.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+          expect(later.prompt.content.some((message) => message.role === "assistant")).toBe(false);
+          expect(later.prompt.content.some((message) => message.role === "tool")).toBe(false);
+
+          const providerTurn: ReadonlyArray<Prompt.Message> = [
+            Prompt.makeMessage("system", { content: "Answer as JSON." }),
+            Prompt.makeMessage("user", {
+              content: [Prompt.makePart("text", { text: '{"question":"search?"}' })],
+            }),
+            Prompt.makeMessage("assistant", {
+              content: [
+                Prompt.makePart("tool-call", {
+                  id: "provider-call",
+                  name: "web_search",
+                  params: { query: "Kyoto" },
+                  providerExecuted: true,
+                }),
+              ],
+            }),
+          ];
+          const providerResponse = yield* turnResponseBatch(turnInput(providerTurn));
+          const providerLater = yield* projectRunJournal(
+            envelopesOf([providerResponse]),
+            LATER_RUN_ID,
+          );
+          expect(providerLater.prompt.content.map((message) => message.role)).toEqual([
+            "system",
+            "user",
+            "assistant",
+          ]);
+        }),
+    );
+
+    it.effect("matches Tool settlements by Run, Turn, and call identity", () =>
+      Effect.gen(function* () {
+        const firstTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("system", { content: "Answer as JSON." }),
+          Prompt.makeMessage("user", {
+            content: [Prompt.makePart("text", { text: '{"question":"book twice?"}' })],
+          }),
+          Prompt.makeMessage("assistant", {
+            content: [
+              Prompt.makePart("tool-call", {
+                id: CALL_ONE,
+                name: "book_flight",
+                params: { destination: "Kyoto" },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+          Prompt.makeMessage("tool", {
+            content: [
+              Prompt.makePart("tool-result", {
+                id: CALL_ONE,
+                name: "book_flight",
+                result: { bookingRef: "flight-42" },
+                isFailure: false,
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+        const secondTurn: ReadonlyArray<Prompt.Message> = [
+          Prompt.makeMessage("assistant", {
+            content: [
+              Prompt.makePart("tool-call", {
+                id: CALL_ONE,
+                name: "book_flight",
+                params: { destination: "Osaka" },
+                providerExecuted: false,
+              }),
+            ],
+          }),
+        ];
+
+        const firstResponse = yield* turnResponseBatch(turnInput(firstTurn));
+        const firstResults = yield* turnResultsBatch(turnInput(firstTurn));
+        const secondResponse = yield* turnResponseBatch(turnInput(secondTurn, 2));
+        const records = envelopesOf([firstResponse, firstResults, secondResponse]);
+
+        const recovering = yield* projectRunJournal(records, RUN_ID);
+        expect(recovering.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+          "assistant",
+        ]);
+
+        const later = yield* projectRunJournal(records, LATER_RUN_ID);
+        expect(later.prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+        ]);
+        expect(later.prompt.content.filter((message) => message.role === "assistant")).toHaveLength(
+          1,
+        );
+        expect(
+          later.prompt.content.flatMap((message) =>
+            message.role === "tool"
+              ? message.content.filter((part) => part.type === "tool-result").map((part) => part.id)
+              : [],
+          ),
+        ).toEqual([CALL_ONE]);
       }),
     );
 

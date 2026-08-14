@@ -1,3 +1,5 @@
+import { Effect } from "effect";
+
 import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
 import {
   CONVERSATIONS_BINDING,
@@ -37,6 +39,36 @@ const baseOptions: ConversationObjectOptions = {
   runtimeFailpoint: runtimeEvictionFailpoint,
 };
 
+interface BindingSourceProbe {
+  readonly evaluationCount: number;
+  readonly incarnation: number;
+  readonly conversationId: string;
+  readonly producerId: string;
+  readonly rawEnvHasNamespace: boolean;
+}
+
+let nextBindingSourceIncarnation = 0;
+const bindingSourceProbes = new WeakMap<DurableObjectState, BindingSourceProbe>();
+
+const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
+  ctx,
+  env,
+  conversationId,
+  producerId,
+}) =>
+  Effect.sync(() => {
+    const previous = bindingSourceProbes.get(ctx);
+    const probe = {
+      evaluationCount: (previous?.evaluationCount ?? 0) + 1,
+      incarnation: previous?.incarnation ?? ++nextBindingSourceIncarnation,
+      conversationId,
+      producerId,
+      rawEnvHasNamespace: typeof env === "object" && env !== null && "DYNAMIC_BINDINGS" in env,
+    };
+    bindingSourceProbes.set(ctx, probe);
+    return [];
+  });
+
 /** The eviction/alarm/chaos suites' Conversation Object. */
 export class TestConversationObject extends makeConversationObjectClass(baseOptions) {}
 
@@ -54,6 +86,41 @@ export class TinyDatabaseConversationObject extends makeConversationObjectClass(
   namespaceBinding: "TINYDB",
   maxDatabaseBytes: 1,
 }) {}
+
+/** Callback-form Binding capture probe. */
+export class DynamicBindingsConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "DYNAMIC_BINDINGS",
+  bindings: dynamicBindings,
+}) {
+  async bindingSourceProbe(): Promise<BindingSourceProbe & { readonly stateMatches: boolean }> {
+    const probe = bindingSourceProbes.get(this.ctx);
+    if (probe === undefined) throw new Error("Binding source was not evaluated");
+    return { ...probe, stateMatches: bindingSourceProbes.has(this.ctx) };
+  }
+}
+
+/** Legacy array-form Binding capture probe. */
+export class ArrayBindingsConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "ARRAY_BINDINGS",
+  bindings: [],
+}) {
+  async bindingSourceKind(): Promise<string> {
+    return "array";
+  }
+}
+
+/** Legacy Effect-form Binding capture probe. */
+export class EffectBindingsConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "EFFECT_BINDINGS",
+  bindings: Effect.succeed([]),
+}) {
+  async bindingSourceKind(): Promise<string> {
+    return "effect";
+  }
+}
 
 /**
  * The WP4 cross-Object subagent matrix's Conversation Object: parent and child Conversations

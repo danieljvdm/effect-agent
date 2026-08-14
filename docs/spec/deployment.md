@@ -247,6 +247,13 @@ Cloudflare platform APIs are wrapped as Effect services and supplied through Lay
 Conversation runtime requires storage, scheduling/alarm, clock, attachment, and observability
 services rather than importing bindings in the engine.
 
+`CloudflareDurableRuntimeOptions.bindings` accepts a resolved array, a closed Effect, or a
+per-incarnation callback. The callback runs after the Object's Conversation and producer
+identities are derived and receives the live `DurableObjectState`, raw Worker environment,
+`conversationId`, and `producerId`. This is the host boundary for capturing environment-backed
+resources such as Worker service bindings; database clients and other request-scoped resources
+remain outside the cached Durable Object runtime.
+
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.

@@ -38,6 +38,18 @@ export default defineConfig({
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
                 SUBAGENTS: { className: "SubagentConversationObject", useSQLite: true },
+                DYNAMIC_BINDINGS: {
+                  className: "DynamicBindingsConversationObject",
+                  useSQLite: true,
+                },
+                ARRAY_BINDINGS: {
+                  className: "ArrayBindingsConversationObject",
+                  useSQLite: true,
+                },
+                EFFECT_BINDINGS: {
+                  className: "EffectBindingsConversationObject",
+                  useSQLite: true,
+                },
               },
             },
           }),
