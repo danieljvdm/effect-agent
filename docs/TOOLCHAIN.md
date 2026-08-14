@@ -128,10 +128,18 @@ source-first export map (a private-development convention, see below) for the
 built `dist` entries during the publish, restores it afterwards, and skips
 versions already on the registry, so a partial publish can be re-run.
 
+Releases currently ship on the **beta channel**: the repository is in
+changesets pre mode (`.changeset/pre.json`, tag `beta`), so `changeset
+version` produces `X.Y.Z-beta.N` versions, and the release script publishes
+any prerelease under the matching npm dist-tag (never `latest`). Consumers
+install with `bun add @effect-agent/core@beta` (or an exact version).
+Leaving the channel for a stable release is `bun x changeset pre exit`
+followed by the normal sequence.
+
 The release sequence from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
 
-1. `bun run changeset` — describe the change (one exists for 0.0.1);
+1. `bun run changeset` — describe the change (one exists for `0.0.1-beta.0`);
 2. `bun run changeset:version && bun install` — cut versions and changelogs;
 3. `bun run ready`;
 4. `bun run release:publish -- --dry-run`, then without `--dry-run`
