@@ -1,5 +1,5 @@
 import { Context, Effect, Option, Schema, Stream } from "effect";
-import { ConversationId, SubmissionId } from "@effect-agent/core";
+import { ConversationId } from "@effect-agent/core";
 
 import {
   BatchId,
@@ -57,6 +57,25 @@ export class ConversationExportRequest extends Schema.Class<ConversationExportRe
   conversationId: ConversationId,
 }) {}
 
+export class ConversationTailRequest extends Schema.Class<ConversationTailRequest>(
+  "@effect-agent/session/ConversationTailRequest",
+)({
+  conversationId: ConversationId,
+}) {}
+
+/**
+ * The committed tail of one Conversation Log. A resuming producer composes its next
+ * FencedAppendRequest from this value instead of exporting the whole log.
+ */
+export class ConversationTail extends Schema.Class<ConversationTail>(
+  "@effect-agent/session/ConversationTail",
+)({
+  conversationId: ConversationId,
+  tailSequence: CanonicalSequence,
+  tailDigest: Digest,
+  producerEpoch: ProducerEpoch,
+}) {}
+
 export class ConversationExport extends Schema.Class<ConversationExport>(
   "@effect-agent/session/ConversationExport",
 )({
@@ -109,10 +128,17 @@ export class ConversationNotMaterialized extends Schema.TaggedErrorClass<Convers
   { conversationId: ConversationId },
 ) {}
 
+/**
+ * A canonical append that cannot commit: `batch-digest` replays a batch ID with different
+ * content, `record-identity` reuses a canonical record ID, and `tail` declares a stale expected
+ * tail. Tail conflicts carry the actual committed tail as a diagnostic resume hint.
+ */
 export class AppendConflict extends Schema.TaggedErrorClass<AppendConflict>()("AppendConflict", {
   conversationId: ConversationId,
   batchId: BatchId,
-  reason: Schema.Literals(["batch-digest", "tail"]),
+  reason: Schema.Literals(["batch-digest", "record-identity", "tail"]),
+  actualTailSequence: Schema.optionalKey(CanonicalSequence),
+  actualTailDigest: Schema.optionalKey(Digest),
 }) {}
 
 export class FenceRejected extends Schema.TaggedErrorClass<FenceRejected>()("FenceRejected", {
@@ -163,6 +189,9 @@ export class ConversationStore extends Context.Service<
     readonly export: (
       request: ConversationExportRequest,
     ) => Effect.Effect<ConversationExport, ConversationStoreError | ConversationNotMaterialized>;
+    readonly inspectTail: (
+      request: ConversationTailRequest,
+    ) => Effect.Effect<ConversationTail, ConversationStoreError | ConversationNotMaterialized>;
     readonly saveCheckpoint: (
       request: SaveCheckpointRequest,
     ) => Effect.Effect<
@@ -177,28 +206,3 @@ export class ConversationStore extends Context.Service<
     >;
   }
 >()("@effect-agent/session/ConversationStore") {}
-
-export class SubmissionStoreCapabilities extends Schema.Class<SubmissionStoreCapabilities>(
-  "@effect-agent/session/SubmissionStoreCapabilities",
-)({
-  /** Phase 3 persists Conversations but does not durably accept work. */
-  durability: Schema.Literal("non-durable"),
-  acceptsDurableWork: Schema.Literal(false),
-}) {}
-
-export class SubmissionStatus extends Schema.Class<SubmissionStatus>(
-  "@effect-agent/session/SubmissionStatus",
-)({
-  submissionId: SubmissionId,
-  state: Schema.Literal("not-persisted"),
-}) {}
-
-export class SubmissionStore extends Context.Service<
-  SubmissionStore,
-  {
-    readonly capabilities: Effect.Effect<SubmissionStoreCapabilities>;
-    readonly inspect: (
-      submissionId: SubmissionId,
-    ) => Effect.Effect<Option.Option<SubmissionStatus>, ConversationStoreError>;
-  }
->()("@effect-agent/session/SubmissionStore") {}

@@ -4,3 +4,4 @@ export * from "./events.ts";
 export * from "./identifiers.ts";
 export * from "./policy.ts";
 export * from "./services.ts";
+export * from "./subagent.ts";

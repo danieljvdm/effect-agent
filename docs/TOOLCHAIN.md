@@ -6,25 +6,35 @@ This repository is a Vite+ monorepo derived from
 [`danieljvdm/vp-effect-cf-template`](https://github.com/danieljvdm/vp-effect-cf-template).
 Its hosted and Cloudflare applications are intentionally absent. A local browser test bench lives
 under `examples/demo`; `examples/providers` is a compile-only native provider-binding leaf.
-Cloudflare support will be introduced later as library packages, not as an application scaffold.
+Cloudflare support exists as library packages (`storage-cloudflare`, `platform-cloudflare` since
+Phase 6), not as an application scaffold: there is no `wrangler` dependency or configuration,
+and the Worker entries in the repository are test fixtures.
 
 ## Source-of-truth versions
 
 The root `package.json` is the only version source for shared dependencies.
 
-| Tool                    |        Current pin | Purpose                                                                           |
-| ----------------------- | -----------------: | --------------------------------------------------------------------------------- |
-| Bun                     |           `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
-| Vite+                   |            `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
-| Vitest                  |           `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
-| Effect                  |   `4.0.0-beta.102` | Runtime, Schema, services, and Effect AI                                          |
-| `@effect/platform-node` |   `4.0.0-beta.102` | Node services used by repository scripts                                          |
-| `@effect/vitest`        |   `4.0.0-beta.102` | Effect-aware test execution and scoped Layer composition                          |
-| Node.js                 | `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
-| TypeScript              |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
-| `@effect/tsgo`          |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
-| `@types/node`           |           `26.1.2` | Node types for repository scripts                                                 |
-| `tsx`                   |           `4.23.1` | TypeScript script runner                                                          |
+| Tool                              |        Current pin | Purpose                                                                           |
+| --------------------------------- | -----------------: | --------------------------------------------------------------------------------- |
+| Bun                               |           `1.3.14` | Package manager, workspace resolver, and lockfile                                 |
+| Vite+                             |            `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
+| Vitest                            |           `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
+| Effect                            |   `4.0.0-beta.102` | Runtime, Schema, services, and Effect AI                                          |
+| `@effect/platform-node`           |   `4.0.0-beta.102` | Node services used by repository scripts                                          |
+| `@effect/platform-browser`        |   `4.0.0-beta.102` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
+| `@effect/sql-sqlite-do`           |   `4.0.0-beta.102` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
+| `@effect/vitest`                  |   `4.0.0-beta.102` | Effect-aware test execution and scoped Layer composition                          |
+| `@cloudflare/vitest-pool-workers` |           `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
+| `@cloudflare/workers-types`       |     `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
+| Miniflare                         |     `4.20260730.0` | Programmatic workerd runtimes for the restart-persistence test lane               |
+| esbuild                           |           `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
+| Node.js                           | `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
+| TypeScript                        |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
+| `@effect/tsgo`                    |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
+| `@types/node`                     |           `26.1.2` | Node types for repository scripts                                                 |
+| `tsx`                             |           `4.23.1` | TypeScript script runner                                                          |
+| VitePress                         |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
+| Vue                               |           `3.5.40` | VitePress theme components                                                        |
 
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
@@ -33,7 +43,10 @@ Root overrides align the contributor skills CLI with the repository's Effect and
 `@effect/platform-node` versions. Framework packages, repository scripts, and contributor tooling
 therefore install one Effect runtime. The Vitest override matches the version bundled by Vite+ so
 `@effect/vitest` and `vite-plus/test` resolve the same runner, assertion, and test context state.
-Vitest remains supplied by Vite+ rather than becoming a separate workspace dependency.
+Vitest remains supplied by Vite+ rather than becoming a separate workspace dependency, with one
+probed exception: `vp test` cannot drive the Cloudflare Workers pool runner, so
+`storage-cloudflare` and `platform-cloudflare` declare the catalog-pinned `vitest` directly and
+run `vitest run` as their `test` scripts (P6 WP0 probe, decision D-P6-7).
 
 ## Current workspace
 
@@ -41,15 +54,18 @@ Only packages required by the active roadmap phase exist:
 
 ```text
 packages/
-  core/            Domain and Agent authoring package
-  engine/          Ephemeral Agent interpreter
-  capabilities/    Operational policy and capability adapters
-  sandbox/         Platform-neutral sandbox contracts
-  sandbox-local/   Node-local sandbox adapter
-  session/         Canonical Conversation records, reducers, and store ports
-  storage-memory/  Scoped deterministic reference storage adapter
-  storage-sqlite/  Node SQLite persistence adapter
-  testing/         Scripted model, fixtures, and conformance test kit
+  core/                 Domain and Agent authoring package
+  engine/               Ephemeral Agent interpreter
+  capabilities/         Operational policy and capability adapters
+  sandbox/              Platform-neutral sandbox contracts
+  sandbox-local/        Node-local sandbox adapter
+  session/              Canonical Conversation records, reducers, and store ports
+  storage-memory/       Scoped deterministic reference storage adapter
+  storage-sqlite/       Node SQLite persistence adapter
+  storage-cloudflare/   Durable Object SQLite persistence adapter and routed port protocol
+  platform-node/        Class DN Node/SQLite Layer assembly and durable host
+  platform-cloudflare/  Class DC Cloudflare Layer assembly (Conversation Objects, alarms)
+  testing/              Scripted model, fixtures, and conformance test kit
 examples/
   demo/             Leaf TanStack Start browser bench
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
@@ -81,8 +97,11 @@ Run commands from the repository root:
 | `bun install`                                 | Install dependencies and run repository setup                                  |
 | `bun run check`                               | Run Vite+ format/lint/type checks, package type checks, and script type checks |
 | `bun run test`                                | Run package and example test tasks in dependency order                         |
-| `bun run build`                               | Build library packages and runnable examples                                   |
-| `bun --filter @effect-agent/example-demo dev` | Run the Phase 1 browser bench on port 4173                                     |
+| `bun run build`                               | Build packages, runnable examples, and the VitePress documentation site        |
+| `bun run docs:dev`                            | Run the local VitePress documentation server                                   |
+| `bun run docs:build`                          | Build and validate the Markdown documentation site                             |
+| `bun run docs:preview`                        | Preview the built documentation site                                           |
+| `bun --filter @effect-agent/example-demo dev` | Run the chat-first demo and Phase 2 simulator on port 4173                     |
 | `bun run ready`                               | Run check, test, and build; this is the local and CI handoff gate              |
 | `bun run format:write`                        | Apply repository formatting                                                    |
 | `bun run sync:effect`                         | Align the local Effect source checkout with the catalog pin                    |
@@ -92,7 +111,9 @@ Run commands from the repository root:
 Vite+ owns shared configuration in `vite.config.ts`. Package-specific scripts remain in each
 package manifest so Vite+ can order and cache them from the actual workspace dependency graph.
 The root declares the catalog's Vite+ core alias as `vite` as well as `vite-plus`; Bun needs that
-direct peer provider to avoid resolving a second Vite implementation.
+direct peer provider for the Vite+ toolchain. VitePress intentionally resolves the official Vite
+implementation as its nested dependency; the repository therefore does not use a global `vite`
+override. The documentation build is part of the root `build` and `ready` gates.
 
 ## Post-install setup
 

@@ -9,13 +9,16 @@
     "test": "vp test --passWithNoTests"
   },
   "dependencies": {
+    "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
     "@effect-agent/testing": "workspace:*",
     "@effect/ai-anthropic": "catalog:",
     "@effect/ai-openai": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

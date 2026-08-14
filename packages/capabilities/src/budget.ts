@@ -56,9 +56,15 @@ export class BudgetExceeded extends Schema.TaggedErrorClass<BudgetExceeded>()("B
 export interface UsageBudgetNode {
   readonly level: BudgetLevel;
   readonly id: string;
+  /**
+   * Register or re-attach one child node. Re-attaching an already-registered
+   * `level:id` with identical limits returns a handle to the shared
+   * registration; different limits fail with BudgetNodeConflict rather than
+   * being silently ignored.
+   */
   readonly child: (
     config: UsageBudgetNodeConfig,
-  ) => Effect.Effect<UsageBudgetNode, InvalidBudgetHierarchy>;
+  ) => Effect.Effect<UsageBudgetNode, InvalidBudgetHierarchy | BudgetNodeConflict>;
   readonly consume: (delta: UsageDelta) => Effect.Effect<UsageTotals, BudgetExceeded>;
   readonly snapshot: Effect.Effect<UsageTotals>;
   /**
@@ -76,6 +82,15 @@ export class InvalidBudgetHierarchy extends Schema.TaggedErrorClass<InvalidBudge
   {
     parentLevel: BudgetLevel,
     childLevel: BudgetLevel,
+  },
+) {}
+
+/** A child `level:id` is already registered with different limits; neither set may win silently. */
+export class BudgetNodeConflict extends Schema.TaggedErrorClass<BudgetNodeConflict>()(
+  "BudgetNodeConflict",
+  {
+    scopeLevel: BudgetLevel,
+    scopeId: Schema.NonEmptyString,
   },
 ) {}
 
@@ -155,6 +170,13 @@ const exceeded = (node: LedgerNode, totals: UsageTotals): BudgetExceeded | undef
   }
   return undefined;
 };
+
+const sameLimits = (a: UsageBudgetLimits, b: UsageBudgetLimits): boolean =>
+  a.maxInputTokens === b.maxInputTokens &&
+  a.maxOutputTokens === b.maxOutputTokens &&
+  a.maxToolCalls === b.maxToolCalls &&
+  a.maxCostMicrousd === b.maxCostMicrousd &&
+  a.maxDurationMillis === b.maxDurationMillis;
 
 const durationExceeded = (node: LedgerNode, now: number): BudgetExceeded => {
   const limitValue = node.config.limits.maxDurationMillis ?? 0;
@@ -240,18 +262,34 @@ const makeNode = (
         }
         const childKey = `${key}/${childConfig.level}:${childConfig.id}`;
         const now = yield* Clock.currentTimeMillis;
-        yield* Ref.update(ledger, (state) => {
-          if (state.nodes.has(childKey)) {
-            return state;
-          }
-          return {
-            nodes: new Map(state.nodes).set(childKey, {
-              config: childConfig,
-              startedAt: now,
-              totals: emptyTotals(),
-            }),
-          };
-        });
+        const conflict = yield* Ref.modify(
+          ledger,
+          (state): readonly [BudgetNodeConflict | undefined, BudgetLedger] => {
+            const existing = state.nodes.get(childKey);
+            if (existing !== undefined) {
+              return sameLimits(existing.config.limits, childConfig.limits)
+                ? [undefined, state]
+                : [
+                    BudgetNodeConflict.make({
+                      scopeLevel: childConfig.level,
+                      scopeId: childConfig.id,
+                    }),
+                    state,
+                  ];
+            }
+            return [
+              undefined,
+              {
+                nodes: new Map(state.nodes).set(childKey, {
+                  config: childConfig,
+                  startedAt: now,
+                  totals: emptyTotals(),
+                }),
+              },
+            ];
+          },
+        );
+        if (conflict !== undefined) return yield* conflict;
         return makeNode(ledger, childKey, hierarchy, childConfig);
       }),
     consume: (delta) =>

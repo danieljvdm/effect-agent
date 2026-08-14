@@ -19,7 +19,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | Skills                     |     Deferred |                          No |                              No |
 | MCP client                 |           P2 |                          No |                              No |
 | Sandbox                    |           P2 |                          No |     For untrusted commands/code |
-| Subagents                  |     Deferred |                          No |                              No |
+| Subagents                  |     Proposed |                          No |                              No |
 | Persistent agent state     |           P4 |                          No |                              No |
 | Durable steps              |           P5 |                          No |                              No |
 
@@ -121,6 +121,14 @@ An approval request includes:
 An approval provider may be interactive, policy-based, remote, or test-controlled.
 Approval decisions are canonical audit events. A timeout is a denial unless the
 configured policy explicitly says otherwise.
+
+On the durable runtime (Phase 5), an unresolved approval is a **durable suspension**: the
+canonical approval request record is the safe boundary (durability §8), ownership ends, and the
+lane consumes no worker permit — durable suspension itself has no implicit timeout. Suspension
+is operational ledger state with no canonical "suspended" record (ADR-0012); the resuming
+Attempt appends the canonical decision before honoring it and replays the declared Tool batch
+without re-invoking the model. An immediate policy decision commits atomically with its request.
+Denial remains terminal per the P2 policy default.
 
 ## 6. Compaction
 
@@ -226,12 +234,14 @@ security sandbox.
 
 ## 10. Subagents
 
-Subagents are deferred. The initial product proves one Agent before designing
-delegation APIs or detailed child budgets.
+The proposed Subagent capability is specified in [subagents.md](./subagents.md). It uses declared
+Effect AI Tools for attached delegation: the parent retains conversational control, each invocation
+owns a fresh child Conversation, child context and authority are explicit, and the parent joins one
+Schema-validated result.
 
-The only reserved rule is that any future attached child uses structured concurrency
-and belongs to its parent Scope. The full context, authority, budget, persistence,
-and join design will be written when subagents become active work.
+An ephemeral child uses structured concurrency and belongs to its parent Scope. A durable child is
+a separate accepted Submission with immutable parent linkage and independent Attempt ownership.
+The proposed design is not implemented until ADR-0010 and its roadmap slices are accepted.
 
 ## 11. Persistent agent state
 
@@ -278,7 +288,7 @@ default and are excluded from ordinary span attributes.
 - **CAP-009**: Effect AI MCP integration preserves remote identity and does not imply exactly-once
   execution.
 - **CAP-010**: Unisolated process execution is never labeled a security sandbox.
-- **CAP-011**: Subagents are outside the initial roadmap; future attached children must use
-  structured concurrency.
+- **CAP-011**: When enabled, Subagents use only declared delegation Tools; attached ephemeral
+  children use structured concurrency and belong to the parent Scope.
 - **CAP-012**: Persistent agent state is distinct from conversation history.
 - **CAP-013**: Capability telemetry is bounded and redacted by default.

@@ -2,6 +2,7 @@ import { Clock, DateTime, Effect, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 import type {
   PreparedRunContext,
+  RunApprovalDecision,
   RunApprovalHook,
   RunApprovalRequest,
   RunBudgetHook,
@@ -112,7 +113,9 @@ export const toRunApprovalHook = (
         actionSummary: metadata.actionSummary,
         resourceTargets: metadata.resourceTargets,
         risk: validatedPolicy.risk,
-        expiresAt: DateTime.toUtc(DateTime.makeUnsafe(now + validatedPolicy.expiresInMillis)),
+        expiresAt: DateTime.formatIso(
+          DateTime.toUtc(DateTime.makeUnsafe(now + validatedPolicy.expiresInMillis)),
+        ),
         denial: validatedPolicy.denial,
       }).pipe(
         Effect.mapError((error) =>
@@ -137,6 +140,44 @@ export const toRunApprovalHook = (
         reason: decision.reason,
       };
     }),
+});
+
+/**
+ * Durable variant of `toRunApprovalHook` (P5 plan §2.6): the durable coordinator consults this
+ * delegate for policy-AUTO decisions only, after its recorded-decision lookup misses. It reuses
+ * the exact P2 approval stack — `ApprovalRequestDraft` policy metadata, structural redaction,
+ * audit sink, expiry/timeout policy — but differs in two durable-specific ways:
+ *
+ * 1. The capability services (`ApprovalResolver | ApprovalAudit | Redactor`) are captured up
+ *    front, so the returned hook is `RunApprovalHook<never, never>` — the shape the
+ *    coordinator's `DurableApprovalResolver` reference accepts without leaking capability
+ *    requirements into the durable runtime Layer.
+ * 2. It FAILS CLOSED into `unresolved`: any adapter, audit, redaction, or resolver failure
+ *    defers the decision to the durable suspension + `resolveApproval` path instead of
+ *    approving, denying, or crashing the Attempt on a transient policy fault. Explicit
+ *    policy denials (including the P2 timeout-denial for `denial: "terminal"`) still deny.
+ */
+export const toDurableRunApprovalHook = Effect.fn("toDurableRunApprovalHook")(function* (
+  policy: RunApprovalAdapterPolicy,
+): Effect.fn.Return<
+  RunApprovalHook<never, never>,
+  never,
+  ApprovalResolver | ApprovalAudit | Redactor
+> {
+  const services = yield* Effect.context<ApprovalResolver | ApprovalAudit | Redactor>();
+  const hook = toRunApprovalHook(policy);
+  return {
+    request: (request) =>
+      hook.request(request).pipe(
+        Effect.provideContext(services),
+        Effect.catch((error) =>
+          Effect.succeed<RunApprovalDecision>({
+            _tag: "unresolved",
+            reason: `Approval delegation failed (${error._tag}); the decision defers to the durable resolveApproval path`,
+          }),
+        ),
+      ),
+  };
 });
 
 /** Adapt one hierarchical budget node to the engine's usage accounting seam. */

@@ -37,6 +37,25 @@ The cumulative Travel Planner remains deployment class `E`. Its Phase 2 Agent ad
 steering, missing-preference follow-up, budget rejection, source-preserving compaction, and denied
 or unresolved holds without starting the mutation handler.
 
+## Interactive evidence
+
+`examples/demo` defaults to a calm general-chat surface. The detailed Phase 2 evidence is one click
+away under its Simulator tab rather than occupying the primary experience. Chat and Simulator use
+separate typed state and cancellation paths.
+
+The Simulator assembles the same public Phase 2 contracts into a deterministic browser control
+room. One guided Run makes the safe seams visible: three Tool handlers start concurrently and
+finish in reverse order; their results commit in declaration order; steering and follow-up
+commands transition through queued, claimed, and delivered states at different seams; model-only
+context is compacted without replacing official Conversation history; and bounded MCP discovery
+and an explicitly unisolated local command emit operational evidence.
+
+Separate scenario presets exercise approval and each budget dimension. Approval decisions travel
+over a unary RPC independent of the Run stream, and the UI projects the hold handler's start count
+so denial can demonstrate a strict no-start boundary. The demo remains offline and deterministic.
+`examples/demo/src/demo/operational-runtime.server.test.ts` covers the cumulative guided path and a
+denied hold through the real server-scoped runtime.
+
 ## Non-claims
 
 - Conversation state and approval audit state are process-local and disposable.

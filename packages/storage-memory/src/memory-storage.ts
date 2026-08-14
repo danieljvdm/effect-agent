@@ -15,6 +15,8 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
+  ConversationTail,
+  ConversationTailRequest,
   digestCanonicalBatch,
   EMPTY_TAIL_DIGEST,
   FenceRejected,
@@ -24,8 +26,6 @@ import {
   ProducerEpoch,
   RecordId,
   SaveCheckpointRequest,
-  SubmissionStore,
-  SubmissionStoreCapabilities,
   type BatchId,
   type Digest,
 } from "@effect-agent/session";
@@ -94,7 +94,7 @@ const validate = Effect.fn("MemoryConversationStore.validate")(
   ): Effect.Effect<A, ConversationStoreError> =>
     Schema.encodeUnknownEffect(schema)(value).pipe(
       Effect.flatMap(Schema.decodeUnknownEffect(schema)),
-      Effect.mapError(() => storeError(operation, `Invalid ${operation} request`)),
+      Effect.mapError((error) => storeError(operation, `Invalid ${operation} request`, error)),
     ),
 );
 
@@ -304,6 +304,8 @@ const makeConversationStore = Effect.gen(function* () {
                   conversationId: request.conversationId,
                   batchId: request.batch.batchId,
                   reason: "tail",
+                  actualTailSequence: conversation.tailSequence,
+                  actualTailDigest: conversation.tailDigest,
                 }),
               },
               current,
@@ -337,7 +339,7 @@ const makeConversationStore = Effect.gen(function* () {
                   error: AppendConflict.make({
                     conversationId: request.conversationId,
                     batchId: request.batch.batchId,
-                    reason: "batch-digest",
+                    reason: "record-identity",
                   }),
                 },
                 current,
@@ -472,6 +474,23 @@ const makeConversationStore = Effect.gen(function* () {
     }),
   );
 
+  const inspectTail: ConversationStore["Service"]["inspectTail"] = Effect.fn(
+    "MemoryConversationStore.inspectTail",
+  )((unvalidated) =>
+    Effect.gen(function* () {
+      const request = yield* validate(ConversationTailRequest, "inspectTail", unvalidated);
+      const conversation = yield* Ref.get(state).pipe(
+        Effect.flatMap((current) => findConversation(current, request.conversationId)),
+      );
+      return ConversationTail.make({
+        conversationId: request.conversationId,
+        tailSequence: conversation.tailSequence,
+        tailDigest: conversation.tailDigest,
+        producerEpoch: conversation.producerEpoch,
+      });
+    }),
+  );
+
   const saveCheckpoint: ConversationStore["Service"]["saveCheckpoint"] = Effect.fn(
     "MemoryConversationStore.saveCheckpoint",
   )((unvalidated) =>
@@ -581,6 +600,7 @@ const makeConversationStore = Effect.gen(function* () {
     read,
     observe,
     export: exportConversation,
+    inspectTail,
     saveCheckpoint,
     loadCheckpoint,
   });
@@ -588,20 +608,8 @@ const makeConversationStore = Effect.gen(function* () {
 
 export const MemoryConversationStoreLive = Layer.effect(ConversationStore, makeConversationStore);
 
-export const MemorySubmissionStoreLive = Layer.succeed(
-  SubmissionStore,
-  SubmissionStore.of({
-    capabilities: Effect.succeed(
-      SubmissionStoreCapabilities.make({
-        durability: "non-durable",
-        acceptsDurableWork: false,
-      }),
-    ),
-    inspect: Effect.fn("MemorySubmissionStore.inspect")(() => Effect.succeed(Option.none())),
-  }),
-);
-
-export const MemoryStorageLive = Layer.merge(
-  MemoryConversationStoreLive,
-  MemorySubmissionStoreLive,
-);
+/**
+ * In-memory canonical Conversation persistence. Durable accepted work is served by the separate
+ * SubmissionLedger port; this Layer deliberately provides only the ConversationStore.
+ */
+export const MemoryStorageLive = MemoryConversationStoreLive;

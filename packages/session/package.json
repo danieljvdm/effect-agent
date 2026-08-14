@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
     "effect": "catalog:"
   },
   "devDependencies": {

@@ -22,13 +22,15 @@ const canonicalJson = (value: Schema.Json): string => {
   if (isJsonArray(value)) {
     return `[${value.map(canonicalJson).join(",")}]`;
   }
-  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+  const entries = Object.entries(value).sort(([left], [right]) =>
+    left < right ? -1 : left > right ? 1 : 0,
+  );
   return `{${entries
     .map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`)
     .join(",")}}`;
 };
 
-/** Digest a JSON value using a stable object-key ordering. */
+/** Digest a JSON value using a stable, locale-independent object-key ordering (UTF-16 code units, RFC 8785 style). */
 export const digestJson = Effect.fn("Session.digestJson")(function* (
   value: Schema.Json,
 ): Effect.fn.Return<Digest, DigestError, Crypto.Crypto> {

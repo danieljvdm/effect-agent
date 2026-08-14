@@ -16,14 +16,55 @@ review expectations.
 The roadmap remains normative and **Draft**. This table records implementation evidence; it does
 not change the specified scope of later phases.
 
-| Phase  | Implementation status                                       |
-| ------ | ----------------------------------------------------------- |
-| P0     | Complete — [design proof](PHASE-0-EVIDENCE.md)              |
-| P1     | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md) |
-| P2     | Complete — [operational local runtime](PHASE-2-EVIDENCE.md) |
-| P3     | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)  |
-| **P4** | **Next — durable Node/SQLite runtime**                      |
-| P5–P7  | Planned — not yet implemented                               |
+| Phase | Implementation status                                                                                                                       |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| P0    | Complete — [design proof](PHASE-0-EVIDENCE.md)                                                                                              |
+| P1    | Complete — [ephemeral `E` interpreter](PHASE-1-EVIDENCE.md)                                                                                 |
+| P2    | Complete — [operational local runtime](PHASE-2-EVIDENCE.md)                                                                                 |
+| P3    | Complete — [persistent Conversations](PHASE-3-EVIDENCE.md)                                                                                  |
+| S1    | Implemented — [attached ephemeral Subagents](S1-EVIDENCE.md), as the roadmap-assigned proposed default; ADR-0010 remains Proposed           |
+| P4    | Complete — [durable Node/SQLite runtime](PHASE-4-EVIDENCE.md)                                                                               |
+| P5    | Complete — [durable Tools and joined input](PHASE-5-EVIDENCE.md)                                                                            |
+| S2    | Implemented — [durable attached Subagents](S2-EVIDENCE.md) (`DN` only), as the roadmap-assigned proposed default; ADR-0010 remains Proposed |
+| P6    | Complete — [Cloudflare Durable Object runtime](PHASE-6-EVIDENCE.md), including the deferred S2 `DC` Subagent conformance row                |
+| P7    | Complete — [internal hardening](PHASE-7-EVIDENCE.md)                                                                                        |
+
+Every numbered phase in this table is now **Complete**, and both Subagent slices are implemented
+as roadmap-assigned proposed defaults — the roadmap table is fully discharged. That is an
+engineering statement, not a governance one: the specifications stay Draft, ADR-0010 remains
+Proposed, ADRs 0011–0015 (D-029…D-033) are accepted by default awaiting owner review, and the
+[deferred open-source-preparation items](#deferred-until-open-source-preparation) remain the
+next chapter. The [Phase 7 evidence](PHASE-7-EVIDENCE.md) states the final claim and its
+non-claims precisely.
+
+## Proposed Subagent insertion
+
+[ADR-0010](adr/0010-declared-attached-subagents.md) and
+[the Subagent specification](spec/subagents.md) recommend two bounded slices. This proposal does
+not change phase status until the owner accepts it. Both slices are now implemented as
+roadmap-assigned proposed defaults — S1 ([S1 evidence](S1-EVIDENCE.md)) and S2
+([S2 evidence](S2-EVIDENCE.md), `DN` only; shape-level defaults in
+[ADR-0013](adr/0013-durable-subagent-establishment.md)); ADR-0010 itself remains Proposed.
+
+- **S1 — attached ephemeral Subagents:** implement immediately after Phase 3, before or alongside
+  early Phase 4 work. Deliver declared Effect AI delegation Tools with an explicit engine service,
+  preallocated child identity, explicit child Bindings, fresh child Conversations, context/result
+  projection, per-action authorization, non-transitive approval, a real reservation service,
+  normative nested-delegation rejection, bounded child concurrency, scoped interruption, and
+  deterministic parent result order. Implemented — see the [S1 evidence](S1-EVIDENCE.md) for the
+  delivered surface, its deviations, and its explicit non-claims.
+- **S2 — durable attached Subagents:** implement after Phase 5 establishes admission, Tool
+  uncertainty, durable Steps, approval suspension, and joined-input recovery, but before Phase 6
+  claims platform equivalence. It additionally depends on the Phase 4 ownership-token/epoch and
+  ledger ports; the Phase 3 Conversation Store is insufficient. Deliver child Receipts, immutable
+  Parent Links, requested/started/joined records, parent-owned budget reservations, authoritative
+  admission lookup, worker-permit-free parent waiting/wakeup, independent fencing, Settlement
+  joins, durable abort propagation, and the full crash matrix. Implemented for `DN` — see the
+  [S2 evidence](S2-EVIDENCE.md) for the delivered surface and its explicit non-claims; the `DC`
+  Subagent conformance row is P6 scope.
+
+Handoff, detached children, child Conversation reuse, peer messaging, and depth above one remain
+later proposals.
 
 ## Progressive reference application
 
@@ -272,7 +313,9 @@ replacing it with an unrelated demo.
 - retention/deletion policy beyond indefinite internal retention;
 - public package names, license, governance, npm publication, and final `dist` export maps;
 - PostgreSQL and generic multi-node scheduling;
-- durable Subagents and detailed child budgets;
+- Subagent extensions beyond the implemented S1/S2 slices: nested delegation above depth one,
+  handoff, detached children, child Conversation reuse, and peer messaging (spec §17 later
+  extensions);
 - channel integrations, UI, hosted control plane, and marketplace.
 
 ## Workstreams for a large AI project

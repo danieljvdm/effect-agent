@@ -1,9 +1,9 @@
 # Target API examples
 
-Status: Phase 1 ephemeral authoring and runtime subset implemented; Phase 2 and later examples remain design targets
+Status: Phase 1 and Phase 2 ephemeral APIs implemented; Phase 3 and later examples remain design targets
 
-The implemented Phase 1 API uses the pinned Effect v4 package directly; later-phase sections remain
-design targets. The Effect AI APIs shown here must not be wrapped.
+The implemented Phase 1 and Phase 2 APIs use the pinned Effect v4 package directly; later-phase
+sections remain design targets. The Effect AI APIs shown here must not be wrapped.
 
 These focused API examples complement the
 [progressive Travel Planner Reference Application](travel-planner.md), which carries one
@@ -203,8 +203,8 @@ const RefundPayment = Tool.make("refund_payment", {
 });
 ```
 
-The runtime persists Effect AI approval requests in durable mode and does not start
-the handler until approval is resolved.
+The Phase 2 ephemeral runtime does not start the handler until approval is resolved. A future
+durable runtime must additionally persist the approval request and decision.
 
 ## 6. Bounded parallel Tools
 
@@ -295,19 +295,23 @@ The external idempotency key remains necessary.
 ## 9. Node and Cloudflare use the same Agent
 
 ```ts
-const NodeRuntimeLive = Layer.mergeAll(
-  NodePlatform.layer,
-  SqliteConversationStore.layer,
-  SqliteSubmissionStore.layer,
-);
+// Implemented (Phase 4): one option bag assembles the SQLite Conversation Store,
+// SQLite Submission Ledger, Node wake scheduler, and durable coordinator.
+const NodeRuntimeLive = NodeDurableRuntime.layer({
+  filename: "planner.sqlite",
+  deploymentId: "dev-host",
+  producerId: "worker-1",
+});
 
+// Planned (Phase 6): the same services assembled from Cloudflare Layers.
 const CloudflareRuntimeLive = Layer.mergeAll(
   CloudflarePlatform.layer,
   DurableObjectConversationStore.layer,
-  DurableObjectSubmissionStore.layer,
+  DurableObjectSubmissionLedger.layer,
   DurableObjectAlarm.layer,
 );
 ```
 
-These Layers implement the same framework services. The Agent Definition and engine
-do not import Node or Cloudflare types.
+These Layers implement the same framework services (`ConversationStore`,
+`SubmissionLedger`, `WakeScheduler`). The Agent Definition and engine do not import
+Node or Cloudflare types.

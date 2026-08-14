@@ -107,8 +107,10 @@ const canonicalJson = (value: Schema.Json): Schema.Json => {
   }
   if (isJsonArray(value)) return value.map(canonicalJson);
   const output: Record<string, Schema.Json> = {};
+  // Keys sort by UTF-16 code units (RFC 8785 style): locale-aware collation varies
+  // across hosts and treats canonically equivalent distinct key sequences as equal.
   for (const [key, item] of Object.entries(value).sort(([left], [right]) =>
-    left.localeCompare(right),
+    left < right ? -1 : left > right ? 1 : 0,
   )) {
     output[key] = canonicalJson(item);
   }
@@ -201,12 +203,12 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
   }
   const discoverySchemas = server.tools
     .map((tool) => ({ name: tool.name, inputSchema: tool.inputSchema }))
-    .sort((left, right) => left.name.localeCompare(right.name));
+    .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   const toolkitSchemas = yield* Effect.try({
     try: () =>
       Object.values(server.toolkit.tools)
         .map((tool) => ({ name: tool.name, inputSchema: Tool.getJsonSchema(tool) }))
-        .sort((left, right) => left.name.localeCompare(right.name)),
+        .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)),
     catch: (cause) =>
       McpToolkitMismatch.make({
         cause,

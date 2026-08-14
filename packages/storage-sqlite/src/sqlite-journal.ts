@@ -1,6 +1,6 @@
 import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
-import { Effect, Schema } from "effect";
+import { Effect, Exit, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
 import {
@@ -11,6 +11,7 @@ import {
   SqliteStorageCorruptionError,
   SqliteStorageError,
   SqliteStorageFailpointError,
+  SqliteWriteContention,
   type SqliteStorageFailpointLocation,
 } from "./errors.ts";
 import { CurrentSqliteStorageVersion, sqliteMigrations } from "./migrations.ts";
@@ -128,9 +129,14 @@ type AppendError =
   | SqliteFenceRejected
   | SqliteStorageCorruptionError
   | SqliteStorageError
-  | SqliteStorageFailpointError;
+  | SqliteStorageFailpointError
+  | SqliteWriteContention;
 
-type CheckpointError = SqliteCheckpointConflict | SqliteStorageCorruptionError | SqliteStorageError;
+type CheckpointError =
+  | SqliteCheckpointConflict
+  | SqliteStorageCorruptionError
+  | SqliteStorageError
+  | SqliteWriteContention;
 type SqliteJournalFailpoint = (
   location: SqliteStorageFailpointLocation,
 ) => Effect.Effect<void, SqliteStorageFailpointError>;
@@ -146,7 +152,8 @@ const storageError =
       message: error.message,
     });
 
-const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
+/** Decode raw SQLite rows against a Schema, reporting failures as typed corruption. */
+export const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
@@ -164,7 +171,8 @@ const decodeRows = Effect.fn("SqliteJournal.decodeRows")(
     ),
 );
 
-const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
+/** Decode exactly one raw SQLite row against a Schema, reporting failures as typed corruption. */
+export const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
   <A, I>(
     schema: Schema.Codec<ReadonlyArray<A>, ReadonlyArray<I>>,
     table: string,
@@ -189,11 +197,14 @@ const decodeSingleRow = Effect.fn("SqliteJournal.decodeSingleRow")(
 const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(function* (
   sql: SqlClient.SqlClient,
   failpoint: SqliteJournalFailpoint = noFailpoint,
+  busyTimeoutMillis = 5_000,
 ) {
   yield* sql`PRAGMA foreign_keys = ON`.pipe(Effect.mapError(storageError("enable foreign keys")));
-  yield* sql`PRAGMA busy_timeout = 5000`.pipe(
-    Effect.mapError(storageError("configure busy timeout")),
-  );
+  // PRAGMA statements do not accept bound parameters; the value is a schema-validated
+  // non-negative integer, never caller-controlled text.
+  yield* sql
+    .unsafe(`PRAGMA busy_timeout = ${busyTimeoutMillis}`)
+    .pipe(Effect.mapError(storageError("configure busy timeout")));
   const journalModeRows = yield* sql<Record<string, unknown>>`PRAGMA journal_mode`.pipe(
     Effect.mapError(storageError("read journal mode")),
   );
@@ -221,12 +232,17 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     versionRows,
   );
 
-  if (version.user_version > CurrentSqliteStorageVersion) {
+  // D7: the storage version must match EXACTLY (or be 0 for a fresh file). Older
+  // private-development versions fail closed with reset guidance rather than being
+  // migrated, and newer versions fail closed rather than being decoded incorrectly.
+  if (version.user_version !== 0 && version.user_version !== CurrentSqliteStorageVersion) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: version.user_version,
       supportedVersion: CurrentSqliteStorageVersion,
       message:
-        "The SQLite file uses an unsupported private-development storage format. Reset it explicitly; automatic stored-data migrations are not provided.",
+        `The SQLite file uses private-development storage version ${version.user_version}; ` +
+        `this build supports exactly version ${CurrentSqliteStorageVersion}. ` +
+        "Reset the database file explicitly; automatic stored-data migrations are not provided during private development.",
     });
   }
 
@@ -276,7 +292,14 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
         'effect_agent_conversations',
         'effect_agent_canonical_batches',
         'effect_agent_canonical_records',
-        'effect_agent_checkpoints'
+        'effect_agent_checkpoints',
+        'effect_agent_submissions',
+        'effect_agent_submission_ownership',
+        'effect_agent_attempts',
+        'effect_agent_settlement_reservations',
+        'effect_agent_abort_intents',
+        'effect_agent_approval_decisions',
+        'effect_agent_unknown_resolutions'
       )
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
@@ -286,7 +309,7 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     "required_tables",
     requiredRows,
   );
-  if (required.length !== 4) {
+  if (required.length !== 11) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,
@@ -299,6 +322,60 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
 });
 
 const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint) => {
+  const classifyWriteFailure =
+    (operation: string) =>
+    (error: SqlError): SqliteStorageError | SqliteWriteContention =>
+      error.reason._tag === "LockTimeoutError"
+        ? SqliteWriteContention.make({
+            cause: error,
+            operation,
+            message: `Another producer holds the SQLite write lock; ${operation} is safe to retry.`,
+          })
+        : storageError(operation)(error);
+
+  /**
+   * Runs one journal write transaction under `BEGIN IMMEDIATE`. SQLite's deferred `BEGIN`
+   * would let a read-then-write transaction start as a reader and fail with
+   * SQLITE_BUSY_SNAPSHOT on upgrade, which `busy_timeout` never retries. Taking the write
+   * lock up front keeps cross-owner contention inside the bounded busy retry; a lock
+   * timeout is classified as the retryable SqliteWriteContention. A failed `BEGIN` leaves
+   * no transaction, so no rollback is attempted for it.
+   *
+   * Journal write transactions are always top level. Nesting one inside another would
+   * deadlock the single-connection client, so new journal operations must not wrap this
+   * helper inside another transaction.
+   */
+  const withWriteTransaction =
+    (operation: string) =>
+    <A, E>(
+      effect: Effect.Effect<A, E>,
+    ): Effect.Effect<A, E | SqliteStorageError | SqliteWriteContention> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const connection = yield* sql.reserve.pipe(
+              Effect.mapError(classifyWriteFailure(operation)),
+            );
+            yield* connection
+              .executeUnprepared("BEGIN IMMEDIATE", [], undefined)
+              .pipe(Effect.mapError(classifyWriteFailure(operation)));
+            const exit = yield* restore(
+              Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
+            ).pipe(Effect.exit);
+            if (Exit.isSuccess(exit)) {
+              yield* connection
+                .executeUnprepared("COMMIT", [], undefined)
+                .pipe(Effect.mapError(classifyWriteFailure(operation)));
+              return exit.value;
+            }
+            yield* Effect.orDie(connection.executeUnprepared("ROLLBACK", [], undefined));
+            return yield* exit;
+          }),
+        ).pipe(
+          Effect.withSpan("SqliteJournal.withWriteTransaction", { attributes: { operation } }),
+        ),
+      );
+
   const materialize = Effect.fn("SqliteJournal.materialize")(function* (
     conversationId: string,
     createdAt: string,
@@ -306,7 +383,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
     producerEpoch: ProducerEpoch,
   ): Effect.fn.Return<
     void,
-    SqliteFenceRejected | SqliteStorageCorruptionError | SqliteStorageError
+    SqliteFenceRejected | SqliteStorageCorruptionError | SqliteStorageError | SqliteWriteContention
   > {
     if (
       conversationId.length > MAX_IDENTIFIER_LENGTH ||
@@ -317,10 +394,9 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
         message: "Conversation identity or initial digest exceeds the SQLite storage bounds.",
       });
     }
-    yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const existingRows = yield* sql<Record<string, unknown>>`
+    yield* withWriteTransaction("materialize transaction")(
+      Effect.gen(function* () {
+        const existingRows = yield* sql<Record<string, unknown>>`
           SELECT
             conversation_id,
             created_at,
@@ -330,21 +406,21 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
           FROM effect_agent_conversations
           WHERE conversation_id = ${conversationId}
         `.pipe(Effect.mapError(storageError("read materialized conversation")));
-          const existing = yield* decodeRows(
-            Schema.Array(ConversationRow),
-            "effect_agent_conversations",
-            conversationId,
-            existingRows,
-          );
-          if (existing.length > 1) {
-            return yield* SqliteStorageCorruptionError.make({
-              table: "effect_agent_conversations",
-              rowKey: conversationId,
-              message: "A conversation primary key returned more than one row.",
-            });
-          }
-          if (existing.length === 0) {
-            yield* sql`
+        const existing = yield* decodeRows(
+          Schema.Array(ConversationRow),
+          "effect_agent_conversations",
+          conversationId,
+          existingRows,
+        );
+        if (existing.length > 1) {
+          return yield* SqliteStorageCorruptionError.make({
+            table: "effect_agent_conversations",
+            rowKey: conversationId,
+            message: "A conversation primary key returned more than one row.",
+          });
+        }
+        if (existing.length === 0) {
+          yield* sql`
             INSERT INTO effect_agent_conversations (
               conversation_id,
               created_at,
@@ -359,29 +435,24 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
               ${producerEpoch}
             )
           `.pipe(Effect.mapError(storageError("materialize conversation")));
-            return;
-          }
-          if (producerEpoch < existing[0].producer_epoch) {
-            return yield* SqliteFenceRejected.make({
-              producerEpoch,
-              actualEpoch: existing[0].producer_epoch,
-              message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
-            });
-          }
-          if (producerEpoch > existing[0].producer_epoch) {
-            yield* sql`
+          return;
+        }
+        if (producerEpoch < existing[0].producer_epoch) {
+          return yield* SqliteFenceRejected.make({
+            producerEpoch,
+            actualEpoch: existing[0].producer_epoch,
+            message: `Producer epoch ${producerEpoch} is stale; current epoch is ${existing[0].producer_epoch}.`,
+          });
+        }
+        if (producerEpoch > existing[0].producer_epoch) {
+          yield* sql`
             UPDATE effect_agent_conversations
             SET producer_epoch = ${producerEpoch}
             WHERE conversation_id = ${conversationId}
           `.pipe(Effect.mapError(storageError("advance materialization epoch")));
-          }
-        }),
-      )
-      .pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("materialize transaction")(error)),
-        ),
-      );
+        }
+      }),
+    );
   });
 
   const getConversation = Effect.fn("SqliteJournal.getConversation")(function* (
@@ -425,18 +496,17 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
         message: "Canonical identifiers or encoded JSON exceed the SQLite storage bounds.",
       });
     }
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const recordIds = request.records.map((record) => record.recordId);
-          if (new Set(recordIds).size !== recordIds.length) {
-            return yield* SqliteAppendConflict.make({
-              message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
-              reason: "batch-digest",
-            });
-          }
+    return yield* withWriteTransaction("append transaction")(
+      Effect.gen(function* () {
+        const recordIds = request.records.map((record) => record.recordId);
+        if (new Set(recordIds).size !== recordIds.length) {
+          return yield* SqliteAppendConflict.make({
+            message: `Batch ${request.batchId} contains duplicate canonical record IDs.`,
+            reason: "record-identity",
+          });
+        }
 
-          const conversationRows = yield* sql<Record<string, unknown>>`
+        const conversationRows = yield* sql<Record<string, unknown>>`
           SELECT
             conversation_id,
             created_at,
@@ -446,22 +516,22 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
           FROM effect_agent_conversations
           WHERE conversation_id = ${request.conversationId}
         `.pipe(Effect.mapError(storageError("read append tail")));
-          const conversation = yield* decodeSingleRow(
-            Schema.Array(ConversationRow),
-            "effect_agent_conversations",
-            request.conversationId,
-            conversationRows,
-          );
+        const conversation = yield* decodeSingleRow(
+          Schema.Array(ConversationRow),
+          "effect_agent_conversations",
+          request.conversationId,
+          conversationRows,
+        );
 
-          if (request.producerEpoch !== conversation.producer_epoch) {
-            return yield* SqliteFenceRejected.make({
-              producerEpoch: request.producerEpoch,
-              actualEpoch: conversation.producer_epoch,
-              message: `Producer epoch ${request.producerEpoch} is not the current epoch ${conversation.producer_epoch}.`,
-            });
-          }
+        if (request.producerEpoch !== conversation.producer_epoch) {
+          return yield* SqliteFenceRejected.make({
+            producerEpoch: request.producerEpoch,
+            actualEpoch: conversation.producer_epoch,
+            message: `Producer epoch ${request.producerEpoch} is not the current epoch ${conversation.producer_epoch}.`,
+          });
+        }
 
-          const batchRows = yield* sql<Record<string, unknown>>`
+        const batchRows = yield* sql<Record<string, unknown>>`
           SELECT
             conversation_id,
             batch_id,
@@ -474,55 +544,57 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
           WHERE conversation_id = ${request.conversationId}
             AND batch_id = ${request.batchId}
         `.pipe(Effect.mapError(storageError("read idempotent batch")));
-          const batches = yield* decodeRows(
-            Schema.Array(BatchRow),
-            "effect_agent_canonical_batches",
-            `${request.conversationId}/${request.batchId}`,
-            batchRows,
-          );
+        const batches = yield* decodeRows(
+          Schema.Array(BatchRow),
+          "effect_agent_canonical_batches",
+          `${request.conversationId}/${request.batchId}`,
+          batchRows,
+        );
 
-          if (batches.length > 1) {
-            return yield* SqliteStorageCorruptionError.make({
-              table: "effect_agent_canonical_batches",
-              rowKey: `${request.conversationId}/${request.batchId}`,
-              message: "A canonical batch primary key returned more than one row.",
-            });
-          }
-          if (batches.length === 1) {
-            const existing = batches[0];
-            if (existing.batch_digest !== request.batchDigest) {
-              return yield* SqliteAppendConflict.make({
-                message: `Batch ${request.batchId} already exists with different canonical content.`,
-                reason: "batch-digest",
-              });
-            }
-            return RawAppendResult.make({
-              firstSequence: existing.first_sequence,
-              lastSequence: existing.last_sequence,
-              replayed: true,
-              tailDigest: existing.tail_digest,
-            });
-          }
-
-          if (
-            request.expectedTailSequence !== conversation.tail_sequence ||
-            request.expectedTailDigest !== conversation.tail_digest
-          ) {
+        if (batches.length > 1) {
+          return yield* SqliteStorageCorruptionError.make({
+            table: "effect_agent_canonical_batches",
+            rowKey: `${request.conversationId}/${request.batchId}`,
+            message: "A canonical batch primary key returned more than one row.",
+          });
+        }
+        if (batches.length === 1) {
+          const existing = batches[0];
+          if (existing.batch_digest !== request.batchDigest) {
             return yield* SqliteAppendConflict.make({
-              message:
-                `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
-                `but found ${conversation.tail_sequence}/${conversation.tail_digest}.`,
-              reason: "tail",
+              message: `Batch ${request.batchId} already exists with different canonical content.`,
+              reason: "batch-digest",
             });
           }
-          if (conversation.tail_sequence + request.records.length > MAX_RECORDS_PER_CONVERSATION) {
-            return yield* SqliteStorageError.make({
-              operation: "append canonical batch",
-              message: `Conversation record limit ${MAX_RECORDS_PER_CONVERSATION} would be exceeded.`,
-            });
-          }
+          return RawAppendResult.make({
+            firstSequence: existing.first_sequence,
+            lastSequence: existing.last_sequence,
+            replayed: true,
+            tailDigest: existing.tail_digest,
+          });
+        }
 
-          const existingRecordRows = yield* sql<Record<string, unknown>>`
+        if (
+          request.expectedTailSequence !== conversation.tail_sequence ||
+          request.expectedTailDigest !== conversation.tail_digest
+        ) {
+          return yield* SqliteAppendConflict.make({
+            message:
+              `Expected tail ${request.expectedTailSequence}/${request.expectedTailDigest} ` +
+              `but found ${conversation.tail_sequence}/${conversation.tail_digest}.`,
+            reason: "tail",
+            actualTailSequence: conversation.tail_sequence,
+            actualTailDigest: conversation.tail_digest,
+          });
+        }
+        if (conversation.tail_sequence + request.records.length > MAX_RECORDS_PER_CONVERSATION) {
+          return yield* SqliteStorageError.make({
+            operation: "append canonical batch",
+            message: `Conversation record limit ${MAX_RECORDS_PER_CONVERSATION} would be exceeded.`,
+          });
+        }
+
+        const existingRecordRows = yield* sql<Record<string, unknown>>`
           SELECT
             conversation_id,
             sequence,
@@ -534,43 +606,43 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             AND record_id IN ${sql.in(recordIds)}
           ORDER BY sequence
         `.pipe(Effect.mapError(storageError("check canonical record identities")));
-          const existingRecords = yield* decodeRows(
-            Schema.Array(RecordRow),
-            "effect_agent_canonical_records",
-            `${request.conversationId}/record_ids`,
-            existingRecordRows,
-          );
-          if (existingRecords.length > 0) {
-            return yield* SqliteAppendConflict.make({
-              message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
-              reason: "batch-digest",
-            });
-          }
+        const existingRecords = yield* decodeRows(
+          Schema.Array(RecordRow),
+          "effect_agent_canonical_records",
+          `${request.conversationId}/record_ids`,
+          existingRecordRows,
+        );
+        if (existingRecords.length > 0) {
+          return yield* SqliteAppendConflict.make({
+            message: `Canonical record ID ${existingRecords[0].record_id} already exists.`,
+            reason: "record-identity",
+          });
+        }
 
-          const firstSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
-            conversation.tail_sequence + 1,
-          ).pipe(
-            Effect.mapError((error) =>
-              SqliteStorageError.make({
-                cause: error,
-                operation: "append canonical batch",
-                message: error.message,
-              }),
-            ),
-          );
-          const lastSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
-            firstSequence + request.records.length - 1,
-          ).pipe(
-            Effect.mapError((error) =>
-              SqliteStorageError.make({
-                cause: error,
-                operation: "append canonical batch",
-                message: error.message,
-              }),
-            ),
-          );
+        const firstSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
+          conversation.tail_sequence + 1,
+        ).pipe(
+          Effect.mapError((error) =>
+            SqliteStorageError.make({
+              cause: error,
+              operation: "append canonical batch",
+              message: error.message,
+            }),
+          ),
+        );
+        const lastSequence = yield* Schema.decodeUnknownEffect(CanonicalSequence)(
+          firstSequence + request.records.length - 1,
+        ).pipe(
+          Effect.mapError((error) =>
+            SqliteStorageError.make({
+              cause: error,
+              operation: "append canonical batch",
+              message: error.message,
+            }),
+          ),
+        );
 
-          yield* sql`
+        yield* sql`
           INSERT INTO effect_agent_canonical_batches (
             conversation_id,
             batch_id,
@@ -589,13 +661,13 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             ${request.batchJson}
           )
         `.pipe(Effect.mapError(storageError("insert canonical batch")));
-          yield* failpoint("append:after-batch-insert");
+        yield* failpoint("append:after-batch-insert");
 
-          yield* Effect.forEach(
-            request.records,
-            (record, index) =>
-              Effect.gen(function* () {
-                yield* sql`
+        yield* Effect.forEach(
+          request.records,
+          (record, index) =>
+            Effect.gen(function* () {
+              yield* sql`
                   INSERT INTO effect_agent_canonical_records (
                     conversation_id,
                     sequence,
@@ -610,12 +682,12 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
                     ${record.recordJson}
                   )
                 `.pipe(Effect.mapError(storageError("insert canonical record")));
-                yield* failpoint("append:after-record-insert");
-              }),
-            { discard: true },
-          );
+              yield* failpoint("append:after-record-insert");
+            }),
+          { discard: true },
+        );
 
-          yield* sql`
+        yield* sql`
           UPDATE effect_agent_conversations
           SET
             tail_sequence = ${lastSequence},
@@ -623,21 +695,16 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             producer_epoch = ${request.producerEpoch}
           WHERE conversation_id = ${request.conversationId}
         `.pipe(Effect.mapError(storageError("advance conversation tail")));
-          yield* failpoint("append:after-tail-update");
+        yield* failpoint("append:after-tail-update");
 
-          return RawAppendResult.make({
-            firstSequence,
-            lastSequence,
-            replayed: false,
-            tailDigest: request.tailDigest,
-          });
-        }),
-      )
-      .pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("append transaction")(error)),
-        ),
-      );
+        return RawAppendResult.make({
+          firstSequence,
+          lastSequence,
+          replayed: false,
+          tailDigest: request.tailDigest,
+        });
+      }),
+    );
   });
 
   const read = Effect.fn("SqliteJournal.read")(function* (request: RawReadRequest) {
@@ -762,10 +829,9 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
         message: "Checkpoint identity or encoded JSON exceeds the SQLite storage bounds.",
       });
     }
-    yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const conversationRows = yield* sql<Record<string, unknown>>`
+    yield* withWriteTransaction("checkpoint transaction")(
+      Effect.gen(function* () {
+        const conversationRows = yield* sql<Record<string, unknown>>`
           SELECT
             conversation_id,
             created_at,
@@ -775,21 +841,21 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
           FROM effect_agent_conversations
           WHERE conversation_id = ${checkpoint.conversationId}
         `.pipe(Effect.mapError(storageError("read checkpoint tail")));
-          const conversation = yield* decodeSingleRow(
-            Schema.Array(ConversationRow),
-            "effect_agent_conversations",
-            checkpoint.conversationId,
-            conversationRows,
-          );
-          if (checkpoint.throughSequence > conversation.tail_sequence) {
-            return yield* SqliteCheckpointConflict.make({
-              message:
-                `Checkpoint sequence ${checkpoint.throughSequence} is after canonical tail ` +
-                `${conversation.tail_sequence}.`,
-            });
-          }
+        const conversation = yield* decodeSingleRow(
+          Schema.Array(ConversationRow),
+          "effect_agent_conversations",
+          checkpoint.conversationId,
+          conversationRows,
+        );
+        if (checkpoint.throughSequence > conversation.tail_sequence) {
+          return yield* SqliteCheckpointConflict.make({
+            message:
+              `Checkpoint sequence ${checkpoint.throughSequence} is after canonical tail ` +
+              `${conversation.tail_sequence}.`,
+          });
+        }
 
-          const checkpointRows = yield* sql<Record<string, unknown>>`
+        const checkpointRows = yield* sql<Record<string, unknown>>`
           SELECT
             conversation_id,
             through_sequence,
@@ -799,32 +865,32 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
           WHERE conversation_id = ${checkpoint.conversationId}
             AND through_sequence = ${checkpoint.throughSequence}
         `.pipe(Effect.mapError(storageError("read idempotent checkpoint")));
-          const existing = yield* decodeRows(
-            Schema.Array(CheckpointRow),
-            "effect_agent_checkpoints",
-            `${checkpoint.conversationId}/${checkpoint.throughSequence}`,
-            checkpointRows,
-          );
-          if (existing.length > 1) {
-            return yield* SqliteStorageCorruptionError.make({
-              table: "effect_agent_checkpoints",
-              rowKey: `${checkpoint.conversationId}/${checkpoint.throughSequence}`,
-              message: "A checkpoint primary key returned more than one row.",
+        const existing = yield* decodeRows(
+          Schema.Array(CheckpointRow),
+          "effect_agent_checkpoints",
+          `${checkpoint.conversationId}/${checkpoint.throughSequence}`,
+          checkpointRows,
+        );
+        if (existing.length > 1) {
+          return yield* SqliteStorageCorruptionError.make({
+            table: "effect_agent_checkpoints",
+            rowKey: `${checkpoint.conversationId}/${checkpoint.throughSequence}`,
+            message: "A checkpoint primary key returned more than one row.",
+          });
+        }
+        if (existing.length === 1) {
+          if (
+            existing[0].tail_digest !== checkpoint.tailDigest ||
+            existing[0].checkpoint_json !== checkpoint.checkpointJson
+          ) {
+            return yield* SqliteCheckpointConflict.make({
+              message: "A different checkpoint already exists at this canonical sequence.",
             });
           }
-          if (existing.length === 1) {
-            if (
-              existing[0].tail_digest !== checkpoint.tailDigest ||
-              existing[0].checkpoint_json !== checkpoint.checkpointJson
-            ) {
-              return yield* SqliteCheckpointConflict.make({
-                message: "A different checkpoint already exists at this canonical sequence.",
-              });
-            }
-            return;
-          }
+          return;
+        }
 
-          yield* sql`
+        yield* sql`
           INSERT INTO effect_agent_checkpoints (
             conversation_id,
             through_sequence,
@@ -837,13 +903,8 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             ${checkpoint.checkpointJson}
           )
         `.pipe(Effect.mapError(storageError("insert checkpoint")));
-        }),
-      )
-      .pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("checkpoint transaction")(error)),
-        ),
-      );
+      }),
+    );
   });
 
   const loadCheckpoint = Effect.fn("SqliteJournal.loadCheckpoint")(function* (
@@ -994,6 +1055,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
     read,
     saveCheckpoint,
     scanStoredPayloads,
+    withWriteTransaction,
   } as const;
 };
 

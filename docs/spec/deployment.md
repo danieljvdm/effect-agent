@@ -71,26 +71,43 @@ Correctness cannot depend on role co-location or in-memory notifications.
 
 ## 3.1 Platform Effect services
 
-The durable engine requires capabilities rather than a platform name:
+The durable runtime requires capabilities rather than a platform name. The shipped inventory is
+exactly three ports, all owned by `@effect-agent/session`:
 
 ```ts
-class DurableStorage extends Context.Service<DurableStorage, DurableStorage.Service>()(
-  "@effect-agent/DurableStorage",
+class ConversationStore extends Context.Service<ConversationStore, {...}>()(
+  "@effect-agent/session/ConversationStore",
 ) {}
 
-class AttemptOwnership extends Context.Service<AttemptOwnership, AttemptOwnership.Service>()(
-  "@effect-agent/AttemptOwnership",
+class SubmissionLedger extends Context.Service<SubmissionLedger, {...}>()(
+  "@effect-agent/session/SubmissionLedger",
 ) {}
 
-class WakeScheduler extends Context.Service<WakeScheduler, WakeScheduler.Service>()(
-  "@effect-agent/WakeScheduler",
+class WakeScheduler extends Context.Service<WakeScheduler, {...}>()(
+  "@effect-agent/session/WakeScheduler",
 ) {}
 ```
 
+- `ConversationStore` owns the canonical Conversation Log: materialization, fenced atomic batch
+  append, bounded reads, resumable observation, export, tail inspection, and digest-bound
+  disposable checkpoints (there is no separate `CheckpointStore` port).
+- `SubmissionLedger` owns operational obligations: admission, readiness, FIFO-head claims,
+  ownership tokens, producer-epoch fencing, lease renewal/release, canonical-input markers,
+  settlement reservation/finalization, abort intent, nonterminal scans, and recovery snapshots.
+  It absorbs the earlier `AttemptOwnership` prose service; claims mint Attempt identity and
+  fencing evidence atomically with queue-head selection.
+- `WakeScheduler` is a pure liveness hint whose notifications may be dropped, coalesced, or
+  duplicated; consumers must pair subscriptions with ledger scans.
+
+Earlier drafts referred to a `DurableStorage` service; that was prose shorthand and no such port
+exists. Two further ports are explicitly deferred: an `AttachmentStore` (digest-addressed durable
+attachments) waits for a real attachment requirement, and a `RecoveryScheduler` waits for
+recovery cadence needs beyond the host's startup pass and wake/scan loop.
+
 Node Layers implement these with local SQLite transactions, process ownership, and a local
 scheduler. Cloudflare Layers implement them with SQLite-backed Durable Object storage, object
-ownership, and alarms. The semantic engine depends on these services and has no conditional branch
-for `node` versus `cloudflare`.
+ownership, and alarms. The semantic coordinator depends on these services and has no conditional
+branch for `node` versus `cloudflare`.
 
 ## 4. Configuration
 
@@ -234,8 +251,16 @@ Durable Object storage is the only correctness-critical store for that Conversat
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
 
-The target remains experimental until the generic durability conformance suite passes eviction,
-alarm retry, deployment, and fault-injection scenarios.
+The target left experimental status with Phase 6: the generic durability conformance suite —
+the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the
+eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry (double-fire
+and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted storage), and
+fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
+are implemented and green ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)). The tested harness is
+workerd/Miniflare; the hosted production service, its observability adapters, and live soak
+remain explicitly unclaimed — Phase 7 completed the roadmap without hosted-platform evidence
+([Phase 7 evidence](../PHASE-7-EVIDENCE.md)), and hosted-service operation stays outside the
+roadmap's claims until open-source preparation revisits it.
 
 Current platform references:
 

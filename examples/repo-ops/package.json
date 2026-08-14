@@ -1,0 +1,29 @@
+{
+  "name": "@effect-agent/example-repo-ops",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
+    "@effect-agent/platform-node": "workspace:*",
+    "@effect-agent/sandbox": "workspace:*",
+    "@effect-agent/sandbox-local": "workspace:*",
+    "@effect-agent/session": "workspace:*",
+    "@effect-agent/testing": "workspace:*",
+    "@effect/ai-openai": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@effect/platform-node": "catalog:",
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

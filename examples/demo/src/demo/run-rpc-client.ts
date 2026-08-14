@@ -1,5 +1,6 @@
 import { Context, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
+import * as Atom from "effect/unstable/reactivity/Atom";
 import * as RpcClient from "effect/unstable/rpc/RpcClient";
 import type { RpcClientError } from "effect/unstable/rpc/RpcClientError";
 import type * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -9,7 +10,7 @@ import { DemoRunRpcs } from "./run-rpc";
 
 type DemoRunRpcClientApi = RpcClient.RpcClient<RpcGroup.Rpcs<typeof DemoRunRpcs>, RpcClientError>;
 
-/** Generated browser client for the shared streaming Run RPC definitions. */
+/** Generated browser client for the shared interactive operational RPC definitions. */
 export class DemoRunRpcClient extends Context.Service<DemoRunRpcClient, DemoRunRpcClientApi>()(
   "@effect-agent/example-demo/DemoRunRpcClient",
 ) {
@@ -18,3 +19,10 @@ export class DemoRunRpcClient extends Context.Service<DemoRunRpcClient, DemoRunR
     Layer.provide([RpcSerialization.layerNdjson, FetchHttpClient.layer]),
   );
 }
+
+/**
+ * One shared browser Atom runtime so every interaction atom reuses the same
+ * built RPC client instead of rebuilding the Layer per invocation. It is kept
+ * alive because the interaction atoms are only write-mounted between clicks.
+ */
+export const DemoRunRpcRuntime = Atom.keepAlive(Atom.runtime(DemoRunRpcClient.layer));

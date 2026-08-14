@@ -61,28 +61,30 @@ The actual TypeScript API may split these services further, but it must preserve
 semantic operations below.
 
 ```ts
-interface SubmissionStore {
-  readonly admit: (request: AdmissionRequest) => Effect.Effect<AdmissionResult, AdmissionError>;
+interface SubmissionLedger {
+  readonly admit: (
+    request: AdmissionRequest,
+  ) => Effect.Effect<AdmissionResult, AdmissionConflict | LedgerError>;
 
-  readonly markReady: (submissionId: SubmissionId) => Effect.Effect<void, SubmissionStoreError>;
+  readonly markReady: (request: MarkReadyRequest) => Effect.Effect<void, LedgerError>;
 
-  readonly claim: (request: ClaimRequest) => Effect.Effect<Option.Option<Claim>, ClaimError>;
+  readonly claim: (request: ClaimRequest) => Effect.Effect<Option.Option<Claim>, LedgerError>;
 
   readonly renewOwnership: (
-    ownership: OwnershipToken,
-  ) => Effect.Effect<OwnershipToken, OwnershipLost | StoreError>;
+    request: RenewOwnershipRequest,
+  ) => Effect.Effect<OwnershipRenewal, OwnershipLost | LedgerError>;
 
   readonly reserveSettlement: (
     request: SettlementReservation,
-  ) => Effect.Effect<ReservedSettlement, SettlementConflict | SubmissionStoreError>;
+  ) => Effect.Effect<ReservedSettlement, SettlementConflict | OwnershipLost | LedgerError>;
 
   readonly finalizeSettlement: (
     request: SettlementFinalization,
-  ) => Effect.Effect<Settlement, SettlementConflict | SubmissionStoreError>;
+  ) => Effect.Effect<Settlement, SettlementConflict | LedgerError>;
 
   readonly loadRecoverySnapshot: (
-    submissionId: SubmissionId,
-  ) => Effect.Effect<RecoverySnapshot, StoreError>;
+    request: RecoverySnapshotRequest,
+  ) => Effect.Effect<RecoverySnapshot, LedgerError>;
 }
 
 interface ConversationStore {
@@ -97,8 +99,21 @@ interface ConversationStore {
   readonly read: (
     request: ConversationRead,
   ) => Stream.Stream<CanonicalRecord, ConversationStoreError>;
+
+  readonly inspectTail: (
+    request: ConversationTailRequest,
+  ) => Effect.Effect<ConversationTail, ConversationStoreError>;
 }
 ```
+
+`inspectTail` returns the committed tail sequence, tail digest, and current producer epoch in
+one cheap read inside the same consistency domain as `append`. A resuming producer composes
+its next `FencedAppendRequest` from this value instead of exporting the whole log.
+
+The shipped `@effect-agent/session` `SubmissionLedger` port implements exactly these semantic
+operations and additionally exposes strongly consistent `lookup`, graceful `releaseOwnership`,
+the idempotent `markInputApplied` canonical-input marker, idempotent `requestAbort`, the ordered
+`scanNonterminal` stream, and a `capabilities` durability declaration.
 
 Each method has an explicit atomic and idempotent contract. Admission and settlement intentionally
 span the two stores through recoverable states:
@@ -138,7 +153,7 @@ The canonical log supports, at minimum:
 - model text/reasoning deltas, completion, signature/redaction metadata, or structured item;
 - tool call requested, prepared, approved/rejected, settled, unknown;
 - compaction created/selected;
-- subagent started/settled;
+- subagent requested/started/joined and child Parent Link;
 - run warning/failure;
 - abort requested;
 - terminal outcome;
@@ -160,8 +175,11 @@ Each append declares:
 On retry:
 
 - the same batch ID and digest returns the original append result;
-- the same batch ID with different content is a conflict;
-- a stale expected tail is a conflict;
+- the same batch ID with different content is a conflict (`batch-digest`);
+- a reused canonical record ID, inside one batch or across batches, is a conflict
+  (`record-identity`);
+- a stale expected tail is a conflict (`tail`), and the conflict carries the actual
+  committed tail sequence and digest as a diagnostic resume hint;
 - a stale producer epoch is fenced;
 - a partial batch is impossible.
 
@@ -170,7 +188,8 @@ On retry:
 The store supports:
 
 - bounded forward reads by conversation sequence;
-- tail reads;
+- tail reads (`inspectTail`: tail sequence, tail digest, and producer epoch, strongly
+  consistent with `append`);
 - batch lookup by ID;
 - submission lookup by ID and idempotency key;
 - nonterminal work scans;
@@ -217,10 +236,18 @@ Purpose: first operational local runtime and single-node durable host.
 
 - WAL mode;
 - transactions for admission, append, claim, and terminalization;
-- single-writer behavior handled with bounded busy retry;
+- write transactions begin with `BEGIN IMMEDIATE`: producer epochs exist precisely because
+  two owners transiently coexist, and a deferred `BEGIN` would let a read-then-write
+  transaction fail with `SQLITE_BUSY_SNAPSHOT`, which the busy timeout never retries;
+- single-writer behavior handled with bounded busy retry (configurable `busyTimeout`); a
+  write-lock timeout is classified as the typed, retryable `SqliteWriteContention` and
+  surfaces on the port as a `ConversationStoreError` carrying it as the cause;
 - monotonically increasing epochs allocated transactionally;
 - blob payload thresholds with artifact spillover;
-- backup and integrity-check guidance;
+- backup and integrity-check guidance: opening the store verifies the storage version and
+  required tables; the full payload/digest-chain integrity scan is an explicit opt-in
+  (`verifyOnOpen`, default off) because per-operation Schema decoding and the digest chain
+  already fail clearly on corrupt rows;
 - no multi-host scheduler claim unless deployment constraints prove safe.
 
 ### 9.3 Cloudflare
@@ -254,8 +281,12 @@ Rules:
 - validate data read from storage, even if the application originally wrote it;
 - store content digests over canonical encoding.
 
-Canonical encoding must be deterministic. The project will choose and document one
-encoding profile before the first persistent release.
+Canonical encoding must be deterministic and locale-independent. Canonical JSON
+serialization orders object keys by UTF-16 code units (RFC 8785 style). Locale-aware
+collation is forbidden: it varies across hosts, and it treats canonically equivalent
+but distinct key sequences as equal, leaking insertion order through a stable sort.
+The project will choose and document the remaining details of the encoding profile
+before the first persistent release.
 
 ## 11. Stored-version policy during private development
 

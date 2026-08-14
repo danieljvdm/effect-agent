@@ -1,51 +1,74 @@
-# General chat runtime bench
+# Chat-first demo with a Phase 2 simulator
 
-A deliberately restrained test bench for the Effect Agent runtime. It uses TanStack Start, Effect
-Atom, shadcn/ui on Base UI, Tailwind CSS, and AI Elements-style conversation primitives.
+A simple chat is the default experience. The detailed Phase 2 operations bench remains available
+under the **Simulator** tab. Both surfaces use TanStack Start, Effect Atom, Effect RPC over
+HTTP/NDJSON, and the public framework packages.
 
 ```sh
 bun --filter @effect-agent/example-demo dev
 ```
 
-Both profiles accept the same Schema-owned `{ message }` input and produce a Schema-decoded
-`{ answer }` output. Neither profile injects a hidden travel scenario or mandates a Tool Call.
+## Chat
 
-The default offline profile binds the general chat Definition to `ScriptedModel`. Its submitted
-message becomes the parameters of a real `search_fixture_knowledge` application Tool Call, whose
-Effect handler returns explicitly marked deterministic catalog data. The profile also exposes a
-real `calculate` application Tool. It exercises the runtime, handler Layers, semantic events, and
-output decoding without a provider key or network access.
+The default **OpenAI agent** profile is a real model-driven Phase 2 travel agent. The model decides
+which framework Tools to call and coordinates repeatable flight, lodging, and activity suppliers.
+Those supplier results are fixed demo inventory, so the interaction is safe and reproducible while
+the orchestration is genuinely model-driven. Put `OPENAI_API_KEY` in `examples/demo/.env` (copy
+`.env.example` to start); the Vite server loads that credential through Effect Config without
+exposing it to the client bundle.
 
-The opt-in live profile binds a separate provider-specific Definition to `gpt-5.6-luna`. The model
-may answer directly, use the same exact arithmetic Tool, or invoke Effect AI's OpenAI-hosted web
-search according to the Tool descriptions and the user's message. Put the credential in this
-workspace's untracked `.env` file:
+Use the chat directly to exercise the runtime:
 
-```dotenv
-OPENAI_API_KEY=...
-```
+- Ask it to plan the fixed London trip to see the live model call fixture supplier Tools through
+  the bounded framework scheduler. The trace reflects the Tools the model actually chose; it is
+  not a canned transcript.
+- While a travel Run is active, send another message. The first admitted update is steering and is
+  delivered after the current Tool batch; a later update is a queued follow-up delivered at the
+  next safe stop boundary. The composer also exposes one-click date and room-preference updates so
+  the timing behavior is easy to reproduce.
+- Ask it to place a temporary hold. The runtime pauses before the handler, displays an approval
+  card, and starts the demo hold handler only after explicit approval. No real reservation is made.
+- Launch a token, Tool-call, spend, or time recipe to see the same live coordinator stopped by a
+  typed run-level budget.
 
-The provider Layer and credential are resolved only by the server implementation of a shared
-Effect RPC definition. A TanStack Start server route delegates the request to Effect RPC over
-framed HTTP/NDJSON, so the generated browser client receives each Schema-encoded semantic
-`RunEvent` as it occurs. Text, provider-returned reasoning, Tool lifecycle, and terminal events are
-projected through the same Effect Atom action used by the direct in-browser scripted profile.
+The **Scripted replay** profile is the deliberate offline option. It uses the same travel schemas,
+runtime hooks, fixture handlers, and event stream with a deterministic model, making exact ordering
+and failure cases repeatable without credentials. Free-form messages are never silently classified
+by regular expressions: OpenAI mode always reaches the live travel agent, while Scripted replay
+always reaches its explicit offline path. Tool activity stays inline beneath the active assistant
+message.
 
-The in-conversation activity line is derived from those semantic events too. It moves through
-startup, model reasoning, Tool-specific work, result review, and response composition without a
-second transport-only status protocol.
+The Simulator remains an optional deterministic evidence inspector, not a prerequisite for using
+the Phase 2 features in chat.
 
-The Tool panel renders parameters and results from semantic events. It explicitly distinguishes
-framework-executed handlers from provider-hosted execution. URLs exposed in hosted search results
-are provider output and are not independently verified by this bench.
+## Simulator
 
-The pinned Effect beta.102 OpenAI adapter emits an empty declaration for hosted search before its
-final action result, while the exported helper currently expects that action during declaration.
-The live profile keeps the upstream provider metadata and result schemas but narrows that
-declaration schema to the empty object actually emitted. This compatibility projection should be
-removed when the upstream adapter and helper agree.
+A server-scoped runtime owns the simulator's ephemeral Conversation, bounded input queue, approval
+resolver, and event queue. The generated RPC client streams Schema-encoded framework and
+operational events; separate unary RPCs admit steering, follow-up, and approval decisions without
+replacing the stream.
 
-The ordinary test and build gates never make a live provider call. This is an ephemeral (`E`)
-provider preview and observability bench, not a deployable transport. Phase 1 also includes the
-separate compile-only `examples/providers` OpenAI/Anthropic Travel Planner bindings; neither
-example claims persistence, durable execution, steering, approval, MCP, or sandbox behavior.
+Simulator scenarios:
+
+- **Guided control run** starts flight, lodging, and activity Tools concurrently, forces them to
+  finish in reverse order, and shows results committed in declaration order. While the batch is
+  active, it queues a departure-date steering command and a room-preference follow-up. Steering is
+  claimed after the complete Tool batch; the follow-up waits until the Run would otherwise stop.
+- **Risky itinerary hold** exposes an approval checkpoint. The hold handler start count remains
+  zero until approval. Denial or a 20-second non-response fails closed.
+- **Token, Tool, spend, and time fuses** run with deliberately tiny limits and expose the exact
+  rejected usage dimension and observed value.
+- **Tool handler defect** makes every supplier handler die mid-batch. The producer boundary
+  converts the defect into the stream's typed terminal failure and releases the single-run
+  registry, so the browser never waits on a stranded Run.
+
+The guided scenario also validates one bounded deterministic MCP discovery result, executes a
+fixed `/bin/echo` request through `@effect-agent/sandbox-local`, and shows the implementation's
+explicit `unisolated` posture, disabled network, output bound, deadline, and exit status. Its
+context hook presents a compacted model view while the ephemeral Conversation retains the full
+official Effect AI `Prompt`.
+
+The scripted replay path is credential-free and makes no external network call. The demo does not
+claim persistence, accepted-work durability, OS isolation, exactly-once side effects, or recovery
+after process loss. The Simulator's raw evidence panel is the same authoritative stream that drives
+its projections.

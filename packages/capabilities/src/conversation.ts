@@ -104,7 +104,11 @@ export class EphemeralConversations extends Context.Service<
     >;
     /**
      * Record an engine-emitted full history only when it is an append-only
-     * extension of the exact official Prompt already stored.
+     * extension of the exact official Prompt already stored. The entire
+     * suffix commits in one transaction or not at all: concurrent writers are
+     * serialized, a writer whose history no longer extends the committed
+     * official history fails with ConversationHistoryDiverged, and a limit
+     * failure inside the suffix records nothing.
      */
     readonly recordHistory: (
       conversationId: ConversationId,
@@ -129,6 +133,13 @@ type AppendResult =
   | { readonly _tag: "success"; readonly value: ConversationSnapshot };
 type CreateResult =
   | { readonly _tag: "failure"; readonly error: ConversationLimitExceeded }
+  | { readonly _tag: "success"; readonly value: ConversationSnapshot };
+type RecordHistoryResult =
+  | { readonly _tag: "stale" }
+  | {
+      readonly _tag: "failure";
+      readonly error: ConversationNotFound | ConversationLimitExceeded | ConversationEncodingError;
+    }
   | { readonly _tag: "success"; readonly value: ConversationSnapshot };
 
 const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;
@@ -237,6 +248,52 @@ const appendEncoded = (
   return [{ _tag: "success", value: next }, new Map(conversations).set(conversationId, next)];
 };
 
+/**
+ * Commit a verified engine suffix in one transaction: either every suffix
+ * message extends official history or nothing is recorded. Snapshots are
+ * immutable and replaced wholesale, so identity against the verified base
+ * detects any concurrent commit before a single message can interleave.
+ */
+const commitHistorySuffix = (
+  conversations: ReadonlyMap<ConversationId, ConversationSnapshot>,
+  conversationId: ConversationId,
+  base: ConversationSnapshot,
+  suffix: ReadonlyArray<{ readonly append: ConversationAppend; readonly encoded: string }>,
+  timestamp: DateTime.Utc,
+): readonly [RecordHistoryResult, ReadonlyMap<ConversationId, ConversationSnapshot>] => {
+  const current = conversations.get(conversationId);
+  if (current === undefined) {
+    return [
+      { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
+      conversations,
+    ];
+  }
+  if (current !== base) return [{ _tag: "stale" }, conversations];
+  let next = conversations;
+  let snapshot = current;
+  for (const entry of suffix) {
+    const [result, updated] = appendEncoded(
+      next,
+      conversationId,
+      entry.append,
+      entry.encoded,
+      timestamp,
+    );
+    if (result._tag === "not-found") {
+      return [
+        { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
+        conversations,
+      ];
+    }
+    if (result._tag === "failure") {
+      return [{ _tag: "failure", error: result.error }, conversations];
+    }
+    snapshot = result.value;
+    next = updated;
+  }
+  return [{ _tag: "success", value: snapshot }, next];
+};
+
 /** Layer whose state is scoped to the consumer; it intentionally has no persistence semantics. */
 export const EphemeralConversationsLive = Layer.effect(
   EphemeralConversations,
@@ -308,35 +365,43 @@ export const EphemeralConversationsLive = Layer.effect(
       append,
       recordHistory: (conversationId, historyRunId, history) =>
         Effect.gen(function* () {
-          const current = yield* Ref.get(state).pipe(
-            Effect.flatMap((all) => findSnapshot(all, conversationId)),
+          const incoming = yield* Effect.forEach(history.content, (message) =>
+            encodeMessage(conversationId, message).pipe(
+              Effect.map((encoded) => ({ message, encoded })),
+            ),
           );
-          const currentEncoded = yield* Effect.forEach(current.messages, (entry) =>
-            encodeMessage(conversationId, entry.message),
+          const attempt: Effect.Effect<ConversationSnapshot, ConversationError> = Effect.gen(
+            function* () {
+              const current = yield* Ref.get(state).pipe(
+                Effect.flatMap((all) => findSnapshot(all, conversationId)),
+              );
+              const currentEncoded = yield* Effect.forEach(current.messages, (entry) =>
+                encodeMessage(conversationId, entry.message),
+              );
+              if (
+                incoming.length < currentEncoded.length ||
+                currentEncoded.some((encoded, index) => encoded !== incoming[index]?.encoded)
+              ) {
+                return yield* ConversationHistoryDiverged.make({
+                  conversationId,
+                  message: "Engine history is not an append-only extension of official history",
+                });
+              }
+              const timestamp = DateTime.toUtc(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+              const suffix = incoming.slice(currentEncoded.length).map((entry) => ({
+                append: ConversationAppend.make({ runId: historyRunId, message: entry.message }),
+                encoded: entry.encoded,
+              }));
+              const result = yield* Ref.modify(state, (conversations) =>
+                commitHistorySuffix(conversations, conversationId, current, suffix, timestamp),
+              );
+              // Another writer committed after verification: re-verify against the new base.
+              if (result._tag === "stale") return yield* attempt;
+              if (result._tag === "failure") return yield* result.error;
+              return result.value;
+            },
           );
-          const incomingEncoded = yield* Effect.forEach(history.content, (message) =>
-            encodeMessage(conversationId, message),
-          );
-          if (
-            incomingEncoded.length < currentEncoded.length ||
-            currentEncoded.some((encoded, index) => encoded !== incomingEncoded[index])
-          ) {
-            return yield* ConversationHistoryDiverged.make({
-              conversationId,
-              message: "Engine history is not an append-only extension of official history",
-            });
-          }
-          let next = current;
-          for (const message of history.content.slice(currentEncoded.length)) {
-            next = yield* append(
-              conversationId,
-              ConversationAppend.make({
-                runId: historyRunId,
-                message,
-              }),
-            );
-          }
-          return next;
+          return yield* attempt;
         }),
       snapshot: (conversationId) =>
         Ref.get(state).pipe(Effect.flatMap((all) => findSnapshot(all, conversationId))),

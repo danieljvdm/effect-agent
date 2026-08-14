@@ -1,6 +1,8 @@
 # Progressive Travel Planner Reference Application
 
-Status: Phase 3 persistent Conversation foundation implemented; Phase 4 and later increments remain design targets
+Status: Phase 7 (certified internal profiles) implemented on top of the Phase 6 `DC` slice, the
+Phase 5 durable booking slice, and the S1/S2 Subagent delegation slices — every phase row in
+the progression table below is executable evidence
 Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
@@ -111,9 +113,57 @@ insufficient without `DN` or `DC` and the tested adapter.
 
 Each row is cumulative. A phase exit runs that row plus every earlier offline scenario.
 
-P0 through P3 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
+P0 through P7 are implemented. P2 retains the ephemeral `E` runtime's operational behavior; P3
 adds a separate `P` profile that stores and reconstructs planning history while keeping accepted
-work explicitly non-durable.
+work explicitly non-durable. P4 adds the `DN` profile: a durable planning Submission that returns
+a Receipt, keeps one FIFO trip lane, survives restart to the same projection, supports durable
+abort, and settles exactly once — while its fixture pins `supplierBookingReplaySafe: false`
+because replay-safe booking is P5 scope (`packages/testing/src/fixtures/travel-planner/phase4.ts`,
+`packages/testing/test/travel-planner-phase4.test.ts`; [Phase 4 evidence](../PHASE-4-EVIDENCE.md)).
+P5 adds the durable booking slice: an idempotency-keyed supplier desk, an approval-gated
+`uncertain` `book_flight`, an `idempotent`-by-`bookingRef` `cancel_booking`, the `book_itinerary`
+Durable Tool whose named Steps derive supplier idempotency keys from `(toolCallId, stepName)`,
+a supplier reconciliation Layer, explicit Unknown Outcomes with audited resolution, durable
+approval suspension, and joined traveler follow-ups — with crash tests that never fabricate a
+booking result (`packages/testing/src/fixtures/travel-planner/phase5.ts`,
+`packages/testing/test/travel-planner-phase5.test.ts`,
+`packages/platform-node/test/crash/crash.test.ts`; [Phase 5 evidence](../PHASE-5-EVIDENCE.md)).
+The S1 slice adds the ephemeral `travel-coordinator` → `destination-researcher` delegation
+(`packages/testing/src/fixtures/travel-planner/subagents.ts`,
+`packages/testing/test/travel-planner-subagents.test.ts`; [S1 evidence](../S1-EVIDENCE.md)), and
+the S2 slice re-runs that delegation as accepted work on the `DN` runtime: a separately admitted
+child Submission with a Receipt, `waitingForChild` suspension without a worker permit, durable
+wakeup, a verified join with conserved reservation accounting, abort propagation, and
+invocation-counted never-re-executed proof — while pinning
+`childExternalEffectsExactlyOnce: false` and `cloudflareEquivalence: false`
+(`packages/testing/src/fixtures/travel-planner/subagents-durable.ts`,
+`packages/testing/test/travel-planner-subagents-durable.test.ts`,
+`packages/platform-node/test/crash/crash-subagents.test.ts`;
+[S2 evidence](../S2-EVIDENCE.md)).
+P6 adds the `DC` profile: the same cumulative fixtures assembled with Cloudflare Layers inside
+workerd — one SQLite-backed Durable Object per Conversation, eviction and alarm redelivery as
+the exercised recovery path, approval suspension and Unknown Outcomes across eviction,
+coordinator→researcher delegation across two Durable Objects, admission limits refused before
+any ledger row, and a Miniflare runtime-restart lane — with `cloudflareEquivalence: true`
+earned by asserting the DN and DC runs against one committed cross-platform normalized golden
+while `exactlyOnceExternalEffects` stays `false`
+(`packages/testing/src/fixtures/travel-planner/phase6.ts`,
+`packages/testing/test/travel-planner-phase6.test.ts`,
+`packages/platform-cloudflare/test/travel-planner-dc.test.ts`,
+`packages/platform-cloudflare/test/restart/travel-planner-restart.test.ts`;
+[Phase 6 evidence](../PHASE-6-EVIDENCE.md)).
+P7 makes the Travel Planner one of the three certified internal Agents: the dual-profile pin
+`phase7TravelPlannerProfile` records as a decodable Schema value that the offline cumulative
+suites stay deterministic and credential-free while the live-model profile is opt-in
+(`EFFECT_AGENT_LIVE=1` plus `OPENAI_API_KEY`, applied with `describe.skipIf`) and emits only
+structurally redacted transcripts — with `liveSupplierLayers` pinned `false`, because no real
+supplier exists to integrate and the deterministic desk is retained deliberately; the red-team
+suites make supplier content and traveler data adversarial, and the operator surface explains
+its recovery lanes without editing storage
+(`packages/testing/src/fixtures/travel-planner/phase7.ts`,
+`examples/providers/test/live-smoke.test.ts`,
+`packages/testing/test/security/redteam-supplier-injection.test.ts`;
+[Phase 7 evidence](../PHASE-7-EVIDENCE.md)).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -123,6 +173,7 @@ work explicitly non-durable.
 |    P3 | `P` persistent              | Stored trip Conversation, resumable observation, export, replayable itinerary projection, and current-version redacted fixtures                                   | Full replay equals valid Checkpoint replay; restart reconstruction; unsupported data fails before mutation; explicit non-durable label                 |
 |    P4 | `DN` durable planning       | Durable admission of a planning request, Receipt, FIFO trip lane, restart recovery, abort, and one Settlement                                                     | Node process-kill tests across admission, input application, model Turns, terminalization, and reattachment; no replayable booking claim               |
 |    P5 | `DN` durable booking        | Approval suspension, prepared/settled booking Tools, named booking Steps, supplier reconciliation, explicit unknown outcomes, and joined traveler changes         | Crash tests before/during/after supplier mutation; confirmed recovery or `UnknownToolOutcome`; no fabricated Tool result; joined input exactly once    |
+|    S2 | `DN` durable delegation     | The S1 coordinator→researcher delegation as accepted work: child Receipt, `waitingForChild` wakeup, verified join, conserved reservation, abort propagation       | Establishment/join failpoint and process-kill convergence; one child per invocation; completed child never re-executed; no exactly-once child effects  |
 |    P6 | `DN` + `DC`                 | The same authoring definition and scenarios assembled with Node/SQLite and Cloudflare Layers                                                                      | Shared durability suite; Durable Object eviction and alarm retry; equivalent canonical outcomes; no Cloudflare types in Agent/core/engine              |
 |    P7 | certified internal profiles | Live model and selected supplier Layers, operator diagnostics, security cases, chaos, and soak coverage                                                           | Adapter certification; threat model; redacted fixtures/cassettes; explainable recovery; Travel Planner counts as one of at least three internal Agents |
 
@@ -143,12 +194,22 @@ packages/testing/
         deterministic-layers.ts
         phase2.ts
         phase3.ts
+        phase4.ts
+        phase5.ts
+        phase6.ts
+        subagents.ts
+        subagents-durable.ts
         scenarios.ts
         index.ts
   test/
     travel-planner.test.ts
     travel-planner-phase2.test.ts
     travel-planner-phase3.test.ts
+    travel-planner-phase4.test.ts
+    travel-planner-phase5.test.ts
+    travel-planner-phase6.test.ts
+    travel-planner-subagents.test.ts
+    travel-planner-subagents-durable.test.ts
     travel-planner.compile.test.ts
 examples/
   demo/
@@ -162,13 +223,17 @@ testing package may add dependencies on phase packages as those packages are cre
 remains outward of production code; production packages must never import
 `@effect-agent/testing`.
 
-`examples/demo` imports the same public fixture exports used by the tests. Its Effect Atom action
-consumes `AgentRuntime.stream` directly for the scripted browser profile. The optional live profile
-uses a demo-local shared Effect RPC definition whose server handler returns that same semantic
-Stream over framed HTTP/NDJSON; the generated browser client consumes it without collecting or
-replaying an event array. The TanStack Start UI exposes chat input, provider-returned reasoning,
-Tool results, semantic Run Events, and Schema-decoded output. The scripted Model remains the
-default so this surface is deterministic and credential-free.
+`examples/demo` imports the same public Phase 2 fixture exports used by the tests. A server-scoped
+runtime assembles the scripted Model, controlled Travel Planner services, ephemeral Conversation,
+command queue, approval resolver, budgets, MCP connector, and local sandbox. A demo-local shared
+Effect RPC definition returns the operational Stream over framed HTTP/NDJSON; separate unary RPCs
+admit commands and approval decisions while the stream remains open.
+
+The TanStack Start app defaults to a separate general-chat surface. Its Simulator tab projects
+safe-seam command delivery, Tool declaration/completion order, deterministic commit order,
+approval and handler-start state, budget rejection, official versus model-only context, MCP
+discovery bounds, local command posture, semantic Run Events, and Schema-decoded output. The
+Simulator is deterministic and credential-free.
 
 Focused tests stay with their owner:
 
@@ -234,6 +299,7 @@ travel-specific contract.
 |    P3 | `STORE-001`, `STORE-004`–`STORE-008`, `STORE-011`, `TEST-001`, `TEST-004`, `TEST-014`                               |
 |    P4 | `DUR-001`–`DUR-008`, `DUR-011`–`DUR-015`, `DEPLOY-001`–`DEPLOY-009`, `TEST-003`–`TEST-006`, `TEST-012`, `TEST-014`  |
 |    P5 | `DUR-009`, `DUR-010`, `DUR-013`, `DUR-016`, `CAP-006`, `OPS-002`, `TEST-005`, `TEST-006`, `TEST-014`                |
+| S1/S2 | `SUB-001`–`SUB-032`, `TEST-014` (S1: `E` delegation; S2: `DN` durable delegation)                                   |
 |    P6 | `STORE-013`, `DEPLOY-010`, `TEST-004`–`TEST-006`, `TEST-014`                                                        |
 |    P7 | `SEC-001`–`SEC-013`, `OPS-001`–`OPS-003`, `TEST-003`–`TEST-014`                                                     |
 

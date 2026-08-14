@@ -1,170 +1,125 @@
 import { Effect, Schema, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 
-import type { RunEvent } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
-import {
-  ChatOutput,
-  type ChatOutput as ChatOutputValue,
-  FixtureChatRuntimeLayer,
-  makeFixtureChatAgent,
-} from "./general-chat";
-import type { DemoRunSelection } from "./contracts";
+import { TravelPlan, type TravelPlan as TravelPlanValue } from "@effect-agent/testing";
 import { decodeErrorDetails } from "./error-details";
-import { DemoRunRpcClient } from "./run-rpc-client";
+import {
+  type DemoApprovalChoice,
+  type DemoCommandKind,
+  type DemoOperationalEvent,
+  type DemoRunHandle,
+  type DemoScenario,
+} from "./operational-contracts";
+import { DemoRunRpcClient, DemoRunRpcRuntime } from "./run-rpc-client";
 
 export type DemoStatus = "idle" | "running" | "succeeded" | "failed" | "interrupted" | "suspended";
 
-export interface ChatMessage {
-  readonly id: string;
-  readonly role: "assistant" | "user";
-  readonly content: string;
-  readonly reasoning?: string;
-}
-
 export interface DemoState {
   readonly status: DemoStatus;
-  readonly mode: DemoRunSelection["mode"];
+  readonly scenario: DemoScenario;
   readonly runNumber: number;
-  readonly messages: ReadonlyArray<ChatMessage>;
-  readonly events: ReadonlyArray<RunEvent>;
-  readonly output: ChatOutputValue | null;
+  readonly handle: DemoRunHandle | null;
+  readonly events: ReadonlyArray<DemoOperationalEvent>;
+  readonly output: TravelPlanValue | null;
   readonly error: string | null;
-  readonly activeMessage: string;
+  readonly controlError: string | null;
 }
-
-const initialPrompt = "What are the best cities to visit in Europe in August?";
 
 export const initialDemoState: DemoState = {
   status: "idle",
-  mode: "deterministic",
+  scenario: "guided",
   runNumber: 0,
-  messages: [
-    {
-      id: "intro",
-      role: "assistant",
-      content:
-        "Ask anything. The offline profile replays deterministic application tools; the live profile lets the model choose real arithmetic or OpenAI-hosted web search.",
-    },
-  ],
+  handle: null,
   events: [],
   output: null,
   error: null,
-  activeMessage: initialPrompt,
+  controlError: null,
 };
 
-/** Shared browser state for the current agent run and selected model profile. */
+/** Shared browser projection of the authoritative server event stream. */
 export const demoStateAtom = Atom.make<DemoState>(initialDemoState);
 
 const failureMessage = (error: unknown): string =>
   decodeErrorDetails(error).message ?? String(error);
 
-const updateAssistantMessage = (
-  messages: ReadonlyArray<ChatMessage>,
-  id: string,
-  update: (message: ChatMessage) => ChatMessage,
-): ReadonlyArray<ChatMessage> => {
-  const existing = messages.findIndex((message) => message.id === id);
-  if (existing === -1) {
-    return [...messages, update({ id, role: "assistant", content: "" })];
-  }
-  return messages.map((message, index) => (index === existing ? update(message) : message));
-};
+const failControl = (context: Atom.FnContext, error: unknown): Effect.Effect<void> =>
+  Effect.sync(() => {
+    const current = context(demoStateAtom);
+    context.set(demoStateAtom, {
+      ...current,
+      controlError: failureMessage(error),
+    });
+  });
 
-/** Starts one selected profile and projects its semantic events into browser state. */
-export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, message }, context) => {
+/** Starts one bounded Phase 2 scenario and projects its streamed evidence. */
+export const runOperationalDemoAtom = DemoRunRpcRuntime.fn<DemoScenario>()((scenario, context) => {
   const previous = context(demoStateAtom);
-  const runNumber = previous.runNumber + 1;
-  const assistantId = `assistant-${runNumber}`;
-
   context.set(demoStateAtom, {
     ...previous,
     status: "running",
-    mode,
-    runNumber,
+    scenario,
+    runNumber: previous.runNumber + 1,
+    handle: null,
     events: [],
     output: null,
     error: null,
-    activeMessage: message,
-    messages: [...previous.messages, { id: `user-${runNumber}`, role: "user", content: message }],
+    controlError: null,
   });
 
-  const projectEvent = Effect.fn("Demo.projectEvent")(function* (event: RunEvent) {
+  const projectEvent = Effect.fn("Demo.projectOperationalEvent")(function* (
+    event: DemoOperationalEvent,
+  ) {
     const current = context(demoStateAtom);
-    const messages =
-      event._tag === "TextDelta"
-        ? updateAssistantMessage(current.messages, assistantId, (message) => ({
-            ...message,
-            content: message.content + event.text,
-          }))
-        : event._tag === "ReasoningDelta"
-          ? updateAssistantMessage(current.messages, assistantId, (message) => ({
-              ...message,
-              reasoning: (message.reasoning ?? "") + event.text,
-            }))
-          : current.messages;
+    const handle = "handle" in event ? event.handle : current.handle;
+    let status = current.status;
+    let output = current.output;
+    let error = current.error;
+
+    switch (event._tag) {
+      case "DemoApprovalPending":
+        status = "suspended";
+        break;
+      case "DemoApprovalSettled":
+        status = "running";
+        break;
+      case "RunCompleted": {
+        const candidate: unknown = event.output;
+        output = yield* Schema.decodeUnknownEffect(TravelPlan)(candidate);
+        status = "succeeded";
+        break;
+      }
+      case "RunFailed":
+        status = "failed";
+        error = event.message;
+        break;
+      case "RunInterrupted":
+        status = "interrupted";
+        error = event.message;
+        break;
+      case "RunSuspended":
+        status = "suspended";
+        error = event.reason;
+        break;
+    }
+
     context.set(demoStateAtom, {
       ...current,
-      messages,
+      status,
+      handle,
       events: [...current.events, event],
+      output,
+      error,
     });
-
-    if (event._tag === "RunCompleted") {
-      const candidateOutput: unknown = event.output;
-      const output = yield* Schema.decodeUnknownEffect(ChatOutput)(candidateOutput);
-      const completed = context(demoStateAtom);
-      context.set(demoStateAtom, {
-        ...completed,
-        status: "succeeded",
-        output,
-        messages: updateAssistantMessage(completed.messages, assistantId, (message) => ({
-          ...message,
-          content: output.answer,
-        })),
-      });
-    } else if (event._tag === "RunFailed") {
-      const failed = context(demoStateAtom);
-      context.set(demoStateAtom, {
-        ...failed,
-        status: "failed",
-        error: event.message,
-      });
-    } else if (event._tag === "RunInterrupted") {
-      const interrupted = context(demoStateAtom);
-      context.set(demoStateAtom, {
-        ...interrupted,
-        status: "interrupted",
-        error: event.message,
-      });
-    } else if (event._tag === "RunSuspended") {
-      const suspended = context(demoStateAtom);
-      context.set(demoStateAtom, {
-        ...suspended,
-        status: "suspended",
-        error: event.reason,
-      });
-    }
   });
 
-  const deterministic = AgentRuntime.stream(makeFixtureChatAgent(message), { message }).pipe(
-    Stream.runForEach(projectEvent),
-    Effect.provide(FixtureChatRuntimeLayer),
-    Effect.scoped,
-  );
-  const openai = Stream.unwrap(
+  return Stream.unwrap(
     Effect.gen(function* () {
       const client = yield* DemoRunRpcClient;
-      return client.StreamDemoRun({ message });
+      return client.StreamOperationalRun({ scenario });
     }),
-  ).pipe(Stream.runForEach(projectEvent), Effect.provide(DemoRunRpcClient.layer), Effect.scoped);
-  const selected = Effect.gen(function* () {
-    if (mode === "openai") {
-      return yield* openai;
-    }
-    return yield* deterministic;
-  });
-
-  return selected.pipe(
+  ).pipe(
+    Stream.runForEach(projectEvent),
+    Effect.scoped,
     Effect.tap(() =>
       Effect.sync(() => {
         const current = context(demoStateAtom);
@@ -172,27 +127,88 @@ export const runDemoAtom = Atom.fn<DemoRunSelection>()(({ mode, message }, conte
           context.set(demoStateAtom, {
             ...current,
             status: "failed",
-            error: "The Run stream ended without a terminal event.",
+            error: "The operational stream ended without a terminal event.",
           });
         }
       }),
     ),
-    Effect.tapError((error) =>
+    Effect.tapError((cause) =>
       Effect.sync(() => {
+        const current = context(demoStateAtom);
         context.set(demoStateAtom, {
-          ...context(demoStateAtom),
+          ...current,
           status: "failed",
-          error: failureMessage(error),
+          error: failureMessage(cause),
         });
       }),
     ),
     Effect.onInterrupt(() =>
       Effect.sync(() => {
+        const current = context(demoStateAtom);
         context.set(demoStateAtom, {
-          ...context(demoStateAtom),
+          ...current,
           status: "interrupted",
         });
       }),
     ),
+  );
+});
+
+export interface QueueDemoCommand {
+  readonly kind: DemoCommandKind;
+  readonly content: string;
+}
+
+/** Offers a command without interrupting the active stream or Tool batch. */
+export const queueDemoCommandAtom = DemoRunRpcRuntime.fn<QueueDemoCommand>()((request, context) => {
+  const handle = context(demoStateAtom).handle;
+  if (handle === null) {
+    return failControl(context, "No active Run is ready to accept input.");
+  }
+  context.set(demoStateAtom, {
+    ...context(demoStateAtom),
+    controlError: null,
+  });
+  return Effect.gen(function* () {
+    const client = yield* DemoRunRpcClient;
+    yield* client.QueueRunCommand({
+      handle,
+      kind: request.kind,
+      content: request.content,
+    });
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((cause) => failControl(context, cause)),
+  );
+});
+
+export interface ResolveDemoApproval {
+  readonly requestId: string;
+  readonly choice: DemoApprovalChoice;
+}
+
+/** Resolves a pending approval exactly once through a separate unary RPC. */
+export const resolveDemoApprovalAtom = DemoRunRpcRuntime.fn<ResolveDemoApproval>()((
+  request,
+  context,
+) => {
+  const handle = context(demoStateAtom).handle;
+  if (handle === null) {
+    return failControl(context, "No active Run has a pending approval.");
+  }
+  context.set(demoStateAtom, {
+    ...context(demoStateAtom),
+    controlError: null,
+  });
+  return Effect.gen(function* () {
+    const client = yield* DemoRunRpcClient;
+    yield* client.ResolveRunApproval({
+      handle,
+      requestId: request.requestId,
+      choice: request.choice,
+    });
+  }).pipe(
+    Effect.scoped,
+    Effect.catch((cause) => failControl(context, cause)),
   );
 });

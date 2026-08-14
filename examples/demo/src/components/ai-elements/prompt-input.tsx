@@ -53,12 +53,7 @@ export function PromptInputSubmit({
 }: ComponentProps<typeof Button> & { readonly status?: ChatStatus }) {
   const running = status === "submitted" || status === "streaming";
   return (
-    <Button
-      aria-label={running ? "Stop run" : "Run agent"}
-      size="icon-sm"
-      type={running ? "button" : "submit"}
-      {...props}
-    >
+    <Button aria-label={running ? "Stop run" : "Run agent"} size="icon-sm" type="button" {...props}>
       {running ? <Square className="size-3 fill-current" /> : <ArrowUp />}
     </Button>
   );

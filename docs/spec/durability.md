@@ -12,7 +12,7 @@ The durable runtime makes this promise:
 
 > Once a submission is durably accepted, the system will eventually record exactly
 > one durable terminal outcome—`completed`, `failed`, or `aborted`—unless the
-> configured durability dependencies remain unavailable.
+> configured durability or required outcome-resolution dependencies remain unavailable.
 
 This is an exactly-once **recording** guarantee, not an exactly-once execution
 guarantee.
@@ -79,7 +79,9 @@ stateDiagram-v2
 ```
 
 `Unknown` is nonterminal operational state. It blocks automatic continuation until
-resolved. The settlement obligation remains outstanding.
+resolved. The settlement obligation remains outstanding. A deployment that permits ordinary
+external effects MUST configure an authorized reconciler/operator resolution path; an unresolved
+external truth is not converted to a terminal result merely to satisfy liveness.
 
 ## 4. Admission
 
@@ -119,7 +121,9 @@ An active run may claim a contiguous ready prefix of later queued Submissions:
 - after its exact canonical input is appended, it becomes `joined`;
 - joined Submissions settle with the host Run;
 - a crash before canonical input reverts the joining Submission to ready;
-- a crash after canonical input reattaches it to the host rather than duplicating it.
+- a crash after canonical input reattaches it to the host rather than duplicating it;
+- an aborted-settled queued row is a closed obligation, not a gap: the contiguous ready
+  prefix walks over it (an admitted-but-not-ready row still breaks the prefix).
 
 This join behavior comes after the base FIFO durable runtime; the ephemeral runtime
 proves the same Turn-boundary semantics first.
@@ -130,7 +134,9 @@ same.
 
 ## 6. Attempt ownership and fencing
 
-The engine depends on an `AttemptOwnership` Effect service. A claim returns:
+Attempt ownership is a capability of the `SubmissionLedger` service (its claim,
+renewal, and release operations); the durable runtime, not the engine, depends on it.
+A claim returns:
 
 - an attempt identity;
 - an ownership token;
@@ -176,7 +182,14 @@ The scheduler may safely resume automatically at these boundaries:
 - after every requested tool has a canonical result;
 - after a committed compaction artifact;
 - after a committed durable step result;
+- after a committed model response whose declared tool batch has no prepared records yet — the
+  batch resumes from the canonical declaration without re-invoking the model;
 - while waiting for explicit approval, if the approval request is canonical.
+
+The canonical approval request record is the suspension's entire canonical footprint: suspension
+itself is operational ledger state, rebuildable from history, and no canonical "suspended" record
+exists (ADR-0012). The resumed Attempt appends the canonical approval decision before honoring
+it.
 
 The scheduler must classify recovery rather than blindly retry when failure occurs:
 
@@ -232,6 +245,13 @@ The store may return a prior result for the same step identity without executing
 body. Concurrent executions race to commit; only the fenced winning result becomes
 canonical.
 
+Only **success** is ever recorded. A failing step body fails the call into the handler's error
+channel and re-entry re-executes it; recording failures would replay a transient failure forever.
+Steps carry no prepared records: under an at-least-once body contract, "may have executed" is the
+normal case and a prepared marker adds no recovery information (ADR-0012). Step results persist
+as canonical records in the Conversation Log under stable step identity — the Step Store of
+persistence §2.5 is a logical record family, not a separate physical store.
+
 Durable steps do not make a non-idempotent external API exactly once. The step
 implementation must use the external system's idempotency key, reconciliation API,
 or compensating workflow.
@@ -260,7 +280,11 @@ is recorded separately and cannot erase an accepted settlement.
 Abort is a durable command with identity, author, reason, and target.
 
 - If the submission is accepted but inactive, it may settle as aborted without an
-  execution attempt.
+  execution attempt. An aborted, never-claimed queued submission settles immediately —
+  without waiting to head its lane — because settlement order of never-run work is not
+  execution order (DUR-004 bounds execution order). Its durable abort intent authorizes
+  exactly its aborted settlement reservation, and the aborted-settled row is a closed
+  obligation that does not gap the contiguous joining prefix.
 - If active, the command becomes canonical before the worker is interrupted.
 - Ordinary tools already in flight may produce unknown outcomes.
 - Abort does not mean external side effects were rolled back.
@@ -304,6 +328,11 @@ snapshot.
 | After canonical settlement append, before ledger finalization | Canonical terminal outcome                                        | Rebuild/finalize ledger from history              |
 | After ledger finalization, before client notification         | Terminal                                                          | Return recorded settlement                        |
 
+As of Phase 5 every row of this matrix — including the tool preparation, invocation, and
+result-commit rows — is realized by executable evidence: each row exists as a pure
+recovery-classifier case and as a deterministic failpoint or real process-kill test
+([Phase 4](../PHASE-4-EVIDENCE.md) and [Phase 5](../PHASE-5-EVIDENCE.md) evidence).
+
 ## 16. Liveness and poison work
 
 Retry budgets exist per operation and per submission. Exhausting a retry budget
@@ -318,6 +347,11 @@ Poison submissions are not retried forever. The scheduler supports:
 - administrative retry after policy change;
 - quarantine for corrupt records;
 - alerts for overdue settlement obligations.
+
+`Unknown` stops ordinary running-time and worker-permit consumption, but not the accepted settlement
+obligation. Unknown work is aged, alerted, and routed to the configured resolution dependency.
+Durable deployment claims require an operational runbook and authorized bounded intervention path
+for that queue.
 
 ## 17. Requirements
 
@@ -347,3 +381,6 @@ Poison submissions are not retried forever. The scheduler supports:
   operational ledger can be rebuilt from it.
 - **DUR-016**: Recovery returns pre-append `joining` input to ready and reattaches post-append
   `joined` input without duplicate delivery.
+- **DUR-017**: Unknown external outcomes remain visible accepted-work obligations, consume no
+  ordinary worker permit, and require an authorized, alerted resolution dependency before a
+  deployment may claim durable liveness.

@@ -1,7 +1,8 @@
 # Reference-project analysis
 
 Status: Point-in-time research record  
-Inspected: 2026-07-28; decision follow-up verified 2026-07-29
+Inspected: 2026-07-28; decision follow-up verified 2026-07-29; Subagent follow-up
+2026-07-30
 
 This document records the source snapshots that informed the specification. It is
 not a promise that the upstream projects retain the same APIs or internals.
@@ -130,18 +131,166 @@ Effect AI's inspected Tool defaults handler failure to the Effect error channel 
 accepts a concurrency option and currently defaults it to unbounded, so the Agent
 runtime will supply a finite value.
 
+## Subagent research addendum
+
+The 2026-07-30 follow-up compared the pinned Flue, Pi, and Effect snapshots with these current
+official sources:
+
+- [OpenAI Agents SDK: Agents and orchestration](https://openai.github.io/openai-agents-python/agents/)
+  and [handoffs](https://openai.github.io/openai-agents-python/handoffs/);
+- [Anthropic Managed Agents: multiagent orchestration](https://platform.claude.com/docs/en/managed-agents/multiagent-orchestration)
+  and [session operations](https://platform.claude.com/docs/en/managed-agents/session-operations);
+- [LangChain/LangGraph: Subagents](https://docs.langchain.com/oss/python/langchain/multi-agent/subagents)
+  and [handoffs](https://docs.langchain.com/oss/python/langchain/multi-agent/handoffs);
+- [Temporal Child Workflows](https://docs.temporal.io/child-workflows),
+  [TypeScript child execution](https://docs.temporal.io/develop/typescript/workflows/child-workflows),
+  and
+  [Parent Close Policy](https://docs.temporal.io/parent-close-policy);
+- [Effect Fibers](https://effect.website/docs/concurrency/fibers/),
+  [Scope](https://effect.website/docs/resource-management/scope/), and the pinned v4 source.
+
+These online sources are point-in-time observations, not compatibility dependencies. Anthropic
+Managed Agents was public beta material at inspection time. Exact Effect API signatures were
+checked against the pinned v4 source because public documentation may describe another release
+line.
+
+### Flue Subagents
+
+The pinned Flue snapshot contains a substantial durable Subagent implementation:
+
+- `useSubagent` declares a named, described target and rejects duplicate names
+  (`repos/flue/packages/runtime/src/hooks/use-subagent.ts:10-71,138-153`).
+- The framework exposes one `task` Tool whose input selects only a declared target and supplies a
+  focused prompt, optional working directory, and attachment references
+  (`repos/flue/packages/runtime/src/agent.ts:339-401`).
+- Each child renders a fresh Subagent frame. It receives its own instructions, Tools, Skills, and
+  nested declarations rather than the parent's prompt history
+  (`repos/flue/packages/runtime/src/hooks/render.ts:139-174`).
+- Child creation persists parent Conversation and Tool Call linkage, increments depth, and
+  inherits or overrides Model configuration deliberately
+  (`repos/flue/packages/runtime/src/session.ts:4140-4207`).
+- Parent abort cascades to active child tasks, and close awaits task settlement and canonical
+  flushing (`repos/flue/packages/runtime/src/session.ts:3512-3537,4189-4194`).
+- Recovery locates the existing child by exact parent Tool Call identity and resumes its
+  Conversation rather than starting a new child
+  (`repos/flue/packages/runtime/src/session.ts:2755-2795,2890-2975,5295-5355`).
+- Live sibling task calls may run concurrently, while recovery currently rejoins interrupted
+  tasks sequentially before the parent batch commits.
+- Delegation depth is capped at four, but no separate token, cost, Turn, Tool Call, or breadth
+  budget was found. Children share the parent attempt deadline and durability configuration.
+
+The durable link and recovery behavior are strong design inputs. Sharing the parent environment,
+working directory, and broad runtime authority is not adopted as a safe default.
+
+### Pi Subagents
+
+Pi's pinned coding-agent repository provides Subagents as an example extension rather than a
+runtime-native child abstraction:
+
+- one model-visible Tool supports single, parallel, and chain modes
+  (`repos/pi/packages/coding-agent/examples/extensions/subagent/index.ts:1-13,448-472`);
+- each invocation launches a separate `pi` process with no session and transfers only a task plus
+  a temporary system prompt (`index.ts:267-339`);
+- a YAML Agent description may restrict child Tools and choose a Model, but the process otherwise
+  inherits its operating-system environment (`agents.ts:11-19,52-71`; `index.ts:294-297`);
+- parent cancellation terminates the process, waits, escalates after a deadline, and removes the
+  private prompt file (`index.ts:239-246,399-428`);
+- parallel mode caps eight tasks and four workers, streams progress, and preserves input-order
+  results (`index.ts:33-36,583-663`);
+- token and cost values are observed but not enforced as hierarchical budgets;
+- no stable child ID, Parent Link, durable Conversation, Receipt, ownership, fencing, reattachment,
+  or crash-recovery protocol exists.
+
+The useful lessons are the small Tool surface, clean child context, bounded parallelism, ordered
+results, progressive UI, and per-child usage. Process inheritance and in-memory-only identity are
+not sufficient framework contracts.
+
+### Current Agent-framework patterns
+
+OpenAI's official Agents SDK distinguishes:
+
+- **agents as Tools**, where a manager retains control and consumes a specialist result;
+- **handoffs**, where the recipient receives Conversation history and takes control.
+
+That distinction is adopted. The first Effect Agent Subagent capability is manager-style
+delegation; handoff remains separate.
+
+Anthropic Managed Agents demonstrates durable Agent-specific mechanics:
+
+- each child has a context-isolated session thread, history, status, event stream, and parent
+  identity;
+- a coordinator roster and referenced Agent versions are snapshotted;
+- the service limits delegation to one level, twenty unique roster entries, and twenty-five
+  concurrent threads;
+- Tool and MCP visibility is Agent-specific;
+- sandbox, filesystem, and vault credentials are session-shared.
+
+Stable versioning, child identity, bounded concurrency, and separate observation are useful. A
+shared sandbox or session-wide credential set is not treated as authority isolation.
+
+LangChain's current Subagent pattern likewise uses manager-called Tools, fresh context by default,
+parallel calls, explicit input/output projection, and optional persistent checkpointers. The docs
+also note that Tool-wrapped children are not statically discoverable for nested-state inspection.
+This reinforces making child identity, projection, and observation first-class framework records
+rather than hiding them inside an opaque handler.
+
+### Durable-child and Effect lessons
+
+Temporal Child Workflows provide a useful durability comparison without defining Agent semantics:
+
+- a child has distinct logical identity and event history;
+- the parent must await durable child establishment before relying on it;
+- result join and parent-close behavior are explicit;
+- parent and child share no local state;
+- child execution may continue across its own run chain;
+- child count is bounded because every child adds durable history;
+- durable history does not make external side effects exactly once.
+
+Effect v4 supplies the process-local execution substrate:
+
+- `Effect.forkChild` creates supervised child work;
+- `Effect.forkIn` and `Effect.forkScoped` tie work to explicit Scope ownership;
+- `FiberSet.make` interrupts tracked Fibers when its Scope closes and can await emptiness;
+- `Fiber.join` reflects child success or failure;
+- interruption waits for termination and finalizers;
+- `Semaphore.withPermit` bounds execution and releases permits under all exits.
+
+An Effect Fiber is an Attempt mechanism, not a durable child identity. Durable Subagents still need
+Conversation, Submission, Receipt, ownership, fencing, Settlement, and recovery records.
+
+### Subagent synthesis
+
+The proposed native design takes these combined lessons:
+
+1. Keep delegation distinct from handoff.
+2. Expose only declared targets through native Effect AI Tools.
+3. Start every invocation with isolated input and context.
+4. Derive explicit least-authority grants rather than cloning a runtime environment.
+5. Bound depth, breadth, concurrency, Turns, Tools, duration, bytes, tokens, and cost separately.
+6. Reserve parallel child budgets from the parent and charge usage to every ancestor.
+7. Supervise ephemeral children in the parent Scope and forbid daemon Fibers.
+8. Give durable children distinct Conversations and accepted-work obligations.
+9. Persist child establishment before relying on it and reattach by exact parent Tool Call
+   identity.
+10. Join only verified, Schema-decoded terminal output into deterministic parent Tool order.
+11. Keep full child history separately observable instead of merging it into parent context.
+12. Let unresolved child external effects remain unknown rather than fabricating a result.
+
+The normative version is [the Subagent specification](spec/subagents.md).
+
 ## Synthesis
 
 The recommended division of labor is:
 
-| Concern                           | Primary source of inspiration       | Native owner                                   |
-| --------------------------------- | ----------------------------------- | ---------------------------------------------- |
-| Authoring, typing, resources      | Effect                              | Effect Agent core                              |
-| Model/tool turn loop              | Pi and Effect AI                    | Effect Agent engine using Effect AI primitives |
-| Provider implementation           | Effect AI                           | Effect AI provider Models/Layers               |
-| Accepted-work durability          | Flue                                | Effect Agent durable runtime                   |
-| Application schemas               | Effect Schema                       | Effect Agent definitions                       |
-| Store/provider/platform mechanics | Upstream adapters and platform docs | Leaf adapters                                  |
+| Concern                           | Primary source of inspiration                    | Native owner                                   |
+| --------------------------------- | ------------------------------------------------ | ---------------------------------------------- |
+| Authoring, typing, resources      | Effect                                           | Effect Agent core                              |
+| Model/tool turn loop              | Pi and Effect AI                                 | Effect Agent engine using Effect AI primitives |
+| Subagent delegation               | Flue, current Agent frameworks, Effect, Temporal | Effect Agent capabilities and durable runtime  |
+| Provider implementation           | Effect AI                                        | Effect AI provider Models/Layers               |
+| Accepted-work durability          | Flue                                             | Effect Agent durable runtime                   |
+| Application schemas               | Effect Schema                                    | Effect Agent definitions                       |
+| Store/provider/platform mechanics | Upstream adapters and platform docs              | Leaf adapters                                  |
 
 This division of responsibility makes Effect Agent's authoring, runtime, provider, and durability
 contracts native Effect specifications. Flue and Pi remain the attributed research sources

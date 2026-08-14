@@ -129,6 +129,18 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         expect(result.output).toEqual(expectedTravelPlan);
         expect(secondPrompt).toContain("2026-09-21");
         expect(secondPrompt).toContain("quote-sfo-lhr-001");
+        // The steering message may appear only after every committed result of
+        // the settled Tool batch: applied at the Turn seam, not injected
+        // mid-batch.
+        expect(secondPrompt.indexOf("quote-sfo-lhr-001")).toBeLessThan(
+          secondPrompt.indexOf("2026-09-21"),
+        );
+        expect(secondPrompt.indexOf("Bloomsbury House")).toBeLessThan(
+          secondPrompt.indexOf("2026-09-21"),
+        );
+        expect(secondPrompt.indexOf("British Museum")).toBeLessThan(
+          secondPrompt.indexOf("2026-09-21"),
+        );
       }),
     ),
   );
@@ -200,7 +212,15 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
   it.effect("compacts only the model view while retaining growing official Travel history", () =>
     Effect.gen(function* () {
       const sourceSizes = yield* Ref.make<ReadonlyArray<number>>([]);
-      yield* AgentRuntime.run(makeTravelAgent(phase1HappyPathTurns), phase1Trip, {
+      const receivedPrompts: Array<string> = [];
+      const turns: ReadonlyArray<ScriptedTurnInput> = phase1HappyPathTurns.map((turn) => ({
+        ...turn,
+        assertRequest: (request) => {
+          expect(request.prompt.content.map((message) => message.role)).toEqual(["user"]);
+          receivedPrompts.push(JSON.stringify(request.prompt.content));
+        },
+      }));
+      yield* AgentRuntime.run(makeTravelAgent(turns), phase1Trip, {
         context: {
           prepare: ({ source }) =>
             Ref.update(sourceSizes, (sizes) => [...sizes, source.content.length]).pipe(
@@ -212,6 +232,14 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
       const sizes = yield* Ref.get(sourceSizes);
       expect(sizes).toHaveLength(2);
       expect(sizes[1]).toBeGreaterThan(sizes[0] ?? 0);
+      // The model must receive exactly the prepared compacted prompt, never
+      // the growing official history it replaces.
+      expect(receivedPrompts).toHaveLength(2);
+      for (const prompt of receivedPrompts) {
+        expect(prompt).toContain("Use the compacted Travel Planner context.");
+        expect(prompt).not.toContain(phase1Trip.request);
+        expect(prompt).not.toContain("quote-sfo-lhr-001");
+      }
     }),
   );
 

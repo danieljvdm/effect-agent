@@ -19,7 +19,6 @@ import {
   replayConversation,
   replayConversationFromCheckpoint,
   SaveCheckpointRequest,
-  SubmissionStore,
 } from "@effect-agent/session";
 import { MemoryStorageLive } from "@effect-agent/storage-memory";
 import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite";
@@ -87,7 +86,6 @@ const writePersistentTravelPlanner = Effect.gen(function* () {
 
 const inspectPersistentTravelPlanner = Effect.gen(function* () {
   const store = yield* ConversationStore;
-  const submissions = yield* SubmissionStore;
   const exported = yield* store.export(
     ConversationExportRequest.make({
       conversationId: phase3TravelPlannerConversationId,
@@ -135,13 +133,11 @@ const inspectPersistentTravelPlanner = Effect.gen(function* () {
     )
     .pipe(Stream.take(suffix.length), Stream.runCollect);
 
-  const capabilities = yield* submissions.capabilities;
   const portableExport = yield* Schema.encodeEffect(ConversationExport)(exported).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(ConversationExport)),
   );
 
   return {
-    capabilities,
     checkpointReplay,
     fullReplay,
     observedSuffix: Array.from(observedSuffix),
@@ -188,10 +184,6 @@ describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
       expect(inspected.plan).toEqual(expectedTravelPlan);
       expect(inspected.observedSuffix).toHaveLength(2);
       expect(inspected.portableExport.records).toHaveLength(4);
-      expect(inspected.capabilities).toEqual({
-        durability: "non-durable",
-        acceptsDurableWork: false,
-      });
     }).pipe(Effect.provide(memoryLayer)),
   );
 
@@ -209,10 +201,6 @@ describe("TEST-014 P3 persistent Travel Planner profile (P)", () => {
         expect(inspected.plan).toEqual(expectedTravelPlan);
         expect(inspected.observedSuffix).toHaveLength(2);
         expect(inspected.portableExport.records).toHaveLength(4);
-        expect(inspected.capabilities).toEqual({
-          durability: "non-durable",
-          acceptsDurableWork: false,
-        });
       }),
     ),
   );

@@ -7,6 +7,8 @@ projects belong in [REFERENCE-ANALYSIS.md](REFERENCE-ANALYSIS.md).
 Status values:
 
 - **Accepted** — authoritative for implementation.
+- **Accepted by default** — adopted as a roadmap-assigned implementation default and already
+  implemented; owner review may still amend it.
 - **Deferred** — intentionally postponed until the stated trigger.
 - **Proposed** — a future recommendation that still needs owner approval.
 
@@ -135,9 +137,19 @@ Record: [ADR-0002](adr/0002-use-effect-ai-primitives.md)
 
 ### D-013 — Child agent budgets
 
-**Status:** Deferred  
-**Decision for now:** Do not design a detailed child-budget system. Reopen when Subagents become an
-active implementation phase.
+**Status:** Proposed
+**Recommendation:** Reopen Subagents in two slices: attached ephemeral delegation immediately
+after Phase 3, and durable attached delegation after the Phase 4/5 recovery foundations. A child
+receives a finite allocation reserved from its parent's remaining delegation budget; consumption
+is charged exactly once to every ancestor, and unused reservation returns exactly once through an
+idempotent accounting transition after settlement. The grant is only a ceiling: each protected
+child action reauthorizes current policy, and parent approval is not transitive.
+
+The proposed first release is depth one, attached join only, and uses declared Effect AI Tools with
+fresh child Conversations. Owner approval and roadmap placement remain required.
+
+Proposed record: [ADR-0010](adr/0010-declared-attached-subagents.md)
+Specification: [Subagents](spec/subagents.md)
 
 ## Platforms, persistence, and operations
 
@@ -198,6 +210,137 @@ admission and live coordination such as queue order, attempts, ownership, and ab
 terminal ledger row that disagrees with canonical history is repaired from history.
 
 Record: [ADR-0003](adr/0003-canonical-log-and-ledger.md)
+
+### D-029 — Durable runtime placement and leases
+
+**Status:** Accepted by default (adopted as the Phase 4 implementation default; pending owner
+review)
+
+**Decision:** The durable coordinator (`DurableAgentRuntime`), recovery classifier, and run
+journal live in `@effect-agent/session`, which now depends on `@effect-agent/engine`; platform
+packages remain Layer assembly, host gates, and crash harnesses. Ledger claims fence with
+atomically bumped producer epochs as the correctness authority, while renewable ownership leases
+(default 30 seconds, adapter-configurable) provide liveness only. The SQLite storage version is 2
+with an exact-or-zero compatibility check: version-1 development files fail with typed reset
+guidance and are never migrated. Canonical model output is recorded per Turn as
+`ModelResponseRecorded` carrying the Turn's Schema-encoded Prompt messages; per-delta canonical
+records were rejected for volume and remain a Phase 5 consideration.
+
+Record: [ADR-0011](adr/0011-durable-runtime-placement-and-leases.md)
+Evidence: [Phase 4 evidence](PHASE-4-EVIDENCE.md)
+
+### D-030 — Durable Tool uncertainty, Steps, and suspension records
+
+**Status:** Accepted by default (adopted as the Phase 5 implementation default; pending owner
+review)
+
+**Decision:** Which Tool Calls enter the prepared/settled uncertainty protocol is declared by an
+Effect AI execution-class annotation (`readonly` | `idempotent` | `uncertain`) with a fail-closed
+`uncertain` default for unannotated Tools; always-prepared was rejected for volume and for
+converting free re-runs into Unknown Outcomes. The Durable Step service tag and API
+(`step.do(name, OutputSchema, effect)` — the Schema is the canonical codec for the recorded
+result) live in `@effect-agent/engine`, provided locally per Tool Call over a session-implemented
+`RunStepHook`. Step results persist as settled-success-only `ToolStepSettled` canonical records
+in the Conversation Log — no separate Step Store port, no prepared Step records, no recorded Step
+failures. A superseding Attempt audits an incomplete prior response with a first-class
+`ModelResponseInterrupted` canonical record. Durable approval suspension writes no canonical
+suspension record: the canonical `ToolApprovalRequested` is the boundary evidence and suspension
+is rebuildable ledger state. Unknown/approval resolution authorization in P5 is service-possession
+plus mandatory author/reason audit fields — the same trust boundary as `abort`; the authenticated
+operator surface, aging, and alerting are P7 scope.
+
+Record: [ADR-0012](adr/0012-durable-tool-uncertainty-and-steps.md)
+Evidence: [Phase 5 evidence](PHASE-5-EVIDENCE.md)
+
+### D-031 — Durable Subagent establishment, waiting suspension, and binding resolution
+
+**Status:** Accepted by default (adopted as the S2 implementation default; pending owner
+review — the Subagent capability decision itself, ADR-0010/D-013, remains Proposed)
+
+**Decision:** The durable delegation seam is an engine-owned `RunSubagentHook` contract with a
+per-batch `SubagentDurability` service and an explicit ephemeral default; session implements the
+hook inside the coordinator and capabilities consumes it, so no package gains a forbidden
+dependency edge. A durable parent waits as `waitingForChild` through an additive
+`SuspensionReason` member plus one new idempotent cross-lane wake operation
+(`recordChildSettled`) — no new submission state. Recovery is primarily idempotent delegation-
+handler re-entry via batch resume, with binding-free repair executors only; the encoded child
+input rides the canonical `SubagentRequested` record so admission completes without a live
+handler, and child identity is derived deterministically from the parent Run and Tool Call pair.
+Admission recovery uses a tri-state `resolveAdmission` port operation (`notAdmitted` | `admitted`
+| `indeterminate`). Durable recovery resolves Agent Bindings through the host-supplied
+`AgentBindingResolver` by stable identity and exact stored digests, fail-closed: an unresolvable
+parent-linked child settles the framework `ChildCompatibilityFailure`, a failed durable child
+joins as the bounded `SubagentExecutionFailure` (no raw Cause; `mapChildFailure` stays the
+ephemeral contract), and a root head is refused typed. Child budget reservations are generic
+opaque state-machine rows in the one `SubmissionLedger` port; delegation calls remain ordinary
+prepared Tool Calls excluded from `MarkUnknown` by durable evidence plus the core-owned naming
+rule. Authorization scope is service possession plus structural Parent-Link/digest verification;
+authenticated per-read authorization, aging, and alerting stay P7. Accounting is conservative:
+structural dimensions from canonical child evidence, unreported token/cost dimensions consume
+their reservation, overruns recorded and never clipped.
+
+Record: [ADR-0013](adr/0013-durable-subagent-establishment.md)
+Evidence: [S2 evidence](S2-EVIDENCE.md)
+
+### D-032 — Cloudflare Conversation Objects
+
+**Status:** Accepted by default (adopted as the Phase 6 implementation default; pending owner
+review)
+
+**Decision:** Deployment class `DC` runs the unchanged durable coordinator inside one
+SQLite-backed Durable Object per Conversation (`namespace.idFromName(conversationId)`): no
+worker loop — each ingress event or alarm runs one bounded reconcile-then-drain pass, with the
+constructor gate local-only so cross-Object recovery can never deadlock. One multiplexed storage
+alarm is the liveness engine under the pre-armed invariant that committed nonterminal work
+implies a committed alarm, making eviction recovery request-free; alarm passes are idempotent
+under at-least-once delivery. Storage mirrors the Node v4 tables in one fresh migration plus an
+`effect_agent_meta` exact-or-fresh version gate and the durable `effect_agent_child_settlements`
+cross-store notification marker; transactions use Durable Object storage transactions (the
+Node write-contention machinery has no analogue and is absent). Cross-Object port calls travel
+as Schema-encoded envelopes over Durable Object JS RPC across a closed route-capable subset,
+with adapter-minted routable Submission identities (`{uuidv7}:{conversationId}`) and transport
+faults surfacing as `AdmissionIndeterminate`, never absence. Admission limits (queue depth,
+input bytes, database size under the 10 GB cap) are checked before `submit`; the ~1.9 MB stored
+value bound fails typed and R2 stays deferred with the `AttachmentStore` port. DN ≡ DC is
+claimed as byte-equal cross-platform normalized canonical evidence against one committed golden.
+The Cloudflare suites run on `@cloudflare/vitest-pool-workers` plus a programmatic Miniflare
+restart lane, via direct `vitest run` (the probed `vp test` exception).
+
+Record: [ADR-0014](adr/0014-cloudflare-conversation-objects.md)
+Evidence: [Phase 6 evidence](PHASE-6-EVIDENCE.md)
+
+### D-033 — Phase 7 hardening shape
+
+**Status:** Accepted by default (adopted as the Phase 7 implementation default; pending owner
+review — Phase 7 completes the roadmap table, so resolving this record, ADRs 0011–0015, and the
+still-Proposed ADR-0010 is the owner review that roadmap completion now awaits)
+
+**Decision:** Adapter certification is one three-tier entry point (`certifyDurableAdapters`)
+producing a Schema-encoded certificate: the shared conformance arrays verbatim (Tier 1), the
+real coordinator swept across every failpoint location and six scenario shapes into the single
+shared invariant checker `verifyConversationInvariants` with a fully recomputed digest chain and
+a pinned unreachable-location list (Tier 2), and real loss recorded honestly as
+exercised / recorded-evidence / not-exercised / not-applicable (Tier 3) — certificates are
+committed evidence artifacts, never the assertion source. The formal model is TLA+/PlusCal
+checked by TLC on bounded committed instances with negative controls, run manually and on a
+schedule but never as a PR gate; its claim is about the protocol design under enumerated
+abstraction assumptions, explicitly not about the code, whose claim remains the linked test
+corpus. The administrative operations (explain/explainConversation, verify, retry, wake,
+scanObligations) are coordinator members over the two storage ports only — identical on DN and
+DC — with a scripts/ CLI rather than a new package; explain is provably read-only, verify never
+repairs and scopes honestly, retry re-drives exactly the classifier's one decision with the
+existing audit record, and obligation scanning is scan-based with host-owned alerting. Admin
+authorization is the minimal `OperationAuthorizer` port: possession-default, fail-closed typed
+denial before any read or write when a host supplies a real authorizer, mandatory author/reason
+on mutating operations. The closing semantic fixes: the model-vindicated
+`AwaitParentEstablishment` classifier decision (with the worker-claim gate) closes the
+cross-Object establishment race; aborted never-claimed non-head ready Submissions settle
+immediately with the gap rule treating them as non-gaps; defects stay defects with
+`withTerminalDefectEvent` as the bounded opt-in; `LedgerCapabilities.durability` gains
+`durable-cloudflare`; and the shared SQL core is deliberately not extracted (ADR-0014 revisit).
+
+Record: [ADR-0015](adr/0015-hardening-shape.md)
+Evidence: [Phase 7 evidence](PHASE-7-EVIDENCE.md)
 
 ## Integration and project boundaries
 

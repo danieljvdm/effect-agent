@@ -1,12 +1,65 @@
-import { ConversationId, RunId } from "@effect-agent/core";
+import { ConversationId, RunId, ToolCallId } from "@effect-agent/core";
 import { Schema } from "effect";
 
 import { EMPTY_TAIL_DIGEST } from "./digest.ts";
-import { CanonicalRecordEnvelope, CanonicalSequence, Digest, PersistedJson } from "./records.ts";
+import {
+  AbortRequested,
+  CanonicalRecordEnvelope,
+  CanonicalSequence,
+  Digest,
+  PersistedJson,
+  SubagentJoined,
+  SubagentLineageRecorded,
+  SubagentRequested,
+  SubagentStarted,
+  SubmissionSettled,
+  ToolApprovalDecided,
+  ToolApprovalRequested,
+  ToolCallPrepared,
+  ToolCallUnknown,
+} from "./records.ts";
+
+/** One prepared ordinary Tool Call still awaiting a canonical settled/resolved outcome. */
+export class OpenToolCallState extends Schema.Class<OpenToolCallState>(
+  "@effect-agent/session/OpenToolCallState",
+)({
+  toolCallId: ToolCallId,
+  toolName: ToolCallPrepared.fields.toolName,
+  turn: ToolCallPrepared.fields.turn,
+  runId: RunId,
+}) {}
+
+/** The canonical approval trail: requests and decisions in canonical order. */
+export const ApprovalRecord = Schema.Union([ToolApprovalRequested, ToolApprovalDecided]);
+export type ApprovalRecord = typeof ApprovalRecord.Type;
 
 /**
- * Rebuildable Phase 3 projection. It contains only canonical values and can be discarded and
+ * Parent-side view of one Subagent Invocation, keyed by the parent Tool Call: the canonical
+ * `SubagentRequested`/`SubagentStarted`/`SubagentJoined` payloads as they become canonical
+ * (spec/subagents.md §11). A disposable derived view — the canonical records and the child's
+ * own Settlement remain the recovery truth (DUR-015).
+ */
+export class SubagentInvocationState extends Schema.Class<SubagentInvocationState>(
+  "@effect-agent/session/SubagentInvocationState",
+)({
+  toolCallId: ToolCallId,
+  requested: Schema.optionalKey(SubagentRequested),
+  started: Schema.optionalKey(SubagentStarted),
+  joined: Schema.optionalKey(SubagentJoined),
+}) {}
+
+/**
+ * Rebuildable canonical projection. It contains only canonical values and can be discarded and
  * reconstructed from the record stream at any time.
+ *
+ * Phase 4 added `settlements` and `abortRequests`; Phase 5 added `openToolCalls` (the
+ * prepared-minus-settled/resolved fold), `unknownToolCalls`, and `approvals`; S2 adds
+ * `subagentInvocations` (the parent-side requested/started/joined fold) and `parentLink` (the
+ * child-side immutable lineage). A checkpoint whose persisted state lacks these fields fails to
+ * decode against this schema; the checkpoint is rejected and the projection is rebuilt from
+ * canonical records (documented disposable-checkpoint behavior, STORE-007/STORE-008).
+ * `ModelResponseRecorded` advances `throughSequence` without dedicated projection state: Prompt
+ * reconstruction reads canonical records directly.
  */
 export class ConversationProjection extends Schema.Class<ConversationProjection>(
   "@effect-agent/session/ConversationProjection",
@@ -18,6 +71,13 @@ export class ConversationProjection extends Schema.Class<ConversationProjection>
   modelOutputs: Schema.Array(PersistedJson),
   completedRuns: Schema.Array(RunId),
   failedRuns: Schema.Array(RunId),
+  settlements: Schema.Array(SubmissionSettled),
+  abortRequests: Schema.Array(AbortRequested),
+  openToolCalls: Schema.Array(OpenToolCallState),
+  unknownToolCalls: Schema.Array(ToolCallUnknown),
+  approvals: Schema.Array(ApprovalRecord),
+  subagentInvocations: Schema.Array(SubagentInvocationState),
+  parentLink: Schema.optionalKey(SubagentLineageRecorded),
 }) {}
 
 export const initialConversationProjection = (
@@ -31,7 +91,40 @@ export const initialConversationProjection = (
     modelOutputs: [],
     completedRuns: [],
     failedRuns: [],
+    settlements: [],
+    abortRequests: [],
+    openToolCalls: [],
+    unknownToolCalls: [],
+    approvals: [],
+    subagentInvocations: [],
   });
+
+/**
+ * Idempotent per-Tool-Call upsert of the parent-side Subagent fold. Deterministic record
+ * identities make duplicates impossible in one canonical stream; the first canonical payload of
+ * each stage wins so a replayed reduce is a no-op.
+ */
+const upsertSubagentInvocation = (
+  invocations: ReadonlyArray<SubagentInvocationState>,
+  payload: SubagentRequested | SubagentStarted | SubagentJoined,
+): ReadonlyArray<SubagentInvocationState> => {
+  const existing = invocations.find((invocation) => invocation.toolCallId === payload.toolCallId);
+  const requested =
+    existing?.requested ?? (payload._tag === "SubagentRequested" ? payload : undefined);
+  const started = existing?.started ?? (payload._tag === "SubagentStarted" ? payload : undefined);
+  const joined = existing?.joined ?? (payload._tag === "SubagentJoined" ? payload : undefined);
+  const next = SubagentInvocationState.make({
+    toolCallId: payload.toolCallId,
+    ...(requested === undefined ? {} : { requested }),
+    ...(started === undefined ? {} : { started }),
+    ...(joined === undefined ? {} : { joined }),
+  });
+  return existing === undefined
+    ? [...invocations, next]
+    : invocations.map((invocation) =>
+        invocation.toolCallId === payload.toolCallId ? next : invocation,
+      );
+};
 
 /** Pure one-record Conversation transition. */
 export const reduceConversationRecord = (
@@ -56,6 +149,50 @@ export const reduceConversationRecord = (
     payload._tag === "RunFailed"
       ? [...projection.failedRuns, payload.runId]
       : projection.failedRuns;
+  const settlements =
+    payload._tag === "SubmissionSettled"
+      ? [...projection.settlements, payload]
+      : projection.settlements;
+  const abortRequests =
+    payload._tag === "AbortRequested"
+      ? [...projection.abortRequests, payload]
+      : projection.abortRequests;
+  // `ToolCallPrepared` opens a call; `ToolCallSettled` (results batch or late settle) and
+  // `ToolCallResolved` (DUR-017) close it. `ToolCallUnknown` does NOT close it: the call stays
+  // open until an authorized resolution or a recovered result arrives.
+  const openToolCalls =
+    payload._tag === "ToolCallPrepared"
+      ? projection.openToolCalls.some((call) => call.toolCallId === payload.toolCallId)
+        ? projection.openToolCalls
+        : [
+            ...projection.openToolCalls,
+            OpenToolCallState.make({
+              toolCallId: payload.toolCallId,
+              toolName: payload.toolName,
+              turn: payload.turn,
+              runId: payload.runId,
+            }),
+          ]
+      : payload._tag === "ToolCallSettled" || payload._tag === "ToolCallResolved"
+        ? projection.openToolCalls.filter((call) => call.toolCallId !== payload.toolCallId)
+        : projection.openToolCalls;
+  const unknownToolCalls =
+    payload._tag === "ToolCallUnknown"
+      ? [...projection.unknownToolCalls, payload]
+      : projection.unknownToolCalls;
+  const approvals =
+    payload._tag === "ToolApprovalRequested" || payload._tag === "ToolApprovalDecided"
+      ? [...projection.approvals, payload]
+      : projection.approvals;
+  const subagentInvocations =
+    payload._tag === "SubagentRequested" ||
+    payload._tag === "SubagentStarted" ||
+    payload._tag === "SubagentJoined"
+      ? upsertSubagentInvocation(projection.subagentInvocations, payload)
+      : projection.subagentInvocations;
+  // The child-side lineage is immutable (SUB-004): the first canonical record wins forever.
+  const parentLink =
+    projection.parentLink ?? (payload._tag === "SubagentLineageRecorded" ? payload : undefined);
 
   return ConversationProjection.make({
     conversationId: projection.conversationId,
@@ -65,6 +202,13 @@ export const reduceConversationRecord = (
     modelOutputs,
     completedRuns,
     failedRuns,
+    settlements,
+    abortRequests,
+    openToolCalls,
+    unknownToolCalls,
+    approvals,
+    subagentInvocations,
+    ...(parentLink === undefined ? {} : { parentLink }),
   });
 };
 

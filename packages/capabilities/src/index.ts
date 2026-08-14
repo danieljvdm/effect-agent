@@ -7,3 +7,5 @@ export * from "./engine-adapters.ts";
 export * from "./mcp.ts";
 export * from "./redaction.ts";
 export * from "./scheduling.ts";
+export * from "./subagent.ts";
+export * from "./subagent-reservation.ts";

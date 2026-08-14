@@ -9,6 +9,8 @@
     { "path": "./packages/session" },
     { "path": "./packages/storage-memory" },
     { "path": "./packages/storage-sqlite" },
+    { "path": "./packages/storage-cloudflare" },
+    { "path": "./packages/platform-cloudflare" },
     { "path": "./packages/testing" },
     { "path": "./examples/demo" },
     { "path": "./examples/providers" }

@@ -19,8 +19,9 @@ import {
 } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 
+import { TestClock } from "effect/testing";
+
 import {
-  AppendConflict,
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
@@ -31,16 +32,14 @@ import {
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
+  conversationStoreConformanceCases,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
-  FenceRejected,
-  inspectConversationStoreConformance,
   LoadCheckpointRequest,
   ObservationOffset,
   ProducerEpoch,
   RunCompleted,
   SaveCheckpointRequest,
-  SubmissionStore,
   UserInputRecorded,
   type AppendResult,
   type CanonicalRecordPayload,
@@ -59,6 +58,7 @@ import {
   SqliteStorageCorruptionError,
   type SqliteStorageInitializationError,
   SqliteStorageError,
+  SqliteWriteContention,
 } from "../src/index.ts";
 
 type Equal<Left, Right> =
@@ -156,10 +156,13 @@ const append = (
     }),
   );
 
-const withStorage = <A, E>(
+const withStorage = <A, E>(filename: string, effect: Effect.Effect<A, E, ConversationStore>) =>
+  Effect.provide(effect, layer({ filename, observationPollInterval: 1 }));
+
+const withVerifiedStorage = <A, E>(
   filename: string,
-  effect: Effect.Effect<A, E, ConversationStore | SubmissionStore>,
-) => Effect.provide(effect, layer({ filename, observationPollInterval: 1 }));
+  effect: Effect.Effect<A, E, ConversationStore>,
+) => Effect.provide(effect, layer({ filename, observationPollInterval: 1, verifyOnOpen: true }));
 
 const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
   Effect.provide(effect, SqliteClient.layer({ filename }));
@@ -170,8 +173,10 @@ const explicitTestStorageLayer = (filename: string) =>
       Layer.mergeAll(
         Layer.succeed(SqliteStorageConfig)(
           SqliteStorageConfigValue.make({
-            filename,
             observationPollInterval: 1,
+            busyTimeout: 5_000,
+            ownershipLeaseDuration: 30_000,
+            verifyOnOpen: false,
           }),
         ),
         SqliteStorageFailpoint.layerTest,
@@ -195,6 +200,14 @@ const withTemporaryDatabase = <A, E>(
   ).pipe(Effect.provide(NodeFileSystem.layer));
 
 describe("SqliteConversationStore", () => {
+  describe("shared ConversationStore conformance", () => {
+    for (const conformanceCase of conversationStoreConformanceCases) {
+      it.effect(conformanceCase.name, () =>
+        withTemporaryDatabase((filename) => withStorage(filename, conformanceCase.run)),
+      );
+    }
+  });
+
   it("keeps configuration and failpoint authority in the named Layer input", () => {
     const requirementsProof: ConversationStoreLayerRequirementsProof = true;
     const errorProof: ConversationStoreLayerErrorProof = true;
@@ -211,8 +224,9 @@ describe("SqliteConversationStore", () => {
         const store = yield* ConversationStore;
 
         expect(config).toMatchObject({
-          filename,
           observationPollInterval: 1,
+          busyTimeout: 5_000,
+          verifyOnOpen: false,
         });
         yield* failpoints.setHandler((location) =>
           location === "materialize:before"
@@ -298,7 +312,6 @@ describe("SqliteConversationStore", () => {
             filename,
             Effect.gen(function* () {
               const store = yield* ConversationStore;
-              const submissions = yield* SubmissionStore;
               const exported = yield* store.export(
                 ConversationExportRequest.make({ conversationId }),
               );
@@ -310,105 +323,18 @@ describe("SqliteConversationStore", () => {
               expect(exported.tailSequence).toBe(first.lastSequence);
               expect(exported.tailDigest).toBe(first.tailDigest);
               expect(Option.isSome(checkpoint)).toBe(true);
-              expect(yield* inspectConversationStoreConformance(conversationId)).toEqual({
-                readCount: 1,
-                observedCount: 1,
-                exportCount: 1,
-                hasCheckpoint: true,
-              });
-              expect(yield* submissions.capabilities).toEqual({
-                durability: "non-durable",
-                acceptsDurableWork: false,
-              });
-              expect(Option.isNone(yield* submissions.inspect(submissionId))).toBe(true);
+              const reread = yield* store
+                .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+                .pipe(Stream.runCollect);
+              expect(reread).toHaveLength(1);
+              const reobserved = yield* store
+                .observe(ConversationObservation.make({ conversationId }))
+                .pipe(Stream.take(1), Stream.runCollect);
+              expect(reobserved).toHaveLength(1);
             }),
           );
         }),
       ),
-  );
-
-  it.effect("atomically replays identical batches and rejects conflicts and fenced producers", () =>
-    withTemporaryDatabase((filename) =>
-      withStorage(
-        filename,
-        Effect.gen(function* () {
-          const store = yield* ConversationStore;
-          yield* store.materialize(
-            ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
-          );
-          const firstBatch = batch("atomic-1", [inputRecord("atomic-record-1", "Lisbon")]);
-          const first = yield* append(store, firstBatch);
-          expect((yield* append(store, firstBatch)).replayed).toBe(true);
-
-          const conflicting = yield* append(
-            store,
-            batch("atomic-1", [inputRecord("atomic-record-2", "Porto")]),
-          ).pipe(Effect.exit);
-          expect(Exit.isFailure(conflicting)).toBe(true);
-          if (Exit.isFailure(conflicting)) {
-            const error = Cause.squash(conflicting.cause);
-            expect(error).toBeInstanceOf(AppendConflict);
-            if (error instanceof AppendConflict) {
-              expect(error.reason).toBe("batch-digest");
-              expect(error.batchId).toBe(firstBatch.batchId);
-            }
-          }
-
-          const duplicate = inputRecord("duplicate-record", "duplicate");
-          const duplicateExit = yield* append(
-            store,
-            batch("atomic-duplicate", [duplicate, duplicate]),
-            first,
-          ).pipe(Effect.exit);
-          expect(Exit.isFailure(duplicateExit)).toBe(true);
-          if (Exit.isFailure(duplicateExit)) {
-            const error = Cause.squash(duplicateExit.cause);
-            expect(error).toBeInstanceOf(AppendConflict);
-            if (error instanceof AppendConflict) {
-              expect(error.reason).toBe("batch-digest");
-            }
-          }
-
-          const staleTail = yield* append(
-            store,
-            batch("atomic-stale-tail", [inputRecord("atomic-record-stale-tail", "Faro")]),
-          ).pipe(Effect.exit);
-          expect(Exit.isFailure(staleTail)).toBe(true);
-          if (Exit.isFailure(staleTail)) {
-            const error = Cause.squash(staleTail.cause);
-            expect(error).toBeInstanceOf(AppendConflict);
-            if (error instanceof AppendConflict) {
-              expect(error.reason).toBe("tail");
-            }
-          }
-
-          yield* store.materialize(
-            ConversationMaterialization.make({ conversationId, producerEpoch: epoch(2) }),
-          );
-          const fenced = yield* append(
-            store,
-            batch("atomic-2", [inputRecord("atomic-record-3", "Coimbra")]),
-            first,
-            epoch(1),
-          ).pipe(Effect.exit);
-          expect(Exit.isFailure(fenced)).toBe(true);
-          if (Exit.isFailure(fenced)) {
-            const error = Cause.squash(fenced.cause);
-            expect(error).toBeInstanceOf(FenceRejected);
-            if (error instanceof FenceRejected) {
-              expect(error.actualEpoch).toBe(2);
-              expect(error.attemptedEpoch).toBe(1);
-              expect(error.conversationId).toBe(conversationId);
-            }
-          }
-
-          const records = yield* store
-            .read(ConversationRead.make({ conversationId, limit: 1_024 }))
-            .pipe(Stream.runCollect);
-          expect(records).toHaveLength(1);
-        }),
-      ),
-    ),
   );
 
   it.effect("resumes observation from the opaque offset returned by the prior record", () =>
@@ -555,7 +481,7 @@ describe("SqliteConversationStore", () => {
     ),
   );
 
-  it.effect("fails startup on corrupt current-version rows without mutating the log", () =>
+  it.effect("fails clearly on corrupt current-version rows without mutating the log", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         yield* withStorage(
@@ -581,10 +507,33 @@ describe("SqliteConversationStore", () => {
           }),
         );
 
-        const reopened = yield* withStorage(filename, ConversationStore).pipe(Effect.exit);
-        expect(Exit.isFailure(reopened)).toBe(true);
-        if (Exit.isFailure(reopened)) {
-          expect(Cause.squash(reopened.cause)).toBeInstanceOf(SqliteStorageCorruptionError);
+        // The opt-in integrity scan refuses to open the corrupt database.
+        const verified = yield* ConversationStore.pipe(
+          Effect.provide(layer({ filename, observationPollInterval: 1, verifyOnOpen: true })),
+          Effect.exit,
+        );
+        expect(Exit.isFailure(verified)).toBe(true);
+        if (Exit.isFailure(verified)) {
+          expect(Cause.squash(verified.cause)).toBeInstanceOf(SqliteStorageCorruptionError);
+        }
+
+        // The default lazy open succeeds; the corrupt row fails clearly at first decode.
+        const lazyRead = yield* withStorage(
+          filename,
+          Effect.gen(function* () {
+            const store = yield* ConversationStore;
+            return yield* store
+              .read(ConversationRead.make({ conversationId, limit: 1_024 }))
+              .pipe(Stream.runCollect);
+          }),
+        ).pipe(Effect.exit);
+        expect(Exit.isFailure(lazyRead)).toBe(true);
+        if (Exit.isFailure(lazyRead)) {
+          const error = Cause.squash(lazyRead.cause);
+          expect(error).toBeInstanceOf(ConversationStoreError);
+          if (error instanceof ConversationStoreError) {
+            expect(error.operation).toBe("decode canonical record");
+          }
         }
 
         const rows = yield* withSql(
@@ -626,7 +575,8 @@ describe("SqliteConversationStore", () => {
           }),
         );
 
-        const reopened = yield* withStorage(
+        // Reopen with the opt-in integrity scan to keep its healthy-database path covered.
+        const reopened = yield* withVerifiedStorage(
           filename,
           Effect.gen(function* () {
             const store = yield* ConversationStore;
@@ -705,13 +655,98 @@ describe("SqliteConversationStore", () => {
     ),
   );
 
+  it.effect("wakes a live observer whose poll found nothing once a new batch commits", () =>
+    withTemporaryDatabase((filename) =>
+      withStorage(
+        filename,
+        Effect.gen(function* () {
+          const store = yield* ConversationStore;
+          yield* store.materialize(
+            ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+          );
+
+          const observerFiber = yield* store
+            .observe(ConversationObservation.make({ conversationId }))
+            .pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+          // Let the observer reach its first empty poll before anything is committed.
+          yield* Effect.yieldNow;
+
+          yield* append(store, batch("live-1", [inputRecord("live-record-1", "first")]));
+
+          // Drive the TestClock until the sleeping poll wakes and sees the new batch. The
+          // adjust loop yields each step, so the observer always progresses deterministically.
+          const observed = yield* Fiber.join(observerFiber).pipe(
+            Effect.raceFirst(
+              TestClock.adjust(1).pipe(Effect.andThen(Effect.yieldNow), Effect.forever),
+            ),
+          );
+          expect(observed.map((record) => record.record.recordId)).toEqual(["live-record-1"]);
+        }),
+      ),
+    ),
+  );
+
+  it.effect("classifies cross-connection write contention as retryable typed contention", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const first = yield* withStorage(
+          filename,
+          Effect.gen(function* () {
+            const store = yield* ConversationStore;
+            yield* store.materialize(
+              ConversationMaterialization.make({ conversationId, producerEpoch: epoch(1) }),
+            );
+            return yield* append(store, batch("busy-1", [inputRecord("busy-record-1", "before")]));
+          }),
+        );
+
+        const contendedBatch = batch("busy-2", [inputRecord("busy-record-2", "after")]);
+        yield* withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            // Hold the write lock on a separate connection, as a transiently coexisting
+            // producer would.
+            yield* sql`BEGIN IMMEDIATE`;
+            const contended = yield* Effect.provide(
+              Effect.gen(function* () {
+                const store = yield* ConversationStore;
+                return yield* append(store, contendedBatch, first);
+              }),
+              layer({ filename, observationPollInterval: 1, busyTimeout: 0 }),
+            ).pipe(Effect.exit);
+            yield* sql`ROLLBACK`;
+
+            expect(Exit.isFailure(contended)).toBe(true);
+            if (Exit.isFailure(contended)) {
+              const error = Cause.squash(contended.cause);
+              expect(error).toBeInstanceOf(ConversationStoreError);
+              if (error instanceof ConversationStoreError) {
+                expect(error.cause).toBeInstanceOf(SqliteWriteContention);
+              }
+            }
+          }),
+        );
+
+        // Once the competing writer releases the lock, the identical append commits.
+        const recovered = yield* withStorage(
+          filename,
+          Effect.gen(function* () {
+            const store = yield* ConversationStore;
+            return yield* append(store, contendedBatch, first);
+          }),
+        );
+        expect(recovered.replayed).toBe(false);
+        expect(recovered.firstSequence).toBe(first.lastSequence + 1);
+      }),
+    ),
+  );
+
   it.effect("exposes deterministic before/after mutation failpoints with recoverable reopen", () =>
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const active = yield* Ref.make<SqliteStorageFailpointLocation | undefined>(undefined);
-        const withFailpoints = <A, E>(
-          effect: Effect.Effect<A, E, ConversationStore | SubmissionStore>,
-        ) =>
+        const withFailpoints = <A, E>(effect: Effect.Effect<A, E, ConversationStore>) =>
           Effect.provide(
             effect,
             layer({

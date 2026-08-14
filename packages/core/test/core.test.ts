@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { Duration, Schema } from "effect";
+import { Duration, Effect, Schema } from "effect";
 
 import {
   AgentId,
@@ -12,18 +12,46 @@ import {
   AgentOutputError,
   AgentPolicy,
   AgentPolicyError,
+  ConversationId,
+  DelegationId,
+  IdGenerator,
   ModelProtocolError,
+  ReceiptId,
   RunEvent,
   RunId,
   RunStarted,
+  SettlementId,
+  SubagentCompleted,
+  SubagentFailed,
+  SubagentInterrupted,
+  SubagentJoined,
+  SubagentParentLink,
+  SubagentProgress,
+  SubagentRequested,
+  SubagentStarted,
   ToolCallFailed,
   ToolCallDeclared,
+  TurnId,
 } from "../src/index.ts";
 
 describe("core schemas", () => {
   it("decodes distinct non-empty branded identifiers", () => {
     expect(Schema.decodeSync(AgentId)("travel-planner")).toBe("travel-planner");
+    expect(Schema.decodeSync(DelegationId)("delegate-research")).toBe("delegate-research");
     expect(() => Schema.decodeSync(RunId)("")).toThrow();
+    expect(() => Schema.decodeSync(DelegationId)("")).toThrow();
+  });
+
+  it("round-trips the durable Receipt and Settlement identities and rejects empty values", () => {
+    const receiptId = Schema.decodeSync(ReceiptId)("receipt-1");
+    const settlementId = Schema.decodeSync(SettlementId)("settlement:submission-1");
+
+    expect(Schema.encodeSync(ReceiptId)(receiptId)).toBe("receipt-1");
+    expect(Schema.encodeSync(SettlementId)(settlementId)).toBe("settlement:submission-1");
+    expect(Schema.decodeUnknownExit(ReceiptId)("")._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(SettlementId)("")._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(ReceiptId)(7)._tag).toBe("Failure");
+    expect(Schema.decodeUnknownExit(SettlementId)(null)._tag).toBe("Failure");
   });
 
   it("constructs finite policies and rejects invalid bounds", () => {
@@ -80,6 +108,10 @@ describe("core schemas", () => {
       AgentInputError.make({ message: "invalid trip input" }),
       AgentOutputError.make({ message: "invalid itinerary output" }),
       AgentPolicyError.make({ limit: "turns", message: "turn limit reached" }),
+      AgentPolicyError.make({
+        limit: "repeated-failures",
+        message: "3 consecutive Tool Call failures",
+      }),
       AgentApprovalDenied.make({
         toolCallId: "hold-1",
         toolName: "hold",
@@ -177,5 +209,169 @@ describe("core schemas", () => {
         toolCallId: "",
       }),
     ).toThrow();
+  });
+
+  it("round-trips the Subagent Parent Link and rejects invalid lineage", () => {
+    const encodedLink = {
+      delegationId: "delegate-research",
+      parentAgentId: "travel-planner",
+      parentConversationId: "conversation-1",
+      parentRunId: "run-1",
+      parentToolCallId: "delegate-1",
+      depth: 1,
+    } satisfies typeof SubagentParentLink.Encoded;
+    const link = Schema.decodeSync(SubagentParentLink)(encodedLink);
+
+    expect(Schema.encodeSync(SubagentParentLink)(link)).toEqual(encodedLink);
+    expect(() =>
+      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, depth: 0 }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, depth: 1.5 }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, delegationId: "" }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(SubagentParentLink)({ ...encodedLink, parentRunId: "" }),
+    ).toThrow();
+  });
+
+  it("round-trips every Subagent lifecycle event through the public union", () => {
+    const base = {
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 5,
+      timestamp: "2026-07-29T12:00:00.000Z",
+      turnId: "turn-1",
+      toolCallId: "delegate-1",
+      delegationId: "delegate-research",
+      childConversationId: "conversation-2",
+      childRunId: "run-2",
+      targetAgentId: "research-specialist",
+      depth: 1,
+    } as const;
+    const encodedEvents = [
+      { _tag: "SubagentRequested", ...base } satisfies typeof SubagentRequested.Encoded,
+      { _tag: "SubagentStarted", ...base } satisfies typeof SubagentStarted.Encoded,
+      {
+        _tag: "SubagentProgress",
+        ...base,
+        summary: "comparing rail connections",
+      } satisfies typeof SubagentProgress.Encoded,
+      {
+        _tag: "SubagentCompleted",
+        ...base,
+        turns: 2,
+        finishReason: "completed",
+      } satisfies typeof SubagentCompleted.Encoded,
+      {
+        _tag: "SubagentFailed",
+        ...base,
+        errorTag: "ChildDomainFailure",
+        message: "no availability",
+      } satisfies typeof SubagentFailed.Encoded,
+      {
+        _tag: "SubagentInterrupted",
+        ...base,
+        reason: "parent run interrupted",
+      } satisfies typeof SubagentInterrupted.Encoded,
+      { _tag: "SubagentJoined", ...base } satisfies typeof SubagentJoined.Encoded,
+    ] as const;
+
+    for (const encodedEvent of encodedEvents) {
+      const event = Schema.decodeSync(RunEvent)(encodedEvent);
+      expect(event._tag).toBe(encodedEvent._tag);
+      expect(Schema.encodeSync(RunEvent)(event)).toEqual(encodedEvent);
+    }
+  });
+
+  it("rejects malformed Subagent lifecycle payloads", () => {
+    const base = {
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 5,
+      timestamp: "2026-07-29T12:00:00.000Z",
+      turnId: "turn-1",
+      toolCallId: "delegate-1",
+      delegationId: "delegate-research",
+      childConversationId: "conversation-2",
+      childRunId: "run-2",
+      targetAgentId: "research-specialist",
+      depth: 1,
+    } as const;
+    const progress = {
+      _tag: "SubagentProgress",
+      ...base,
+      summary: "comparing rail connections",
+    } satisfies typeof SubagentProgress.Encoded;
+    const { delegationId: _delegationId, ...withoutDelegationId } = progress;
+
+    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, eventVersion: 2 })).toThrow();
+    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, depth: 0 })).toThrow();
+    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...progress, childRunId: "" })).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({ ...progress, childConversationId: "" }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({ ...progress, summary: "x".repeat(4 * 1024 + 1) }),
+    ).toThrow();
+    expect(() => Schema.decodeUnknownSync(RunEvent)(withoutDelegationId)).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({
+        _tag: "SubagentCompleted",
+        ...base,
+        turns: 0,
+        finishReason: "completed",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({
+        _tag: "SubagentCompleted",
+        ...base,
+        turns: 2,
+        finishReason: "tool-calls",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({
+        _tag: "SubagentFailed",
+        ...base,
+        errorTag: "",
+        message: "no availability",
+      }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({
+        _tag: "SubagentInterrupted",
+        ...base,
+        reason: "x".repeat(4 * 1024 + 1),
+      }),
+    ).toThrow();
+  });
+
+  it("mints valid, distinct branded identities from the default IdGenerator Layer", () => {
+    const program = Effect.gen(function* () {
+      const ids = yield* IdGenerator;
+      return {
+        firstConversation: yield* ids.nextConversationId,
+        secondConversation: yield* ids.nextConversationId,
+        run: yield* ids.nextRunId,
+        turn: yield* ids.nextTurnId,
+      };
+    }).pipe(Effect.provide(IdGenerator.layer));
+    const { firstConversation, secondConversation, run, turn } = Effect.runSync(program);
+
+    expect(Schema.decodeSync(ConversationId)(firstConversation)).toBe(firstConversation);
+    expect(Schema.decodeSync(RunId)(run)).toBe(run);
+    expect(Schema.decodeSync(TurnId)(turn)).toBe(turn);
+    expect(firstConversation).not.toBe(secondConversation);
+    expect(firstConversation.startsWith("conversation-")).toBe(true);
+    expect(run.startsWith("run-")).toBe(true);
+    expect(turn.startsWith("turn-")).toBe(true);
   });
 });

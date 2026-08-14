@@ -264,9 +264,13 @@ export const digestCompactionSource = Effect.fn("digestCompactionSource")(functi
 });
 
 /**
- * Replace only the covered range in the model view. The digest is recomputed
- * against the exact source slice before the artifact can influence context.
- * Messages before `coversFrom` and after `coversThrough` remain visible.
+ * Replace only the model-view messages fully covered by the artifact range
+ * with its summary. The digest is recomputed against the exact source slice
+ * before the artifact can influence context. Messages that are not fully
+ * covered — including transform-synthesized messages without provenance and
+ * messages whose provenance only partially overlaps the range — remain
+ * visible, and the summary is inserted before the first message derived
+ * entirely from later source.
  */
 export const applyCompaction = Effect.fn("applyCompaction")(function* (
   context: PreparedModelContext,
@@ -308,18 +312,21 @@ export const applyCompaction = Effect.fn("applyCompaction")(function* (
     });
   }
 
-  const before = context.messages.filter(
-    (message) =>
-      message.sourceSequences.length > 0 &&
-      message.sourceSequences.every((sequence) => sequence < artifact.coversFrom),
-  );
-  const after = context.messages.filter(
+  const fullyCovered = (message: ModelContextMessage): boolean =>
+    message.sourceSequences.length > 0 &&
+    message.sourceSequences.every(
+      (sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough,
+    );
+  const kept = context.messages.filter((message) => !fullyCovered(message));
+  const summaryAt = kept.findIndex(
     (message) =>
       message.sourceSequences.length > 0 &&
       message.sourceSequences.every((sequence) => sequence > artifact.coversThrough),
   );
   const messages = yield* validateModelView(
-    [...before, artifact.summary, ...after],
+    summaryAt === -1
+      ? [...kept, artifact.summary]
+      : [...kept.slice(0, summaryAt), artifact.summary, ...kept.slice(summaryAt)],
     `compaction:${artifact.compactorVersion}`,
   );
   return PreparedModelContext.make({
