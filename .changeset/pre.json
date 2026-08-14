@@ -21,6 +21,7 @@
     "effect-agent": "0.0.1-beta.3"
   },
   "changesets": [
+    "beta107-runtime-fixes",
     "effect-agent-umbrella",
     "initial-live-test-release",
     "mit-cloudflare-and-review-fixes",

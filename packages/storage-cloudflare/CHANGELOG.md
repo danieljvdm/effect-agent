@@ -1,5 +1,15 @@
 # @effect-agent/storage-cloudflare
 
+## 0.0.1-beta.5
+
+### Patch Changes
+
+- [#19](https://github.com/danieljvdm/effect-agent/pull/19) [`a063031`](https://github.com/danieljvdm/effect-agent/commit/a063031c6b1f1637d947ae193a410b6bb9e8a9fc) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align every public package with Effect 4.0.0-beta.107. Also expose per-incarnation Cloudflare
+  Binding capture with live Durable Object context and derived identities, and prevent incomplete
+  application Tool batches from a failed or aborted Run from poisoning prompts for later Runs.
+- Updated dependencies [[`a063031`](https://github.com/danieljvdm/effect-agent/commit/a063031c6b1f1637d947ae193a410b6bb9e8a9fc)]:
+  - @effect-agent/session@0.0.1-beta.5
+
 ## 0.0.1-beta.4
 
 ### Patch Changes
