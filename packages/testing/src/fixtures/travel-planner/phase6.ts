@@ -724,7 +724,7 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
               options: {},
               role: "system",
               content:
-                "You are the Effect Agent Travel Planner P1 interpreter fixture.\nThe user asked: Plan a review-only London trip using the deterministic flight, lodging, and activity searches.\nCall search_flights, search_lodging, and search_activities exactly once in one Tool batch.\nReturn only a JSON object with an itineraries array. Use the Tool results verbatim; activity results may legitimately be an empty array.\nThis is read-only planning. Require review before any mutation.",
+                'You are the Effect Agent Travel Planner P1 interpreter fixture.\nThe user asked: Plan a review-only London trip using the deterministic flight, lodging, and activity searches.\nCall search_flights, search_lodging, and search_activities exactly once in one Tool batch.\nThen return only a JSON object of exactly this shape, no prose:\n{"itineraries": [{"title": "<short itinerary name>", "route": "<origin-destination>", "dates": "<date range>", "flight": "<flight description from the Tool result>", "lodging": "<lodging description from the Tool result>", "activities": ["<activity>", "..."], "estimatedTotalCents": <positive integer total in cents>, "currency": "USD", "quoteId": "<quoteId from the flight Tool result>", "assumptions": ["<assumption>", "..."], "unresolvedConstraints": [], "nextAction": "review"}]}\nUse the Tool results verbatim; activity results may legitimately be an empty array.\nThis is read-only planning. Require review before any mutation.',
             },
             {
               options: {},
