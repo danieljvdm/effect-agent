@@ -32,7 +32,6 @@ The root `package.json` is the only version source for shared dependencies.
 | TypeScript                        |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
 | `@effect/tsgo`                    |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
 | `@types/node`                     |           `26.1.2` | Node types for repository scripts                                                 |
-| `tsx`                             |           `4.23.1` | TypeScript script runner                                                          |
 | VitePress                         |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
 | Vue                               |           `3.5.40` | VitePress theme components                                                        |
 
@@ -128,22 +127,54 @@ source-first export map (a private-development convention, see below) for the
 built `dist` entries during the publish, restores it afterwards, and skips
 versions already on the registry, so a partial publish can be re-run.
 
-The release sequence from an authenticated npm session (`bunx npm login`, an
+Releases currently ship on the **beta channel**: the repository is in
+changesets pre mode (`.changeset/pre.json`, tag `beta`), so `changeset
+version` produces `X.Y.Z-beta.N` versions, and the release script publishes
+any prerelease under the matching npm dist-tag (never `latest`). Consumers
+install with `bun add @effect-agent/core@beta` (or an exact version).
+Leaving the channel for a stable release is `bun x changeset pre exit`
+followed by the normal sequence.
+
+Releases are automated: on every push to `main`, `.github/workflows/release.yml`
+maintains a "Version Packages (beta)" PR from the pending changesets, and
+merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
+identity is exchanged for short-lived credentials (no npm token, no OTP), with
+provenance attached. Each package on npmjs.com lists `release.yml` in
+`danieljvdm/effect-agent` as its trusted publisher (package Settings, a
+one-time registration; "Allow npm publish" only). In CI the publish script
+runs in `--ci` mode: `bun pm pack` resolves the `workspace:`/`catalog:`
+protocols into the tarball and the npm CLI uploads it, because only npm
+implements the OIDC exchange.
+
+The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
 
-1. `bun run changeset` — describe the change (one exists for 0.0.1);
+1. `bun run changeset` — describe the change (one exists for `0.0.1-beta.0`);
 2. `bun run changeset:version && bun install` — cut versions and changelogs;
 3. `bun run ready`;
 4. `bun run release:publish -- --dry-run`, then without `--dry-run`
    (append `--otp <code>` when npm 2FA asks);
 5. `bun x changeset tag && git push --follow-tags`.
 
-`@effect-agent/platform-cloudflare` and `@effect-agent/storage-cloudflare`
-remain `private` in the 0.0.1 release: their Durable Object class factories
-return classes with private fields, which TypeScript declaration emit rejects
-(TS4094), so `vp pack` produces no `.d.mts` for them. Publishing them
-requires annotating the factories' public return types (and scoping
-declaration builds to `src/`) first.
+All twelve packages publish under the MIT license (owner decision
+2026-08-14, resolving the licensing half of D-023). The Cloudflare pair
+joined the channel after their declaration-emit fix: the Durable Object
+class factory carries an explicit `ConversationObjectClass` return type
+because TS4094 rejects inferring an exported anonymous class type around a
+private field, and both packages pin `pack: { dts, sourcemap }` in their
+Vite configs since a package-level config suppresses `vp pack`'s
+zero-config defaults.
+
+## Script runners
+
+Repository scripts run under **Bun** (`bun scripts/<name>.ts`) — there is no
+`tsx` in this repository. The one exception is anything that imports
+`@effect-agent/storage-sqlite`: Bun does not implement `node:sqlite`, so
+`admin:durable` runs under `node --experimental-transform-types` (plain
+strip-only mode rejects the framework's runtime `namespace` declarations),
+and the platform-node crash/soak harnesses spawn their TypeScript worker
+entries the same way (verified: the full process-kill matrix passes under
+transform-mode workers).
 
 ## Post-install setup
 

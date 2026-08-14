@@ -1,8 +1,8 @@
 {
   "name": "@effect-agent/platform-node",
-  "version": "0.0.1",
+  "version": "0.0.1-beta.3",
   "description": "Class DN layer assembly for Effect Agent: the durable Node/SQLite runtime host, wake scheduler, and ownership drain.",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/danieljvdm/effect-agent.git",
@@ -36,7 +36,6 @@
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect/vitest": "catalog:",
-    "tsx": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
   }

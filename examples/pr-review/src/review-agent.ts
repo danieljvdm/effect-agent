@@ -46,6 +46,8 @@ export class ChangedFilesView extends Schema.Class<ChangedFilesView>(
   "@effect-agent/example-pr-review/ChangedFilesView",
 )({
   totalFiles: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** True when the pull request has more changed files than are listed here. */
+  truncated: Schema.Boolean,
   files: Schema.Array(ChangedFileSummary).check(Schema.isMaxLength(300)),
 }) {}
 
@@ -136,8 +138,10 @@ export const ReviewToolkitLayer = ReviewToolkit.toLayer({
     Effect.gen(function* () {
       const source = yield* PullRequestSource;
       const files = yield* source.changedFiles;
+      const metadata = yield* source.metadata;
       return ChangedFilesView.make({
-        totalFiles: files.length,
+        totalFiles: metadata.totalChangedFiles,
+        truncated: files.length < metadata.totalChangedFiles,
         files: files.map((file) =>
           ChangedFileSummary.make({
             path: file.path,

@@ -28,6 +28,8 @@ export class PullRequestMetadata extends Schema.Class<PullRequestMetadata>(
   baseRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
   headRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
   headSha: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+  /** GitHub's own changed-file total; may exceed what `changedFiles` returns. */
+  totalChangedFiles: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
 /** The upstream source failed: API error, network fault, or malformed payload. */

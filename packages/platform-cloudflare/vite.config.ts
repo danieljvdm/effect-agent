@@ -12,6 +12,13 @@ import { defineConfig } from "vite-plus";
 //   (dispose/reopen over one persist directory); these spawn real runtimes and HTTP
 //   listeners and cannot run inside workerd.
 export default defineConfig({
+  // A package-level Vite config suppresses `vp pack`'s zero-config library
+  // defaults, so the published artifact's declarations and sourcemap are
+  // pinned explicitly here.
+  pack: {
+    dts: true,
+    sourcemap: true,
+  },
   test: {
     // The eviction harness ABORTS Durable Objects mid-flight by design; the pool surfaces
     // each abort's orphaned in-flight promise as an "unhandled error" (durableObjectReset)
