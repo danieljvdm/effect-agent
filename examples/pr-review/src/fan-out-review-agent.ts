@@ -149,7 +149,7 @@ export class FileReviewUnitResult extends Schema.Class<FileReviewUnitResult>(
  * bound, output violation, model fault). The marker is bounded and carries no
  * child transcript content beyond the failure tag and message.
  */
-export class FileReviewUnitFailed extends Schema.TaggedErrorClass<FileReviewUnitFailed>()(
+export class FileReviewUnitFailed extends Schema.TaggedError<FileReviewUnitFailed>()(
   "FileReviewUnitFailed",
   {
     childErrorTag: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
