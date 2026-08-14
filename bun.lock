@@ -7,7 +7,6 @@
       "devDependencies": {
         "@changesets/changelog-github": "0.7.0",
         "@changesets/cli": "2.31.0",
-        "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#e1cdbe5dbad7576617052285d0cad43091432e0f",
         "@danieljvdm/dev-kit": "0.11.3",
         "@effect-agent/core": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
@@ -511,8 +510,6 @@
     "@cloudflare/workers-types": ["@cloudflare/workers-types@5.20260813.1", "", {}, "sha512-RQNfm7xD10hNHEQZFxQPmyGMJ9+aDGPcdFZ0x1LtmjRoLFcgZkGvfaqJAbOMQBAUFSESO3bYJS4p9mOLv28Ihg=="],
 
     "@cspotcode/source-map-support": ["@cspotcode/source-map-support@0.8.1", "", { "dependencies": { "@jridgewell/trace-mapping": "0.3.9" } }, "sha512-IchNf6dN4tHoMFIn/7OE8LWZ19Y6q/67Bmf6vnGREv8RSbBVb9LPJxEcnwrcwX6ixSvaiGoomAUvu4YSxXrVgw=="],
-
-    "@danieljvdm/agent-skills": ["@danieljvdm/agent-skills@github:danieljvdm/agent-skills#e1cdbe5", { "dependencies": { "@effect/platform-node": "4.0.0-beta.102", "effect": "4.0.0-beta.102", "jsonc-parser": "3.3.1", "tsx": "4.22.4" }, "bin": { "agent-skills": "./bin/agent-skills.mjs" } }, "danieljvdm-agent-skills-e1cdbe5", "sha512-Drf23NK0l8wHJKwDBAM/+zdZ+lX7yjwiHt4hXFUWkcTe5Zn0aE71JMTpg/CQ8A4k3tF0+GG1U7zzv1ed0BgE1A=="],
 
     "@danieljvdm/dev-kit": ["@danieljvdm/dev-kit@0.11.3", "", { "dependencies": { "@effect/platform-bun": "4.0.0-beta.102", "@stylistic/eslint-plugin": "5.10.0", "effect": "4.0.0-beta.102", "jsonc-parser": "3.3.1", "semver": "7.8.5" }, "peerDependencies": { "oxfmt": ">=0.60.0 <0.61.0", "oxlint": ">=1.75.0 <2.0.0", "vite-plus": ">=0.2.6 <0.3.0" }, "optionalPeers": ["oxfmt", "oxlint", "vite-plus"], "bin": { "dev-kit": "bin/dev-kit.mjs" } }, "sha512-x+Us/B3MKDBdPRFUcozqhF007eV1XNLc0g5TqcXvrXzRq/GvFgoztrFdv8g6BGnipMKjnqK3bkHHzLy3gqHhDA=="],
 

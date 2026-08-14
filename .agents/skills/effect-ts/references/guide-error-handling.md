@@ -59,34 +59,34 @@ Repo references:
 Example:
 
 ```ts
-import { Effect, Schema } from "effect"
+import { Effect, Schema } from "effect";
 
-class InvalidPayload extends Schema.TaggedErrorClass<InvalidPayload>()(
-  "InvalidPayload",
-  {
-    field: Schema.String,
-    reason: Schema.String
-  }
-) {}
+class InvalidPayload extends Schema.TaggedErrorClass<InvalidPayload>()("InvalidPayload", {
+  field: Schema.String,
+  reason: Schema.String,
+}) {}
 
 const validate = Effect.fail(
   InvalidPayload.make({
     field: "email",
-    reason: "missing"
-  })
-)
+    reason: "missing",
+  }),
+);
 ```
 
 Expected application and service failures belong in the typed error channel.
 In generators, use an explicit control-flow exit when failing:
 
 ```ts
-return yield* Effect.fail(
-  InvalidPayload.make({
-    field: "email",
-    reason: "missing"
-  })
-)
+return (
+  yield *
+  Effect.fail(
+    InvalidPayload.make({
+      field: "email",
+      reason: "missing",
+    }),
+  )
+);
 ```
 
 Use this when:
@@ -128,18 +128,17 @@ Repo reference:
 Example:
 
 ```ts
-import { Data, Effect } from "effect"
+import { Data, Effect } from "effect";
 
 class UserNotFound extends Data.TaggedError("UserNotFound")<{
-  readonly userId: string
+  readonly userId: string;
 }> {}
 
-const loadUser = (userId: string) =>
-  Effect.fail(new UserNotFound({ userId }))
+const loadUser = (userId: string) => Effect.fail(new UserNotFound({ userId }));
 
-const program = Effect.gen(function*() {
-  yield* loadUser("u_123")
-})
+const program = Effect.gen(function* () {
+  yield* loadUser("u_123");
+});
 ```
 
 ## When To Prefer `Data.TaggedError` vs `Schema.TaggedErrorClass`
@@ -173,14 +172,14 @@ Repo references:
 Example:
 
 ```ts
-import { Effect, Schema } from "effect"
+import { Effect, Schema } from "effect";
 
 const UserPayload = Schema.Struct({
   id: Schema.String,
-  email: Schema.String
-})
+  email: Schema.String,
+});
 
-const decodeUser = Schema.decodeUnknownEffect(UserPayload)
+const decodeUser = Schema.decodeUnknownEffect(UserPayload);
 ```
 
 This gives you:
@@ -195,23 +194,23 @@ For application code, it is often better to convert `SchemaError` into a domain 
 Example:
 
 ```ts
-import { Data, Effect, Schema } from "effect"
+import { Data, Effect, Schema } from "effect";
 
 class InvalidRequestBody extends Data.TaggedError("InvalidRequestBody")<{
-  readonly message: string
+  readonly message: string;
 }> {}
 
 const UserPayload = Schema.Struct({
   id: Schema.String,
-  email: Schema.String
-})
+  email: Schema.String,
+});
 
 const decodeUser = (input: unknown) =>
   Schema.decodeUnknownEffect(UserPayload)(input).pipe(
     Effect.catchTag("SchemaError", (error) =>
-      Effect.fail(new InvalidRequestBody({ message: error.message }))
-    )
-  )
+      Effect.fail(new InvalidRequestBody({ message: error.message })),
+    ),
+  );
 ```
 
 Why:
@@ -262,38 +261,32 @@ Prefer using:
 Example:
 
 ```ts
-import { Effect, Schema } from "effect"
+import { Effect, Schema } from "effect";
 
-class TodoStorageError extends Schema.TaggedErrorClass<TodoStorageError>()(
-  "TodoStorageError",
-  {
-    operation: Schema.String,
-    cause: Schema.Defect()
-  }
-) {}
+class TodoStorageError extends Schema.TaggedErrorClass<TodoStorageError>()("TodoStorageError", {
+  operation: Schema.String,
+  cause: Schema.Defect(),
+}) {}
 
 const makeStorageError = (operation: string) => (cause: unknown) =>
   TodoStorageError.make({
     operation,
-    cause
-  })
+    cause,
+  });
 
 const loadTodo = (id: number) =>
   Effect.try({
     try: () => someLibraryCall(id),
-    catch: makeStorageError("loadTodo")
-  })
+    catch: makeStorageError("loadTodo"),
+  });
 ```
 
 When stack preservation matters in the encoded schema, prefer:
 
 ```ts
-class WorkerFailure extends Schema.TaggedErrorClass<WorkerFailure>()(
-  "WorkerFailure",
-  {
-    cause: Schema.Defect({ includeStack: true })
-  }
-) {}
+class WorkerFailure extends Schema.TaggedErrorClass<WorkerFailure>()("WorkerFailure", {
+  cause: Schema.Defect({ includeStack: true }),
+}) {}
 ```
 
 ### Why This Is Preferred
@@ -332,8 +325,8 @@ Bad:
 const loadTodo = (id: number) =>
   Effect.try({
     try: () => someLibraryCall(id),
-    catch: (cause) => cause as Error
-  })
+    catch: (cause) => cause as Error,
+  });
 ```
 
 Why this is bad:
@@ -373,10 +366,8 @@ Example:
 
 ```ts
 const recovered = program.pipe(
-  Effect.catchTag("UserNotFound", (error) =>
-    Effect.succeed({ id: error.userId, guest: true })
-  )
-)
+  Effect.catchTag("UserNotFound", (error) => Effect.succeed({ id: error.userId, guest: true })),
+);
 ```
 
 ### Handle several tagged errors with `Effect.catchTags`
@@ -387,9 +378,9 @@ Use `catchTags` when multiple domain errors should be handled together.
 const recovered = program.pipe(
   Effect.catchTags({
     UserNotFound: () => Effect.succeed(null),
-    InvalidPayload: (error) => Effect.succeed({ error: error.reason })
-  })
-)
+    InvalidPayload: (error) => Effect.succeed({ error: error.reason }),
+  }),
+);
 ```
 
 ### Handle predicate-based subsets with `Effect.catchIf`
@@ -404,9 +395,9 @@ Use `match` when you want to fully fold the typed error channel into a success v
 const outcome = program.pipe(
   Effect.match({
     onFailure: (error) => ({ ok: false as const, error }),
-    onSuccess: (value) => ({ ok: true as const, value })
-  })
-)
+    onSuccess: (value) => ({ ok: true as const, value }),
+  }),
+);
 ```
 
 ## Handling Defects
@@ -439,17 +430,17 @@ Use defects for:
 Use `sandbox` to expose `Cause<E>` in the error channel.
 
 ```ts
-import { Cause, Effect } from "effect"
+import { Cause, Effect } from "effect";
 
 const diagnosed = program.pipe(
   Effect.sandbox,
   Effect.catchCause((cause) => {
     if (Cause.hasDies(cause)) {
-      return Effect.succeed("defect")
+      return Effect.succeed("defect");
     }
-    return Effect.failCause(cause)
-  })
-)
+    return Effect.failCause(cause);
+  }),
+);
 ```
 
 Use `matchCause` or `matchCauseEffect` when you need to distinguish:
@@ -503,11 +494,11 @@ Interrupts signal that the fiber should stop. They should not usually be transla
 If interrupted work needs special cleanup, use `onInterrupt`.
 
 ```ts
-import { Console, Effect } from "effect"
+import { Console, Effect } from "effect";
 
 const program = longRunningTask.pipe(
-  Effect.onInterrupt(() => Console.log("cleaning up after interrupt"))
-)
+  Effect.onInterrupt(() => Console.log("cleaning up after interrupt")),
+);
 ```
 
 ### Use `Cause` inspection when interrupts must be distinguished

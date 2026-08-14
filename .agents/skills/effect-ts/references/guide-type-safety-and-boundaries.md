@@ -49,13 +49,13 @@ domain policy.
 
 Choose the Schema adapter that matches the caller's control flow:
 
-| Intent | Adapter |
-| --- | --- |
-| Boolean type guard | `Schema.is(Model)` |
-| Optional tolerant decode | `Schema.decodeUnknownOption(Model)` |
-| Typed Effect failure | `Schema.decodeUnknownEffect(Model)` |
-| JSON string decode | `Schema.fromJsonString(Model)` |
-| Any JSON-compatible value | `Schema.Json` |
+| Intent                    | Adapter                             |
+| ------------------------- | ----------------------------------- |
+| Boolean type guard        | `Schema.is(Model)`                  |
+| Optional tolerant decode  | `Schema.decodeUnknownOption(Model)` |
+| Typed Effect failure      | `Schema.decodeUnknownEffect(Model)` |
+| JSON string decode        | `Schema.fromJsonString(Model)`      |
+| Any JSON-compatible value | `Schema.Json`                       |
 
 Define small schemas for provider responses, SDK payloads, persisted data, and
 other structured external values. Decode once in the adapter and return the

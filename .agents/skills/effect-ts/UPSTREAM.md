@@ -16,14 +16,12 @@ They have been modified to:
 
 ## Local Authoring Checkout
 
-This repository may keep an ignored, version-matched Effect checkout for
-validating source paths and beta-sensitive APIs:
+This repository keeps an ignored, version-matched Effect checkout for
+validating source paths and beta-sensitive APIs. `vp i` runs the equivalent
+dev-kit setup automatically; it can also be invoked directly:
 
 ```bash
-git clone --depth 1 \
-  --branch 'effect@4.0.0-beta.102' \
-  https://github.com/Effect-TS/effect.git \
-  .repos/effect
+./bin/dev-kit.mjs effect sync
 ```
 
 Update the checkout, package dependencies, review baseline, feature index, and

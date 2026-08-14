@@ -1,7 +1,7 @@
 {
   "version": 1,
   "toolVersion": "0.11.3",
-  "manifestDigest": "sha256:5ab8ba32bb2a178f5e532826b10d338b8a11a360810880e64b0d92ac63c78add",
+  "manifestDigest": "sha256:0b9dc205e81f64ea7ae62b68772aa258f4d167915289b614f594910b4f9a9243",
   "setup": {
     "effectSource": {
       "packageName": "effect",
@@ -41,6 +41,15 @@
       "digest": "sha256:934e6a086784b8cc9cc19c85587ba60481f57613fb8b85e4aea6b5556da72e0f"
     },
     {
+      "resourceId": "skill:effect-ts@agents",
+      "path": ".agents/skills/effect-ts",
+      "skill": "effect-ts",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:50786d8d351fa32953de526bc12ac67fee34fecfebff5dccde4f9fe0c3354ba3"
+    },
+    {
       "resourceId": "skill:testing@agents",
       "path": ".agents/skills/testing",
       "skill": "testing",
@@ -71,6 +80,15 @@
       "mode": "symlink",
       "kind": "symlink",
       "digest": "sha256:b59ba0874ef06cb4c651bb9b3012b014c9063648577f3f3181894e8ca3086d8f"
+    },
+    {
+      "resourceId": "skill:effect-ts@claude",
+      "path": ".claude/skills/effect-ts",
+      "skill": "effect-ts",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:057d09728194631224706ae6afbf877107388501832bf0f3e2c6516c7d55f242"
     },
     {
       "resourceId": "skill:testing@claude",

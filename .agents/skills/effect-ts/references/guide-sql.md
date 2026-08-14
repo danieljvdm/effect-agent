@@ -79,7 +79,7 @@ Prefer typed SQL queries instead of leaving row shapes implicit.
 The repo uses typed query literals like:
 
 ```ts
-const rows = yield* sql<{ id: number; name: string }>`SELECT * FROM test`
+const rows = yield * sql<{ id: number; name: string }>`SELECT * FROM test`;
 ```
 
 This is the first level of typed SQL usage and is already better than untyped row access.
@@ -111,8 +111,8 @@ Why:
 Avoid this pattern:
 
 ```ts
-const row = yield* sql`SELECT id, title FROM todos WHERE id = ${id}`
-const todo = row[0] as TodoRow
+const row = yield * sql`SELECT id, title FROM todos WHERE id = ${id}`;
+const todo = row[0] as TodoRow;
 ```
 
 Prefer:
@@ -126,10 +126,10 @@ Example boundary decode:
 const TodoRow = Schema.Struct({
   id: Schema.Number,
   title: Schema.String,
-  completed: Schema.Boolean
-})
+  completed: Schema.Boolean,
+});
 
-const decodeTodoRows = Schema.decodeUnknownEffect(Schema.Array(TodoRow))
+const decodeTodoRows = Schema.decodeUnknownEffect(Schema.Array(TodoRow));
 ```
 
 Then keep the query and decoding together in one SQL-aware operation.
@@ -150,11 +150,11 @@ const resolver = SqlResolver.findById({
   Id: Schema.Number,
   Result: Schema.Struct({
     id: Schema.Number,
-    name: Schema.String
+    name: Schema.String,
   }),
   ResultId: (row) => row.id,
-  execute: (ids) => sql`SELECT * FROM test WHERE id IN ${sql.in(ids)}`
-})
+  execute: (ids) => sql`SELECT * FROM test WHERE id IN ${sql.in(ids)}`,
+});
 ```
 
 This is a preferred pattern when:
@@ -201,17 +201,17 @@ Prefer a layer that provides `SqlClient`, and let domain services depend on that
 Good pattern:
 
 ```ts
-import * as Context from "effect/Context"
-import * as Effect from "effect/Effect"
-import * as SqlClient from "effect/unstable/sql/SqlClient"
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 class TodoRepo extends Context.Service<TodoRepo>()("TodoRepo", {
   make: Effect.succeed({
-    getById: Effect.fn("TodoRepo.getById")(function*(id: number) {
-      const sql = yield* SqlClient.SqlClient
-      return yield* sql`SELECT id, title, completed FROM todos WHERE id = ${id}`
-    })
-  })
+    getById: Effect.fn("TodoRepo.getById")(function* (id: number) {
+      const sql = yield* SqlClient.SqlClient;
+      return yield* sql`SELECT id, title, completed FROM todos WHERE id = ${id}`;
+    }),
+  }),
 }) {}
 ```
 
@@ -233,16 +233,16 @@ Repo reference:
 Prefer:
 
 ```ts
-const createAndAudit = Effect.fn("TodoRepo.createAndAudit")(function*(title: string) {
-  const sql = yield* SqlClient.SqlClient
+const createAndAudit = Effect.fn("TodoRepo.createAndAudit")(function* (title: string) {
+  const sql = yield* SqlClient.SqlClient;
 
   return yield* sql.withTransaction(
-    Effect.gen(function*() {
-      yield* sql`INSERT INTO todos ${sql.insert({ title, completed: false })}`
-      yield* sql`INSERT INTO audit_log ${sql.insert({ event: "todo_created" })}`
-    })
-  )
-})
+    Effect.gen(function* () {
+      yield* sql`INSERT INTO todos ${sql.insert({ title, completed: false })}`;
+      yield* sql`INSERT INTO audit_log ${sql.insert({ event: "todo_created" })}`;
+    }),
+  );
+});
 ```
 
 Avoid:
@@ -265,10 +265,10 @@ Avoid exposing one exported accessor function per SQL service method if it only 
 Bad:
 
 ```ts
-export const createTodo = Effect.fn(function*(title: string) {
-  const todos = yield* TodoRepo
-  return yield* todos.create(title)
-})
+export const createTodo = Effect.fn(function* (title: string) {
+  const todos = yield* TodoRepo;
+  return yield* todos.create(title);
+});
 ```
 
 Prefer:
@@ -352,25 +352,25 @@ The runtime-specific SQL migrator packages expose `fromRecord(...)` to define mi
 Example shape:
 
 ```ts
-import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator"
-import * as Effect from "effect/Effect"
+import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
+import * as Effect from "effect/Effect";
 
 const migrations = SqliteMigrator.fromRecord({
-  "1_create_todos": Effect.gen(function*() {
+  "1_create_todos": Effect.gen(function* () {
     yield* sql`
       CREATE TABLE todos (
         id INTEGER PRIMARY KEY NOT NULL,
         title TEXT NOT NULL,
         completed INTEGER NOT NULL DEFAULT 0
       )
-    `.withoutTransform
+    `.withoutTransform;
   }),
-  "2_add_todo_index": Effect.gen(function*() {
+  "2_add_todo_index": Effect.gen(function* () {
     yield* sql`
       CREATE INDEX todos_completed_idx ON todos (completed)
-    `.withoutTransform
-  })
-})
+    `.withoutTransform;
+  }),
+});
 ```
 
 This matches the model used by the canonical migrator implementation:
@@ -386,11 +386,11 @@ Use the runtime-specific `run(...)` helper when you want a startup effect that r
 Example shape:
 
 ```ts
-import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator"
+import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 
 const runMigrations = SqliteMigrator.run({
-  loader: migrations
-})
+  loader: migrations,
+});
 ```
 
 This is a good fit when:
@@ -408,11 +408,11 @@ Use the runtime-specific `layer(...)` helper when migrations should run as part 
 Example shape:
 
 ```ts
-import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator"
+import * as SqliteMigrator from "@effect/sql-sqlite-bun/SqliteMigrator";
 
 const MigrationLayer = SqliteMigrator.layer({
-  loader: migrations
-})
+  loader: migrations,
+});
 ```
 
 From the canonical packages, this is implemented as `Layer.effectDiscard(run(options))`.
@@ -428,16 +428,13 @@ That means:
 Preferred shape:
 
 ```ts
-const SqlLayer = SqliteClient.layer({ filename: "todos.sqlite" })
+const SqlLayer = SqliteClient.layer({ filename: "todos.sqlite" });
 
 const MigrationLayer = SqliteMigrator.layer({
-  loader: migrations
-})
+  loader: migrations,
+});
 
-const MigratedSqlLayer = Layer.merge(
-  SqlLayer,
-  MigrationLayer.pipe(Layer.provide(SqlLayer))
-)
+const MigratedSqlLayer = Layer.merge(SqlLayer, MigrationLayer.pipe(Layer.provide(SqlLayer)));
 ```
 
 This keeps the structure explicit:

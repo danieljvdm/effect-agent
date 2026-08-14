@@ -47,11 +47,11 @@ The dominant usage pattern is:
 For reusable effectful operations, prefer `Effect.fn`.
 
 ```ts
-import { Effect } from "effect"
+import { Effect } from "effect";
 
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  return { id: userId, name: "Ada" }
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  return { id: userId, name: "Ada" };
+});
 ```
 
 Use `Effect.fn` when:
@@ -73,12 +73,12 @@ Repo examples:
 Use `Effect.gen` for orchestration and sequential workflows, especially when there are multiple `yield*` steps.
 
 ```ts
-const program = Effect.gen(function*() {
-  const config = yield* Config
-  const repo = yield* UserRepo
-  const user = yield* repo.getById("u_123")
-  return { config, user }
-})
+const program = Effect.gen(function* () {
+  const config = yield* Config;
+  const repo = yield* UserRepo;
+  const user = yield* repo.getById("u_123");
+  return { config, user };
+});
 ```
 
 Use `Effect.gen` when:
@@ -103,15 +103,15 @@ Use this rule:
 Good split:
 
 ```ts
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  const repo = yield* UserRepo
-  return yield* repo.getById(userId)
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  const repo = yield* UserRepo;
+  return yield* repo.getById(userId);
+});
 
-const program = Effect.gen(function*() {
-  const user = yield* loadUser("u_123")
-  yield* Effect.logInfo("loaded user", user)
-})
+const program = Effect.gen(function* () {
+  const user = yield* loadUser("u_123");
+  yield* Effect.logInfo("loaded user", user);
+});
 ```
 
 ## `Effect.fnUntraced` Is An Escape Hatch
@@ -127,17 +127,17 @@ Use it only when:
 If the only goal is to avoid an explicit named span, prefer:
 
 ```ts
-const normalizeUser = Effect.fn(function*(input: string) {
-  return input.trim().toLowerCase()
-})
+const normalizeUser = Effect.fn(function* (input: string) {
+  return input.trim().toLowerCase();
+});
 ```
 
 Instead of:
 
 ```ts
-const normalizeUser = Effect.fnUntraced(function*(input: string) {
-  return input.trim().toLowerCase()
-})
+const normalizeUser = Effect.fnUntraced(function* (input: string) {
+  return input.trim().toLowerCase();
+});
 ```
 
 ## Constructor Functions
@@ -149,7 +149,7 @@ The repo uses constructor functions very deliberately.
 Use for pure successful values.
 
 ```ts
-const ok = Effect.succeed(42)
+const ok = Effect.succeed(42);
 ```
 
 ### `Effect.fail`
@@ -157,7 +157,7 @@ const ok = Effect.succeed(42)
 Use for expected typed failures.
 
 ```ts
-const notFound = Effect.fail(UserNotFound.make({ userId: "u_123" }))
+const notFound = Effect.fail(UserNotFound.make({ userId: "u_123" }));
 ```
 
 ### `Effect.sync`
@@ -165,7 +165,7 @@ const notFound = Effect.fail(UserNotFound.make({ userId: "u_123" }))
 Use for synchronous side effects or pure synchronous construction that should live inside `Effect`.
 
 ```ts
-const buildConfig = Effect.sync(() => ({ retries: 3 }))
+const buildConfig = Effect.sync(() => ({ retries: 3 }));
 ```
 
 ### `Effect.try`
@@ -173,17 +173,17 @@ const buildConfig = Effect.sync(() => ({ retries: 3 }))
 Use for synchronous code that may throw.
 
 ```ts
-import { Effect, Schema } from "effect"
+import { Effect, Schema } from "effect";
 
 class ParseError extends Schema.TaggedErrorClass<ParseError>()("ParseError", {
-  cause: Schema.Defect()
+  cause: Schema.Defect(),
 }) {}
 
 const parseJson = (input: string) =>
   Effect.try({
     try: () => JSON.parse(input),
-    catch: (cause) => ParseError.make({ cause })
-  })
+    catch: (cause) => ParseError.make({ cause }),
+  });
 ```
 
 ### `Effect.tryPromise`
@@ -194,17 +194,17 @@ opaque cause when it is diagnostically useful. Compose Effect-native APIs
 directly instead of converting them through Promise.
 
 ```ts
-import { Effect, Schema } from "effect"
+import { Effect, Schema } from "effect";
 
 class FetchError extends Schema.TaggedErrorClass<FetchError>()("FetchError", {
-  cause: Schema.Defect()
+  cause: Schema.Defect(),
 }) {}
 
 const fetchText = (url: string) =>
   Effect.tryPromise({
     try: () => fetch(url).then((response) => response.text()),
-    catch: (cause) => FetchError.make({ cause })
-  })
+    catch: (cause) => FetchError.make({ cause }),
+  });
 ```
 
 Preferred rule:
@@ -224,9 +224,7 @@ The repo uses `map`, `flatMap`, and `tap` constantly for small local transformat
 Use to transform successful values.
 
 ```ts
-const userName = loadUser("u_123").pipe(
-  Effect.map((user) => user.name)
-)
+const userName = loadUser("u_123").pipe(Effect.map((user) => user.name));
 ```
 
 ### `Effect.flatMap`
@@ -234,9 +232,7 @@ const userName = loadUser("u_123").pipe(
 Use when the next step returns another `Effect`.
 
 ```ts
-const result = loadUser("u_123").pipe(
-  Effect.flatMap((user) => saveAudit(user.id))
-)
+const result = loadUser("u_123").pipe(Effect.flatMap((user) => saveAudit(user.id)));
 ```
 
 ### `Effect.tap`
@@ -245,8 +241,8 @@ Use for side effects that should preserve the main value.
 
 ```ts
 const result = loadUser("u_123").pipe(
-  Effect.tap((user) => Effect.logDebug("loaded user", { userId: user.id }))
-)
+  Effect.tap((user) => Effect.logDebug("loaded user", { userId: user.id })),
+);
 ```
 
 Preferred rule:
@@ -264,27 +260,23 @@ Repo style is:
 ### Access services in implementations
 
 ```ts
-const loadUser = Effect.fn("loadUser")(function*(userId: string) {
-  const repo = yield* UserRepo
-  return yield* repo.getById(userId)
-})
+const loadUser = Effect.fn("loadUser")(function* (userId: string) {
+  const repo = yield* UserRepo;
+  return yield* repo.getById(userId);
+});
 ```
 
 or:
 
 ```ts
 const loadUser = (userId: string) =>
-  Effect.service(UserRepo).pipe(
-    Effect.flatMap((repo) => repo.getById(userId))
-  )
+  Effect.service(UserRepo).pipe(Effect.flatMap((repo) => repo.getById(userId)));
 ```
 
 ### Provide at the edge
 
 ```ts
-const program = loadUser("u_123").pipe(
-  Effect.provide(AppLayer)
-)
+const program = loadUser("u_123").pipe(Effect.provide(AppLayer));
 ```
 
 Use `provideService` and `provideServiceEffect` for targeted overrides, especially in tests or framework boundaries.
@@ -309,9 +301,7 @@ Common repo patterns:
 Use for targeted typed recovery.
 
 ```ts
-const safe = loadUser("u_123").pipe(
-  Effect.catchTag("UserNotFound", () => Effect.succeed(null))
-)
+const safe = loadUser("u_123").pipe(Effect.catchTag("UserNotFound", () => Effect.succeed(null)));
 ```
 
 ### `Effect.match`
@@ -322,9 +312,9 @@ Use when the caller wants a value either way.
 const result = loadUser("u_123").pipe(
   Effect.match({
     onFailure: () => null,
-    onSuccess: (user) => user
-  })
-)
+    onSuccess: (user) => user,
+  }),
+);
 ```
 
 For deeper guidance, see `./references/guide-error-handling.md`.
@@ -338,10 +328,7 @@ One of the strongest repo patterns is explicit resource ownership.
 Use for resources that must be cleaned up.
 
 ```ts
-const connection = Effect.acquireRelease(
-  openConnection,
-  (conn) => closeConnection(conn)
-)
+const connection = Effect.acquireRelease(openConnection, (conn) => closeConnection(conn));
 ```
 
 ### `Effect.scoped`
@@ -350,11 +337,11 @@ Use when a workflow consumes scoped resources and should tie cleanup to scope li
 
 ```ts
 const program = Effect.scoped(
-  Effect.gen(function*() {
-    const conn = yield* connection
-    return yield* conn.query("select 1")
-  })
-)
+  Effect.gen(function* () {
+    const conn = yield* connection;
+    return yield* conn.query("select 1");
+  }),
+);
 ```
 
 Repo examples:

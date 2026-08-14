@@ -1,6 +1,6 @@
 ---
 name: effect-ts
-description: Use this skill whenever working in a repository that uses Effect, even if the current task is in a new file or the user does not explicitly ask for Effect help. Apply it to Effect patterns, services, layers, schemas, streams, runtimes, typed errors, observability, testing, HTTP, SQL, command-line scripts, project automation, and supporting tooling.
+description: Use this skill whenever working in a repository that uses Effect, even if the current task is in a new file or the user does not explicitly ask for Effect help. Apply it to Effect patterns, services, layers, schemas, streams, runtimes, typed errors, DateTime, Effect Atom, observability, testing, HTTP, SQL, command-line scripts, project automation, and supporting tooling.
 ---
 
 # Effect Expert
@@ -106,6 +106,19 @@ When the task touches one of these areas, consult the matching guide before impl
 - `./references/guide-schedule.md` for retries, repeats, backoff, polling, cron, and schedule composition
 - `./references/guide-schema.md` for schema-first application modeling,
   service contracts, transformations, unions, recursion, and branded types
+- `./references/guide-datetime.md` for current time, parsing, UTC and zoned
+  values, time zones, DST-safe arithmetic, formatting, Date interoperability,
+  and deterministic `TestClock` tests
+- `./references/guide-atom-data-fetching.md` for the core Effect Atom HTTP
+  data-fetching workflow, React hook choice, and action-lifetime ownership rules
+- `./references/atom-cache-lifecycle.md` for Effect Atom registry scope,
+  runtime memoization, families, TTL, SWR, polling, and aggregation resets
+- `./references/atom-http-and-invalidation.md` for `AtomHttpApi.Service`,
+  queries, mutations, reactivity keys, and invalidation
+- `./references/atom-tanstack-start.md` only for TanStack Start provider
+  placement, SSR isolation, hydration, and focus guidance
+- `./references/atom-testing.md` when adding or diagnosing deterministic Effect
+  Atom lifecycle tests
 - `./references/guide-sql.md` for Effect SQL usage, transactions, resolvers, schema-aware SQL, and migrations
 - `./references/guide-testing.md` for `@effect/vitest`, deterministic testing,
   honest test Layers, property tests, and protocol round trips
@@ -208,6 +221,15 @@ Install additional `@effect/*` packages only when the user task actually needs t
 - If a type is hard to express, simplify the design or introduce a properly typed helper instead of using unsafe TypeScript.
 - For layers, do not hide them inside `namespace` blocks. Prefer either `static` members on the service class or plain exported layer constants.
 
+### Date and Time
+
+- Prefer Effect `DateTime` over vanilla JavaScript `Date` for application
+  logic. Keep `Date` as an interoperability type at external boundaries.
+- Use `DateTime.now` inside Effect programs so current time remains driven by
+  the `Clock` service and deterministic under `TestClock`.
+- Preserve the distinction between instants, zoned wall-clock values, and
+  date-only domain values.
+
 ### Code Quality
 
 - Write type-safe code that leverages Effect's type system.
@@ -233,6 +255,12 @@ rely on installed declarations and version-matched canonical Effect source.
 - `./references/guide-retries.md`
 - `./references/guide-schedule.md`
 - `./references/guide-schema.md`
+- `./references/guide-datetime.md`
+- `./references/guide-atom-data-fetching.md`
+- `./references/atom-cache-lifecycle.md`
+- `./references/atom-http-and-invalidation.md`
+- `./references/atom-tanstack-start.md`
+- `./references/atom-testing.md`
 - `./references/guide-sql.md`
 - `./references/guide-testing.md`
 - `./references/guide-cli.md`

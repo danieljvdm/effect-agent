@@ -97,8 +97,8 @@ packages.
   independently in a package.
 - After changing an Effect-family version, run `bun install`, `bun run sync:effect`, and
   `bun run ready`.
-- After changing `agent-skills.jsonc` or its dependency, run `bun run sync:agent-skills` and commit
-  the generated `.agents/skills` copies and `.claude/skills` symlinks.
+- After changing `dev-kit.jsonc` or its dependency, run `bunx dev-kit apply` and commit the
+  regenerated `.agents/skills` copies, `.claude/skills` symlinks, and `dev-kit.lock.json`.
 - Contributor agent skills are repository tooling. They are not runtime Skill definitions and
   must not be imported by `@effect-agent/*`.
 - Before handoff, run `bun run ready`.

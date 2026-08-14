@@ -84,4 +84,3 @@ Before completing version-sensitive work:
 - every installed Effect v4 package resolves to the same beta
 - no source path is assumed solely because it appears in this skill
 - current-main guidance is not presented as installed-version behavior
-
