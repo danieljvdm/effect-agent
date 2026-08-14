@@ -97,15 +97,34 @@ export interface CloudflareDurableRuntimeOptions {
   readonly toolReconciler?: Layer.Layer<ToolReconciler> | undefined;
   /**
    * Registered worker Bindings resolved at durable claim time (S2, spec/subagents.md §11):
-   * build each with `DurableWorkerBinding.make(binding, digests)`. An Effect form is accepted
-   * because the capture is effectful; it runs once per incarnation during Layer construction.
-   * Defaults to the empty registration (every resolved claim fails closed).
+   * build each with `DurableWorkerBinding.make(binding, digests)`. An Effect or callback form is
+   * accepted because capture can be effectful. The callback receives the live Object context and
+   * derived identities and is evaluated once per incarnation during Layer construction. Defaults
+   * to the empty registration (every resolved claim fails closed).
    */
-  readonly bindings?:
-    | ReadonlyArray<ResolvedBinding>
-    | Effect.Effect<ReadonlyArray<ResolvedBinding>>
-    | undefined;
+  readonly bindings?: CloudflareBindingSource | undefined;
 }
+
+/** Per-incarnation host values available while registered worker Bindings are captured. */
+export interface CloudflareBindingSourceContext {
+  readonly ctx: DurableObjectState;
+  readonly env: unknown;
+  readonly conversationId: ConversationId;
+  readonly producerId: ProducerId;
+}
+
+/**
+ * Registered worker Bindings, or a closed Effect/callback that captures them once for each
+ * Durable Object incarnation. Callback Effects cannot require services or fail typed.
+ */
+export type CloudflareBindingSource =
+  | ReadonlyArray<ResolvedBinding>
+  | Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>
+  | ((
+      context: CloudflareBindingSourceContext,
+    ) =>
+      | ReadonlyArray<ResolvedBinding>
+      | Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>);
 
 /** Every construction failure of the assembled Cloudflare durable runtime stack. */
 export type CloudflareDurableRuntimeInitializationError =
@@ -208,13 +227,19 @@ const conversationIdFromState = (
       );
 
 const resolveBindings = (
-  bindings: CloudflareDurableRuntimeOptions["bindings"],
+  source: CloudflareDurableRuntimeOptions["bindings"],
+  context: CloudflareBindingSourceContext,
 ): Effect.Effect<ReadonlyArray<ResolvedBinding>> =>
-  bindings === undefined
+  source === undefined
     ? Effect.succeed([])
-    : Effect.isEffect(bindings)
-      ? bindings
-      : Effect.succeed(bindings);
+    : Effect.isEffect(source)
+      ? source
+      : typeof source === "function"
+        ? Effect.suspend(() => {
+            const bindings = source(context);
+            return Effect.isEffect(bindings) ? bindings : Effect.succeed(bindings);
+          })
+        : Effect.succeed(source);
 
 /**
  * The DC Layer assembly (deployment §12: a Layer-assembly library, not an app entrypoint;
@@ -243,7 +268,7 @@ export class CloudflareDurableRuntime {
   > {
     return Layer.unwrap(
       Effect.gen(function* () {
-        const { ctx } = yield* DurableObjectContext;
+        const { ctx, env } = yield* DurableObjectContext;
         const config = yield* configFromOptions(options);
         const conversationId = yield* conversationIdFromState(ctx);
         const producerId = yield* decodeProducerId(
@@ -317,7 +342,10 @@ export class CloudflareDurableRuntime {
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
-          Effect.map(resolveBindings(options.bindings), AgentBindingResolver.fromBindings),
+          Effect.map(
+            resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
+            (bindings) => AgentBindingResolver.fromBindings(bindings),
+          ),
         );
 
         const base = Layer.mergeAll(

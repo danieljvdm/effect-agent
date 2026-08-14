@@ -100,7 +100,9 @@ configuration, the single multiplexed `DurableAlarmService` with the idempotent
 committed alarm), the alarm/RPC wake scheduler, the Durable Object RPC port transport,
 `CloudflareDurableRuntime.layer`, `makeConversationObjectClass` (local-only constructor gates
 and the typed admission-limits gate before `submit`), and the Worker-side
-`CloudflareConversationClient`. It is a Layer-assembly library, not an application entrypoint.
+`CloudflareConversationClient`. `CloudflareBindingSource` may capture registered worker Bindings
+from `CloudflareBindingSourceContext` once per Object incarnation, after identity derivation. It
+is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/testing`
 
