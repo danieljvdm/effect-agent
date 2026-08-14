@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/engine",
-  "version": "0.0.1-beta.0",
+  "version": "0.0.1-beta.1",
   "description": "The Effect Agent ephemeral interpreter: a bounded agent loop over Effect AI with typed run events, budgets, and deterministic tool scheduling.",
   "license": "UNLICENSED",
   "repository": {
