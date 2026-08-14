@@ -150,7 +150,7 @@ export const SandboxEvent = Schema.Union([SandboxStarted, SandboxOutput, Sandbox
 export type SandboxEvent = typeof SandboxEvent.Type;
 
 /** The runtime could not start the requested process. */
-export class SandboxSpawnError extends Schema.TaggedErrorClass<SandboxSpawnError>()(
+export class SandboxSpawnError extends Schema.TaggedError<SandboxSpawnError>()(
   "SandboxSpawnError",
   {
     implementation: SandboxImplementation,
@@ -161,18 +161,15 @@ export class SandboxSpawnError extends Schema.TaggedErrorClass<SandboxSpawnError
 ) {}
 
 /** The process ended unsuccessfully after starting. */
-export class SandboxExitError extends Schema.TaggedErrorClass<SandboxExitError>()(
-  "SandboxExitError",
-  {
-    implementation: SandboxImplementation,
-    exitCode: Schema.Int,
-    message: Schema.String,
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {}
+export class SandboxExitError extends Schema.TaggedError<SandboxExitError>()("SandboxExitError", {
+  implementation: SandboxImplementation,
+  exitCode: Schema.Int,
+  message: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {}
 
 /** The wall-clock execution limit elapsed and the owned process was interrupted. */
-export class SandboxTimeoutError extends Schema.TaggedErrorClass<SandboxTimeoutError>()(
+export class SandboxTimeoutError extends Schema.TaggedError<SandboxTimeoutError>()(
   "SandboxTimeoutError",
   {
     implementation: SandboxImplementation,
@@ -181,7 +178,7 @@ export class SandboxTimeoutError extends Schema.TaggedErrorClass<SandboxTimeoutE
 ) {}
 
 /** A stdout or stderr stream exceeded its configured bounded-output limit. */
-export class SandboxOutputLimitError extends Schema.TaggedErrorClass<SandboxOutputLimitError>()(
+export class SandboxOutputLimitError extends Schema.TaggedError<SandboxOutputLimitError>()(
   "SandboxOutputLimitError",
   {
     implementation: SandboxImplementation,
@@ -192,7 +189,7 @@ export class SandboxOutputLimitError extends Schema.TaggedErrorClass<SandboxOutp
 ) {}
 
 /** The selected implementation cannot honestly enforce one requested security or resource feature. */
-export class SandboxUnsupportedRequestError extends Schema.TaggedErrorClass<SandboxUnsupportedRequestError>()(
+export class SandboxUnsupportedRequestError extends Schema.TaggedError<SandboxUnsupportedRequestError>()(
   "SandboxUnsupportedRequestError",
   {
     implementation: SandboxImplementation,

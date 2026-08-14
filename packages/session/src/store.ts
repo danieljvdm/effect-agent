@@ -114,7 +114,7 @@ export class LoadCheckpointRequest extends Schema.Class<LoadCheckpointRequest>(
   atOrBeforeSequence: Schema.optionalKey(CanonicalSequence),
 }) {}
 
-export class ConversationStoreError extends Schema.TaggedErrorClass<ConversationStoreError>()(
+export class ConversationStoreError extends Schema.TaggedError<ConversationStoreError>()(
   "ConversationStoreError",
   {
     operation: Schema.String,
@@ -123,7 +123,7 @@ export class ConversationStoreError extends Schema.TaggedErrorClass<Conversation
   },
 ) {}
 
-export class ConversationNotMaterialized extends Schema.TaggedErrorClass<ConversationNotMaterialized>()(
+export class ConversationNotMaterialized extends Schema.TaggedError<ConversationNotMaterialized>()(
   "ConversationNotMaterialized",
   { conversationId: ConversationId },
 ) {}
@@ -133,7 +133,7 @@ export class ConversationNotMaterialized extends Schema.TaggedErrorClass<Convers
  * content, `record-identity` reuses a canonical record ID, and `tail` declares a stale expected
  * tail. Tail conflicts carry the actual committed tail as a diagnostic resume hint.
  */
-export class AppendConflict extends Schema.TaggedErrorClass<AppendConflict>()("AppendConflict", {
+export class AppendConflict extends Schema.TaggedError<AppendConflict>()("AppendConflict", {
   conversationId: ConversationId,
   batchId: BatchId,
   reason: Schema.Literals(["batch-digest", "record-identity", "tail"]),
@@ -141,13 +141,13 @@ export class AppendConflict extends Schema.TaggedErrorClass<AppendConflict>()("A
   actualTailDigest: Schema.optionalKey(Digest),
 }) {}
 
-export class FenceRejected extends Schema.TaggedErrorClass<FenceRejected>()("FenceRejected", {
+export class FenceRejected extends Schema.TaggedError<FenceRejected>()("FenceRejected", {
   conversationId: ConversationId,
   actualEpoch: ProducerEpoch,
   attemptedEpoch: ProducerEpoch,
 }) {}
 
-export class CheckpointRejected extends Schema.TaggedErrorClass<CheckpointRejected>()(
+export class CheckpointRejected extends Schema.TaggedError<CheckpointRejected>()(
   "CheckpointRejected",
   {
     conversationId: ConversationId,

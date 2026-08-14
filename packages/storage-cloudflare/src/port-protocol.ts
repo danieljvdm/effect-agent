@@ -75,7 +75,7 @@ export const boundPortDiagnostic = (value: string): string =>
  * except `resolveAdmission`, which folds it into `AdmissionIndeterminate` because a
  * non-answer is never proof of absence (SUB-031).
  */
-export class PortProtocolError extends Schema.TaggedErrorClass<PortProtocolError>()(
+export class PortProtocolError extends Schema.TaggedError<PortProtocolError>()(
   "PortProtocolError",
   {
     message: BoundedDiagnostic,

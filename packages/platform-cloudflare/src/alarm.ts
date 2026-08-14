@@ -25,7 +25,7 @@ import { CloudflareDurableRuntimeConfig } from "./config.ts";
  */
 
 /** The Durable Object alarm API failed; surfaces on host entry points as a typed refusal. */
-export class DurableAlarmError extends Schema.TaggedErrorClass<DurableAlarmError>()(
+export class DurableAlarmError extends Schema.TaggedError<DurableAlarmError>()(
   "DurableAlarmError",
   {
     operation: Schema.String,

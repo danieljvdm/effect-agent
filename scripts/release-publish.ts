@@ -25,7 +25,7 @@ import { ChildProcess } from "effect/unstable/process";
 
 const REGISTRY = "https://registry.npmjs.org";
 
-class ReleaseError extends Schema.TaggedErrorClass<ReleaseError>()("ReleaseError", {
+class ReleaseError extends Schema.TaggedError<ReleaseError>()("ReleaseError", {
   package: Schema.String,
   reason: Schema.String,
 }) {
@@ -34,7 +34,7 @@ class ReleaseError extends Schema.TaggedErrorClass<ReleaseError>()("ReleaseError
   }
 }
 
-class CommandError extends Schema.TaggedErrorClass<CommandError>()("CommandError", {
+class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   command: Schema.String,
   exitCode: Schema.Int,
   output: Schema.String,

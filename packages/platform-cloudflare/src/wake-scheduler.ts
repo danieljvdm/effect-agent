@@ -14,7 +14,7 @@ import { ConversationObjectIdentity, ConversationObjectNamespace } from "./bindi
 const WAKE_BUFFER_CAPACITY = 1_024;
 
 /** A remote wake stub call failed; always swallowed and logged (hints are droppable). */
-class RemoteWakeDropped extends Schema.TaggedErrorClass<RemoteWakeDropped>()("RemoteWakeDropped", {
+class RemoteWakeDropped extends Schema.TaggedError<RemoteWakeDropped>()("RemoteWakeDropped", {
   conversationId: Schema.String,
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),

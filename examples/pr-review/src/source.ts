@@ -33,7 +33,7 @@ export class PullRequestMetadata extends Schema.Class<PullRequestMetadata>(
 }) {}
 
 /** The upstream source failed: API error, network fault, or malformed payload. */
-export class PullRequestSourceFailure extends Schema.TaggedErrorClass<PullRequestSourceFailure>()(
+export class PullRequestSourceFailure extends Schema.TaggedError<PullRequestSourceFailure>()(
   "PullRequestSourceFailure",
   {
     operation: Schema.String,
@@ -46,7 +46,7 @@ export class PullRequestSourceFailure extends Schema.TaggedErrorClass<PullReques
 }
 
 /** A model-supplied path or range was invalid; always fail-closed (SEC-007). */
-export class ReviewInputViolation extends Schema.TaggedErrorClass<ReviewInputViolation>()(
+export class ReviewInputViolation extends Schema.TaggedError<ReviewInputViolation>()(
   "ReviewInputViolation",
   {
     input: Schema.String,

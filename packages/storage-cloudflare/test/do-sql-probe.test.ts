@@ -14,7 +14,7 @@ declare global {
   }
 }
 
-class ProbeRollback extends Schema.TaggedErrorClass<ProbeRollback>()("ProbeRollback", {}) {}
+class ProbeRollback extends Schema.TaggedError<ProbeRollback>()("ProbeRollback", {}) {}
 
 /**
  * WP0 probe 1: the pinned `@effect/sql-sqlite-do` client executes DDL/DML and

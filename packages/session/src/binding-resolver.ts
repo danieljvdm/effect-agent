@@ -12,7 +12,7 @@ import { DefinitionDigests } from "./records.ts";
  * fails closed: it never substitutes the latest Binding or runs different
  * code (spec/subagents.md §11, SUB-023/SUB-032).
  */
-export class BindingUnavailable extends Schema.TaggedErrorClass<BindingUnavailable>()(
+export class BindingUnavailable extends Schema.TaggedError<BindingUnavailable>()(
   "BindingUnavailable",
   {
     agentId: AgentId,
@@ -26,7 +26,7 @@ export class BindingUnavailable extends Schema.TaggedErrorClass<BindingUnavailab
  * digests byte-for-byte. Fail closed (SUB-023): missing or different code is
  * a typed compatibility failure, never a silent substitution.
  */
-export class BindingDigestMismatch extends Schema.TaggedErrorClass<BindingDigestMismatch>()(
+export class BindingDigestMismatch extends Schema.TaggedError<BindingDigestMismatch>()(
   "BindingDigestMismatch",
   {
     agentId: AgentId,

@@ -190,7 +190,7 @@ export const phase4TravelPlannerWorkerLayer = Layer.mergeAll(
   TravelGuidanceLayer,
 ).pipe(Layer.provide(CatalogLifecycle.layerNoDeps));
 
-export class TravelPlannerDurableEvidenceError extends Schema.TaggedErrorClass<TravelPlannerDurableEvidenceError>()(
+export class TravelPlannerDurableEvidenceError extends Schema.TaggedError<TravelPlannerDurableEvidenceError>()(
   "TravelPlannerDurableEvidenceError",
   { message: Schema.String },
 ) {}

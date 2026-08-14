@@ -67,15 +67,15 @@ const INSTANCES: ReadonlyArray<FormalInstance> = [
   },
 ];
 
-class JavaNotFound extends Schema.TaggedErrorClass<JavaNotFound>()("JavaNotFound", {
+class JavaNotFound extends Schema.TaggedError<JavaNotFound>()("JavaNotFound", {
   message: Schema.String,
 }) {}
 
-class ToolsUnavailable extends Schema.TaggedErrorClass<ToolsUnavailable>()("ToolsUnavailable", {
+class ToolsUnavailable extends Schema.TaggedError<ToolsUnavailable>()("ToolsUnavailable", {
   message: Schema.String,
 }) {}
 
-class VerdictMismatch extends Schema.TaggedErrorClass<VerdictMismatch>()("VerdictMismatch", {
+class VerdictMismatch extends Schema.TaggedError<VerdictMismatch>()("VerdictMismatch", {
   cfg: Schema.String,
   expected: Schema.String,
   actual: Schema.String,

@@ -59,7 +59,7 @@ export const boundHostDiagnostic = (value: string): string =>
  * The envelope itself could not be honored: the Object could not decode the request, or a
  * response could not be encoded/decoded. Never carries operation semantics.
  */
-export class HostProtocolError extends Schema.TaggedErrorClass<HostProtocolError>()(
+export class HostProtocolError extends Schema.TaggedError<HostProtocolError>()(
   "HostProtocolError",
   {
     message: BoundedDiagnostic,
@@ -67,7 +67,7 @@ export class HostProtocolError extends Schema.TaggedErrorClass<HostProtocolError
 ) {}
 
 /** The Worker-side stub call itself failed (RPC rejection, overload, eviction mid-call). */
-export class ConversationClientError extends Schema.TaggedErrorClass<ConversationClientError>()(
+export class ConversationClientError extends Schema.TaggedError<ConversationClientError>()(
   "ConversationClientError",
   {
     conversationId: Schema.String,

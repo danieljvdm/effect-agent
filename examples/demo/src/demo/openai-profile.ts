@@ -19,8 +19,9 @@ const UpstreamOpenAiWebSearch = OpenAiTool.WebSearch({
 });
 
 /**
- * Compatibility projection for Effect beta.102, whose OpenAI adapter emits an
- * empty hosted-search declaration before returning the final action as result.
+ * Compatibility projection for Effect beta.107. The adapter now preserves the
+ * stable hosted-search action in Tool Call parameters, so this projection keeps
+ * the upstream parameter schema rather than erasing that provider evidence.
  *
  * The success schema is deliberately permissive: OpenAI keeps adding search
  * action and source variants the pinned generated schema rejects (for example
@@ -34,7 +35,7 @@ export const OpenAiWebSearch = Tool.providerDefined({
   customName: UpstreamOpenAiWebSearch.name,
   providerName: UpstreamOpenAiWebSearch.providerName,
   args: UpstreamOpenAiWebSearch.argsSchema,
-  parameters: Schema.Struct({}),
+  parameters: UpstreamOpenAiWebSearch.parametersSchema,
   success: Schema.Unknown,
   failure: UpstreamOpenAiWebSearch.failureSchema,
 })(UpstreamOpenAiWebSearch.args);

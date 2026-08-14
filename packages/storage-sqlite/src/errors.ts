@@ -2,7 +2,7 @@ import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
 import { Schema } from "effect";
 
 /** The SQLite file uses a private-development format this adapter cannot read. */
-export class SqliteStorageCompatibilityError extends Schema.TaggedErrorClass<SqliteStorageCompatibilityError>()(
+export class SqliteStorageCompatibilityError extends Schema.TaggedError<SqliteStorageCompatibilityError>()(
   "SqliteStorageCompatibilityError",
   {
     actualVersion: Schema.Int,
@@ -12,7 +12,7 @@ export class SqliteStorageCompatibilityError extends Schema.TaggedErrorClass<Sql
 ) {}
 
 /** Stored bytes failed the current Schema and cannot be used as recovery truth. */
-export class SqliteStorageCorruptionError extends Schema.TaggedErrorClass<SqliteStorageCorruptionError>()(
+export class SqliteStorageCorruptionError extends Schema.TaggedError<SqliteStorageCorruptionError>()(
   "SqliteStorageCorruptionError",
   {
     message: Schema.String,
@@ -22,7 +22,7 @@ export class SqliteStorageCorruptionError extends Schema.TaggedErrorClass<Sqlite
 ) {}
 
 /** SQLite infrastructure failed while opening or operating the store. */
-export class SqliteStorageError extends Schema.TaggedErrorClass<SqliteStorageError>()(
+export class SqliteStorageError extends Schema.TaggedError<SqliteStorageError>()(
   "SqliteStorageError",
   {
     cause: Schema.optionalKey(Schema.Defect()),
@@ -36,7 +36,7 @@ export class SqliteStorageError extends Schema.TaggedErrorClass<SqliteStorageErr
  * SubmissionLedger port as the typed `LedgerError` with this error preserved as its cause,
  * so the adapter-level tag is never erased.
  */
-export class SqliteLedgerError extends Schema.TaggedErrorClass<SqliteLedgerError>()(
+export class SqliteLedgerError extends Schema.TaggedError<SqliteLedgerError>()(
   "SqliteLedgerError",
   {
     cause: Schema.optionalKey(Schema.Defect()),
@@ -49,7 +49,7 @@ export class SqliteLedgerError extends Schema.TaggedErrorClass<SqliteLedgerError
  * A canonical batch retry conflicts with existing append state. Tail conflicts carry the
  * actual committed tail as a diagnostic resume hint.
  */
-export class SqliteAppendConflict extends Schema.TaggedErrorClass<SqliteAppendConflict>()(
+export class SqliteAppendConflict extends Schema.TaggedError<SqliteAppendConflict>()(
   "SqliteAppendConflict",
   {
     message: Schema.String,
@@ -64,7 +64,7 @@ export class SqliteAppendConflict extends Schema.TaggedErrorClass<SqliteAppendCo
  * require the exact registered epoch, so both older and newer unregistered epochs are fenced;
  * a newer epoch takes over by materializing first.
  */
-export class SqliteFenceRejected extends Schema.TaggedErrorClass<SqliteFenceRejected>()(
+export class SqliteFenceRejected extends Schema.TaggedError<SqliteFenceRejected>()(
   "SqliteFenceRejected",
   {
     actualEpoch: ProducerEpoch,
@@ -78,7 +78,7 @@ export class SqliteFenceRejected extends Schema.TaggedErrorClass<SqliteFenceReje
  * timeout (SQLITE_BUSY / SQLITE_LOCKED). Another transiently coexisting owner is writing;
  * the operation did not mutate canonical state and is safe to retry.
  */
-export class SqliteWriteContention extends Schema.TaggedErrorClass<SqliteWriteContention>()(
+export class SqliteWriteContention extends Schema.TaggedError<SqliteWriteContention>()(
   "SqliteWriteContention",
   {
     cause: Schema.optionalKey(Schema.Defect()),
@@ -88,7 +88,7 @@ export class SqliteWriteContention extends Schema.TaggedErrorClass<SqliteWriteCo
 ) {}
 
 /** A checkpoint conflicts with a previously stored checkpoint at the same offset. */
-export class SqliteCheckpointConflict extends Schema.TaggedErrorClass<SqliteCheckpointConflict>()(
+export class SqliteCheckpointConflict extends Schema.TaggedError<SqliteCheckpointConflict>()(
   "SqliteCheckpointConflict",
   {
     message: Schema.String,
@@ -152,7 +152,7 @@ export const SqliteStorageFailpointLocation = Schema.Literals([
 export type SqliteStorageFailpointLocation = typeof SqliteStorageFailpointLocation.Type;
 
 /** Deterministic test-only fault or pause injected at a SQLite operation boundary. */
-export class SqliteStorageFailpointError extends Schema.TaggedErrorClass<SqliteStorageFailpointError>()(
+export class SqliteStorageFailpointError extends Schema.TaggedError<SqliteStorageFailpointError>()(
   "SqliteStorageFailpointError",
   {
     location: SqliteStorageFailpointLocation,

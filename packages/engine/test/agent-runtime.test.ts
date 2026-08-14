@@ -48,21 +48,18 @@ import {
   type RunUsageDelta,
 } from "../src/index.ts";
 
-class ScheduledToolFailure extends Schema.TaggedErrorClass<ScheduledToolFailure>()(
+class ScheduledToolFailure extends Schema.TaggedError<ScheduledToolFailure>()(
   "ScheduledToolFailure",
   { message: Schema.String },
 ) {}
 
-class HookFailure extends Schema.TaggedErrorClass<HookFailure>()("HookFailure", {
+class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,
 }) {}
 
-class BudgetGuardFailure extends Schema.TaggedErrorClass<BudgetGuardFailure>()(
-  "BudgetGuardFailure",
-  {
-    message: Schema.String,
-  },
-) {}
+class BudgetGuardFailure extends Schema.TaggedError<BudgetGuardFailure>()("BudgetGuardFailure", {
+  message: Schema.String,
+}) {}
 
 class HookService extends Context.Service<HookService, { readonly enabled: true }>()(
   "@effect-agent/engine/test/HookService",
@@ -591,11 +588,13 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const input = failureFrom(inputExit);
       const output = failureFrom(outputExit);
       expect(input).toBeInstanceOf(AgentInputError);
-      expect(input.message).toContain("Expected string, got 42");
+      expect(input.message).toContain("Expected string");
       expect(input.message).toContain('at ["question"]');
+      expect(input.message).not.toContain("got 42");
       expect(output).toBeInstanceOf(AgentOutputError);
-      expect(output.message).toContain("Expected string, got 42");
+      expect(output.message).toContain("Expected string");
       expect(output.message).toContain('at ["answer"]');
+      expect(output.message).not.toContain("got 42");
     });
   });
 
@@ -938,7 +937,9 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const failure = failureFrom(exit);
       const observed = yield* Ref.get(events);
 
-      expect(errorMessageForTest(failure)).toContain('Expected number, got "not-an-int"');
+      expect(errorMessageForTest(failure)).toContain("Expected number");
+      expect(errorMessageForTest(failure)).toContain('at [1]["params"]["value"]');
+      expect(errorMessageForTest(failure)).not.toContain("not-an-int");
       expect(yield* Ref.get(starts)).toBe(0);
       expect(observed.some((event) => event._tag === "ToolCallStarted")).toBe(false);
       expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);

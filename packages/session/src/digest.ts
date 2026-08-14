@@ -2,7 +2,7 @@ import { Crypto, Effect, Encoding, PlatformError, Schema } from "effect";
 
 import { CanonicalBatch, DefinitionDigestInput, DefinitionDigests, Digest } from "./records.ts";
 
-export class DigestError extends Schema.TaggedErrorClass<DigestError>()("DigestError", {
+export class DigestError extends Schema.TaggedError<DigestError>()("DigestError", {
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}

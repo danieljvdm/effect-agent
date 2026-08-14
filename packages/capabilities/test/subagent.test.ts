@@ -196,7 +196,7 @@ const childDefinition = Agent.define("research-child", {
   policy: childPolicy,
 });
 
-class ResearchDelegationFailed extends Schema.TaggedErrorClass<ResearchDelegationFailed>()(
+class ResearchDelegationFailed extends Schema.TaggedError<ResearchDelegationFailed>()(
   "ResearchDelegationFailed",
   {
     childErrorTag: Schema.String,
@@ -1712,7 +1712,7 @@ class ProjectStamper extends Context.Service<ProjectStamper, { readonly stamp: s
   "@effect-agent/capabilities/test/ProjectStamper",
 ) {}
 
-class SearchFailure extends Schema.TaggedErrorClass<SearchFailure>()("SearchFailure", {
+class SearchFailure extends Schema.TaggedError<SearchFailure>()("SearchFailure", {
   message: Schema.String,
 }) {}
 

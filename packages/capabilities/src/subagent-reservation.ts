@@ -136,7 +136,7 @@ export class SubagentParentBudgetView extends Schema.Class<SubagentParentBudgetV
 }) {}
 
 /** All-or-nothing admission failed: one dimension cannot cover the requested allocation. */
-export class SubagentBudgetExhausted extends Schema.TaggedErrorClass<SubagentBudgetExhausted>()(
+export class SubagentBudgetExhausted extends Schema.TaggedError<SubagentBudgetExhausted>()(
   "SubagentBudgetExhausted",
   {
     parentRunId: RunId,
@@ -147,7 +147,7 @@ export class SubagentBudgetExhausted extends Schema.TaggedErrorClass<SubagentBud
 ) {}
 
 /** The stable key is already reserved with a different allocation; neither request may win silently. */
-export class SubagentReservationConflict extends Schema.TaggedErrorClass<SubagentReservationConflict>()(
+export class SubagentReservationConflict extends Schema.TaggedError<SubagentReservationConflict>()(
   "SubagentReservationConflict",
   {
     reservationId: BudgetReservationId,
@@ -157,7 +157,7 @@ export class SubagentReservationConflict extends Schema.TaggedErrorClass<Subagen
 ) {}
 
 /** No reservation exists for this identity. */
-export class SubagentReservationUnknown extends Schema.TaggedErrorClass<SubagentReservationUnknown>()(
+export class SubagentReservationUnknown extends Schema.TaggedError<SubagentReservationUnknown>()(
   "SubagentReservationUnknown",
   {
     reservationId: BudgetReservationId,
@@ -165,7 +165,7 @@ export class SubagentReservationUnknown extends Schema.TaggedErrorClass<Subagent
 ) {}
 
 /** No delegation budget was registered for this parent Run. */
-export class SubagentParentBudgetUnknown extends Schema.TaggedErrorClass<SubagentParentBudgetUnknown>()(
+export class SubagentParentBudgetUnknown extends Schema.TaggedError<SubagentParentBudgetUnknown>()(
   "SubagentParentBudgetUnknown",
   {
     parentRunId: RunId,
@@ -173,7 +173,7 @@ export class SubagentParentBudgetUnknown extends Schema.TaggedErrorClass<Subagen
 ) {}
 
 /** The parent Run is already registered with different caps; neither set may win silently. */
-export class SubagentParentBudgetConflict extends Schema.TaggedErrorClass<SubagentParentBudgetConflict>()(
+export class SubagentParentBudgetConflict extends Schema.TaggedError<SubagentParentBudgetConflict>()(
   "SubagentParentBudgetConflict",
   {
     parentRunId: RunId,

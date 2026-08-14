@@ -85,7 +85,7 @@ export type SubagentEventPayload =
   | SubagentJoinedPayload;
 
 /** A handler emitted a Subagent event after its Tool batch had already settled. */
-export class RunEventSinkClosedError extends Schema.TaggedErrorClass<RunEventSinkClosedError>()(
+export class RunEventSinkClosedError extends Schema.TaggedError<RunEventSinkClosedError>()(
   "RunEventSinkClosedError",
   {
     message: Schema.String,

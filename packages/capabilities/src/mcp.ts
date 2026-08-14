@@ -29,7 +29,7 @@ export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
 }) {}
 
 /** Typed remote connection failure; no remote execution is claimed exactly-once. */
-export class McpConnectionError extends Schema.TaggedErrorClass<McpConnectionError>()(
+export class McpConnectionError extends Schema.TaggedError<McpConnectionError>()(
   "McpConnectionError",
   {
     serverId: Schema.NonEmptyString,
@@ -39,7 +39,7 @@ export class McpConnectionError extends Schema.TaggedErrorClass<McpConnectionErr
 ) {}
 
 /** Discovery exceeded an explicit caller or framework hard bound. */
-export class McpDiscoveryLimitExceeded extends Schema.TaggedErrorClass<McpDiscoveryLimitExceeded>()(
+export class McpDiscoveryLimitExceeded extends Schema.TaggedError<McpDiscoveryLimitExceeded>()(
   "McpDiscoveryLimitExceeded",
   {
     serverId: Schema.NonEmptyString,
@@ -50,7 +50,7 @@ export class McpDiscoveryLimitExceeded extends Schema.TaggedErrorClass<McpDiscov
 ) {}
 
 /** Native dynamic Toolkit names did not match the bounded MCP discovery response. */
-export class McpToolkitMismatch extends Schema.TaggedErrorClass<McpToolkitMismatch>()(
+export class McpToolkitMismatch extends Schema.TaggedError<McpToolkitMismatch>()(
   "McpToolkitMismatch",
   {
     serverId: Schema.NonEmptyString,
@@ -202,12 +202,23 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     });
   }
   const discoverySchemas = server.tools
-    .map((tool) => ({ name: tool.name, inputSchema: tool.inputSchema }))
+    .map((tool) => ({
+      name: tool.name,
+      inputSchema: tool.inputSchema,
+      ...(tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}),
+    }))
     .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0));
   const toolkitSchemas = yield* Effect.try({
     try: () =>
       Object.values(server.toolkit.tools)
-        .map((tool) => ({ name: tool.name, inputSchema: Tool.getJsonSchema(tool) }))
+        .map((tool) => {
+          const outputSchema = Tool.getJsonSchemaFromSchema(tool.successSchema);
+          return {
+            name: tool.name,
+            inputSchema: Tool.getJsonSchema(tool),
+            ...(outputSchema.type === "object" ? { outputSchema } : {}),
+          };
+        })
         .sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0)),
     catch: (cause) =>
       McpToolkitMismatch.make({

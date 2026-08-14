@@ -45,13 +45,10 @@ export class GitHubReviewTarget extends Context.Service<
 }
 
 /** A GitHub API call failed: transport, status, or payload decode. */
-export class GitHubApiFailure extends Schema.TaggedErrorClass<GitHubApiFailure>()(
-  "GitHubApiFailure",
-  {
-    operation: Schema.String,
-    reason: Schema.String,
-  },
-) {
+export class GitHubApiFailure extends Schema.TaggedError<GitHubApiFailure>()("GitHubApiFailure", {
+  operation: Schema.String,
+  reason: Schema.String,
+}) {
   override get message() {
     return `GitHub API operation '${this.operation}' failed: ${this.reason}`;
   }

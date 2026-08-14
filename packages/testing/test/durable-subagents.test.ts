@@ -153,7 +153,7 @@ const childDefinition = Agent.define("research-child", {
   }),
 });
 
-class ResearchDelegationFailed extends Schema.TaggedErrorClass<ResearchDelegationFailed>()(
+class ResearchDelegationFailed extends Schema.TaggedError<ResearchDelegationFailed>()(
   "ResearchDelegationFailed",
   { childErrorTag: Schema.String },
 ) {}

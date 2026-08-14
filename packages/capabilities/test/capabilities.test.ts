@@ -147,6 +147,7 @@ describe("capability contracts", () => {
             name: "search",
             isFailure: false,
             result: { hotel: "Harbor" },
+            providerExecuted: false,
           }),
         ],
       });
@@ -167,6 +168,7 @@ describe("capability contracts", () => {
             name: "reserve",
             isFailure: false,
             result: { held: true },
+            providerExecuted: false,
           }),
         ],
       });
@@ -1039,11 +1041,11 @@ describe("capability contracts", () => {
     }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 
-  it.effect("binds MCP server identity and every native Toolkit parameter schema", () =>
+  it.effect("binds MCP server identity and every advertised Toolkit schema", () =>
     Effect.gen(function* () {
       const Search = Tool.make("search", {
         parameters: Schema.Struct({ query: Schema.String }),
-        success: Schema.String,
+        success: Schema.Struct({ answer: Schema.String }),
       });
       const toolkit = Toolkit.make(Search);
       const request = McpConnectionRequest.make({
@@ -1064,6 +1066,7 @@ describe("capability contracts", () => {
         name: "search",
         description: "bounded",
         inputSchema: Tool.getJsonSchema(Search),
+        outputSchema: Tool.getJsonSchemaFromSchema(Search.successSchema),
       });
       const discovery = yield* validateMcpDiscovery(request, {
         identity,
@@ -1086,6 +1089,24 @@ describe("capability contracts", () => {
         toolkit,
       }).pipe(Effect.exit);
       expect(Exit.isFailure(wrongSchemaExit)).toBe(true);
+
+      const wrongOutputSchemaExit = yield* validateMcpDiscovery(request, {
+        identity,
+        capabilities: McpSchema.ServerCapabilities.make({}),
+        tools: [
+          McpSchema.Tool.make({
+            name: matching.name,
+            description: matching.description,
+            inputSchema: matching.inputSchema,
+            outputSchema: {
+              type: "object",
+              properties: { answer: { type: "number" } },
+            },
+          }),
+        ],
+        toolkit,
+      }).pipe(Effect.exit);
+      expect(Exit.isFailure(wrongOutputSchemaExit)).toBe(true);
 
       const nonJsonSchemaError = yield* validateMcpDiscovery(request, {
         identity,

@@ -248,7 +248,7 @@ layer(localSandboxLayer, { excludeTestServices: true })("unisolated local Sandbo
   it.effect("copies only explicitly allowed environment variables", () =>
     Effect.gen(function* () {
       const sandbox = yield* Sandbox;
-      const provider = ConfigProvider.fromUnknown({
+      const provider = ConfigProvider.fromEnvRecord({
         EFFECT_AGENT_ALLOWED: "visible",
         EFFECT_AGENT_HIDDEN: "hidden",
       });

@@ -67,7 +67,7 @@ import {
 } from "./records.ts";
 
 /** A SubmissionLedger contract invariant that an adapter under test violated. */
-export class SubmissionLedgerConformanceViolation extends Schema.TaggedErrorClass<SubmissionLedgerConformanceViolation>()(
+export class SubmissionLedgerConformanceViolation extends Schema.TaggedError<SubmissionLedgerConformanceViolation>()(
   "SubmissionLedgerConformanceViolation",
   {
     caseName: Schema.String,

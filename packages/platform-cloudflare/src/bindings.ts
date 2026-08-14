@@ -10,7 +10,7 @@ import { Context, Effect, Layer, Schema } from "effect";
  */
 
 /** A Cloudflare platform binding was missing or carried the wrong shape (DEPLOY-003/010). */
-export class CloudflareBindingError extends Schema.TaggedErrorClass<CloudflareBindingError>()(
+export class CloudflareBindingError extends Schema.TaggedError<CloudflareBindingError>()(
   "CloudflareBindingError",
   {
     binding: Schema.String,

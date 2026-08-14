@@ -49,7 +49,7 @@ export class RequirementCoverageReport extends Schema.Class<RequirementCoverageR
   entries: Schema.Array(RequirementCoverageEntry),
 }) {}
 
-class RequirementsCoverageFailed extends Schema.TaggedErrorClass<RequirementsCoverageFailed>()(
+class RequirementsCoverageFailed extends Schema.TaggedError<RequirementsCoverageFailed>()(
   "RequirementsCoverageFailed",
   {
     problems: Schema.Array(Schema.String),

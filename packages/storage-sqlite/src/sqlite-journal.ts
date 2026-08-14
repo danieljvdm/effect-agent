@@ -377,6 +377,39 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
         ),
       );
 
+  /**
+   * Runs a read-only snapshot under a deferred transaction. Effect's SQLite client now
+   * starts every writable-client `withTransaction` with `BEGIN IMMEDIATE`, which is the
+   * right default for mutations but would make exports take the write lock and block a
+   * concurrent append. Reserving the connection and beginning explicitly preserves the
+   * adapter's snapshot-with-concurrent-writer contract. As with the write helper, a failed
+   * `BEGIN` is reported directly because there is no transaction to roll back.
+   */
+  const withReadTransaction =
+    (operation: string) =>
+    <A, E>(effect: Effect.Effect<A, E>): Effect.Effect<A, E | SqliteStorageError> =>
+      Effect.uninterruptibleMask((restore) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const connection = yield* sql.reserve.pipe(Effect.mapError(storageError(operation)));
+            yield* connection
+              .executeUnprepared("BEGIN", [], undefined)
+              .pipe(Effect.mapError(storageError(operation)));
+            const exit = yield* restore(
+              Effect.provideService(effect, sql.transactionService, [connection, 0] as const),
+            ).pipe(Effect.exit);
+            if (Exit.isSuccess(exit)) {
+              yield* connection
+                .executeUnprepared("COMMIT", [], undefined)
+                .pipe(Effect.mapError(storageError(operation)));
+              return exit.value;
+            }
+            yield* Effect.orDie(connection.executeUnprepared("ROLLBACK", [], undefined));
+            return yield* exit;
+          }),
+        ).pipe(Effect.withSpan("SqliteJournal.withReadTransaction", { attributes: { operation } })),
+      );
+
   const materialize = Effect.fn("SqliteJournal.materialize")(function* (
     conversationId: string,
     createdAt: string,
@@ -733,10 +766,9 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
   const exportConversation = Effect.fn("SqliteJournal.exportConversation")(function* (
     conversationId: string,
   ) {
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const conversationRows = yield* sql<Record<string, unknown>>`
+    return yield* withReadTransaction("export transaction")(
+      Effect.gen(function* () {
+        const conversationRows = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               created_at,
@@ -746,14 +778,14 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             FROM effect_agent_conversations
             WHERE conversation_id = ${conversationId}
           `.pipe(Effect.mapError(storageError("export conversation")));
-          const conversation = yield* decodeSingleRow(
-            Schema.Array(ConversationRow),
-            "effect_agent_conversations",
-            conversationId,
-            conversationRows,
-          );
-          yield* failpoint("export:after-conversation-read");
-          const batchRows = yield* sql<Record<string, unknown>>`
+        const conversation = yield* decodeSingleRow(
+          Schema.Array(ConversationRow),
+          "effect_agent_conversations",
+          conversationId,
+          conversationRows,
+        );
+        yield* failpoint("export:after-conversation-read");
+        const batchRows = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               batch_id,
@@ -766,7 +798,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             WHERE conversation_id = ${conversationId}
             ORDER BY first_sequence
           `.pipe(Effect.mapError(storageError("export canonical batches")));
-          const recordRows = yield* sql<Record<string, unknown>>`
+        const recordRows = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               sequence,
@@ -777,7 +809,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             WHERE conversation_id = ${conversationId}
             ORDER BY sequence
           `.pipe(Effect.mapError(storageError("export canonical records")));
-          const checkpointRows = yield* sql<Record<string, unknown>>`
+        const checkpointRows = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               through_sequence,
@@ -788,34 +820,29 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             ORDER BY through_sequence
           `.pipe(Effect.mapError(storageError("export checkpoints")));
 
-          return RawConversationExport.make({
-            conversation,
-            batches: yield* decodeRows(
-              Schema.Array(BatchRow),
-              "effect_agent_canonical_batches",
-              conversationId,
-              batchRows,
-            ),
-            records: yield* decodeRows(
-              Schema.Array(RecordRow),
-              "effect_agent_canonical_records",
-              conversationId,
-              recordRows,
-            ),
-            checkpoints: yield* decodeRows(
-              Schema.Array(CheckpointRow),
-              "effect_agent_checkpoints",
-              conversationId,
-              checkpointRows,
-            ),
-          });
-        }),
-      )
-      .pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("export transaction")(error)),
-        ),
-      );
+        return RawConversationExport.make({
+          conversation,
+          batches: yield* decodeRows(
+            Schema.Array(BatchRow),
+            "effect_agent_canonical_batches",
+            conversationId,
+            batchRows,
+          ),
+          records: yield* decodeRows(
+            Schema.Array(RecordRow),
+            "effect_agent_canonical_records",
+            conversationId,
+            recordRows,
+          ),
+          checkpoints: yield* decodeRows(
+            Schema.Array(CheckpointRow),
+            "effect_agent_checkpoints",
+            conversationId,
+            checkpointRows,
+          ),
+        });
+      }),
+    );
   });
 
   const saveCheckpoint = Effect.fn("SqliteJournal.saveCheckpoint")(function* (
@@ -967,10 +994,9 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
   });
 
   const scanStoredPayloads = Effect.fn("SqliteJournal.scanStoredPayloads")(function* () {
-    return yield* sql
-      .withTransaction(
-        Effect.gen(function* () {
-          const conversations = yield* sql<Record<string, unknown>>`
+    return yield* withReadTransaction("startup scan transaction")(
+      Effect.gen(function* () {
+        const conversations = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               created_at,
@@ -980,7 +1006,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             FROM effect_agent_conversations
             ORDER BY conversation_id
           `.pipe(Effect.mapError(storageError("scan conversations")));
-          const batches = yield* sql<Record<string, unknown>>`
+        const batches = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               batch_id,
@@ -992,7 +1018,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             FROM effect_agent_canonical_batches
             ORDER BY conversation_id, first_sequence
           `.pipe(Effect.mapError(storageError("scan canonical batches")));
-          const records = yield* sql<Record<string, unknown>>`
+        const records = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               sequence,
@@ -1002,7 +1028,7 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             FROM effect_agent_canonical_records
             ORDER BY conversation_id, sequence
           `.pipe(Effect.mapError(storageError("scan canonical records")));
-          const checkpoints = yield* sql<Record<string, unknown>>`
+        const checkpoints = yield* sql<Record<string, unknown>>`
             SELECT
               conversation_id,
               through_sequence,
@@ -1011,39 +1037,34 @@ const makeJournal = (sql: SqlClient.SqlClient, failpoint: SqliteJournalFailpoint
             FROM effect_agent_checkpoints
             ORDER BY conversation_id, through_sequence
           `.pipe(Effect.mapError(storageError("scan checkpoints")));
-          return {
-            conversations: yield* decodeRows(
-              Schema.Array(ConversationRow),
-              "effect_agent_conversations",
-              "startup_scan",
-              conversations,
-            ),
-            batches: yield* decodeRows(
-              Schema.Array(BatchRow),
-              "effect_agent_canonical_batches",
-              "startup_scan",
-              batches,
-            ),
-            records: yield* decodeRows(
-              Schema.Array(RecordRow),
-              "effect_agent_canonical_records",
-              "startup_scan",
-              records,
-            ),
-            checkpoints: yield* decodeRows(
-              Schema.Array(CheckpointRow),
-              "effect_agent_checkpoints",
-              "startup_scan",
-              checkpoints,
-            ),
-          };
-        }),
-      )
-      .pipe(
-        Effect.catchTag("SqlError", (error) =>
-          Effect.fail(storageError("startup scan transaction")(error)),
-        ),
-      );
+        return {
+          conversations: yield* decodeRows(
+            Schema.Array(ConversationRow),
+            "effect_agent_conversations",
+            "startup_scan",
+            conversations,
+          ),
+          batches: yield* decodeRows(
+            Schema.Array(BatchRow),
+            "effect_agent_canonical_batches",
+            "startup_scan",
+            batches,
+          ),
+          records: yield* decodeRows(
+            Schema.Array(RecordRow),
+            "effect_agent_canonical_records",
+            "startup_scan",
+            records,
+          ),
+          checkpoints: yield* decodeRows(
+            Schema.Array(CheckpointRow),
+            "effect_agent_checkpoints",
+            "startup_scan",
+            checkpoints,
+          ),
+        };
+      }),
+    );
   });
 
   return {

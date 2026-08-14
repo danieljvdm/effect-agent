@@ -50,13 +50,13 @@ export class ConversationAppend extends Schema.Class<ConversationAppend>(
 }) {}
 
 /** The requested ephemeral Conversation has not been created in this process Scope. */
-export class ConversationNotFound extends Schema.TaggedErrorClass<ConversationNotFound>()(
+export class ConversationNotFound extends Schema.TaggedError<ConversationNotFound>()(
   "ConversationNotFound",
   { conversationId: ConversationId },
 ) {}
 
 /** A process-local Conversation store reached an explicit count or encoded-content bound. */
-export class ConversationLimitExceeded extends Schema.TaggedErrorClass<ConversationLimitExceeded>()(
+export class ConversationLimitExceeded extends Schema.TaggedError<ConversationLimitExceeded>()(
   "ConversationLimitExceeded",
   {
     conversationId: ConversationId,
@@ -67,13 +67,13 @@ export class ConversationLimitExceeded extends Schema.TaggedErrorClass<Conversat
 ) {}
 
 /** Engine history was not an append-only extension of the official snapshot. */
-export class ConversationHistoryDiverged extends Schema.TaggedErrorClass<ConversationHistoryDiverged>()(
+export class ConversationHistoryDiverged extends Schema.TaggedError<ConversationHistoryDiverged>()(
   "ConversationHistoryDiverged",
   { conversationId: ConversationId, message: Schema.String },
 ) {}
 
 /** Native Prompt encoding failed before a bounded state mutation. */
-export class ConversationEncodingError extends Schema.TaggedErrorClass<ConversationEncodingError>()(
+export class ConversationEncodingError extends Schema.TaggedError<ConversationEncodingError>()(
   "ConversationEncodingError",
   { conversationId: ConversationId, message: Schema.String },
 ) {}
