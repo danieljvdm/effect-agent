@@ -119,7 +119,7 @@ import {
   type StartLiveTravelChatRequest,
   type StartOperationalRunRequest,
 } from "./operational-contracts";
-import { OpenAiRealTravelPlannerAgent, RealTravelHoldToolkit } from "./openai-profile";
+import { makeRealTravelPlannerAgent, RealTravelHoldToolkit } from "./openai-profile";
 
 const guidedSteering = "Change the departure date to 2026-09-21.";
 const guidedFollowUp = "Prefer a quiet room away from the lift.";
@@ -501,6 +501,19 @@ const scenarioLimits = (scenario: DemoScenario): UsageBudgetLimits => {
   }
 };
 
+/**
+ * Real web research is token-heavy: hosted search results routinely exceed the
+ * fixture profile's 12k input budget in one turn. The live profile keeps every
+ * bound finite but sized for genuine research, with cost as the safety net.
+ */
+const liveResearchLimits = UsageBudgetLimits.make({
+  maxInputTokens: 400_000,
+  maxOutputTokens: 16_000,
+  maxToolCalls: 10,
+  maxCostMicrousd: 2_000_000,
+  maxDurationMillis: 180_000,
+});
+
 const operationalPlanAgent = (turns: ReadonlyArray<ScriptedTurnInput>) =>
   Agent.withModel(
     TravelPlannerPhase2,
@@ -735,7 +748,7 @@ const InteractiveRuntimeLive = Layer.effect(
             }),
           );
 
-          const limits = scenarioLimits(request.scenario);
+          const limits = live ? liveResearchLimits : scenarioLimits(request.scenario);
           const budget = yield* makeUsageBudget(limits);
           yield* emit(
             DemoBudgetChanged.make({
@@ -1150,7 +1163,11 @@ const InteractiveRuntimeLive = Layer.effect(
                 budgetCents: phase1Trip.budgetCents,
                 currency: phase1Trip.currency,
               });
-              yield* AgentRuntime.stream(OpenAiRealTravelPlannerAgent, input, runOptions).pipe(
+              yield* AgentRuntime.stream(
+                makeRealTravelPlannerAgent("settings" in request ? request.settings : undefined),
+                input,
+                runOptions,
+              ).pipe(
                 Stream.runForEach(inspectRunEvent),
                 Effect.provide(liveRuntimeLayer),
                 Effect.provideService(OpenAiClient.OpenAiClient, liveClient),

@@ -160,13 +160,29 @@ export const OpenAiRealTravelPlannerDefinition = Agent.define("travel-planner-li
   },
 });
 
-/** Live binding for the real research travel agent. */
-export const OpenAiRealTravelPlannerAgent = Agent.withModel(
-  OpenAiRealTravelPlannerDefinition,
-  OpenAiLanguageModel.model(OPENAI_DEMO_MODEL, {
-    max_output_tokens: 4_000,
-    store: false,
-    strictJsonSchema: true,
-    text: { verbosity: "low" },
-  }),
-);
+/** Browser-selectable model settings for the live research binding. */
+export interface RealTravelModelSettings {
+  readonly model?: "gpt-5.6-luna" | "gpt-5.6-terra" | "gpt-5.6-sol" | undefined;
+  readonly reasoningEffort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | undefined;
+  readonly fast?: boolean | undefined;
+}
+
+/** Live binding factory: one definition, caller-selected model behavior. */
+export const makeRealTravelPlannerAgent = (settings?: RealTravelModelSettings) =>
+  Agent.withModel(
+    OpenAiRealTravelPlannerDefinition,
+    OpenAiLanguageModel.model(settings?.model ?? OPENAI_DEMO_MODEL, {
+      max_output_tokens: 4_000,
+      store: false,
+      strictJsonSchema: true,
+      text: { verbosity: "low" },
+      ...(settings?.reasoningEffort !== undefined
+        ? { reasoning: { effort: settings.reasoningEffort } }
+        : {}),
+      // OpenAI priority processing is the demo's "fast mode".
+      ...(settings?.fast === true ? { service_tier: "priority" } : {}),
+    }),
+  );
+
+/** Default live binding for the real research travel agent. */
+export const OpenAiRealTravelPlannerAgent = makeRealTravelPlannerAgent();

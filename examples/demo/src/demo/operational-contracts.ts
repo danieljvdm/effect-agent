@@ -21,6 +21,27 @@ export const DemoScenario = Schema.Literals([
 ]);
 export type DemoScenario = typeof DemoScenario.Type;
 
+export const DemoOpenAiModel = Schema.Literals(["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"]);
+export type DemoOpenAiModel = typeof DemoOpenAiModel.Type;
+
+export const DemoReasoningEffort = Schema.Literals([
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+]);
+export type DemoReasoningEffort = typeof DemoReasoningEffort.Type;
+
+/** Browser-selected model settings for the live research travel agent. */
+export class DemoModelSettings extends Schema.Class<DemoModelSettings>("DemoModelSettings")({
+  model: DemoOpenAiModel,
+  reasoningEffort: DemoReasoningEffort,
+  /** OpenAI priority processing ("fast mode"). */
+  fast: Schema.Boolean,
+}) {}
+
 export class StartOperationalRunRequest extends Schema.Class<StartOperationalRunRequest>(
   "StartOperationalRunRequest",
 )({
@@ -33,6 +54,7 @@ export class StartLiveTravelChatRequest extends Schema.Class<StartLiveTravelChat
 )({
   message: ChatInput.fields.message,
   scenario: DemoScenario,
+  settings: Schema.optionalKey(DemoModelSettings),
 }) {}
 
 export const DemoCommandKind = Schema.Literals(["steering", "follow-up"]);

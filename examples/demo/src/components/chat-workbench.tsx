@@ -35,6 +35,7 @@ import {
   type CapabilityRecipe,
 } from "@/demo/chat-capabilities";
 import {
+  modelSettingsAtom,
   chatHistoryFromMessages,
   chatStateAtom,
   initialChatState,
@@ -46,6 +47,7 @@ import {
   type ChatState,
   type ChatStatus,
 } from "@/demo/chat-state";
+import { DemoModelSettings } from "@/demo/operational-contracts";
 import { projectRunActivity } from "@/demo/run-activity";
 import { projectToolTraces } from "@/demo/tool-trace";
 
@@ -114,6 +116,8 @@ function GeneralChatTrace({
 export function ChatWorkbench() {
   const state = useAtomValue(chatStateAtom);
   const setState = useAtomSet(chatStateAtom);
+  const modelSettings = useAtomValue(modelSettingsAtom);
+  const setModelSettings = useAtomSet(modelSettingsAtom);
   const run = useAtomSet(runChatAtom);
   const runCapability = useAtomSet(runCapabilityChatAtom);
   const queueUpdate = useAtomSet(queueChatUpdateAtom);
@@ -201,6 +205,60 @@ export function ChatWorkbench() {
                   ? "OpenAI agent · live web research"
                   : "Scripted replay"}
             </Badge>
+            {state.mode === "openai" ? (
+              <>
+                <select
+                  aria-label="Model"
+                  className="h-7 rounded-md border border-slate-300 bg-white px-1.5 text-xs text-slate-700"
+                  onChange={(event) =>
+                    setModelSettings(
+                      DemoModelSettings.make({
+                        ...modelSettings,
+                        model: event.target.value as DemoModelSettings["model"],
+                      }),
+                    )
+                  }
+                  value={modelSettings.model}
+                >
+                  <option value="gpt-5.6-luna">Luna</option>
+                  <option value="gpt-5.6-terra">Terra</option>
+                  <option value="gpt-5.6-sol">Sol</option>
+                </select>
+                <select
+                  aria-label="Reasoning effort"
+                  className="h-7 rounded-md border border-slate-300 bg-white px-1.5 text-xs text-slate-700"
+                  onChange={(event) =>
+                    setModelSettings(
+                      DemoModelSettings.make({
+                        ...modelSettings,
+                        reasoningEffort: event.target.value as DemoModelSettings["reasoningEffort"],
+                      }),
+                    )
+                  }
+                  value={modelSettings.reasoningEffort}
+                >
+                  <option value="none">No reasoning</option>
+                  <option value="minimal">Minimal</option>
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                  <option value="xhigh">X-high</option>
+                </select>
+                <Button
+                  onClick={() =>
+                    setModelSettings(
+                      DemoModelSettings.make({ ...modelSettings, fast: !modelSettings.fast }),
+                    )
+                  }
+                  size="sm"
+                  title="OpenAI priority processing"
+                  type="button"
+                  variant={modelSettings.fast ? "default" : "outline"}
+                >
+                  Fast
+                </Button>
+              </>
+            ) : null}
             <Button onClick={reset} size="icon-sm" title="New chat" type="button" variant="ghost">
               <RotateCcw />
             </Button>

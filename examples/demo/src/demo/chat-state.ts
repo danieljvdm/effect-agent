@@ -8,6 +8,7 @@ import { DemoChatHistoryMessage, type DemoRunSelection } from "./contracts";
 import { decodeErrorDetails } from "./error-details";
 import { ChatOutput, type ChatOutput as ChatOutputValue } from "./general-chat";
 import {
+  DemoModelSettings,
   type DemoApprovalChoice,
   type DemoOperationalEvent,
   type DemoRunHandle,
@@ -63,6 +64,11 @@ export const initialChatState: ChatState = {
 };
 
 export const chatStateAtom = Atom.make<ChatState>(initialChatState);
+
+/** Browser-selected model settings for the live research agent. */
+export const modelSettingsAtom = Atom.make<DemoModelSettings>(
+  DemoModelSettings.make({ model: "gpt-5.6-luna", reasoningEffort: "medium", fast: false }),
+);
 
 /** Projects the visible transcript into the bounded wire history for the next Run. */
 export const chatHistoryFromMessages = (
@@ -311,7 +317,11 @@ export const runCapabilityChatAtom = DemoRunRpcRuntime.fn<CapabilityChatRequest>
     Effect.gen(function* () {
       const client = yield* DemoRunRpcClient;
       return previous.mode === "openai"
-        ? client.StreamLiveTravelChatRun({ message, scenario })
+        ? client.StreamLiveTravelChatRun({
+            message,
+            scenario,
+            settings: context(modelSettingsAtom),
+          })
         : client.StreamOperationalRun({ scenario });
     }),
   ).pipe(
