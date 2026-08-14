@@ -1,17 +1,17 @@
 {
   "version": 1,
-  "toolVersion": "0.11.3",
-  "manifestDigest": "sha256:5ab8ba32bb2a178f5e532826b10d338b8a11a360810880e64b0d92ac63c78add",
+  "toolVersion": "0.17.0",
+  "manifestDigest": "sha256:59fab5f12d5cff0e759652ee648d705472636a7ca3d9bdb028cd574cf5d3ccd3",
   "setup": {
     "effectSource": {
       "packageName": "effect",
-      "packageVersion": "4.0.0-beta.102",
+      "packageVersion": "4.0.0-beta.105",
       "path": "repos/effect",
       "repository": "https://github.com/Effect-TS/effect.git",
-      "tag": "effect@4.0.0-beta.102"
+      "tag": "effect@4.0.0-beta.105"
     },
     "effectTsgo": {
-      "effectTsgoVersion": "0.24.3",
+      "effectTsgoVersion": "0.33.0",
       "typescriptPackage": "typescript",
       "typescriptVersion": "7.0.2"
     }
@@ -38,7 +38,7 @@
       "target": "agents",
       "mode": "copy",
       "kind": "directory",
-      "digest": "sha256:934e6a086784b8cc9cc19c85587ba60481f57613fb8b85e4aea6b5556da72e0f"
+      "digest": "sha256:b152fec9dcb69b3018f021e70771d42036201c53d485e79b098147733ba445ac"
     },
     {
       "resourceId": "skill:testing@agents",
@@ -47,7 +47,7 @@
       "target": "agents",
       "mode": "copy",
       "kind": "directory",
-      "digest": "sha256:e239ef710f905b77ae1f98b2b86d3d0911c9e5f9381a92b268a8ac8c28e9c88f"
+      "digest": "sha256:6c35e7d322cc196e98bbd37660c493302f39f5a91183b18c7b2dc2f679a36ada"
     },
     {
       "resourceId": "skill:cloudflare@claude",
@@ -87,7 +87,7 @@
       "sourcePath": "templates/AGENTS.md",
       "mode": "copy",
       "kind": "file",
-      "digest": "sha256:acc4f12eb7801c245f6a3117b0cb9b329b3c5765f32cbc8ecb4501d7af08cd08"
+      "digest": "sha256:d6c16545eb6cfbf9e58acd45340961ca70626a6d00b676c534ef6572cfa68228"
     },
     {
       "resourceId": "setup:claude-instructions",

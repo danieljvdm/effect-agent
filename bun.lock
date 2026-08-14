@@ -8,7 +8,7 @@
         "@changesets/changelog-github": "0.7.0",
         "@changesets/cli": "2.31.0",
         "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#e1cdbe5dbad7576617052285d0cad43091432e0f",
-        "@danieljvdm/dev-kit": "0.11.3",
+        "@danieljvdm/dev-kit": "0.17.0",
         "@effect-agent/core": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
         "@effect-agent/session": "workspace:*",
@@ -134,7 +134,7 @@
     },
     "packages/capabilities": {
       "name": "@effect-agent/capabilities",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -149,7 +149,7 @@
     },
     "packages/core": {
       "name": "@effect-agent/core",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -160,7 +160,7 @@
     },
     "packages/engine": {
       "name": "@effect-agent/engine",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "effect": "catalog:",
@@ -198,7 +198,7 @@
     },
     "packages/platform-node": {
       "name": "@effect-agent/platform-node",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/session": "workspace:*",
@@ -218,7 +218,7 @@
     },
     "packages/sandbox": {
       "name": "@effect-agent/sandbox",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "effect": "catalog:",
       },
@@ -229,7 +229,7 @@
     },
     "packages/sandbox-local": {
       "name": "@effect-agent/sandbox-local",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/sandbox": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -244,7 +244,7 @@
     },
     "packages/session": {
       "name": "@effect-agent/session",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
@@ -278,7 +278,7 @@
     },
     "packages/storage-memory": {
       "name": "@effect-agent/storage-memory",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/session": "workspace:*",
@@ -293,7 +293,7 @@
     },
     "packages/storage-sqlite": {
       "name": "@effect-agent/storage-sqlite",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/session": "workspace:*",
         "@effect/platform-node": "catalog:",
@@ -308,7 +308,7 @@
     },
     "packages/testing": {
       "name": "@effect-agent/testing",
-      "version": "0.0.0",
+      "version": "0.0.1-beta.1",
       "dependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/core": "workspace:*",
@@ -520,7 +520,7 @@
 
     "@danieljvdm/agent-skills": ["@danieljvdm/agent-skills@github:danieljvdm/agent-skills#e1cdbe5", { "dependencies": { "@effect/platform-node": "4.0.0-beta.102", "effect": "4.0.0-beta.102", "jsonc-parser": "3.3.1", "tsx": "4.22.4" }, "bin": { "agent-skills": "./bin/agent-skills.mjs" } }, "danieljvdm-agent-skills-e1cdbe5", "sha512-Drf23NK0l8wHJKwDBAM/+zdZ+lX7yjwiHt4hXFUWkcTe5Zn0aE71JMTpg/CQ8A4k3tF0+GG1U7zzv1ed0BgE1A=="],
 
-    "@danieljvdm/dev-kit": ["@danieljvdm/dev-kit@0.11.3", "", { "dependencies": { "@effect/platform-bun": "4.0.0-beta.102", "@stylistic/eslint-plugin": "5.10.0", "effect": "4.0.0-beta.102", "jsonc-parser": "3.3.1", "semver": "7.8.5" }, "peerDependencies": { "oxfmt": ">=0.60.0 <0.61.0", "oxlint": ">=1.75.0 <2.0.0", "vite-plus": ">=0.2.6 <0.3.0" }, "optionalPeers": ["oxfmt", "oxlint", "vite-plus"], "bin": { "dev-kit": "bin/dev-kit.mjs" } }, "sha512-x+Us/B3MKDBdPRFUcozqhF007eV1XNLc0g5TqcXvrXzRq/GvFgoztrFdv8g6BGnipMKjnqK3bkHHzLy3gqHhDA=="],
+    "@danieljvdm/dev-kit": ["@danieljvdm/dev-kit@0.17.0", "", { "dependencies": { "@effect/platform-bun": "4.0.0-beta.105", "@stylistic/eslint-plugin": "5.10.0", "effect": "4.0.0-beta.105", "jsonc-parser": "3.3.1", "semver": "7.8.5" }, "peerDependencies": { "oxfmt": ">=0.60.0 <0.61.0", "oxlint": ">=1.75.0 <2.0.0", "vite-plus": ">=0.2.6 <0.3.0" }, "optionalPeers": ["oxfmt", "oxlint", "vite-plus"], "bin": { "dev-kit": "bin/dev-kit.mjs" } }, "sha512-KJBvnchyIdPDJ4Q3SDiuqseXmp+gj6Fj5ERzhzsG+CDzpHDpFZAhZzUHALvJbrUmttaUJ4gMbntCYwOxaNlZHw=="],
 
     "@docsearch/css": ["@docsearch/css@4.7.0", "", {}, "sha512-Sk5xkdRFeE7PeWjG9l4AfTwdvMfr9wHiwNNCpHXT4v4SNyNMKdHGvEILc31BgaVFGDDNbv5u/a73tofRiwbEZw=="],
 
@@ -572,7 +572,7 @@
 
     "@effect/platform-browser": ["@effect/platform-browser@4.0.0-beta.105", "", { "peerDependencies": { "effect": "^4.0.0-beta.105" } }, "sha512-ts6js/MzhptBEfAXkxtyWq0fDK1snISNUWdziw4J5vf8g+1yIujpk4tgFN0dhQcRnhzVJZVDEAUoiwTQW1Bp8A=="],
 
-    "@effect/platform-bun": ["@effect/platform-bun@4.0.0-beta.102", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.102" }, "peerDependencies": { "effect": "^4.0.0-beta.102" } }, "sha512-hTIb0jjTfXhNgnDq2OX5wrigc0OSvTT0VWWb1PLpMM395RJPu8rCIbTlGhy0NS7kZOd8FfgNi9e0sDhgyu+5Ag=="],
+    "@effect/platform-bun": ["@effect/platform-bun@4.0.0-beta.105", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.105" }, "peerDependencies": { "effect": "^4.0.0-beta.105" } }, "sha512-5eCuMLxfkLbVK5If5zFybyKduQvhYofy0oPsbTH8UiIrYqyx5QqK9G9PZ1SfBsbqHfykwLEpMCdzQczFGERw2w=="],
 
     "@effect/platform-node": ["@effect/platform-node@4.0.0-beta.105", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.105", "mime": "^4.1.0", "undici": "^8.7.0" }, "peerDependencies": { "effect": "^4.0.0-beta.105", "ioredis": ">=5.7.0 <6.0.0" } }, "sha512-gOHtgE9PqCT8aiiM0W7ZSbu4M2/jPGfJOKWuyBCxofNV5Np36fFY55FSa1MtyG+vjOjlD5btNY2i6i/SPtRqTA=="],
 
@@ -2542,8 +2542,6 @@
 
     "@dotenvx/dotenvx/undici": ["undici@7.29.0", "", {}, "sha512-IDxfleLmmbSskfWSUATiN1nfn2rDuvnMOqb5CWR92iIfojA0Ud+ulOAAEQ57LPr9rWmsreUyf5lwyao+7GNNVw=="],
 
-    "@effect/platform-bun/@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-rc.109", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.0" }, "peerDependencies": { "effect": "^4.0.0-rc.109" } }, "sha512-jhZJnf81N7Z5+Z41Qr0cKT75WzGu6M1W05xrSdu/V8PK0kSFtU5hJMBxSGDWNlgWhBwK0WRZtnMHY8HLdONg1w=="],
-
     "@effect/platform-node-shared/ws": ["ws@8.21.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw=="],
 
     "@eslint-community/eslint-utils/eslint-visitor-keys": ["eslint-visitor-keys@3.4.3", "", {}, "sha512-wpc+LXeiyiisxPlEkUzU6svyS1frIO3Mgxj1fdy7Pm8Ygzguax2N3Fa/D/ag1WqbOprdI+uY6wMUl8/a2G+iag=="],
@@ -2702,8 +2700,6 @@
 
     "@dotenvx/dotenvx/open/define-lazy-prop": ["define-lazy-prop@2.0.0", "", {}, "sha512-Ds09qNh8yw3khSjiJjiUInaGX9xlqZDY7JVryGxdxV7NPeuqQfplOpQ66yJFZut3jLa5zOwkXw1g9EI2uKh4Og=="],
 
-    "@effect/platform-bun/@effect/platform-node-shared/ws": ["ws@8.21.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw=="],
-
     "@tailwindcss/node/lightningcss/lightningcss-android-arm64": ["lightningcss-android-arm64@1.32.0", "", { "os": "android", "cpu": "arm64" }, "sha512-YK7/ClTt4kAK0vo6w3X+Pnm0D2cf2vPHbhOXdoNti1Ga0al1P4TBZhwjATvjNwLEBCnKvjJc2jQgHXH0NEwlAg=="],
 
     "@tailwindcss/node/lightningcss/lightningcss-darwin-arm64": ["lightningcss-darwin-arm64@1.32.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-RzeG9Ju5bag2Bv1/lwlVJvBE3q6TtXskdZLLCyfg5pt+HLz9BqlICO7LZM7VHNTTn/5PRhHFBSjk5lc4cmscPQ=="],
@@ -2772,6 +2768,8 @@
 
     "@cloudflare/vitest-pool-workers/miniflare/workerd/@cloudflare/workerd-windows-64": ["@cloudflare/workerd-windows-64@1.20260811.1", "", { "os": "win32", "cpu": "x64" }, "sha512-g6VquwjASlYAibcNW/0E6Zszht4qLkmnXOGwIjjRHl2A0Qz48kVeMcGvyH6eA0G9U3OzZojjYFpP+YeyQmmdjw=="],
 
+    "@danieljvdm/agent-skills/@effect/platform-node/@effect/platform-node-shared/ws": ["ws@8.21.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw=="],
+
     "eslint/find-up/locate-path/p-locate": ["p-locate@5.0.0", "", { "dependencies": { "p-limit": "^3.0.2" } }, "sha512-LaNjtRWUBY++zB5nE/NwcaoMylSPk+S+ZHNB1TzdbMJMny6dynpAGt7X/tl/QYq3TIeE6nxHppbo2LGymrG5Pw=="],
 
     "pkg-up/find-up/locate-path/p-locate": ["p-locate@3.0.0", "", { "dependencies": { "p-limit": "^2.0.0" } }, "sha512-x+12w/To+4GFfgJhBEpiDcLozRJGegY+Ei7/z0tSLkMmxGZNybVMSfWj9aJn8Z5Fc7dBUNJOOVgPv2H7IwulSQ=="],
@@ -2779,7 +2777,5 @@
     "pkg-up/find-up/locate-path/path-exists": ["path-exists@3.0.0", "", {}, "sha512-bpC7GYwiDYQ4wYLe+FA8lhRjhQCMcQGuSgGGqDkg/QerRWw9CmGRT0iSOVRSZJ29NMLZgIzqaljJ63oaL4NIJQ=="],
 
     "eslint/find-up/locate-path/p-locate/p-limit": ["p-limit@3.1.0", "", { "dependencies": { "yocto-queue": "^0.1.0" } }, "sha512-TYOanM3wGwNGsZN2cVTYPArw454xnXj5qmWF1bEoAc4+cU/ol7GVh7odevjp1FNHduHc3KZMcFduxU5Xc6uJRQ=="],
-
-    "@danieljvdm/agent-skills/@effect/platform-node/@effect/platform-node-shared/ws": ["ws@8.21.1", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-+0NTnW77fFN/DjQi6k/Sq/Yvk4Sgajw7urW8V+asjXnRgDs9gyGkdb7EzgfhA4goXsRIZKE28fzIXBHEzhuiWw=="],
   }
 }

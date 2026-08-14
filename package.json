@@ -36,7 +36,7 @@
     "@changesets/changelog-github": "0.7.0",
     "@changesets/cli": "2.31.0",
     "@danieljvdm/agent-skills": "github:danieljvdm/agent-skills#e1cdbe5dbad7576617052285d0cad43091432e0f",
-    "@danieljvdm/dev-kit": "0.11.3",
+    "@danieljvdm/dev-kit": "0.17.0",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/session": "workspace:*",
