@@ -1,7 +1,3 @@
-import { NodeServices } from "@effect/platform-node";
-import { Clock, Config, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
-import { ChildProcess } from "effect/unstable/process";
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
 import {
   Sandbox,
   SandboxExited,
@@ -19,6 +15,10 @@ import {
   type SandboxExecute,
   type SandboxRequest,
 } from "@effect-agent/sandbox";
+import { NodeServices } from "@effect/platform-node";
+import { Clock, Config, Duration, Effect, Layer, Option, Ref, Stream } from "effect";
+import { ChildProcess } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
 
 /**
  * The only implementation identity produced by this package. It deliberately states that local

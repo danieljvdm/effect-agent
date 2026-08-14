@@ -1,7 +1,3 @@
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Option, PlatformError, Schema, Stream } from "effect";
-
 import { connectMcp, StructuralRedactorLive } from "@effect-agent/capabilities";
 import { ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
@@ -18,6 +14,9 @@ import {
   runIdForSubmission,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, Option, PlatformError, Schema, Stream } from "effect";
 
 import {
   assertDiscoveryMatchesAuthoredToolkit,

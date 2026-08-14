@@ -1,7 +1,3 @@
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
-
 import {
   CanonicalBatch,
   CanonicalSequence,
@@ -22,6 +18,9 @@ import {
 } from "@effect-agent/session";
 import { MemoryStorageLive } from "@effect-agent/storage-memory";
 import { layer as sqliteStorageLayer } from "@effect-agent/storage-sqlite";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, Option, Schema, Stream } from "effect";
 
 import {
   expectedTravelPlan,

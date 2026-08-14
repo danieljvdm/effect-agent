@@ -1,7 +1,7 @@
+import { TravelPlan, type TravelPlan as TravelPlanValue } from "@effect-agent/testing";
 import { Effect, Schema, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 
-import { TravelPlan, type TravelPlan as TravelPlanValue } from "@effect-agent/testing";
 import { decodeErrorDetails } from "./error-details";
 import {
   type DemoApprovalChoice,

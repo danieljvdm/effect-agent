@@ -1,8 +1,8 @@
-import { Schema } from "effect";
-
 import { ApprovalRequest, UsageBudgetLimits, UsageTotals } from "@effect-agent/capabilities";
 import { ConversationId, RunEvent, RunId, ToolCallId } from "@effect-agent/core";
 import { SandboxEvent } from "@effect-agent/sandbox";
+import { Schema } from "effect";
+
 import { ChatInput } from "./general-chat";
 
 export const DemoRunHandle = Schema.NonEmptyString.pipe(

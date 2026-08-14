@@ -31,8 +31,8 @@ import {
 } from "@effect-agent/session";
 import { Context, Effect, Layer, Schema } from "effect";
 
-import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
 import { DurableAlarmError } from "./alarm.ts";
+import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
 import { AdmissionLimitExceeded } from "./config.ts";
 
 /**

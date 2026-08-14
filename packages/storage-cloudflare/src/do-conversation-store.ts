@@ -1,5 +1,3 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   AppendConflict,
   AppendResult,
@@ -29,6 +27,8 @@ import {
   ObservationOffset,
   SaveCheckpointRequest,
 } from "@effect-agent/session";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   Clock,
   Context,
@@ -42,15 +42,7 @@ import {
   Stream,
 } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
-import {
-  DoAppendConflict,
-  DoCheckpointConflict,
-  DoFenceRejected,
-  type DoStorageFailpointLocation,
-  DoStorageCompatibilityError,
-  DoStorageCorruptionError,
-  DoStorageError,
-} from "./errors.ts";
+
 import {
   initializeDoJournal,
   RawAppendRequest,
@@ -64,6 +56,15 @@ import {
   DoStorageConfigValue,
 } from "./do-storage-config.ts";
 import { DoStorageFailpoint, type DoStorageFailpointHandler } from "./do-storage-failpoint.ts";
+import {
+  DoAppendConflict,
+  DoCheckpointConflict,
+  DoFenceRejected,
+  type DoStorageFailpointLocation,
+  DoStorageCompatibilityError,
+  DoStorageCorruptionError,
+  DoStorageError,
+} from "./errors.ts";
 
 /**
  * Convenience-layer construction options. `storage` is the Durable Object's own

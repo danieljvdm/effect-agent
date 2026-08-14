@@ -1,5 +1,5 @@
-import { Context, Effect, Layer, Ref, Schema, type Scope, Semaphore } from "effect";
 import { RunId, ToolCallId } from "@effect-agent/core";
+import { Context, Effect, Layer, Ref, Schema, type Scope, Semaphore } from "effect";
 
 const Natural = Schema.Natural;
 

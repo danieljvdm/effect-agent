@@ -1,6 +1,3 @@
-import { expect, layer } from "@effect/vitest";
-
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import {
   Agent,
   AgentId,
@@ -14,6 +11,8 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import { Cause, Deferred, Effect, Exit, Fiber, Ref, Schema, Stream } from "effect";
 
 import {

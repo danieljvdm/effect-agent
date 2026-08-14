@@ -1,9 +1,3 @@
-import { describe, expect, it } from "vite-plus/test";
-
-import { Config, Effect, Layer, Schema, Stream } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { OpenAiClient } from "@effect/ai-openai";
-
 import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities";
 import { RunEvent } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
@@ -17,6 +11,10 @@ import {
   TravelPlannerPhase7Profile,
   TravelPlannerRuntimeLayer,
 } from "@effect-agent/testing";
+import { OpenAiClient } from "@effect/ai-openai";
+import { Config, Effect, Layer, Schema, Stream } from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
+import { describe, expect, it } from "vite-plus/test";
 
 import { OpenAiTravelPlanner } from "../src/index.ts";
 

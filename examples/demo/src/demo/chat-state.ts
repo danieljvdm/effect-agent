@@ -1,8 +1,8 @@
+import type { RunEvent } from "@effect-agent/core";
+import { TravelPlan, type TravelPlan as TravelPlanValue } from "@effect-agent/testing";
 import { Effect, Schema, Stream } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
 
-import type { RunEvent } from "@effect-agent/core";
-import { TravelPlan, type TravelPlan as TravelPlanValue } from "@effect-agent/testing";
 import { capabilityFailureMessage, formatTravelPlanForChat } from "./chat-capabilities";
 import { DemoChatHistoryMessage, type DemoRunSelection } from "./contracts";
 import { decodeErrorDetails } from "./error-details";

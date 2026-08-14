@@ -1,6 +1,6 @@
+import { CertificationReport } from "@effect-agent/session";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect, FileSystem, Schema } from "effect";
-import { CertificationReport } from "@effect-agent/session";
 
 /**
  * Shared by the Node certification runners: write the Schema-encoded certificate when

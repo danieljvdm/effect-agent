@@ -1,5 +1,5 @@
-import { Context, Effect, Option, Schema, Stream } from "effect";
 import { ConversationId } from "@effect-agent/core";
+import { Context, Effect, Option, Schema, Stream } from "effect";
 
 import {
   BatchId,

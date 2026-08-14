@@ -1,18 +1,3 @@
-import { NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import {
-  Cause,
-  Duration,
-  Effect,
-  Exit,
-  FileSystem,
-  Option,
-  PlatformError,
-  Schema,
-  Stream,
-} from "effect";
-import { TestClock } from "effect/testing";
-
 import { SubagentDurableAccounting, SubagentReservationAmounts } from "@effect-agent/capabilities";
 import { ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import {
@@ -46,6 +31,20 @@ import {
   type DurableRuntimeFailpointLocation,
   type Receipt,
 } from "@effect-agent/session";
+import { NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import {
+  Cause,
+  Duration,
+  Effect,
+  Exit,
+  FileSystem,
+  Option,
+  PlatformError,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 
 import {
   DestinationShortlist,

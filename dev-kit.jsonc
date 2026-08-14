@@ -1,0 +1,26 @@
+{
+  "$schema": "./node_modules/@danieljvdm/dev-kit/schema/dev-kit.schema.json",
+  "include": ["dev-kit", "testing", "cloudflare"],
+  "setup": {
+    "agentInstructions": { "enabled": true },
+    "claudeInstructions": { "enabled": true },
+    "effectSource": {
+      "enabled": true,
+      "path": "repos/effect",
+    },
+    "effectTsgo": { "enabled": true },
+    "vitePlus": {
+      "hooks": { "enabled": true },
+    },
+  },
+  "targets": {
+    "agents": {
+      "enabled": true,
+      "mode": "copy",
+    },
+    "claude": {
+      "enabled": true,
+      "mode": "symlink",
+    },
+  },
+}

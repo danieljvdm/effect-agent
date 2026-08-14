@@ -1,6 +1,3 @@
-import type { Effect } from "effect";
-import type { Prompt, Response } from "effect/unstable/ai";
-
 import type {
   AgentId,
   ConversationId,
@@ -13,6 +10,8 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
+import type { Effect } from "effect";
+import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
 

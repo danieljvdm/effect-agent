@@ -1,10 +1,9 @@
-import { runDurableObjectAlarm } from "cloudflare:test";
-
 import {
   ApprovalDecisionCommand,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
 } from "@effect-agent/session";
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

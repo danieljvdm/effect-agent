@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
-
 import { Duration, Effect, Schema } from "effect";
+import { describe, expect, it } from "vite-plus/test";
 
 import {
   AgentId,

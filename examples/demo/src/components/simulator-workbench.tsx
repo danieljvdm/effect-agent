@@ -1,5 +1,6 @@
 "use client";
 
+import type { RunEvent } from "@effect-agent/core";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Schema } from "effect";
 import * as Atom from "effect/unstable/reactivity/Atom";
@@ -28,7 +29,6 @@ import {
 } from "lucide-react";
 import { useMemo, useState, type ComponentType, type ReactNode } from "react";
 
-import type { RunEvent } from "@effect-agent/core";
 import { CodeBlock } from "@/components/ai-elements/code-block";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";

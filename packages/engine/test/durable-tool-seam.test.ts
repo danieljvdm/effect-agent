@@ -1,6 +1,3 @@
-import { expect, layer } from "@effect/vitest";
-
-import { Cause, Context, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import {
   Agent,
   AgentApprovalDenied,
@@ -12,6 +9,8 @@ import {
   TurnId,
   type RunEvent,
 } from "@effect-agent/core";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Context, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import {

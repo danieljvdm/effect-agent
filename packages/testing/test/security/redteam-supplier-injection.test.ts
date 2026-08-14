@@ -1,8 +1,3 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
-
 import { Redactor, StructuralRedactorLive } from "@effect-agent/capabilities";
 import { Agent, ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
 import type {
@@ -29,6 +24,10 @@ import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
 
 import {
   ActivityCatalogLayer,

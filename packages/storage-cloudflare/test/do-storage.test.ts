@@ -1,5 +1,3 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   CanonicalBatch,
   CanonicalRecord,
@@ -11,6 +9,8 @@ import {
   FencedAppendRequest,
   UserInputRecorded,
 } from "@effect-agent/session";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Cause, Crypto, Effect, Exit, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";

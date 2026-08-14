@@ -1,5 +1,4 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import { Cause, Deferred, Effect, Exit, Fiber, Option, Schema, Stream } from "effect";
 import { LanguageModel } from "effect/unstable/ai";
 

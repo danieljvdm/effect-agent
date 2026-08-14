@@ -1,7 +1,3 @@
-import { OpenAiLanguageModel } from "@effect/ai-openai";
-import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response } from "effect/unstable/ai";
-
 import { Agent, type ConversationId } from "@effect-agent/core";
 import {
   DefinitionDigests,
@@ -12,6 +8,9 @@ import {
   type DurableSubmitOptions,
   type IdempotencyKey,
 } from "@effect-agent/session";
+import { OpenAiLanguageModel } from "@effect/ai-openai";
+import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
 import { AUDIT_REPORT_PATH, EvidenceAuditor, EvidenceAuditReport } from "./evidence-auditor.ts";
 

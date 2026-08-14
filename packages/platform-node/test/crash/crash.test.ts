@@ -1,3 +1,4 @@
+import { Agent } from "@effect-agent/core";
 import {
   AbortCommand,
   ClaimRequest,
@@ -26,7 +27,6 @@ import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema, Stream } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
-import { Agent } from "@effect-agent/core";
 import { NodeDurableHost } from "../../src/index.ts";
 import {
   BOOK_CALL_ID,

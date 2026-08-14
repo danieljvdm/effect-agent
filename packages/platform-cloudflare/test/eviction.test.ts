@@ -1,5 +1,3 @@
-import { runInDurableObject } from "cloudflare:test";
-
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -19,6 +17,7 @@ import {
   layer as doConversationStoreLayer,
   type DoStorageFailpointLocation,
 } from "@effect-agent/storage-cloudflare";
+import { runInDurableObject } from "cloudflare:test";
 import { DateTime, Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

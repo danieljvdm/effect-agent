@@ -1,8 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
-
-import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
-import { Model, Prompt } from "effect/unstable/ai";
-
 import {
   FollowUpCommand,
   makeRunCommandQueue,
@@ -20,6 +15,10 @@ import {
   RunId,
 } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, DateTime, Effect, Fiber, Layer, Option, Ref, Schema } from "effect";
+import { Model, Prompt } from "effect/unstable/ai";
+
 import {
   ActivityCatalogLayer,
   CatalogLifecycle,

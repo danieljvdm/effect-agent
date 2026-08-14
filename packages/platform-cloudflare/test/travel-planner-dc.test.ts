@@ -1,5 +1,3 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-
 import { ToolCallId } from "@effect-agent/core";
 import {
   ApprovalDecisionCommand,
@@ -46,6 +44,7 @@ import {
   TripRequest,
 } from "@effect-agent/testing";
 import { SqliteClient } from "@effect/sql-sqlite-do";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";

@@ -1,8 +1,7 @@
-import { Context, Effect, Layer, Ref, Schema } from "effect";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
-
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import { ScriptedModel } from "@effect-agent/testing";
+import { Context, Effect, Layer, Ref, Schema } from "effect";
+import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
 const ChatMessageText = Schema.String.check(
   Schema.isTrimmed(),

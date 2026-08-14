@@ -1,8 +1,9 @@
-import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
+import { SqliteMigrator } from "@effect/sql-sqlite-node";
 import { Effect, Exit, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
+
 import {
   SqliteAppendConflict,
   SqliteCheckpointConflict,

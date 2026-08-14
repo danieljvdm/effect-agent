@@ -1,7 +1,6 @@
+import { Agent, AgentPolicy } from "@effect-agent/core";
 import { Context, Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
-
-import { Agent, AgentPolicy } from "@effect-agent/core";
 
 export const AirportCode = Schema.NonEmptyString.pipe(
   Schema.brand("@effect-agent/testing/travel-planner/AirportCode"),

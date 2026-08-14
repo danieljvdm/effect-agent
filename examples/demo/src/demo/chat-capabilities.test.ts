@@ -1,6 +1,6 @@
+import { expectedTravelPlan } from "@effect-agent/testing";
 import { describe, expect, it } from "@effect/vitest";
 
-import { expectedTravelPlan } from "@effect-agent/testing";
 import {
   formatTravelPlanForChat,
   primaryCapabilityRecipes,

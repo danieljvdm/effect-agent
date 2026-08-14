@@ -1,17 +1,3 @@
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import {
-  Cause,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  PlatformError,
-  Schema,
-  Stream,
-} from "effect";
-
 import { ConversationId, type SubmissionId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
 import {
@@ -37,6 +23,19 @@ import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import {
+  Cause,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  Schema,
+  Stream,
+} from "effect";
 
 import {
   expectedTravelPlan,

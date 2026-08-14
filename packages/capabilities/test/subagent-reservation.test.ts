@@ -1,8 +1,7 @@
+import { RunId, ToolCallId } from "@effect-agent/core";
 import { describe, expect, it } from "@effect/vitest";
-
 import { Deferred, Effect, Fiber, Schema } from "effect";
 import { FastCheck } from "effect/testing";
-import { RunId, ToolCallId } from "@effect-agent/core";
 
 import {
   makeBudgetReservationId,

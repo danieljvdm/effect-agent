@@ -1,20 +1,3 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, layer } from "@effect/vitest";
-import {
-  Cause,
-  DateTime,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { TestClock } from "effect/testing";
 import {
   Agent,
   AgentPolicy,
@@ -24,12 +7,6 @@ import {
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
-
 import { ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
@@ -75,6 +52,28 @@ import {
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
+import {
+  MemoryConversationStoreLive,
+  MemorySubmissionLedgerLive,
+} from "@effect-agent/storage-memory";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, layer } from "@effect/vitest";
+import {
+  Cause,
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
+import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable");

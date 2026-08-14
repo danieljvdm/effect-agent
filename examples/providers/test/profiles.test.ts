@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vite-plus/test";
-
 import { TravelPlanner } from "@effect-agent/testing";
+import { describe, expect, it } from "vite-plus/test";
 
 import { AnthropicTravelPlanner, OpenAiTravelPlanner } from "../src/index.ts";
 

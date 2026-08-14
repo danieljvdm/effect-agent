@@ -1,7 +1,3 @@
-import { Effect, Layer, Schema } from "effect";
-import { Tool } from "effect/unstable/ai";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
-
 import {
   McpConnectionRequest,
   McpConnector,
@@ -9,6 +5,9 @@ import {
   McpToolkitMismatch,
   type McpConnection,
 } from "@effect-agent/capabilities";
+import { Effect, Layer, Schema } from "effect";
+import { Tool } from "effect/unstable/ai";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
 
 import { DocContentToolkit, FetchDocument } from "./definition.ts";
 

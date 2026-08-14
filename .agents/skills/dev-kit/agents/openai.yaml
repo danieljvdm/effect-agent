@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dev Kit"
+  short_description: "Configure and apply portable project tooling"
+  default_prompt: "Use $dev-kit to configure and safely apply this project's development toolkit."

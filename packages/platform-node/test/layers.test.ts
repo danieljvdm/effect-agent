@@ -1,4 +1,5 @@
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
+import type { SubmissionId } from "@effect-agent/core";
 import {
   AdmissionRequest,
   AgentBindingResolver,
@@ -22,7 +23,6 @@ import {
   type PersistedJson,
   type SubmissionState,
 } from "@effect-agent/session";
-import type { SubmissionId } from "@effect-agent/core";
 import {
   CurrentSqliteStorageVersion,
   SqliteStorageCompatibilityError,

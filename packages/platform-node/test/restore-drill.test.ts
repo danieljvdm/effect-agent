@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 
+import { Agent } from "@effect-agent/core";
 import {
   ClaimRequest,
   DurableAgentRuntime,
@@ -15,10 +16,9 @@ import {
   toolCallPreparedRecordId,
   toolCallSettledRecordId,
 } from "@effect-agent/session";
-import { Agent } from "@effect-agent/core";
+import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Schema } from "effect";
-import { NodeFileSystem } from "@effect/platform-node";
 
 import { NodeDurableHost } from "../src/index.ts";
 import {

@@ -1,22 +1,3 @@
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it, layer } from "@effect/vitest";
-import {
-  Cause,
-  Context,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  FileSystem,
-  Layer,
-  Option,
-  PlatformError,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
-
 import { Agent, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import type {
   RunApprovalDecision,
@@ -53,6 +34,24 @@ import {
   MemoryConversationStoreLive,
   MemorySubmissionLedgerLive,
 } from "@effect-agent/storage-memory";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
 
 import {
   assertSettledBookingsExistAtSupplier,

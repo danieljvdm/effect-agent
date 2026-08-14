@@ -1,6 +1,5 @@
-import { expect, layer } from "@effect/vitest";
-
 import { NodeServices } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
 import { Effect, FileSystem, Schema, Stream } from "effect";
 import { ChildProcess } from "effect/unstable/process";
 

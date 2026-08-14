@@ -1,8 +1,3 @@
-import { describe, expect, it } from "vite-plus/test";
-
-import { type Effect, type Scope } from "effect";
-import { type AiError, Model, type Tool, type Toolkit } from "effect/unstable/ai";
-
 import {
   Agent,
   AgentApprovalDenied,
@@ -19,6 +14,10 @@ import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
 } from "@effect-agent/engine";
+import { type Effect, type Scope } from "effect";
+import { type AiError, Model, type Tool, type Toolkit } from "effect/unstable/ai";
+import { describe, expect, it } from "vite-plus/test";
+
 import {
   ActivityCatalog,
   ActivityUnavailable,

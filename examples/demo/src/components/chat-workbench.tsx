@@ -1,5 +1,6 @@
 "use client";
 
+import { RunEvent } from "@effect-agent/core";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import type { ChatStatus as AiChatStatus } from "ai";
 import { Schema } from "effect";
@@ -7,9 +8,7 @@ import * as Atom from "effect/unstable/reactivity/Atom";
 import { ChevronDown, FlaskConical, RotateCcw, Sparkles } from "lucide-react";
 import { useMemo, useState } from "react";
 
-import { RunEvent } from "@effect-agent/core";
 import { AgentActivity } from "@/components/ai-elements/agent-activity";
-import { CapabilityChatTrace } from "@/components/capability-chat-trace";
 import {
   Conversation,
   ConversationContent,
@@ -24,6 +23,7 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Reasoning } from "@/components/ai-elements/reasoning";
 import { Tool, ToolContent, ToolData, ToolHeader } from "@/components/ai-elements/tool";
+import { CapabilityChatTrace } from "@/components/capability-chat-trace";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";

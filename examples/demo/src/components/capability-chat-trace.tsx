@@ -1,5 +1,7 @@
 "use client";
 
+import { RunEvent } from "@effect-agent/core";
+import { Schema } from "effect";
 import {
   AlertTriangle,
   Check,
@@ -13,8 +15,6 @@ import {
 } from "lucide-react";
 import { useMemo } from "react";
 
-import { RunEvent } from "@effect-agent/core";
-import { Schema } from "effect";
 import { AgentActivity } from "@/components/ai-elements/agent-activity";
 import { Tool, ToolContent, ToolData, ToolHeader } from "@/components/ai-elements/tool";
 import { Badge } from "@/components/ui/badge";

@@ -1,6 +1,3 @@
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response } from "effect/unstable/ai";
-
 import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities";
 import { Agent } from "@effect-agent/core";
 import {
@@ -14,6 +11,8 @@ import {
   type ResolvedBinding,
   type ToolReconciler,
 } from "@effect-agent/session";
+import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
 import { TravelPlan, TripRequest } from "./definition.ts";
 import {
@@ -37,6 +36,13 @@ import {
 } from "./phase5.ts";
 import { expectedTravelPlan } from "./scenarios.ts";
 import {
+  durableDestinationResearchHandlersLayer,
+  durableResearchCallId,
+  durableResearchShortlist,
+  s2CoordinatorDigests,
+  s2ResearcherDigests,
+} from "./subagents-durable.ts";
+import {
   DestinationGuide,
   DestinationResearcher,
   DestinationResearcherToolkitLayer,
@@ -47,13 +53,6 @@ import {
   destinationLookup,
   encodedDestinationReport,
 } from "./subagents.ts";
-import {
-  durableDestinationResearchHandlersLayer,
-  durableResearchCallId,
-  durableResearchShortlist,
-  s2CoordinatorDigests,
-  s2ResearcherDigests,
-} from "./subagents-durable.ts";
 
 // ---------------------------------------------------------------------------
 // Phase 6 (P6): the SAME cumulative Travel Planner on the Cloudflare Durable

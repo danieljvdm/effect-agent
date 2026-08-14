@@ -1,9 +1,8 @@
-import { Context, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
-
 import { Subagent, SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
+import { Context, Deferred, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import type { ScriptedTurnInput } from "../../scripted-model.ts";
 import { AirportCode } from "./definition.ts";

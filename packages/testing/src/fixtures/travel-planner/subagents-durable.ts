@@ -1,6 +1,3 @@
-import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
-
 import {
   delegationAllocationFromPolicy,
   SubagentReservationsMemoryLive,
@@ -19,6 +16,8 @@ import {
   type IdempotencyKey,
   type ResolvedBinding,
 } from "@effect-agent/session";
+import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, type Response, type Toolkit } from "effect/unstable/ai";
 
 import { DeterministicIdGeneratorLayer } from "./deterministic-layers.ts";
 import {

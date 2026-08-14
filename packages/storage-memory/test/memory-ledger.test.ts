@@ -1,7 +1,3 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-
 import { AgentId, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import {
   AdmissionRequest,
@@ -43,6 +39,9 @@ import {
   submissionLedgerConformanceCases,
   submissionSettlementId,
 } from "@effect-agent/session";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 import { MemorySubmissionLedgerLive, memorySubmissionLedgerLayer } from "../src/index.ts";
 

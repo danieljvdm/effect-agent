@@ -1,7 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
-
 import { Schema } from "effect";
 import * as RpcSchema from "effect/unstable/rpc/RpcSchema";
+import { describe, expect, it } from "vite-plus/test";
 
 import { DemoRunSelection } from "./contracts";
 import {

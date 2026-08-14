@@ -1,6 +1,11 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it, layer } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  ApprovalApproved,
+  ApprovalAuditMemoryLive,
+  ApprovalResolver,
+  ApprovalResolverError,
+  StructuralRedactorLive,
+  toDurableRunApprovalHook,
+} from "@effect-agent/capabilities";
 import {
   Agent,
   AgentPolicy,
@@ -15,20 +20,6 @@ import type {
   RunApprovalHook,
   RunApprovalRequest,
 } from "@effect-agent/engine";
-import { LanguageModel, Model, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
-import {
-  ApprovalApproved,
-  ApprovalAuditMemoryLive,
-  ApprovalResolver,
-  ApprovalResolverError,
-  StructuralRedactorLive,
-  toDurableRunApprovalHook,
-} from "@effect-agent/capabilities";
-
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -56,6 +47,14 @@ import {
   type DurableRuntimeFailpointLocation,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
+import {
+  MemoryConversationStoreLive,
+  MemorySubmissionLedgerLive,
+} from "@effect-agent/storage-memory";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-approval");

@@ -68,13 +68,18 @@ import {
   type ObligationBlockedOn,
   type ObligationThresholds,
 } from "./admin.ts";
+import {
+  AgentBindingResolver,
+  BindingDigestMismatch,
+  BindingUnavailable,
+  definitionDigestsEqual,
+  DurableWorkerBinding,
+  type DurableBindingFailure,
+  type ResolvedAttemptDriver,
+  type ResolvedBinding,
+} from "./binding-resolver.ts";
 import { verifyConversationInvariants } from "./certification.ts";
 import { digestJson, type DigestError } from "./digest.ts";
-import {
-  OperationAuthorizationRequest,
-  OperationAuthorizer,
-  type OperationDenied,
-} from "./operation-authorizer.ts";
 import {
   DurableRuntimeFailpoint,
   type DurableRuntimeFailpointError,
@@ -141,6 +146,12 @@ import {
   type UnknownResolutionIntent,
 } from "./ledger.ts";
 import {
+  OperationAuthorizationRequest,
+  OperationAuthorizer,
+  type OperationDenied,
+} from "./operation-authorizer.ts";
+import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
+import {
   AbortRequested,
   BatchId,
   CanonicalBatch,
@@ -175,17 +186,6 @@ import {
   type SettlementOutcome,
   type ToolCallResolution,
 } from "./records.ts";
-import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
-import {
-  AgentBindingResolver,
-  BindingDigestMismatch,
-  BindingUnavailable,
-  definitionDigestsEqual,
-  DurableWorkerBinding,
-  type DurableBindingFailure,
-  type ResolvedAttemptDriver,
-  type ResolvedBinding,
-} from "./binding-resolver.ts";
 import {
   classifyRecovery,
   DeclaredPendingBatchEvidence,

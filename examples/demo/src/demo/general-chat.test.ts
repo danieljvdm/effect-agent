@@ -1,8 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
-
-import { Effect, type Scope, Schema, Stream } from "effect";
-import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";
-
 import {
   AgentApprovalDenied,
   AgentApprovalPending,
@@ -18,6 +13,10 @@ import {
   type AgentRuntimeFailure,
   type AgentRuntimeRequirements,
 } from "@effect-agent/engine";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, type Scope, Schema, Stream } from "effect";
+import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";
+
 import {
   CalculationFailure,
   ChatInput,

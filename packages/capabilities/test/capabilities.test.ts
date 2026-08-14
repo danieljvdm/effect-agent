@@ -1,10 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
-import { NodeCrypto } from "@effect/platform-node";
-
-import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
-import { TestClock } from "effect/testing";
-import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
 import {
   AgentId,
   ConversationId,
@@ -14,6 +7,12 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { TestClock } from "effect/testing";
+import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
 
 import {
   applyCompaction,

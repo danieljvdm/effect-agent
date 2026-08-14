@@ -1,10 +1,10 @@
-import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
   Subagent,
   SubagentPolicy,
   SubagentReservationsMemoryLive,
   SubagentRuntime,
 } from "@effect-agent/capabilities";
+import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
   DefinitionDigests,

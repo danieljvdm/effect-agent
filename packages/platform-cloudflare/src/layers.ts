@@ -28,12 +28,12 @@ import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
+import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
 import {
   ConversationObjectIdentity,
   ConversationObjectNamespace,
   DurableObjectContext,
 } from "./bindings.ts";
-import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
   CloudflareDurableRuntimeConfig,

@@ -3,6 +3,7 @@
 import { Brain, ChevronDown } from "lucide-react";
 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+
 import { MessageResponse } from "./message";
 
 /** Compact disclosure for reasoning text explicitly returned by a provider. */

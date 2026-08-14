@@ -1,12 +1,11 @@
 import { describe, expect, it } from "@effect/vitest";
-
 import { Effect, Layer, Stream } from "effect";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as RpcTest from "effect/unstable/rpc/RpcTest";
 
 import { DemoInteractiveRuntimeLive } from "./operational-runtime.server";
-import { chatHistoryPrompt, DemoRunRpcHandlers, DemoRunRpcServerLayer } from "./run-rpc.server";
 import { DemoRunRpcs } from "./run-rpc";
+import { chatHistoryPrompt, DemoRunRpcHandlers, DemoRunRpcServerLayer } from "./run-rpc.server";
 
 describe("Phase 2 demo RPC server", () => {
   it.effect("builds without a provider credential or network dependency", () =>
