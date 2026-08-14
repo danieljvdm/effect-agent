@@ -18,7 +18,8 @@ import {
 // (model output is untrusted input, AGENTS.md rule 11).
 // ---------------------------------------------------------------------------
 
-const MAX_FINDINGS = 20;
+/** The hard findings bound carried by the CodeReview schema. */
+export const MAX_FINDINGS = 20;
 
 /** Annotated patches larger than this are truncated with an explicit marker. */
 const MAX_PATCH_CHARS = 60_000;
@@ -32,7 +33,7 @@ const DEFAULT_SLICE_LINES = 400;
 // ---------------------------------------------------------------------------
 
 export class ChangedFileSummary extends Schema.Class<ChangedFileSummary>(
-  "@effect-agent/example-pr-review/ChangedFileSummary",
+  "@effect-agent/pr-review/ChangedFileSummary",
 )({
   path: ChangedPath,
   status: ChangedFileStatus,
@@ -42,7 +43,7 @@ export class ChangedFileSummary extends Schema.Class<ChangedFileSummary>(
 }) {}
 
 export class ChangedFilesView extends Schema.Class<ChangedFilesView>(
-  "@effect-agent/example-pr-review/ChangedFilesView",
+  "@effect-agent/pr-review/ChangedFilesView",
 )({
   totalFiles: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** True when the pull request has more changed files than are listed here. */
@@ -51,7 +52,7 @@ export class ChangedFilesView extends Schema.Class<ChangedFilesView>(
 }) {}
 
 export class ListChangedFilesQuery extends Schema.Class<ListChangedFilesQuery>(
-  "@effect-agent/example-pr-review/ListChangedFilesQuery",
+  "@effect-agent/pr-review/ListChangedFilesQuery",
 )({
   /** Explicit constant keeps the zero-choice operation compatible with strict provider schemas. */
   scope: Schema.Literal("all"),
@@ -68,13 +69,13 @@ export const ListChangedFiles = Tool.make("list_changed_files", {
 }).annotate(ToolExecutionClass, "readonly");
 
 export class FileDiffQuery extends Schema.Class<FileDiffQuery>(
-  "@effect-agent/example-pr-review/FileDiffQuery",
+  "@effect-agent/pr-review/FileDiffQuery",
 )({
   path: ChangedPath,
 }) {}
 
 export class FileDiffView extends Schema.Class<FileDiffView>(
-  "@effect-agent/example-pr-review/FileDiffView",
+  "@effect-agent/pr-review/FileDiffView",
 )({
   path: ChangedPath,
   status: ChangedFileStatus,
@@ -98,7 +99,7 @@ export const ReadFileDiff = Tool.make("read_file_diff", {
 }).annotate(ToolExecutionClass, "readonly");
 
 export class FileSliceQuery extends Schema.Class<FileSliceQuery>(
-  "@effect-agent/example-pr-review/FileSliceQuery",
+  "@effect-agent/pr-review/FileSliceQuery",
 )({
   path: ChangedPath,
   /** 1-based first line to read; defaults to 1. */
@@ -109,16 +110,14 @@ export class FileSliceQuery extends Schema.Class<FileSliceQuery>(
   ),
 }) {}
 
-export class FileSlice extends Schema.Class<FileSlice>("@effect-agent/example-pr-review/FileSlice")(
-  {
-    path: ChangedPath,
-    startLine: Schema.Int.check(Schema.isGreaterThan(0)),
-    endLine: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    totalLines: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-    /** Slice content with each line prefixed by its 1-based line number. */
-    content: Schema.String,
-  },
-) {}
+export class FileSlice extends Schema.Class<FileSlice>("@effect-agent/pr-review/FileSlice")({
+  path: ChangedPath,
+  startLine: Schema.Int.check(Schema.isGreaterThan(0)),
+  endLine: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  totalLines: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** Slice content with each line prefixed by its 1-based line number. */
+  content: Schema.String,
+}) {}
 
 export const ReadFile = Tool.make("read_file", {
   description:
@@ -133,8 +132,32 @@ export const ReadFile = Tool.make("read_file", {
 export const ReviewToolkit = Toolkit.make(ListChangedFiles, ReadFileDiff, ReadFile);
 
 /**
+ * The `list_changed_files` handler, shared by the flat reviewer's toolkit and
+ * any extended toolkit built by the configuration factory.
+ */
+export const listChangedFilesHandler = (_query: ListChangedFilesQuery) =>
+  Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const files = yield* source.changedFiles;
+    const metadata = yield* source.metadata;
+    return ChangedFilesView.make({
+      totalFiles: metadata.totalChangedFiles,
+      truncated: files.length < metadata.totalChangedFiles,
+      files: files.map((file) =>
+        ChangedFileSummary.make({
+          path: file.path,
+          status: file.status,
+          additions: file.additions,
+          deletions: file.deletions,
+          hasTextualDiff: file.patch !== undefined,
+        }),
+      ),
+    });
+  });
+
+/**
  * The `read_file_diff` handler, shared verbatim by the flat reviewer's
- * toolkit and the fan-out child's toolkit (fan-out-review-agent.ts).
+ * toolkit and the fan-out child's toolkit (fan-out.ts).
  */
 export const readFileDiffHandler = (query: FileDiffQuery) =>
   Effect.gen(function* () {
@@ -162,7 +185,7 @@ export const readFileDiffHandler = (query: FileDiffQuery) =>
 
 /**
  * The `read_file` handler, shared verbatim by the flat reviewer's toolkit
- * and the fan-out child's toolkit (fan-out-review-agent.ts).
+ * and the fan-out child's toolkit (fan-out.ts).
  */
 export const readFileHandler = (query: FileSliceQuery) =>
   Effect.gen(function* () {
@@ -192,25 +215,7 @@ export const readFileHandler = (query: FileSliceQuery) =>
   });
 
 export const ReviewToolkitLayer = ReviewToolkit.toLayer({
-  list_changed_files: () =>
-    Effect.gen(function* () {
-      const source = yield* PullRequestSource;
-      const files = yield* source.changedFiles;
-      const metadata = yield* source.metadata;
-      return ChangedFilesView.make({
-        totalFiles: metadata.totalChangedFiles,
-        truncated: files.length < metadata.totalChangedFiles,
-        files: files.map((file) =>
-          ChangedFileSummary.make({
-            path: file.path,
-            status: file.status,
-            additions: file.additions,
-            deletions: file.deletions,
-            hasTextualDiff: file.patch !== undefined,
-          }),
-        ),
-      });
-    }),
+  list_changed_files: listChangedFilesHandler,
   read_file_diff: readFileDiffHandler,
   read_file: readFileHandler,
 });
@@ -220,7 +225,7 @@ export const ReviewToolkitLayer = ReviewToolkit.toLayer({
 // ---------------------------------------------------------------------------
 
 export class ReviewMission extends Schema.Class<ReviewMission>(
-  "@effect-agent/example-pr-review/ReviewMission",
+  "@effect-agent/pr-review/ReviewMission",
 )({
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   number: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -235,7 +240,7 @@ export const FindingSeverity = Schema.Literals(["blocking", "important", "nit"])
 export type FindingSeverity = typeof FindingSeverity.Type;
 
 export class ReviewFinding extends Schema.Class<ReviewFinding>(
-  "@effect-agent/example-pr-review/ReviewFinding",
+  "@effect-agent/pr-review/ReviewFinding",
 )({
   path: ChangedPath,
   /** 1-based line numbers in the NEW file version; must appear in the diff. */
@@ -251,9 +256,7 @@ export class ReviewFinding extends Schema.Class<ReviewFinding>(
 export const ReviewVerdict = Schema.Literals(["approve", "comment", "request-changes"]);
 export type ReviewVerdict = typeof ReviewVerdict.Type;
 
-export class CodeReview extends Schema.Class<CodeReview>(
-  "@effect-agent/example-pr-review/CodeReview",
-)({
+export class CodeReview extends Schema.Class<CodeReview>("@effect-agent/pr-review/CodeReview")({
   summary: Schema.NonEmptyString.check(Schema.isMaxLength(4_000)),
   verdict: ReviewVerdict,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_FINDINGS)),
@@ -262,27 +265,77 @@ export class CodeReview extends Schema.Class<CodeReview>(
 // ---------------------------------------------------------------------------
 // Instructions. Live models diverge wherever the contract is implicit, so the
 // exact JSON shape, the anchor rule, and the suggestion rule are all spelled
-// out with types (the lesson recorded by commit 7d7890e).
+// out with types. Consumer guidance is injected BETWEEN the mission framing
+// and the procedure — it can widen what the reviewer pays attention to, but
+// the machine contract (anchor rule, JSON shape, bounds) is always appended
+// by this builder and cannot be edited out.
 // ---------------------------------------------------------------------------
 
-export const reviewInstructions = (mission: ReviewMission): string =>
-  [
-    `You are a senior code reviewer for pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
-    mission.body.length > 0
-      ? `Author description:\n${mission.body}`
-      : "The author provided no description.",
-    "Work in this order:",
-    "1. Call list_changed_files once to see the changeset.",
-    "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-    "3. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
-    "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-    '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
-    `Report at most ${MAX_FINDINGS} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
-    'Use verdict "request-changes" only when at least one finding is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',
-  ].join("\n");
+/** Consumer-supplied domain guidance: static lines or a function of the mission. */
+export type ReviewGuidance =
+  | string
+  | ReadonlyArray<string>
+  | ((mission: ReviewMission) => string | ReadonlyArray<string>);
+
+export const resolveGuidance = (
+  guidance: ReviewGuidance | undefined,
+  mission: ReviewMission,
+): ReadonlyArray<string> => {
+  if (guidance === undefined) return [];
+  const value = typeof guidance === "function" ? guidance(mission) : guidance;
+  const lines = typeof value === "string" ? [value] : value;
+  return lines.filter((line) => line.length > 0);
+};
+
+export interface ReviewInstructionOptions {
+  readonly guidance?: ReviewGuidance | undefined;
+  /** Advertised findings bound; clamped to the CodeReview schema cap. */
+  readonly maxFindings?: number | undefined;
+}
+
+/** Clamp a configured findings bound into the schema-supported range. */
+export const clampMaxFindings = (maxFindings: number | undefined): number =>
+  maxFindings === undefined
+    ? MAX_FINDINGS
+    : Math.min(MAX_FINDINGS, Math.max(1, Math.trunc(maxFindings)));
+
+/** Build the flat reviewer's instructions with optional consumer guidance. */
+export const makeReviewInstructions =
+  (options: ReviewInstructionOptions = {}) =>
+  (mission: ReviewMission): string => {
+    const maxFindings = clampMaxFindings(options.maxFindings);
+    return [
+      `You are a senior code reviewer for pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
+      mission.body.length > 0
+        ? `Author description:\n${mission.body}`
+        : "The author provided no description.",
+      ...resolveGuidance(options.guidance, mission),
+      "Work in this order:",
+      "1. Call list_changed_files once to see the changeset.",
+      "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+      "3. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+      "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
+      '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
+      `Report at most ${maxFindings} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
+      'Use verdict "request-changes" only when at least one finding is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',
+    ].join("\n");
+  };
+
+/** The default flat-reviewer instructions: no guidance, schema-cap findings. */
+export const reviewInstructions = makeReviewInstructions();
+
+/** The default flat-reviewer execution bounds. */
+export const defaultReviewPolicy = AgentPolicy.make({
+  maxTurns: 12,
+  maxToolCalls: 24,
+  maxDuration: "8 minutes",
+  toolConcurrency: 2,
+  tokenBudget: 300_000,
+});
 
 // ---------------------------------------------------------------------------
-// Agent Definition: model-agnostic; bindings live in profiles.ts (D-027).
+// Agent Definition: model-agnostic (D-027); bindings are created by callers
+// or by the configuration factory.
 // ---------------------------------------------------------------------------
 
 export const PullRequestReviewer = Agent.define("pr-reviewer", {
@@ -290,13 +343,7 @@ export const PullRequestReviewer = Agent.define("pr-reviewer", {
   output: CodeReview,
   instructions: reviewInstructions,
   toolkit: ReviewToolkit,
-  policy: AgentPolicy.make({
-    maxTurns: 12,
-    maxToolCalls: 24,
-    maxDuration: "8 minutes",
-    toolConcurrency: 2,
-    tokenBudget: 300_000,
-  }),
+  policy: defaultReviewPolicy,
   description:
     "Review one pull request read-only: list the changeset, read annotated diffs and head-file context, and return a structured, line-anchored code review.",
   metadata: { deploymentClass: "E", surface: "read-only" },

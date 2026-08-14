@@ -93,3 +93,17 @@ SubagentDurabilityError`) verbatim — including two members that are
     `Subagent.define` call site; a "minimal ephemeral delegation" doc recipe
     (or a bundled `SubagentRuntime.ephemeralSupportLayer`) would have saved
     the longest debugging loop of this example.
+
+---
+
+**2026-08-14 — promotion note.** The reviewer (flat + fan-out) was promoted
+into the publishable `packages/pr-review`; this example is now its first
+downstream consumer. Items above remain live framework friction unless noted:
+items 3/10 (scripted-model boilerplate) are mitigated for THIS domain by
+`@effect-agent/pr-review/testing` (`makePromptKeyedModel`), item 5 (path
+validator copies) is reduced to two copies (repo-ops and the package), and
+item 11's delegation-support wiring is now packaged inside
+`PrReview.makeFanOut`. Items 1 and 2 were re-confirmed while building the
+package's configuration factory: the factory constructs bindings structurally
+because `Agent.withModel`'s conditional model type cannot re-resolve inside a
+generic body, and `executeReview` still re-decodes `AgentResult.output`.

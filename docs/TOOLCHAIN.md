@@ -65,12 +65,14 @@ packages/
   storage-cloudflare/   Durable Object SQLite persistence adapter and routed port protocol
   platform-node/        Class DN Node/SQLite Layer assembly and durable host
   platform-cloudflare/  Class DC Cloudflare Layer assembly (Conversation Objects, alarms)
+  pr-review/            Packaged GitHub pull-request reviewer (factory, adapters, CLI/Action entrypoints; D-034)
   testing/              Scripted model, fixtures, and conformance test kit
 examples/
   demo/             Leaf TanStack Start browser bench
-  pr-review/        Leaf GitHub pull-request reviewer (CLI + composite Action)
+  pr-review/        Leaf consumer of @effect-agent/pr-review (guidance, extra tool, ignore globs)
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
+action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle; ADR-0016)
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.
@@ -83,12 +85,14 @@ core <- sandbox <- sandbox-local
 core <- engine <- session <- storage adapters
 engine + session + selected adapters <- platform packages
 core + engine <- testing
+core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 ```
 
 `testing` is an outward test kit used by tests and examples. Production packages must never depend
-on it. Additional framework package directories are created only when their roadmap phase starts.
-There is no `apps/` workspace. `examples/*` are runnable, private leaf consumers: framework
-packages never import them, and they add no deployment or durability claim.
+on it. Additional framework package directories are created only when their roadmap phase starts
+(`pr-review` is the one owner-directed post-roadmap exception, D-034). There is no `apps/`
+workspace. `examples/*` are runnable, private leaf consumers: framework packages never import
+them, and they add no deployment or durability claim.
 
 ## Commands
 
@@ -155,7 +159,7 @@ owner of the `@effect-agent` scope):
    (append `--otp <code>` when npm 2FA asks);
 5. `bun x changeset tag && git push --follow-tags`.
 
-All twelve packages publish under the MIT license (owner decision
+All fourteen packages publish under the MIT license (owner decision
 2026-08-14, resolving the licensing half of D-023). The Cloudflare pair
 joined the channel after their declaration-emit fix: the Durable Object
 class factory carries an explicit `ConversationObjectClass` return type
@@ -228,10 +232,14 @@ require, and phase evidence records any justified exception.
 
 ## Adding a package
 
-Create a package only when a roadmap phase requires it:
+Create a package only when a roadmap phase requires it (or a recorded owner decision, per
+D-034):
 
 1. add `packages/<name>/package.json`, `src/index.ts`, and `tsconfig.json`;
-2. use the working `@effect-agent/<name>` scope and keep it private;
+2. use the working `@effect-agent/<name>` scope with the sibling manifest shape (MIT,
+   `publishConfig.access: public`, source-first exports) — packages publish on the `beta`
+   dist-tag per D-023, and each new package needs its one-time npm trusted-publisher
+   registration before CI can publish it;
 3. use `catalog:` for shared external dependencies and `workspace:*` for internal packages;
 4. extend the root `tsconfig.base.json`;
 5. add it to root `tsconfig.json` references;

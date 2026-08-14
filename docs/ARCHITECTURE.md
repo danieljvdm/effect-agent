@@ -48,6 +48,7 @@ only when its roadmap phase begins. The current tree (through Phase 6) is:
 
 ```text
 packages/
+  effect-agent
   core
   engine
   capabilities
@@ -59,10 +60,14 @@ packages/
   storage-cloudflare
   platform-node
   platform-cloudflare
+  pr-review
   testing
 examples/
   demo
+  pr-review
   providers
+  repo-ops
+action/
 ```
 
 There is no `apps/` workspace. Reusable Travel Planner fixtures live in the leaf testing package;

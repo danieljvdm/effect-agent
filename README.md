@@ -38,7 +38,8 @@ and a browser test bench under `examples/demo`.
   benches in `examples/*`, and no `apps/`
 - Current packages: `effect-agent` (umbrella over the pure surface), `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
   `storage-memory`, `storage-sqlite`, `storage-cloudflare`, `platform-node`,
-  `platform-cloudflare`, and `testing`
+  `platform-cloudflare`, `pr-review` (packaged pull-request reviewer with a prebuilt GitHub
+  Action at `action/`; owner decision D-034), and `testing`
 - Current implementation milestone: **the roadmap table is complete** — Phase 7 internal
   hardening ([evidence](docs/PHASE-7-EVIDENCE.md)) closes the final phase on top of the Phase 6
   Cloudflare runtime ([evidence](docs/PHASE-6-EVIDENCE.md)), Phase 5 durable Tools and joined

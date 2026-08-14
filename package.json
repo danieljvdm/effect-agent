@@ -27,7 +27,8 @@
     "format": "vp fmt",
     "format:write": "vp fmt --write",
     "lint": "vp lint",
-    "check": "vp check && vp run -F './packages/*' check && vp run -F './examples/*' check && tsc --noEmit -p scripts/tsconfig.json",
+    "action:build": "bun scripts/build-action.ts",
+    "check": "vp check && vp run -F './packages/*' check && vp run -F './examples/*' check && tsc --noEmit -p scripts/tsconfig.json && bun scripts/build-action.ts --check",
     "test": "vp run -F './packages/*' test && vp run -F './examples/*' test",
     "build": "vp run -F './packages/*' build && vp run -F './examples/*' build && bun run docs:build",
     "ready": "bun run check && bun run test && bun run build"

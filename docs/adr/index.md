@@ -25,6 +25,7 @@ are authoritative; a Proposed ADR is design material, not an owner-approved feat
 | [0013](./0013-durable-subagent-establishment)             | Accepted by default — pending owner review ([evidence](../S2-EVIDENCE))                                | Durable Subagent establishment, waiting suspension, and exact binding resolution      |
 | [0014](./0014-cloudflare-conversation-objects)            | Accepted by default — pending owner review ([evidence](../PHASE-6-EVIDENCE))                           | Cloudflare Conversation Objects: serialized owner, multiplexed alarm, routed ports    |
 | [0015](./0015-hardening-shape)                            | Accepted by default — pending owner review ([evidence](../PHASE-7-EVIDENCE))                           | Phase 7 hardening shape: certification tiers, formal-model scope, admin authorization |
+| [0016](./0016-pr-review-package)                          | Accepted (owner-directed, 2026-08-14)                                                                  | Package the pull-request reviewer with a prebuilt GitHub Action                       |
 
 The [decision register](../DECISIONS) is the owner-facing status source. ADRs preserve rationale,
 consequences, rejected alternatives, and validation criteria.

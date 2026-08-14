@@ -10,7 +10,8 @@ import { type Tool } from "effect/unstable/ai";
 
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
-import { CodeReview, ReviewMission } from "./review-agent.ts";
+import { clampMaxFindings, CodeReview, ReviewMission } from "./review-agent.ts";
+import { rankAndDedupeFindings } from "./review-units.ts";
 import { PullRequestSource } from "./source.ts";
 
 // ---------------------------------------------------------------------------
@@ -23,7 +24,7 @@ import { PullRequestSource } from "./source.ts";
 /**
  * Run-level usage bounds on top of the definition's AgentPolicy. Real diffs
  * are token-heavy, so the input budget is research-sized with cost as the
- * safety net (mirroring the live travel-chat profile).
+ * safety net.
  */
 export const reviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 400_000,
@@ -51,7 +52,7 @@ export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
 
 /** Everything one review run produced, publication receipt included. */
 export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
-  "@effect-agent/example-pr-review/ReviewRunOutcome",
+  "@effect-agent/pr-review/ReviewRunOutcome",
 )({
   review: CodeReview,
   plan: ReviewPublicationPlan,
@@ -66,14 +67,30 @@ export interface ExecuteReviewOptions {
   readonly applyVerdict: boolean;
   /** Run-level usage bounds; defaults to `reviewBudgetLimits`. */
   readonly limits?: UsageBudgetLimits | undefined;
+  /**
+   * Host-side findings bound (fail-closed backstop for the instruction-level
+   * bound): a review carrying more findings is ranked by severity, deduped by
+   * anchor, and trimmed — never published oversized. Clamped to the schema cap.
+   */
+  readonly maxFindings?: number | undefined;
 }
+
+/** Enforce the configured findings bound on an already-validated review. */
+export const enforceFindingsBound = (review: CodeReview, maxFindings: number): CodeReview =>
+  review.findings.length <= maxFindings
+    ? review
+    : CodeReview.make({
+        summary: review.summary,
+        verdict: review.verdict,
+        findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings),
+      });
 
 /**
  * Execute one review with any explicit Agent Binding whose contract is
  * `ReviewMission -> CodeReview` — the flat reviewer or the fan-out
  * coordinator; the toolkit stays generic because publication only depends on
  * the shared output contract. The binding stays a parameter (D-027): tests
- * pass scripted models, the CLI passes live OpenAI bindings, and the model
+ * pass scripted models, hosts pass live provider bindings, and the model
  * Layer's requirements stay visible in this Effect's `R`.
  */
 export const executeReview = <
@@ -116,7 +133,8 @@ export const executeReview = <
 
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
-    const review = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
+    const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
+    const review = enforceFindingsBound(decoded, clampMaxFindings(options.maxFindings));
     const plan = planPublication(review, files, {
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,

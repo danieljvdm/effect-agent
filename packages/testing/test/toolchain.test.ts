@@ -26,6 +26,7 @@ const packageNames = [
   "engine",
   "platform-cloudflare",
   "platform-node",
+  "pr-review",
   "sandbox",
   "sandbox-local",
   "session",
@@ -34,6 +35,14 @@ const packageNames = [
   "storage-sqlite",
   "testing",
 ] as const;
+
+/**
+ * The one framework package allowed to depend on upstream provider adapters:
+ * its CLI/Action host entrypoints ship batteries-included provider bindings
+ * (D-034, ADR-0016). The factory surface itself stays Model-agnostic, and
+ * provider WRAPPER packages remain deliberately absent.
+ */
+const providerConsumingPackages = new Set<string>(["pr-review"]);
 const exampleNames = ["demo", "pr-review", "providers", "repo-ops"] as const;
 const effectTestPackageNames = [
   "capabilities",
@@ -272,16 +281,26 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
       );
-      // The pr-review GitHub Action bot is the fourth leaf example workspace.
+      // The pr-review example is a consumer of the packaged reviewer (D-034):
+      // provider bindings reach it through @effect-agent/pr-review, so it no
+      // longer declares provider adapters itself.
       expect(prReview.name).toBe("@effect-agent/example-pr-review");
-      // The example consumes the framework through the umbrella package.
+      expect(prReview.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
       expect(prReview.dependencies?.["effect-agent"]).toBe("workspace:*");
       expect(prReview.dependencies?.effect).toBe("catalog:");
-      expect(prReview.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(prReviewDependencies).not.toContain("wrangler");
       expect(prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
       );
+
+      // The packaged reviewer pins its provider adapters through the catalog
+      // like every other shared dependency (D-034, ADR-0016).
+      const prReviewPackage = yield* readManifest(
+        `${repositoryRoot}/packages/pr-review/package.json`,
+      );
+      for (const adapter of providerAdapterDependencies) {
+        expect(prReviewPackage.dependencies?.[adapter]).toBe("catalog:");
+      }
 
       for (const packageName of packageNames) {
         const manifest = yield* readManifest(
@@ -291,6 +310,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(manifestDependencies(manifest)).not.toContain(providers.name);
         expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
         expect(manifestDependencies(manifest)).not.toContain(prReview.name);
+        if (providerConsumingPackages.has(packageName)) continue;
         for (const adapter of providerAdapterDependencies) {
           expect(manifestDependencies(manifest)).not.toContain(adapter);
         }

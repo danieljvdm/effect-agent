@@ -56,8 +56,8 @@ export const MAX_CHILD_FINDINGS = 8;
 // ---------------------------------------------------------------------------
 // The child: a file reviewer over one unit. Its toolkit is intentionally
 // smaller than the flat reviewer's — diff and head-file reads only, no
-// changeset listing — so a child can never roam beyond its briefed unit's
-// observation surface being the whole changeset port.
+// changeset listing — so a child can never roam beyond its briefed unit
+// despite its observation surface being the whole changeset port.
 // ---------------------------------------------------------------------------
 
 export const FileReviewToolkit = Toolkit.make(ReadFileDiff, ReadFile);
@@ -73,7 +73,7 @@ const UnitPaths = Schema.Array(ChangedPath)
 
 /** The child Agent input: one briefed unit of the changeset. */
 export class FileReviewBrief extends Schema.Class<FileReviewBrief>(
-  "@effect-agent/example-pr-review/FileReviewBrief",
+  "@effect-agent/pr-review/FileReviewBrief",
 )({
   unitId: ReviewUnitId,
   paths: UnitPaths,
@@ -82,43 +82,54 @@ export class FileReviewBrief extends Schema.Class<FileReviewBrief>(
 
 /** The child Agent output: the briefed unit's bounded findings. */
 export class FileReviewReport extends Schema.Class<FileReviewReport>(
-  "@effect-agent/example-pr-review/FileReviewReport",
+  "@effect-agent/pr-review/FileReviewReport",
 )({
   unitId: ReviewUnitId,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_CHILD_FINDINGS)),
 }) {}
 
-export const fileReviewerInstructions = (brief: FileReviewBrief): string =>
-  [
-    `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
-    "Work in this order:",
-    "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-    "2. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
-    "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-    `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.`,
-    `Report at most ${MAX_CHILD_FINDINGS} findings; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`,
-  ].join("\n");
-
 /**
- * The child Agent Definition. Bounds are tight and per-unit: a unit that
- * cannot be reviewed inside them fails typed and is reported by the
- * coordinator, never silently absorbed or retried.
+ * Guidance for delegated children must be static: child instructions are a
+ * pure function of the brief, and the coordinator's mission never crosses the
+ * delegation boundary (context isolation), so mission-dependent guidance
+ * cannot be resolved for a child.
  */
-export const FileReviewer = Agent.define("pr-file-reviewer", {
-  input: FileReviewBrief,
-  output: FileReviewReport,
-  instructions: fileReviewerInstructions,
-  toolkit: FileReviewToolkit,
-  policy: AgentPolicy.make({
-    maxTurns: 8,
-    maxToolCalls: 16,
-    maxDuration: "4 minutes",
-    toolConcurrency: 2,
-    tokenBudget: 200_000,
-  }),
-  description:
-    "Review one bounded unit of a pull request's changeset read-only and return line-anchored findings for exactly those files.",
-  metadata: { deploymentClass: "E", surface: "read-only" },
+export interface FanOutInstructionOptions {
+  readonly guidance?: string | ReadonlyArray<string> | undefined;
+}
+
+const staticGuidanceLines = (
+  guidance: string | ReadonlyArray<string> | undefined,
+): ReadonlyArray<string> => {
+  if (guidance === undefined) return [];
+  const lines = typeof guidance === "string" ? [guidance] : guidance;
+  return lines.filter((line) => line.length > 0);
+};
+
+/** Build the child file-reviewer instructions with optional static guidance. */
+export const makeFileReviewerInstructions =
+  (options: FanOutInstructionOptions = {}) =>
+  (brief: FileReviewBrief): string =>
+    [
+      `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
+      ...staticGuidanceLines(options.guidance),
+      "Work in this order:",
+      "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+      "2. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+      "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
+      `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.`,
+      `Report at most ${MAX_CHILD_FINDINGS} findings; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`,
+    ].join("\n");
+
+export const fileReviewerInstructions = makeFileReviewerInstructions();
+
+/** The default per-unit child execution bounds. */
+export const defaultFileReviewerPolicy = AgentPolicy.make({
+  maxTurns: 8,
+  maxToolCalls: 16,
+  maxDuration: "4 minutes",
+  toolConcurrency: 2,
+  tokenBudget: 200_000,
 });
 
 // ---------------------------------------------------------------------------
@@ -130,7 +141,7 @@ export const FileReviewer = Agent.define("pr-file-reviewer", {
 
 /** The model-decoded delegation parameters: which unit to review. */
 export class FileReviewRequest extends Schema.Class<FileReviewRequest>(
-  "@effect-agent/example-pr-review/FileReviewRequest",
+  "@effect-agent/pr-review/FileReviewRequest",
 )({
   unitId: ReviewUnitId,
   paths: UnitPaths,
@@ -138,7 +149,7 @@ export class FileReviewRequest extends Schema.Class<FileReviewRequest>(
 
 /** The bounded parent-visible result of one delegated unit review. */
 export class FileReviewUnitResult extends Schema.Class<FileReviewUnitResult>(
-  "@effect-agent/example-pr-review/FileReviewUnitResult",
+  "@effect-agent/pr-review/FileReviewUnitResult",
 )({
   unitId: ReviewUnitId,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_CHILD_FINDINGS)),
@@ -173,33 +184,6 @@ export const fileReviewPolicy = SubagentPolicy.make({
 const delegationDescription =
   "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
 
-export const fileReviewDelegation = Subagent.define("delegate_file_review", {
-  description: delegationDescription,
-  target: FileReviewer,
-  parameters: FileReviewRequest,
-  success: FileReviewUnitResult,
-  failure: FileReviewUnitFailed,
-  prepareInput: (request) =>
-    Effect.succeed(
-      FileReviewBrief.make({
-        unitId: request.unitId,
-        paths: request.paths,
-        focus: "defects-first: correctness, security, concurrency, resources, error handling",
-      }),
-    ),
-  // The explicit declassification boundary (SUB-015): exactly the bounded
-  // findings cross to the parent. Whether they may anchor anywhere is decided
-  // host-side by planPublication against the real diff, not here.
-  projectResult: (report) =>
-    Effect.succeed(
-      FileReviewUnitResult.make({
-        unitId: report.unitId,
-        findings: report.findings,
-      }),
-    ),
-  policy: fileReviewPolicy,
-});
-
 /**
  * Total mapping from every expected child Run failure to the declared unit
  * failure (SUB-028): the tag plus a bounded message, nothing else crosses.
@@ -213,22 +197,6 @@ export const mapFileReviewChildFailure = (failure: {
     message: (failure.message ?? "").slice(0, 400),
   });
 
-/** Runtime wiring: the immutable delegation plus one explicit child Binding. */
-export const fanOutHandlersLayer = <Provider, ModelProvides, ModelRequires>(
-  childBinding: RuntimeBinding<
-    typeof FileReviewBrief,
-    typeof FileReviewReport,
-    typeof fileReviewerInstructions,
-    Toolkit.Tools<typeof FileReviewToolkit>,
-    Provider,
-    ModelProvides,
-    ModelRequires
-  >,
-) =>
-  SubagentRuntime.layer(fileReviewDelegation, childBinding, {
-    mapChildFailure: mapFileReviewChildFailure,
-  });
-
 // ---------------------------------------------------------------------------
 // The parent-facing view of the delegation Tool.
 //
@@ -240,8 +208,7 @@ export const fanOutHandlersLayer = <Provider, ModelProvides, ModelRequires>(
 // Effect AI resolves handlers by Tool NAME, so the real S1 delegation handler
 // from `SubagentRuntime.layer` still executes, and a typed unit failure
 // reaches the model as a failed tool result (bounded, encoded through the
-// declared failure union) instead of aborting the Run. Recorded as authoring
-// friction: `Subagent.define` should accept a containment policy directly.
+// declared failure union) instead of aborting the Run.
 // ---------------------------------------------------------------------------
 
 /** Exactly the failure union `Subagent.define` declares for this delegation. */
@@ -276,7 +243,7 @@ export const DelegateFileReview = Tool.make("delegate_file_review", {
 // ---------------------------------------------------------------------------
 
 export class ListReviewUnitsQuery extends Schema.Class<ListReviewUnitsQuery>(
-  "@effect-agent/example-pr-review/ListReviewUnitsQuery",
+  "@effect-agent/pr-review/ListReviewUnitsQuery",
 )({
   /** Explicit constant keeps the zero-choice operation compatible with strict provider schemas. */
   scope: Schema.Literal("all"),
@@ -327,23 +294,119 @@ export const fanOutReviewInstructions = (mission: ReviewMission): string =>
     'Use verdict "request-changes" only when at least one finding is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.',
   ].join("\n");
 
-export const FanOutReviewer = Agent.define("pr-fanout-reviewer", {
-  input: ReviewMission,
-  output: CodeReview,
-  instructions: fanOutReviewInstructions,
-  toolkit: FanOutReviewToolkit,
-  policy: AgentPolicy.make({
-    maxTurns: 6,
-    maxToolCalls: 1 + MAX_REVIEW_UNITS,
-    maxDuration: "15 minutes",
-    toolConcurrency: 3,
-    // One declared batch may legitimately contain a failed result for every
-    // review unit. Leave the coordinator one turn to report all of them, while
-    // still stopping a model that declares another failed delegation.
-    repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
-    tokenBudget: 300_000,
-  }),
-  description:
-    "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
-  metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" },
+/** The default fan-out coordinator execution bounds. */
+export const defaultFanOutPolicy = AgentPolicy.make({
+  maxTurns: 6,
+  maxToolCalls: 1 + MAX_REVIEW_UNITS,
+  maxDuration: "15 minutes",
+  toolConcurrency: 3,
+  // One declared batch may legitimately contain a failed result for every
+  // review unit. Leave the coordinator one turn to report all of them, while
+  // still stopping a model that declares another failed delegation.
+  repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
+  tokenBudget: 300_000,
 });
+
+/** Everything one fan-out configuration is made of, built as one unit so the
+ * delegation always targets exactly the child definition that will run. */
+export interface FanOutReviewSuite {
+  readonly child: ReturnType<typeof makeFileReviewerDefinition>;
+  readonly parent: ReturnType<typeof makeFanOutReviewerDefinition>;
+  readonly delegation: ReturnType<typeof makeFileReviewDelegation>;
+}
+
+const makeFileReviewerDefinition = (options: FanOutInstructionOptions = {}) =>
+  Agent.define("pr-file-reviewer", {
+    input: FileReviewBrief,
+    output: FileReviewReport,
+    instructions: makeFileReviewerInstructions(options),
+    toolkit: FileReviewToolkit,
+    policy: defaultFileReviewerPolicy,
+    description:
+      "Review one bounded unit of a pull request's changeset read-only and return line-anchored findings for exactly those files.",
+    metadata: { deploymentClass: "E", surface: "read-only" },
+  });
+
+const makeFanOutReviewerDefinition = () =>
+  Agent.define("pr-fanout-reviewer", {
+    input: ReviewMission,
+    output: CodeReview,
+    instructions: fanOutReviewInstructions,
+    toolkit: FanOutReviewToolkit,
+    policy: defaultFanOutPolicy,
+    description:
+      "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
+    metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" },
+  });
+
+const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefinition>) =>
+  Subagent.define("delegate_file_review", {
+    description: delegationDescription,
+    target: child,
+    parameters: FileReviewRequest,
+    success: FileReviewUnitResult,
+    failure: FileReviewUnitFailed,
+    prepareInput: (request) =>
+      Effect.succeed(
+        FileReviewBrief.make({
+          unitId: request.unitId,
+          paths: request.paths,
+          focus: "defects-first: correctness, security, concurrency, resources, error handling",
+        }),
+      ),
+    // The explicit declassification boundary (SUB-015): exactly the bounded
+    // findings cross to the parent. Whether they may anchor anywhere is
+    // decided host-side by planPublication against the real diff, not here.
+    projectResult: (report) =>
+      Effect.succeed(
+        FileReviewUnitResult.make({
+          unitId: report.unitId,
+          findings: report.findings,
+        }),
+      ),
+    policy: fileReviewPolicy,
+  });
+
+/** Build one coherent fan-out suite: child, coordinator, and delegation. */
+export const makeFanOutReviewSuite = (
+  options: FanOutInstructionOptions = {},
+): FanOutReviewSuite => {
+  const child = makeFileReviewerDefinition(options);
+  return {
+    child,
+    parent: makeFanOutReviewerDefinition(),
+    delegation: makeFileReviewDelegation(child),
+  };
+};
+
+const defaultSuite = makeFanOutReviewSuite();
+
+/** The default child Agent Definition. */
+export const FileReviewer = defaultSuite.child;
+
+/** The default coordinator Agent Definition. */
+export const FanOutReviewer = defaultSuite.parent;
+
+/** The default delegation over the default child. */
+export const fileReviewDelegation = defaultSuite.delegation;
+
+/** Runtime wiring: one delegation plus one explicit child Binding. */
+export const fanOutHandlersLayerFor =
+  (delegation: ReturnType<typeof makeFileReviewDelegation>) =>
+  <Provider, ModelProvides, ModelRequires>(
+    childBinding: RuntimeBinding<
+      typeof FileReviewBrief,
+      typeof FileReviewReport,
+      ReturnType<typeof makeFileReviewerInstructions>,
+      Toolkit.Tools<typeof FileReviewToolkit>,
+      Provider,
+      ModelProvides,
+      ModelRequires
+    >,
+  ) =>
+    SubagentRuntime.layer(delegation, childBinding, {
+      mapChildFailure: mapFileReviewChildFailure,
+    });
+
+/** Runtime wiring over the default delegation, mirroring the leaf example. */
+export const fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);

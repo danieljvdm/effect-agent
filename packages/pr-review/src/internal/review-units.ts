@@ -31,9 +31,7 @@ export const MAX_MERGED_FINDINGS = 20;
 export const ReviewUnitId = Schema.NonEmptyString.check(Schema.isMaxLength(32));
 
 /** One bounded slice of the changeset delegated to one child reviewer. */
-export class ReviewUnit extends Schema.Class<ReviewUnit>(
-  "@effect-agent/example-pr-review/ReviewUnit",
-)({
+export class ReviewUnit extends Schema.Class<ReviewUnit>("@effect-agent/pr-review/ReviewUnit")({
   unitId: ReviewUnitId,
   paths: Schema.Array(ChangedPath)
     .check(Schema.isMinLength(1))
@@ -44,7 +42,7 @@ export class ReviewUnit extends Schema.Class<ReviewUnit>(
 
 /** The complete deterministic fan-out plan over one changeset. */
 export class ReviewUnitPlan extends Schema.Class<ReviewUnitPlan>(
-  "@effect-agent/example-pr-review/ReviewUnitPlan",
+  "@effect-agent/pr-review/ReviewUnitPlan",
 )({
   totalFiles: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** True when the source returned fewer files than the pull request has. */
@@ -83,7 +81,7 @@ const unitOf = (index: number, files: ReadonlyArray<ChangedFile>): ReviewUnit =>
  *   `undiffablePaths` instead of consuming a child's budget;
  * - diffable files beyond `MAX_REVIEW_UNITS` full units surface in
  *   `unassignedPaths` so the review can report them as unreviewed, never
- *   silently truncated (the kommunikasie#202 lesson this variant exists for).
+ *   silently truncated.
  */
 export const planReviewUnits = (
   files: ReadonlyArray<ChangedFile>,
