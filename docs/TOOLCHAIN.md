@@ -68,7 +68,9 @@ packages/
   testing/              Scripted model, fixtures, and conformance test kit
 examples/
   demo/             Leaf TanStack Start browser bench
+  pr-review/        Leaf GitHub pull-request reviewer (CLI + composite Action)
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
+  repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.
@@ -114,6 +116,34 @@ The root declares the catalog's Vite+ core alias as `vite` as well as `vite-plus
 direct peer provider for the Vite+ toolchain. VitePress intentionally resolves the official Vite
 implementation as its nested dependency; the repository therefore does not use a global `vite`
 override. The documentation build is part of the root `build` and `ready` gates.
+
+## Releasing to npm
+
+Versioning uses changesets (`bun run changeset`, `bun run changeset:version`);
+publishing uses `bun run release:publish`, NOT `changeset publish`. In a
+non-pnpm repository changesets shells out to `npm publish`, which ships
+`workspace:*` and `catalog:` protocol ranges verbatim; `bun publish` resolves
+both at publish time. The release script also swaps each manifest's
+source-first export map (a private-development convention, see below) for the
+built `dist` entries during the publish, restores it afterwards, and skips
+versions already on the registry, so a partial publish can be re-run.
+
+The release sequence from an authenticated npm session (`bunx npm login`, an
+owner of the `@effect-agent` scope):
+
+1. `bun run changeset` — describe the change (one exists for 0.0.1);
+2. `bun run changeset:version && bun install` — cut versions and changelogs;
+3. `bun run ready`;
+4. `bun run release:publish -- --dry-run`, then without `--dry-run`
+   (append `--otp <code>` when npm 2FA asks);
+5. `bun x changeset tag && git push --follow-tags`.
+
+`@effect-agent/platform-cloudflare` and `@effect-agent/storage-cloudflare`
+remain `private` in the 0.0.1 release: their Durable Object class factories
+return classes with private fields, which TypeScript declaration emit rejects
+(TS4094), so `vp pack` produces no `.d.mts` for them. Publishing them
+requires annotating the factories' public return types (and scoping
+declaration builds to `src/`) first.
 
 ## Post-install setup
 

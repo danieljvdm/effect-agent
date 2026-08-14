@@ -1,5 +1,6 @@
 node_modules
 dist
+.worktrees
 coverage
 .vite
 docs/.vitepress/cache

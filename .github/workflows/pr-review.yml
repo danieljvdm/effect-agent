@@ -1,0 +1,36 @@
+# Agentic pull-request review via the examples/pr-review leaf workspace.
+# The job runs only when the OPENAI_API_KEY secret is configured (the
+# secrets context is unavailable in `if:` conditions, so presence is carried
+# through a job-level env var). Reviews always post as COMMENT events.
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      VITE_GIT_HOOKS: "0"
+      HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
+    steps:
+      - if: env.HAS_OPENAI_KEY == 'true'
+        uses: actions/checkout@v4
+
+      - if: env.HAS_OPENAI_KEY == 'true'
+        uses: ./examples/pr-review
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}

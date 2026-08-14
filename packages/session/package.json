@@ -1,10 +1,23 @@
 {
   "name": "@effect-agent/session",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
+  "description": "Canonical Conversation records, reducers, store ports, recovery classifier, and the durable agent runtime coordinator for Effect Agent.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/session"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",

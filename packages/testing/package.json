@@ -1,10 +1,23 @@
 {
   "name": "@effect-agent/testing",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.0.1",
+  "description": "Scripted models, deterministic fixtures, and adapter conformance kits for testing Effect Agent applications.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danieljvdm/effect-agent.git",
+    "directory": "packages/testing"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "vp pack",

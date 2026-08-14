@@ -16,6 +16,7 @@
     "changeset": "bun x changeset",
     "changeset:version": "bun x changeset version",
     "changeset:publish": "bun x changeset publish",
+    "release:publish": "tsx scripts/release-publish.ts",
     "requirements:coverage": "tsx scripts/requirements-coverage.ts",
     "reset:development-storage": "tsx scripts/reset-development-storage.ts",
     "formal:check": "tsx scripts/formal-check.ts",
