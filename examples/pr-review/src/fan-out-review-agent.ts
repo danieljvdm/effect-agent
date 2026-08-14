@@ -337,6 +337,10 @@ export const FanOutReviewer = Agent.define("pr-fanout-reviewer", {
     maxToolCalls: 1 + MAX_REVIEW_UNITS,
     maxDuration: "15 minutes",
     toolConcurrency: 3,
+    // One declared batch may legitimately contain a failed result for every
+    // review unit. Leave the coordinator one turn to report all of them, while
+    // still stopping a model that declares another failed delegation.
+    repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
     tokenBudget: 300_000,
   }),
   description:
