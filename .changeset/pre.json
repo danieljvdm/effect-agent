@@ -17,9 +17,11 @@
     "@effect-agent/storage-cloudflare": "0.0.0",
     "@effect-agent/storage-memory": "0.0.0",
     "@effect-agent/storage-sqlite": "0.0.0",
-    "@effect-agent/testing": "0.0.0"
+    "@effect-agent/testing": "0.0.0",
+    "effect-agent": "0.0.1-beta.3"
   },
   "changesets": [
+    "effect-agent-umbrella",
     "initial-live-test-release",
     "mit-cloudflare-and-review-fixes",
     "pin-internal-dependency-versions"
