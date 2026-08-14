@@ -19,5 +19,5 @@
     "@effect-agent/storage-sqlite": "0.0.0",
     "@effect-agent/testing": "0.0.0"
   },
-  "changesets": ["initial-live-test-release"]
+  "changesets": ["initial-live-test-release", "pin-internal-dependency-versions"]
 }
