@@ -1,12 +1,12 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Schema } from "effect";
 
 import { ChangedFile } from "./diff.ts";
 
 // ---------------------------------------------------------------------------
 // The pull-request source port: everything the review tools may observe about
 // one pull request. The live adapter speaks the GitHub REST API; the fixture
-// adapter serves an in-memory pull request so ordinary gates and dry runs
-// need no network or credential.
+// adapter (testing entry) serves an in-memory pull request so ordinary gates
+// and dry runs need no network or credential.
 // ---------------------------------------------------------------------------
 
 /** Reading a file head version larger than this is refused, never truncated silently. */
@@ -17,7 +17,7 @@ export const MAX_CHANGED_FILES = 300;
 
 /** Pull-request identity and framing shown to the agent as its mission. */
 export class PullRequestMetadata extends Schema.Class<PullRequestMetadata>(
-  "@effect-agent/example-pr-review/PullRequestMetadata",
+  "@effect-agent/pr-review/PullRequestMetadata",
 )({
   /** `owner/name`, exactly as GitHub renders it. */
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
@@ -102,58 +102,4 @@ export class PullRequestSource extends Context.Service<
       path: string,
     ) => Effect.Effect<string, PullRequestSourceFailure | ReviewInputViolation>;
   }
->()("@effect-agent/example-pr-review/PullRequestSource") {}
-
-/** One fixture file: its changeset entry plus optional head content. */
-export class FixtureFile extends Schema.Class<FixtureFile>(
-  "@effect-agent/example-pr-review/FixtureFile",
-)({
-  file: ChangedFile,
-  headContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_FILE_CHARS))),
-}) {}
-
-/** A complete in-memory pull request for tests, dry runs, and live smokes. */
-export class FixturePullRequest extends Schema.Class<FixturePullRequest>(
-  "@effect-agent/example-pr-review/FixturePullRequest",
-)({
-  metadata: PullRequestMetadata,
-  files: Schema.Array(FixtureFile).check(Schema.isMaxLength(MAX_CHANGED_FILES)),
-}) {}
-
-const requireChanged = (
-  fixture: FixturePullRequest,
-  path: string,
-): Effect.Effect<FixtureFile, ReviewInputViolation> => {
-  const entry = fixture.files.find((candidate) => candidate.file.path === path);
-  return entry === undefined
-    ? Effect.fail(
-        ReviewInputViolation.make({
-          input: path,
-          reason: "Path is not part of this pull request's changeset.",
-        }),
-      )
-    : Effect.succeed(entry);
-};
-
-/** Deterministic `PullRequestSource` over one fixture pull request. */
-export const fixturePullRequestSourceLayer = (
-  fixture: FixturePullRequest,
-): Layer.Layer<PullRequestSource> =>
-  Layer.succeed(PullRequestSource)(
-    PullRequestSource.of({
-      metadata: Effect.succeed(fixture.metadata),
-      changedFiles: Effect.succeed(fixture.files.map((entry) => entry.file)),
-      readFile: (path) =>
-        Effect.gen(function* () {
-          const relative = yield* normalizeRepoRelativePath(path);
-          const entry = yield* requireChanged(fixture, relative);
-          if (entry.headContent === undefined) {
-            return yield* ReviewInputViolation.make({
-              input: relative,
-              reason: "No head content is available for this file.",
-            });
-          }
-          return entry.headContent;
-        }),
-    }),
-  );
+>()("@effect-agent/pr-review/PullRequestSource") {}

@@ -22,9 +22,7 @@ export const ChangedFileStatus = Schema.Literals([
 ]);
 
 /** One file changed by the pull request, with its optional textual patch. */
-export class ChangedFile extends Schema.Class<ChangedFile>(
-  "@effect-agent/example-pr-review/ChangedFile",
-)({
+export class ChangedFile extends Schema.Class<ChangedFile>("@effect-agent/pr-review/ChangedFile")({
   path: ChangedPath,
   status: ChangedFileStatus,
   additions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),

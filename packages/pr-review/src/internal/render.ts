@@ -9,7 +9,9 @@ import { ReviewFinding } from "./review-agent.ts";
 // Publication planning: pure, deterministic, and fail-closed. Model output is
 // untrusted input, so every finding anchor is validated against the parsed
 // diff before it may become an inline comment; findings that fail validation
-// are demoted into the review body instead of being dropped or trusted.
+// are demoted into the review body instead of being dropped or trusted. This
+// module is deliberately not configurable — customization widens what goes
+// into a review, never what leaves it unvalidated.
 // ---------------------------------------------------------------------------
 
 export const ReviewEvent = Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]);
@@ -17,7 +19,7 @@ export type ReviewEvent = typeof ReviewEvent.Type;
 
 /** One inline comment exactly as the GitHub review API accepts it. */
 export class ReviewCommentDraft extends Schema.Class<ReviewCommentDraft>(
-  "@effect-agent/example-pr-review/ReviewCommentDraft",
+  "@effect-agent/pr-review/ReviewCommentDraft",
 )({
   path: Schema.NonEmptyString,
   /** The last (or only) commented line, RIGHT side of the diff. */
@@ -29,7 +31,7 @@ export class ReviewCommentDraft extends Schema.Class<ReviewCommentDraft>(
 
 /** The complete, validated review ready for one GitHub reviews API call. */
 export class ReviewPublicationPlan extends Schema.Class<ReviewPublicationPlan>(
-  "@effect-agent/example-pr-review/ReviewPublicationPlan",
+  "@effect-agent/pr-review/ReviewPublicationPlan",
 )({
   event: ReviewEvent,
   body: Schema.String.check(Schema.isMaxLength(60_000)),
@@ -136,7 +138,7 @@ export const planPublication = (
   }
   bodyParts.push(
     "",
-    `_Automated review by the effect-agent pr-review example · reviewed at ${options.headSha.slice(0, 7)}._`,
+    `_Automated review by @effect-agent/pr-review · reviewed at ${options.headSha.slice(0, 7)}._`,
   );
 
   const event: ReviewEvent = options.applyVerdict

@@ -35,6 +35,9 @@
       "path": "./packages/platform-cloudflare"
     },
     {
+      "path": "./packages/pr-review"
+    },
+    {
       "path": "./packages/testing"
     },
     {

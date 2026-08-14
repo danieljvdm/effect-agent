@@ -307,6 +307,15 @@ replacing it with an unrelated demo.
 - Travel Planner is one of those internal Agents and retains a deterministic offline conformance
   profile alongside its live integration profiles.
 
+## Post-roadmap additions
+
+- **`@effect-agent/pr-review` + the prebuilt `action/` bundle** (owner decision
+  [D-034](DECISIONS.md#d-034--packaged-pull-request-reviewer-and-prebuilt-action),
+  [ADR-0016](adr/0016-pr-review-package.md), 2026-08-14): the `examples/pr-review` reviewer
+  promoted into a publishable package with a configuration factory; the example remains as its
+  consumer. Created outside the numbered phases by owner direction — the D-025 phase gate is
+  otherwise unchanged.
+
 ## Deferred until open-source preparation
 
 - stored-data migrations and compatibility windows;

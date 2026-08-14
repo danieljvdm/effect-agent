@@ -445,3 +445,25 @@ Elements-style components. Its scripted Model remains the default so ordinary ve
 requires no credentials or network.
 
 Record: [ADR-0009](adr/0009-leaf-example-workspaces.md)
+
+### D-034 — Packaged pull-request reviewer and prebuilt Action
+
+**Status:** Accepted (owner-directed, 2026-08-14)
+
+**Decision:** Promote the pull-request reviewer (flat and S1 fan-out variants) from
+`examples/pr-review` into the publishable framework package `@effect-agent/pr-review`, exposing a
+configuration factory (`PrReview.make` / `PrReview.makeFanOut`), the GitHub adapters, a
+deterministic `./testing` entry, and `./action` + `./cli` host entrypoints. Ship a prebuilt
+node-runtime GitHub Action at `action/` whose bundled `action/dist/index.mjs` is committed — a
+recorded exception to the dist-is-gitignored convention, kept fresh by a `bun run check` gate.
+
+The package depends on the `effect-agent` umbrella (the first package-level consumer of that
+edge), declares deployment class E only, and never claims exactly-once review posting (DUR-003).
+Customization widens the review's inputs (guidance, extra `readonly` tools, ignore globs, bounds);
+the fail-closed publication path — anchor validation, findings bound, publication after
+settlement — is not configurable.
+
+This is the first package created outside a numbered roadmap phase; D-025's phase gate is
+otherwise unchanged.
+
+Record: [ADR-0016](adr/0016-pr-review-package.md)

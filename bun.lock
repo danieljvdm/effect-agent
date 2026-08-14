@@ -76,7 +76,7 @@
       "name": "@effect-agent/example-pr-review",
       "version": "0.0.0",
       "dependencies": {
-        "@effect/ai-openai": "catalog:",
+        "@effect-agent/pr-review": "workspace:*",
         "@effect/platform-node": "catalog:",
         "effect": "catalog:",
         "effect-agent": "workspace:*",
@@ -220,6 +220,22 @@
       "devDependencies": {
         "@effect-agent/capabilities": "workspace:*",
         "@effect-agent/engine": "workspace:*",
+        "@effect/vitest": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
+    "packages/pr-review": {
+      "name": "@effect-agent/pr-review",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/ai-anthropic": "catalog:",
+        "@effect/ai-openai": "catalog:",
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-agent": "workspace:*",
+      },
+      "devDependencies": {
         "@effect/vitest": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
@@ -552,6 +568,8 @@
     "@effect-agent/platform-cloudflare": ["@effect-agent/platform-cloudflare@workspace:packages/platform-cloudflare"],
 
     "@effect-agent/platform-node": ["@effect-agent/platform-node@workspace:packages/platform-node"],
+
+    "@effect-agent/pr-review": ["@effect-agent/pr-review@workspace:packages/pr-review"],
 
     "@effect-agent/sandbox": ["@effect-agent/sandbox@workspace:packages/sandbox"],
 

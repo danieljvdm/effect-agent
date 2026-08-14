@@ -1,39 +1,40 @@
-import { OpenAiClient } from "@effect/ai-openai";
 import { describe, expect, it } from "@effect/vitest";
-import { Config, Effect, Exit, Layer, Ref, Schema } from "effect";
+import { Effect, Exit, Layer, Ref, Schema } from "effect";
 import { Agent, IdGenerator } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
-import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   anchorViolation,
   annotatePatch,
   ChangedFile,
   CodeReview,
-  collectingReviewPublisherLayer,
-  commentableLines,
   executeReview,
-  FixtureFile,
-  FixturePullRequest,
-  fixturePullRequestSourceLayer,
-  liveReviewProfileEnabled,
+  liveProfileEnabled,
   ListChangedFiles,
-  makeOpenAiReviewer,
-  makeOfflineReviewerModel,
+  makeOpenAiReviewModel,
   normalizeRepoRelativePath,
+  openAiClientLayer,
   parsePatch,
   planPublication,
+  commentableLines,
   PullRequestMetadata,
   PullRequestReviewer,
   PullRequestReviewerProfile,
+  pullRequestReviewerProfile,
   ReadFile,
   ReadFileDiff,
-  pullRequestReviewerProfile,
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewToolkitLayer,
 } from "../src/index.ts";
+import {
+  collectingReviewPublisherLayer,
+  FixtureFile,
+  FixturePullRequest,
+  fixturePullRequestSourceLayer,
+  makeOfflineReviewerModel,
+} from "../src/testing.ts";
 
 describe("OpenAI tool schema compatibility", () => {
   it("encodes every reviewer tool as a strict OpenAI object schema", () => {
@@ -76,7 +77,7 @@ const fixture = FixturePullRequest.make({
     body: "Replaces the wrong literal and introduces `three`.",
     baseRef: "main",
     headRef: "fix/sum",
-    headSha: "0123456789abcdef0123456789abcdef01234567",
+    headSha: FIXTURE_SHA,
     totalChangedFiles: 2,
   }),
   files: [
@@ -439,11 +440,7 @@ describe("offline review run", () => {
 // Ordinary gates make zero network calls and need zero credentials.
 // ---------------------------------------------------------------------------
 
-const liveEnabled = liveReviewProfileEnabled(process.env);
-
-const OpenAiClientLayer = OpenAiClient.layerConfig({
-  apiKey: Config.redacted("OPENAI_API_KEY"),
-}).pipe(Layer.provide(FetchHttpClient.layer));
+const liveEnabled = liveProfileEnabled(process.env, "OPENAI_API_KEY");
 
 describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
   it.live(
@@ -451,7 +448,8 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
     () =>
       Effect.gen(function* () {
         const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
-        const outcome = yield* executeReview(makeOpenAiReviewer(), {
+        const binding = Agent.withModel(PullRequestReviewer, makeOpenAiReviewModel());
+        const outcome = yield* executeReview(binding, {
           post: false,
           applyVerdict: false,
         }).pipe(
@@ -459,7 +457,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
             Layer.mergeAll(
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
               collectingReviewPublisherLayer(published),
-              OpenAiClientLayer,
+              openAiClientLayer,
               IdGenerator.layer,
             ),
           ),

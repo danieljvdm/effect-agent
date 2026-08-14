@@ -1,5 +1,9 @@
 node_modules
 dist
+# The bundled GitHub Action is committed by design (pr-review ADR): a
+# node-runtime action must run straight from a checkout. `bun run check`
+# verifies it stays in sync with the source.
+!action/dist/
 .worktrees
 coverage
 .vite

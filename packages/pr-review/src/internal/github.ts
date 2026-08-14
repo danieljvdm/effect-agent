@@ -1,5 +1,5 @@
 import type { Redacted } from "effect";
-import { Context, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { ChangedFile } from "./diff.ts";
@@ -33,7 +33,7 @@ export class GitHubReviewTarget extends Context.Service<
     /** Absent token means unauthenticated reads (public repositories only). */
     readonly token: Option.Option<Redacted.Redacted<string>>;
   }
->()("@effect-agent/example-pr-review/GitHubReviewTarget") {
+>()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config: {
     readonly apiUrl: string;
     readonly repository: string;
@@ -83,7 +83,7 @@ const GitHubReviewWire = Schema.Struct({
 
 /** The publication receipt callers report back to the operator. */
 export class PublishedReview extends Schema.Class<PublishedReview>(
-  "@effect-agent/example-pr-review/PublishedReview",
+  "@effect-agent/pr-review/PublishedReview",
 )({
   reviewId: Schema.Int,
   url: Schema.String,
@@ -91,7 +91,7 @@ export class PublishedReview extends Schema.Class<PublishedReview>(
   inlineComments: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 }) {}
 
-/** Posts one planned review; the ONLY mutating operation in this example. */
+/** Posts one planned review; the ONLY mutating operation in this package. */
 export class ReviewPublisher extends Context.Service<
   ReviewPublisher,
   {
@@ -99,7 +99,7 @@ export class ReviewPublisher extends Context.Service<
       plan: ReviewPublicationPlan,
     ) => Effect.Effect<PublishedReview, GitHubApiFailure>;
   }
->()("@effect-agent/example-pr-review/ReviewPublisher") {}
+>()("@effect-agent/pr-review/ReviewPublisher") {}
 
 // --- Shared request plumbing -------------------------------------------------
 
@@ -120,7 +120,7 @@ const withCommonHeaders = (
   const base = request.pipe(
     HttpClientRequest.setHeaders({
       "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "effect-agent-example-pr-review",
+      "User-Agent": "effect-agent-pr-review",
     }),
   );
   return Option.isSome(token) ? base.pipe(HttpClientRequest.bearerToken(token.value)) : base;
@@ -333,26 +333,3 @@ export const gitHubReviewPublisherLayer: Layer.Layer<
     });
   }),
 );
-
-// --- Collecting ReviewPublisher (tests and dry-run assertions) ----------------
-
-/** In-memory publisher: records every plan and mints a deterministic receipt. */
-export const collectingReviewPublisherLayer = (
-  published: Ref.Ref<ReadonlyArray<ReviewPublicationPlan>>,
-): Layer.Layer<ReviewPublisher> =>
-  Layer.succeed(ReviewPublisher)(
-    ReviewPublisher.of({
-      publish: (plan) =>
-        Ref.update(published, (plans) => [...plans, plan]).pipe(
-          Effect.flatMap(() => Ref.get(published)),
-          Effect.map((plans) =>
-            PublishedReview.make({
-              reviewId: plans.length,
-              url: `memory://review/${plans.length}`,
-              event: plan.event,
-              inlineComments: plan.comments.length,
-            }),
-          ),
-        ),
-    }),
-  );

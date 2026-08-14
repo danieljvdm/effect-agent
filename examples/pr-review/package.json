@@ -10,7 +10,7 @@
     "review": "bun src/cli.ts"
   },
   "dependencies": {
-    "@effect/ai-openai": "catalog:",
+    "@effect-agent/pr-review": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-agent": "workspace:*"

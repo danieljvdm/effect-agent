@@ -17,7 +17,6 @@ import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 import {
   ChangedFile,
   CodeReview,
-  collectingReviewPublisherLayer,
   DelegateFileReview,
   executeReview,
   FanOutCoordinatorToolkitLayer,
@@ -31,16 +30,9 @@ import {
   FileReviewToolkit,
   FileReviewToolkitLayer,
   FileReviewUnitFailed,
-  FixtureFile,
-  FixturePullRequest,
-  fixturePullRequestSourceLayer,
   ListReviewUnits,
-  makeOfflineFanOutCoordinatorModel,
-  makeOfflineFileReviewerModel,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
-  type OfflineUnitCall,
-  type OfflineUnitScript,
   planReviewUnits,
   PullRequestMetadata,
   PullRequestSource,
@@ -48,6 +40,16 @@ import {
   ReviewFinding,
   ReviewPublicationPlan,
 } from "../src/index.ts";
+import {
+  collectingReviewPublisherLayer,
+  FixtureFile,
+  FixturePullRequest,
+  fixturePullRequestSourceLayer,
+  makeOfflineFanOutCoordinatorModel,
+  makeOfflineFileReviewerModel,
+  type OfflineUnitCall,
+  type OfflineUnitScript,
+} from "../src/testing.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -172,7 +174,7 @@ const unitTwoReport = FileReviewReport.make({
 });
 
 // ---------------------------------------------------------------------------
-// Shared offline wiring: the exact CLI fan-out composition, minus GitHub and
+// Shared offline wiring: the exact host fan-out composition, minus GitHub and
 // live models.
 // ---------------------------------------------------------------------------
 
@@ -246,7 +248,7 @@ describe("fan-out profile", () => {
 });
 
 // ---------------------------------------------------------------------------
-// OpenAI strict schema compatibility for the new tool surface.
+// OpenAI strict schema compatibility for the fan-out tool surface.
 // ---------------------------------------------------------------------------
 
 describe("fan-out OpenAI tool schema compatibility", () => {
@@ -304,7 +306,7 @@ describe("planReviewUnits", () => {
     const assigned = plan.units.flatMap((unit) => [...unit.paths]);
     expect(assigned).toHaveLength(MAX_REVIEW_UNITS * MAX_UNIT_FILES);
     // Every input file is either assigned or reported unassigned — no file
-    // silently disappears (the kommunikasie#202 lesson).
+    // silently disappears.
     expect([...assigned, ...plan.unassignedPaths].sort()).toEqual(
       many.map((file) => file.path).sort(),
     );
