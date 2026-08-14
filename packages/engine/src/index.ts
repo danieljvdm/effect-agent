@@ -1,24 +1,4 @@
 import {
-  Cause,
-  Clock,
-  Context,
-  DateTime,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Metric,
-  Option,
-  PubSub,
-  Queue,
-  Schema,
-  Scope,
-  Semaphore,
-  Stream,
-  Take,
-} from "effect";
-import {
   Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
@@ -63,6 +43,26 @@ import {
   TurnStarted,
   type TurnId,
 } from "@effect-agent/core";
+import {
+  Cause,
+  Clock,
+  Context,
+  DateTime,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Metric,
+  Option,
+  PubSub,
+  Queue,
+  Schema,
+  Scope,
+  Semaphore,
+  Stream,
+  Take,
+} from "effect";
 import {
   type AiError,
   LanguageModel,
@@ -127,6 +127,14 @@ type InstructionRequirementsOf<Instructions, Input> =
     : never;
 
 import {
+  DurableStep,
+  DurableStepError,
+  getToolExecutionClass,
+  type DurableStepService,
+  type RunStepHook,
+  type RunStepKey,
+} from "./durable-step.ts";
+import {
   type ChildEstablishStatus,
   type CommandDrainPolicy,
   type RunApprovalDecision,
@@ -140,14 +148,6 @@ import {
   type RunTurnResume,
   type RunUsageDelta,
 } from "./run-options.ts";
-import {
-  DurableStep,
-  DurableStepError,
-  getToolExecutionClass,
-  type DurableStepService,
-  type RunStepHook,
-  type RunStepKey,
-} from "./durable-step.ts";
 
 export * from "./durable-step.ts";
 export * from "./run-events.ts";

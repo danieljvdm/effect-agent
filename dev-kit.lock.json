@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "toolVersion": "0.11.3",
+  "manifestDigest": "sha256:5ab8ba32bb2a178f5e532826b10d338b8a11a360810880e64b0d92ac63c78add",
+  "setup": {
+    "effectSource": {
+      "packageName": "effect",
+      "packageVersion": "4.0.0-beta.102",
+      "path": "repos/effect",
+      "repository": "https://github.com/Effect-TS/effect.git",
+      "tag": "effect@4.0.0-beta.102"
+    },
+    "effectTsgo": {
+      "effectTsgoVersion": "0.24.3",
+      "typescriptPackage": "typescript",
+      "typescriptVersion": "7.0.2"
+    }
+  },
+  "outputs": [
+    {
+      "resourceId": "skill:cloudflare@agents",
+      "path": ".agents/skills/cloudflare",
+      "skill": "cloudflare",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:dfc92bac99350aa358617e0b8edd61fd7115cbf1a873ba01d32f93d967b9822e",
+      "catalog": {
+        "source": "cloudflare-skills",
+        "repository": "https://github.com/cloudflare/skills.git",
+        "resolved": "30553f89ae1ef1e3c2917cd09d72dac992bb4e9a"
+      }
+    },
+    {
+      "resourceId": "skill:dev-kit@agents",
+      "path": ".agents/skills/dev-kit",
+      "skill": "dev-kit",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:934e6a086784b8cc9cc19c85587ba60481f57613fb8b85e4aea6b5556da72e0f"
+    },
+    {
+      "resourceId": "skill:testing@agents",
+      "path": ".agents/skills/testing",
+      "skill": "testing",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:e239ef710f905b77ae1f98b2b86d3d0911c9e5f9381a92b268a8ac8c28e9c88f"
+    },
+    {
+      "resourceId": "skill:cloudflare@claude",
+      "path": ".claude/skills/cloudflare",
+      "skill": "cloudflare",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:7f52a7fe04df81d3eeafcd92d7e965202d71c0a989082a44838de001aa225f94",
+      "catalog": {
+        "source": "cloudflare-skills",
+        "repository": "https://github.com/cloudflare/skills.git",
+        "resolved": "30553f89ae1ef1e3c2917cd09d72dac992bb4e9a"
+      }
+    },
+    {
+      "resourceId": "skill:dev-kit@claude",
+      "path": ".claude/skills/dev-kit",
+      "skill": "dev-kit",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:b59ba0874ef06cb4c651bb9b3012b014c9063648577f3f3181894e8ca3086d8f"
+    },
+    {
+      "resourceId": "skill:testing@claude",
+      "path": ".claude/skills/testing",
+      "skill": "testing",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:82fb62fd2299e2171e4a204cf80a604732080f812d215b85e667b19d344b0536"
+    },
+    {
+      "resourceId": "setup:agent-instructions",
+      "path": "AGENTS.md",
+      "sourcePath": "templates/AGENTS.md",
+      "mode": "copy",
+      "kind": "file",
+      "digest": "sha256:acc4f12eb7801c245f6a3117b0cb9b329b3c5765f32cbc8ecb4501d7af08cd08"
+    },
+    {
+      "resourceId": "setup:claude-instructions",
+      "path": "CLAUDE.md",
+      "sourcePath": "AGENTS.md",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:07728883f9dfed017a4810db4ea26e3248d1e603ce8b085ec87953359caae216"
+    }
+  ]
+}

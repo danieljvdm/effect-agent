@@ -1,6 +1,3 @@
-import { Effect, Layer, Schema } from "effect";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
-
 import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
 import { ToolExecutionClass } from "@effect-agent/engine";
 import {
@@ -14,6 +11,8 @@ import {
   type IdempotencyKey,
   type Receipt,
 } from "@effect-agent/session";
+import { Effect, Layer, Schema } from "effect";
+import { Model, Tool, Toolkit } from "effect/unstable/ai";
 
 import { ScriptedModel, type ScriptedTurnInput } from "../../scripted-model.ts";
 import {

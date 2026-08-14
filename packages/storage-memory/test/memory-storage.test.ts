@@ -1,20 +1,4 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, describe, it } from "@effect/vitest";
-import {
-  Cause,
-  Context,
-  DateTime,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Schema,
-  Scope,
-  Stream,
-} from "effect";
-
+import { ConversationId, RunId, SubmissionId } from "@effect-agent/core";
 import {
   AppendResult,
   CanonicalBatch,
@@ -43,7 +27,22 @@ import {
   UserInputRecorded,
   type CanonicalRecordPayload,
 } from "@effect-agent/session";
-import { ConversationId, RunId, SubmissionId } from "@effect-agent/core";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, describe, it } from "@effect/vitest";
+import {
+  Cause,
+  Context,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Schema,
+  Scope,
+  Stream,
+} from "effect";
 
 import { MemoryStorageLive } from "../src/index.ts";
 

@@ -1,6 +1,3 @@
-import { Context, Schema } from "effect";
-import type { Effect } from "effect";
-
 import type {
   AgentId,
   ConversationId,
@@ -9,6 +6,8 @@ import type {
   RunId,
   ToolCallId,
 } from "@effect-agent/core";
+import { Context, Schema } from "effect";
+import type { Effect } from "effect";
 
 /**
  * Shared identity carried by every pre-base Subagent event payload. The

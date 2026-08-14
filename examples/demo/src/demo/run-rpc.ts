@@ -1,7 +1,7 @@
+import { RunEvent } from "@effect-agent/core";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
-import { RunEvent } from "@effect-agent/core";
 import { DemoRunSelection } from "./contracts";
 import {
   DemoControlAccepted,

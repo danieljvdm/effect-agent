@@ -1,8 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
-
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
-import { Model, Tool, Toolkit } from "effect/unstable/ai";
-
 import {
   SubagentBudgetExhausted,
   type SubagentParentBudgetView,
@@ -20,6 +15,10 @@ import {
   ToolCallId,
 } from "@effect-agent/core";
 import { AgentRuntime, AgentSpawner } from "@effect-agent/engine";
+import { describe, expect, it } from "@effect/vitest";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Model, Tool, Toolkit } from "effect/unstable/ai";
+
 import {
   AirportCode,
   CatalogLifecycle,

@@ -1,4 +1,5 @@
 import type { TravelPlan } from "@effect-agent/testing";
+
 import type { DemoOperationalEvent, DemoScenario } from "./operational-contracts";
 
 export interface CapabilityRecipe {

@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+
 import { ChatInput } from "./general-chat";
 
 /** Runtime profile selected by the browser bench. */

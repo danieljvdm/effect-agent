@@ -1,5 +1,3 @@
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-
 import { ToolCallId } from "@effect-agent/core";
 import {
   childConversationIdFor,
@@ -10,16 +8,17 @@ import {
   type SubagentStarted,
 } from "@effect-agent/session";
 import { SqliteClient } from "@effect/sql-sqlite-do";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
+import { assertConvergence, laneRows, readCanonical, stubFor } from "./harness.ts";
 import {
   PROJECTED_SUMMARY,
   childModelInvocations,
   delegateCallIdFor,
 } from "./subagent-fixtures.ts";
-import { assertConvergence, laneRows, readCanonical, stubFor } from "./harness.ts";
 
 /**
  * WP4 cross-Object helpers over the WP3 eviction harness: two-lane alarm drains (a

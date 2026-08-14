@@ -1,4 +1,10 @@
 import {
+  Subagent,
+  SubagentPolicy,
+  SubagentReservationsMemoryLive,
+  SubagentRuntime,
+} from "@effect-agent/capabilities";
+import {
   Agent,
   AgentPolicy,
   ConversationId,
@@ -9,12 +15,6 @@ import {
   type AgentId,
   type SubmissionId,
 } from "@effect-agent/core";
-import {
-  Subagent,
-  SubagentPolicy,
-  SubagentReservationsMemoryLive,
-  SubagentRuntime,
-} from "@effect-agent/capabilities";
 import { DurableStep, DurableStepError } from "@effect-agent/engine";
 import {
   AgentBindingResolver,

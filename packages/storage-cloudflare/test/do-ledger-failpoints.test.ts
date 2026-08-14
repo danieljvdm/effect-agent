@@ -1,5 +1,3 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   AbortCommand,
   ApprovalDecisionCommand,
@@ -32,6 +30,8 @@ import {
   WaitingForChildSuspension,
   submissionInputRecordId,
 } from "@effect-agent/session";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Cause, Crypto, Effect, Exit, Option, Ref, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";

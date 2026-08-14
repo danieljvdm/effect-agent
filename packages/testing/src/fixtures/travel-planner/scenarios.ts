@@ -1,4 +1,5 @@
 import { Schema } from "effect";
+
 import type { ScriptedTurnInput } from "../../scripted-model.ts";
 import { TravelPlan, TripRequest, type TravelPlan as TravelPlanValue } from "./definition.ts";
 

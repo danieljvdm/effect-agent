@@ -1,18 +1,3 @@
-import { OpenAiClient } from "@effect/ai-openai";
-import { NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import {
-  Config,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  PlatformError,
-  Schema,
-  Stream,
-} from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
 import * as path from "node:path";
 
 import { Agent, ConversationId, ToolCallId, type SubmissionId } from "@effect-agent/core";
@@ -32,6 +17,21 @@ import {
   type Receipt,
 } from "@effect-agent/session";
 import { phase7LiveProfileEnabled } from "@effect-agent/testing";
+import { OpenAiClient } from "@effect/ai-openai";
+import { NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import {
+  Config,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  Schema,
+  Stream,
+} from "effect";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import {
   AUDIT_REPORT_PATH,

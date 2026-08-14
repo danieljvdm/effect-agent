@@ -1,5 +1,3 @@
-import { Clock, DateTime, Effect, Schema } from "effect";
-import type { Prompt } from "effect/unstable/ai";
 import type {
   PreparedRunContext,
   RunApprovalDecision,
@@ -12,6 +10,8 @@ import type {
   RunOptions,
   RunSchedulingHook,
 } from "@effect-agent/engine";
+import { Clock, DateTime, Effect, Schema } from "effect";
+import type { Prompt } from "effect/unstable/ai";
 
 import {
   ApprovalAudit,

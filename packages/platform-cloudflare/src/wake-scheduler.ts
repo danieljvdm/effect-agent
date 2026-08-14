@@ -2,8 +2,8 @@ import type { ConversationId } from "@effect-agent/core";
 import { WakeScheduler } from "@effect-agent/session";
 import { Effect, Layer, PubSub, Schema, Stream } from "effect";
 
-import { ConversationObjectIdentity, ConversationObjectNamespace } from "./bindings.ts";
 import { DurableAlarmService } from "./alarm.ts";
+import { ConversationObjectIdentity, ConversationObjectNamespace } from "./bindings.ts";
 
 /**
  * Bounded in-memory wake buffer for same-incarnation `awaitSettlement` subscribers. Wake

@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import * as v8 from "node:v8";
 import * as vm from "node:vm";
-import { fileURLToPath } from "node:url";
 
+import { ToolCallId } from "@effect-agent/core";
 import {
   DurableAgentRuntime,
   ObligationThresholds,
@@ -11,10 +12,9 @@ import {
   childConversationIdFor,
   type Receipt,
 } from "@effect-agent/session";
-import { ToolCallId } from "@effect-agent/core";
+import { NodeFileSystem } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Option, Schema, Stream, type Scope } from "effect";
-import { NodeFileSystem } from "@effect/platform-node";
 
 import { NodeDurableHost } from "../../src/index.ts";
 import { packageRoot, waitUntil, withHost, withRuntime } from "../crash/harness.ts";

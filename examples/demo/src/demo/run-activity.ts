@@ -1,4 +1,5 @@
 import type { RunEvent } from "@effect-agent/core";
+
 import type { DemoMode } from "./contracts";
 
 export type RunActivityPhase =

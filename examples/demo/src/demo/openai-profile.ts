@@ -1,7 +1,3 @@
-import { OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
-import { Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
-
 import { Agent, AgentPolicy } from "@effect-agent/core";
 import {
   HoldItinerary,
@@ -10,6 +6,10 @@ import {
   TravelPlannerPhase2Toolkit,
   TripRequest,
 } from "@effect-agent/testing";
+import { OpenAiLanguageModel, OpenAiTool } from "@effect/ai-openai";
+import { Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
+
 import { CalculatorToolkit, ChatInput, ChatOutput, GeneralChatInstructions } from "./general-chat";
 
 export const OPENAI_DEMO_MODEL = "gpt-5.6-luna" as const;

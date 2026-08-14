@@ -3,9 +3,9 @@ import type { RuntimeBinding } from "@effect-agent/engine";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
 
+import type { DurableWorkerFailure, DurableWorkerRequirements } from "./durable-runtime.ts";
 import type { Claim, LedgerError, Settlement } from "./ledger.ts";
 import { DefinitionDigests } from "./records.ts";
-import type { DurableWorkerFailure, DurableWorkerRequirements } from "./durable-runtime.ts";
 
 /**
  * No Agent Binding is registered for the requested stable identity. Recovery

@@ -1,7 +1,7 @@
-import { AnthropicLanguageModel } from "@effect/ai-anthropic";
-import { OpenAiLanguageModel } from "@effect/ai-openai";
 import { Agent } from "@effect-agent/core";
 import { TravelPlanner } from "@effect-agent/testing";
+import { AnthropicLanguageModel } from "@effect/ai-anthropic";
+import { OpenAiLanguageModel } from "@effect/ai-openai";
 
 /** Explicit ephemeral binding for an application-supplied OpenAI client Layer. */
 export const OpenAiTravelPlanner = Agent.withModel(

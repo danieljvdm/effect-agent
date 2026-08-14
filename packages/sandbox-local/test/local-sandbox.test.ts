@@ -1,8 +1,9 @@
-import { describe, expect, it, layer } from "@effect/vitest";
-
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+
+import { Sandbox, type SandboxEvent, type SandboxRequest } from "@effect-agent/sandbox";
+import { describe, expect, it, layer } from "@effect/vitest";
 import {
   Cause,
   ConfigProvider,
@@ -20,7 +21,6 @@ import {
   type Scope,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
-import { Sandbox, type SandboxEvent, type SandboxRequest } from "@effect-agent/sandbox";
 
 import { layer as localSandboxLayer, sandboxLayer } from "../src/index.ts";
 

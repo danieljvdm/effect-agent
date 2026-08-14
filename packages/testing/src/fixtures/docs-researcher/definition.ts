@@ -1,9 +1,8 @@
-import { Context, Effect, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
-
 import { Subagent, SubagentPolicy, SubagentRuntime } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
+import { Context, Effect, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------
 // Docs Researcher (P7 internal agent #3, plan §6): a coordinator that

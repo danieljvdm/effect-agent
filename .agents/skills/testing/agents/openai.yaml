@@ -1,0 +1,4 @@
+interface:
+  display_name: "Testing"
+  short_description: "Set a very high bar for automated tests"
+  default_prompt: "Use $testing to decide whether this change truly warrants any automated tests."

@@ -1,7 +1,6 @@
+import { ConversationId } from "@effect-agent/core";
 import { expect, describe, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
-
-import { ConversationId } from "@effect-agent/core";
 
 import {
   AppendConflict,

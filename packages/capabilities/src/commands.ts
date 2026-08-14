@@ -1,5 +1,5 @@
-import { Effect, Option, Queue, Schema } from "effect";
 import { ConversationId, RunId } from "@effect-agent/core";
+import { Effect, Option, Queue, Schema } from "effect";
 
 import { ConversationText } from "./conversation.ts";
 

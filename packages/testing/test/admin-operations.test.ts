@@ -1,14 +1,4 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { TestClock } from "effect/testing";
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
-
 import {
   ApprovalDecisionCommand,
   CanonicalRecordEnvelope,
@@ -61,6 +51,15 @@ import {
   type RecoveryExplanation,
   type RecoveryReport,
 } from "@effect-agent/session";
+import {
+  MemoryConversationStoreLive,
+  MemorySubmissionLedgerLive,
+} from "@effect-agent/storage-memory";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-admin-operations");

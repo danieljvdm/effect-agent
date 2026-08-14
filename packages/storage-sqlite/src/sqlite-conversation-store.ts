@@ -1,5 +1,3 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   AppendConflict,
   AppendResult,
@@ -29,6 +27,8 @@ import {
   ObservationOffset,
   SaveCheckpointRequest,
 } from "@effect-agent/session";
+import { NodeCrypto } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
 import {
   Clock,
   Context,
@@ -42,6 +42,7 @@ import {
   Stream,
 } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
+
 import {
   SqliteAppendConflict,
   SqliteCheckpointConflict,

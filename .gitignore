@@ -9,3 +9,5 @@ docs/.vitepress/dist
 .env
 .env.*
 !.env.example
+.dev-kit
+.repos

@@ -1,6 +1,6 @@
+import { ConversationId } from "@effect-agent/core";
 import { Context, Crypto, Effect, Encoding, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
-import { ConversationId } from "@effect-agent/core";
 
 import { ConversationMessage, ConversationSnapshot, ConversationText } from "./conversation.ts";
 

@@ -1,5 +1,3 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   AbortCommand,
   AbortIntent,
@@ -75,15 +73,12 @@ import {
   type ChildSettledOutcome,
   type SuspensionOutcome,
 } from "@effect-agent/session";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Clock, Context, Crypto, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import type { SqlError } from "effect/unstable/sql/SqlError";
-import {
-  DoLedgerError,
-  DoStorageCorruptionError,
-  DoStorageError,
-  type DoStorageFailpointLocation,
-} from "./errors.ts";
+
 import {
   storageConfigLayer,
   storageFailpointLayer,
@@ -93,6 +88,12 @@ import {
 import { decodeRows, initializeDoJournal } from "./do-journal.ts";
 import { DoStorageConfig } from "./do-storage-config.ts";
 import { DoStorageFailpoint } from "./do-storage-failpoint.ts";
+import {
+  DoLedgerError,
+  DoStorageCorruptionError,
+  DoStorageError,
+  type DoStorageFailpointLocation,
+} from "./errors.ts";
 
 type SubmissionId = SubmissionSnapshot["submissionId"];
 

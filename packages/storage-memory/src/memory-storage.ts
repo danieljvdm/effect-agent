@@ -1,5 +1,4 @@
-import { Crypto, Effect, Encoding, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
-
+import { ConversationId } from "@effect-agent/core";
 import {
   AppendConflict,
   AppendResult,
@@ -29,7 +28,7 @@ import {
   type BatchId,
   type Digest,
 } from "@effect-agent/session";
-import { ConversationId } from "@effect-agent/core";
+import { Crypto, Effect, Encoding, Layer, Option, PubSub, Ref, Schema, Stream } from "effect";
 
 const MAX_CONVERSATIONS = 256;
 const MAX_RECORDS_PER_CONVERSATION = 65_536;

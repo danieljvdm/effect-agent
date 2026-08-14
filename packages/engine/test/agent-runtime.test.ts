@@ -1,20 +1,3 @@
-import { expect, layer } from "@effect/vitest";
-
-import {
-  Cause,
-  Context,
-  DateTime,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { TestClock } from "effect/testing";
 import {
   Agent,
   AgentApprovalDenied,
@@ -31,6 +14,22 @@ import {
   TurnId,
   type RunEvent,
 } from "@effect-agent/core";
+import { expect, layer } from "@effect/vitest";
+import {
+  Cause,
+  Context,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
 import {
   AiError,
   LanguageModel,

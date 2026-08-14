@@ -1,5 +1,3 @@
-import { describe, expect, it } from "@effect/vitest";
-import { DateTime, Schema } from "effect";
 import {
   AgentId,
   AttemptId,
@@ -8,6 +6,8 @@ import {
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core";
+import { describe, expect, it } from "@effect/vitest";
+import { DateTime, Schema } from "effect";
 
 import {
   AbortIntent,

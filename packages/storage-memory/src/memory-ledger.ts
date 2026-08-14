@@ -7,8 +7,6 @@ import {
   type ConversationId,
   type SettlementId,
 } from "@effect-agent/core";
-import { Clock, DateTime, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
-
 import {
   AbortCommand,
   AdmissionAdmitted,
@@ -88,6 +86,7 @@ import {
   type SuspensionOutcome,
   type SuspensionReason,
 } from "@effect-agent/session";
+import { Clock, DateTime, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 const MAX_SUBMISSIONS = 65_536;
 

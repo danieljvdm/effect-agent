@@ -1,5 +1,3 @@
-import { BrowserCrypto } from "@effect/platform-browser";
-import { SqliteClient } from "@effect/sql-sqlite-do";
 import {
   CertificationReport,
   conversationStoreConformanceCases,
@@ -11,6 +9,8 @@ import {
   certifyDurableAdapters,
   tier2NeverFiredLocations,
 } from "@effect-agent/testing";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

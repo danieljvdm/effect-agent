@@ -1,27 +1,3 @@
-import { describe, expect, it, layer } from "@effect/vitest";
-
-import {
-  Cause,
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { TestClock } from "effect/testing";
-import {
-  type AiError,
-  LanguageModel,
-  Model,
-  type Response,
-  Tool,
-  Toolkit,
-} from "effect/unstable/ai";
 import {
   Agent,
   type AgentOutputError,
@@ -51,6 +27,29 @@ import {
   SubagentDurabilityError,
   ToolCallWaiting,
 } from "@effect-agent/engine";
+import { describe, expect, it, layer } from "@effect/vitest";
+import {
+  Cause,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
+import {
+  type AiError,
+  LanguageModel,
+  Model,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import {
   delegationAllocationFromPolicy,

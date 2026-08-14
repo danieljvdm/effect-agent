@@ -1,13 +1,4 @@
-import { NodeCrypto } from "@effect/platform-node";
-import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
-
 import {
   ApprovalDecisionCommand,
   DefinitionDigests,
@@ -32,6 +23,14 @@ import {
   type DurableSubmitOptions,
   type OperationAuthorizerService,
 } from "@effect-agent/session";
+import {
+  MemoryConversationStoreLive,
+  MemorySubmissionLedgerLive,
+} from "@effect-agent/storage-memory";
+import { NodeCrypto } from "@effect/platform-node";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 // ---------------------------------------------------------------------------
 // Red-team suite: IDOR SWEEP OVER THE ADMIN SURFACE (P7 WP5, plan §4;

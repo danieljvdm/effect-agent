@@ -1,5 +1,3 @@
-import { runDurableObjectAlarm } from "cloudflare:test";
-
 import {
   AbortCommand,
   ChildSettledNotification,
@@ -11,6 +9,7 @@ import {
   decodePortResponse,
   encodePortRequest,
 } from "@effect-agent/storage-cloudflare";
+import { runDurableObjectAlarm } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 

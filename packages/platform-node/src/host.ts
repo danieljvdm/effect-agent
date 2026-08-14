@@ -1,3 +1,4 @@
+import type { ConversationId, SubmissionId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
@@ -28,7 +29,6 @@ import {
   type RetryCommand,
   type Settlement,
 } from "@effect-agent/session";
-import type { ConversationId, SubmissionId } from "@effect-agent/core";
 import { Context, Effect, Layer, Ref, Schema, Stream } from "effect";
 
 import {

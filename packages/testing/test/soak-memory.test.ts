@@ -1,15 +1,7 @@
 import * as v8 from "node:v8";
 import * as vm from "node:vm";
 
-import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
-import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
-import {
-  MemoryConversationStoreLive,
-  MemorySubmissionLedgerLive,
-} from "@effect-agent/storage-memory";
 import {
   DeploymentId,
   Digest,
@@ -26,6 +18,14 @@ import {
   WakeScheduler,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
+import {
+  MemoryConversationStoreLive,
+  MemorySubmissionLedgerLive,
+} from "@effect-agent/storage-memory";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
 
 /**
  * P7 WP4 pure-memory soak (plan §5): 5,000 Submissions across 500 lanes under TestClock,

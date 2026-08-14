@@ -1,27 +1,4 @@
 import "@tanstack/react-start/server-only";
-
-import { OpenAiClient } from "@effect/ai-openai";
-import { NodeCrypto } from "@effect/platform-node";
-import {
-  Cause,
-  Clock,
-  Context,
-  Crypto,
-  DateTime,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Layer,
-  Queue,
-  Ref,
-  Schema,
-  Semaphore,
-  Stream,
-} from "effect";
-import { Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
-import * as McpSchema from "effect/unstable/ai/McpSchema";
-
 import {
   ApprovalApproved,
   ApprovalAdapterError,
@@ -94,7 +71,30 @@ import {
   phase1HappyPathTurns,
   phase1Trip,
 } from "@effect-agent/testing";
+import { OpenAiClient } from "@effect/ai-openai";
+import { NodeCrypto } from "@effect/platform-node";
+import {
+  Cause,
+  Clock,
+  Context,
+  Crypto,
+  DateTime,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Queue,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
+import { Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
+import * as McpSchema from "effect/unstable/ai/McpSchema";
+
 import { toDemoRunFailure } from "./error-details";
+import { makeRealTravelPlannerAgent, RealTravelHoldToolkit } from "./openai-profile";
 import {
   DemoApprovalPending,
   DemoApprovalSettled,
@@ -119,7 +119,6 @@ import {
   type StartLiveTravelChatRequest,
   type StartOperationalRunRequest,
 } from "./operational-contracts";
-import { makeRealTravelPlannerAgent, RealTravelHoldToolkit } from "./openai-profile";
 
 const guidedSteering = "Change the departure date to 2026-09-21.";
 const guidedFollowUp = "Prefer a quiet room away from the lift.";

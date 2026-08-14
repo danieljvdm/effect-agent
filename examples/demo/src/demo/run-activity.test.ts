@@ -1,8 +1,7 @@
+import { RunEvent } from "@effect-agent/core";
+import { Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { Schema } from "effect";
-
-import { RunEvent } from "@effect-agent/core";
 import { projectRunActivity } from "./run-activity";
 
 const event = (input: typeof RunEvent.Encoded): RunEvent => Schema.decodeSync(RunEvent)(input);

@@ -1,6 +1,3 @@
-import { Effect, Layer, Option, Schema } from "effect";
-import { Tool, Toolkit } from "effect/unstable/ai";
-
 import { Agent, AgentPolicy, type ConversationId } from "@effect-agent/core";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
 import {
@@ -19,6 +16,8 @@ import {
   type DurableSubmitOptions,
   type IdempotencyKey,
 } from "@effect-agent/session";
+import { Effect, Layer, Option, Schema } from "effect";
+import { Tool, Toolkit } from "effect/unstable/ai";
 
 import {
   ActivityCatalog,

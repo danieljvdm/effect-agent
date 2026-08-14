@@ -1,5 +1,3 @@
-import { runInDurableObject } from "cloudflare:test";
-import { BrowserCrypto } from "@effect/platform-browser";
 import {
   AbortCommand,
   AdmissionConflict,
@@ -43,6 +41,8 @@ import {
   type Claim,
   type PersistedJson,
 } from "@effect-agent/session";
+import { BrowserCrypto } from "@effect/platform-browser";
+import { runInDurableObject } from "cloudflare:test";
 import { Crypto, Effect, Layer, Option, Stream } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -55,6 +55,7 @@ import {
   routedConversationStoreLayer,
   routedSubmissionLedgerLayer,
 } from "../src/index.ts";
+import { batch, inputRecord } from "./canonical-fixtures.ts";
 import {
   admission,
   conversation,
@@ -68,7 +69,6 @@ import {
   toolCall,
   withConversationStorage,
 } from "./harness.ts";
-import { batch, inputRecord } from "./canonical-fixtures.ts";
 
 const submissionId = (value: string) => id(MarkReadyRequest.fields.submissionId, value);
 const ownershipToken = (value: string) => id(RenewOwnershipRequest.fields.ownershipToken, value);

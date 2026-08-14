@@ -1,23 +1,3 @@
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { SqliteClient } from "@effect/sql-sqlite-node";
-import { describe, expect, it } from "@effect/vitest";
-import {
-  Cause,
-  Crypto,
-  DateTime,
-  Effect,
-  Exit,
-  FileSystem,
-  Layer,
-  Option,
-  PlatformError,
-  Ref,
-  Schema,
-  Stream,
-} from "effect";
-import { TestClock } from "effect/testing";
-import * as SqlClientService from "effect/unstable/sql/SqlClient";
-
 import {
   AbortCommand,
   AdmissionRequest,
@@ -83,6 +63,26 @@ import {
   type PersistedJson,
   type SettlementOutcome,
 } from "@effect-agent/session";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { SqliteClient } from "@effect/sql-sqlite-node";
+import { describe, expect, it } from "@effect/vitest";
+import {
+  Cause,
+  Crypto,
+  DateTime,
+  Effect,
+  Exit,
+  FileSystem,
+  Layer,
+  Option,
+  PlatformError,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
+import { TestClock } from "effect/testing";
+import * as SqlClientService from "effect/unstable/sql/SqlClient";
+
 import {
   conversationStoreLayer,
   ledgerLayer,

@@ -1,3 +1,5 @@
+import { recommendedOxfmtConfig } from "@danieljvdm/dev-kit/oxfmt";
+import { recommendedOxlintConfig } from "@danieljvdm/dev-kit/oxlint";
 import { defineConfig } from "vite-plus";
 
 const generatedPaths = [
@@ -12,9 +14,11 @@ export default defineConfig({
     "*": "vp fmt --write",
   },
   fmt: {
+    ...recommendedOxfmtConfig,
     ignorePatterns: generatedPaths,
   },
   lint: {
+    extends: [recommendedOxlintConfig],
     ignorePatterns: generatedPaths,
     options: {
       typeAware: true,
@@ -22,6 +26,17 @@ export default defineConfig({
     },
     jsPlugins: [{ name: "vite-plus", specifier: "vite-plus/oxlint-plugin" }],
     rules: {
+      "import/no-duplicates": "warn",
+      "react-hooks/exhaustive-deps": "warn",
+      "stylistic/padding-line-between-statements": "warn",
+      "typescript/consistent-type-imports": "warn",
+      "typescript/no-non-null-assertion": "warn",
+      "typescript/switch-exhaustiveness-check": "warn",
+      "vitest/expect-expect": "warn",
+      "vitest/no-conditional-expect": "warn",
+      "vitest/require-to-throw-message": "warn",
+      "vitest/valid-expect": "warn",
+      "vitest/valid-title": "warn",
       "vite-plus/prefer-vite-plus-imports": "error",
     },
   },

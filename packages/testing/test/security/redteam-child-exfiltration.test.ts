@@ -1,7 +1,3 @@
-import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
-
 import {
   Redactor,
   StructuralRedactorLive,
@@ -18,6 +14,9 @@ import {
   runIdForSubmission,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
+import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
 
 import {
   docsCoordinatorConfidentialMarker,

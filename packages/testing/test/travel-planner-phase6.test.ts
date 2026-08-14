@@ -1,7 +1,3 @@
-import { NodeFileSystem } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Schema, Stream } from "effect";
-
 import { ConversationId } from "@effect-agent/core";
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "@effect-agent/platform-node";
 import {
@@ -10,6 +6,9 @@ import {
   DurableAgentRuntime,
   IdempotencyKey,
 } from "@effect-agent/session";
+import { NodeFileSystem } from "@effect/platform-node";
+import { describe, expect, it } from "@effect/vitest";
+import { Effect, FileSystem, Layer, PlatformError, Schema, Stream } from "effect";
 
 import {
   TravelPlannerCloudflareProfile,

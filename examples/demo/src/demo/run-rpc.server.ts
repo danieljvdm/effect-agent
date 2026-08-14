@@ -1,5 +1,5 @@
 import "@tanstack/react-start/server-only";
-
+import { AgentRuntime, withTerminalDefectEvent } from "@effect-agent/engine";
 import { OpenAiClient } from "@effect/ai-openai";
 import { Config, Effect, Layer, Stream } from "effect";
 import { Prompt } from "effect/unstable/ai";
@@ -8,7 +8,6 @@ import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as RpcSerialization from "effect/unstable/rpc/RpcSerialization";
 import * as RpcServer from "effect/unstable/rpc/RpcServer";
 
-import { AgentRuntime, withTerminalDefectEvent } from "@effect-agent/engine";
 import { type DemoChatHistoryMessage } from "./contracts";
 import { toDemoRunFailure } from "./error-details";
 import {
@@ -16,8 +15,8 @@ import {
   LiveChatRuntimeLayer,
   makeFixtureChatAgent,
 } from "./general-chat";
-import { DemoInteractiveRuntime, DemoInteractiveRuntimeLive } from "./operational-runtime.server";
 import { OpenAiChatAgent } from "./openai-profile";
+import { DemoInteractiveRuntime, DemoInteractiveRuntimeLive } from "./operational-runtime.server";
 import { DemoRunRpcs } from "./run-rpc";
 
 const OpenAiClientLayer = OpenAiClient.layerConfig({

@@ -1,7 +1,6 @@
-import { describe, expect, it } from "vite-plus/test";
-
 import { Context, Effect, Layer, Schema, Stream } from "effect";
 import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { describe, expect, it } from "vite-plus/test";
 
 import { Agent, AgentInputError, AgentOutputError, AgentPolicy } from "../src/index.ts";
 

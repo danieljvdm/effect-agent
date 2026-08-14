@@ -1,6 +1,5 @@
-import type { DynamicToolUIPart } from "ai";
-
 import type { RunEvent } from "@effect-agent/core";
+import type { DynamicToolUIPart } from "ai";
 
 export interface ToolTrace {
   readonly toolCallId: string;

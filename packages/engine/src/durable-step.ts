@@ -1,8 +1,7 @@
+import { ToolCallId } from "@effect-agent/core";
 import { Context, Schema } from "effect";
 import type { Effect, Option } from "effect";
 import type { Tool } from "effect/unstable/ai";
-
-import { ToolCallId } from "@effect-agent/core";
 
 /**
  * Declared external execution class of one Tool, used by the durable runtime

@@ -1,6 +1,6 @@
+import { ConversationId, RunId } from "@effect-agent/core";
 import { Clock, Context, DateTime, Effect, Encoding, Layer, Ref, Schema } from "effect";
 import { Prompt } from "effect/unstable/ai";
-import { ConversationId, RunId } from "@effect-agent/core";
 
 /** Bound applied to one text projection before it can enter a model context. */
 export const ConversationText = Schema.String.check(Schema.isMaxLength(64 * 1024));

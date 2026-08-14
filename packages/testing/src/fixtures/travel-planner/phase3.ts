@@ -1,5 +1,3 @@
-import { Effect, Schema } from "effect";
-
 import { AgentId, ConversationId, RunId, SubmissionId } from "@effect-agent/core";
 import {
   BatchId,
@@ -13,6 +11,7 @@ import {
   RecordEnvelope,
   RecordId,
 } from "@effect-agent/session";
+import { Effect, Schema } from "effect";
 
 import { TravelPlan, TripRequest } from "./definition.ts";
 import { expectedTravelPlan, phase1Trip } from "./scenarios.ts";

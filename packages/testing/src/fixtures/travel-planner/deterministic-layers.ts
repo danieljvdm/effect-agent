@@ -1,5 +1,6 @@
-import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
 import { ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
+import { Context, Deferred, Effect, Layer, Option, Ref, Schema } from "effect";
+
 import {
   ActivityCatalog,
   ActivitySearchResult,
