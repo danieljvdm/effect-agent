@@ -43,7 +43,7 @@ import {
  * Admission is not open on this host: it is shutting down (deployment §6 step 1, DEPLOY-005).
  * Accepted work is unaffected — only NEW admissions are refused.
  */
-export class AdmissionClosed extends Schema.TaggedErrorClass<AdmissionClosed>()("AdmissionClosed", {
+export class AdmissionClosed extends Schema.TaggedError<AdmissionClosed>()("AdmissionClosed", {
   message: Schema.String,
 }) {}
 

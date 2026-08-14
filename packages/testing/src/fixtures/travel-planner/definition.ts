@@ -84,19 +84,19 @@ export class TravelPlan extends Schema.Class<TravelPlan>("TravelPlan")({
 }) {}
 
 const unavailableFields = { query: Schema.String, message: Schema.String };
-export class FlightUnavailable extends Schema.TaggedErrorClass<FlightUnavailable>()(
+export class FlightUnavailable extends Schema.TaggedError<FlightUnavailable>()(
   "FlightUnavailable",
   unavailableFields,
 ) {}
-export class LodgingUnavailable extends Schema.TaggedErrorClass<LodgingUnavailable>()(
+export class LodgingUnavailable extends Schema.TaggedError<LodgingUnavailable>()(
   "LodgingUnavailable",
   unavailableFields,
 ) {}
-export class ActivityUnavailable extends Schema.TaggedErrorClass<ActivityUnavailable>()(
+export class ActivityUnavailable extends Schema.TaggedError<ActivityUnavailable>()(
   "ActivityUnavailable",
   unavailableFields,
 ) {}
-export class GuidanceFailure extends Schema.TaggedErrorClass<GuidanceFailure>()("GuidanceFailure", {
+export class GuidanceFailure extends Schema.TaggedError<GuidanceFailure>()("GuidanceFailure", {
   message: Schema.String,
 }) {}
 

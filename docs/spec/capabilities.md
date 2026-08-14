@@ -194,6 +194,7 @@ An MCP client adapter:
 - connects within a Scope;
 - discovers server capabilities;
 - maps MCP tools to Effect AI dynamic Tools;
+- binds advertised input schemas and object-shaped output schemas to the native Effect AI Toolkit;
 - maps content and structured data without losing provider detail;
 - validates inputs through Effect AI Tool Schema boundaries;
 - enforces timeouts, size limits, and authorization;

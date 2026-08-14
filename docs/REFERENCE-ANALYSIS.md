@@ -12,7 +12,7 @@ not a promise that the upstream projects retain the same APIs or internals.
 | Project                                       | Commit                                     | Observed package/version                   |
 | --------------------------------------------- | ------------------------------------------ | ------------------------------------------ |
 | [Flue](https://github.com/withastro/flue)     | `b814b82b2ce45dc941c77bb010140070e1bd48d5` | `@flue/runtime@2.0.0-nightly.202607240825` |
-| [Effect](https://github.com/Effect-TS/effect) | `de2a9a69099993087e57c64df58537c765ac0224` | `effect@4.0.0-beta.102`                    |
+| [Effect](https://github.com/Effect-TS/effect) | `3c495ae7c96d43bfc3b8020250562a194c2c895e` | `effect@4.0.0-beta.107`                    |
 | [Pi](https://github.com/earendil-works/pi)    | `027a5847901b5dde30270abaa1041046cd2b4b55` | core packages `0.82.1`                     |
 
 The inspected snapshots live in shallow Git submodules at `repos/flue`, `repos/effect`, and

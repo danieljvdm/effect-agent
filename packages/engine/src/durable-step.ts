@@ -74,22 +74,19 @@ export interface RunStepHook<Error = never, Requirements = never> {
  * replay-with-different-content conflict: a committed result that no longer
  * decodes through the declared output Schema is never silently accepted.
  */
-export class DurableStepError extends Schema.TaggedErrorClass<DurableStepError>()(
-  "DurableStepError",
-  {
-    stepName: Schema.String,
-    reason: Schema.Literals([
-      "duplicate-step-name",
-      "lookup-failed",
-      "recorded-result-invalid",
-      "output-encoding-failed",
-      "commit-failed",
-      "no-active-tool-call",
-    ]),
-    message: Schema.String,
-    toolCallId: Schema.optionalKey(ToolCallId),
-  },
-) {}
+export class DurableStepError extends Schema.TaggedError<DurableStepError>()("DurableStepError", {
+  stepName: Schema.String,
+  reason: Schema.Literals([
+    "duplicate-step-name",
+    "lookup-failed",
+    "recorded-result-invalid",
+    "output-encoding-failed",
+    "commit-failed",
+    "no-active-tool-call",
+  ]),
+  message: Schema.String,
+  toolCallId: Schema.optionalKey(ToolCallId),
+}) {}
 
 /**
  * Service value provided locally by the engine to each Tool Call's handler.

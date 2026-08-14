@@ -44,7 +44,7 @@ export class UsageBudgetNodeConfig extends Schema.Class<UsageBudgetNodeConfig>(
 }) {}
 
 /** Typed finite-budget rejection. A rejected increment is not committed at any hierarchy level. */
-export class BudgetExceeded extends Schema.TaggedErrorClass<BudgetExceeded>()("BudgetExceeded", {
+export class BudgetExceeded extends Schema.TaggedError<BudgetExceeded>()("BudgetExceeded", {
   scopeLevel: BudgetLevel,
   scopeId: Schema.NonEmptyString,
   limit: Schema.Literals(["input-tokens", "output-tokens", "tool-calls", "cost", "duration"]),
@@ -77,7 +77,7 @@ export interface UsageBudgetNode {
 }
 
 /** A child budget must move strictly inward through the declared hierarchy. */
-export class InvalidBudgetHierarchy extends Schema.TaggedErrorClass<InvalidBudgetHierarchy>()(
+export class InvalidBudgetHierarchy extends Schema.TaggedError<InvalidBudgetHierarchy>()(
   "InvalidBudgetHierarchy",
   {
     parentLevel: BudgetLevel,
@@ -86,7 +86,7 @@ export class InvalidBudgetHierarchy extends Schema.TaggedErrorClass<InvalidBudge
 ) {}
 
 /** A child `level:id` is already registered with different limits; neither set may win silently. */
-export class BudgetNodeConflict extends Schema.TaggedErrorClass<BudgetNodeConflict>()(
+export class BudgetNodeConflict extends Schema.TaggedError<BudgetNodeConflict>()(
   "BudgetNodeConflict",
   {
     scopeLevel: BudgetLevel,

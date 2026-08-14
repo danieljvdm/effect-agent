@@ -1486,6 +1486,7 @@ const promptFromTurnParts = (trace: TurnTrace): Prompt.Prompt => {
             name: part.name,
             isFailure: part.isFailure,
             result: part.encodedResult,
+            providerExecuted: true,
           }),
         ]
       : [],
@@ -2166,6 +2167,7 @@ const toolBatchContinuation = <
             name: result.name,
             result: result.encodedResult,
             isFailure: result.isFailure,
+            providerExecuted: false,
           }),
         ),
       });
@@ -2952,7 +2954,7 @@ const makeDurableStepService = <HookError, HookRequirements>(
  * interruption — and terminates the Run with `AgentChildPending` after every
  * non-waiting sibling handler settled.
  */
-export class ToolCallWaiting extends Schema.TaggedErrorClass<ToolCallWaiting>()("ToolCallWaiting", {
+export class ToolCallWaiting extends Schema.TaggedError<ToolCallWaiting>()("ToolCallWaiting", {
   toolCallId: ToolCallId,
   childConversationId: ConversationId,
   childSubmissionId: SubmissionId,
@@ -2969,7 +2971,7 @@ export class ToolCallWaiting extends Schema.TaggedErrorClass<ToolCallWaiting>()(
  * coordinator catches it and ends the Attempt's ownership period without
  * settling. `children` is listed in declaration order, deterministically.
  */
-export class AgentChildPending extends Schema.TaggedErrorClass<AgentChildPending>()(
+export class AgentChildPending extends Schema.TaggedError<AgentChildPending>()(
   "AgentChildPending",
   {
     children: Schema.NonEmptyArray(
@@ -2991,7 +2993,7 @@ export class AgentChildPending extends Schema.TaggedErrorClass<AgentChildPending
  * `no-active-tool-batch` is the fail-closed Run-level default — establishment
  * outside an active Tool batch never silently degrades to ephemeral spawning.
  */
-export class SubagentDurabilityError extends Schema.TaggedErrorClass<SubagentDurabilityError>()(
+export class SubagentDurabilityError extends Schema.TaggedError<SubagentDurabilityError>()(
   "SubagentDurabilityError",
   {
     operation: Schema.Literals(["establish", "join", "waiting"]),

@@ -39,7 +39,7 @@ const WorkerConcurrency = Schema.Int.check(
 );
 
 /** The supplied Node durable runtime configuration failed schema validation (DEPLOY-003). */
-export class NodePlatformConfigError extends Schema.TaggedErrorClass<NodePlatformConfigError>()(
+export class NodePlatformConfigError extends Schema.TaggedError<NodePlatformConfigError>()(
   "NodePlatformConfigError",
   {
     message: Schema.String,

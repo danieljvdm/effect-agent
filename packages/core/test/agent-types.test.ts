@@ -25,15 +25,13 @@ class AvailabilityCatalog extends Context.Service<
   { readonly search: Effect.Effect<ReadonlyArray<string>> }
 >()("@effect-agent/core/test/AvailabilityCatalog") {}
 
-class InstructionFailure extends Schema.TaggedErrorClass<InstructionFailure>()(
-  "InstructionFailure",
-  { message: Schema.String },
-) {}
+class InstructionFailure extends Schema.TaggedError<InstructionFailure>()("InstructionFailure", {
+  message: Schema.String,
+}) {}
 
-class AvailabilityFailure extends Schema.TaggedErrorClass<AvailabilityFailure>()(
-  "AvailabilityFailure",
-  { message: Schema.String },
-) {}
+class AvailabilityFailure extends Schema.TaggedError<AvailabilityFailure>()("AvailabilityFailure", {
+  message: Schema.String,
+}) {}
 
 const SearchAvailability = Tool.make("search_availability", {
   parameters: Schema.Struct({ destination: Schema.String }),

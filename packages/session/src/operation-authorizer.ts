@@ -36,7 +36,7 @@ export class OperationAuthorizationRequest extends Schema.Class<OperationAuthori
 }) {}
 
 /** A typed, fail-closed authorization denial (never a defect, never silent). */
-export class OperationDenied extends Schema.TaggedErrorClass<OperationDenied>()("OperationDenied", {
+export class OperationDenied extends Schema.TaggedError<OperationDenied>()("OperationDenied", {
   operation: AuthorizedOperation,
   reason: Schema.String.check(Schema.isMaxLength(4_096)),
   conversationId: Schema.optionalKey(ConversationId),

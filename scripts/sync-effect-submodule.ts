@@ -15,7 +15,7 @@ class RootPackageJson extends S.Class<RootPackageJson>("RootPackageJson")({
   workspaces: S.optionalKey(S.Union([S.Array(S.String), WorkspaceCatalog])),
 }) {}
 
-class CommandError extends S.TaggedErrorClass<CommandError>()("CommandError", {
+class CommandError extends S.TaggedError<CommandError>()("CommandError", {
   command: S.String,
   exitCode: S.Int,
   output: S.String,
@@ -27,7 +27,7 @@ class CommandError extends S.TaggedErrorClass<CommandError>()("CommandError", {
   }
 }
 
-class CatalogMissingPackageError extends S.TaggedErrorClass<CatalogMissingPackageError>()(
+class CatalogMissingPackageError extends S.TaggedError<CatalogMissingPackageError>()(
   "CatalogMissingPackageError",
   {
     packageName: S.String,
@@ -38,13 +38,13 @@ class CatalogMissingPackageError extends S.TaggedErrorClass<CatalogMissingPackag
   }
 }
 
-class PackageJsonError extends S.TaggedErrorClass<PackageJsonError>()("PackageJsonError", {
+class PackageJsonError extends S.TaggedError<PackageJsonError>()("PackageJsonError", {
   cause: S.Defect(),
   path: S.String,
   message: S.String,
 }) {}
 
-class SubmoduleSentinelMissingError extends S.TaggedErrorClass<SubmoduleSentinelMissingError>()(
+class SubmoduleSentinelMissingError extends S.TaggedError<SubmoduleSentinelMissingError>()(
   "SubmoduleSentinelMissingError",
   {
     sentinel: S.String,

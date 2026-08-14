@@ -83,25 +83,25 @@ export class PreparedModelContext extends Schema.Class<PreparedModelContext>(
 }) {}
 
 /** Transform failure is named and bounded so model context preparation has a closed error channel. */
-export class ContextTransformError extends Schema.TaggedErrorClass<ContextTransformError>()(
+export class ContextTransformError extends Schema.TaggedError<ContextTransformError>()(
   "ContextTransformError",
   { transformId: Schema.NonEmptyString, message: Schema.String },
 ) {}
 
 /** Source encoding or hashing failed before an artifact could be trusted. */
-export class CompactionDigestError extends Schema.TaggedErrorClass<CompactionDigestError>()(
+export class CompactionDigestError extends Schema.TaggedError<CompactionDigestError>()(
   "CompactionDigestError",
   { message: Schema.String },
 ) {}
 
 /** Compaction artifacts that do not bind to the exact source range are rejected before use. */
-export class InvalidCompactionArtifact extends Schema.TaggedErrorClass<InvalidCompactionArtifact>()(
+export class InvalidCompactionArtifact extends Schema.TaggedError<InvalidCompactionArtifact>()(
   "InvalidCompactionArtifact",
   { message: Schema.String },
 ) {}
 
 /** A transform or compaction exceeded the finite model-view collection bounds. */
-export class ContextLimitExceeded extends Schema.TaggedErrorClass<ContextLimitExceeded>()(
+export class ContextLimitExceeded extends Schema.TaggedError<ContextLimitExceeded>()(
   "ContextLimitExceeded",
   {
     limit: Schema.Literals(["messages", "message-bytes", "compactions"]),

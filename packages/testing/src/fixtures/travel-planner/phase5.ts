@@ -405,7 +405,7 @@ export const TravelPlannerPhase5 = Agent.define("travel-planner-phase-5", {
   metadata: { deploymentClass: "DN", phase: "P5" },
 });
 
-export class TravelPlannerBookingEvidenceError extends Schema.TaggedErrorClass<TravelPlannerBookingEvidenceError>()(
+export class TravelPlannerBookingEvidenceError extends Schema.TaggedError<TravelPlannerBookingEvidenceError>()(
   "TravelPlannerBookingEvidenceError",
   { message: Schema.String },
 ) {}

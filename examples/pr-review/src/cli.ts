@@ -30,7 +30,7 @@ import { executeReview, fanOutReviewBudgetLimits, type ReviewRunOutcome } from "
 // ---------------------------------------------------------------------------
 
 /** The pull request could not be resolved from flags or the environment. */
-class ReviewCliError extends Schema.TaggedErrorClass<ReviewCliError>()("ReviewCliError", {
+class ReviewCliError extends Schema.TaggedError<ReviewCliError>()("ReviewCliError", {
   reason: Schema.String,
 }) {
   override get message() {

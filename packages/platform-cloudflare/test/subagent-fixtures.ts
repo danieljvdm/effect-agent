@@ -254,7 +254,7 @@ export const researcherDefinition = Agent.define("cf-s2-researcher", {
   }),
 });
 
-export class CfDelegationFailed extends Schema.TaggedErrorClass<CfDelegationFailed>()(
+export class CfDelegationFailed extends Schema.TaggedError<CfDelegationFailed>()(
   "CfDelegationFailed",
   { childErrorTag: Schema.String },
 ) {}

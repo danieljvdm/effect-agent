@@ -37,13 +37,13 @@ import type { RedactionError, Redactor } from "./redaction.ts";
 import type { RunSchedulingOverride } from "./scheduling.ts";
 
 /** Capability policy could not be normalized into the bounded approval request Schema. */
-export class ApprovalAdapterError extends Schema.TaggedErrorClass<ApprovalAdapterError>()(
+export class ApprovalAdapterError extends Schema.TaggedError<ApprovalAdapterError>()(
   "ApprovalAdapterError",
   { message: Schema.String },
 ) {}
 
 /** Engine usage data did not satisfy the non-negative budget delta Schema. */
-export class BudgetAdapterError extends Schema.TaggedErrorClass<BudgetAdapterError>()(
+export class BudgetAdapterError extends Schema.TaggedError<BudgetAdapterError>()(
   "BudgetAdapterError",
   { message: Schema.String },
 ) {}

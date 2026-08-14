@@ -546,7 +546,7 @@ export const researcherDefinition = Agent.define("crash-researcher", {
   }),
 });
 
-export class CrashDelegationFailed extends Schema.TaggedErrorClass<CrashDelegationFailed>()(
+export class CrashDelegationFailed extends Schema.TaggedError<CrashDelegationFailed>()(
   "CrashDelegationFailed",
   { childErrorTag: Schema.String },
 ) {}

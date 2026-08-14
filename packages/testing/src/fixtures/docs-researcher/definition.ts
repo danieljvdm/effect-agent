@@ -34,7 +34,7 @@ export class ResearchDocument extends Schema.Class<ResearchDocument>("ResearchDo
   body: BoundedBody,
 }) {}
 
-export class DocumentUnavailable extends Schema.TaggedErrorClass<DocumentUnavailable>()(
+export class DocumentUnavailable extends Schema.TaggedError<DocumentUnavailable>()(
   "DocumentUnavailable",
   {
     documentId: ResearchDocumentId,
@@ -212,7 +212,7 @@ export class SummaryFinding extends Schema.Class<SummaryFinding>("SummaryFinding
   summary: BoundedSummary,
 }) {}
 
-export class DocumentSummaryFailed extends Schema.TaggedErrorClass<DocumentSummaryFailed>()(
+export class DocumentSummaryFailed extends Schema.TaggedError<DocumentSummaryFailed>()(
   "DocumentSummaryFailed",
   {
     childErrorTag: Schema.NonEmptyString,

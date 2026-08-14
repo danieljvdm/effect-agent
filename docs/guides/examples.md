@@ -38,13 +38,13 @@ const Issue = Schema.Struct({
   labels: Schema.Array(Schema.String),
 });
 
-class IssueNotFound extends Schema.TaggedErrorClass<IssueNotFound>()("IssueNotFound", {
+class IssueNotFound extends Schema.TaggedError<IssueNotFound>()("IssueNotFound", {
   owner: Schema.String,
   repo: Schema.String,
   issueNumber: Schema.Int,
 }) {}
 
-class GitHubFailure extends Schema.TaggedErrorClass<GitHubFailure>()("GitHubFailure", {
+class GitHubFailure extends Schema.TaggedError<GitHubFailure>()("GitHubFailure", {
   operation: Schema.String,
   message: Schema.String,
 }) {}

@@ -39,6 +39,7 @@ import {
   makeOfflineFileReviewerModel,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
+  type OfflineUnitCall,
   type OfflineUnitScript,
   planReviewUnits,
   PullRequestMetadata,
@@ -178,10 +179,11 @@ const unitTwoReport = FileReviewReport.make({
 const runOfflineFanOut = (script: {
   readonly children: ReadonlyArray<OfflineUnitScript>;
   readonly review: CodeReview;
+  readonly unitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
 }) =>
   Effect.gen(function* () {
     const coordinator = yield* makeOfflineFanOutCoordinatorModel({
-      unitCalls: [UNIT_ONE, UNIT_TWO],
+      unitCalls: script.unitCalls ?? [UNIT_ONE, UNIT_TWO],
       review: script.review,
     });
     const children = yield* makeOfflineFileReviewerModel(script.children);
@@ -473,6 +475,51 @@ describe("offline fan-out review run", () => {
       expect(result.outcome.plan.comments.map((comment) => comment.path)).toEqual([
         "src/api/alpha.ts",
       ]);
+    }),
+  );
+
+  it.effect("reports a whole batch of failed units before the repeated-failure stop", () =>
+    Effect.gen(function* () {
+      const failedUnits: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: { _tag: "malformed-output" },
+        },
+        {
+          unitId: "unit-002",
+          diffPath: "src/core/gamma.ts",
+          outcome: { _tag: "malformed-output" },
+        },
+        {
+          unitId: "unit-003",
+          diffPath: "src/core/delta.ts",
+          outcome: { _tag: "malformed-output" },
+        },
+      ];
+      const honestReview = CodeReview.make({
+        summary:
+          "unit-001, unit-002, and unit-003 were unreviewed after AgentOutputError failures.",
+        verdict: "comment",
+        findings: [],
+      });
+
+      const result = yield* runOfflineFanOut({
+        children: failedUnits,
+        review: honestReview,
+        unitCalls: failedUnits.map((unit) => ({
+          unitId: unit.unitId,
+          paths: [unit.diffPath],
+        })),
+      });
+
+      expect(result.outcome.turns).toBe(3);
+      expect(result.coordinatorCalls).toBe(3);
+      expect(result.childCalls).toBe(6);
+      expect(result.outcome.review).toEqual(honestReview);
+      expect(result.published).toHaveLength(1);
+      const finalPrompt = result.coordinatorPrompts[2] ?? "";
+      expect(finalPrompt.match(/FileReviewUnitFailed/g)).toHaveLength(3);
     }),
   );
 

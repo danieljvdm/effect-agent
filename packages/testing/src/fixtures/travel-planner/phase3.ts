@@ -119,7 +119,7 @@ export const phase3TravelPlannerEncodedFixture = Schema.encodeSync(Schema.Array(
   phase3TravelPlannerBatches,
 );
 
-export class TravelPlannerProjectionError extends Schema.TaggedErrorClass<TravelPlannerProjectionError>()(
+export class TravelPlannerProjectionError extends Schema.TaggedError<TravelPlannerProjectionError>()(
   "TravelPlannerProjectionError",
   { message: Schema.String },
 ) {}

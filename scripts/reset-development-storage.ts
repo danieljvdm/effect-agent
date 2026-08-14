@@ -2,13 +2,10 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Path, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 
-class UnsafeStorageTarget extends Schema.TaggedErrorClass<UnsafeStorageTarget>()(
-  "UnsafeStorageTarget",
-  {
-    message: Schema.String,
-    target: Schema.String,
-  },
-) {}
+class UnsafeStorageTarget extends Schema.TaggedError<UnsafeStorageTarget>()("UnsafeStorageTarget", {
+  message: Schema.String,
+  target: Schema.String,
+}) {}
 
 const database = Flag.file("database").pipe(
   Flag.withDescription(

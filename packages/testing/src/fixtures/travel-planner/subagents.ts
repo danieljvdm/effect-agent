@@ -25,7 +25,7 @@ export class DestinationFacts extends Schema.Class<DestinationFacts>("Destinatio
   advisory: Schema.NonEmptyString,
 }) {}
 
-export class DestinationGuideUnavailable extends Schema.TaggedErrorClass<DestinationGuideUnavailable>()(
+export class DestinationGuideUnavailable extends Schema.TaggedError<DestinationGuideUnavailable>()(
   "DestinationGuideUnavailable",
   {
     destination: AirportCode,
@@ -177,7 +177,7 @@ export class DestinationResearchFindings extends Schema.Class<DestinationResearc
   summary: Schema.NonEmptyString,
 }) {}
 
-export class DestinationResearchFailed extends Schema.TaggedErrorClass<DestinationResearchFailed>()(
+export class DestinationResearchFailed extends Schema.TaggedError<DestinationResearchFailed>()(
   "DestinationResearchFailed",
   {
     childErrorTag: Schema.NonEmptyString,

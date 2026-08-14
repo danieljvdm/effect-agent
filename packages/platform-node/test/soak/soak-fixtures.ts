@@ -129,7 +129,7 @@ export const soakChildDefinition = Agent.define("soak-child", {
   }),
 });
 
-export class SoakDelegationFailed extends Schema.TaggedErrorClass<SoakDelegationFailed>()(
+export class SoakDelegationFailed extends Schema.TaggedError<SoakDelegationFailed>()(
   "SoakDelegationFailed",
   { childErrorTag: Schema.String },
 ) {}

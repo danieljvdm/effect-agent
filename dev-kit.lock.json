@@ -5,10 +5,10 @@
   "setup": {
     "effectSource": {
       "packageName": "effect",
-      "packageVersion": "4.0.0-beta.102",
+      "packageVersion": "4.0.0-beta.107",
       "path": "repos/effect",
       "repository": "https://github.com/Effect-TS/effect.git",
-      "tag": "effect@4.0.0-beta.102"
+      "tag": "effect@4.0.0-beta.107"
     },
     "effectTsgo": {
       "effectTsgoVersion": "0.24.3",

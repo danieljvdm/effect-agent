@@ -46,7 +46,7 @@ eventual Run type.
 import { Context, Effect, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-class IssueUnavailable extends Schema.TaggedErrorClass<IssueUnavailable>()("IssueUnavailable", {
+class IssueUnavailable extends Schema.TaggedError<IssueUnavailable>()("IssueUnavailable", {
   message: Schema.String,
 }) {}
 

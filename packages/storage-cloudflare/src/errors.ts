@@ -2,7 +2,7 @@ import { CanonicalSequence, ProducerEpoch } from "@effect-agent/session";
 import { Schema } from "effect";
 
 /** The Durable Object's SQLite storage uses a private-development format this adapter cannot read. */
-export class DoStorageCompatibilityError extends Schema.TaggedErrorClass<DoStorageCompatibilityError>()(
+export class DoStorageCompatibilityError extends Schema.TaggedError<DoStorageCompatibilityError>()(
   "DoStorageCompatibilityError",
   {
     actualVersion: Schema.Int,
@@ -12,7 +12,7 @@ export class DoStorageCompatibilityError extends Schema.TaggedErrorClass<DoStora
 ) {}
 
 /** Stored bytes failed the current Schema and cannot be used as recovery truth. */
-export class DoStorageCorruptionError extends Schema.TaggedErrorClass<DoStorageCorruptionError>()(
+export class DoStorageCorruptionError extends Schema.TaggedError<DoStorageCorruptionError>()(
   "DoStorageCorruptionError",
   {
     message: Schema.String,
@@ -22,7 +22,7 @@ export class DoStorageCorruptionError extends Schema.TaggedErrorClass<DoStorageC
 ) {}
 
 /** Durable Object SQLite infrastructure failed while opening or operating the store. */
-export class DoStorageError extends Schema.TaggedErrorClass<DoStorageError>()("DoStorageError", {
+export class DoStorageError extends Schema.TaggedError<DoStorageError>()("DoStorageError", {
   cause: Schema.optionalKey(Schema.Defect()),
   message: Schema.String,
   operation: Schema.String,
@@ -33,7 +33,7 @@ export class DoStorageError extends Schema.TaggedErrorClass<DoStorageError>()("D
  * at the SubmissionLedger port as the typed `LedgerError` with this error preserved as its
  * cause, so the adapter-level tag is never erased.
  */
-export class DoLedgerError extends Schema.TaggedErrorClass<DoLedgerError>()("DoLedgerError", {
+export class DoLedgerError extends Schema.TaggedError<DoLedgerError>()("DoLedgerError", {
   cause: Schema.optionalKey(Schema.Defect()),
   message: Schema.String,
   operation: Schema.String,
@@ -46,7 +46,7 @@ export class DoLedgerError extends Schema.TaggedErrorClass<DoLedgerError>()("DoL
  * Payloads of this size are the designed overflow case for a future R2-backed AttachmentStore
  * (deployment spec §3.1, deferred until a real attachment requirement exists).
  */
-export class DoValueBoundExceeded extends Schema.TaggedErrorClass<DoValueBoundExceeded>()(
+export class DoValueBoundExceeded extends Schema.TaggedError<DoValueBoundExceeded>()(
   "DoValueBoundExceeded",
   {
     actualBytes: Schema.Int,
@@ -67,29 +67,26 @@ export class DoValueBoundExceeded extends Schema.TaggedErrorClass<DoValueBoundEx
  * A canonical batch retry conflicts with existing append state. Tail conflicts carry the
  * actual committed tail as a diagnostic resume hint.
  */
-export class DoAppendConflict extends Schema.TaggedErrorClass<DoAppendConflict>()(
-  "DoAppendConflict",
-  {
-    message: Schema.String,
-    reason: Schema.Literals(["batch-digest", "record-identity", "tail"]),
-    actualTailSequence: Schema.optionalKey(CanonicalSequence),
-    actualTailDigest: Schema.optionalKey(Schema.String),
-  },
-) {}
+export class DoAppendConflict extends Schema.TaggedError<DoAppendConflict>()("DoAppendConflict", {
+  message: Schema.String,
+  reason: Schema.Literals(["batch-digest", "record-identity", "tail"]),
+  actualTailSequence: Schema.optionalKey(CanonicalSequence),
+  actualTailDigest: Schema.optionalKey(Schema.String),
+}) {}
 
 /**
  * A producer epoch does not match the Conversation's current writer registration. Appends
  * require the exact registered epoch, so both older and newer unregistered epochs are fenced;
  * a newer epoch takes over by materializing first.
  */
-export class DoFenceRejected extends Schema.TaggedErrorClass<DoFenceRejected>()("DoFenceRejected", {
+export class DoFenceRejected extends Schema.TaggedError<DoFenceRejected>()("DoFenceRejected", {
   actualEpoch: ProducerEpoch,
   message: Schema.String,
   producerEpoch: ProducerEpoch,
 }) {}
 
 /** A checkpoint conflicts with a previously stored checkpoint at the same offset. */
-export class DoCheckpointConflict extends Schema.TaggedErrorClass<DoCheckpointConflict>()(
+export class DoCheckpointConflict extends Schema.TaggedError<DoCheckpointConflict>()(
   "DoCheckpointConflict",
   {
     message: Schema.String,
@@ -161,7 +158,7 @@ export const DoStorageFailpointLocation = Schema.Literals([
 export type DoStorageFailpointLocation = typeof DoStorageFailpointLocation.Type;
 
 /** Deterministic test-only fault or pause injected at a Durable Object storage boundary. */
-export class DoStorageFailpointError extends Schema.TaggedErrorClass<DoStorageFailpointError>()(
+export class DoStorageFailpointError extends Schema.TaggedError<DoStorageFailpointError>()(
   "DoStorageFailpointError",
   {
     location: DoStorageFailpointLocation,

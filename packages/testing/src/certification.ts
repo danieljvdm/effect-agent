@@ -334,7 +334,7 @@ const childDefinition = Agent.define("certify-child", {
   }),
 });
 
-class CertifyDelegationFailed extends Schema.TaggedErrorClass<CertifyDelegationFailed>()(
+class CertifyDelegationFailed extends Schema.TaggedError<CertifyDelegationFailed>()(
   "CertifyDelegationFailed",
   { childErrorTag: Schema.String },
 ) {}
