@@ -68,7 +68,9 @@ packages/
   testing/              Scripted model, fixtures, and conformance test kit
 examples/
   demo/             Leaf TanStack Start browser bench
+  pr-review/        Leaf GitHub pull-request reviewer (CLI + composite Action)
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
+  repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.

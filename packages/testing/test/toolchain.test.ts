@@ -33,7 +33,7 @@ const packageNames = [
   "storage-sqlite",
   "testing",
 ] as const;
-const exampleNames = ["demo", "providers", "repo-ops"] as const;
+const exampleNames = ["demo", "pr-review", "providers", "repo-ops"] as const;
 const effectTestPackageNames = [
   "capabilities",
   "engine",
@@ -228,9 +228,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       const demo = yield* readManifest(`${repositoryRoot}/examples/demo/package.json`);
       const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
       const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
+      const prReview = yield* readManifest(`${repositoryRoot}/examples/pr-review/package.json`);
       const demoDependencies = manifestDependencies(demo);
       const providerDependencies = manifestDependencies(providers);
       const repoOpsDependencies = manifestDependencies(repoOps);
+      const prReviewDependencies = manifestDependencies(prReview);
 
       expect(demo.name).toBe("@effect-agent/example-demo");
       expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
@@ -268,6 +270,16 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(repoOpsDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
       );
+      // The pr-review GitHub Action bot is the fourth leaf example workspace.
+      expect(prReview.name).toBe("@effect-agent/example-pr-review");
+      expect(prReview.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
+      expect(prReview.dependencies?.["@effect-agent/engine"]).toBe("workspace:*");
+      expect(prReview.dependencies?.effect).toBe("catalog:");
+      expect(prReview.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
+      expect(prReviewDependencies).not.toContain("wrangler");
+      expect(prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
+        false,
+      );
 
       for (const packageName of packageNames) {
         const manifest = yield* readManifest(
@@ -276,6 +288,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(manifestDependencies(manifest)).not.toContain(demo.name);
         expect(manifestDependencies(manifest)).not.toContain(providers.name);
         expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
+        expect(manifestDependencies(manifest)).not.toContain(prReview.name);
         for (const adapter of providerAdapterDependencies) {
           expect(manifestDependencies(manifest)).not.toContain(adapter);
         }

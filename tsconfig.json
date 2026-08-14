@@ -13,6 +13,8 @@
     { "path": "./packages/platform-cloudflare" },
     { "path": "./packages/testing" },
     { "path": "./examples/demo" },
-    { "path": "./examples/providers" }
+    { "path": "./examples/pr-review" },
+    { "path": "./examples/providers" },
+    { "path": "./examples/repo-ops" }
   ]
 }
