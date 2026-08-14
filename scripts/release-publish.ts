@@ -92,6 +92,16 @@ const alreadyPublished = Effect.fn("alreadyPublished")(function* (name: string, 
 });
 
 /**
+ * The npm dist-tag one version belongs to: the first prerelease identifier
+ * (`0.0.1-beta.0` → `beta`), or `latest` for stable versions. `bun publish`
+ * would otherwise tag PRERELEASES as `latest` — the channel must be explicit.
+ */
+const distTagFor = (version: string): string => {
+  const prerelease = /^\d+\.\d+\.\d+-([0-9A-Za-z-]+)(?:\.|$)/.exec(version);
+  return prerelease?.[1] ?? "latest";
+};
+
+/**
  * Map one source export path to its built dist entry, mirroring the `vp pack`
  * (tsdown) output naming: `./src/<entry>.ts` → `./dist/<entry>.mjs` with
  * `./dist/<entry>.d.mts` types.
@@ -149,12 +159,15 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
 
   // Dry runs validate the packed artifact without registry credentials;
   // real publishes require an authenticated npm session (`bunx npm login`).
+  const distTag = distTagFor(manifest.version);
   const args = options.dryRun
     ? ["pm", "pack", "--dry-run"]
     : [
         "publish",
         "--access",
         "public",
+        "--tag",
+        distTag,
         ...(options.otp !== undefined ? ["--otp", options.otp] : []),
       ];
 
@@ -166,7 +179,9 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
   );
   yield* runCommand(options.directory, "bun", args);
   yield* Console.log(
-    `- ${manifest.name}@${manifest.version}: ${options.dryRun ? "dry-run ok" : "published"}`,
+    `- ${manifest.name}@${manifest.version}: ${
+      options.dryRun ? `dry-run ok (tag: ${distTag})` : `published (tag: ${distTag})`
+    }`,
   );
   return "published" as const;
 });
