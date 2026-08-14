@@ -108,13 +108,14 @@ const alreadyPublished = Effect.fn("alreadyPublished")(function* (name: string, 
 const publishEnvironment = Effect.fn("publishEnvironment")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const xdgConfigHome = globalThis.process.env["XDG_CONFIG_HOME"];
-  if (xdgConfigHome === undefined || (yield* fs.exists(`${xdgConfigHome}/.npmrc`))) {
-    return undefined;
-  }
+  const dropXdg = xdgConfigHome !== undefined && !(yield* fs.exists(`${xdgConfigHome}/.npmrc`));
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(globalThis.process.env)) {
-    if (key !== "XDG_CONFIG_HOME" && value !== undefined) env[key] = value;
+    if (value !== undefined && (!dropXdg || key !== "XDG_CONFIG_HOME")) env[key] = value;
   }
+  // CI mode keeps bun publish non-interactive: an expired OTP then fails
+  // typed instead of prompting on the piped stdin — which hangs forever.
+  env["CI"] = "1";
   return env;
 });
 
@@ -224,13 +225,26 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
         ...(options.otp !== undefined ? ["--otp", options.otp] : []),
       ];
 
+  yield* Console.log(
+    `- ${manifest.name}@${manifest.version}: ${options.dryRun ? "packing (dry run)" : "publishing"}...`,
+  );
+
   // The manifest swap is scoped: acquireRelease restores the original bytes
   // even when the publish fails or the fiber is interrupted.
   yield* Effect.acquireRelease(
     fs.writeFileString(manifestPath, JSON.stringify(parsed, null, 2)),
     () => fs.writeFileString(manifestPath, originalBytes).pipe(Effect.orDie),
   );
-  yield* runCommand(options.directory, "bun", args, yield* publishEnvironment());
+  yield* runCommand(options.directory, "bun", args, yield* publishEnvironment()).pipe(
+    Effect.mapError((error) =>
+      error._tag === "CommandError"
+        ? ReleaseError.make({
+            package: manifest.name,
+            reason: `${error.message} (an expired --otp is the usual cause; re-run with a fresh code — published versions are skipped)`,
+          })
+        : error,
+    ),
+  );
   yield* Console.log(
     `- ${manifest.name}@${manifest.version}: ${
       options.dryRun ? `dry-run ok (tag: ${distTag})` : `published (tag: ${distTag})`

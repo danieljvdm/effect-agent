@@ -92,7 +92,7 @@ const startSoakWorker = (
 ): Effect.Effect<SoakWorker, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const child = spawn(process.execPath, ["--import", "tsx", soakWorkerEntry], {
+      const child = spawn(process.execPath, ["--experimental-transform-types", soakWorkerEntry], {
         cwd: packageRoot,
         env: {
           ...process.env,
