@@ -81,7 +81,7 @@ const UUID_HEAD_PATTERN =
  * authority was unreachable, which is exactly the case `AdmissionIndeterminate` was
  * specified for (SUB-031).
  */
-export class PortTransportError extends Schema.TaggedErrorClass<PortTransportError>()(
+export class PortTransportError extends Schema.TaggedError<PortTransportError>()(
   "PortTransportError",
   {
     target: Schema.String,

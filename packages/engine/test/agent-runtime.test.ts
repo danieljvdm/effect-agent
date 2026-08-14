@@ -48,21 +48,18 @@ import {
   type RunUsageDelta,
 } from "../src/index.ts";
 
-class ScheduledToolFailure extends Schema.TaggedErrorClass<ScheduledToolFailure>()(
+class ScheduledToolFailure extends Schema.TaggedError<ScheduledToolFailure>()(
   "ScheduledToolFailure",
   { message: Schema.String },
 ) {}
 
-class HookFailure extends Schema.TaggedErrorClass<HookFailure>()("HookFailure", {
+class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,
 }) {}
 
-class BudgetGuardFailure extends Schema.TaggedErrorClass<BudgetGuardFailure>()(
-  "BudgetGuardFailure",
-  {
-    message: Schema.String,
-  },
-) {}
+class BudgetGuardFailure extends Schema.TaggedError<BudgetGuardFailure>()("BudgetGuardFailure", {
+  message: Schema.String,
+}) {}
 
 class HookService extends Context.Service<HookService, { readonly enabled: true }>()(
   "@effect-agent/engine/test/HookService",

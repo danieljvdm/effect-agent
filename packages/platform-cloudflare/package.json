@@ -1,7 +1,6 @@
 {
   "name": "@effect-agent/platform-cloudflare",
   "version": "0.0.0",
-  "private": true,
   "description": "Class DC layer assembly for Effect Agent: SQLite-backed Conversation Durable Objects with alarm-driven recovery.",
   "license": "UNLICENSED",
   "repository": {
@@ -28,10 +27,7 @@
   "dependencies": {
     "@effect-agent/core": "workspace:*",
     "@effect-agent/session": "workspace:*",
-    "@effect-agent/storage-cloudflare": "workspace:*",
-    "@effect/platform-browser": "catalog:",
-    "@effect/sql-sqlite-do": "catalog:",
-    "effect": "catalog:"
+    "@effect-agent/storage-cloudflare": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",
@@ -39,11 +35,19 @@
     "@effect-agent/capabilities": "workspace:*",
     "@effect-agent/engine": "workspace:*",
     "@effect-agent/testing": "workspace:*",
+    "@effect/platform-browser": "catalog:",
+    "@effect/sql-sqlite-do": "catalog:",
     "@effect/vitest": "catalog:",
+    "effect": "catalog:",
     "esbuild": "catalog:",
     "miniflare": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "@effect/platform-browser": "4.0.0-beta.105",
+    "@effect/sql-sqlite-do": "4.0.0-beta.105",
+    "effect": "4.0.0-beta.105"
   }
 }

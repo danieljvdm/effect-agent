@@ -46,7 +46,7 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
 export type DurableRuntimeFailpointLocation = typeof DurableRuntimeFailpointLocation.Type;
 
 /** Injected coordinator fault. Reaching the caller means the preceding durable step committed. */
-export class DurableRuntimeFailpointError extends Schema.TaggedErrorClass<DurableRuntimeFailpointError>()(
+export class DurableRuntimeFailpointError extends Schema.TaggedError<DurableRuntimeFailpointError>()(
   "DurableRuntimeFailpointError",
   {
     location: DurableRuntimeFailpointLocation,

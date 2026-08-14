@@ -38,6 +38,7 @@ import {
   DurableObjectContext,
   conversationNamespaceLayer,
   type CloudflareBindingError,
+  type ConversationObjectRpc,
 } from "./bindings.ts";
 import {
   AbortRecorded,
@@ -93,6 +94,25 @@ export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptio
    * and remote wakes (DEPLOY-010: the binding enters through a Layer, never ambiently).
    */
   readonly namespaceBinding: string;
+}
+
+/**
+ * Public instance surface of the class returned by `makeConversationObjectClass`. It includes
+ * the Worker/sibling RPC contract, the administrative RPC entry points, the platform alarm
+ * handler, and the inherited Object context used by application subclasses.
+ */
+export interface ConversationObjectInstance
+  extends DurableObject<Cloudflare.Env>, ConversationObjectRpc {
+  explainEncoded(encoded: unknown): Promise<unknown>;
+  verifyEncoded(encoded: unknown): Promise<unknown>;
+  retryEncoded(encoded: unknown): Promise<unknown>;
+  obligationsEncoded(encoded: unknown): Promise<unknown>;
+  alarm(): Promise<void>;
+}
+
+/** Public constructor returned by `makeConversationObjectClass`. */
+export interface ConversationObjectConstructor {
+  new (ctx: DurableObjectState, env: Cloudflare.Env): ConversationObjectInstance;
 }
 
 type ConversationObjectError = CloudflareDurableRuntimeInitializationError | CloudflareBindingError;
@@ -609,7 +629,9 @@ const gateEndpoint: Effect.Effect<void, unknown, EndpointServices> = Effect.gen(
 });
 
 /** Build the application's Conversation Object class (export it from the Worker entry). */
-export const makeConversationObjectClass = (options: ConversationObjectOptions) => {
+export const makeConversationObjectClass = (
+  options: ConversationObjectOptions,
+): ConversationObjectConstructor => {
   class ConversationObject extends DurableObject {
     readonly #runtime: ManagedRuntime.ManagedRuntime<EndpointServices, ConversationObjectError>;
 

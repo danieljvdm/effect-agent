@@ -196,7 +196,7 @@ export class SupplierBookingRecord extends Schema.Class<SupplierBookingRecord>(
   status: Schema.Literals(["confirmed", "cancelled"]),
 }) {}
 
-export class SupplierUnavailable extends Schema.TaggedErrorClass<SupplierUnavailable>()(
+export class SupplierUnavailable extends Schema.TaggedError<SupplierUnavailable>()(
   "SupplierUnavailable",
   { message: Schema.String },
 ) {}

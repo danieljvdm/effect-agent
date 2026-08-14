@@ -784,7 +784,7 @@ export class RecoverySnapshot extends Schema.Class<RecoverySnapshot>(
 }) {}
 
 /** The same idempotency key was admitted with different canonical input content. */
-export class AdmissionConflict extends Schema.TaggedErrorClass<AdmissionConflict>()(
+export class AdmissionConflict extends Schema.TaggedError<AdmissionConflict>()(
   "AdmissionConflict",
   {
     conversationId: ConversationId,
@@ -799,13 +799,13 @@ export class AdmissionConflict extends Schema.TaggedErrorClass<AdmissionConflict
  * The presented ownership token no longer owns the Submission's lane. `actualEpoch` is the
  * conversation's current producer epoch so a stale Attempt can prove to itself it was superseded.
  */
-export class OwnershipLost extends Schema.TaggedErrorClass<OwnershipLost>()("OwnershipLost", {
+export class OwnershipLost extends Schema.TaggedError<OwnershipLost>()("OwnershipLost", {
   submissionId: SubmissionId,
   actualEpoch: ProducerEpoch,
 }) {}
 
 /** A conflicting terminal outcome was already reserved or finalized (DUR-002, DUR-012). */
-export class SettlementConflict extends Schema.TaggedErrorClass<SettlementConflict>()(
+export class SettlementConflict extends Schema.TaggedError<SettlementConflict>()(
   "SettlementConflict",
   {
     submissionId: SubmissionId,
@@ -817,20 +817,17 @@ export class SettlementConflict extends Schema.TaggedErrorClass<SettlementConfli
  * A divergent approval re-decision for an already-decided `(submissionId, toolCallId)` pair.
  * Repeating the SAME decision replays the recorded intent instead (idempotency).
  */
-export class ApprovalConflict extends Schema.TaggedErrorClass<ApprovalConflict>()(
-  "ApprovalConflict",
-  {
-    submissionId: SubmissionId,
-    toolCallId: ToolCallId,
-    existingDecision: ApprovalDecision,
-  },
-) {}
+export class ApprovalConflict extends Schema.TaggedError<ApprovalConflict>()("ApprovalConflict", {
+  submissionId: SubmissionId,
+  toolCallId: ToolCallId,
+  existingDecision: ApprovalDecision,
+}) {}
 
 /**
  * A divergent unknown-outcome re-resolution for an already-resolved `(submissionId, toolCallId)`
  * pair (DUR-017). Repeating the SAME resolution replays the recorded intent instead.
  */
-export class UnknownResolutionConflict extends Schema.TaggedErrorClass<UnknownResolutionConflict>()(
+export class UnknownResolutionConflict extends Schema.TaggedError<UnknownResolutionConflict>()(
   "UnknownResolutionConflict",
   {
     submissionId: SubmissionId,
@@ -842,7 +839,7 @@ export class UnknownResolutionConflict extends Schema.TaggedErrorClass<UnknownRe
  * The target Submission is `joined` to a host Run: it settles with the host, so the abort target
  * is the host Submission carried here (plan §2.5).
  */
-export class JoinedToHost extends Schema.TaggedErrorClass<JoinedToHost>()("JoinedToHost", {
+export class JoinedToHost extends Schema.TaggedError<JoinedToHost>()("JoinedToHost", {
   submissionId: SubmissionId,
   hostSubmissionId: SubmissionId,
 }) {}
@@ -853,7 +850,7 @@ export class JoinedToHost extends Schema.TaggedErrorClass<JoinedToHost>()("Joine
  * Call, a divergent child attachment, a divergent accounting freeze, or an out-of-order state
  * transition. `status` reports the existing row's status. Identical replays never conflict.
  */
-export class ChildReservationConflict extends Schema.TaggedErrorClass<ChildReservationConflict>()(
+export class ChildReservationConflict extends Schema.TaggedError<ChildReservationConflict>()(
   "ChildReservationConflict",
   {
     reservationId: ChildReservationId,
@@ -863,7 +860,7 @@ export class ChildReservationConflict extends Schema.TaggedErrorClass<ChildReser
 ) {}
 
 /** Adapter-level ledger failure (storage unavailable, unknown submission, corrupt row, ...). */
-export class LedgerError extends Schema.TaggedErrorClass<LedgerError>()("LedgerError", {
+export class LedgerError extends Schema.TaggedError<LedgerError>()("LedgerError", {
   operation: Schema.String,
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),

@@ -12,6 +12,12 @@ import { defineConfig } from "vite-plus";
 //   (dispose/reopen over one persist directory); these spawn real runtimes and HTTP
 //   listeners and cannot run inside workerd.
 export default defineConfig({
+  pack: {
+    dts: true,
+    format: ["esm"],
+    sourcemap: true,
+    tsconfig: "tsconfig.build.json",
+  },
   test: {
     // The eviction harness ABORTS Durable Objects mid-flight by design; the pool surfaces
     // each abort's orphaned in-flight promise as an "unhandled error" (durableObjectReset)

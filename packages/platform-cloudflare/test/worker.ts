@@ -1,5 +1,6 @@
-import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
 import { Effect } from "effect";
+
+import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
 import {
   CONVERSATIONS_BINDING,
   DEPLOYMENT_ID,

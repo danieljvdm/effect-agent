@@ -48,11 +48,9 @@ probed exception: `vp test` cannot drive the Cloudflare Workers pool runner, so
 `storage-cloudflare` and `platform-cloudflare` declare the catalog-pinned `vitest` directly and
 run `vitest run` as their `test` scripts (P6 WP0 probe, decision D-P6-7).
 
-Effect `4.0.0-beta.105` is temporarily installed with the same narrow compatibility patch used by
-Kommunikasie. The patch restores `Schema.TaggedErrorClass` as a deprecated alias of
-`Schema.TaggedError`, allowing the two repositories to share the beta.105 runtime before their
-existing tagged errors are migrated together. Remove the patch once those call sites use the
-upstream name directly.
+Tagged errors use the upstream `Schema.TaggedError` API provided by Effect `4.0.0-beta.105`.
+Effect is installed without a repository-local compatibility patch, so published packages and
+their consumers share the same runtime and Schema identities.
 
 The beta.105-aligned `@effect/tsgo` 0.33.0 upgrade also temporarily disables only its
 `preferTypedSchemaDecoder` suggestion. Version 0.33.0 panics while analyzing the repository's

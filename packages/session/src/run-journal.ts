@@ -18,7 +18,7 @@ import {
 } from "./records.ts";
 
 /** A canonical record could not be projected into Run/Prompt state. */
-export class RunJournalError extends Schema.TaggedErrorClass<RunJournalError>()("RunJournalError", {
+export class RunJournalError extends Schema.TaggedError<RunJournalError>()("RunJournalError", {
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}

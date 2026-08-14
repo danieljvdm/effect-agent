@@ -24,7 +24,7 @@ export const RedactedPreview = Schema.String.pipe(
 export type RedactedPreview = typeof RedactedPreview.Type;
 
 /** Structural redaction failed closed rather than returning unreviewed caller text. */
-export class RedactionError extends Schema.TaggedErrorClass<RedactionError>()("RedactionError", {
+export class RedactionError extends Schema.TaggedError<RedactionError>()("RedactionError", {
   reason: Schema.Literals(["input-too-deep", "input-too-large", "encoding-failed"]),
   message: Schema.String,
 }) {}

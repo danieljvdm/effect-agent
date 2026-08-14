@@ -61,18 +61,15 @@ export const ApprovalDecision = Schema.Union([ApprovalApproved, ApprovalDenied])
 export type ApprovalDecision = typeof ApprovalDecision.Type;
 
 /** Resolver infrastructure failed before it could make a policy decision. */
-export class ApprovalResolverError extends Schema.TaggedErrorClass<ApprovalResolverError>()(
+export class ApprovalResolverError extends Schema.TaggedError<ApprovalResolverError>()(
   "ApprovalResolverError",
   { message: Schema.String },
 ) {}
 
 /** The resolver explicitly observed its request deadline; callers turn this into a denial. */
-export class ApprovalTimedOut extends Schema.TaggedErrorClass<ApprovalTimedOut>()(
-  "ApprovalTimedOut",
-  {
-    requestId: Schema.NonEmptyString,
-  },
-) {}
+export class ApprovalTimedOut extends Schema.TaggedError<ApprovalTimedOut>()("ApprovalTimedOut", {
+  requestId: Schema.NonEmptyString,
+}) {}
 
 /** First-class approval authority. Interactive, policy, and remote adapters implement this service. */
 export class ApprovalResolver extends Context.Service<
@@ -108,7 +105,7 @@ export const ApprovalAuditEvents = Schema.Array(ApprovalAuditEvent).check(
   Schema.isMaxLength(MAX_APPROVAL_AUDIT_EVENTS),
 );
 
-export class ApprovalAuditLimitExceeded extends Schema.TaggedErrorClass<ApprovalAuditLimitExceeded>()(
+export class ApprovalAuditLimitExceeded extends Schema.TaggedError<ApprovalAuditLimitExceeded>()(
   "ApprovalAuditLimitExceeded",
   {
     limitValue: Schema.Natural,
@@ -117,7 +114,7 @@ export class ApprovalAuditLimitExceeded extends Schema.TaggedErrorClass<Approval
 ) {}
 
 /** A resolver or audit sink tried to associate a decision with another request. */
-export class ApprovalDecisionMismatch extends Schema.TaggedErrorClass<ApprovalDecisionMismatch>()(
+export class ApprovalDecisionMismatch extends Schema.TaggedError<ApprovalDecisionMismatch>()(
   "ApprovalDecisionMismatch",
   {
     expectedRequestId: Schema.NonEmptyString,

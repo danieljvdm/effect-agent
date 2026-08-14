@@ -118,7 +118,7 @@ const BoundedFailureText = Schema.String.check(Schema.isMaxLength(4 * 1024));
  * (spec/subagents.md §15). No reservation, identity, or event exists for the
  * denied invocation; retry requires a new authorized parent Tool Call.
  */
-export class SubagentPrestartDenied extends Schema.TaggedErrorClass<SubagentPrestartDenied>()(
+export class SubagentPrestartDenied extends Schema.TaggedError<SubagentPrestartDenied>()(
   "SubagentPrestartDenied",
   {
     delegationId: DelegationId,
@@ -133,7 +133,7 @@ export class SubagentPrestartDenied extends Schema.TaggedErrorClass<SubagentPres
  * (spec/subagents.md §15). Fail closed: the message is a fixed description and
  * never carries the raw child value.
  */
-export class SubagentProjectionFailure extends Schema.TaggedErrorClass<SubagentProjectionFailure>()(
+export class SubagentProjectionFailure extends Schema.TaggedError<SubagentProjectionFailure>()(
   "SubagentProjectionFailure",
   {
     delegationId: DelegationId,
@@ -177,7 +177,7 @@ const BoundedErrorTag = Schema.NonEmptyString.check(Schema.isMaxLength(maxErrorT
  * Schema-declared durable domain-failure mapping is a recorded later
  * extension.
  */
-export class SubagentExecutionFailure extends Schema.TaggedErrorClass<SubagentExecutionFailure>()(
+export class SubagentExecutionFailure extends Schema.TaggedError<SubagentExecutionFailure>()(
   "SubagentExecutionFailure",
   {
     delegationId: DelegationId,

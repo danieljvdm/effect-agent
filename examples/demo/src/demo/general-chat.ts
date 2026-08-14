@@ -129,7 +129,7 @@ export class CalculationResult extends Schema.Class<CalculationResult>("Calculat
   value: Schema.Finite,
 }) {}
 
-export class CalculationFailure extends Schema.TaggedErrorClass<CalculationFailure>()(
+export class CalculationFailure extends Schema.TaggedError<CalculationFailure>()(
   "CalculationFailure",
   {
     message: Schema.String,

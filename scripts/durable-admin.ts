@@ -24,7 +24,7 @@ import { Command as CliCommand, Flag } from "effect/unstable/cli";
  * existing deployment file).
  */
 
-class InvalidIdentifier extends Schema.TaggedErrorClass<InvalidIdentifier>()("InvalidIdentifier", {
+class InvalidIdentifier extends Schema.TaggedError<InvalidIdentifier>()("InvalidIdentifier", {
   kind: Schema.String,
   value: Schema.String,
 }) {
@@ -33,17 +33,14 @@ class InvalidIdentifier extends Schema.TaggedErrorClass<InvalidIdentifier>()("In
   }
 }
 
-class MissingSelector extends Schema.TaggedErrorClass<MissingSelector>()("MissingSelector", {
+class MissingSelector extends Schema.TaggedError<MissingSelector>()("MissingSelector", {
   message: Schema.String,
 }) {}
 
-class IntegrityViolation extends Schema.TaggedErrorClass<IntegrityViolation>()(
-  "IntegrityViolation",
-  {
-    conversationId: Schema.String,
-    failed: Schema.Array(Schema.String),
-  },
-) {
+class IntegrityViolation extends Schema.TaggedError<IntegrityViolation>()("IntegrityViolation", {
+  conversationId: Schema.String,
+  failed: Schema.Array(Schema.String),
+}) {
   override get message() {
     return `Integrity verification failed for ${this.conversationId}: ${this.failed.join("; ")}`;
   }

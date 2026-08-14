@@ -83,7 +83,7 @@ export class DemoControlAccepted extends Schema.Class<DemoControlAccepted>("Demo
   accepted: Schema.Literal(true),
 }) {}
 
-export class DemoControlFailure extends Schema.TaggedErrorClass<DemoControlFailure>()(
+export class DemoControlFailure extends Schema.TaggedError<DemoControlFailure>()(
   "DemoControlFailure",
   {
     reason: Schema.Literals([
@@ -97,7 +97,7 @@ export class DemoControlFailure extends Schema.TaggedErrorClass<DemoControlFailu
   },
 ) {}
 
-export class DemoRunFailure extends Schema.TaggedErrorClass<DemoRunFailure>()("DemoRunFailure", {
+export class DemoRunFailure extends Schema.TaggedError<DemoRunFailure>()("DemoRunFailure", {
   errorTag: Schema.NonEmptyString,
   message: Schema.String,
 }) {}

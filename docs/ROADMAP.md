@@ -93,7 +93,7 @@ replacing it with an unrelated demo.
 - Project-local `effect-ts` contributor skill synced from
   `@danieljvdm/agent-skills`.
 - Agent, policy, ID, error, and Run Event Schemas.
-- Schema-derived domain types, branded IDs, and `Schema.TaggedErrorClass` expected failures.
+- Schema-derived domain types, branded IDs, and `Schema.TaggedError` expected failures.
 - Direct use of Effect AI Tool, Toolkit, Model, LanguageModel, Prompt, and Response.
 - Effect service/Layer proofs that keep runtime dependencies visible in `R`.
 - Type proof that Tool handler and instruction requirements propagate into Run `R`.

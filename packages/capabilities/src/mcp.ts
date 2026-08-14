@@ -29,7 +29,7 @@ export class McpConnectionRequest extends Schema.Class<McpConnectionRequest>(
 }) {}
 
 /** Typed remote connection failure; no remote execution is claimed exactly-once. */
-export class McpConnectionError extends Schema.TaggedErrorClass<McpConnectionError>()(
+export class McpConnectionError extends Schema.TaggedError<McpConnectionError>()(
   "McpConnectionError",
   {
     serverId: Schema.NonEmptyString,
@@ -39,7 +39,7 @@ export class McpConnectionError extends Schema.TaggedErrorClass<McpConnectionErr
 ) {}
 
 /** Discovery exceeded an explicit caller or framework hard bound. */
-export class McpDiscoveryLimitExceeded extends Schema.TaggedErrorClass<McpDiscoveryLimitExceeded>()(
+export class McpDiscoveryLimitExceeded extends Schema.TaggedError<McpDiscoveryLimitExceeded>()(
   "McpDiscoveryLimitExceeded",
   {
     serverId: Schema.NonEmptyString,
@@ -50,7 +50,7 @@ export class McpDiscoveryLimitExceeded extends Schema.TaggedErrorClass<McpDiscov
 ) {}
 
 /** Native dynamic Toolkit names did not match the bounded MCP discovery response. */
-export class McpToolkitMismatch extends Schema.TaggedErrorClass<McpToolkitMismatch>()(
+export class McpToolkitMismatch extends Schema.TaggedError<McpToolkitMismatch>()(
   "McpToolkitMismatch",
   {
     serverId: Schema.NonEmptyString,

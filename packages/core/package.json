@@ -24,11 +24,12 @@
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test --passWithNoTests"
   },
-  "dependencies": {
-    "effect": "catalog:"
-  },
   "devDependencies": {
+    "effect": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "effect": "4.0.0-beta.105"
   }
 }

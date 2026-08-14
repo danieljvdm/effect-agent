@@ -482,7 +482,7 @@ export type RetryRefusalReason = typeof RetryRefusalReason.Type;
  * `AwaitApprovalDecision` have their own authorized operations, and settled work is never
  * re-driven. The refusal names the classifier decision so the operator sees WHY.
  */
-export class RetryRefused extends Schema.TaggedErrorClass<RetryRefused>()("RetryRefused", {
+export class RetryRefused extends Schema.TaggedError<RetryRefused>()("RetryRefused", {
   submissionId: SubmissionId,
   refusal: RetryRefusalReason,
   decisionTag: Schema.String.check(Schema.isMaxLength(256)),

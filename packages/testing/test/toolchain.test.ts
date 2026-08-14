@@ -63,6 +63,13 @@ const productionPackageNames = [
 // the types-only package plus the in-workerd test harness — wrangler and
 // application scaffolds stay banned everywhere.
 const cloudflarePackageNames: ReadonlyArray<string> = ["platform-cloudflare", "storage-cloudflare"];
+const effectPeerPackageNames: ReadonlyArray<string> = [
+  "core",
+  "engine",
+  "platform-cloudflare",
+  "session",
+  "storage-cloudflare",
+];
 const allowedCloudflareToolchainDependencies = new Set([
   "@cloudflare/vitest-pool-workers",
   "@cloudflare/workers-types",
@@ -212,12 +219,19 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       }
 
       // The confinement side: every workspace consumer of the Durable Object
-      // SqlClient is one of the two Cloudflare packages, catalog-pinned.
+      // SqlClient is one of the two Cloudflare packages. Published consumers
+      // supply the exact compatible peer while repository development resolves
+      // the same version through the root catalog.
+      const root = yield* readManifest(`${repositoryRoot}/package.json`);
       for (const packageName of cloudflarePackageNames) {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
-        expect(manifest.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+        expect(manifest.dependencies?.["@effect/sql-sqlite-do"]).toBeUndefined();
+        expect(manifest.peerDependencies?.["@effect/sql-sqlite-do"]).toBe(
+          root.catalog?.["@effect/sql-sqlite-do"],
+        );
+        expect(manifest.devDependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
       }
     }),
   );
@@ -321,7 +335,14 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           const manifest = yield* readManifest(
             `${repositoryRoot}/packages/${packageName}/package.json`,
           );
-          expect(effectDependencies(manifest)).toEqual(["catalog:"]);
+          if (effectPeerPackageNames.includes(packageName)) {
+            expect(manifest.dependencies?.effect).toBeUndefined();
+            expect(manifest.devDependencies?.effect).toBe("catalog:");
+            expect(manifest.peerDependencies?.effect).toBe(effectVersion);
+            expect(effectDependencies(manifest)).toEqual(["catalog:", effectVersion]);
+          } else {
+            expect(effectDependencies(manifest)).toEqual(["catalog:"]);
+          }
           if (cloudflarePackageNames.includes(packageName)) {
             // P6 WP0 probe outcome (D-P6-7): `vp test` cannot drive the
             // workers pool runner, so the Cloudflare packages run `vitest run`

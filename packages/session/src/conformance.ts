@@ -34,7 +34,7 @@ import {
 } from "./store.ts";
 
 /** A ConversationStore contract invariant that an adapter under test violated. */
-export class ConversationStoreConformanceViolation extends Schema.TaggedErrorClass<ConversationStoreConformanceViolation>()(
+export class ConversationStoreConformanceViolation extends Schema.TaggedError<ConversationStoreConformanceViolation>()(
   "ConversationStoreConformanceViolation",
   {
     caseName: Schema.String,

@@ -66,7 +66,7 @@ export type ReconciliationDecision = typeof ReconciliationDecision.Type;
 
 /** The reconciliation policy itself failed (supplier unreachable, corrupt lookup, ...). The
  * caller treats this as no proof: the call stays open and the pass may retry. */
-export class ToolReconcilerError extends Schema.TaggedErrorClass<ToolReconcilerError>()(
+export class ToolReconcilerError extends Schema.TaggedError<ToolReconcilerError>()(
   "ToolReconcilerError",
   {
     toolCallId: ToolCallId,

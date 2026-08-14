@@ -24,11 +24,11 @@ import {
   type RunTurnResume,
 } from "../src/index.ts";
 
-class HookFailure extends Schema.TaggedErrorClass<HookFailure>()("HookFailure", {
+class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,
 }) {}
 
-class FlakyFailure extends Schema.TaggedErrorClass<FlakyFailure>()("FlakyFailure", {
+class FlakyFailure extends Schema.TaggedError<FlakyFailure>()("FlakyFailure", {
   message: Schema.String,
 }) {}
 

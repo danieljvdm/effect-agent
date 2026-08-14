@@ -161,7 +161,7 @@ export class ChaosPlanReport extends Schema.Class<ChaosPlanReport>(
 }) {}
 
 /** Typed convergence/verification failure of one chaos plan (never a bare defect). */
-export class ChaosConvergenceFailure extends Schema.TaggedErrorClass<ChaosConvergenceFailure>()(
+export class ChaosConvergenceFailure extends Schema.TaggedError<ChaosConvergenceFailure>()(
   "ChaosConvergenceFailure",
   {
     seed: Schema.Int,
@@ -423,7 +423,7 @@ const childDefinition = Agent.define("chaos-child", {
   }),
 });
 
-class ChaosDelegationFailed extends Schema.TaggedErrorClass<ChaosDelegationFailed>()(
+class ChaosDelegationFailed extends Schema.TaggedError<ChaosDelegationFailed>()(
   "ChaosDelegationFailed",
   { childErrorTag: Schema.String },
 ) {}

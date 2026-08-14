@@ -38,7 +38,7 @@ export class RunCommandQueueConfig extends Schema.Class<RunCommandQueueConfig>(
 )({ capacity: PositiveInt }) {}
 
 /** A command cannot be admitted after the Run Scope has closed. */
-export class RunCommandQueueClosed extends Schema.TaggedErrorClass<RunCommandQueueClosed>()(
+export class RunCommandQueueClosed extends Schema.TaggedError<RunCommandQueueClosed>()(
   "RunCommandQueueClosed",
   { runId: RunId },
 ) {}

@@ -8,6 +8,11 @@ import { defineConfig } from "vite-plus";
 // Object storage is SHARED across tests within a run, so every suite mints a unique Durable
 // Object name per case.
 export default defineConfig({
+  pack: {
+    dts: true,
+    format: ["esm"],
+    sourcemap: true,
+  },
   plugins: [
     cloudflareTest({
       main: "./test/worker.ts",

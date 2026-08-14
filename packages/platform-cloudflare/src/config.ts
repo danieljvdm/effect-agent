@@ -12,7 +12,7 @@ const PositiveMillis = Schema.Int.check(Schema.isGreaterThan(0));
 const NonNegativeMillis = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 
 /** The supplied Cloudflare durable runtime configuration failed validation (DEPLOY-003). */
-export class CloudflarePlatformConfigError extends Schema.TaggedErrorClass<CloudflarePlatformConfigError>()(
+export class CloudflarePlatformConfigError extends Schema.TaggedError<CloudflarePlatformConfigError>()(
   "CloudflarePlatformConfigError",
   {
     message: Schema.String,
@@ -28,7 +28,7 @@ export class CloudflarePlatformConfigError extends Schema.TaggedErrorClass<Cloud
  * Conversation Object's submit entry point before `DurableAgentRuntime.submit` runs, and
  * nothing was admitted or written.
  */
-export class AdmissionLimitExceeded extends Schema.TaggedErrorClass<AdmissionLimitExceeded>()(
+export class AdmissionLimitExceeded extends Schema.TaggedError<AdmissionLimitExceeded>()(
   "AdmissionLimitExceeded",
   {
     limit: Schema.Literals(["queue-depth", "input-bytes", "database-bytes"]),

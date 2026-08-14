@@ -3,7 +3,7 @@ import { Console, Effect, Path, Schema as S, Stream } from "effect";
 import { Command as CliCommand } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
-class CommandError extends S.TaggedErrorClass<CommandError>()("CommandError", {
+class CommandError extends S.TaggedError<CommandError>()("CommandError", {
   command: S.String,
   exitCode: S.Int,
   output: S.String,

@@ -30,7 +30,7 @@ export class ItineraryHold extends Schema.Class<ItineraryHold>(
   status: Schema.Literal("held"),
 }) {}
 
-export class ItineraryHoldUnavailable extends Schema.TaggedErrorClass<ItineraryHoldUnavailable>()(
+export class ItineraryHoldUnavailable extends Schema.TaggedError<ItineraryHoldUnavailable>()(
   "ItineraryHoldUnavailable",
   {
     quoteId: QuoteId,
