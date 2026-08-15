@@ -22,7 +22,7 @@ import { Prompt, Tool } from "effect/unstable/ai";
  * exactly.
  */
 
-/** Rendering outcome for one definition's output Schema, memoized per definition. */
+/** Rendering outcome for one definition's output Schema. */
 export type OutputContract =
   | {
       readonly _tag: "rendered";
@@ -40,35 +40,28 @@ const contractDirective =
   "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " +
   "before or after the JSON.";
 
-const renderedContracts = new WeakMap<Agent.AnyDefinition, OutputContract>();
-
 /**
- * Render (and memoize) the model-visible final-output contract for one
- * definition. An output Schema the Effect AI derivation cannot represent is
- * reported as `unrenderable`; the caller falls back to the prior behavior —
- * the contract is guidance, and a Schema that decodes but does not render
- * must not become a new failure mode (ADR-0020 decision 3).
+ * Render the model-visible final-output contract for one definition. The
+ * derivation is pure and cheap relative to a model call (providers derive
+ * every Tool's JSON Schema per request the same way), so no cache is kept.
+ * An output Schema the Effect AI derivation cannot represent is reported as
+ * `unrenderable`; the caller falls back to the prior behavior — the contract
+ * is guidance, and a Schema that decodes but does not render must not become
+ * a new failure mode (ADR-0020 decision 3).
  */
 export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
-  const cached = renderedContracts.get(definition);
-  if (cached !== undefined) {
-    return cached;
-  }
-  let contract: OutputContract;
   try {
     const jsonSchema = Tool.getJsonSchemaFromSchema(definition.output);
-    contract = {
+    return {
       _tag: "rendered",
       message: `${contractDirective}\n\n${JSON.stringify(jsonSchema, undefined, 2)}`,
     };
   } catch (cause) {
-    contract = {
+    return {
       _tag: "unrenderable",
       reason: cause instanceof Error ? cause.message : String(cause),
     };
   }
-  renderedContracts.set(definition, contract);
-  return contract;
 };
 
 /**

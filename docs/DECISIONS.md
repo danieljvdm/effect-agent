@@ -215,8 +215,9 @@ derivation, inserted after the request's last system message (extending the last
 system block); non-renderable output Schemas fall
 back to today's behavior with a diagnostic, and `decodeFinalOutput` (AUTH-008) remains the
 enforcement authority. Long term, as the enforced mechanism: a synthetic engine-owned
-final-answer Tool whose parameters Schema is the output Schema — provider-validated through the
-Tool-parameter channel and uniform with the streamed tool loop — which is a Turn-protocol change
+final-answer Tool whose parameters Schema is the output Schema — engine-Schema-decoded
+everywhere, strictly provider-validated where the provider guarantees strict tool schemas, and
+uniform with the streamed tool loop — which is a Turn-protocol change
 requiring its own accepted ADR before implementation. A `generateObject` repair call is rejected
 as a default and reserved as a possible future explicit acceptance policy; an upstream Effect AI
 proposal for `responseFormat` on `streamText` is filed in parallel per D-002. Canonical records,

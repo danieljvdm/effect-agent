@@ -296,8 +296,8 @@ layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", 
     },
   );
 
-  it.effect("memoizes the rendered contract per definition", () => {
-    const definition = Agent.define("contract-memoized", {
+  it.effect("renders deterministically from the definition alone", () => {
+    const definition = Agent.define("contract-deterministic", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({ answer: Schema.String }),
       instructions: "Answer.",
@@ -306,10 +306,11 @@ layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", 
     });
     const first = outputSchemaContract(definition);
     const second = outputSchemaContract(definition);
-    expect(second).toBe(first);
+    expect(second).toEqual(first);
     expect(first._tag).toBe("rendered");
     if (first._tag === "rendered") {
       expect(first.message.startsWith(contractMarker)).toBe(true);
+      expect(first.message).toContain('"answer"');
     }
     return Effect.void;
   });

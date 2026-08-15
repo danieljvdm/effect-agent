@@ -64,13 +64,17 @@ non-canonical request projections.
    decodes but does not render must not start failing Runs. No conformance claim is made beyond
    "communicated".
 4. **Phase B — the final-answer tool is the enforced direction, gated on its own accepted ADR.**
-   Provider-grade enforcement will use a synthetic engine-owned finish Tool whose `parameters`
+   Enforced conformance will use a synthetic engine-owned finish Tool whose `parameters`
    Schema is the output Schema; the model finishes by calling it, the engine validates the
    arguments and treats the call as the terminal seam without running any handler. Rationale:
-   Tool parameters are the one channel providers already JSON-Schema-validate on every
-   Tool-calling model — Effect AI's own Anthropic provider implements `generateObject` on
-   non-structured-output models with exactly this forced-tool pattern — and the mechanism stays
-   inside the streamed tool loop, dissolving the text-vs-tools ambiguity. It is a Turn-protocol
+   Tool parameters are the strongest already-existing channel for schema conformance — strictly
+   provider-validated where a provider guarantees strict tool schemas (OpenAI `strict`
+   function schemas, Anthropic structured-output-capable models), generation guidance elsewhere,
+   and always engine-Schema-decoded fail-closed before the Run completes. Effect AI's own
+   Anthropic provider implements `generateObject` on non-structured-output models with exactly
+   this forced-tool pattern, and the mechanism stays inside the streamed tool loop, dissolving
+   the text-vs-tools ambiguity. No blanket provider-enforcement claim is made: the engine decode
+   remains the conformance authority on every model. It is a Turn-protocol
    change (terminal tool batches, mixed-batch rules, canonical response shape, event surface,
    steering/follow-up/resume seams, reserved-name collision, opt-in→default migration) and is
    therefore not implemented under this ADR, in the pattern of ADR-0017's durable deferral.
@@ -96,7 +100,10 @@ non-canonical request projections.
   live path; the hand-written shape prose across travel-planner, docs-researcher, pr-review, and
   the code-mode-cloudflare example becomes deletable duplication (follow-up cleanup).
 - Every model request grows by the rendered Schema — the cost shape of one extra Tool
-  declaration.
+  declaration. Because injection follows context preparation, a context hook compacting to an
+  exact model-input limit does not see the contract's size; when engine-owned compaction lands
+  (the context-economics arc), its window calculation must reserve the contract's serialized
+  size like Tool-schema overhead, with a deterministic near-limit test at that point.
 - Tests that assert the model-request shape see one additional system message; tests that assert
   official history or canonical prompts see nothing, which is the verifiable boundary of the
   change.
@@ -111,7 +118,7 @@ non-canonical request projections.
   streaming it, and `generateObject` cannot host the tool loop; structured output as a separate
   non-streamed mode contradicts the one-interpreter rule (RUN-001).
 - **Inject into official history (`makeInitialPrompt`).** Simplest wiring, but the fragment would
-  be committed inside `ModelResponseRecorded`, changing canonical bytes for every durable
+  be committed inside `ModelResponseRecorded`, changing canonical bytes for every DN and DC
   Conversation, invalidating the committed DN/DC golden, and freezing framework wording into
   history; compaction could also drop it. Injection at request materialization has none of these
   properties.
@@ -128,8 +135,9 @@ non-canonical request projections.
 ## Validation
 
 - Request evidence: the contract message is present on every Turn's provider request (first,
-  tool-loop continuation, and post-compaction Turns), positioned adjacent to the leading system
-  block, and contains the JSON Schema derived from the definition's output Schema.
+  tool-loop continuation, and post-compaction Turns), positioned immediately after the request's
+  last system message (at position 0 when none exists), and contains the JSON Schema derived
+  from the definition's output Schema.
 - Boundary evidence: official history (`onHistory`), run events, canonical records, and the
   committed DN/DC golden are byte-identical with and without the feature enabled for scripted
   runs; the non-renderable-Schema fallback reproduces today's behavior exactly plus one

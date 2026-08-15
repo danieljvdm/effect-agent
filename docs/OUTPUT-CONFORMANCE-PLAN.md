@@ -16,7 +16,7 @@ The branch carries a locally reversible prototype of the Phase A recommendation
 
 An Agent Definition declares an `output` Schema (D-027, [authoring §2](spec/authoring.md)). Make
 the runtime communicate that Schema to the model, and give the framework a credible path from
-"communicated" to "provider-enforced", without breaking the streaming Turn architecture, the
+"communicated" to "enforced", without breaking the streaming Turn architecture, the
 canonical record contract, or ADR-0002's rule against framework-owned Effect AI primitives.
 
 ## 2. The gap today
@@ -87,7 +87,8 @@ TEST-016 to close the class offline.
 3. **Canonical record stability.** Evaluated instructions and Turn responses are canonical
    (`ModelResponseRecorded`, D-029). The DN ≡ DC claim is byte-equal normalized canonical
    evidence against one committed golden (D-032). A mechanism that mutates official history
-   changes canonical records for every existing durable Conversation and invalidates the golden.
+   changes canonical records for every existing DN and DC Conversation and invalidates the
+   golden.
 4. **Fail-closed, but honest.** Model output is untrusted input; `AUTH-008` (structured output is
    Schema-decoded before Run success) stays the enforcement authority regardless of any hint or
    provider claim.
@@ -155,7 +156,7 @@ Properties:
 - **Cost.** The schema rides every model request, like Tool schemas do. For the repository's
   agents this is tens to a few hundred tokens per request.
 
-### 5.2 Option B1 — final-answer tool (provider-enforced, protocol change)
+### 5.2 Option B1 — final-answer tool (enforced, protocol change)
 
 Expose a synthetic engine-owned finish Tool (working name `submit_final_output`) whose
 `parameters` Schema **is** the output Schema. The model finishes by calling it; the engine treats
@@ -164,13 +165,16 @@ against `agent.definition.output`, and completes the Run.
 
 Why this is the right long-term shape:
 
-- **Provider-grade enforcement through an already-enforced channel.** Tool parameters are the one
-  place providers already validate JSON Schema on every model: OpenAI strict function schemas,
-  Anthropic structured-output-capable models. Stronger still, Effect AI's own Anthropic provider
-  implements `generateObject` on non-structured-output models by injecting exactly this — a
-  synthetic tool named after the object with `toolChoice` forced to it (`prepareTools`,
+- **The strongest existing conformance channel.** Tool parameters are strictly
+  provider-validated where a provider guarantees strict tool schemas (OpenAI `strict` function
+  schemas, Anthropic structured-output-capable models) and generation guidance elsewhere — and in
+  every case the engine Schema-decodes the arguments fail-closed, so B1's floor is engine
+  enforcement, not hope. Effect AI's own Anthropic provider implements `generateObject` on
+  non-structured-output models by injecting exactly this — a synthetic tool named after the
+  object with `toolChoice` forced to it (`prepareTools`,
   `repos/effect/packages/ai/anthropic/src/AnthropicLanguageModel.ts`). B1 is the same pattern
-  lifted to the framework's Turn loop, so it works uniformly wherever Tool calling works.
+  lifted to the framework's Turn loop, so it works uniformly wherever Tool calling works, with
+  strict provider validation on top wherever the provider offers it.
 - **Streaming survives.** The finish Tool is just another Tool in the existing streamed tool-call
   loop; no `generateObject` detour, no non-streamed Turn.
 - **The a-priori ambiguity dissolves.** The Turn no longer needs to guess text-vs-tools: work
@@ -194,7 +198,7 @@ Why it is a protocol change requiring its own accepted ADR before implementation
    into `RunCompleted`; observers must not infer an application handler where none ran
    (the provider-executed precedent in [runtime §5](spec/runtime.md)).
 5. **Seams.** `settleOrFollowUp` triggers on text-stop today; follow-up drain, steering, and the
-   durable batch-resume path (`RunTurnResume`) must recognize the finish call.
+   DN/DC batch-resume path (`RunTurnResume`) must recognize the finish call.
 6. **Naming and collision.** The reserved name must fail closed against application Tools and
    MCP-discovered Tools that collide.
 7. **Adoption.** Default-on is a hard behavior change for every existing agent (their models
@@ -202,8 +206,9 @@ Why it is a protocol change requiring its own accepted ADR before implementation
    default flip, is the plausible migration — sequencing belongs to the B1 ADR.
 
 Effort: medium — engine Turn-machine surgery plus spec, canonical, and golden updates, behind an
-accepted ADR. Non-streaming cost: none. Enforcement: provider-validated everywhere Tool calling
-is validated; `decodeFinalOutput`-equivalent validation still runs on the arguments (AUTH-008).
+accepted ADR. Non-streaming cost: none. Enforcement: engine Schema-decode of the finish-Tool
+arguments everywhere (the AUTH-008 authority, equivalent to `decodeFinalOutput`), with strict
+provider validation on top wherever the provider guarantees strict tool schemas.
 
 ### 5.3 Option B2 — `generateObject` repair call
 
@@ -254,12 +259,12 @@ providers without enforcement.
 
 ## 6. Comparison
 
-|                             | Enforced?                        | Streaming preserved      | Breaking surface                                | Canonical impact                        | Extra model calls         | Effort               |
-| --------------------------- | -------------------------------- | ------------------------ | ----------------------------------------------- | --------------------------------------- | ------------------------- | -------------------- |
-| A (request-seam injection)  | No — uniform hint                | Yes                      | None (prompt-visible only)                      | None                                    | None                      | Small (prototyped)   |
-| B1 (final-answer tool)      | Yes — tool-parameter grade       | Yes                      | Turn protocol, events, canonical response shape | Terminal response becomes a tool call   | None                      | Medium, ADR-gated    |
-| B2 (repair call)            | Yes — on the repair step only    | Loop yes; repair step no | Output provenance semantics                     | Repair record or output/text divergence | +1 per non-conforming Run | Small–medium         |
-| C (upstream responseFormat) | Yes — where providers support it | Yes                      | None framework-side                             | None                                    | None                      | Not ours to schedule |
+|                             | Enforced?                                                     | Streaming preserved      | Breaking surface                                | Canonical impact                        | Extra model calls         | Effort               |
+| --------------------------- | ------------------------------------------------------------- | ------------------------ | ----------------------------------------------- | --------------------------------------- | ------------------------- | -------------------- |
+| A (request-seam injection)  | No — uniform hint                                             | Yes                      | None (prompt-visible only)                      | None                                    | None                      | Small (prototyped)   |
+| B1 (final-answer tool)      | Yes — engine decode; strict provider validation where offered | Yes                      | Turn protocol, events, canonical response shape | Terminal response becomes a tool call   | None                      | Medium, ADR-gated    |
+| B2 (repair call)            | Yes — on the repair step only                                 | Loop yes; repair step no | Output provenance semantics                     | Repair record or output/text divergence | +1 per non-conforming Run | Small–medium         |
+| C (upstream responseFormat) | Yes — where providers support it                              | Yes                      | None framework-side                             | None                                    | None                      | Not ours to schedule |
 
 ## 7. Recommendation
 
@@ -279,10 +284,12 @@ sequences risk: ship the reversible default, gate the protocol change on an acce
 
 - **A0 — Governance.** This plan; [ADR-0020](adr/0020-model-visible-output-contract.md)
   (Proposed); D-038 (Proposed). Owner decision converts A0 into spec edits (section 9).
-- **A1 — Engine.** `packages/engine/src/output-contract-internal.ts`: memoized JSON-Schema
-  rendering per definition, the contract message, last-system-block insertion; one call site in
-  `makeTurn` wrapping the request prompt after `context.prepare`; Turn-1 warning on
-  non-renderable Schemas. No core, session, storage, or platform change.
+- **A1 — Engine.** `packages/engine/src/output-contract-internal.ts`: pure per-request
+  JSON-Schema rendering (no process-global cache — derivation is cheap relative to a model call,
+  exactly as providers re-derive Tool schemas per request), the contract message,
+  last-system-block insertion; one call site in `makeTurn` wrapping the request prompt after
+  `context.prepare`; Turn-1 warning on non-renderable Schemas. No core, session, storage, or
+  platform change.
 - **A2 — Tests.** Engine suite: contract present on every Turn's request and placed adjacent to
   the last system block; official history never contains it (`onHistory` evidence);
   non-renderable Schema falls back byte-identically; the **live-shaped model** case (TEST-016
@@ -300,7 +307,7 @@ sequences risk: ship the reversible default, gate the protocol change on an acce
   canonical-record and golden migration plan and the opt-in→default sequencing.
 - **B1a — Engine.** Finish-Tool construction (fail-closed on non-renderable Schemas and name
   collisions), terminal-batch semantics, seam integration, events.
-- **B1b — Durable surface.** Canonical response shape, recovery classifier cases, golden
+- **B1b — DN/DC surface.** Canonical response shape, recovery classifier cases, golden
   regeneration, DN/DC equivalence re-evidence.
 - **B1c — Migration.** Definition-level opt-in, repository agents migrated, default-flip
   decision.
@@ -348,6 +355,13 @@ acceptance:
   consistent, and removable (A3).
 - **Token cost** — the rendered schema per request, comparable to one additional Tool
   declaration.
+- **Context-limit interaction (recorded, deferred to the context-economics composition).** The
+  contract is appended after `context.prepare`, so a context hook that compacts to an exact
+  model-input limit can be pushed over it by the contract's serialized size. Today no engine-owned
+  window exists (adapters own their own margins); when the in-flight context-economics arc's
+  engine compaction lands, its window calculation must reserve the contract's size the same way
+  it reserves Tool-schema overhead — recorded as a Phase A follow-up and an ADR-0020 open point,
+  with a deterministic near-limit test once an engine-owned limit exists to test against.
 - **Reversal** — delete `packages/engine/src/output-schema-guidance.ts`, its `makeTurn` call
   site, and its test file; revert the assertion updates. No data, schema, or API migration.
 
@@ -355,7 +369,7 @@ acceptance:
 
 Implemented per A1/A2 and marked as the ADR-0020 proposed default in code comments:
 
-- `packages/engine/src/output-contract-internal.ts` — rendering, memoization, insertion;
+- `packages/engine/src/output-contract-internal.ts` — pure rendering and insertion;
 - `makeTurn` call site in `packages/engine/src/index.ts`;
 - `packages/engine/test/output-contract.test.ts` — contract-on-every-Turn, placement,
   official-history cleanliness, non-renderable fallback, and the live-shaped model case;

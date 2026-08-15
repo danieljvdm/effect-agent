@@ -32503,29 +32503,21 @@ function isEmptyParamsRecord(indexSignature) {
 }
 // packages/engine/src/output-contract-internal.ts
 var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
-var renderedContracts = new WeakMap;
 var outputSchemaContract = (definition) => {
-  const cached3 = renderedContracts.get(definition);
-  if (cached3 !== undefined) {
-    return cached3;
-  }
-  let contract;
   try {
     const jsonSchema = exports_Tool.getJsonSchemaFromSchema(definition.output);
-    contract = {
+    return {
       _tag: "rendered",
       message: `${contractDirective}
 
 ${JSON.stringify(jsonSchema, undefined, 2)}`
     };
   } catch (cause) {
-    contract = {
+    return {
       _tag: "unrenderable",
       reason: cause instanceof Error ? cause.message : String(cause)
     };
   }
-  renderedContracts.set(definition, contract);
-  return contract;
 };
 var insertOutputContract = (prompt, message) => {
   const content = prompt.content;
