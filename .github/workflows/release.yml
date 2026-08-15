@@ -432,7 +432,10 @@ jobs:
               fi
               echo "- ${PACKAGE}@${VERSION}: already published, skipped"
             elif [ "$STATUS" = "404" ]; then
-              node "$NPM_CLI" publish "$TARBALL" \
+              # npm 12's npm-package-arg reads a bare "packages/….tgz" as the
+              # hosted-git shorthand "github:packages/…" and dies with
+              # EALLOWGIT; the ./ prefix forces the local-file interpretation.
+              node "$NPM_CLI" publish "./$TARBALL" \
                 --access public \
                 --ignore-scripts \
                 --registry https://registry.npmjs.org \

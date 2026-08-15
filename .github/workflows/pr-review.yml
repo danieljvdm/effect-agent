@@ -36,7 +36,7 @@ jobs:
     # internally; this guard saves the runner spin-up).
     if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
     runs-on: ubuntu-latest
-    # Above the fan-out run's 15-minute duration budget, so a run approaching
+    # Above the configured 10-minute review duration budget, so a run approaching
     # its own budget ends gracefully instead of being killed by the runner
     # with nothing posted.
     timeout-minutes: 20
@@ -52,10 +52,16 @@ jobs:
           # A dedicated secret is preferred. The provider credential is a
           # stable workflow-only fallback and is never sent to the reviewer as state.
           state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET || secrets.OPENAI_API_KEY }}
-          # Dogfood the subagent fan-out variant (S1 attached delegation).
-          fan-out: "true"
-          # Position on [0,1]; resolves to the provider's "high" rung.
-          effort: "high"
+          # Routine incremental deltas use one flat reviewer. Reserve fan-out
+          # for the explicit full-diff audit instead of multiplying model calls
+          # across every corrective push.
+          fan-out: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'true' || 'false' }}
+          # Medium is the routine-review default. The deliberate full-diff
+          # audit gets high effort together with fan-out.
+          effort: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}
+          # Bound pathological fan-out runs below the package's 15-minute
+          # ceiling while leaving headroom under the 20-minute runner timeout.
+          max-duration-minutes: "10"
           # The repository's deep Effect-architecture review profile —
           # distilled from the effect-architecture-audit skill and AGENTS.md's
           # non-negotiables. Fan-out injects it into every child reviewer.
@@ -64,5 +70,9 @@ jobs:
           # budget on: the lockfiles, the committed action bundle, changesets
           # output, and dev-kit-managed skill copies.
           ignore: "bun.lock,dev-kit.lock.json,action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
-          max-findings: "12"
+          # Scale the safety ceiling with PR size instead of truncating a large
+          # review to the same output as a tiny patch. This is an upper bound,
+          # not a quota; the guidance still requires every finding to be
+          # concrete and worth acting on.
+          max-findings: ${{ (github.event.pull_request.changed_files > 20 || github.event.pull_request.additions > 800 || github.event.pull_request.deletions > 800) && '20' || (github.event.pull_request.changed_files > 5 || github.event.pull_request.additions > 250 || github.event.pull_request.deletions > 250) && '12' || '6' }}
           review-mode: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'final' || 'incremental' }}
