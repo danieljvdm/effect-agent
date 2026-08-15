@@ -1,4 +1,4 @@
-import { Context, Effect, Option, Schema } from "effect";
+import { Context, DateTime, Effect, Option, Schema } from "effect";
 
 import {
   ReviewStateAuthenticator,
@@ -22,7 +22,7 @@ export class RetirableReview extends Schema.Class<RetirableReview>(
   body: Schema.String.check(Schema.isMaxLength(60_000)),
   commitSha: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
   authorNodeId: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
-  submittedAt: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(100))),
+  submittedAt: Schema.NullOr(Schema.DateTimeUtc),
 }) {}
 
 /** One inline comment attached to a previously posted review. */
@@ -82,7 +82,7 @@ export interface ReviewRetirementInput {
   readonly currentReviewId: number;
   readonly currentReviewUrl: string;
   readonly currentAuthorNodeId: string;
-  readonly currentSubmittedAt: string;
+  readonly currentSubmittedAt: DateTime.Utc;
   readonly currentState: ReviewState;
 }
 
@@ -220,10 +220,15 @@ const failOpen = <A, E, R>(
     ),
   );
 
-const isStrictlyOlderReview = (review: RetirableReview, input: ReviewRetirementInput): boolean =>
-  review.submittedAt !== null &&
-  (review.submittedAt < input.currentSubmittedAt ||
-    (review.submittedAt === input.currentSubmittedAt && review.reviewId < input.currentReviewId));
+const isStrictlyOlderReview = (review: RetirableReview, input: ReviewRetirementInput): boolean => {
+  if (review.submittedAt === null) return false;
+  const submittedAt = DateTime.toEpochMillis(review.submittedAt);
+  const currentSubmittedAt = DateTime.toEpochMillis(input.currentSubmittedAt);
+  return (
+    submittedAt < currentSubmittedAt ||
+    (submittedAt === currentSubmittedAt && review.reviewId < input.currentReviewId)
+  );
+};
 
 /**
  * Retire every marker-bearing prior review against the newest posted state.

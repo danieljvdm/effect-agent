@@ -1,5 +1,5 @@
 import type { Redacted } from "effect";
-import { Context, Effect, Layer, Option, Schema } from "effect";
+import { Context, DateTime, Effect, Layer, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { ChangedFile } from "./diff.ts";
@@ -146,6 +146,10 @@ const GitHubMinimizeCommentWire = Schema.Struct({
   errors: Schema.optionalKey(Schema.Array(Schema.Struct({ message: Schema.String }))),
 });
 
+/** Decode GitHub's external timestamp before it participates in mutation ordering. */
+export const parseGitHubSubmittedAt = (value: string | null): DateTime.Utc | null =>
+  value === null ? null : Option.getOrNull(DateTime.make(value));
+
 /** The publication receipt callers report back to the operator. */
 export class PublishedReview extends Schema.Class<PublishedReview>(
   "@effect-agent/pr-review/PublishedReview",
@@ -156,7 +160,7 @@ export class PublishedReview extends Schema.Class<PublishedReview>(
   inlineComments: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Actor and ordering boundary returned by the create-review response. */
   authorNodeId: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
-  submittedAt: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(100))),
+  submittedAt: Schema.NullOr(Schema.DateTimeUtc),
 }) {}
 
 /** Posts one planned review; the ONLY mutating operation in this package. */
@@ -398,7 +402,7 @@ export const gitHubReviewPublisherLayer: Layer.Layer<
             event: plan.event,
             inlineComments: plan.comments.length,
             authorNodeId: wire.user?.node_id ?? null,
-            submittedAt: wire.submitted_at,
+            submittedAt: parseGitHubSubmittedAt(wire.submitted_at),
           });
         }),
     });
@@ -494,7 +498,7 @@ export const gitHubReviewRetirementHostLayer: Layer.Layer<
               body: review.body ?? "",
               commitSha: review.commit_id,
               authorNodeId: review.user?.node_id ?? null,
-              submittedAt: review.submitted_at,
+              submittedAt: parseGitHubSubmittedAt(review.submitted_at),
             }),
           ),
         ),

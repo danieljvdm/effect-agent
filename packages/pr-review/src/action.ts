@@ -15,7 +15,7 @@ import {
   openAiClientLayer,
   type ReviewProvider,
 } from "./internal/providers.ts";
-import { retireStaleReviews, ReviewRetirementHost } from "./internal/retirement.ts";
+import { retireStaleReviews } from "./internal/retirement.ts";
 import {
   ReviewExecutionContext,
   ReviewHeadComparison,
@@ -407,8 +407,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     readonly priorReviews?: PriorReviews["Service"] | undefined;
     /** Retire marker-bearing prior reviews after a successful post (default true). */
     readonly retireStaleReviews?: boolean | undefined;
-    /** Explicit deterministic/custom-host retirement override. */
-    readonly retirementHost?: ReviewRetirementHost["Service"] | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -581,18 +579,13 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
               "Skipping stale-review retirement because GitHub did not return the posted review's actor and submission time.",
             );
           } else {
-            const retirement = retireStaleReviews({
+            const report = yield* retireStaleReviews({
               currentReviewId: outcome.published.reviewId,
               currentReviewUrl: outcome.published.url,
               currentAuthorNodeId: outcome.published.authorNodeId,
               currentSubmittedAt: outcome.published.submittedAt,
               currentState: outcome.state,
             });
-            const report = yield* options.retirementHost === undefined
-              ? retirement
-              : retirement.pipe(
-                  Effect.provideService(ReviewRetirementHost, options.retirementHost),
-                );
             yield* Console.log(
               `Review retirement: ${report.reviewsRetired} prior review(s), ` +
                 `${report.findingsResolved} resolved finding(s), ` +

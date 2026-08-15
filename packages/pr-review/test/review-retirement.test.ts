@@ -1,8 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Exit, Option, Redacted, Ref } from "effect";
+import { DateTime, Effect, Exit, Option, Redacted, Ref } from "effect";
 
 import {
   decideReviewRetirement,
+  parseGitHubSubmittedAt,
   RetirableReview,
   RetirableReviewComment,
   ReviewRetirementFailure,
@@ -21,7 +22,7 @@ const PROFILE_FINGERPRINT = "a".repeat(64);
 const SCOPE_FINGERPRINT = "b".repeat(64);
 const STATE_SECRET = Redacted.make("review-retirement-test-secret");
 const BOT_NODE_ID = "BOT_effect-agent-reviewer";
-const CURRENT_SUBMITTED_AT = "2026-08-15T20:10:00Z";
+const CURRENT_SUBMITTED_AT = DateTime.makeUnsafe("2026-08-15T20:10:00Z");
 
 const resolvedFinding = StoredReviewFinding.make({
   path: "src/resolved.ts",
@@ -117,6 +118,16 @@ const unresolvedComment = RetirableReviewComment.make({
 });
 
 describe("review retirement", () => {
+  it("canonicalizes valid GitHub submission times and rejects malformed values", () => {
+    const utc = parseGitHubSubmittedAt("2026-08-15T20:00:00Z");
+    const offset = parseGitHubSubmittedAt("2026-08-15T13:00:00-07:00");
+
+    if (utc === null || offset === null) throw new Error("Expected valid test timestamps");
+    expect(DateTime.toEpochMillis(utc)).toBe(DateTime.toEpochMillis(offset));
+    expect(parseGitHubSubmittedAt("not-a-timestamp")).toBeNull();
+    expect(parseGitHubSubmittedAt(null)).toBeNull();
+  });
+
   it.effect("computes the resolved subset and keeps edited machine state byte-identical", () =>
     Effect.gen(function* () {
       const prior = yield* renderPriorBody;
@@ -159,21 +170,28 @@ describe("review retirement", () => {
               body: prior.body,
               commitSha: PRIOR_HEAD_SHA,
               authorNodeId: BOT_NODE_ID,
-              submittedAt: "2026-08-15T20:00:00Z",
+              submittedAt: DateTime.makeUnsafe("2026-08-15T20:00:00Z"),
+            }),
+            RetirableReview.make({
+              reviewId: 6,
+              body: prior.body,
+              commitSha: PRIOR_HEAD_SHA,
+              authorNodeId: BOT_NODE_ID,
+              submittedAt: null,
             }),
             RetirableReview.make({
               reviewId: 7,
               body: "A human-authored review without the package metadata marker.",
               commitSha: PRIOR_HEAD_SHA,
               authorNodeId: BOT_NODE_ID,
-              submittedAt: "2026-08-15T20:01:00Z",
+              submittedAt: DateTime.makeUnsafe("2026-08-15T20:01:00Z"),
             }),
             RetirableReview.make({
               reviewId: 8,
               body: prior.body,
               commitSha: PRIOR_HEAD_SHA,
               authorNodeId: "USER_copied-signed-state",
-              submittedAt: "2026-08-15T20:02:00Z",
+              submittedAt: DateTime.makeUnsafe("2026-08-15T20:02:00Z"),
             }),
             RetirableReview.make({
               reviewId: 9,
@@ -187,7 +205,7 @@ describe("review retirement", () => {
               body: prior.body,
               commitSha: CURRENT_HEAD_SHA,
               authorNodeId: BOT_NODE_ID,
-              submittedAt: "2026-08-15T20:11:00Z",
+              submittedAt: DateTime.makeUnsafe("2026-08-15T20:11:00Z"),
             }),
           ]),
           listComments: () => Effect.succeed([resolvedComment, unresolvedComment]),
@@ -227,7 +245,7 @@ describe("review retirement", () => {
             body: prior.body,
             commitSha: PRIOR_HEAD_SHA,
             authorNodeId: BOT_NODE_ID,
-            submittedAt: "2026-08-15T20:00:00Z",
+            submittedAt: DateTime.makeUnsafe("2026-08-15T20:00:00Z"),
           }),
         ]),
         listComments: () => Effect.succeed([resolvedComment]),
