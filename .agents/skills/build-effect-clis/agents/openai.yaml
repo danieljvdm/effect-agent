@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build Effect Scripts and CLIs"
+  short_description: "Write every script and CLI with Effect"
+  default_prompt: "Use $build-effect-clis to write or modify this script or CLI as an Effect program with explicit platform boundaries and tests."

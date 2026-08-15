@@ -1,4 +1,4 @@
 interface:
-  display_name: "Effect Expert"
-  short_description: "Apply current Effect v4 patterns and tooling"
-  default_prompt: "Use $effect-ts to apply the relevant Effect architecture, DateTime, Atom, schema, service, error, testing, HTTP, SQL, observability, or CLI guidance."
+  display_name: "Effect TypeScript Setup"
+  short_description: "Set up version-matched Effect guidance"
+  default_prompt: "Use $effect-ts to set up Effect and its package-bundled agent guidance."

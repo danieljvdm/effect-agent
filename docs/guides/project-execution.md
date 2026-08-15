@@ -79,25 +79,22 @@ An agent must not receive “implement the runtime” as a single task.
 
 ## 3. Skill routing
 
-Every coding task uses the project-local `effect-ts` skill in `.agents/skills`. A task names only
-the focused references that match its work; agents do not need to load every reference for every
-change.
+Dev Kit 0.17 moved the general Effect guidance upstream: `node_modules/effect/AGENTS.md` (and the
+documents it links) is the canonical Effect reference, with the pinned checkout under
+`repos/effect` for source-level questions. The project-local skills in `.agents/skills` are now
+focused: a task names only the skill that matches its work; agents do not need to load every
+skill for every change.
 
-| Work in scope                                          | Required reference                                                                        | Planning consequence                                                                                                       |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Effect version, installation, imports, and new APIs    | `effect-ts/references/version-and-source.md` and `effect-ts/references/features.md`       | Verify the pinned source before coding and use the current Effect v4 API rather than remembered v3 patterns.               |
-| Repository scripts and shell/process automation        | `effect-ts/references/guide-cli.md`                                                       | Use `effect/unstable/cli`, platform services, argument arrays, typed command errors, and a harmless help or dry-run check. |
-| IDs, domain values, records, DTOs, and expected errors | `effect-ts/references/guide-schema.md`                                                    | The Schema is implemented before the derived type; IDs are branded; expected errors use `Schema.TaggedError`.              |
-| Reusable Effect helpers and error paths                | `effect-ts/references/guide-effect.md` and `effect-ts/references/guide-error-handling.md` | Use named `Effect.fn`; expected failures stay in `E`; Promise conversion exists only at external boundaries.               |
-| Type inference, validation, and unsafe boundaries      | `effect-ts/references/guide-type-safety-and-boundaries.md`                                | Keep `A`, `E`, and `R` inferred; decode untrusted values; contain unavoidable assertions at validated dynamic boundaries.  |
-| Services, ports, implementations, and Layers           | `effect-ts/references/guide-layers.md`                                                    | Runtime dependencies remain in `R`; Layers yield dependencies instead of accepting environment/client/config arguments.    |
-| Service design or whole-package service audits         | `effect-ts/references/audit-services.md`                                                  | Audit contracts, accessors, constructors, Layers, configuration, requirements, errors, lifecycle, and test evidence.       |
-| Runtime logs, spans, and annotations                   | `effect-ts/references/guide-observability.md`                                             | Use Effect logging and structured annotations inside the owning Effect; do not introduce a logging wrapper.                |
-| Retries and retry classification                       | `effect-ts/references/guide-retries.md`                                                   | Retry only explicitly transient typed failures, bound attempts or elapsed time, and preserve terminal error information.   |
-| Repeated or calendar-based execution                   | `effect-ts/references/guide-schedule.md`                                                  | Express recurrence with `Schedule`, make timing testable, and define exhaustion and interruption behavior.                 |
-| Unit, service, runtime, and conformance tests          | `effect-ts/references/guide-testing.md`                                                   | Use Layers and controllable clocks/providers; assert typed exits; never use wall-clock sleeps in green tests.              |
-| A future HTTP transport boundary                       | `effect-ts/references/guide-http-boundaries.md`                                           | Keep contracts explicit and handlers thin; business orchestration remains in services.                                     |
-| A future SQL persistence boundary                      | `effect-ts/references/guide-sql.md`                                                       | Keep SQL in outward repositories, use Schema-backed rows, explicit transactions, typed failures, and real adapter tests.   |
+| Work in scope                                            | Required reference                                                               | Planning consequence                                                                                                       |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Any Effect code (version, imports, APIs, Schema, Layers) | `node_modules/effect/AGENTS.md`, then `repos/effect` source for exact signatures | Verify the pinned v4 source before coding; use the current Effect v4 API rather than remembered v3 patterns.               |
+| Repository scripts, CLIs, and shell/process automation   | `build-effect-clis/SKILL.md` (+ its `references/`)                               | Use `effect/unstable/cli`, platform services, argument arrays, typed command errors, and a harmless help or dry-run check. |
+| Service design or whole-package service audits           | `effect-architecture-audit/SKILL.md`                                             | Audit contracts, accessors, constructors, Layers, configuration, requirements, errors, lifecycle, and test evidence.       |
+| Unit, service, runtime, and conformance tests            | `testing/SKILL.md` plus `node_modules/effect/AGENTS.md` testing guidance         | Use Layers and controllable clocks/providers; assert typed exits; never use wall-clock sleeps in green tests.              |
+| An HTTP transport boundary                               | `build-effect-apis/SKILL.md` (+ its `references/`)                               | Keep contracts explicit and handlers thin; business orchestration remains in services.                                     |
+| Browser client state (examples/demo)                     | `effect-atom-state/SKILL.md`                                                     | Compose client workflows as atoms with reactivity keys; keep the Effect→Promise boundary at the React edge.                |
+| Cloudflare adapters (storage/platform-cloudflare)        | `cloudflare/SKILL.md` and `durable-objects/SKILL.md`                             | Follow retrieved platform guidance for Workers, DO storage, alarms, and wrangler-free test wiring.                         |
+| Preparing or opening a pull request                      | `open-pull-request/SKILL.md`                                                     | Conventional commits, reviewer-complete descriptions, links to vital code, and concrete evidence.                          |
 
 Review rejects code that technically works but bypasses the applicable skill pattern without a
 documented architectural reason. A shared skill is guidance, not a substitute for this project's
