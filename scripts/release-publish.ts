@@ -3,7 +3,7 @@ import { Console, Effect, FileSystem, Path, Schema, Stream } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
-import { acquireReleaseArtifactStagingDirectory } from "./release-artifact-directory.ts";
+import { prepareReleaseArtifactDirectory } from "./release-artifact-directory.ts";
 
 // ---------------------------------------------------------------------------
 // Publish the public `@effect-agent/*` workspaces to npm with `bun publish`.
@@ -375,17 +375,6 @@ const command = CliCommand.make(
           });
         }
       }
-      // Pack into a scope-owned sibling and expose the requested directory
-      // only after every tarball and the manifest are complete. Failure or
-      // interruption removes the staging tree, while rename makes successful
-      // publication of the prepared tree atomic on the destination volume.
-      const stagingRoot =
-        packRoot === undefined
-          ? undefined
-          : yield* acquireReleaseArtifactStagingDirectory(packRoot);
-      if (stagingRoot !== undefined) {
-        yield* fs.makeDirectory(path.join(stagingRoot, "packages"), { recursive: true });
-      }
       const directories = (yield* fs.readDirectory("packages"))
         .filter((entry) => !entry.startsWith("."))
         .sort()
@@ -402,32 +391,44 @@ const command = CliCommand.make(
         );
         workspaceVersions.set(manifest.name, manifest.version);
       }
-      let published = 0;
-      const releases: Array<typeof PreparedReleasePackage.Type> = [];
-      for (const directory of directories) {
-        const outcome = yield* Effect.scoped(
-          publishOne({
-            directory,
-            dryRun,
-            packDirectory:
-              stagingRoot === undefined ? undefined : path.join(stagingRoot, "packages"),
-            otp: otp._tag === "Some" ? otp.value : undefined,
-            workspaceVersions,
-          }),
-        );
-        if (outcome._tag !== "Private") releases.push(outcome.release);
-        if (outcome._tag === "Published" || outcome._tag === "Prepared") published += 1;
-      }
-      if (packRoot !== undefined && stagingRoot !== undefined) {
-        const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(PreparedReleaseManifest))(
-          PreparedReleaseManifest.make({
-            version: 1,
-            packages: releases,
-          }),
-        );
-        yield* fs.writeFileString(path.join(stagingRoot, "release-manifest.json"), encoded);
-        yield* fs.rename(stagingRoot, packRoot);
-      }
+      const publishAll = (stagingRoot: string | undefined) =>
+        Effect.gen(function* () {
+          if (stagingRoot !== undefined) {
+            yield* fs.makeDirectory(path.join(stagingRoot, "packages"), { recursive: true });
+          }
+          let published = 0;
+          const releases: Array<typeof PreparedReleasePackage.Type> = [];
+          for (const directory of directories) {
+            const outcome = yield* Effect.scoped(
+              publishOne({
+                directory,
+                dryRun,
+                packDirectory:
+                  stagingRoot === undefined ? undefined : path.join(stagingRoot, "packages"),
+                otp: otp._tag === "Some" ? otp.value : undefined,
+                workspaceVersions,
+              }),
+            );
+            if (outcome._tag !== "Private") releases.push(outcome.release);
+            if (outcome._tag === "Published" || outcome._tag === "Prepared") published += 1;
+          }
+          if (stagingRoot !== undefined) {
+            const encoded = yield* Schema.encodeEffect(
+              Schema.fromJsonString(PreparedReleaseManifest),
+            )(
+              PreparedReleaseManifest.make({
+                version: 1,
+                packages: releases,
+              }),
+            );
+            yield* fs.writeFileString(path.join(stagingRoot, "release-manifest.json"), encoded);
+          }
+          return published;
+        });
+      const published =
+        packRoot === undefined
+          ? yield* publishAll(undefined)
+          : yield* prepareReleaseArtifactDirectory(packRoot, publishAll);
       yield* Console.log(
         packRoot !== undefined
           ? `Release preparation complete: ${published} package(s) packed in ${packRoot}.`

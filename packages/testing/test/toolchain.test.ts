@@ -1,10 +1,10 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Effect, FileSystem, Path, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, FileSystem, Path, PlatformError, Schema, Stream } from "effect";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
-import { acquireReleaseArtifactStagingDirectory } from "../../../scripts/release-artifact-directory.ts";
+import { prepareReleaseArtifactDirectory } from "../../../scripts/release-artifact-directory.ts";
 import {
   InvalidCommitSha,
   ReleaseTreeMismatch,
@@ -355,6 +355,213 @@ esac
   ]);
   const invocation = (yield* fs.exists(capturePath)) ? yield* fs.readFileString(capturePath) : "";
   return { exitCode, invocation, output } as const;
+});
+
+const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(function* (
+  script: string,
+  options: {
+    readonly packageMetadata: string;
+    readonly registryStatus: "200" | "404";
+    readonly versionMetadata: string;
+  },
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const temporaryRoot = yield* fs.makeTempDirectoryScoped({
+    prefix: "effect-agent-release-publisher-test-",
+  });
+  const artifactDirectory = path.join(temporaryRoot, "artifact-source");
+  const binDirectory = path.join(temporaryRoot, "bin");
+  const publishCapture = path.join(temporaryRoot, "npm-publish-invoked");
+  const trustedManifestDirectory = path.join(temporaryRoot, "trusted-manifests");
+  const version = "0.0.1-beta.7";
+  yield* fs.makeDirectory(path.join(artifactDirectory, "packages"), { recursive: true });
+  yield* fs.makeDirectory(binDirectory, { recursive: true });
+  yield* fs.makeDirectory(trustedManifestDirectory, { recursive: true });
+
+  const releases: Array<{
+    readonly distTag: "beta";
+    readonly name: string;
+    readonly tarball: string | null;
+    readonly version: string;
+  }> = [];
+  for (const directory of packageNames) {
+    const manifest = yield* readManifest(`${repositoryRoot}/packages/${directory}/package.json`);
+    if (manifest.name === undefined) {
+      return yield* Effect.die(new Error(`Release package ${directory} must have a name.`));
+    }
+    yield* fs.writeFileString(
+      path.join(trustedManifestDirectory, `${directory}.json`),
+      `${JSON.stringify({ name: manifest.name, version })}\n`,
+    );
+    releases.push({
+      distTag: "beta",
+      name: manifest.name,
+      tarball: directory === "capabilities" ? "packages/capabilities.tgz" : null,
+      version,
+    });
+  }
+  yield* fs.writeFileString(
+    path.join(artifactDirectory, "release-manifest.json"),
+    `${JSON.stringify({ version: 1, packages: releases })}\n`,
+  );
+  yield* fs.writeFileString(path.join(artifactDirectory, "SHA256SUMS"), "fixture\n");
+  yield* fs.writeFileString(path.join(artifactDirectory, "npm-12.0.2.tgz"), "fixture\n");
+  yield* fs.writeFileString(
+    path.join(artifactDirectory, "packages", "capabilities.tgz"),
+    "fixture\n",
+  );
+
+  const writeExecutable = (name: string, contents: string) =>
+    Effect.gen(function* () {
+      const file = path.join(binDirectory, name);
+      yield* fs.writeFileString(file, contents);
+      yield* fs.chmod(file, 0o755);
+    });
+  yield* Effect.all([
+    writeExecutable(
+      "gh",
+      `#!/usr/bin/env bash
+set -euo pipefail
+REQUEST="$*"
+if [[ "$REQUEST" == *"/actions/runs/"*"/artifacts"* ]]; then
+  printf '731\n'
+elif [[ "$REQUEST" == *"/actions/artifacts/731/zip"* ]]; then
+  printf 'fixture archive\n'
+elif [[ "$REQUEST" =~ /contents/packages/([^/]+)/package.json ]]; then
+  cat "$PUBLISH_TRUSTED_MANIFESTS/\${BASH_REMATCH[1]}.json"
+else
+  echo "Unexpected gh invocation: $REQUEST" >&2
+  exit 64
+fi
+`,
+    ),
+    writeExecutable(
+      "unzip",
+      `#!/usr/bin/env bash
+set -euo pipefail
+DESTINATION=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-d" ]; then
+    shift
+    DESTINATION="\${1:-}"
+  fi
+  shift
+done
+test -n "$DESTINATION"
+mkdir -p "$DESTINATION"
+cp -R "$PUBLISH_ARTIFACT_SOURCE"/. "$DESTINATION"/
+`,
+    ),
+    writeExecutable(
+      "sha256sum",
+      `#!/usr/bin/env bash
+exit 0
+`,
+    ),
+    writeExecutable(
+      "node",
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "--eval" ]; then
+  exit 0
+fi
+if [ "\${2:-}" = "publish" ]; then
+  printf '%s\n' "$*" > "$PUBLISH_CAPTURE"
+  exit 0
+fi
+echo "Unexpected node invocation: $*" >&2
+exit 64
+`,
+    ),
+    writeExecutable(
+      "tar",
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [ "\${1:-}" = "-xzf" ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-C" ]; then
+      shift
+      mkdir -p "$1/package/bin"
+      printf 'fixture\n' > "$1/package/bin/npm-cli.js"
+      exit 0
+    fi
+    shift
+  done
+fi
+if [ "\${1:-}" = "-xOf" ]; then
+  printf '{"name":"@effect-agent/capabilities","version":"0.0.1-beta.7"}\n'
+  exit 0
+fi
+exit 64
+`,
+    ),
+    writeExecutable(
+      "stat",
+      `#!/usr/bin/env bash
+printf '128\n'
+`,
+    ),
+    writeExecutable(
+      "curl",
+      `#!/usr/bin/env bash
+set -euo pipefail
+URL="\${!#}"
+if [[ "$*" == *"--write-out"* ]]; then
+  printf '%s' "$PUBLISH_REGISTRY_STATUS"
+elif [[ "$URL" == */0.0.1-beta.7 ]]; then
+  printf '%s' "$PUBLISH_VERSION_METADATA"
+else
+  printf '%s' "$PUBLISH_PACKAGE_METADATA"
+fi
+`,
+    ),
+    writeExecutable(
+      "openssl",
+      `#!/usr/bin/env bash
+printf 'fixture bytes'
+`,
+    ),
+    writeExecutable(
+      "base64",
+      `#!/usr/bin/env bash
+cat > /dev/null
+printf 'fixture-integrity'
+`,
+    ),
+  ]);
+
+  const child = yield* ChildProcess.make("bash", ["-euo", "pipefail", "-c", script], {
+    cwd: temporaryRoot,
+    env: {
+      GH_TOKEN: "test-token",
+      GITHUB_REPOSITORY: "effect-agent/release-publisher-fixture",
+      GITHUB_RUN_ID: "1234",
+      GITHUB_SHA: "1111111111111111111111111111111111111111",
+      NPM_CLI_SHA256: "fixture-checksum",
+      NPM_CLI_VERSION: "12.0.2",
+      PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
+      PUBLISH_ARTIFACT_SOURCE: artifactDirectory,
+      PUBLISH_CAPTURE: publishCapture,
+      PUBLISH_PACKAGE_METADATA: options.packageMetadata,
+      PUBLISH_REGISTRY_STATUS: options.registryStatus,
+      PUBLISH_TRUSTED_MANIFESTS: trustedManifestDirectory,
+      PUBLISH_VERSION_METADATA: options.versionMetadata,
+      RUNNER_TEMP: path.join(temporaryRoot, "runner"),
+    },
+    extendEnv: true,
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [output, exitCode] = yield* Effect.all([
+    Stream.mkString(Stream.decodeText(child.all)),
+    child.exitCode,
+  ]);
+  return {
+    exitCode,
+    output,
+    publishInvoked: yield* fs.exists(publishCapture),
+  } as const;
 });
 
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
@@ -754,6 +961,79 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     15_000,
   );
 
+  it.effect(
+    "executes the isolated publisher fail-closed before npm publish",
+    () =>
+      Effect.gen(function* () {
+        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+        const publishScript = workflowStep(
+          releaseWorkflow,
+          "publish-packages",
+          "Verify and publish prepared tarballs",
+        )?.run;
+        if (publishScript === undefined) {
+          return yield* Effect.die(new Error("Release publisher must have an executable body."));
+        }
+
+        const validVersionMetadata = JSON.stringify({
+          dist: { integrity: "sha512-fixture-integrity" },
+        });
+        const validPackageMetadata = JSON.stringify({
+          "dist-tags": { beta: "0.0.1-beta.7" },
+        });
+        const existingVersion = yield* runReleasePublisher(publishScript, {
+          packageMetadata: validPackageMetadata,
+          registryStatus: "200",
+          versionMetadata: validVersionMetadata,
+        });
+        expect(existingVersion).toMatchObject({ exitCode: 0, publishInvoked: false });
+
+        const invalidMetadata = [
+          {
+            packageMetadata: validPackageMetadata,
+            versionMetadata: "not-json",
+          },
+          {
+            packageMetadata: validPackageMetadata,
+            versionMetadata: JSON.stringify({ dist: {} }),
+          },
+          {
+            packageMetadata: validPackageMetadata,
+            versionMetadata: JSON.stringify({ dist: { integrity: "sha512-other" } }),
+          },
+          {
+            packageMetadata: "not-json",
+            versionMetadata: validVersionMetadata,
+          },
+          {
+            packageMetadata: JSON.stringify({ "dist-tags": {} }),
+            versionMetadata: validVersionMetadata,
+          },
+          {
+            packageMetadata: JSON.stringify({ "dist-tags": { beta: "0.0.1-beta.6" } }),
+            versionMetadata: validVersionMetadata,
+          },
+        ];
+        for (const fixture of invalidMetadata) {
+          const result = yield* runReleasePublisher(publishScript, {
+            packageMetadata: fixture.packageMetadata,
+            registryStatus: "200",
+            versionMetadata: fixture.versionMetadata,
+          });
+          expect(result.exitCode).not.toBe(0);
+          expect(result.publishInvoked).toBe(false);
+        }
+
+        const unpublishedVersion = yield* runReleasePublisher(publishScript, {
+          packageMetadata: validPackageMetadata,
+          registryStatus: "404",
+          versionMetadata: validVersionMetadata,
+        });
+        expect(unpublishedVersion).toMatchObject({ exitCode: 0, publishInvoked: true });
+      }),
+    40_000,
+  );
+
   it.effect("publishes prepared release directories atomically and cleans failed staging", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -765,9 +1045,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       let failedStaging = "";
 
       const failure = yield* Effect.flip(
-        Effect.scoped(
+        prepareReleaseArtifactDirectory(destination, (staging) =>
           Effect.gen(function* () {
-            failedStaging = yield* acquireReleaseArtifactStagingDirectory(destination);
+            failedStaging = staging;
             yield* fs.writeFileString(path.join(failedStaging, "partial"), "incomplete\n");
             return yield* Effect.fail("fixture-failure" as const);
           }),
@@ -777,12 +1057,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(yield* fs.exists(failedStaging)).toBe(false);
       expect(yield* fs.exists(destination)).toBe(false);
 
-      yield* Effect.scoped(
+      yield* prepareReleaseArtifactDirectory(destination, (staging) =>
         Effect.gen(function* () {
-          const staging = yield* acquireReleaseArtifactStagingDirectory(destination);
           expect(path.dirname(staging)).toBe(path.dirname(destination));
           yield* fs.writeFileString(path.join(staging, "release-manifest.json"), "{}\n");
-          yield* fs.rename(staging, destination);
         }),
       );
       expect(yield* fs.readFileString(path.join(destination, "release-manifest.json"))).toBe(
@@ -793,6 +1071,37 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           entry.startsWith(".effect-agent-release-staging-"),
         ),
       ).toEqual([]);
+
+      const commitCause = PlatformError.systemError({
+        _tag: "PermissionDenied",
+        module: "FileSystem",
+        method: "rename",
+        pathOrDescriptor: destination,
+      });
+      const cleanupCause = PlatformError.systemError({
+        _tag: "Busy",
+        module: "FileSystem",
+        method: "remove",
+        pathOrDescriptor: failedStaging,
+      });
+      const failingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        remove: () => Effect.fail(cleanupCause),
+        rename: () => Effect.fail(commitCause),
+      });
+      const cleanupExit = yield* prepareReleaseArtifactDirectory(
+        path.join(temporaryRoot, "cleanup-failure"),
+        () => Effect.void,
+      ).pipe(Effect.provideService(FileSystem.FileSystem, failingFileSystem), Effect.exit);
+      expect(Exit.isFailure(cleanupExit)).toBe(true);
+      if (Exit.isFailure(cleanupExit)) {
+        expect(Cause.hasDies(cleanupExit.cause)).toBe(false);
+        const diagnostics = Cause.pretty(cleanupExit.cause);
+        expect(diagnostics).toContain("Could not commit release artifacts");
+        expect(diagnostics).toContain("PermissionDenied: FileSystem.rename");
+        expect(diagnostics).toContain("Could not cleanup release artifacts");
+        expect(diagnostics).toContain("Busy: FileSystem.remove");
+      }
     }),
   );
 
