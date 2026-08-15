@@ -98,10 +98,45 @@ const decodeAskRequestBody = Schema.decodeUnknownOption(AskRequestBody);
 
 const MAX_BODY_BYTES = 64 * 1024;
 
-/** Parse the request body's question; any malformed body falls to the default. */
-const readQuestion = (request: Request): Effect.Effect<string> =>
-  Effect.tryPromise(() => request.json()).pipe(
-    Effect.map((parsed) => {
+class BodyTooLarge extends Schema.TaggedError<BodyTooLarge>()("BodyTooLarge", {}) {}
+
+/**
+ * Read the request body through a size-limited stream: the bound is enforced
+ * on bytes ACTUALLY consumed, so chunked requests without (or with forged)
+ * `Content-Length` cannot buffer past `MAX_BODY_BYTES`. Malformed bodies fall
+ * to the default question; only oversize is a typed failure (413 at the edge).
+ */
+const readQuestion = (request: Request): Effect.Effect<string, BodyTooLarge> =>
+  Effect.tryPromise(async () => {
+    const reader = request.body?.getReader();
+    if (reader === undefined) return "";
+    const chunks: Array<Uint8Array> = [];
+    let received = 0;
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      received += chunk.value.byteLength;
+      if (received > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new BodyTooLarge();
+      }
+      chunks.push(chunk.value);
+    }
+    const merged = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(merged);
+  }).pipe(
+    Effect.map((textBody) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(textBody);
+      } catch {
+        return DEFAULT_QUESTION;
+      }
       const body = decodeAskRequestBody(parsed);
       const question = body._tag === "Some" ? body.value.question : undefined;
       return typeof question === "string" && question.trim().length > 0
@@ -109,7 +144,11 @@ const readQuestion = (request: Request): Effect.Effect<string> =>
           question.slice(0, 2_000)
         : DEFAULT_QUESTION;
     }),
-    Effect.catch(() => Effect.succeed(DEFAULT_QUESTION)),
+    Effect.catch((error) =>
+      error.cause instanceof BodyTooLarge
+        ? Effect.fail(new BodyTooLarge())
+        : Effect.succeed(DEFAULT_QUESTION),
+    ),
   );
 
 /** Which registered binding should serve this request. */
@@ -319,9 +358,10 @@ const askHandler = Effect.gen(function* () {
   if (request.method !== "POST") {
     return Response.json({ error: "POST required" }, { status: 405 });
   }
-  // Bound the request BEFORE buffering the body, not after.
-  const contentLength = Number(request.headers.get("content-length") ?? "0");
-  if (!Number.isFinite(contentLength) || contentLength > MAX_BODY_BYTES) {
+  // Early rejection when the client declares an oversized body; the REAL
+  // bound is enforced on consumed bytes inside `readQuestion`.
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (!Number.isFinite(declaredLength) || declaredLength > MAX_BODY_BYTES) {
     return Response.json({ error: "request body too large" }, { status: 413 });
   }
   const liveMode = env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0;
@@ -340,7 +380,11 @@ const askHandler = Effect.gen(function* () {
   if (hasAuthToken && request.headers.get("authorization") !== `Bearer ${authToken}`) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
-  const question = yield* readQuestion(request);
+  const questionOutcome = yield* readQuestion(request).pipe(Effect.exit);
+  if (Exit.isFailure(questionOutcome)) {
+    return Response.json({ error: "request body too large" }, { status: 413 });
+  }
+  const question = questionOutcome.value;
 
   // Idempotent seed over the root-provided D1 SqlClient: a persistence
   // failure is EXPECTED — log the cause server-side, answer a generic 503.

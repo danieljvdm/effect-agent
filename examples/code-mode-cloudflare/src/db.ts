@@ -20,6 +20,7 @@ export const invoiceDbSqlLayer = (db: D1Database): Layer.Layer<SqlClient.SqlClie
   Layer.orDie(D1Client.layer({ db }));
 
 const MAX_ROWS = 200;
+const MAX_RESULT_BYTES = 256 * 1024;
 
 /** A read-only query outcome the tool handler branches on. */
 export interface QueryOutcome {
@@ -47,19 +48,18 @@ const seedRows = [
 export const seedInvoices: Effect.Effect<void, unknown, SqlClient.SqlClient> = Effect.gen(
   function* () {
     const sql = yield* SqlClient.SqlClient;
+    // `customer` is the stable unique key, and every attempt replays every
+    // row with INSERT OR IGNORE — so concurrent first requests and partially
+    // failed earlier attempts both converge on the complete dataset without a
+    // read-then-write race.
     yield* sql`CREATE TABLE IF NOT EXISTS invoice_summary (
-      customer TEXT NOT NULL,
+      customer TEXT PRIMARY KEY,
       region TEXT NOT NULL,
       revenue INTEGER NOT NULL,
       created_at TEXT NOT NULL
     )`;
-    const existing = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`.pipe(
-      Effect.map((rows) => Number((rows[0] as { n?: unknown }).n ?? 0)),
-    );
-    if (existing === 0) {
-      for (const row of seedRows) {
-        yield* sql`INSERT INTO invoice_summary ${sql.insert(row)}`;
-      }
+    for (const row of seedRows) {
+      yield* sql`INSERT OR IGNORE INTO invoice_summary ${sql.insert(row)}`;
     }
   },
 );
@@ -148,8 +148,13 @@ export const runReadOnlyQuery = (
       return deniedOutcome(denied);
     }
     const sql = yield* SqlClient.SqlClient;
+    // Enforce the row bound INSIDE the database operation: the statement is
+    // untrusted model output, so it is wrapped as a subquery with a hard
+    // LIMIT (SQLite accepts CTE-bearing selects as table expressions) —
+    // a Cartesian product never materializes more than MAX_ROWS + 1 rows.
+    const bounded = `SELECT * FROM (${text}) LIMIT ${MAX_ROWS + 1}`;
     const raw = yield* sql
-      .unsafe<Record<string, unknown>>(text, parameters as Array<unknown>)
+      .unsafe<Record<string, unknown>>(bounded, parameters as Array<unknown>)
       .withoutTransform.pipe(
         Effect.map((rows) => ({ ok: true as const, rows })),
         Effect.catch((error) =>
@@ -164,6 +169,7 @@ export const runReadOnlyQuery = (
     }
     const rows: Array<Record<string, unknown>> = [];
     let truncated = false;
+    let usedBytes = 0;
     for (const row of raw.rows) {
       if (rows.length >= MAX_ROWS) {
         truncated = true;
@@ -173,6 +179,17 @@ export const runReadOnlyQuery = (
       if (Option.isNone(decoded)) {
         return deniedOutcome("a result row contained a non-JSON value");
       }
+      // Output-byte bound: even a single oversized computed value must not
+      // produce an unbounded broker payload.
+      const bytes = new TextEncoder().encode(JSON.stringify(decoded.value)).byteLength;
+      if (bytes > MAX_RESULT_BYTES) {
+        return deniedOutcome("a result row exceeded the output byte budget");
+      }
+      if (usedBytes + bytes > MAX_RESULT_BYTES) {
+        truncated = true;
+        break;
+      }
+      usedBytes += bytes;
       rows.push(decoded.value);
     }
     return {
