@@ -151,6 +151,31 @@ fresh child Conversations. Owner approval and roadmap placement remain required.
 Proposed record: [ADR-0010](adr/0010-declared-attached-subagents.md)
 Specification: [Subagents](spec/subagents.md)
 
+### D-035 — Code Mode capability
+
+**Status:** Proposed
+**Recommendation:** Add a platform-neutral Code Mode capability: one native Effect AI Tool whose
+input is bounded JavaScript source, executed in one isolated pass that may call an explicit
+allowlist of existing Tools through typed sandbox globals and an engine-owned broker. The
+capability lives in `@effect-agent/capabilities`; the callback-capable `CodeExecutor` port is a
+sibling service in `@effect-agent/sandbox` (adding the documented `capabilities -> sandbox`
+dependency edge); the first isolated executor is a Cloudflare Dynamic Worker Layer in
+`@effect-agent/platform-cloudflare`; the first integration slice is a read-only SQL reference
+Tool. Deployment class `E` only; Code Mode in the `DN` or `DC` assemblies requires a future
+accepted ADR.
+
+The eleven scoped design defaults — package and port placement, the Delegation-pattern builder
+over an explicit Tool record, raw SQL over curated read-only views, `truncated: true` success by
+default, the budget model (one model-visible outer call plus per-inner-call budgets consumed
+mid-pass), a new canonical record family for `DN`/`DC` inner calls, reads recorded by default for
+replay, a content-addressed
+execution digest, and the one-async-function-expression calling convention — were resolved by
+owner decision on 2026-08-14. Owner approval and roadmap placement for implementation remain
+required.
+
+Proposed record: [ADR-0017](adr/0017-code-mode-executor-and-broker.md)
+Plan: [Code Mode implementation plan](CODE-MODE-PLAN.md)
+
 ## Platforms, persistence, and operations
 
 ### D-014 — Initial platforms

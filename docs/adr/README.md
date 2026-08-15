@@ -27,9 +27,10 @@ The records below reflect explicit owner decisions.
 
 ## Proposed
 
-| ADR                                             | Recommendation                                                                                                                                                          |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ADR-0010](0010-declared-attached-subagents.md) | Model Subagents as declared attached delegation Tools — S1 and S2 implemented as proposed defaults ([S1 evidence](../S1-EVIDENCE.md), [S2 evidence](../S2-EVIDENCE.md)) |
+| ADR                                               | Recommendation                                                                                                                                                                                                                                                    |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ADR-0010](0010-declared-attached-subagents.md)   | Model Subagents as declared attached delegation Tools — S1 and S2 implemented as proposed defaults ([S1 evidence](../S1-EVIDENCE.md), [S2 evidence](../S2-EVIDENCE.md))                                                                                           |
+| [ADR-0017](0017-code-mode-executor-and-broker.md) | Code Mode: a callback-capable `CodeExecutor` port in sandbox, an engine-owned native Tool broker, and one native Tool executing bounded generated JavaScript over an explicit allowlist — design defaults resolved by owner 2026-08-14; implementation unassigned |
 
 ## Status transitions
 
