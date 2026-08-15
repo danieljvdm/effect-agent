@@ -55,7 +55,9 @@ constrains new packages.
    harness entrypoint. Model-facing TypeScript declarations are derived from the encoded side of
    the original Schemas via Effect AI's JSON-schema derivation and fail Tool construction closed
    on non-renderable schemas; runtime validation always uses the original Schemas. A failed inner
-   call rejects with a Schema-encoded envelope carrying the existing framework error tags.
+   call rejects with a Schema-encoded envelope carrying the existing framework error tags. The
+   final result, captured logs, and thrown values form one model-visible egress surface under a
+   single aggregate byte budget and redaction policy.
 6. **First slice.** Read-only only: the builder rejects non-`readonly` and approval-requiring
    Tools at construction and annotates the outer Tool `readonly`. Deployment class `E` only. The
    reference integration is a raw-SQL Tool over curated read-only views whose safety comes from
@@ -67,7 +69,7 @@ constrains new packages.
    the scoped broker RPC stub as capability, platform CPU limits as the runaway stop, all handles
    disposed in Scope finalizers. No cost or performance claim is made before measurement; any
    future stable-ID Worker caching must include tenant and binding context in cache identity.
-8. **Durability is deferred.** Durable Code Mode (abort-and-replay with recorded inner calls, a
+8. **Durability is deferred.** `DN`/`DC` Code Mode (abort-and-replay with recorded inner calls, a
    new canonical record family, reads recorded by default, a content-addressed execution digest,
    and reconciliation halts at prepared-unsettled `uncertain` calls) requires its own accepted
    ADR and canonical record design before any `DN`/`DC` claim.
@@ -90,7 +92,7 @@ constrains new packages.
 ## Rejected alternatives
 
 - **Adopt `@cloudflare/codemode` as the framework abstraction.** Its Promise-first executor,
-  connector definitions, and separate durable log duplicate Effect AI Tool semantics and the
+  connector definitions, and separate persistence log duplicate Effect AI Tool semantics and the
   canonical durability contract. It remains prior art only.
 - **Pass database or platform bindings directly into generated code.** Grants authority outside
   Tool authorization, Schema validation, audit, tenancy, and durability policy.

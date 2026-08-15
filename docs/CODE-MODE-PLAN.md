@@ -53,7 +53,10 @@ type CodeModeSuccess = {
 
 `Json` denotes Effect `Schema.Json` values; when Code Mode values later become canonical they use
 the bounded `PersistedJson` family instead. The typed failure envelope carries the same bounded
-`logs` capture as success, so a model can correct a failing program without a blind retry.
+`logs` capture as success, so a model can correct a failing program without a blind retry. The
+final result, success logs, failure logs, and any thrown value form one model-visible egress
+surface governed by a single aggregate byte budget and redaction policy (section 5.1); no channel
+carries data the aggregate policy has not passed.
 
 The exact public constructor remains a design task, but it must return or contribute an ordinary
 Effect AI `Tool` / `Toolkit`; Effect Agent must not introduce a competing Tool abstraction.
@@ -136,7 +139,8 @@ Responsibilities:
 - invoke `CodeExecutor` and the engine-owned broker;
 - annotate the outer Tool `readonly` for the first slice (an unannotated Tool reads as
   `uncertain` under the fail-closed execution-class default);
-- bound and redact final results and captured logs;
+- enforce one aggregate model-visible egress policy: the final result, success and failure logs,
+  and thrown values share a single bounded byte budget and redaction pass;
 - expose no Cloudflare types.
 
 If the capability later gains an independently useful release boundary, it may move to
@@ -352,8 +356,11 @@ async () => {
 };
 ```
 
-Only the bounded final value returns to model context. Intermediate rows stay inside the isolated
-pass.
+Only the bounded model-visible egress — the final value plus captured logs — returns to model
+context. Intermediate rows never leave the pass implicitly: not through telemetry, canonical
+records, or declarations. The program may explicitly return or log data it was authorized to read
+through its Tools, but only within the aggregate egress budget; containment is a claim about
+implicit leakage and context size, not a boundary against the program's own deliberate output.
 
 ### 8.3 Host Tool contract
 
@@ -431,7 +438,9 @@ The executor records no durable state. A later pass may run in a completely diff
   authorized host Tool or a policy-enforcing outbound service.
 - No raw secret may be returned by a host Tool or included in a Worker binding.
 - Synchronous loops must be stopped by platform CPU limits, not only by a JavaScript timer.
-- Adapter errors map into the typed `CodeExecutionError` union and retain bounded diagnostic data.
+- Expected adapter failures — startup, timeout, termination, protocol, and transport — map into
+  the typed `CodeExecutionError` union with bounded diagnostic data; unexpected adapter defects
+  remain defects.
 
 ### 9.3 Cost and operations
 
@@ -509,9 +518,9 @@ designed observability boundary of class-`E` Code Mode; section 12 is what chang
 
 ## 12. Durability design for a later phase
 
-The first slice makes no durable Code Mode claim. Durable support requires an accepted ADR and new
-canonical semantics; it must not be obtained by merely annotating the outer Code Mode Tool as
-`idempotent`.
+The first slice makes no `DN` or `DC` Code Mode claim. Code Mode support in either the `DN` or
+`DC` assembly requires an accepted ADR and new canonical semantics; it must not be obtained by
+merely annotating the outer Code Mode Tool as `idempotent`.
 
 ### 12.1 Replay model
 
@@ -682,7 +691,8 @@ Exit gates:
 
 - the executor receives no database client, credentials, address, or network authority;
 - mutation, multiple statements, over-limit output, timeout, and cross-tenant attempts fail closed;
-- intermediate rows do not enter model context or ordinary telemetry;
+- intermediate rows never enter ordinary telemetry, and reach model context only when the program
+  explicitly returns or logs them within the aggregate egress budget;
 - the same final result is deterministic under the test fixture.
 
 ### C4 — Cloudflare Dynamic Worker adapter
