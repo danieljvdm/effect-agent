@@ -68,6 +68,11 @@ The repository provides a scripted Layer implementing Effect AI `LanguageModel` 
 This Layer is the default for engine tests. Real providers are not required for
 most correctness coverage.
 
+A scripted Layer cannot catch model-visible information that is missing from the request — it
+plays back its script regardless of what the request said. The engine's final-output path is
+therefore additionally exercised against a live-shaped LanguageModel substitute that derives its
+responses only from the model-visible request (TEST-016).
+
 ## 3. Runtime state-machine tests
 
 Generated command sequences cover:
@@ -341,3 +346,8 @@ No durability milestone is complete while its crash tests are skipped.
   offline, while live provider profiles are opt-in.
 - **TEST-015**: Every `CodeExecutor` adapter passes the shared executor conformance suite, and
   direct versus programmatic invocation of the same Tool is observably equivalent.
+- **TEST-016**: The engine's final-output path is exercised against a live-shaped LanguageModel
+  substitute that derives its responses only from the model-visible request (prompt text,
+  advertised schemas, tools) — never from test-known expected values — so offline suites catch
+  model-visible contract information missing from the request that a scripted model would
+  fabricate away.

@@ -2453,7 +2453,7 @@ const makeTurn = <
     Effect.gen(function* () {
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
-      // Model-visible final-output contract (proposed default):
+      // Model-visible final-output contract (RUN-028):
       // derived before context preparation so a limit-targeting adapter can
       // reserve the contract's overhead in its window calculation, applied to
       // the request after preparation so compaction cannot drop it, and never

@@ -216,7 +216,7 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
         ...turn,
         assertRequest: (request) => {
           // The compacted request keeps the model-visible output contract
-          // (proposed default) ahead of the compacted view.
+          // (RUN-028) ahead of the compacted view.
           expect(request.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
           receivedPrompts.push(JSON.stringify(request.prompt.content));
         },

@@ -4338,7 +4338,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const receivedPrompts = yield* Ref.get(received);
       expect(receivedPrompts).toHaveLength(2);
       for (const receivedPrompt of receivedPrompts) {
-        // The model-visible output contract (proposed default) is
+        // The model-visible output contract (RUN-028) is
         // applied after context preparation, so compaction cannot drop it.
         expect(receivedPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
         const encoded = JSON.stringify(receivedPrompt.content);
