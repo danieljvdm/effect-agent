@@ -8,7 +8,7 @@ import {
   TurnId,
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Layer, Logger, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import { AgentRuntime } from "../src/index.ts";
@@ -292,6 +292,136 @@ layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", 
         expect(captured).toHaveLength(1);
         expect(captured[0]?.content.map((message) => message.role)).toEqual(["system", "user"]);
         expect(contractMessages(captured[0]!)).toHaveLength(0);
+      });
+    },
+  );
+
+  it.effect(
+    "exposes the exact contract to context preparation so adapters can reserve its overhead",
+    () => {
+      const captured: Array<Prompt.Prompt> = [];
+      const observedContracts: Array<string | undefined> = [];
+      const definition = Agent.define("contract-context-visibility", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer the question.",
+        toolkit: Toolkit.empty,
+        policy,
+      });
+      const agent = Agent.withModel(definition, liveShapedModel(captured));
+
+      return Effect.gen(function* () {
+        const result = yield* AgentRuntime.run(
+          agent,
+          { question: "How big is the request?" },
+          {
+            context: {
+              prepare: (request) =>
+                Effect.sync(() => {
+                  observedContracts.push(request.outputContract);
+                  return { prompt: request.source };
+                }),
+            },
+          },
+        );
+        expect(result.output).toEqual({ answer: "live-shaped" });
+        expect(observedContracts).toHaveLength(1);
+        // Byte-equal with the message actually appended to the request: an
+        // adapter compacting toward a model-input limit can reserve exactly
+        // this overhead before the engine composes the final request.
+        const appended = contractMessages(captured[0]!).at(0);
+        expect(appended).toBeDefined();
+        expect(observedContracts[0]).toBe(appended);
+      });
+    },
+  );
+
+  it.effect(
+    "logs the unrenderable diagnostic exactly once at Turn 1 and still completes when the final text decodes",
+    () => {
+      const Search = Tool.make("search", {
+        parameters: Schema.Struct({ query: Schema.String }),
+        success: Schema.Struct({ available: Schema.Boolean }),
+      });
+      const tools = Toolkit.make(Search);
+      const observedContracts: Array<string | undefined> = [];
+      const warnings: Array<string> = [];
+      const logger = Logger.make<unknown, void>(({ logLevel, message }) => {
+        const rendered = Array.isArray(message) ? message.join(" ") : String(message);
+        if (logLevel === "Warn" && rendered.includes("cannot render to JSON Schema")) {
+          warnings.push(rendered);
+        }
+      });
+      const model = Model.make(
+        "scripted",
+        "two-turn-unrenderable",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          Effect.gen(function* () {
+            const turn = yield* Ref.make(0);
+            return yield* LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.unwrap(
+                  Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                    Effect.map((value) =>
+                      Stream.fromIterable<Response.StreamPartEncoded>(
+                        value === 0
+                          ? [
+                              {
+                                type: "tool-call",
+                                id: "search-1",
+                                name: "search",
+                                params: { query: "sea" },
+                                providerExecuted: false,
+                              },
+                              { type: "finish", reason: "tool-calls", usage },
+                            ]
+                          : finalParts('["first",1,"last"]'),
+                      ),
+                    ),
+                  ),
+                ),
+            });
+          }),
+        ),
+      );
+      const definition = Agent.define("contract-unrenderable-two-turn", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.TupleWithRest(Schema.Tuple([Schema.String]), [Schema.Int, Schema.String]),
+        instructions: "Search before answering.",
+        toolkit: tools,
+        policy,
+      });
+      const agent = Agent.withModel(definition, model);
+      const toolLayer = tools.toLayer({
+        search: () => Effect.succeed({ available: true }),
+      });
+
+      return Effect.gen(function* () {
+        const result = yield* AgentRuntime.run(
+          agent,
+          { question: "Is a flight available?" },
+          {
+            context: {
+              prepare: (request) =>
+                Effect.sync(() => {
+                  observedContracts.push(request.outputContract);
+                  return { prompt: request.source };
+                }),
+            },
+          },
+        ).pipe(Effect.provide([toolLayer, Logger.layer([logger])]));
+
+        // An unrenderable Schema still succeeds exactly as before when the
+        // final text happens to decode; the fallback removes the hint, never
+        // the Run.
+        expect(result.output).toEqual(["first", 1, "last"]);
+        expect(result.turns).toBe(2);
+        // The diagnostic fires exactly once, at Turn 1 — not per Turn.
+        expect(warnings).toHaveLength(1);
+        // Context preparation sees the absence honestly on every Turn.
+        expect(observedContracts).toEqual([undefined, undefined]);
       });
     },
   );

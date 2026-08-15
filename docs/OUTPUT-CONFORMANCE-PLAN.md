@@ -287,9 +287,10 @@ sequences risk: ship the reversible default, gate the protocol change on an acce
 - **A1 — Engine.** `packages/engine/src/output-contract-internal.ts`: pure per-request
   JSON-Schema rendering (no process-global cache — derivation is cheap relative to a model call,
   exactly as providers re-derive Tool schemas per request), the contract message,
-  last-system-block insertion; one call site in `makeTurn` wrapping the request prompt after
-  `context.prepare`; Turn-1 warning on non-renderable Schemas. No core, session, storage, or
-  platform change.
+  last-system-block insertion; one call site in `makeTurn` deriving the contract before
+  `context.prepare` (exposed as `RunContextRequest.outputContract` so adapters can reserve its
+  overhead) and wrapping the request prompt after it; Turn-1 warning on non-renderable Schemas.
+  No core, session, storage, or platform change.
 - **A2 — Tests.** Engine suite: contract present on every Turn's request and placed adjacent to
   the last system block; official history never contains it (`onHistory` evidence);
   non-renderable Schema falls back byte-identically; the **live-shaped model** case (TEST-016
@@ -355,15 +356,19 @@ acceptance:
   consistent, and removable (A3).
 - **Token cost** — the rendered schema per request, comparable to one additional Tool
   declaration.
-- **Context-limit interaction (recorded, deferred to the context-economics composition).** The
-  contract is appended after `context.prepare`, so a context hook that compacts to an exact
-  model-input limit can be pushed over it by the contract's serialized size. Today no engine-owned
-  window exists (adapters own their own margins); when the in-flight context-economics arc's
-  engine compaction lands, its window calculation must reserve the contract's size the same way
-  it reserves Tool-schema overhead — recorded as a Phase A follow-up and an ADR-0020 open point,
-  with a deterministic near-limit test once an engine-owned limit exists to test against.
-- **Reversal** — delete `packages/engine/src/output-schema-guidance.ts`, its `makeTurn` call
-  site, and its test file; revert the assertion updates. No data, schema, or API migration.
+- **Context-limit interaction (visible to preparation today; engine enforcement composes with
+  the context-economics arc).** The contract is appended after `context.prepare`, so a hook
+  compacting to an exact model-input limit could otherwise be pushed over it by the contract's
+  serialized size. The prototype therefore passes the exact contract text into
+  `RunContextRequest.outputContract` (additive optional field): a limit-targeting adapter
+  reserves precisely that overhead in its own window calculation before the engine composes the
+  request, and the suite asserts byte-equality between what preparation saw and what was
+  appended. The engine itself has no window to enforce today (adapters own their margins); when
+  the in-flight context-economics arc's engine compaction lands, its window calculation must
+  reserve the same value the way it reserves Tool-schema overhead.
+- **Reversal** — delete `packages/engine/src/output-contract-internal.ts`, its `makeTurn` call
+  site, the `RunContextRequest.outputContract` field, and its test file; revert the assertion
+  updates. No data, schema, or API migration.
 
 ## 11. Prototype status (this branch)
 
@@ -372,7 +377,9 @@ Implemented per A1/A2 and marked as the ADR-0020 proposed default in code commen
 - `packages/engine/src/output-contract-internal.ts` — pure rendering and insertion;
 - `makeTurn` call site in `packages/engine/src/index.ts`;
 - `packages/engine/test/output-contract.test.ts` — contract-on-every-Turn, placement,
-  official-history cleanliness, non-renderable fallback, and the live-shaped model case;
+  official-history cleanliness, context-preparation visibility (byte-equal reserve value),
+  non-renderable fallback with the Turn-1 diagnostic asserted exactly once across a two-Turn
+  Run, and the live-shaped model case;
 - request-shape assertion updates listed in section 10;
 - `bun run ready` green.
 

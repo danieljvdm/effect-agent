@@ -45,9 +45,11 @@ non-canonical request projections.
    appends one framework-owned system message stating the final-output contract: a fixed
    directive plus the JSON Schema derived from the encoded side of `agent.definition.output` via
    Effect AI's `Tool.getJsonSchemaFromSchema` (the same derivation Code Mode uses for
-   model-facing declarations). The fragment is a per-request projection of the immutable
-   definition, exactly like Tool schemas: canonical records, run events, the committed DN/DC
-   golden, and every public type are unchanged.
+   model-facing declarations). The contract is derived before context preparation and its exact
+   text rides `RunContextRequest.outputContract`, so a limit-targeting adapter can reserve its
+   overhead; the hook cannot remove or alter it. The fragment is a per-request projection of the
+   immutable definition, exactly like Tool schemas: canonical records, run events, the committed
+   DN/DC golden, and every public type are unchanged.
 2. **Placement is normative.** The contract message is inserted immediately after the request
    prompt's **last** system message (position 0 when none exists), extending the last contiguous
    system block. The Anthropic provider replaces its top-level `system` parameter per contiguous
@@ -100,10 +102,12 @@ non-canonical request projections.
   live path; the hand-written shape prose across travel-planner, docs-researcher, pr-review, and
   the code-mode-cloudflare example becomes deletable duplication (follow-up cleanup).
 - Every model request grows by the rendered Schema — the cost shape of one extra Tool
-  declaration. Because injection follows context preparation, a context hook compacting to an
-  exact model-input limit does not see the contract's size; when engine-owned compaction lands
-  (the context-economics arc), its window calculation must reserve the contract's serialized
-  size like Tool-schema overhead, with a deterministic near-limit test at that point.
+  declaration. Because injection follows context preparation, the engine passes the exact
+  contract text into `RunContextRequest.outputContract` (additive optional field), so a
+  limit-targeting context adapter reserves precisely that overhead in its own window
+  calculation; the suite asserts byte-equality between what preparation saw and what was
+  appended. When engine-owned compaction lands (the context-economics arc), its window
+  calculation must reserve the same value like Tool-schema overhead.
 - Tests that assert the model-request shape see one additional system message; tests that assert
   official history or canonical prompts see nothing, which is the verifiable boundary of the
   change.
@@ -142,6 +146,9 @@ non-canonical request projections.
   committed DN/DC golden are byte-identical with and without the feature enabled for scripted
   runs; the non-renderable-Schema fallback reproduces today's behavior exactly plus one
   diagnostic.
+- Preparation evidence: `RunContextRequest.outputContract` is byte-equal with the message
+  actually appended after preparation, is `undefined` for an unrenderable Schema, and the Turn-1
+  diagnostic fires exactly once per Run — never per Turn.
 - Live-shaped evidence: a deterministic LanguageModel that answers only from the request it
   received produces schema-valid final output solely because the engine communicated the
   contract — with contract communication removed, the same substitute fails the Run the way the

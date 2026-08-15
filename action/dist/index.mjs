@@ -34190,12 +34190,15 @@ var decodeFinalOutput = exports_Effect.fn("AgentRuntime.decodeFinalOutput")(func
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const ids = yield* IdGenerator;
   const turnId = yield* ids.nextTurnId;
+  const outputContract = outputSchemaContract(agent2.definition);
+  const outputContractMessage = outputContract._tag === "rendered" ? outputContract.message : undefined;
   const modelContext = options.context === undefined ? { prompt } : yield* options.context.prepare({
     conversationId: context3.conversationId,
     runId: context3.runId,
     turnId,
     turn,
-    source: prompt
+    source: prompt,
+    outputContract: outputContractMessage
   });
   const trace2 = {
     parts: [],
@@ -34238,7 +34241,6 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options);
   const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls);
-  const outputContract = outputSchemaContract(agent2.definition);
   if (outputContract._tag === "unrenderable" && turn === 1) {
     yield* exports_Effect.logWarning("Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted (ADR-0020)").pipe(exports_Effect.annotateLogs({
       agentId: context3.agentId,
@@ -34246,7 +34248,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       reason: outputContract.reason
     }));
   }
-  const requestPrompt = outputContract._tag === "rendered" ? insertOutputContract(modelContext.prompt, outputContract.message) : modelContext.prompt;
+  const requestPrompt = outputContractMessage === undefined ? modelContext.prompt : insertOutputContract(modelContext.prompt, outputContractMessage);
   const response = guardBudgetStream(exports_LanguageModel.streamText({
     prompt: requestPrompt,
     toolkit: agent2.definition.toolkit,
