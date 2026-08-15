@@ -387,7 +387,29 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
   outcome: SettlementOutcome,
   runId: Schema.optionalKey(RunId),
   result: Schema.optionalKey(PersistedJson),
+  /**
+   * Present only when a `completed` Run settled through the final-answer
+   * exhaustion resolution (RUN-011, RUN-018): the durable log must be able to
+   * distinguish honest-exhaustion completion from ordinary completion without
+   * the live event stream. Absent for every ordinary settlement, keeping
+   * existing histories and goldens byte-stable (additive, schemaVersion 1).
+   */
+  finishReason: Schema.optionalKey(Schema.Literal("budget-exhausted")),
 }) {}
+
+/**
+ * Canonical-boundary view of `SubmissionSettled`: `finishReason` is valid
+ * only on a `completed` outcome, so a malformed persisted combination such as
+ * `{ outcome: "failed", finishReason: "budget-exhausted" }` fails closed at
+ * decode instead of becoming trusted audit history (STORE-006, RUN-011).
+ */
+const SubmissionSettledRecord = SubmissionSettled.pipe(
+  Schema.refine(
+    (settled): settled is SubmissionSettled =>
+      settled.finishReason === undefined || settled.outcome === "completed",
+    { expected: "finishReason only on a completed settlement" },
+  ),
+);
 
 /**
  * PARENT-log record of one durable child establishment request (spec/subagents.md §12 step 3):
@@ -498,7 +520,7 @@ export const CanonicalRecordPayload = Schema.Union([
   RunFailed,
   RunCompleted,
   AbortRequested,
-  SubmissionSettled,
+  SubmissionSettledRecord,
   SubagentRequested,
   SubagentStarted,
   SubagentJoined,

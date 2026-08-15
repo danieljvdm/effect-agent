@@ -148,6 +148,10 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200_000,
+  // S1 soft landing is not yet adopted here: the fan-out contract pins the
+  // typed "unit unreviewed" failure flow until the containment slice reworks
+  // it (planned S2/S3 of the budget arc).
+  onExhaustion: "fail",
 });
 
 // ---------------------------------------------------------------------------
@@ -342,6 +346,8 @@ export const defaultFanOutPolicy = AgentPolicy.make({
   // still stopping a model that declares another failed delegation.
   repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
   tokenBudget: 300_000,
+  // See defaultFileReviewerPolicy: soft-landing adoption is the S2/S3 rework.
+  onExhaustion: "fail",
 });
 
 /** Everything one fan-out configuration is made of, built as one unit so the

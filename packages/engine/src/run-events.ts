@@ -46,7 +46,7 @@ export interface SubagentProgressPayload extends SubagentEventBasePayload {
 export interface SubagentCompletedPayload extends SubagentEventBasePayload {
   readonly _tag: "SubagentCompleted";
   readonly turns: number;
-  readonly finishReason: "completed" | "model-stop";
+  readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
 }
 
 /** Pre-base payload for the core `SubagentFailed` event; `message` is at most 4096 characters. */

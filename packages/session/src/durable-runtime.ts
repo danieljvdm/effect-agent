@@ -616,7 +616,12 @@ export class DurableRuntimeConfig extends Context.Service<
 
 /** Terminal outcome an Attempt decided before terminalization (DUR-011). */
 type AttemptOutcome =
-  | { readonly _tag: "completed"; readonly result: PersistedJson }
+  | {
+      readonly _tag: "completed";
+      readonly result: PersistedJson;
+      /** Set when the Run settled through the final-answer exhaustion resolution (RUN-018). */
+      readonly finishReason?: "budget-exhausted";
+    }
   | { readonly _tag: "failed"; readonly result: PersistedJson }
   | { readonly _tag: "aborted" };
 
@@ -1819,6 +1824,9 @@ const make = Effect.gen(function* () {
       outcome: outcome._tag,
       ...(includeRunId ? { runId: runIdForSubmission(submissionId) } : {}),
       ...(outcome._tag === "aborted" ? {} : { result: outcome.result }),
+      ...(outcome._tag === "completed" && outcome.finishReason !== undefined
+        ? { finishReason: outcome.finishReason }
+        : {}),
     });
     const record = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
     // The envelope was constructed from validated parts, so an encode failure is a defect.
@@ -2831,6 +2839,7 @@ const make = Effect.gen(function* () {
         readonly history: Prompt.Prompt | undefined;
         readonly pendingTurn: { readonly turn: number; readonly turnId: TurnId } | undefined;
         readonly completedOutput: PersistedJson | undefined;
+        readonly completedFinishReason: "budget-exhausted" | undefined;
       }
       const stateRef = yield* Ref.make<RunState>({
         baseLen: undefined,
@@ -2838,6 +2847,7 @@ const make = Effect.gen(function* () {
         history: undefined,
         pendingTurn: undefined,
         completedOutput: undefined,
+        completedFinishReason: undefined,
       });
       const turnCounter = yield* Ref.make(journal.committedTurns);
       const idGenerator: (typeof IdGenerator)["Service"] = {
@@ -3792,7 +3802,10 @@ const make = Effect.gen(function* () {
         }));
       });
 
-      const recordCompleted = (output: unknown): Effect.Effect<void, DurableWorkerFailure> =>
+      const recordCompleted = (
+        output: unknown,
+        finishReason: "completed" | "model-stop" | "budget-exhausted",
+      ): Effect.Effect<void, DurableWorkerFailure> =>
         Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
           Effect.mapError(
             (cause): DurableWorkerFailure =>
@@ -3803,7 +3816,11 @@ const make = Effect.gen(function* () {
               }),
           ),
           Effect.flatMap((result) =>
-            Ref.update(stateRef, (state) => ({ ...state, completedOutput: result })),
+            Ref.update(stateRef, (state) => ({
+              ...state,
+              completedOutput: result,
+              completedFinishReason: finishReason === "budget-exhausted" ? finishReason : undefined,
+            })),
           ),
         );
 
@@ -3820,7 +3837,9 @@ const make = Effect.gen(function* () {
             }));
           }
           case "RunCompleted": {
-            return commitPendingTurn.pipe(Effect.andThen(recordCompleted(event.output)));
+            return commitPendingTurn.pipe(
+              Effect.andThen(recordCompleted(event.output, event.finishReason)),
+            );
           }
           case "RunFailed": {
             // Preserve a completed-and-advanced final Turn for audit before the Run settles failed.
@@ -4051,7 +4070,13 @@ const make = Effect.gen(function* () {
           message: "Agent Run stream ended without RunCompleted",
         });
       }
-      return { _tag: "completed", result: state.completedOutput } as RunPhaseOutcome;
+      return {
+        _tag: "completed",
+        result: state.completedOutput,
+        ...(state.completedFinishReason === undefined
+          ? {}
+          : { finishReason: state.completedFinishReason }),
+      } as RunPhaseOutcome;
     });
 
   /**

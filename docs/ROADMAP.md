@@ -323,6 +323,14 @@ replacing it with an unrelated demo.
   executor adapter, and a leaf demo example — slices C0–C4 of
   [CODE-MODE-PLAN.md](CODE-MODE-PLAN.md), deployment class `E` only. Durable (`DN`/`DC`) Code
   Mode remains unassigned and requires its own accepted ADR.
+- **Budget soft landing arc** (owner decision
+  [D-037](DECISIONS.md#d-037--budget-soft-landing-delegation-containment-and-budget-extension),
+  [ADR-0019](adr/0019-budget-soft-landing-and-extension.md), 2026-08-15): S1 — the
+  `AgentPolicy.onExhaustion` final-answer default, synthetic over-budget batch settlement, the
+  single grace Turn, and the durable `budget-exhausted` settlement marker (implemented); S2 —
+  the `Subagent.define` `failureMode: "return"` containment option retiring the pr-review
+  shadow-Tool workaround (assigned); S3 — the per-invocation child Tool Call allowance and
+  budget extension by fresh re-delegation (assigned).
 
 ## Deferred until open-source preparation
 

@@ -3925,138 +3925,144 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("fails typed Turn exhaustion before executing the pending Tool batch", () =>
-    Effect.gen(function* () {
-      const handlerStarts = yield* Ref.make(0);
-      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-      const Search = Tool.make("search", {
-        parameters: Schema.Struct({}),
-        success: Schema.String,
-      });
-      const tools = Toolkit.make(Search);
-      const definition = Agent.define("turn-exhaustion", {
-        input: Schema.Struct({ question: Schema.String }),
-        output: Schema.Struct({ answer: Schema.String }),
-        instructions: "Search until done.",
-        toolkit: tools,
-        policy: AgentPolicy.make({
-          maxTurns: 1,
-          maxToolCalls: 5,
-          maxDuration: "30 seconds",
-          toolConcurrency: 1,
-        }),
-      });
-      const model = modelFromParts([
-        {
-          type: "tool-call",
-          id: "search-1",
-          name: "search",
-          params: {},
-          providerExecuted: false,
-        },
-        { type: "finish", reason: "tool-calls", usage },
-      ]);
-      const toolLayer = tools.toLayer({
-        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
-      });
+  it.effect(
+    "RUN-019 fail mode fails typed Turn exhaustion before executing the pending Tool batch",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const Search = Tool.make("search", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        });
+        const tools = Toolkit.make(Search);
+        const definition = Agent.define("turn-exhaustion", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Search until done.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 1,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            onExhaustion: "fail",
+          }),
+        });
+        const model = modelFromParts([
+          {
+            type: "tool-call",
+            id: "search-1",
+            name: "search",
+            params: {},
+            providerExecuted: false,
+          },
+          { type: "finish", reason: "tool-calls", usage },
+        ]);
+        const toolLayer = tools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
 
-      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
-        question: "loop",
-      }).pipe(
-        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
-        Stream.runDrain,
-        Effect.provide(toolLayer),
-        Effect.exit,
-      );
-      const failure = failureFrom(exit);
-      const observed = yield* Ref.get(events);
+        const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "loop",
+        }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+        const failure = failureFrom(exit);
+        const observed = yield* Ref.get(events);
 
-      expect(failure).toBeInstanceOf(AgentPolicyError);
-      expect(failure).toMatchObject({ limit: "turns" });
-      expect(yield* Ref.get(handlerStarts)).toBe(0);
-      expect(observed.filter((event) => event._tag === "ModelStarted")).toHaveLength(1);
-      expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
-      expect(observed.at(-1)).toMatchObject({
-        _tag: "RunFailed",
-        errorTag: "AgentPolicyError",
-      });
-    }),
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect(failure).toMatchObject({ limit: "turns" });
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+        expect(observed.filter((event) => event._tag === "ModelStarted")).toHaveLength(1);
+        expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+        expect(observed.at(-1)).toMatchObject({
+          _tag: "RunFailed",
+          errorTag: "AgentPolicyError",
+        });
+      }),
   );
 
-  it.effect("fails typed Tool Call exhaustion before executing the exceeding batch", () =>
-    Effect.gen(function* () {
-      const handlerStarts = yield* Ref.make(0);
-      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
-      const turns = yield* Ref.make(0);
-      const Search = Tool.make("search", {
-        parameters: Schema.Struct({}),
-        success: Schema.String,
-      });
-      const tools = Toolkit.make(Search);
-      const model = Model.make(
-        "scripted",
-        "tool-call-exhaustion",
-        Layer.effect(
-          LanguageModel.LanguageModel,
-          LanguageModel.make({
-            generateText: () => Effect.succeed([]),
-            streamText: () =>
-              Stream.unwrap(
-                Ref.getAndUpdate(turns, (value) => value + 1).pipe(
-                  Effect.map((turn) =>
-                    Stream.fromIterable<Response.StreamPartEncoded>([
-                      {
-                        type: "tool-call",
-                        id: `search-${turn + 1}`,
-                        name: "search",
-                        params: {},
-                        providerExecuted: false,
-                      },
-                      { type: "finish", reason: "tool-calls", usage },
-                    ]),
+  it.effect(
+    "RUN-018 fail mode fails typed Tool Call exhaustion before executing the exceeding batch",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const turns = yield* Ref.make(0);
+        const Search = Tool.make("search", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        });
+        const tools = Toolkit.make(Search);
+        const model = Model.make(
+          "scripted",
+          "tool-call-exhaustion",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.unwrap(
+                  Ref.getAndUpdate(turns, (value) => value + 1).pipe(
+                    Effect.map((turn) =>
+                      Stream.fromIterable<Response.StreamPartEncoded>([
+                        {
+                          type: "tool-call",
+                          id: `search-${turn + 1}`,
+                          name: "search",
+                          params: {},
+                          providerExecuted: false,
+                        },
+                        { type: "finish", reason: "tool-calls", usage },
+                      ]),
+                    ),
                   ),
                 ),
-              ),
+            }),
+          ),
+        );
+        const definition = Agent.define("tool-call-exhaustion", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Search until done.",
+          toolkit: tools,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            onExhaustion: "fail",
           }),
-        ),
-      );
-      const definition = Agent.define("tool-call-exhaustion", {
-        input: Schema.Struct({ question: Schema.String }),
-        output: Schema.Struct({ answer: Schema.String }),
-        instructions: "Search until done.",
-        toolkit: tools,
-        policy: AgentPolicy.make({
-          maxTurns: 5,
-          maxToolCalls: 1,
-          maxDuration: "30 seconds",
-          toolConcurrency: 1,
-        }),
-      });
-      const toolLayer = tools.toLayer({
-        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
-      });
+        });
+        const toolLayer = tools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
 
-      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
-        question: "loop",
-      }).pipe(
-        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
-        Stream.runDrain,
-        Effect.provide(toolLayer),
-        Effect.exit,
-      );
-      const failure = failureFrom(exit);
-      const observed = yield* Ref.get(events);
+        const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "loop",
+        }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+        const failure = failureFrom(exit);
+        const observed = yield* Ref.get(events);
 
-      expect(failure).toBeInstanceOf(AgentPolicyError);
-      expect(failure).toMatchObject({ limit: "tool-calls" });
-      expect(yield* Ref.get(handlerStarts)).toBe(1);
-      expect(observed.filter((event) => event._tag === "ModelStarted")).toHaveLength(2);
-      expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
-      expect(observed.at(-1)).toMatchObject({
-        _tag: "RunFailed",
-        errorTag: "AgentPolicyError",
-      });
-    }),
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect(failure).toMatchObject({ limit: "tool-calls" });
+        expect(yield* Ref.get(handlerStarts)).toBe(1);
+        expect(observed.filter((event) => event._tag === "ModelStarted")).toHaveLength(2);
+        expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+        expect(observed.at(-1)).toMatchObject({
+          _tag: "RunFailed",
+          errorTag: "AgentPolicyError",
+        });
+      }),
   );
 
   it.effect(
@@ -5314,6 +5320,467 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         );
         expect(bareLeading).toBe(-1);
       }),
+  );
+});
+
+/**
+ * Budget soft landing (RUN-018/RUN-019/RUN-020): under the default
+ * `onExhaustion: "final-answer"`, Turn and Tool Call exhaustion settle the Run
+ * through one constrained final-answer opportunity — the over-budget batch
+ * settles synthetically without a handler start, subsequent model requests
+ * forbid tool use, and the Run completes with the honest
+ * `finishReason: "budget-exhausted"` (RUN-011).
+ */
+layer(identifiers)("RUN-018 budget soft landing", (it) => {
+  const Search = Tool.make("search", {
+    parameters: Schema.Struct({}),
+    success: Schema.String,
+  });
+  const softLandingTools = Toolkit.make(Search);
+  const softLandingDefinition = (policy: AgentPolicy) =>
+    Agent.define("soft-landing", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Search until done.",
+      toolkit: softLandingTools,
+      policy,
+    });
+  const searchCall = (id: string): Response.StreamPartEncoded => ({
+    type: "tool-call",
+    id,
+    name: "search",
+    params: {},
+    providerExecuted: false,
+  });
+  const turnScriptedModel = (
+    name: string,
+    turns: Ref.Ref<number>,
+    toolChoices: Ref.Ref<ReadonlyArray<unknown>>,
+    prompts: Ref.Ref<ReadonlyArray<string>>,
+    script: (turn: number) => ReadonlyArray<Response.StreamPartEncoded>,
+  ) =>
+    Model.make(
+      "scripted",
+      name,
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: (request) =>
+            Stream.unwrap(
+              Effect.gen(function* () {
+                yield* Ref.update(toolChoices, (all) => [...all, request.toolChoice]);
+                yield* Ref.update(prompts, (all) => [...all, JSON.stringify(request.prompt)]);
+                const turn = yield* Ref.getAndUpdate(turns, (value) => value + 1);
+                return Stream.fromIterable(script(turn));
+              }),
+            ),
+        }),
+      ),
+    );
+
+  it.effect(
+    "RUN-018 an over-budget Tool batch settles synthetically and the Run completes budget-exhausted",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const turns = yield* Ref.make(0);
+        const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+        const definition = softLandingDefinition(
+          AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        );
+        const model = turnScriptedModel(
+          "soft-landing-batch",
+          turns,
+          toolChoices,
+          prompts,
+          (turn) =>
+            turn === 0
+              ? [
+                  searchCall("search-1"),
+                  searchCall("search-2"),
+                  { type: "finish", reason: "tool-calls", usage },
+                ]
+              : finalParts('{"answer":"partial findings"}'),
+        );
+        const toolLayer = softLandingTools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+
+        const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "research",
+        }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+        const observed = yield* Ref.get(events);
+        const observedChoices = yield* Ref.get(toolChoices);
+        const observedPrompts = yield* Ref.get(prompts);
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+        expect(observed.filter((event) => event._tag === "ToolCallDeclared")).toHaveLength(2);
+        expect(observed.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(0);
+        const failed = observed.filter((event) => event._tag === "ToolCallFailed");
+        expect(failed).toHaveLength(2);
+        for (const event of failed) {
+          expect(event).toMatchObject({ errorTag: "AgentPolicyError" });
+        }
+        expect(observed.at(-1)).toMatchObject({
+          _tag: "RunCompleted",
+          turns: 2,
+          finishReason: "budget-exhausted",
+        });
+        expect(observedChoices).toEqual(["auto", "none"]);
+        // The rejected batch is model-visible: the final-answer request
+        // carries one failed tool result per rejected call, in declaration
+        // order, each with the synthetic policy failure as its payload.
+        const secondPrompt = JSON.parse(observedPrompts[1] ?? "{}") as {
+          readonly content?: ReadonlyArray<{
+            readonly role: string;
+            readonly content: ReadonlyArray<{
+              readonly type: string;
+              readonly id?: string;
+              readonly isFailure?: boolean;
+              readonly result?: { readonly _tag?: string; readonly message?: string };
+            }>;
+          }>;
+        };
+        const toolResults = (secondPrompt.content ?? [])
+          .filter((message) => message.role === "tool")
+          .flatMap((message) => message.content)
+          .filter((part) => part.type === "tool-result");
+        expect(toolResults.map((part) => part.id)).toEqual(["search-1", "search-2"]);
+        for (const part of toolResults) {
+          expect(part.isFailure).toBe(true);
+          expect(part.result?._tag).toBe("AgentPolicyError");
+          expect(part.result?.message).toContain("Tool Call budget exhausted");
+        }
+      }),
+  );
+
+  it.effect("RUN-018 synthetic rejections do not advance the repeated-failure counter", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          repeatedFailureLimit: 3,
+        }),
+      );
+      const model = turnScriptedModel("soft-landing-exempt", turns, toolChoices, prompts, (turn) =>
+        turn === 0
+          ? [
+              searchCall("search-1"),
+              searchCall("search-2"),
+              searchCall("search-3"),
+              searchCall("search-4"),
+              { type: "finish", reason: "tool-calls", usage },
+            ]
+          : finalParts('{"answer":"still landed"}'),
+      );
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Effect.succeed("found"),
+      });
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "research",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const observed = yield* Ref.get(events);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(4);
+      expect(observed.some((event) => event._tag === "RunFailed")).toBe(false);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        finishReason: "budget-exhausted",
+      });
+    }),
+  );
+
+  it.effect("RUN-018 a batch landing exactly on the Tool Call cap keeps the model-stop path", () =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      );
+      const model = turnScriptedModel("soft-landing-exact", turns, toolChoices, prompts, (turn) =>
+        turn === 0
+          ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
+          : finalParts('{"answer":"done"}'),
+      );
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+      });
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "research",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const observed = yield* Ref.get(events);
+      const observedChoices = yield* Ref.get(toolChoices);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(yield* Ref.get(handlerStarts)).toBe(1);
+      expect(observedChoices).toEqual(["auto", "auto"]);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        finishReason: "model-stop",
+      });
+    }),
+  );
+
+  it.effect(
+    "RUN-018 a resumed over-budget batch settles synthetically without handler starts",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const turns = yield* Ref.make(0);
+        const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+        const resumeTurnId = yield* Schema.decodeEffect(TurnId)("turn-resume-soft").pipe(
+          Effect.orDie,
+        );
+        const definition = softLandingDefinition(
+          AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        );
+        const model = turnScriptedModel("soft-landing-resume", turns, toolChoices, prompts, () =>
+          finalParts('{"answer":"resumed partial"}'),
+        );
+        const toolLayer = softLandingTools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+        const resume: RunTurnResume = {
+          turn: 1,
+          turnId: resumeTurnId,
+          calls: [
+            { id: "search-1", name: "search", params: {} },
+            { id: "search-2", name: "search", params: {} },
+          ],
+          settled: [{ id: "search-1", result: "recorded-before-crash", isFailure: false }],
+        };
+
+        const exit = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "resume" },
+          { resume },
+        ).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+        const observed = yield* Ref.get(events);
+        const observedPrompts = yield* Ref.get(prompts);
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+        expect(observed.filter((event) => event._tag === "ToolCallStarted")).toHaveLength(0);
+        // Only the open call settles synthetically; the recorded result stands verbatim.
+        expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+        expect(observed.at(-1)).toMatchObject({
+          _tag: "RunCompleted",
+          finishReason: "budget-exhausted",
+        });
+        expect(yield* Ref.get(toolChoices)).toEqual(["none"]);
+        expect(observedPrompts[0]).toContain("recorded-before-crash");
+        expect(observedPrompts[0]).toContain("Tool Call budget exhausted");
+      }),
+  );
+
+  it.effect("RUN-019 Turn exhaustion grants exactly one final-answer grace Turn", () =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      );
+      const model = turnScriptedModel("soft-landing-grace", turns, toolChoices, prompts, (turn) =>
+        turn === 0
+          ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
+          : finalParts('{"answer":"grace"}'),
+      );
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+      });
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "research",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const observed = yield* Ref.get(events);
+
+      expect(Exit.isSuccess(exit)).toBe(true);
+      // The pending batch at the final permitted Turn executes normally.
+      expect(yield* Ref.get(handlerStarts)).toBe(1);
+      expect(yield* Ref.get(toolChoices)).toEqual(["auto", "none"]);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        turns: 2,
+        finishReason: "budget-exhausted",
+      });
+    }),
+  );
+
+  it.effect("RUN-019 no second grace Turn is granted at the grace Turn's stop seam", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const followUpOffered = yield* Ref.make(false);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      );
+      const model = turnScriptedModel(
+        "soft-landing-no-second-grace",
+        turns,
+        toolChoices,
+        prompts,
+        (turn) =>
+          turn === 0
+            ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
+            : finalParts('{"answer":"grace"}'),
+      );
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Effect.succeed("found"),
+      });
+
+      const exit = yield* AgentRuntime.stream(
+        Agent.withModel(definition, model),
+        { question: "research" },
+        {
+          input: {
+            drain: () =>
+              Ref.getAndSet(followUpOffered, true).pipe(
+                Effect.map((offered) =>
+                  offered ? [] : [{ kind: "follow-up" as const, input: "one more thing" }],
+                ),
+              ),
+          },
+        },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const observed = yield* Ref.get(events);
+
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect(failure).toMatchObject({ limit: "turns" });
+      expect(observed.filter((event) => event._tag === "ModelStarted")).toHaveLength(2);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "AgentPolicyError",
+      });
+    }),
+  );
+
+  it.effect("RUN-020 declaring Tool Calls under toolChoice none fails the Run typed", () =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      );
+      const model = turnScriptedModel(
+        "soft-landing-fail-closed",
+        turns,
+        toolChoices,
+        prompts,
+        (turn) =>
+          turn === 0
+            ? [
+                searchCall("search-1"),
+                searchCall("search-2"),
+                { type: "finish", reason: "tool-calls", usage },
+              ]
+            : [searchCall("search-3"), { type: "finish", reason: "tool-calls", usage }],
+      );
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+      });
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "research",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(errorMessageForTest(failure)).toContain('toolChoice "none"');
+      expect(yield* Ref.get(handlerStarts)).toBe(0);
+    }),
   );
 });
 

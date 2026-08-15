@@ -27,6 +27,7 @@ are authoritative; a Proposed ADR is design material, not an owner-approved feat
 | [0015](./0015-hardening-shape)                            | Accepted by default — pending owner review ([evidence](../PHASE-7-EVIDENCE))                           | Phase 7 hardening shape: certification tiers, formal-model scope, admin authorization |
 | [0016](./0016-pr-review-package)                          | Accepted (owner-directed, 2026-08-14)                                                                  | Package the pull-request reviewer with a prebuilt GitHub Action                       |
 | [0017](./0017-code-mode-executor-and-broker)              | Accepted (owner-directed, 2026-08-14) — ephemeral slices assigned; durable Code Mode needs its own ADR | Code Mode: executor port, engine-owned Tool broker, and generated-code capability     |
+| [0019](./0019-budget-soft-landing-and-extension)          | Accepted (owner-directed, 2026-08-15) — S1 implemented; containment (S2) and extension (S3) assigned   | Budget soft landing: final-answer exhaustion default and honest exhausted settlement  |
 
 The [decision register](../DECISIONS) is the owner-facing status source. ADRs preserve rationale,
 consequences, rejected alternatives, and validation criteria.

@@ -114,12 +114,17 @@ export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnComp
   ]),
 }) {}
 
-/** Successful terminal event carrying Schema-compatible output and the completed turn count. */
+/**
+ * Successful terminal event carrying Schema-compatible output and the completed turn count.
+ * `"budget-exhausted"` marks a Run that settled through the policy's final-answer resolution
+ * after Turn or Tool Call exhaustion — never a plain `"model-stop"` (RUN-011); its `turns`
+ * count may exceed `maxTurns` by the single grace Turn.
+ */
 export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
   ...RunEventBase,
   output: Schema.Json,
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
-  finishReason: Schema.Literals(["completed", "model-stop"]),
+  finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
 }) {}
 
 /** Terminal event for a run that failed with an expected error. */
@@ -178,7 +183,7 @@ export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
   {
     ...SubagentEventBase,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
-    finishReason: Schema.Literals(["completed", "model-stop"]),
+    finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
   },
 ) {}
 

@@ -255,6 +255,7 @@ interface AgentPolicy {
   readonly tokenBudget?: number;
   readonly costBudget?: Money;
   readonly repeatedFailureLimit: number;
+  readonly onExhaustion: "final-answer" | "fail";
 }
 ```
 
@@ -268,7 +269,12 @@ order; any terminal Tool Call success resets the counter. Reaching the limit fai
 the typed policy failure (`AgentPolicyError` with `limit: "repeated-failures"`) at the Turn seam,
 before the next model request. A `repeatedFailureLimit` of `0` disables the bound.
 
-Budget exhaustion is a typed non-success outcome.
+Budget exhaustion is never a plain success. `onExhaustion` selects how Turn and Tool Call
+exhaustion resolve (runtime spec RUN-018/RUN-019): `"final-answer"` (the default) settles the Run
+through one constrained final-answer opportunity and completes it with the distinct
+`finishReason: "budget-exhausted"`; `"fail"` fails the Run with the typed `AgentPolicyError`
+before the exceeding work starts. Duration, token, cost, and repeated-failure bounds are hard
+rails regardless: their exhaustion is always the typed non-success failure.
 
 Subagent policy, hierarchical reservation, and ancestor accounting are specified as a proposal in
 [the Subagent specification](./subagents.md). Until ADR-0010 is accepted, they are not an

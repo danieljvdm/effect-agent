@@ -179,6 +179,29 @@ Durable (`DN`/`DC`) Code Mode remains unassigned and requires its own accepted A
 Record: [ADR-0017](adr/0017-code-mode-executor-and-broker.md)
 Plan: [Code Mode implementation plan](CODE-MODE-PLAN.md)
 
+### D-037 — Budget soft landing, delegation containment, and budget extension
+
+**Status:** Accepted (owner-directed, 2026-08-15)
+
+**Decision:** Turn and Tool Call exhaustion resolve through a policy-selected `onExhaustion`
+knob whose default is `"final-answer"`: the engine rejects the over-budget Tool batch with
+model-visible synthetic failed results (no handler starts, no durable batch declaration), forbids
+tool use on subsequent model requests, admits exactly one grace Turn past `maxTurns`, and settles
+the Run `completed` with the distinct `finishReason: "budget-exhausted"` carried on the live
+terminal event and the durable `SubmissionSettled` record. `"fail"` preserves the prior run-fatal
+behavior. Duration, token, cost, repeated-failure, and hierarchical budget-hook bounds remain
+hard rails.
+
+The same owner decision assigns two follow-on slices: a `failureMode: "return"` containment
+option on `Subagent.define` so expected child failures can become model-visible results instead
+of parent-fatal errors (the engine-signal members `ToolCallWaiting` and
+`SubagentDurabilityError` always stay in the error channel), and a per-invocation child
+tool-call allowance below the child Definition's policy ceiling so an orchestrator can grant a
+budget extension by fresh re-delegation. Mid-flight reservation top-up and child Conversation
+reuse remain rejected (D-013, ADR-0010).
+
+Record: [ADR-0019](adr/0019-budget-soft-landing-and-extension.md)
+
 ## Platforms, persistence, and operations
 
 ### D-014 — Initial platforms
