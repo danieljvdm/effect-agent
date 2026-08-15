@@ -25,6 +25,7 @@ jobs:
         uses: danieljvdm/effect-agent/action@main
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET }}
           # or: provider: anthropic + anthropic-api-key
           effort: high # low..max or a number in [0,1], per-provider ladder
           guidance-file: .github/review-guidance.md # committed review profile
@@ -42,10 +43,12 @@ trust level as the workflow file itself, which PRs can also edit. Repos that
 want a base-ref profile should check the file out from the base branch, and
 must not combine `guidance-file` with `pull_request_target`.)
 
-## Incremental reviews and durable state
+## Incremental reviews and authenticated continuity state
 
 Every review with complete host-verified coverage embeds a bounded,
-schema-validated state marker in its review body. The marker records the PR
+schema-validated, terminal state marker in its review body. `state-secret`
+HMAC-authenticates the marker so model text or another workflow cannot forge
+scope-narrowing authority. The marker records the PR
 identity, base/head lineage, reviewer-profile fingerprint, reviewed-scope
 fingerprint, and unresolved findings/concerns. On the next `synchronize`, the
 action validates that state and asks GitHub for the previous-head...current-head
@@ -61,9 +64,14 @@ head is no longer an ancestor, a comparison is unavailable or truncated, or
 the base lineage changed materially. `skip-unchanged: "true"` (the default)
 avoids model execution when the same head was already covered, but preserves
 the stored blocking or successful conclusion.
-Only markers authored by the default `github-actions[bot]` identity may
-narrow scope; user-authored marker text and custom-token review authors are
-ignored, which safely makes those runs full reviews.
+Only terminal markers authored by the default `github-actions[bot]` identity,
+authenticated with the same stable `state-secret`, and pinned to the review's
+commit may narrow scope. Missing or rotated secrets, user-authored marker text,
+and custom-token review authors safely force a full review. Prefer a dedicated
+secret; do not expose it to the model or derive it from pull-request content.
+The authenticated marker itself is capped at 24,000 characters. Signing or
+size failures omit state, render a bounded warning, and force the next run to
+review fully instead of posting continuity data that cannot be recovered.
 
 ## Final merge-readiness audit
 

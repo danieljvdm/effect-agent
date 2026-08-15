@@ -1,14 +1,15 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Effect, Option, Redacted } from "effect";
 
 import {
   ChangedFile,
-  extractReviewState,
   PullRequestMetadata,
-  renderReviewStateMarker,
   ReviewHeadComparison,
   ReviewState,
+  ReviewStateAuthenticator,
   selectReviewRange,
   StoredReviewFinding,
+  webCryptoReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
 
 const BASE_SHA = "1".repeat(40);
@@ -90,14 +91,68 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
     ...overrides,
   });
 
-describe("durable review state", () => {
-  it("round-trips a schema-validated review-body marker and ignores malformed state", () => {
-    const marker = renderReviewStateMarker(priorState);
-    expect(extractReviewState(`review body\n${marker}`)).toEqual(priorState);
-    expect(extractReviewState("<!-- effect-agent-pr-review state-v1:not-base64 -->")).toBe(
-      undefined,
-    );
-  });
+describe("review state", () => {
+  it.effect("authenticates only a terminal schema-validated review-body marker", () =>
+    Effect.gen(function* () {
+      const secret = Redacted.make("stable-state-secret");
+      const authenticate = (body: string, key = secret) =>
+        Effect.gen(function* () {
+          const authenticator = yield* ReviewStateAuthenticator;
+          return yield* authenticator.extract(body);
+        }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(key)));
+      const marker = yield* Effect.gen(function* () {
+        const authenticator = yield* ReviewStateAuthenticator;
+        return yield* authenticator.render(priorState);
+      }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(secret)));
+      expect(Option.getOrUndefined(yield* authenticate(`review body\n${marker}`))).toEqual(
+        priorState,
+      );
+      expect(
+        Option.getOrUndefined(yield* authenticate(`review body\n${marker}\nhost footer`)),
+      ).toBeUndefined();
+      expect(
+        Option.getOrUndefined(
+          yield* authenticate(`review body\n${marker}`, Redacted.make("wrong-secret")),
+        ),
+      ).toBeUndefined();
+      expect(
+        Option.getOrUndefined(
+          yield* authenticate("<!-- effect-agent-pr-review state-v1:not-base64 -->"),
+        ),
+      ).toBeUndefined();
+    }),
+  );
+
+  it.effect("keeps WebCrypto failures typed and bounds the authenticated marker", () =>
+    Effect.gen(function* () {
+      const sign = (state: ReviewState, key: string) =>
+        Effect.gen(function* () {
+          const authenticator = yield* ReviewStateAuthenticator;
+          return yield* authenticator.render(state);
+        }).pipe(
+          Effect.provide(webCryptoReviewStateAuthenticatorLayer(Redacted.make(key))),
+          Effect.flip,
+        );
+      const authenticationFailure = yield* sign(priorState, "");
+      expect(authenticationFailure._tag).toBe("ReviewStateAuthenticationFailure");
+
+      const oversized = ReviewState.make({
+        ...priorState,
+        unresolvedFindings: Array.from({ length: 20 }, (_, index) =>
+          StoredReviewFinding.make({
+            path: `src/${index}-${"a".repeat(480)}.ts`,
+            startLine: 1,
+            endLine: 1,
+            severity: "blocking",
+            title: `Finding ${index} ${"t".repeat(100)}`,
+            body: "b".repeat(800),
+          }),
+        ),
+      });
+      const markerFailure = yield* sign(oversized, "stable-state-secret");
+      expect(markerFailure._tag).toBe("ReviewStateMarkerTooLarge");
+    }),
+  );
 
   it("reviews only the corrective delta and preserves unchanged prior scope", () => {
     const selection = select();

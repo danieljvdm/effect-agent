@@ -23728,6 +23728,16 @@ function id() {
   return identityIso;
 }
 
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Redacted.js
+var exports_Redacted = {};
+__export(exports_Redacted, {
+  wipeUnsafe: () => wipeUnsafe,
+  value: () => value3,
+  makeEquivalence: () => makeEquivalence7,
+  make: () => make36,
+  isRedacted: () => isRedacted
+});
+
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/redacted.js
 var redactedRegistry = /* @__PURE__ */ new WeakMap;
 var value2 = (self) => {
@@ -23770,6 +23780,7 @@ var Proto5 = {
   }
 };
 var value3 = value2;
+var wipeUnsafe = (self) => redactedRegistry.delete(self);
 var makeEquivalence7 = (isEquivalent) => make3((x, y) => isEquivalent(value3(x), value3(y)));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaError.js
@@ -38571,25 +38582,103 @@ var toStoredConcern = (concern) => StoredReviewConcern.make({
 var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
 var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 var STATE_MARKER_SUFFIX = " -->";
-var STATE_MARKER_PATTERN = /<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2}) -->/g;
-var renderReviewStateMarker = (state) => {
-  const encoded = exports_Schema.encodeSync(ReviewState)(state);
-  return `${STATE_MARKER_PREFIX}${exports_Encoding.encodeBase64(JSON.stringify(encoded))}${STATE_MARKER_SUFFIX}`;
-};
-var extractReviewState = (body) => {
-  let latest;
-  for (const match9 of body.matchAll(STATE_MARKER_PATTERN)) {
-    const encoded = match9[1];
-    if (encoded === undefined)
-      continue;
-    const json = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(encoded));
-    if (json === undefined)
-      continue;
-    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json);
-    if (exports_Option.isSome(decoded))
-      latest = decoded.value;
+var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
+var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+
+class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
+  operation: exports_Schema.Literals(["sign", "verify"]),
+  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
+}) {
+}
+
+class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
+  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
+}) {
+}
+
+class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
+}
+var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
+  operation,
+  reason: String(cause).slice(0, 2048)
+});
+var hmacKey = (secret, operation) => exports_Effect.tryPromise({
+  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
+  catch: (cause) => authenticationFailure(operation, cause)
+});
+var signatureBytes = (signature) => {
+  const pairs = signature.match(/../g) ?? [];
+  const buffer3 = new ArrayBuffer(pairs.length);
+  const bytes = new Uint8Array(buffer3);
+  for (let index2 = 0;index2 < pairs.length; index2 += 1) {
+    bytes[index2] = Number.parseInt(pairs[index2] ?? "", 16);
   }
-  return latest;
+  return buffer3;
+};
+var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+  status: "available",
+  unavailableReason: undefined,
+  render: (state) => exports_Effect.gen(function* () {
+    const json = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+    const payload = exports_Encoding.encodeBase64(json);
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    const key = yield* hmacKey(secret, "sign");
+    const signature = yield* exports_Effect.tryPromise({
+      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
+      catch: (cause) => authenticationFailure("sign", cause)
+    });
+    const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
+    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
+      return yield* ReviewStateMarkerTooLarge.make({
+        observedChars: marker.length,
+        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
+      });
+    }
+    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+  }),
+  extract: (body) => {
+    if (body.length > 60000)
+      return exports_Effect.succeed(exports_Option.none());
+    const match9 = STATE_MARKER_PATTERN.exec(body);
+    const payload = match9?.[1];
+    const signature = match9?.[2];
+    if (payload === undefined || signature === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
+    if (!exports_Schema.is(ReviewStateMarker)(marker))
+      return exports_Effect.succeed(exports_Option.none());
+    const json = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+    if (json === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json);
+    if (exports_Option.isNone(decoded))
+      return exports_Effect.succeed(exports_Option.none());
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    return exports_Effect.gen(function* () {
+      const key = yield* hmacKey(secret, "verify");
+      const valid = yield* exports_Effect.tryPromise({
+        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
+        catch: (cause) => authenticationFailure("verify", cause)
+      });
+      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
+    });
+  }
+}));
+var unavailableReviewStateAuthenticatorLayer = (reason) => {
+  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
+  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+    status: "unavailable",
+    unavailableReason: safeReason.slice(0, 1000),
+    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
+      operation: "sign",
+      reason: safeReason.slice(0, 2048)
+    })),
+    extract: () => exports_Effect.succeed(exports_Option.none())
+  }));
 };
 
 class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
@@ -38757,6 +38846,23 @@ var toolTrace = (events2) => {
   return { declared, succeeded, failed };
 };
 var sortedUnique = (values3) => [...new Set(values3)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+var boundedListReason = (label, values3) => {
+  const items = sortedUnique(values3);
+  const prefix = `${label} (${items.length}): `;
+  let rendered = prefix;
+  for (let index2 = 0;index2 < items.length; index2 += 1) {
+    const item = items[index2] ?? "";
+    const separator = index2 === 0 ? "" : ", ";
+    const omitted = items.length - index2 - 1;
+    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
+    if (`${rendered}${separator}${item}${suffix}`.length > 1000) {
+      const omission = `… (+${items.length - index2} more)`;
+      return `${rendered.slice(0, 1000 - omission.length)}${omission}`;
+    }
+    rendered = `${rendered}${separator}${item}`;
+  }
+  return rendered;
+};
 var flatCoverage = (files, totalFiles, trace2) => {
   const requiredPaths = sortedUnique(files.map((file) => file.path));
   const reviewed = new Set;
@@ -38779,13 +38885,13 @@ var flatCoverage = (files, totalFiles, trace2) => {
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (undiffable.length > 0) {
-    reasons.push(`required paths have no textual diff: ${undiffable.join(", ")}`);
+    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
   }
   if (failedPaths.size > 0) {
-    reasons.push(`diff reads failed for: ${sortedUnique(failedPaths).join(", ")}`);
+    reasons.push(boundedListReason("diff reads failed", failedPaths));
   }
   if (unreviewed.length > 0) {
-    reasons.push(`required paths were not successfully reviewed: ${unreviewed.join(", ")}`);
+    reasons.push(boundedListReason("required paths were not successfully reviewed", unreviewed));
   }
   return ReviewCoverage.make({
     status: reasons.length === 0 ? "complete" : "incomplete",
@@ -38842,13 +38948,13 @@ var fanOutCoverage = (files, totalFiles, trace2) => {
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (plan.undiffablePaths.length > 0) {
-    reasons.push(`required paths have no textual diff: ${plan.undiffablePaths.join(", ")}`);
+    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
   }
   if (plan.unassignedPaths.length > 0) {
-    reasons.push(`fan-out capacity left paths unassigned: ${plan.unassignedPaths.join(", ")}`);
+    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
   }
   if (failedUnits.length > 0) {
-    reasons.push(`review units did not complete: ${failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`).join(", ")}`);
+    reasons.push(boundedListReason("review units did not complete", failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`)));
   }
   return ReviewCoverage.make({
     status: reasons.length === 0 ? "complete" : "incomplete",
@@ -40855,6 +40961,7 @@ class PriorReviews extends exports_Context.Service()("@effect-agent/pr-review/Pr
 }
 var GitHubPriorReviewWire = exports_Schema.Struct({
   body: exports_Schema.NullOr(exports_Schema.String),
+  commit_id: exports_Schema.String,
   user: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Struct({
     login: exports_Schema.String,
     type: exports_Schema.String
@@ -40865,7 +40972,7 @@ var GitHubCompareWire = exports_Schema.Struct({
   status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
   base_commit: exports_Schema.Struct({ sha: exports_Schema.String }),
   merge_base_commit: exports_Schema.Struct({ sha: exports_Schema.String }),
-  files: exports_Schema.optionalKey(GitHubFilesPageWire)
+  files: GitHubFilesPageWire
 });
 var MAX_PRIOR_REVIEW_PAGES = 5;
 var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.gen(function* () {
@@ -40876,7 +40983,7 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
   const asLookupFailure = (error2) => PriorReviewLookupFailure.make({
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
   });
-  const readMarkers = exports_Effect.gen(function* () {
+  const readMarkers = (authenticator) => exports_Effect.gen(function* () {
     const perPage = 100;
     let latest = exports_Option.none();
     let latestState = exports_Option.none();
@@ -40892,20 +40999,29 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
         const fingerprint = extractFingerprint(wire.body ?? "");
         if (fingerprint !== undefined)
           latest = exports_Option.some(fingerprint);
-        const state = extractReviewState(wire.body ?? "");
-        if (state !== undefined)
-          latestState = exports_Option.some(state);
+        if (exports_Option.isSome(authenticator)) {
+          const state = yield* authenticator.value.extract(wire.body ?? "").pipe(exports_Effect.mapError((error2) => PriorReviewLookupFailure.make({
+            reason: `${error2._tag}: ${error2.reason}`.slice(0, 2048)
+          })));
+          if (exports_Option.isSome(state) && state.value.reviewedHeadSha === wire.commit_id) {
+            latestState = state;
+          }
+        }
       }
       if (wires.length < perPage)
         break;
+      if (page === MAX_PRIOR_REVIEW_PAGES) {
+        return yield* PriorReviewLookupFailure.make({
+          reason: `review history exceeds the bounded ${MAX_PRIOR_REVIEW_PAGES * perPage}-review lookup`
+        });
+      }
     }
     return { latestFingerprint: latest, latestState };
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  const cachedMarkers = yield* exports_Effect.cached(readMarkers);
   const compareHeads = (baseSha, headSha) => exports_Effect.gen(function* () {
     const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
     const wire = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => exports_Schema.decodeUnknownEffect(GitHubCompareWire)(body).pipe(exports_Effect.mapError(asLookupFailure))));
-    const files = (wire.files ?? []).map(toChangedFile);
+    const files = wire.files.map(toChangedFile);
     return ReviewHeadComparison.make({
       status: wire.status,
       baseSha: wire.base_commit.sha,
@@ -40916,8 +41032,11 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
     });
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
   return PriorReviews.of({
-    latestFingerprint: cachedMarkers.pipe(exports_Effect.map((markers) => markers.latestFingerprint)),
-    latestState: cachedMarkers.pipe(exports_Effect.map((markers) => markers.latestState)),
+    latestFingerprint: readMarkers(exports_Option.none()).pipe(exports_Effect.map((markers) => markers.latestFingerprint)),
+    latestState: exports_Effect.gen(function* () {
+      const authenticator = yield* ReviewStateAuthenticator;
+      return yield* readMarkers(exports_Option.some(authenticator)).pipe(exports_Effect.map((markers) => markers.latestState));
+    }),
     compareHeads
   });
 }));
@@ -41084,6 +41203,9 @@ var planPublication = (review, files, options3) => {
     if (options3.reviewMode !== undefined && options3.reviewReason !== undefined) {
       parts2.push("", options3.reviewMode === "incremental" ? `**Incremental scope:** reviewed ${options3.reviewFilesVisible ?? files.length} file(s) ${options3.reviewReason}. Unchanged accepted scope was preserved and not reopened.` : `**Full-diff scope:** ${options3.reviewReason}.`);
     }
+    if (options3.stateNotice !== undefined) {
+      parts2.push("", `⚠️ Continuity state was not stored (${options3.stateNotice.slice(0, 1000)}); the next run will safely review the full diff.`);
+    }
     parts2.push("", review.summary);
     if (options3.coverage?.status === "incomplete") {
       parts2.push("", "### \uD83D\uDED1 Incomplete coverage", "", ...options3.coverage.reasons.map((reason) => `- ${reason}`));
@@ -41113,7 +41235,7 @@ var planPublication = (review, files, options3) => {
 `);
   };
   const counts = severityCounts(review, options3.carriedFindings ?? [], options3.carriedConcerns ?? []);
-  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
+  const event = !options3.applyVerdict ? "COMMENT" : options3.coverage?.status === "incomplete" || counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
   const tail = [
     renderReviewMetadata({
       headSha: options3.headSha,
@@ -41125,7 +41247,7 @@ var planPublication = (review, files, options3) => {
       baselineSha: options3.baselineSha
     }),
     ...options3.fingerprint === undefined ? [] : [renderFingerprintMarker(options3.fingerprint)],
-    ...options3.state === undefined ? [] : [renderReviewStateMarker(options3.state)]
+    ...options3.stateMarker === undefined ? [] : [options3.stateMarker]
   ].join(`
 `);
   const headBudget = 60000 - tail.length - 1;
@@ -41261,7 +41383,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     totalAnchorFiles: metadata.totalChangedFiles,
     events: events2
   });
-  const state = executionContext !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined ? ReviewState.make({
+  const stateCandidate = executionContext !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
     version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
@@ -41276,6 +41398,18 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
     lastReviewMode: executionContext.mode
   }) : undefined;
+  const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
+    state: undefined,
+    marker: undefined,
+    notice: executionContext?.stateAuthenticator?.status === "unavailable" && coverage.status === "complete" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+  } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
+    onFailure: (error2) => ({
+      state: undefined,
+      marker: undefined,
+      notice: error2._tag === "ReviewStateMarkerTooLarge" ? `authenticated continuity state exceeded its ${error2.maximumChars}-character bound` : `authenticated continuity state could not be signed: ${error2.reason}`
+    }),
+    onSuccess: (marker) => ({ state: stateCandidate, marker, notice: undefined })
+  }));
   const plan = planPublication(review, anchorFiles, {
     applyVerdict: options3.applyVerdict,
     headSha: metadata.headSha,
@@ -41295,7 +41429,8 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     baselineSha: executionContext?.baselineSha,
     reviewFilesVisible: files.length,
     reviewTotalFiles,
-    state
+    stateMarker: continuity.marker,
+    stateNotice: continuity.notice
   });
   const scope3 = options3.usageScope === undefined ? {} : { usageScope: options3.usageScope };
   if (!options3.post) {
@@ -41309,7 +41444,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
       usage,
       ...scope3,
       ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
-      ...state === undefined ? {} : { state }
+      ...continuity.state === undefined ? {} : { state: continuity.state }
     });
   }
   const publisher = yield* ReviewPublisher;
@@ -41325,7 +41460,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     usage,
     ...scope3,
     ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
-    ...state === undefined ? {} : { state }
+    ...continuity.state === undefined ? {} : { state: continuity.state }
   });
 });
 
@@ -52356,7 +52491,6 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     }
   }
   const target = yield* resolveReviewTarget({});
-  const ambientPriorReviews = yield* exports_Effect.serviceOption(PriorReviews);
   return yield* exports_Effect.gen(function* () {
     let selection;
     if (reviewer.profileFingerprint !== undefined) {
@@ -52366,10 +52500,17 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
         reviewer.profileFingerprint
       ]);
       const { metadata, files: fullFiles } = snapshot2;
-      const history = exports_Option.isSome(ambientPriorReviews) ? ambientPriorReviews.value : yield* PriorReviews;
-      const recovered = yield* history.latestState.pipe(exports_Effect.match({
+      const history = options3.priorReviews ?? (yield* PriorReviews);
+      const stateAuthenticator = yield* ReviewStateAuthenticator;
+      const recovered = stateAuthenticator.status === "unavailable" ? {
+        state: undefined,
+        failure: stateAuthenticator.unavailableReason ?? "an authenticated review-state secret is not configured"
+      } : yield* history.latestState.pipe(exports_Effect.match({
         onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
-        onSuccess: (state) => ({ state: exports_Option.getOrUndefined(state), failure: undefined })
+        onSuccess: (state) => ({
+          state: exports_Option.getOrUndefined(state),
+          failure: undefined
+        })
       }));
       let comparison;
       let baseComparison;
@@ -52406,16 +52547,19 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           }
         }
       }
-      selection = selectReviewRange({
-        requestedMode: options3.reviewMode ?? "incremental",
-        current: metadata,
-        fullFiles,
-        profileFingerprint,
-        priorState: recovered.state,
-        comparison,
-        baseComparison,
-        lookupFailure: recovered.failure
-      });
+      selection = {
+        ...selectReviewRange({
+          requestedMode: options3.reviewMode ?? "incremental",
+          current: metadata,
+          fullFiles,
+          profileFingerprint,
+          priorState: recovered.state,
+          comparison,
+          baseComparison,
+          lookupFailure: recovered.failure
+        }),
+        stateAuthenticator
+      };
       if (options3.skipUnchanged !== false && selection.mode === "incremental" && selection.files.length === 0 && selection.priorState !== undefined) {
         const result4 = concludeReviewState(selection.priorState);
         const reason = "no changed review scope since the last successfully reviewed head";
@@ -52438,6 +52582,23 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
             reasons: result4.reasons
           });
         }
+        return { _tag: "Skipped", reason };
+      }
+    } else if (options3.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
+      const current = yield* reviewer.fingerprint;
+      const history = options3.priorReviews ?? (yield* PriorReviews);
+      const latest = yield* history.latestFingerprint.pipe(exports_Effect.orElseSucceed(() => exports_Option.none()));
+      if (exports_Option.isSome(latest) && latest.value === current) {
+        const reason = "changeset unchanged since the last review";
+        yield* exports_Console.log(`Skipping review of ${target.repository}#${target.number}: ${reason}.`);
+        yield* writeActionOutputs([
+          ["skipped", "true"],
+          ["skip-reason", reason],
+          ["fingerprint", current],
+          ["conclusion", "success"],
+          ["coverage", "complete"]
+        ]);
+        yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
         return { _tag: "Skipped", reason };
       }
     }
@@ -52463,6 +52624,11 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const stateSecret = exports_Option.map(yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_STATE_SECRET")), exports_Redacted.make);
+  const stateAuthenticatorLayer = exports_Option.match(stateSecret, {
+    onNone: () => unavailableReviewStateAuthenticatorLayer("an authenticated review-state secret is not configured"),
+    onSome: webCryptoReviewStateAuthenticatorLayer
+  });
   const guidance = yield* resolveGuidance2(inputs);
   const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
@@ -52488,11 +52654,11 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   if (inputs.provider === "anthropic") {
     const model4 = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
-    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)));
   }
   const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
-  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
 var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_NodeServices.layer)), { disableErrorReporting: true });
 
@@ -52512,6 +52678,7 @@ var INPUT_TO_ENV = [
   ["INPUT_REVIEW-MODE", "PR_REVIEW_MODE"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
+  ["INPUT_STATE-SECRET", "PR_REVIEW_STATE_SECRET"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
   ["INPUT_ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY"],
   ["INPUT_GITHUB-TOKEN", "GITHUB_TOKEN"]

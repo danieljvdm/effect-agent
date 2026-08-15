@@ -6,6 +6,7 @@ import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
   anchorViolation,
+  assessReviewCoverage,
   annotatePatch,
   ChangedFile,
   CodeReview,
@@ -25,6 +26,7 @@ import {
   ReadFile,
   ReadFileDiff,
   ReviewConcern,
+  ReviewCoverage,
   ReviewExecutionContext,
   ReviewFinding,
   ReviewHeadComparison,
@@ -51,6 +53,31 @@ describe("OpenAI tool schema compatibility", () => {
       expect(jsonSchema.type).toBe("object");
       expect(jsonSchema.anyOf).toBeUndefined();
     }
+  });
+});
+
+describe("host coverage diagnostics", () => {
+  it("bounds externally sourced path lists before constructing ReviewCoverage", () => {
+    const longFiles = Array.from({ length: 3 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/${String(index)}-${"a".repeat(480)}.ts`,
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+export {};",
+      }),
+    );
+    const coverage = assessReviewCoverage({
+      shape: "flat",
+      files: longFiles,
+      totalFiles: longFiles.length,
+      anchorFiles: longFiles,
+      totalAnchorFiles: longFiles.length,
+      events: [],
+    });
+    expect(coverage.status).toBe("incomplete");
+    expect(coverage.reasons.every((reason) => reason.length <= 1_000)).toBe(true);
+    expect(coverage.reasons.join("\n")).toContain("(+2 more)");
   });
 });
 
@@ -306,6 +333,21 @@ describe("publication planning", () => {
         totalChangedFiles: 2,
       }).event,
     ).toBe("APPROVE");
+    expect(
+      planPublication(approving, files, {
+        applyVerdict: true,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+        coverage: ReviewCoverage.make({
+          status: "incomplete",
+          requiredPaths: [],
+          reviewedPaths: [],
+          unreviewedPaths: [],
+          failedUnits: [],
+          reasons: ["required review unit did not complete"],
+        }),
+      }).event,
+    ).toBe("REQUEST_CHANGES");
   });
 
   it("extends the suggestion fence past any backticks in the replacement", () => {

@@ -62,6 +62,24 @@ const toolTrace = (events: ReadonlyArray<RunEvent>): ToolTrace => {
 const sortedUnique = (values: Iterable<string>): ReadonlyArray<string> =>
   [...new Set(values)].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
+const boundedListReason = (label: string, values: Iterable<string>): string => {
+  const items = sortedUnique(values);
+  const prefix = `${label} (${items.length}): `;
+  let rendered = prefix;
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index] ?? "";
+    const separator = index === 0 ? "" : ", ";
+    const omitted = items.length - index - 1;
+    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
+    if (`${rendered}${separator}${item}${suffix}`.length > 1_000) {
+      const omission = `… (+${items.length - index} more)`;
+      return `${rendered.slice(0, 1_000 - omission.length)}${omission}`;
+    }
+    rendered = `${rendered}${separator}${item}`;
+  }
+  return rendered;
+};
+
 const flatCoverage = (
   files: ReadonlyArray<ChangedFile>,
   totalFiles: number,
@@ -86,13 +104,13 @@ const flatCoverage = (
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (undiffable.length > 0) {
-    reasons.push(`required paths have no textual diff: ${undiffable.join(", ")}`);
+    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
   }
   if (failedPaths.size > 0) {
-    reasons.push(`diff reads failed for: ${sortedUnique(failedPaths).join(", ")}`);
+    reasons.push(boundedListReason("diff reads failed", failedPaths));
   }
   if (unreviewed.length > 0) {
-    reasons.push(`required paths were not successfully reviewed: ${unreviewed.join(", ")}`);
+    reasons.push(boundedListReason("required paths were not successfully reviewed", unreviewed));
   }
   return ReviewCoverage.make({
     status: reasons.length === 0 ? "complete" : "incomplete",
@@ -178,16 +196,17 @@ const fanOutCoverage = (
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (plan.undiffablePaths.length > 0) {
-    reasons.push(`required paths have no textual diff: ${plan.undiffablePaths.join(", ")}`);
+    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
   }
   if (plan.unassignedPaths.length > 0) {
-    reasons.push(`fan-out capacity left paths unassigned: ${plan.unassignedPaths.join(", ")}`);
+    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
   }
   if (failedUnits.length > 0) {
     reasons.push(
-      `review units did not complete: ${failedUnits
-        .map((unit) => `${unit.unitId} (${unit.errorTag})`)
-        .join(", ")}`,
+      boundedListReason(
+        "review units did not complete",
+        failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`),
+      ),
     );
   }
   return ReviewCoverage.make({

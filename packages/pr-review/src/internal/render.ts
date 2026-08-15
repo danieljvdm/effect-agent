@@ -1,12 +1,10 @@
 import { Schema } from "effect";
 
 import type { ReviewCoverage } from "./coverage.ts";
-import type { ChangedFile } from "./diff.ts";
-import { commentableLines } from "./diff.ts";
+import { commentableLines, type ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
-import type { CodeReview } from "./review-agent.ts";
-import { ReviewFinding, type ReviewConcern } from "./review-agent.ts";
-import { renderReviewStateMarker, type ReviewScopeMode, type ReviewState } from "./review-state.ts";
+import { ReviewFinding, type CodeReview, type ReviewConcern } from "./review-agent.ts";
+import type { ReviewScopeMode, ReviewStateMarker } from "./review-state.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is
@@ -245,8 +243,10 @@ export const planPublication = (
     readonly baselineSha?: string | undefined;
     readonly reviewFilesVisible?: number | undefined;
     readonly reviewTotalFiles?: number | undefined;
-    /** Durable state is emitted only after complete host-owned coverage. */
-    readonly state?: ReviewState | undefined;
+    /** Authenticated continuity state is emitted only after complete host-owned coverage. */
+    readonly stateMarker?: ReviewStateMarker | undefined;
+    /** Visible reason continuity state was omitted; the next run will review fully. */
+    readonly stateNotice?: string | undefined;
   },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
@@ -306,6 +306,12 @@ export const planPublication = (
         options.reviewMode === "incremental"
           ? `**Incremental scope:** reviewed ${options.reviewFilesVisible ?? files.length} file(s) ${options.reviewReason}. Unchanged accepted scope was preserved and not reopened.`
           : `**Full-diff scope:** ${options.reviewReason}.`,
+      );
+    }
+    if (options.stateNotice !== undefined) {
+      parts.push(
+        "",
+        `⚠️ Continuity state was not stored (${options.stateNotice.slice(0, 1_000)}); the next run will safely review the full diff.`,
       );
     }
     parts.push("", review.summary);
@@ -372,7 +378,7 @@ export const planPublication = (
   );
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
-    : counts.blocking > 0
+    : options.coverage?.status === "incomplete" || counts.blocking > 0
       ? "REQUEST_CHANGES"
       : review.verdict === "approve" && counts.important === 0
         ? "APPROVE"
@@ -391,7 +397,7 @@ export const planPublication = (
       baselineSha: options.baselineSha,
     }),
     ...(options.fingerprint === undefined ? [] : [renderFingerprintMarker(options.fingerprint)]),
-    ...(options.state === undefined ? [] : [renderReviewStateMarker(options.state)]),
+    ...(options.stateMarker === undefined ? [] : [options.stateMarker]),
   ].join("\n");
   const headBudget = 60_000 - tail.length - 1;
 

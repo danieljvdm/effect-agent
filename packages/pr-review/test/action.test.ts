@@ -7,6 +7,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Redacted,
   Ref,
   Schema,
 } from "effect";
@@ -32,9 +33,10 @@ import {
   ReviewRunOutcome,
   ReviewState,
   StoredReviewFinding,
+  webCryptoReviewStateAuthenticatorLayer,
   type ReviewVerdict,
 } from "../src/index.ts";
-import { staticPriorReviewsLayer } from "../src/testing.ts";
+import { staticPriorReviews } from "../src/testing.ts";
 
 const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   expect(Exit.isFailure(exit)).toBe(true);
@@ -213,9 +215,10 @@ const actionHarness = (eventJson: string | undefined) =>
       GITHUB_REPOSITORY: "acme/widgets",
       ...(eventJson !== undefined ? { GITHUB_EVENT_PATH: EVENT_PATH } : {}),
     };
-    const layer = Layer.merge(
+    const layer = Layer.mergeAll(
       Layer.succeed(FileSystem.FileSystem)(fs),
       ConfigProvider.layer(ConfigProvider.fromEnvRecord(env)),
+      webCryptoReviewStateAuthenticatorLayer(Redacted.make("test-review-state-secret")),
     );
     return { written, layer };
   });
@@ -322,6 +325,35 @@ describe("runReviewAction", () => {
     }),
   );
 
+  it.effect("preserves legacy fingerprint skipping for explicit custom harness history", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const fingerprint = "f".repeat(64);
+      const invoked = yield* Ref.make(0);
+      const result = yield* runReviewAction(
+        {
+          run: () =>
+            Ref.update(invoked, (count) => count + 1).pipe(
+              Effect.map(() => fakeOutcome("comment")),
+            ),
+          fingerprint: Effect.succeed(fingerprint),
+        },
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.some(fingerprint)),
+        },
+      ).pipe(Effect.provide(harness.layer));
+      expect(result._tag).toBe("Skipped");
+      expect(yield* Ref.get(invoked)).toBe(0);
+      expect(yield* Ref.get(harness.written)).toContain(`fingerprint=${fingerprint}`);
+    }),
+  );
+
   it.effect("preserves a blocking conclusion when the reviewed head is unchanged", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
@@ -378,16 +410,11 @@ describe("runReviewAction", () => {
           profileFingerprint: Effect.succeed(profileFingerprint),
           snapshot: Effect.succeed({ metadata, files: [] }),
         },
-        { post: false },
-      ).pipe(
-        Effect.provide(
-          Layer.merge(
-            harness.layer,
-            staticPriorReviewsLayer(Option.none(), { state: Option.some(state) }),
-          ),
-        ),
-        Effect.exit,
-      );
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.none(), { state: Option.some(state) }),
+        },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
       const failure = failureFrom(exit);
       expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
       expect(yield* Ref.get(invoked)).toBe(0);

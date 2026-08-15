@@ -15,7 +15,9 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
+  # Ignored label events must not cancel a real review before their job-level
+  # condition skips them. Final-audit labels share the ordinary PR group.
+  group: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && format('pr-review-ignored-{0}-{1}', github.event.pull_request.number, github.run_id) || format('pr-review-{0}', github.event.pull_request.number) }}
   cancel-in-progress: true
 
 jobs:
@@ -38,6 +40,9 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # A dedicated secret is preferred. The provider credential is a
+          # stable workflow-only fallback and is never sent to the reviewer as state.
+          state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET || secrets.OPENAI_API_KEY }}
           # Dogfood the subagent fan-out variant (S1 attached delegation).
           fan-out: "true"
           # Position on [0,1]; resolves to the provider's "high" rung.

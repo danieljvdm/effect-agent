@@ -289,11 +289,12 @@ export const executeReview = <
       totalAnchorFiles: metadata.totalChangedFiles,
       events,
     });
-    const state =
+    const stateCandidate =
       executionContext !== undefined &&
       coverage.status === "complete" &&
       fingerprint !== undefined &&
-      metadata.baseSha !== undefined
+      metadata.baseSha !== undefined &&
+      executionContext.stateAuthenticator?.status === "available"
         ? ReviewState.make({
             version: 1,
             repository: metadata.repository,
@@ -310,6 +311,31 @@ export const executeReview = <
             lastReviewMode: executionContext.mode,
           })
         : undefined;
+    const continuity =
+      stateCandidate === undefined || executionContext?.stateAuthenticator === undefined
+        ? {
+            state: undefined,
+            marker: undefined,
+            notice:
+              executionContext?.stateAuthenticator?.status === "unavailable" &&
+              coverage.status === "complete"
+                ? (executionContext.stateAuthenticator.unavailableReason ??
+                  "authenticated continuity state is unavailable")
+                : undefined,
+          }
+        : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(
+            Effect.match({
+              onFailure: (error) => ({
+                state: undefined,
+                marker: undefined,
+                notice:
+                  error._tag === "ReviewStateMarkerTooLarge"
+                    ? `authenticated continuity state exceeded its ${error.maximumChars}-character bound`
+                    : `authenticated continuity state could not be signed: ${error.reason}`,
+              }),
+              onSuccess: (marker) => ({ state: stateCandidate, marker, notice: undefined }),
+            }),
+          );
     const plan = planPublication(review, anchorFiles, {
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,
@@ -329,7 +355,8 @@ export const executeReview = <
       baselineSha: executionContext?.baselineSha,
       reviewFilesVisible: files.length,
       reviewTotalFiles,
-      state,
+      stateMarker: continuity.marker,
+      stateNotice: continuity.notice,
     });
 
     const scope =
@@ -347,7 +374,7 @@ export const executeReview = <
         ...(executionContext === undefined
           ? {}
           : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
-        ...(state === undefined ? {} : { state }),
+        ...(continuity.state === undefined ? {} : { state: continuity.state }),
       });
     }
     const publisher = yield* ReviewPublisher;
@@ -365,6 +392,6 @@ export const executeReview = <
       ...(executionContext === undefined
         ? {}
         : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
-      ...(state === undefined ? {} : { state }),
+      ...(continuity.state === undefined ? {} : { state: continuity.state }),
     });
   });

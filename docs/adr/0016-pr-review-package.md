@@ -155,10 +155,15 @@ while the posted review contained blocking findings or incomplete fan-out covera
 cannot repair either host-boundary defect.
 
 1. **Review state is a bounded GitHub-review marker.** Every structurally complete posted review
-   embeds a versioned, schema-validated marker containing exact PR/base/head identity, reviewer-
+   embeds a versioned, terminal, HMAC-authenticated, schema-validated marker containing exact PR/base/head identity, reviewer-
    profile and accepted-scope fingerprints, and bounded unresolved findings/concerns. This is
    cross-run workflow continuity, not a stronger runtime deployment class: execution remains E,
-   GitHub is the external state carrier, and review posting remains non-exactly-once.
+   GitHub is the external state carrier, and review posting remains non-exactly-once. The stable
+   state secret is host-only; missing/rotated credentials and non-default review authors force a
+   full fallback rather than accepting unauthenticated scope authority. Authentication is an
+   explicit host-provided Effect service with typed WebCrypto failures. Markers are branded and
+   capped at 24,000 characters; signing or size failure visibly omits continuity state so the next
+   run falls back to a full review.
 2. **Normal synchronization is incremental.** After validating state, the host compares the last
    successfully covered head with the current head and exposes only newly affected paths still in
    the current PR diff. Findings in unchanged paths remain active; changed or reverted paths are
@@ -178,6 +183,8 @@ cannot repair either host-boundary defect.
    the incremental baseline. The dogfood workflow invokes it only for the
    `pr-review:final-audit` label and reruns the same required `review` check; ordinary corrective
    `synchronize` events retain incremental mode.
+6. **Unrelated labels cannot interrupt review.** Ignored `labeled` events use a unique concurrency
+   group; only the final-audit label shares and may replace the active PR review run.
 
 Rejected: storing continuity only in prompt prose, treating a failed delegated unit as successful
 coverage because the coordinator produced JSON, and running a full audit after every corrective
