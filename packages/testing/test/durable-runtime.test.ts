@@ -432,11 +432,32 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           "ModelResponseRecorded",
           "SubmissionSettled",
         ]);
+        // Exact synthetic settlements: identities in declaration order, each
+        // carrying the encoded policy failure — replay correlation for the
+        // model-declared calls, not just an isFailure bit.
+        expect(records.map((envelope) => envelope.record.recordId).slice(2, 5)).toEqual([
+          modelResponseRecordId(runId, 1),
+          toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-1")),
+          toolCallSettledRecordId(runId, 1, Schema.decodeSync(ToolCallId)("probe-2")),
+        ]);
         const settledCalls = records
           .map((envelope) => envelope.record.payload)
           .filter((payload) => payload._tag === "ToolCallSettled");
+        expect(
+          settledCalls.map((payload) => ({
+            toolCallId: payload.toolCallId,
+            toolName: payload.toolName,
+            isFailure: payload.isFailure,
+          })),
+        ).toEqual([
+          { toolCallId: "probe-1", toolName: "probe", isFailure: true },
+          { toolCallId: "probe-2", toolName: "probe", isFailure: true },
+        ]);
         for (const payload of settledCalls) {
-          expect(payload).toMatchObject({ isFailure: true });
+          expect(payload.result).toMatchObject({
+            _tag: "AgentPolicyError",
+            limit: "tool-calls",
+          });
         }
         const settled = records.at(-1)?.record.payload;
         expect(settled?._tag).toBe("SubmissionSettled");
@@ -448,7 +469,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         }
 
         // The canonical journal alone rebuilds the exact model-visible prompt,
-        // rejected batch included.
+        // rejected batch included: the tool message carries one failed result
+        // per rejected call in declaration order.
         const prompt = yield* promptFromCanonicalRecords(records);
         expect(prompt.content.map((message) => message.role)).toEqual([
           "system",
@@ -457,6 +479,105 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           "tool",
           "assistant",
         ]);
+        const toolMessage = prompt.content.find((message) => message.role === "tool");
+        const toolParts = (toolMessage?.content ?? []).flatMap((part) =>
+          part.type === "tool-result" ? [{ id: part.id, isFailure: part.isFailure ?? false }] : [],
+        );
+        expect(toolParts).toEqual([
+          { id: "probe-1", isFailure: true },
+          { id: "probe-2", isFailure: true },
+        ]);
+      }),
+  );
+
+  it.effect(
+    "RUN-018 recovery preserves the budget-exhausted finishReason across both terminalize failpoints",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const scenarios = [
+          {
+            location: "terminalize:after-reserve" as const,
+            conversation: "conversation-soft-landing-reserve",
+            key: "soft-landing-reserve-1",
+          },
+          {
+            location: "terminalize:after-canonical-append" as const,
+            conversation: "conversation-soft-landing-append",
+            key: "soft-landing-append-1",
+          },
+        ];
+        for (const scenario of scenarios) {
+          const Probe = Tool.make("probe", {
+            parameters: Schema.Struct({ query: Schema.String }),
+            success: Schema.Struct({ available: Schema.Boolean }),
+          });
+          const probeTools = Toolkit.make(Probe);
+          const definition = Agent.define("durable-soft-landing-recovery", {
+            input: Schema.Struct({ question: Schema.String }),
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: "Probe before answering.",
+            toolkit: probeTools,
+            policy: AgentPolicy.make({
+              maxTurns: 5,
+              maxToolCalls: 1,
+              maxDuration: "30 seconds",
+              toolConcurrency: 1,
+            }),
+          });
+          const probeToolLayer = probeTools.toLayer({
+            probe: () => Effect.succeed({ available: true }),
+          });
+          const scripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? [
+                  {
+                    type: "tool-call",
+                    id: "probe-1",
+                    name: "probe",
+                    params: { query: "a" },
+                    providerExecuted: false,
+                  },
+                  {
+                    type: "tool-call",
+                    id: "probe-2",
+                    name: "probe",
+                    params: { query: "b" },
+                    providerExecuted: false,
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ]
+              : finalParts('{"answer":"recovered partial"}'),
+          );
+          const agent = Agent.withModel(definition, scripted.model);
+
+          const receipt = yield* runtime.submit(
+            agent,
+            { question: "Everything?" },
+            submitOptions(scenario.conversation, scenario.key),
+          );
+          yield* armFailpoint(scenario.location);
+          const killed = yield* Effect.exit(
+            runtime
+              .processConversation(agent, decodeConversationId(scenario.conversation))
+              .pipe(Effect.provide(probeToolLayer)),
+          );
+          expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+
+          yield* runtime.runRecovery;
+          const settlement = yield* runtime.awaitSettlement(receipt);
+          expect(settlement.outcome).toBe("completed");
+          const records = yield* readLog(scenario.conversation);
+          const settledRecords = records
+            .map((envelope) => envelope.record.payload)
+            .filter((payload) => payload._tag === "SubmissionSettled");
+          expect(settledRecords).toHaveLength(1);
+          expect(settledRecords[0]).toMatchObject({
+            outcome: "completed",
+            finishReason: "budget-exhausted",
+          });
+        }
       }),
   );
 

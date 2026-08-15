@@ -398,6 +398,20 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
 }) {}
 
 /**
+ * Canonical-boundary view of `SubmissionSettled`: `finishReason` is valid
+ * only on a `completed` outcome, so a malformed persisted combination such as
+ * `{ outcome: "failed", finishReason: "budget-exhausted" }` fails closed at
+ * decode instead of becoming trusted audit history (STORE-006, RUN-011).
+ */
+const SubmissionSettledRecord = SubmissionSettled.pipe(
+  Schema.refine(
+    (settled): settled is SubmissionSettled =>
+      settled.finishReason === undefined || settled.outcome === "completed",
+    { expected: "finishReason only on a completed settlement" },
+  ),
+);
+
+/**
  * PARENT-log record of one durable child establishment request (spec/subagents.md §12 step 3):
  * the exact parent Tool Call, delegation and target identity, the digests that pin the child's
  * Binding/input/grant, the fenced budget reservation, and the INTENDED child identity derived
@@ -506,7 +520,7 @@ export const CanonicalRecordPayload = Schema.Union([
   RunFailed,
   RunCompleted,
   AbortRequested,
-  SubmissionSettled,
+  SubmissionSettledRecord,
   SubagentRequested,
   SubagentStarted,
   SubagentJoined,

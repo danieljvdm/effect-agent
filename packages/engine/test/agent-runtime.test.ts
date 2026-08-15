@@ -5441,10 +5441,30 @@ layer(identifiers)("RUN-018 budget soft landing", (it) => {
           finishReason: "budget-exhausted",
         });
         expect(observedChoices).toEqual(["auto", "none"]);
-        // The rejected batch is model-visible: the final-answer request carries
-        // one failed tool result per rejected call.
-        expect(observedPrompts[1]).toContain("Tool Call budget exhausted");
-        expect(observedPrompts[1]).toContain('"isFailure":true');
+        // The rejected batch is model-visible: the final-answer request
+        // carries one failed tool result per rejected call, in declaration
+        // order, each with the synthetic policy failure as its payload.
+        const secondPrompt = JSON.parse(observedPrompts[1] ?? "{}") as {
+          readonly content?: ReadonlyArray<{
+            readonly role: string;
+            readonly content: ReadonlyArray<{
+              readonly type: string;
+              readonly id?: string;
+              readonly isFailure?: boolean;
+              readonly result?: { readonly _tag?: string; readonly message?: string };
+            }>;
+          }>;
+        };
+        const toolResults = (secondPrompt.content ?? [])
+          .filter((message) => message.role === "tool")
+          .flatMap((message) => message.content)
+          .filter((part) => part.type === "tool-result");
+        expect(toolResults.map((part) => part.id)).toEqual(["search-1", "search-2"]);
+        for (const part of toolResults) {
+          expect(part.isFailure).toBe(true);
+          expect(part.result?._tag).toBe("AgentPolicyError");
+          expect(part.result?.message).toContain("Tool Call budget exhausted");
+        }
       }),
   );
 
