@@ -72,16 +72,11 @@ export type OfflineUnitOutcome =
   /** Read one diff, then return non-JSON — the child fails typed (AgentOutputError). */
   | { readonly _tag: "malformed-output" }
   /**
-   * Declare more Tool Calls than the child's AgentPolicy allows in one turn.
-   * None executes; under the default `onExhaustion: "final-answer"` the child
-   * sees one synthetic failed result per rejected call and returns `report`
-   * on its final tool-free turn (RUN-018).
+   * Declare more Tool Calls than the child's AgentPolicy allows in one turn —
+   * none executes and the child fails typed (AgentPolicyError "tool-calls",
+   * the reviewer's deliberate `onExhaustion: "fail"` pin).
    */
-  | {
-      readonly _tag: "budget-runaway";
-      readonly declaredCalls: number;
-      readonly report: FileReviewReport;
-    };
+  | { readonly _tag: "budget-runaway"; readonly declaredCalls: number };
 
 export interface OfflineUnitScript {
   readonly unitId: string;
@@ -108,13 +103,6 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
       if (script === undefined) return undefined;
       switch (script.outcome._tag) {
         case "budget-runaway": {
-          // Turn 2: the rejected batch's synthetic results are in history, so
-          // the child soft-lands with its partial report.
-          if (promptJson.includes(`runaway-${script.unitId}-1`)) {
-            return scriptedFinalParts(
-              JSON.stringify(Schema.encodeSync(FileReviewReport)(script.outcome.report)),
-            );
-          }
           return scriptedToolTurn(
             ...Array.from(
               { length: script.outcome.declaredCalls },

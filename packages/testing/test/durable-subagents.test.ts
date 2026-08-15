@@ -210,6 +210,38 @@ const mixedCoordinatorDefinition = Agent.define("travel-coordinator-mixed", {
 const mapChildFailure = (failure: { readonly _tag: string }) =>
   ResearchDelegationFailed.make({ childErrorTag: failure._tag });
 
+/** SUB-033 fixture: the same delegation under first-party containment. */
+const containedResearchDelegation = Subagent.define("delegate_research_contained", {
+  description: "Research one bounded question; failures are contained result data.",
+  target: childDefinition,
+  parameters: Schema.Struct({ topic: Schema.String }),
+  success: Schema.Struct({ summary: Schema.String }),
+  failure: ResearchDelegationFailed,
+  failureMode: "return",
+  prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+  projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
+  policy: SubagentPolicy.make({
+    maxChildren: 2,
+    maxConcurrency: 2,
+    maxTurns: 4,
+    maxToolCalls: 4,
+    maxDuration: "10 seconds",
+  }),
+});
+
+const containedCoordinatorDefinition = Agent.define("travel-coordinator-contained", {
+  input: Schema.Struct({ mission: Schema.String }),
+  output: Schema.Struct({ report: Schema.String }),
+  instructions: "Delegate, then answer as JSON.",
+  toolkit: Toolkit.make(containedResearchDelegation.tool),
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 2,
+    maxDuration: "30 seconds",
+    toolConcurrency: 2,
+  }),
+});
+
 const configLayer = DurableRuntimeConfig.layer({
   deploymentId: Schema.decodeSync(DeploymentId)("deployment-durable-subagents"),
   producerId: Schema.decodeSync(ProducerId)("producer-durable-subagents"),
@@ -270,7 +302,12 @@ const identifiers = Layer.effect(
 const delegationSupport = Layer.mergeAll(SubagentReservationsMemoryLive, identifiers);
 
 const submitParentWith =
-  (definition: typeof coordinatorDefinition | typeof mixedCoordinatorDefinition) =>
+  (
+    definition:
+      | typeof coordinatorDefinition
+      | typeof mixedCoordinatorDefinition
+      | typeof containedCoordinatorDefinition,
+  ) =>
   (conversation: string, key: string) =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
@@ -590,6 +627,93 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
           const reservations = yield* parentReservations(parent.submissionId);
           expect(reservations.map((row) => row.status)).toEqual(["released"]);
+        }
+      }),
+  );
+
+  it.effect(
+    "SUB-033 a kill around the contained join yields ONE non-failure settlement carrying the bounded child failure",
+    () =>
+      Effect.gen(function* () {
+        for (const location of [
+          "subagent:after-join-append",
+          "subagent:after-release-pending",
+          "subagent:after-release",
+        ] satisfies ReadonlyArray<DurableRuntimeFailpointLocation>) {
+          yield* clearFailpoint;
+          // A child whose model emits invalid output: its lane settles FAILED.
+          const childScripted = yield* makeScriptedModel(() => finalParts("not-json"));
+          const childBinding = Agent.withModel(childDefinition, childScripted.model);
+          const parentScripted = yield* makeScriptedModel((call) =>
+            call === 0
+              ? toolTurn(toolCall("delegate-1", "delegate_research_contained", { topic: "paris" }))
+              : finalParts('{"report":"handled"}'),
+          );
+          const parentBinding = Agent.withModel(
+            containedCoordinatorDefinition,
+            parentScripted.model,
+          );
+          const delegationLayer = SubagentRuntime.layer(containedResearchDelegation, childBinding, {
+            mapChildFailure,
+            durable: { targetDigests: CHILD_DIGEST_STRINGS },
+          }).pipe(Layer.provide(delegationSupport));
+          const parentResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
+            parentBinding,
+            PARENT_DIGESTS,
+          ).pipe(Effect.provide(delegationLayer));
+          const childResolved: ResolvedBinding = yield* DurableWorkerBinding.make(
+            childBinding,
+            CHILD_DIGESTS,
+          );
+          const harness = {
+            resolver: AgentBindingResolver.fromBindings([parentResolved, childResolved]),
+            childInvocations: childScripted.calls,
+            parentPrompts: parentScripted.prompts,
+            submitParent: submitParentWith(containedCoordinatorDefinition),
+            lookupInvocations: Effect.succeed(0),
+          };
+          const run = drive(harness);
+          const conversation = `conversation-s2-contained-${location.replaceAll(":", "-")}`;
+          const parent = yield* harness.submitParent(conversation, `contained-${location}`);
+          const parentRunId = runIdForSubmission(parent.submissionId);
+          const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+
+          yield* run(parent.conversationId);
+          const childSettlements = yield* run(childConversationId);
+          expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["failed"]);
+          expect(yield* harness.childInvocations).toBe(1);
+
+          yield* armFailpoint(location);
+          const exit = yield* Effect.exit(run(parent.conversationId));
+          expect(failureTag(exit)).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+
+          // Recovery: the parent COMPLETES — the failed child is contained
+          // result data, exactly one non-failure Tool settlement exists, and
+          // the child was never re-executed.
+          const settlements = yield* run(parent.conversationId);
+          expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+          expect(yield* harness.childInvocations).toBe(1);
+          const log = yield* readLog(parent.conversationId);
+          expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
+          const joinSettles = log.filter(
+            (envelope) =>
+              envelope.record.payload._tag === "ToolCallSettled" &&
+              envelope.record.recordId === `tool-settled:${parentRunId}:1:delegate-1`,
+          );
+          expect(joinSettles).toHaveLength(1);
+          const settled = joinSettles[0]?.record.payload;
+          if (settled?._tag === "ToolCallSettled") {
+            expect(settled.isFailure).toBe(false);
+            expect(settled.result).toMatchObject({
+              _tag: "SubagentExecutionFailure",
+              classification: "child-failed",
+            });
+          }
+          // The rebuilt model context carries the contained failure as an
+          // ordinary (non-error) tool result: the parent's final prompt saw it.
+          const finalPrompt = JSON.stringify(harness.parentPrompts.at(-1));
+          expect(finalPrompt).toContain("SubagentExecutionFailure");
         }
       }),
   );

@@ -16,4 +16,10 @@ child; never a mid-flight top-up). `projectResult` now receives a bounded
 ephemeral child result's `finishReason`, or from the child Settlement's durable marker carried
 through the new optional `ChildEstablishSettled.finishReason` — so a budget-truncated partial can
 be surfaced in the declared success Schema. Existing one-argument `projectResult` functions keep
-compiling unchanged.
+compiling unchanged. Also hardens S2 containment per its autoreviewer findings: `Subagent.define`
+is overloaded so the Tool channels follow the `failureMode` value; genuine engine signals are
+classified by unspoofable provenance instead of `instanceof` on exported classes; each delegation
+exposes its canonical `containedFailure` schema (pr-review's coverage decoder now derives from
+it); and the pr-review child reviewer deliberately returns to typed exhaustion — a review is a
+coverage claim, so a budget-exhausted unit stays honestly unreviewed (contained as result data,
+never run-fatal).

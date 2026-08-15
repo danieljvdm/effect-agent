@@ -37438,19 +37438,17 @@ var define = (name, options) => {
     maxDepth: 1
   });
   const failureMode = options.failureMode ?? "error";
+  const containedFailure = exports_Schema.Union([
+    options.failure,
+    SubagentPrestartDenied,
+    SubagentBudgetExhausted,
+    SubagentProjectionFailure,
+    SubagentExecutionFailure
+  ]);
   const returnModeTool = exports_Tool.make(name, {
     description: options.description,
     parameters: options.parameters,
-    success: exports_Schema.Union([
-      options.success,
-      exports_Schema.Union([
-        options.failure,
-        SubagentPrestartDenied,
-        SubagentBudgetExhausted,
-        SubagentProjectionFailure,
-        SubagentExecutionFailure
-      ])
-    ]),
+    success: exports_Schema.Union([options.success, containedFailure]),
     failure: exports_Schema.Union([ToolCallWaiting, SubagentDurabilityError]),
     needsApproval: options.needsApproval
   });
@@ -37476,6 +37474,7 @@ var define = (name, options) => {
     delegationId,
     grant,
     failureMode,
+    containedFailure,
     tool
   });
 };
@@ -37586,6 +37585,15 @@ var settleReservation = (reservations, reservationId, startedAt) => exports_Effe
   }
   yield* reservations.release(reservationId);
 }).pipe(exports_Effect.orDie);
+
+class GenuineEngineSignal {
+  signal;
+  _tag = "GenuineEngineSignal";
+  constructor(signal) {
+    this.signal = signal;
+  }
+}
+var wrapEngineSignal = (signal) => new GenuineEngineSignal(signal);
 var layer14 = (delegation, childBinding, options) => {
   const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
   const allocation = delegationAllocationFromPolicy(delegation.policy);
@@ -37786,7 +37794,7 @@ var layer14 = (delegation, childBinding, options) => {
         stage: "input",
         message: "Prepared child input did not satisfy the target Agent input Schema"
       })));
-      const status = yield* durability.establish({
+      const status = yield* exports_Effect.mapError(wrapEngineSignal)(durability.establish({
         toolCallId,
         delegationId: delegation.delegationId,
         targetAgentId: delegation.target.id,
@@ -37795,7 +37803,7 @@ var layer14 = (delegation, childBinding, options) => {
         encodedChildInput: encodedInput,
         encodedGrant,
         encodedAllocation
-      });
+      }));
       switch (status._tag) {
         case "denied": {
           return yield* executionFailure("establishment-denied", status.errorTag, status.message);
@@ -37811,7 +37819,7 @@ var layer14 = (delegation, childBinding, options) => {
           };
           yield* emit({ _tag: "SubagentRequested", ...payload });
           yield* emit({ _tag: "SubagentStarted", ...payload });
-          return yield* durability.waiting(toolCallId, status);
+          return yield* exports_Effect.mapError(wrapEngineSignal)(durability.waiting(toolCallId, status));
         }
         case "settled": {
           const payload = {
@@ -37827,12 +37835,12 @@ var layer14 = (delegation, childBinding, options) => {
             ...payload,
             errorTag: errorTagOf(failure),
             message: boundedEventText(errorMessageOf(failure))
-          }).pipe(exports_Effect.andThen(durability.join({
+          }).pipe(exports_Effect.andThen(exports_Effect.mapError(wrapEngineSignal)(durability.join({
             toolCallId,
             encodedResult: encodedFailure,
             isFailure: !contained,
             encodedAccounting: conservativeAccounting
-          })), exports_Effect.andThen(exports_Effect.fail(failure)));
+          }))), exports_Effect.andThen(exports_Effect.fail(failure)));
           if (status.outcome !== "completed") {
             const projection = childFailureProjectionOf(status.encodedResult);
             const failure = executionFailure(status.outcome === "aborted" ? "child-aborted" : projection.errorTag === "ChildCompatibilityFailure" ? "child-compatibility" : "child-failed", projection.errorTag, projection.message, status);
@@ -37869,28 +37877,29 @@ var layer14 = (delegation, childBinding, options) => {
             const encodedFailure = yield* encodeBudgetFailure(failure).pipe(exports_Effect.orDie);
             return yield* settleFailure(failure, encodedFailure);
           }
-          yield* durability.join({
+          yield* exports_Effect.mapError(wrapEngineSignal)(durability.join({
             toolCallId,
             encodedResult,
             isFailure: false,
             encodedAccounting: conservativeAccounting
-          });
+          }));
           yield* emit({ _tag: "SubagentJoined", ...payload });
           return projected;
         }
       }
     });
-    const containSignals = (failure) => failure instanceof ToolCallWaiting || failure instanceof SubagentDurabilityError ? exports_Effect.fail(failure) : exports_Effect.succeed(failure);
+    const containSignals = (failure) => failure instanceof GenuineEngineSignal ? exports_Effect.fail(failure.signal) : exports_Effect.succeed(failure);
+    const unwrapSignals = (failure) => failure instanceof GenuineEngineSignal ? failure.signal : failure;
     const handlerImpl = (parameters, handlerContext) => exports_Effect.gen(function* () {
       const spawner = yield* AgentSpawner;
       const sink = yield* RunEventSink;
       const durability = yield* SubagentDurability;
       if (durability.mode === "durable") {
         const durable = invokeDurable(parameters, handlerContext, durability).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
-        return yield* contained ? durable.pipe(exports_Effect.catch(containSignals)) : durable;
+        return yield* contained ? durable.pipe(exports_Effect.catch(containSignals)) : durable.pipe(exports_Effect.mapError(unwrapSignals));
       }
       const ephemeral = invoke(parameters, handlerContext).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
-      return yield* contained ? ephemeral.pipe(exports_Effect.catch(containSignals)) : ephemeral;
+      return yield* contained ? ephemeral.pipe(exports_Effect.catch(containSignals)) : ephemeral.pipe(exports_Effect.mapError(unwrapSignals));
     });
     const handler = handlerImpl;
     return { [delegation.name]: handler };
@@ -38467,7 +38476,7 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200000,
-  onExhaustion: "final-answer"
+  onExhaustion: "fail"
 });
 
 class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
@@ -38500,13 +38509,6 @@ var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
   childErrorTag: failure._tag,
   message: (failure.message ?? "").slice(0, 400)
 });
-var FileReviewDelegationFailure = exports_Schema.Union([
-  FileReviewUnitFailed,
-  SubagentPrestartDenied,
-  SubagentBudgetExhausted,
-  SubagentProjectionFailure,
-  SubagentExecutionFailure
-]);
 
 class ListReviewUnitsQuery extends exports_Schema.Class("@effect-agent/pr-review/ListReviewUnitsQuery")({
   scope: exports_Schema.Literal("all")
@@ -38610,6 +38612,7 @@ var FanOutReviewer = defaultSuite.parent;
 var fileReviewDelegation = defaultSuite.delegation;
 var DelegateFileReview = delegationToolFor(fileReviewDelegation);
 var FanOutReviewToolkit = FanOutReviewer.toolkit;
+var FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
 var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.layer(delegation, childBinding, {
   mapChildFailure: mapFileReviewChildFailure
 });
