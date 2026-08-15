@@ -39114,6 +39114,7 @@ var defaultReviewPolicy = AgentPolicy.make({
   maxDuration: "8 minutes",
   toolConcurrency: 2,
   tokenBudget: 300000,
+  contextTokenLimit: 150000,
   onExhaustion: "final-answer"
 });
 var PullRequestReviewer = Agent.define("pr-reviewer", {
@@ -39264,6 +39265,7 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200000,
+  contextTokenLimit: 150000,
   onExhaustion: "fail"
 });
 
@@ -39345,6 +39347,7 @@ var defaultFanOutPolicy = AgentPolicy.make({
   toolConcurrency: 3,
   repeatedFailureLimit: 3,
   tokenBudget: 300000,
+  contextTokenLimit: 150000,
   onExhaustion: "final-answer"
 });
 var makeFileReviewerDefinition = (options = {}) => Agent.define("pr-file-reviewer", {

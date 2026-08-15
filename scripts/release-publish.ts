@@ -1,7 +1,13 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, FileSystem, Schema, Stream } from "effect";
+import { Cause, Console, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
 import { ChildProcess } from "effect/unstable/process";
+
+import { prepareReleaseArtifactDirectory } from "./release-artifact-directory.ts";
 
 // ---------------------------------------------------------------------------
 // Publish the public `@effect-agent/*` workspaces to npm with `bun publish`.
@@ -17,10 +23,13 @@ import { ChildProcess } from "effect/unstable/process";
 // entries for the duration of one `bun publish`, then restores the original
 // bytes exactly — on success, failure, or interrupt.
 //
-// Flow: `bun run build` (dist artifacts) → `bun x changeset version` (cut the
-// versions) → `bun run release:publish -- --otp <code>` → `bun x changeset
-// tag` and push tags. Idempotent: versions already on the registry are
-// skipped, so a partial publish can simply be re-run.
+// Manual flow: build the dist artifacts, cut versions, run
+// `release:publish`, then create and push Changesets tags. CI instead uses
+// `--pack-directory` without OIDC authority, transfers the resulting manifest
+// and tarballs as an immutable artifact, and lets an action-free publisher
+// upload them. Manual publishing skips existing versions. Pack mode still
+// produces their tarballs so the isolated publisher can validate an exact
+// registry match and safely resume a partial release.
 // ---------------------------------------------------------------------------
 
 const REGISTRY = "https://registry.npmjs.org";
@@ -46,11 +55,46 @@ class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   }
 }
 
-const PublishManifest = Schema.Struct({
+class ReleaseManifestSwapError extends Schema.TaggedError<ReleaseManifestSwapError>()(
+  "ReleaseManifestSwapError",
+  {
+    cause: Schema.optionalKey(Schema.Defect()),
+    manifestPath: Schema.String,
+    message: Schema.String,
+    operation: Schema.Literals(["install", "restore"]),
+  },
+) {}
+
+const DependencyMap = Schema.Record(Schema.String, Schema.String);
+export const PublishManifest = Schema.StructWithRest(
+  Schema.Struct({
+    name: Schema.String,
+    version: Schema.String,
+    private: Schema.optionalKey(Schema.Boolean),
+    exports: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+    dependencies: Schema.optionalKey(DependencyMap),
+    optionalDependencies: Schema.optionalKey(DependencyMap),
+    peerDependencies: Schema.optionalKey(DependencyMap),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
+);
+
+export const PreparedTarballPath = Schema.String.pipe(
+  Schema.refine((value): value is string => /^packages\/[A-Za-z0-9._-]+[.]tgz$/.test(value), {
+    expected: "a safe packages/<basename>.tgz relative path",
+  }),
+);
+
+export const PreparedReleasePackage = Schema.Struct({
   name: Schema.String,
   version: Schema.String,
-  private: Schema.optionalKey(Schema.Boolean),
-  exports: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  distTag: Schema.String,
+  tarball: Schema.NullOr(PreparedTarballPath),
+});
+
+export const PreparedReleaseManifest = Schema.Struct({
+  version: Schema.Literal(1),
+  packages: Schema.Array(PreparedReleasePackage),
 });
 
 const decodeManifest = Schema.decodeUnknownEffect(Schema.fromJsonString(PublishManifest));
@@ -81,14 +125,14 @@ const runCommand = Effect.fn("runCommand")(function* (
 
 /** True when `name@version` already exists on the public registry. */
 const alreadyPublished = Effect.fn("alreadyPublished")(function* (name: string, version: string) {
-  const response = yield* Effect.tryPromise({
-    try: () => fetch(`${REGISTRY}/${name.replace("/", "%2f")}/${version}`),
-    catch: (cause) =>
+  const response = yield* HttpClient.get(`${REGISTRY}/${name.replace("/", "%2f")}/${version}`).pipe(
+    Effect.mapError((cause) =>
       ReleaseError.make({
         package: name,
         reason: `Registry lookup failed: ${String(cause)}`,
       }),
-  });
+    ),
+  );
   if (response.status === 200) return true;
   if (response.status === 404) return false;
   return yield* ReleaseError.make({
@@ -140,10 +184,47 @@ const distExport = (sourcePath: string): { types: string; default: string } | un
   return { types: `./dist/${match[1]}.d.mts`, default: `./dist/${match[1]}.mjs` };
 };
 
+const withTemporaryManifest = <A, E, R>(
+  manifestPath: string,
+  originalBytes: string,
+  publishBytes: string,
+  use: Effect.Effect<A, E, R>,
+) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const manifestError = (operation: ReleaseManifestSwapError["operation"]) => (cause: unknown) =>
+      ReleaseManifestSwapError.make({
+        cause,
+        manifestPath,
+        message: `Could not ${operation} temporary publish manifest ${manifestPath}: ${String(cause)}`,
+        operation,
+      });
+    return yield* Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        yield* fs
+          .writeFileString(manifestPath, publishBytes)
+          .pipe(Effect.mapError(manifestError("install")));
+        const useExit = yield* restore(use).pipe(Effect.exit);
+        const restoreExit = yield* fs
+          .writeFileString(manifestPath, originalBytes)
+          .pipe(Effect.mapError(manifestError("restore")), Effect.exit);
+        if (Exit.isFailure(useExit)) {
+          return yield* Effect.failCause(
+            Exit.isFailure(restoreExit)
+              ? Cause.combine(useExit.cause, restoreExit.cause)
+              : useExit.cause,
+          );
+        }
+        if (Exit.isFailure(restoreExit)) return yield* Effect.failCause(restoreExit.cause);
+        return useExit.value;
+      }),
+    );
+  });
+
 const publishOne = Effect.fn("publishOne")(function* (options: {
   readonly directory: string;
   readonly dryRun: boolean;
-  readonly ci: boolean;
+  readonly packDirectory: string | undefined;
   readonly otp: string | undefined;
   readonly workspaceVersions: ReadonlyMap<string, string>;
 }) {
@@ -154,31 +235,38 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
 
   if (manifest.private === true) {
     yield* Console.log(`- ${manifest.name}: private, skipped`);
-    return "skipped" as const;
+    return { _tag: "Private" as const };
   }
-  if (yield* alreadyPublished(manifest.name, manifest.version)) {
+  const distTag = distTagFor(manifest.version);
+  const versionAlreadyPublished =
+    options.packDirectory === undefined
+      ? yield* alreadyPublished(manifest.name, manifest.version)
+      : false;
+  if (versionAlreadyPublished && options.packDirectory === undefined) {
     yield* Console.log(`- ${manifest.name}@${manifest.version}: already on the registry, skipped`);
-    return "skipped" as const;
+    return {
+      _tag: "Skipped" as const,
+      release: PreparedReleasePackage.make({
+        name: manifest.name,
+        version: manifest.version,
+        distTag,
+        tarball: null,
+      }),
+    };
   }
-
   // Rewrite every source export to its dist entry, fail-closed on both an
   // unrecognized export shape and a missing built artifact.
-  const parsed: unknown = JSON.parse(originalBytes);
-  const mutable = parsed as {
-    exports?: Record<string, unknown>;
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-    peerDependencies?: Record<string, string>;
-  };
+  const mutable = { ...manifest };
 
   // Pin internal `workspace:*` ranges to the exact workspace versions
   // ourselves: `bun publish` resolves them from the lockfile, which does not
   // pick up changeset version bumps ("no changes" install), and 0.0.1-beta.0
   // shipped with dependencies on unpublished internal versions as a result.
   for (const section of ["dependencies", "optionalDependencies", "peerDependencies"] as const) {
-    const dependencies = mutable[section];
+    const dependencies = manifest[section];
     if (dependencies === undefined) continue;
-    for (const [dependency, range] of Object.entries(dependencies)) {
+    const rewrittenDependencies = { ...dependencies };
+    for (const [dependency, range] of Object.entries(rewrittenDependencies)) {
       if (!range.startsWith("workspace:")) continue;
       const version = options.workspaceVersions.get(dependency);
       if (version === undefined) {
@@ -187,8 +275,9 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
           reason: `Workspace dependency '${dependency}' has no known version to pin.`,
         });
       }
-      dependencies[dependency] = version;
+      rewrittenDependencies[dependency] = version;
     }
+    mutable[section] = rewrittenDependencies;
   }
   const exportsMap = manifest.exports ?? {};
   const rewritten: Record<string, { types: string; default: string }> = {};
@@ -210,95 +299,104 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
     }
     rewritten[key] = dist;
   }
-  mutable.exports = rewritten;
+  const publishManifest = { ...mutable, exports: rewritten };
 
   // Dry runs validate the packed artifact without registry credentials;
-  // real publishes require an authenticated npm session (`bunx npm login`)
-  // or, in CI mode, npm's OIDC trusted-publisher exchange.
-  const distTag = distTagFor(manifest.version);
-
-  yield* Console.log(
-    `- ${manifest.name}@${manifest.version}: ${options.dryRun ? "packing (dry run)" : "publishing"}...`,
-  );
-
-  // The manifest swap is scoped: acquireRelease restores the original bytes
-  // even when the publish fails or the fiber is interrupted.
-  yield* Effect.acquireRelease(
-    fs.writeFileString(manifestPath, JSON.stringify(parsed, null, 2)),
-    () => fs.writeFileString(manifestPath, originalBytes).pipe(Effect.orDie),
-  );
-  const environment = yield* publishEnvironment();
-  const publishFailure = (error: { readonly _tag: string; readonly message: string }) =>
-    error._tag === "CommandError"
-      ? ReleaseError.make({
-          package: manifest.name,
-          reason: `${error.message} (an expired --otp is the usual cause locally; re-run with a fresh code — published versions are skipped)`,
-        })
-      : (error as ReleaseError);
-  if (options.dryRun) {
-    yield* runCommand(options.directory, "bun", ["pm", "pack", "--dry-run"], environment).pipe(
-      Effect.mapError(publishFailure),
-    );
-  } else if (options.ci) {
-    // Trusted publishing: bun packs (resolving workspace:/catalog: protocols
-    // into the tarball), and the npm CLI uploads it — only npm implements the
-    // OIDC trusted-publisher exchange and provenance attestation.
-    const packDirectory = `${options.directory}/dist/.release-pack`;
-    yield* fs.makeDirectory(packDirectory, { recursive: true });
-    yield* runCommand(
-      options.directory,
-      "bun",
-      ["pm", "pack", "--destination", "dist/.release-pack"],
-      environment,
-    ).pipe(Effect.mapError(publishFailure));
-    const tarballs = (yield* fs.readDirectory(packDirectory).pipe(Effect.orDie)).filter((entry) =>
-      entry.endsWith(".tgz"),
-    );
-    const tarball = tarballs[0];
-    if (tarball === undefined || tarballs.length !== 1) {
-      return yield* ReleaseError.make({
-        package: manifest.name,
-        reason: `Expected exactly one packed tarball in ${packDirectory}, found ${tarballs.length}.`,
-      });
-    }
-    yield* runCommand(
-      options.directory,
-      "npm",
-      [
-        "publish",
-        `dist/.release-pack/${tarball}`,
-        "--access",
-        "public",
-        "--tag",
-        distTag,
-        "--provenance",
-      ],
-      environment,
-    ).pipe(
-      Effect.mapError(publishFailure),
-      Effect.ensuring(fs.remove(packDirectory, { recursive: true }).pipe(Effect.ignore)),
-    );
-  } else {
-    yield* runCommand(
-      options.directory,
-      "bun",
-      [
-        "publish",
-        "--access",
-        "public",
-        "--tag",
-        distTag,
-        ...(options.otp !== undefined ? ["--otp", options.otp] : []),
-      ],
-      environment,
-    ).pipe(Effect.mapError(publishFailure));
-  }
+  // manual publishes require an authenticated npm session. CI stops at the
+  // pack-directory branch and transfers the tarballs to its isolated OIDC job.
   yield* Console.log(
     `- ${manifest.name}@${manifest.version}: ${
-      options.dryRun ? `dry-run ok (tag: ${distTag})` : `published (tag: ${distTag})`
-    }`,
+      options.packDirectory !== undefined
+        ? "preparing release tarball"
+        : options.dryRun
+          ? "packing (dry run)"
+          : "publishing"
+    }...`,
   );
-  return "published" as const;
+
+  return yield* withTemporaryManifest(
+    manifestPath,
+    originalBytes,
+    JSON.stringify(publishManifest, null, 2),
+    Effect.gen(function* () {
+      const environment = yield* publishEnvironment();
+      const publishFailure = (error: { readonly _tag: string; readonly message: string }) =>
+        error._tag === "CommandError"
+          ? ReleaseError.make({
+              package: manifest.name,
+              reason: `${error.message} (an expired --otp is the usual cause locally; re-run with a fresh code — published versions are skipped)`,
+            })
+          : ReleaseError.make({
+              package: manifest.name,
+              reason: `Process execution failed (${error._tag}): ${error.message}`,
+            });
+      if (options.packDirectory !== undefined) {
+        const before = new Set(yield* fs.readDirectory(options.packDirectory));
+        yield* runCommand(
+          options.directory,
+          "bun",
+          ["pm", "pack", "--destination", options.packDirectory],
+          environment,
+        ).pipe(Effect.mapError(publishFailure));
+        const tarballs = (yield* fs.readDirectory(options.packDirectory)).filter(
+          (entry) => entry.endsWith(".tgz") && !before.has(entry),
+        );
+        const tarball = tarballs[0];
+        if (
+          tarball === undefined ||
+          tarballs.length !== 1 ||
+          !/^[A-Za-z0-9._-]+\.tgz$/.test(tarball)
+        ) {
+          return yield* ReleaseError.make({
+            package: manifest.name,
+            reason: `Expected one safely named tarball in ${options.packDirectory}, found ${tarballs.length}.`,
+          });
+        }
+        yield* Console.log(`- ${manifest.name}@${manifest.version}: prepared packages/${tarball}`);
+        return {
+          _tag: "Prepared" as const,
+          release: PreparedReleasePackage.make({
+            name: manifest.name,
+            version: manifest.version,
+            distTag,
+            tarball: `packages/${tarball}`,
+          }),
+        };
+      } else if (options.dryRun) {
+        yield* runCommand(options.directory, "bun", ["pm", "pack", "--dry-run"], environment).pipe(
+          Effect.mapError(publishFailure),
+        );
+      } else {
+        yield* runCommand(
+          options.directory,
+          "bun",
+          [
+            "publish",
+            "--access",
+            "public",
+            "--tag",
+            distTag,
+            ...(options.otp !== undefined ? ["--otp", options.otp] : []),
+          ],
+          environment,
+        ).pipe(Effect.mapError(publishFailure));
+      }
+      yield* Console.log(
+        `- ${manifest.name}@${manifest.version}: ${
+          options.dryRun ? `dry-run ok (tag: ${distTag})` : `published (tag: ${distTag})`
+        }`,
+      );
+      return {
+        _tag: "Published" as const,
+        release: PreparedReleasePackage.make({
+          name: manifest.name,
+          version: manifest.version,
+          distTag,
+          tarball: null,
+        }),
+      };
+    }),
+  );
 });
 
 const dryRunFlag = Flag.boolean("dry-run").pipe(
@@ -308,24 +406,45 @@ const otpFlag = Flag.string("otp").pipe(
   Flag.optional,
   Flag.withDescription("npm one-time password forwarded to every bun publish."),
 );
-const ciFlag = Flag.boolean("ci").pipe(
+const packDirectoryFlag = Flag.string("pack-directory").pipe(
+  Flag.optional,
   Flag.withDescription(
-    "Trusted-publishing mode: bun packs the tarball, the npm CLI uploads it via the OIDC trusted-publisher exchange with provenance.",
+    "Prepare public package tarballs and a release-manifest.json in a new directory without publishing.",
   ),
 );
 
 const command = CliCommand.make(
   "release-publish",
-  { dryRun: dryRunFlag, ci: ciFlag, otp: otpFlag },
-  ({ ci, dryRun, otp }) =>
+  { dryRun: dryRunFlag, otp: otpFlag, packDirectory: packDirectoryFlag },
+  ({ dryRun, otp, packDirectory }) =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const packRoot =
+        packDirectory._tag === "Some" ? path.resolve(packDirectory.value) : undefined;
+      const selectedModes = Number(dryRun) + Number(packRoot !== undefined);
+      if (selectedModes > 1 || (packRoot !== undefined && otp._tag === "Some")) {
+        return yield* ReleaseError.make({
+          package: "release-publish",
+          reason: "--dry-run, --pack-directory, and --otp cannot select conflicting modes.",
+        });
+      }
+      if (packRoot !== undefined) {
+        if (yield* fs.exists(packRoot)) {
+          return yield* ReleaseError.make({
+            package: "release-publish",
+            reason: `Pack directory already exists: ${packRoot}`,
+          });
+        }
+      }
       const directories = (yield* fs.readDirectory("packages"))
         .filter((entry) => !entry.startsWith("."))
         .sort()
         .map((entry) => `packages/${entry}`);
       yield* Console.log(
-        `Publishing ${directories.length} workspaces to ${REGISTRY}${dryRun ? " (dry run)" : ""}...`,
+        packRoot !== undefined
+          ? `Preparing ${directories.length} workspaces for isolated trusted publishing...`
+          : `Publishing ${directories.length} workspaces to ${REGISTRY}${dryRun ? " (dry run)" : ""}...`,
       );
       const workspaceVersions = new Map<string, string>();
       for (const directory of directories) {
@@ -334,35 +453,64 @@ const command = CliCommand.make(
         );
         workspaceVersions.set(manifest.name, manifest.version);
       }
-      let published = 0;
-      for (const directory of directories) {
-        const outcome = yield* Effect.scoped(
-          publishOne({
-            directory,
-            dryRun,
-            ci,
-            otp: otp._tag === "Some" ? otp.value : undefined,
-            workspaceVersions,
-          }),
-        );
-        if (outcome === "published") published += 1;
-      }
+      const publishAll = (stagingRoot: string | undefined) =>
+        Effect.gen(function* () {
+          if (stagingRoot !== undefined) {
+            yield* fs.makeDirectory(path.join(stagingRoot, "packages"), { recursive: true });
+          }
+          let published = 0;
+          const releases: Array<typeof PreparedReleasePackage.Type> = [];
+          for (const directory of directories) {
+            const outcome = yield* Effect.scoped(
+              publishOne({
+                directory,
+                dryRun,
+                packDirectory:
+                  stagingRoot === undefined ? undefined : path.join(stagingRoot, "packages"),
+                otp: otp._tag === "Some" ? otp.value : undefined,
+                workspaceVersions,
+              }),
+            );
+            if (outcome._tag !== "Private") releases.push(outcome.release);
+            if (outcome._tag === "Published" || outcome._tag === "Prepared") published += 1;
+          }
+          if (stagingRoot !== undefined) {
+            const encoded = yield* Schema.encodeEffect(
+              Schema.fromJsonString(PreparedReleaseManifest),
+            )(
+              PreparedReleaseManifest.make({
+                version: 1,
+                packages: releases,
+              }),
+            );
+            yield* fs.writeFileString(path.join(stagingRoot, "release-manifest.json"), encoded);
+          }
+          return published;
+        });
+      const published =
+        packRoot === undefined
+          ? yield* publishAll(undefined)
+          : yield* prepareReleaseArtifactDirectory(packRoot, publishAll);
       yield* Console.log(
-        dryRun
-          ? `Dry run complete: ${published} package(s) would publish.`
-          : `Published ${published} package(s). Now run: bun x changeset tag && git push --follow-tags`,
+        packRoot !== undefined
+          ? `Release preparation complete: ${published} package(s) packed in ${packRoot}.`
+          : dryRun
+            ? `Dry run complete: ${published} package(s) would publish.`
+            : `Published ${published} package(s). Now run: bun x changeset tag && git push --follow-tags`,
       );
     }),
 ).pipe(
   CliCommand.withDescription(
-    "Publish public @effect-agent/* workspaces with bun publish (resolves workspace:/catalog: protocols) using dist export maps.",
+    "Prepare or publish framework workspaces with resolved workspace:/catalog: protocols and dist export maps.",
   ),
 );
 
 const program = CliCommand.run(command, { version: "1.0.0" }).pipe(
-  Effect.tapError((error) => Console.error(String(error))),
   Effect.scoped,
-  Effect.provide(NodeServices.layer),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer)),
+  Effect.tapError((error) => Console.error(String(error))),
 );
 
-NodeRuntime.runMain(program, { disableErrorReporting: true });
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  NodeRuntime.runMain(program);
+}
