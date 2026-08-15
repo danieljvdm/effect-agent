@@ -1,7 +1,12 @@
 import { expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer } from "effect";
 
-import { WarehouseDb, WarehouseLimits, warehouseDbLayer, warehouseDemoSeed } from "../src/index.ts";
+import {
+  WarehouseDb,
+  WarehouseLimits,
+  warehouseDbLayer,
+  warehouseDemoSeed,
+} from "../src/fixtures/warehouse/index.ts";
 
 const acmeLayer = (limits?: WarehouseLimits) =>
   warehouseDbLayer({ tenant: "acme", seed: warehouseDemoSeed, limits });

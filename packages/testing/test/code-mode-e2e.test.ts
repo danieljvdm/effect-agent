@@ -6,12 +6,12 @@ import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {
-  inProcessCodeExecutorLayer,
   warehouseDbLayer,
   warehouseDemoSeed,
   warehouseHandlersLayer,
   warehouseQueryTool,
-} from "../src/index.ts";
+} from "../src/fixtures/warehouse/index.ts";
+import { inProcessCodeExecutorLayer } from "../src/index.ts";
 
 const usage = { inputTokens: {}, outputTokens: {} };
 
