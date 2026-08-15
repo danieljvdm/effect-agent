@@ -48,8 +48,9 @@ non-canonical request projections.
    model-facing declarations). The contract is derived before context preparation and its exact
    text rides `RunContextRequest.outputContract`, so a limit-targeting adapter can reserve its
    overhead; the hook cannot remove or alter it. The fragment is a per-request projection of the
-   immutable definition, exactly like Tool schemas: canonical records, run events, the committed
-   DN/DC golden, and every public type are unchanged.
+   immutable definition, exactly like Tool schemas: canonical records, run events, and the
+   committed DN/DC golden are unchanged; the one public-surface change is the additive optional
+   `RunContextRequest.outputContract` field, absent when no contract renders.
 2. **Placement is normative.** The contract message is inserted immediately after the request
    prompt's **last** system message (position 0 when none exists), extending the last contiguous
    system block. The Anthropic provider replaces its top-level `system` parameter per contiguous
@@ -147,8 +148,9 @@ non-canonical request projections.
   runs; the non-renderable-Schema fallback reproduces today's behavior exactly plus one
   diagnostic.
 - Preparation evidence: `RunContextRequest.outputContract` is byte-equal with the message
-  actually appended after preparation, is `undefined` for an unrenderable Schema, and the Turn-1
-  diagnostic fires exactly once per Run — never per Turn.
+  actually appended after preparation and is entirely absent for an unrenderable Schema; the
+  diagnostic fires once per Turn-1 execution — never on later Turns — and a recovering DN or DC
+  Attempt that re-executes Turn 1 may repeat it, because recovery is at-least-once.
 - Live-shaped evidence: a deterministic LanguageModel that answers only from the request it
   received produces schema-valid final output solely because the engine communicated the
   contract — with contract communication removed, the same substitute fails the Run the way the

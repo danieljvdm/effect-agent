@@ -34198,7 +34198,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     turnId,
     turn,
     source: prompt,
-    outputContract: outputContractMessage
+    ...outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }
   });
   const trace2 = {
     parts: [],

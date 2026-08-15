@@ -398,6 +398,7 @@ layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", 
         search: () => Effect.succeed({ available: true }),
       });
 
+      const observedOwnKeys: Array<boolean> = [];
       return Effect.gen(function* () {
         const result = yield* AgentRuntime.run(
           agent,
@@ -407,6 +408,7 @@ layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", 
               prepare: (request) =>
                 Effect.sync(() => {
                   observedContracts.push(request.outputContract);
+                  observedOwnKeys.push(Object.hasOwn(request, "outputContract"));
                   return { prompt: request.source };
                 }),
             },
@@ -418,10 +420,15 @@ layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", 
         // the Run.
         expect(result.output).toEqual(["first", 1, "last"]);
         expect(result.turns).toBe(2);
-        // The diagnostic fires exactly once, at Turn 1 — not per Turn.
+        // The diagnostic fires once for this Attempt's Turn 1 — never on a
+        // later Turn. A recovering DN/DC Attempt that re-executes Turn 1 may
+        // repeat it: recovery is at-least-once, and no exactly-once claim is
+        // made for the log line.
         expect(warnings).toHaveLength(1);
-        // Context preparation sees the absence honestly on every Turn.
+        // The fallback request is byte-identical to the prior behavior: the
+        // key is entirely absent, not present-with-undefined.
         expect(observedContracts).toEqual([undefined, undefined]);
+        expect(observedOwnKeys).toEqual([false, false]);
       });
     },
   );

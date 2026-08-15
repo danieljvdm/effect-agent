@@ -21,14 +21,19 @@ canonical record contract, or ADR-0002's rule against framework-owned Effect AI 
 
 ## 2. The gap today
 
-The `output` Schema is consumed in exactly one place. After the model finishes with `stop` and no
-queued input remains, the interpreter's otherwise-stop seam calls `decodeFinalOutput`
-(`packages/engine/src/index.ts`), which:
+The `output` Schema has exactly two consumers today, both post-hoc validation boundaries and
+neither model-visible. After the model finishes with `stop` and no queued input remains, the
+interpreter's otherwise-stop seam calls `decodeFinalOutput` (`packages/engine/src/index.ts`),
+which:
 
 1. decodes the Turn's final text through `Schema.fromJsonString(Schema.Json)` — failure produces
    the typed `AgentOutputError` `"Agent output is not valid JSON: …"`;
 2. validates the parsed JSON against `agent.definition.output` and completes the Run with the
    encoded JSON as `RunCompleted.output`.
+
+The second consumer is `reduceRunEvents`: `run` and `start` decode `RunCompleted.output` through
+the Schema again to produce the typed `AgentResult`. Both are fail-closed decode seams (AUTH-008)
+and both stay authoritative under every option in this plan.
 
 The model request never carries the schema in any form. Every Turn calls
 
@@ -112,12 +117,12 @@ contract_ — to the model request:
 
 Two injection sites were analyzed; they are not equivalent:
 
-|                  | A-official: append to official history in `makeInitialPrompt`                                                                                                                                                                                                                            | A-request: append at model-request materialization in `makeTurn` (recommended)                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Canonical impact | The fragment enters official history, so it is committed inside `ModelResponseRecorded` (D-029). Every durable Conversation's canonical bytes change; the committed DN/DC golden must be regenerated; future framework wording changes alter canonical history for unchanged definitions | None. Official history, canonical records, run events, and the committed golden are byte-identical; the fragment exists only in the provider request |
-| Compaction       | A compacting `RunContextHook` can drop or summarize the fragment                                                                                                                                                                                                                         | Applied after `context.prepare`, so the contract survives any context transform on every Turn                                                        |
-| Turn coverage    | Present once at history head                                                                                                                                                                                                                                                             | Re-applied to every model request, including post-compaction Turns                                                                                   |
-| Replay           | Recorded wording is replayed verbatim (frozen per Conversation)                                                                                                                                                                                                                          | Re-derived per Attempt from the definition — same source the instructions replay from                                                                |
+|                  | A-official: append to official history in `makeInitialPrompt`                                                                                                                                                                                                                              | A-request: append at model-request materialization in `makeTurn` (recommended)                                                                       |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Canonical impact | The fragment enters official history, so it is committed inside `ModelResponseRecorded` (D-029). Every DN and DC Conversation's canonical bytes change; the committed DN/DC golden must be regenerated; future framework wording changes alter canonical history for unchanged definitions | None. Official history, canonical records, run events, and the committed golden are byte-identical; the fragment exists only in the provider request |
+| Compaction       | A compacting `RunContextHook` can drop or summarize the fragment                                                                                                                                                                                                                           | Applied after `context.prepare`, so the contract survives any context transform on every Turn                                                        |
+| Turn coverage    | Present once at history head                                                                                                                                                                                                                                                               | Re-applied to every model request, including post-compaction Turns                                                                                   |
+| Replay           | Recorded wording is replayed verbatim (frozen per Conversation)                                                                                                                                                                                                                            | Re-derived per Attempt from the definition — same source the instructions replay from                                                                |
 
 **A-request is the recommended variant.** The contract is a projection of the immutable
 definition, exactly like the Tool schemas the provider request already carries on every call —
@@ -340,7 +345,11 @@ acceptance:
 
 ## 10. Compatibility and blast radius (measured by the prototype)
 
-- **Canonical records, run events, `E`/`R` types, public APIs: unchanged.** The DN/DC committed
+- **Canonical records, run events, `E`/`R` types: unchanged. Public API: one additive optional
+  field.** `RunContextRequest.outputContract` (engine `run-options.ts`, publicly re-exported) is
+  new observable hook-request surface — additive and optional, absent entirely when the Schema
+  is unrenderable, so existing hook implementations and request literals keep compiling and
+  behaving. The DN/DC committed
   golden (`phase6TravelPlannerGoldenEvidence`) is untouched because `ModelResponseRecorded`
   carries official history, and A-request never writes there. Type tests needed no change.
 - **Model-visible prompts change for every agent** — the intended effect. Deterministic suites
@@ -378,8 +387,9 @@ Implemented per A1/A2 and marked as the ADR-0020 proposed default in code commen
 - `makeTurn` call site in `packages/engine/src/index.ts`;
 - `packages/engine/test/output-contract.test.ts` — contract-on-every-Turn, placement,
   official-history cleanliness, context-preparation visibility (byte-equal reserve value),
-  non-renderable fallback with the Turn-1 diagnostic asserted exactly once across a two-Turn
-  Run, and the live-shaped model case;
+  non-renderable fallback with the Turn-1 diagnostic asserted once for the Attempt's Turn 1
+  across a two-Turn Run (a recovering DN/DC Attempt that re-executes Turn 1 may repeat it —
+  at-least-once recovery), and the live-shaped model case;
 - request-shape assertion updates listed in section 10;
 - `bun run ready` green.
 

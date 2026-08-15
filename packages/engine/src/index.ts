@@ -2472,7 +2472,11 @@ const makeTurn = <
               turnId,
               turn,
               source: prompt,
-              outputContract: outputContractMessage,
+              // Omit the key entirely when no contract renders so the
+              // fallback request is byte-identical to the prior behavior.
+              ...(outputContractMessage === undefined
+                ? {}
+                : { outputContract: outputContractMessage }),
             });
       const trace: TurnTrace = {
         parts: [],
