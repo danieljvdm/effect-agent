@@ -3,23 +3,30 @@
 # stays `ready`.
 #
 # Each job restores and saves a Vite Task cache (node_modules/.vite/task-cache)
-# so per-package gates whose fingerprinted inputs did not change replay
-# instead of re-executing. The jobs use separate key namespaces because each
-# saves only the task entries it ran; a shared prefix would let one job's
-# snapshot shadow the others'. Keys are per-run (cache entries are immutable)
-# with restore-keys prefixes that pick the newest baseline, scoped first to
-# the current lockfile and falling back across dependency bumps (Vite Task
-# fingerprints inputs itself, so a stale baseline is ignored per task, never
-# trusted). Caches saved by pull-request runs are scoped to that PR's merge
-# ref, so other PRs can only reuse baselines saved from main — running on
-# main pushes publishes that shared baseline after each merge.
+# so later synchronize events on the same PR can replay per-package gates
+# whose fingerprinted inputs did not change. The jobs use separate key
+# namespaces because each saves only the task entries it ran; a shared prefix
+# would let one job's snapshot shadow the others'. Keys are per-run (cache
+# entries are immutable) with restore-keys prefixes that pick the newest
+# baseline, scoped first to the current lockfile and falling back across
+# dependency bumps (Vite Task fingerprints inputs itself, so a stale baseline
+# is ignored per task, never trusted). GitHub scopes PR caches to that PR's
+# merge ref; first runs may therefore be cold now that duplicate main-push CI
+# no longer publishes a shared default-branch baseline.
 name: CI
 
 on:
+  # Changesets release PRs contain only these generated paths. They receive a
+  # `ready` check from the trusted main-branch Release workflow after exact
+  # regeneration. GITHUB_TOKEN updates cannot trigger this workflow, so the
+  # verifier itself rejects any unexpected path. A later human update with an
+  # unexpected path stops matching this filter and runs ordinary CI.
   pull_request:
-  push:
-    branches:
-      - main
+    paths-ignore:
+      - ".changeset/**"
+      - "bun.lock"
+      - "packages/*/CHANGELOG.md"
+      - "packages/*/package.json"
 
 permissions:
   contents: read
@@ -172,9 +179,7 @@ jobs:
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
   # Fan-in for branch protection: the required status check is named `ready`.
-  # It runs unconditionally and asserts every gate's result, because GitHub
-  # treats a SKIPPED required check as satisfied — a fan-in that merely gets
-  # skipped when a dependency fails would let the failure merge.
+  # It runs unconditionally and asserts every ordinary-PR gate succeeded.
   ready:
     name: ready
     needs: [checks, test, build]
@@ -182,8 +187,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify all gates passed
+      - name: Verify all ordinary gates passed
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
+          TEST_RESULT: ${{ needs.test.result }}
         run: |
-          test "${{ needs.checks.result }}" = "success"
-          test "${{ needs.test.result }}" = "success"
-          test "${{ needs.build.result }}" = "success"
+          test "$CHECKS_RESULT" = "success"
+          test "$TEST_RESULT" = "success"
+          test "$BUILD_RESULT" = "success"

@@ -3,53 +3,57 @@
 # On every push to main: with unreleased changesets present, the changesets
 # action opens/updates a "Version Packages (beta)" PR (running `changeset
 # version` in the repository's pre mode, so versions mint as 0.0.1-beta.N).
-# Merging that PR is the release: the action then runs the publish command,
-# which gates on `bun run ready`, packs each workspace with bun (resolving
-# workspace:/catalog: protocols), and uploads with the npm CLI via the OIDC
-# trusted-publisher exchange — no npm token or OTP anywhere. Each package on
-# npmjs.com must list this workflow file (release.yml) as its trusted
-# publisher for the exchange to succeed.
+# Merging that PR is the release: constituent code PRs have already passed the
+# full required gate, while this trusted workflow independently regenerates the
+# proposed release tree before posting the release PR's `ready` check. The
+# publish path frozen-installs and rebuilds the exact versioned tree, then an
+# unprivileged job packs immutable release artifacts before any registry
+# mutation. A separate action-free job is the only holder of npm OIDC
+# authority; it verifies the artifact and uploads with a checksum-pinned npm
+# CLI — no npm token or OTP anywhere. Each package on npmjs.com must list this
+# workflow file (release.yml) as its trusted publisher for the exchange to
+# succeed.
+#
+# Keep the `main` ruleset's required `ready` check in strict/up-to-date mode.
+# The generated check is attached to an immutable PR head; strict mode makes a
+# later base advance invalidate that success for merge purposes until the
+# Changesets branch is regenerated and checked again.
 name: Release
 
 on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: release
   cancel-in-progress: false
 
 jobs:
-  release:
+  version-release:
+    name: Maintain generated release PR
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release-pr-number: ${{ steps.changesets.outputs.pullRequestNumber }}
+      has-changesets: ${{ steps.changesets.outputs.hasChangesets }}
     env:
       CI: "true"
       VITE_GIT_HOOKS: "0"
     steps:
       - name: Check out repository (full history for changesets)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
-
-      # Trusted publishing lives in the npm CLI; the runner's default npm
-      # predates the OIDC exchange, so pin a current one.
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - name: Update npm (OIDC trusted publishing needs a current CLI)
-        run: npm install -g npm@latest
 
       - name: Install dependencies (frozen, scripts suppressed)
         run: bun install --frozen-lockfile --ignore-scripts
@@ -58,22 +62,510 @@ jobs:
         run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
       - name: Patch Effect TypeScript-Go
-        run: bun run patch:tsgo
+        run: ./node_modules/.bin/vp run patch:tsgo
 
-      - name: Version or publish
-        uses: changesets/action@v1
+      - name: Create or update the version PR
+        id: changesets
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
           title: "chore: version packages (beta)"
           commit: "chore: version packages (beta)"
-          # The changesets action does not shell-interpret its command
-          # strings ('&&' arrives as a literal argument), so both commands
-          # live in package.json scripts, which bun runs through a shell.
-          version: bun run ci:version
-          # Branch protection already requires the full `ready` gate on the
-          # exact merged tree, so the publish path re-verifies only what it
-          # consumes (the build), then publishes, tags, and pushes tags —
-          # all inside one package.json script for real shell chaining.
-          publish: bun run ci:publish
+          # The changesets action does not shell-interpret its version command
+          # string ('&&' arrives as a literal argument), so the sequence lives
+          # in one package.json task invoked through Vite+.
+          version: ./node_modules/.bin/vp run ci:version
+          # This input makes the generated PR accurately say that merge-time
+          # publishing is automatic. The action's own publish command is a
+          # deliberate no-op; isolated downstream jobs own packing, OIDC
+          # publishing, and tagging when hasChangesets is false.
+          publish: "true"
           createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-release:
+    name: Verify generated release tree
+    needs: version-release
+    if: ${{ needs.version-release.outputs.release-pr-number != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release-head-sha: ${{ steps.release-pr.outputs.head-sha }}
+      verification-outcome: ${{ steps.verify-release.outcome }}
+    env:
+      CI: "true"
+      VITE_GIT_HOOKS: "0"
+    steps:
+      # This is a fresh job: no workspace state produced by changesets/action
+      # crosses the boundary. The verifier and its dependencies come from the
+      # exact trusted main commit that triggered this run.
+      - name: Check out trusted base
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install trusted verifier dependencies
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      # Pull requests created or updated with GITHUB_TOKEN cannot trigger their
+      # own pull_request workflows. Verify the generated head from this trusted
+      # main-branch run and post the required check directly.
+      - name: Resolve the generated release head
+        id: release-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.version-release.outputs.release-pr-number }}
+        run: |
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Changesets returned an invalid pull request number." >&2
+            exit 1
+          fi
+
+          HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          HEAD_REPOSITORY="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')"
+          HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')"
+          BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
+          BASE_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+
+          test "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"
+          test "$HEAD_REF" = "changeset-release/main"
+          test "$BASE_SHA" = "$GITHUB_SHA"
+          test "$BASE_REF" = "main"
+          if [[ ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Changesets returned an invalid head commit SHA." >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin "$HEAD_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$HEAD_SHA"
+          echo "head-sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Regenerate and verify the release tree
+        id: verify-release
+        if: ${{ steps.release-pr.outputs.head-sha != '' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          ./node_modules/.bin/vp run verify:changesets-release --
+          --base-sha ${{ github.sha }}
+          --head-sha ${{ steps.release-pr.outputs.head-sha }}
+
+  report-release-check:
+    name: Report generated release check
+    needs: [version-release, verify-release]
+    if: ${{ always() && needs.version-release.outputs.release-pr-number != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      # No third-party action or repository code runs in this job. It alone
+      # receives Checks authority, and revalidates mutable PR/base state before
+      # reporting the verifier result produced by the unprivileged job.
+      - name: Report the generated release check
+        env:
+          EXPECTED_BASE_SHA: ${{ github.sha }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.version-release.outputs.release-pr-number }}
+          VERIFIED_HEAD_SHA: ${{ needs.verify-release.outputs.release-head-sha }}
+          VERIFY_OUTCOME: ${{ needs.verify-release.outputs.verification-outcome }}
+        run: |
+          CONCLUSION="failure"
+          TITLE="Generated release tree did not verify"
+          SUMMARY="The proposed tree is not the exact Changesets output from its trusted main base."
+          if [[ ! "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+            echo "Changesets returned an invalid pull request number." >&2
+            exit 1
+          fi
+
+          CURRENT_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          CURRENT_HEAD_REPOSITORY="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name')"
+          CURRENT_HEAD_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.ref')"
+          CURRENT_BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
+          CURRENT_BASE_REF="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.ref')"
+          STRICT_READY="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" --jq 'any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "ready"))')"
+
+          if [ "$VERIFY_OUTCOME" != "success" ]; then
+            TITLE="Generated release tree did not verify"
+          elif [ "$CURRENT_HEAD_SHA" != "$VERIFIED_HEAD_SHA" ]; then
+            TITLE="Generated release head changed during verification"
+            SUMMARY="The verified commit is no longer the pull request head; the current head must be regenerated."
+          elif [ "$CURRENT_HEAD_REPOSITORY" != "$GITHUB_REPOSITORY" ] || [ "$CURRENT_HEAD_REF" != "changeset-release/main" ]; then
+            TITLE="Generated release source changed during verification"
+            SUMMARY="The pull request no longer comes from the trusted same-repository Changesets branch."
+          elif [ "$CURRENT_BASE_SHA" != "$EXPECTED_BASE_SHA" ]; then
+            TITLE="Generated release base changed during verification"
+            SUMMARY="The pull request base advanced after generation; the release head must be regenerated from the new base."
+          elif [ "$CURRENT_BASE_REF" != "main" ]; then
+            TITLE="Generated release target changed during verification"
+            SUMMARY="The pull request no longer targets the trusted main branch."
+          elif [ "$STRICT_READY" != "true" ]; then
+            TITLE="Strict required-check policy is missing"
+            SUMMARY="The main branch must require the ready check and require branches to be up to date before merging."
+          else
+            CONCLUSION="success"
+            TITLE="Generated release tree verified"
+            SUMMARY="The complete proposed tree exactly matches a clean Changesets regeneration from its current trusted main base."
+          fi
+
+          gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" \
+            -f name="ready" \
+            -f head_sha="$CURRENT_HEAD_SHA" \
+            -f status="completed" \
+            -f conclusion="$CONCLUSION" \
+            -f details_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            -f external_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            -f "output[title]=$TITLE" \
+            -f "output[summary]=$SUMMARY"
+
+  prepare-publish:
+    name: Build immutable release artifacts
+    needs: version-release
+    if: ${{ needs.version-release.outputs.has-changesets == 'false' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    outputs:
+      publish-count: ${{ steps.prepare.outputs.publish-count }}
+    env:
+      CI: "true"
+      VITE_GIT_HOOKS: "0"
+    steps:
+      - name: Check out versioned main commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies (frozen, scripts suppressed)
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Verify locked Dev Kit setup
+        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
+
+      - name: Patch Effect TypeScript-Go
+        run: ./node_modules/.bin/vp run patch:tsgo
+
+      - name: Build release tree
+        run: ./node_modules/.bin/vp run build
+
+      - name: Prepare package and npm CLI artifacts
+        id: prepare
+        env:
+          ARTIFACT_ROOT: ${{ runner.temp }}/release-artifacts
+          NPM_CLI_SHA256: 5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1
+          NPM_CLI_VERSION: 12.0.2
+        run: |
+          ./node_modules/.bin/vp run release:prepare -- --pack-directory "$ARTIFACT_ROOT"
+          curl --fail --show-error --silent --location \
+            "https://registry.npmjs.org/npm/-/npm-${NPM_CLI_VERSION}.tgz" \
+            --output "$ARTIFACT_ROOT/npm-${NPM_CLI_VERSION}.tgz"
+          echo "${NPM_CLI_SHA256}  $ARTIFACT_ROOT/npm-${NPM_CLI_VERSION}.tgz" | sha256sum --check --strict
+
+          PUBLISH_COUNT="$(jq '[.packages[] | select(.tarball != null)] | length' "$ARTIFACT_ROOT/release-manifest.json")"
+          echo "publish-count=$PUBLISH_COUNT" >> "$GITHUB_OUTPUT"
+          (
+            cd "$ARTIFACT_ROOT"
+            find . -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          )
+
+      - name: Upload immutable release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-packages
+          path: ${{ runner.temp }}/release-artifacts
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish-packages:
+    name: Publish packages with npm OIDC
+    needs: [version-release, prepare-publish]
+    if: ${{ needs.version-release.outputs.has-changesets == 'false' && needs.prepare-publish.outputs.publish-count != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+    steps:
+      # This is deliberately one action-free step. No checkout, third-party
+      # action, dependency install, build, or repository script can access the
+      # OIDC request token. Trusted package manifests are read as immutable
+      # policy data from github.sha; the only downloaded executable is npm's
+      # pinned and checksum-verified CLI tarball from the preparation job.
+      - name: Verify and publish prepared tarballs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NPM_CLI_SHA256: 5dbb86c71d07a1957f2e90734092dd6a58bdcd9ebc2d8d41ca1c6e6a21d364e1
+          NPM_CLI_VERSION: 12.0.2
+        run: |
+          ARTIFACT_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts | map(select(.name == "release-packages" and (.expired | not))) | if length == 1 then .[0].id else empty end')"
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo "Expected exactly one unexpired release-packages artifact." >&2
+            exit 1
+          fi
+
+          ARTIFACT_ROOT="$RUNNER_TEMP/release-artifact"
+          mkdir -p "$ARTIFACT_ROOT"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "$RUNNER_TEMP/release-artifact.zip"
+          unzip -q "$RUNNER_TEMP/release-artifact.zip" -d "$ARTIFACT_ROOT"
+          cd "$ARTIFACT_ROOT"
+          sha256sum --check --strict SHA256SUMS
+          echo "${NPM_CLI_SHA256}  npm-${NPM_CLI_VERSION}.tgz" | sha256sum --check --strict
+
+          node --eval '
+            const [major, minor, patch] = process.versions.node.split(".").map(Number)
+            const supported =
+              (major === 22 && (minor > 22 || (minor === 22 && patch >= 2))) ||
+              (major === 24 && (minor > 15 || (minor === 15 && patch >= 0))) ||
+              major >= 26
+            if (!supported) {
+              console.error(`npm 12.0.2 requires Node ^22.22.2, ^24.15.0, or >=26; found ${process.versions.node}`)
+              process.exit(1)
+            }
+          '
+          mkdir .npm-cli
+          tar -xzf "npm-${NPM_CLI_VERSION}.tgz" -C .npm-cli
+          NPM_CLI="$ARTIFACT_ROOT/.npm-cli/package/bin/npm-cli.js"
+
+          EXPECTED_VERSION=""
+          while IFS=$'\t' read -r PACKAGE_DIRECTORY EXPECTED_PACKAGE; do
+            TRUSTED_MANIFEST="$(gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}")"
+            test "$(jq --raw-output '.name' <<< "$TRUSTED_MANIFEST")" = "$EXPECTED_PACKAGE"
+            PACKAGE_VERSION="$(jq --raw-output '.version' <<< "$TRUSTED_MANIFEST")"
+            if [ -z "$EXPECTED_VERSION" ]; then
+              EXPECTED_VERSION="$PACKAGE_VERSION"
+            else
+              test "$PACKAGE_VERSION" = "$EXPECTED_VERSION"
+            fi
+          done <<'PACKAGES'
+          capabilities	@effect-agent/capabilities
+          core	@effect-agent/core
+          effect-agent	effect-agent
+          engine	@effect-agent/engine
+          platform-cloudflare	@effect-agent/platform-cloudflare
+          platform-node	@effect-agent/platform-node
+          pr-review	@effect-agent/pr-review
+          sandbox	@effect-agent/sandbox
+          sandbox-local	@effect-agent/sandbox-local
+          session	@effect-agent/session
+          storage-cloudflare	@effect-agent/storage-cloudflare
+          storage-memory	@effect-agent/storage-memory
+          storage-sqlite	@effect-agent/storage-sqlite
+          testing	@effect-agent/testing
+          PACKAGES
+          if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$ ]]; then
+            echo "Trusted release commit is not on the beta prerelease train." >&2
+            exit 1
+          fi
+
+          jq --exit-status --arg expectedVersion "$EXPECTED_VERSION" '
+            .version == 1 and
+            (.packages | type == "array") and
+            ([.packages[].name] | sort) == ([
+              "@effect-agent/capabilities",
+              "@effect-agent/core",
+              "@effect-agent/engine",
+              "@effect-agent/platform-cloudflare",
+              "@effect-agent/platform-node",
+              "@effect-agent/pr-review",
+              "@effect-agent/sandbox",
+              "@effect-agent/sandbox-local",
+              "@effect-agent/session",
+              "@effect-agent/storage-cloudflare",
+              "@effect-agent/storage-memory",
+              "@effect-agent/storage-sqlite",
+              "@effect-agent/testing",
+              "effect-agent"
+            ] | sort) and
+            ([.packages[].name] | unique | length) == 14 and
+            ([.packages[].version] | unique) == [$expectedVersion] and
+            all(.packages[];
+              .distTag == "beta" and
+              (.tarball == null or (.tarball | test("^packages/[A-Za-z0-9._-]+[.]tgz$")))
+            )
+          ' release-manifest.json > /dev/null
+
+          while IFS=$'\t' read -r PACKAGE VERSION TARBALL DIST_TAG; do
+            TARBALL_BYTES="$(stat --format='%s' "$TARBALL")"
+            test "$TARBALL_BYTES" -le 52428800
+            tar -xOf "$TARBALL" package/package.json | jq --exit-status \
+              --arg package "$PACKAGE" \
+              --arg version "$VERSION" \
+              '.name == $package and .version == $version' > /dev/null
+
+            REGISTRY_PACKAGE="${PACKAGE/\//%2f}"
+            STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://registry.npmjs.org/${REGISTRY_PACKAGE}/${VERSION}")"
+            if [ "$STATUS" = "200" ]; then
+              VERSION_METADATA="$(curl --fail --show-error --silent "https://registry.npmjs.org/${REGISTRY_PACKAGE}/${VERSION}")"
+              PACKAGE_METADATA="$(curl --fail --show-error --silent "https://registry.npmjs.org/${REGISTRY_PACKAGE}")"
+              LOCAL_INTEGRITY="sha512-$(openssl dgst -sha512 -binary "$TARBALL" | base64 --wrap=0)"
+              REMOTE_INTEGRITY="$(jq --raw-output '.dist.integrity // empty' <<< "$VERSION_METADATA")"
+              REMOTE_BETA_VERSION="$(jq --raw-output '.["dist-tags"].beta // empty' <<< "$PACKAGE_METADATA")"
+              if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]; then
+                echo "Published artifact integrity mismatch for ${PACKAGE}@${VERSION}." >&2
+                exit 1
+              fi
+              if [ "$REMOTE_BETA_VERSION" != "$VERSION" ]; then
+                echo "The beta dist-tag does not identify ${PACKAGE}@${VERSION}; refusing to alter or accept it." >&2
+                exit 1
+              fi
+              echo "- ${PACKAGE}@${VERSION}: already published, skipped"
+            elif [ "$STATUS" = "404" ]; then
+              node "$NPM_CLI" publish "$TARBALL" \
+                --access public \
+                --ignore-scripts \
+                --registry https://registry.npmjs.org \
+                --tag "$DIST_TAG" \
+                --provenance
+            else
+              echo "Unexpected npm registry status ${STATUS} for ${PACKAGE}@${VERSION}." >&2
+              exit 1
+            fi
+          done < <(jq --raw-output '.packages[] | select(.tarball != null) | [.name, .version, .tarball, .distTag] | @tsv' release-manifest.json)
+
+  tag-release:
+    name: Tag published packages
+    needs: [version-release, prepare-publish, publish-packages]
+    if: ${{ always() && needs.version-release.outputs.has-changesets == 'false' && needs.prepare-publish.result == 'success' && (needs.publish-packages.result == 'success' || needs.publish-packages.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      # Tags are created from the same immutable manifest only after publish
+      # succeeds (or no package needed publishing). This action-free job has no
+      # OIDC authority and can create tags only for framework package names at
+      # the exact main commit that triggered the run.
+      - name: Verify manifest and create package tags
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_RESULT: ${{ needs.publish-packages.result }}
+        run: |
+          ARTIFACT_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts | map(select(.name == "release-packages" and (.expired | not))) | if length == 1 then .[0].id else empty end')"
+          if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
+            echo "Expected exactly one unexpired release-packages artifact." >&2
+            exit 1
+          fi
+
+          ARTIFACT_ROOT="$RUNNER_TEMP/release-artifact"
+          mkdir -p "$ARTIFACT_ROOT"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}/zip" > "$RUNNER_TEMP/release-artifact.zip"
+          unzip -q "$RUNNER_TEMP/release-artifact.zip" -d "$ARTIFACT_ROOT"
+          cd "$ARTIFACT_ROOT"
+          sha256sum --check --strict SHA256SUMS
+
+          EXPECTED_VERSION=""
+          while IFS=$'\t' read -r PACKAGE_DIRECTORY EXPECTED_PACKAGE; do
+            TRUSTED_MANIFEST="$(gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}")"
+            test "$(jq --raw-output '.name' <<< "$TRUSTED_MANIFEST")" = "$EXPECTED_PACKAGE"
+            PACKAGE_VERSION="$(jq --raw-output '.version' <<< "$TRUSTED_MANIFEST")"
+            if [ -z "$EXPECTED_VERSION" ]; then
+              EXPECTED_VERSION="$PACKAGE_VERSION"
+            else
+              test "$PACKAGE_VERSION" = "$EXPECTED_VERSION"
+            fi
+          done <<'PACKAGES'
+          capabilities	@effect-agent/capabilities
+          core	@effect-agent/core
+          effect-agent	effect-agent
+          engine	@effect-agent/engine
+          platform-cloudflare	@effect-agent/platform-cloudflare
+          platform-node	@effect-agent/platform-node
+          pr-review	@effect-agent/pr-review
+          sandbox	@effect-agent/sandbox
+          sandbox-local	@effect-agent/sandbox-local
+          session	@effect-agent/session
+          storage-cloudflare	@effect-agent/storage-cloudflare
+          storage-memory	@effect-agent/storage-memory
+          storage-sqlite	@effect-agent/storage-sqlite
+          testing	@effect-agent/testing
+          PACKAGES
+          if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$ ]]; then
+            echo "Trusted release commit is not on the beta prerelease train." >&2
+            exit 1
+          fi
+
+          jq --exit-status --arg expectedVersion "$EXPECTED_VERSION" '
+            .version == 1 and
+            (.packages | type == "array") and
+            ([.packages[].name] | sort) == ([
+              "@effect-agent/capabilities",
+              "@effect-agent/core",
+              "@effect-agent/engine",
+              "@effect-agent/platform-cloudflare",
+              "@effect-agent/platform-node",
+              "@effect-agent/pr-review",
+              "@effect-agent/sandbox",
+              "@effect-agent/sandbox-local",
+              "@effect-agent/session",
+              "@effect-agent/storage-cloudflare",
+              "@effect-agent/storage-memory",
+              "@effect-agent/storage-sqlite",
+              "@effect-agent/testing",
+              "effect-agent"
+            ] | sort) and
+            ([.packages[].name] | unique | length) == 14 and
+            ([.packages[].version] | unique) == [$expectedVersion] and
+            all(.packages[];
+              .distTag == "beta" and
+              (.tarball == null or (.tarball | test("^packages/[A-Za-z0-9._-]+[.]tgz$")))
+            )
+          ' release-manifest.json > /dev/null
+          TARBALL_COUNT="$(jq '[.packages[] | select(.tarball != null)] | length' release-manifest.json)"
+          if [ "$PUBLISH_RESULT" = "skipped" ] && [ "$TARBALL_COUNT" != "0" ]; then
+            echo "Publishing was skipped even though the prepared release contains tarballs." >&2
+            exit 1
+          fi
+
+          while IFS=$'\t' read -r PACKAGE VERSION TARBALL; do
+            TAG="${PACKAGE}@${VERSION}"
+            if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent 2>/dev/null; then
+              REF_OBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")"
+              REF_TYPE="$(jq --raw-output '.object.type' <<< "$REF_OBJECT")"
+              REF_SHA="$(jq --raw-output '.object.sha' <<< "$REF_OBJECT")"
+              for _ in 1 2 3 4; do
+                if [ "$REF_TYPE" != "tag" ]; then
+                  break
+                fi
+                TAG_OBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${REF_SHA}")"
+                REF_TYPE="$(jq --raw-output '.object.type' <<< "$TAG_OBJECT")"
+                REF_SHA="$(jq --raw-output '.object.sha' <<< "$TAG_OBJECT")"
+              done
+              if [ "$REF_TYPE" != "commit" ] || [ "$REF_SHA" != "$GITHUB_SHA" ]; then
+                echo "Existing tag ${TAG} does not resolve to this release commit ${GITHUB_SHA}." >&2
+                exit 1
+              fi
+              echo "- ${TAG}: already exists at ${GITHUB_SHA}"
+            elif [ "$TARBALL" = "null" ]; then
+              echo "Published package ${TAG} has no existing tag, but this run did not build its tarball; refusing to guess an older source commit." >&2
+              exit 1
+            else
+              gh api --method POST "repos/${GITHUB_REPOSITORY}/git/refs" \
+                -f "ref=refs/tags/${TAG}" \
+                -f "sha=${GITHUB_SHA}"
+            fi
+          done < <(jq --raw-output '.packages[] | [.name, .version, (.tarball // "null")] | @tsv' release-manifest.json)
