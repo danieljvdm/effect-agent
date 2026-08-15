@@ -4,6 +4,7 @@
 export * from "./internal/diff.ts";
 export * from "./internal/factory.ts";
 export * from "./internal/fan-out.ts";
+export * from "./internal/fingerprint.ts";
 export * from "./internal/github.ts";
 export * from "./internal/github-env.ts";
 export * from "./internal/ignore.ts";

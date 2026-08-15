@@ -50,9 +50,18 @@ inputs:
     description: 'Fail the job on the review verdict: "never" (default) or "request-changes".'
     required: false
     default: "never"
+  skip-unchanged:
+    description: >-
+      Skip the review when the changeset fingerprint matches the last posted
+      review ('true', default) — base-branch auto-merges and equivalent
+      rebases stop re-triggering reviews. Set 'false' to always review.
+    required: false
+    default: "true"
 outputs:
   skipped:
-    description: "'true' when the event was not a reviewable pull request."
+    description: "'true' when the event was not a reviewable pull request or the changeset was unchanged."
+  fingerprint:
+    description: "The changeset fingerprint (set on unchanged-changeset skips)."
   verdict:
     description: "The review verdict: approve, comment, or request-changes."
   inline-comments:

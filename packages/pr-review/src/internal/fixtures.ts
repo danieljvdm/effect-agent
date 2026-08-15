@@ -1,7 +1,7 @@
-import { Effect, Layer, Ref, Schema } from "effect";
+import { Effect, Layer, Option, Ref, Schema } from "effect";
 
 import { ChangedFile } from "./diff.ts";
-import { PublishedReview, ReviewPublisher } from "./github.ts";
+import { PriorReviews, PublishedReview, ReviewPublisher } from "./github.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
 import {
   MAX_CHANGED_FILES,
@@ -91,3 +91,9 @@ export const collectingReviewPublisherLayer = (
         ),
     }),
   );
+
+/** Static `PriorReviews` for tests: a fixed latest fingerprint (or none). */
+export const staticPriorReviewsLayer = (
+  fingerprint: Option.Option<string>,
+): Layer.Layer<PriorReviews> =>
+  Layer.succeed(PriorReviews)(PriorReviews.of({ latestFingerprint: Effect.succeed(fingerprint) }));

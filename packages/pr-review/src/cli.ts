@@ -3,8 +3,9 @@ import { Console, Effect, Layer, Option, Schema } from "effect";
 import { BudgetExceeded } from "effect-agent";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 
-import { PrReview } from "./internal/factory.ts";
+import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { gitHubReviewLayers, resolveReviewTarget } from "./internal/github-env.ts";
+import { fingerprintUnchanged } from "./internal/github.ts";
 import {
   anthropicClientLayer,
   DEFAULT_MODEL,
@@ -65,6 +66,11 @@ const maxFindingsFlag = Flag.integer("max-findings").pipe(
   Flag.optional,
   Flag.withDescription("Findings bound (1-20); the schema cap of 20 applies regardless."),
 );
+const skipUnchangedFlag = Flag.boolean("skip-unchanged").pipe(
+  Flag.withDescription(
+    "Skip when the changeset fingerprint matches the last posted review (explicit runs review unconditionally by default).",
+  ),
+);
 
 /** An unknown --provider value; the two supported providers are spelled out. */
 class UnknownProvider extends Schema.TaggedError<UnknownProvider>()("UnknownProvider", {
@@ -92,6 +98,7 @@ const command = CliCommand.make(
     fanOut: fanOutFlag,
     ignore: ignoreFlag,
     maxFindings: maxFindingsFlag,
+    skipUnchanged: skipUnchangedFlag,
   },
   (flags) =>
     Effect.gen(function* () {
@@ -115,22 +122,44 @@ const command = CliCommand.make(
       );
 
       const githubLayers = gitHubReviewLayers(target);
-      let outcome: ReviewRunOutcome;
+      // Fingerprint check and run under ONE provide, sharing the cached
+      // pull-request snapshot; None means "unchanged, skipped".
+      const runOrSkip = <E, R, FingerprintE, FingerprintR>(reviewer: {
+        readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
+        readonly fingerprint: Effect.Effect<string, FingerprintE, FingerprintR>;
+      }) =>
+        Effect.gen(function* () {
+          if (flags.skipUnchanged) {
+            const current = yield* reviewer.fingerprint;
+            if (yield* fingerprintUnchanged(current)) {
+              return Option.none<ReviewRunOutcome>();
+            }
+          }
+          return Option.some(yield* reviewer.run({ post: flags.post }));
+        });
+
+      let result: Option.Option<ReviewRunOutcome>;
       if (provider === "anthropic") {
         const reviewer = flags.fanOut
           ? PrReview.makeFanOut({ ...shared, model: makeAnthropicReviewModel(model) })
           : PrReview.make({ ...shared, model: makeAnthropicReviewModel(model) });
-        outcome = yield* reviewer
-          .run({ post: flags.post })
-          .pipe(Effect.provide(Layer.merge(githubLayers, anthropicClientLayer)));
+        result = yield* runOrSkip(reviewer).pipe(
+          Effect.provide(Layer.merge(githubLayers, anthropicClientLayer)),
+        );
       } else {
         const reviewer = flags.fanOut
           ? PrReview.makeFanOut({ ...shared, model: makeOpenAiReviewModel(model) })
           : PrReview.make({ ...shared, model: makeOpenAiReviewModel(model) });
-        outcome = yield* reviewer
-          .run({ post: flags.post })
-          .pipe(Effect.provide(Layer.merge(githubLayers, openAiClientLayer)));
+        result = yield* runOrSkip(reviewer).pipe(
+          Effect.provide(Layer.merge(githubLayers, openAiClientLayer)),
+        );
       }
+
+      if (Option.isNone(result)) {
+        yield* Console.log("Skipped: changeset unchanged since the last posted review.");
+        return;
+      }
+      const outcome = result.value;
 
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
