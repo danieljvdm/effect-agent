@@ -284,10 +284,10 @@ success and failure, so a failed alarm remains rejected for workerd redelivery w
 continues in the background. An exporter that masks interruption can outlive
 `telemetryFlushTimeout` until Cloudflare cancels the `waitUntil` work; it still cannot hold delivery
 open or create concurrent exporter attempts. A synchronous `waitUntil` registration failure logs
-the framework-owned `wait_until_registration` classification and the exact platform Cause through
-the already-built runtime's synchronous Logger contract, cancels the unowned batch without invoking
-its exporter, and returns the already-running delivery Promise unchanged; failure of that derivative
-diagnostic sink is isolated too.
+only the framework-owned `wait_until_registration` classification through the already-built
+runtime's synchronous Logger contract. Its arbitrary platform Cause is not logged. The boundary
+cancels the unowned batch without invoking its exporter and returns the already-running delivery
+Promise unchanged; failure of that derivative diagnostic sink is isolated too.
 
 Expected export failure, timeout, defect, and interruption logs carry only the bounded
 `effect_agent.cloudflare.telemetry.failure_kind` classification. Foreign exporter causes, arbitrary

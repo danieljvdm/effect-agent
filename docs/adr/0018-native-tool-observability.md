@@ -99,9 +99,10 @@ remain failed/interrupted until the final always-fulfilled `waitUntil` Promise b
 exporter causes, arbitrary defects, and fiber IDs are never passed to the automatic Logger; the
 typed export error retains its cause for explicit host-controlled inspection. Timeout, exporter
 failure, or synchronous `waitUntil` registration failure never changes the original result or alarm
-rejection. Registration failure is logged synchronously with its exact platform Cause and the
-`wait_until_registration` classification before the exact delivery Promise is returned, and the
-unowned exporter continuation is not invoked.
+rejection. Registration failure is logged synchronously with only the bounded
+`wait_until_registration` classification before the exact delivery Promise is returned; its
+arbitrary platform Cause is not sent to the configured Logger, and the unowned exporter
+continuation is not invoked.
 Native rejection spans are sanitized before the original Cause is restored. The runtime remains
 cached for the Object incarnation; it is not disposed per delivery. Hosts configure one
 native-delivery flush owner and do not duplicate this path with effect-cf or another native

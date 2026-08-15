@@ -171,13 +171,14 @@ marker before the original Cause is restored. The cached runtime is not disposed
 Durable Objects have no guaranteed shutdown callback, and storage/runtime/exporter scopes must
 remain available for later events in the same incarnation.
 
-A synchronous `ctx.waitUntil` registration failure is also derivative: effect-agent emits the
-bounded `wait_until_registration` classification with the exact platform Cause as a structured
-Logger Cause, cancels that unowned batch ticket, then returns the already-running native delivery
-Promise unchanged rather than creating an uncertain RPC outcome. The registration failure means
-Cloudflare has not accepted ownership of that background work, so the gated exporter is not invoked. The diagnostic uses the
-already-built runtime's synchronous Logger contract; logger defects are captured without starting a
-fiber. Even a broken diagnostic sink does not change the delivery result or alarm retry signal.
+A synchronous `ctx.waitUntil` registration failure is also derivative: effect-agent emits only the
+bounded `wait_until_registration` classification, cancels that unowned batch ticket, then returns
+the already-running native delivery Promise unchanged rather than creating an uncertain RPC
+outcome. The arbitrary platform Cause is not sent to the configured Logger. The registration
+failure means Cloudflare has not accepted ownership of that background work, so the gated exporter
+is not invoked. The diagnostic uses the already-built runtime's synchronous Logger contract; logger
+defects are captured without starting a fiber. Even a broken diagnostic sink does not change the
+delivery result or alarm retry signal.
 
 There must be one native-delivery flush owner. If an effect-cf or host native-entry integration already
 flushes the same exporter, either disable that integration's delivery flush and provide it via

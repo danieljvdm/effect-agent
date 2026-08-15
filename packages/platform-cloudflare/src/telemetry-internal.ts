@@ -423,9 +423,9 @@ export const registerCloudflareTelemetryAfterNativeSettlement = <A>(
   return delivery;
 };
 
-/** @internal Synchronous host diagnostic for a rejected Cloudflare waitUntil registration. */
-export const logCloudflareWaitUntilRegistrationFailure = (cause: unknown): Effect.Effect<void> =>
-  Effect.logError(Cause.die(cause), "Cloudflare telemetry waitUntil registration failed").pipe(
+/** @internal Content-free diagnostic for a rejected Cloudflare waitUntil registration. */
+export const logCloudflareWaitUntilRegistrationFailure = (_cause: unknown): Effect.Effect<void> =>
+  Effect.logError("Cloudflare telemetry waitUntil registration failed").pipe(
     Effect.annotateLogs({
       "effect_agent.cloudflare.telemetry.failure_kind": "wait_until_registration",
     }),

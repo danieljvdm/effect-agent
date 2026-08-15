@@ -55,6 +55,24 @@ const reachableValues = (root: unknown): ReadonlyArray<unknown> => {
   return values;
 };
 
+const exportedLogObservation = ({ cause, fiber, logLevel, message }: Logger.Options<unknown>) => ({
+  message,
+  level: logLevel,
+  cause,
+  annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+  logSpans: fiber
+    .getRef(References.CurrentLogSpans)
+    .map(([label, startTime]) => ({ label, startTime })),
+  fiberId: fiber.id,
+  currentSpan:
+    fiber.currentSpan === undefined
+      ? undefined
+      : {
+          traceId: fiber.currentSpan.traceId,
+          spanId: fiber.currentSpan.spanId,
+        },
+});
+
 describe("Cloudflare telemetry flush boundary", () => {
   it.effect("dispose releases an exporter gate after the flush has claimed it", () => {
     const probe = makeTelemetryProbeFixture();
@@ -208,28 +226,25 @@ describe("Cloudflare telemetry flush boundary", () => {
     expect(diagnosedCause).toBe(registrationFailure);
   });
 
-  it.effect("logs the exact synchronous waitUntil registration Cause structurally", () => {
-    const registrationFailure = new Error("waitUntil rejected this lifecycle");
-    const observations: Array<{
-      readonly cause: Cause.Cause<unknown>;
-      readonly annotations: Readonly<Record<string, unknown>>;
-    }> = [];
-    const logger = Logger.make<unknown, void>(({ cause, fiber }) => {
-      observations.push({
-        cause,
-        annotations: fiber.getRef(References.CurrentLogAnnotations),
-      });
+  it.effect("logs only a bounded waitUntil registration classification", () => {
+    const registrationFailure = new Error("secret waitUntil platform rejection");
+    const observations: Array<ReturnType<typeof exportedLogObservation>> = [];
+    const logger = Logger.make<unknown, void>((options) => {
+      observations.push(exportedLogObservation(options));
     });
 
     return Effect.gen(function* () {
       yield* logCloudflareWaitUntilRegistrationFailure(registrationFailure);
 
       expect(observations).toHaveLength(1);
-      expect(observations[0]?.cause.reasons).toEqual([Cause.makeDieReason(registrationFailure)]);
-      expect(observations[0]?.cause.reasons[0]).toMatchObject({ defect: registrationFailure });
+      expect(observations[0]?.cause.reasons).toEqual([]);
       expect(observations[0]?.annotations).toMatchObject({
         "effect_agent.cloudflare.telemetry.failure_kind": "wait_until_registration",
       });
+      const values = reachableValues(observations);
+      expect(values).not.toContain(registrationFailure);
+      const strings = values.filter((value) => typeof value === "string").join("\n");
+      expect(strings).not.toContain(registrationFailure.message);
     }).pipe(Effect.provide(Logger.layer([logger])));
   });
 
@@ -256,6 +271,36 @@ describe("Cloudflare telemetry flush boundary", () => {
 
     expect(returned).toBe(delivery);
     await expect(returned).resolves.toBe("delivered");
+    if (registered === undefined) throw new Error("Expected successful background registration");
+    await expect(registered).resolves.toBeUndefined();
+    expect(flushAttempts).toBe(1);
+    expect(diagnosticCalls).toBe(0);
+  });
+
+  it("flushes after a rejected delivery whose background registration succeeds", async () => {
+    const deliveryFailure = new Error("native delivery rejected");
+    const delivery = Promise.reject(deliveryFailure);
+    let registered: Promise<void> | undefined;
+    let flushAttempts = 0;
+    let diagnosticCalls = 0;
+    const coordinator = makeCloudflareTelemetryFlushCoordinator(() => {
+      flushAttempts += 1;
+      return Promise.resolve();
+    });
+
+    const returned = registerCloudflareTelemetryAfterNativeSettlement(
+      (background) => {
+        registered = background;
+      },
+      delivery,
+      coordinator.reserve,
+      () => {
+        diagnosticCalls += 1;
+      },
+    );
+
+    expect(returned).toBe(delivery);
+    await expect(returned).rejects.toBe(deliveryFailure);
     if (registered === undefined) throw new Error("Expected successful background registration");
     await expect(registered).resolves.toBeUndefined();
     expect(flushAttempts).toBe(1);

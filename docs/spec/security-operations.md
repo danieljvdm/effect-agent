@@ -261,9 +261,9 @@ host's ambient Tracer; Tool execution does not replace the Tracer service locall
 Cloudflare exporter diagnostics export only bounded framework classifications. Retained foreign
 exporter causes, arbitrary defects, and fiber IDs are never passed to the configured Logger; raw
 exporter cause inspection is an explicit host decision at the typed error boundary. A synchronous
-`waitUntil` registration rejection is an irreducible platform lifecycle failure, so its exact Cause
-is passed structurally to the host Logger together with the bounded
-`wait_until_registration` classification; effect-agent adds no request or conversation content.
+`waitUntil` registration rejection is an irreducible platform lifecycle failure, but automatic
+diagnostics still emit only the bounded `wait_until_registration` classification. Its arbitrary
+foreign Cause is never passed to the configured Logger by default.
 
 Minimum operational alerts:
 

@@ -782,8 +782,9 @@ export const makeConversationObjectClass = <
         (cause) => {
           // Native entrypoints run only after blockConcurrencyWhile has built the cached runtime.
           // Effect Logger invocation is synchronous; runSyncExit captures a broken logger without
-          // starting an unscoped fiber or changing the delivery Promise. The structured Cause keeps
-          // the exact synchronous platform rejection available to the host-owned diagnostic sink.
+          // starting an unscoped fiber or changing the delivery Promise. The exact platform value
+          // stays confined to this registration callback; the automatic Logger diagnostic is
+          // deliberately content-free.
           void this.#runtime.runSyncExit(logCloudflareWaitUntilRegistrationFailure(cause));
         },
       );
