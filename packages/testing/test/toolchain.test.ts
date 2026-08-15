@@ -105,7 +105,7 @@ const inwardPackageNames = [
   "storage-memory",
   "storage-sqlite",
 ] as const;
-const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do"]);
+const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do", "@effect/sql-d1"]);
 const dependencySections = [
   "dependencies",
   "devDependencies",
@@ -387,6 +387,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(demo.dependencies?.effect).toBe("catalog:");
       expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
       expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(root.catalog?.["@effect/sql-d1"]).toBe(root.catalog?.effect);
       expect(demoDependencies).not.toContain("wrangler");
       expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
@@ -439,7 +440,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "workspace:*",
       );
       expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
-      expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.["@effect/sql-d1"]).toBe("catalog:");
       expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
       expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");
