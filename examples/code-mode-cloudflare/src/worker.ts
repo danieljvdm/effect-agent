@@ -9,7 +9,7 @@ import { Effect, Layer, Stream } from "effect";
 
 import { codeModeHandlersLayer } from "./agent.ts";
 import { liveAgent, scriptedAgent, scriptedWriteProbeAgent } from "./profiles.ts";
-import { Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
+import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
 
 /**
  * The demo Worker: it answers a natural-language question about the invoice
@@ -33,6 +33,12 @@ interface WorkerEnv {
   readonly LOADER: WorkerLoader;
   readonly CODE_MODE_HOST: CodeModeHostStub;
   readonly OPENAI_API_KEY?: string;
+  /**
+   * Optional shared secret. When set, `/ask` requires a matching
+   * `Authorization: Bearer <token>` header — set it whenever `OPENAI_API_KEY`
+   * is deployed so the paid live endpoint cannot be driven anonymously.
+   */
+  readonly DEMO_AUTH_TOKEN?: string;
 }
 
 interface AskResult {
@@ -75,6 +81,7 @@ const runBound = (
     // observable evidence that the isolated program queried the real DO.
     let programResult: unknown;
     let answer = "";
+    let completed = false;
     yield* AgentRuntime.stream(agent, { question }).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
@@ -82,6 +89,7 @@ const runBound = (
             programResult = event.result;
           }
           if (event._tag === "RunCompleted") {
+            completed = true;
             const output = event.output as { readonly answer?: unknown };
             if (typeof output.answer === "string") {
               answer = output.answer;
@@ -92,6 +100,12 @@ const runBound = (
       Effect.provide(layers),
       Effect.scoped,
     );
+    // A Run that ended without emitting RunCompleted (e.g. it hit a policy
+    // limit) is NOT a success — surface it as a defect so `runPromise` rejects
+    // and the fetch handler returns 500, rather than a 200 with an empty answer.
+    if (!completed) {
+      return yield* Effect.die(new Error("the agent run did not complete"));
+    }
     return { answer, program: programResult, profile };
   }) as Effect.Effect<AskResult>;
 };
@@ -124,16 +138,32 @@ export default {
         { status: url.pathname === "/" ? 200 : 404 },
       );
     }
+    if (request.method !== "POST") {
+      return Response.json({ error: "POST required" }, { status: 405 });
+    }
+    // When a shared secret is configured, require it — this gates the paid
+    // live model path. The offline scripted default needs no secret.
+    if (env.DEMO_AUTH_TOKEN !== undefined && env.DEMO_AUTH_TOKEN.length > 0) {
+      if (request.headers.get("authorization") !== `Bearer ${env.DEMO_AUTH_TOKEN}`) {
+        return Response.json({ error: "unauthorized" }, { status: 401 });
+      }
+    }
     let question = "Which customers have more than $10,000 in revenue?";
     try {
       const body = (await request.json()) as { readonly question?: unknown };
       if (typeof body.question === "string" && body.question.trim().length > 0) {
-        question = body.question;
+        // Bound the question so an oversized body cannot drive an unbounded prompt.
+        question = body.question.slice(0, 2_000);
       }
     } catch {
       // fall back to the default question
     }
+    // The tenant addresses a Durable Object, so reject anything that is not a
+    // short, safe identifier rather than minting an arbitrary Object.
     const tenant = url.searchParams.get("tenant") ?? "acme";
+    if (!isValidTenant(tenant)) {
+      return Response.json({ error: "tenant must match /^[a-z0-9-]{1,32}$/" }, { status: 400 });
+    }
     try {
       const result = await Effect.runPromise(
         runAsk(env, question, tenant, url.searchParams.get("probe")),
