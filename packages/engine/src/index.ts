@@ -85,6 +85,7 @@ import {
   stripToolSpanFailures,
   ToolSpanFailure,
   ToolSpanTelemetry,
+  type ToolSpanTelemetryService,
 } from "./tool-telemetry-internal.ts";
 
 /**
@@ -779,6 +780,75 @@ const ProviderToolCallId = ToolCallId.check(
 );
 const isTelemetryToolCallId = Schema.is(ProviderToolCallId);
 
+type ToolTelemetryOutcome = "success" | "failure";
+
+interface ToolTelemetryDescriptor {
+  readonly context: RunContext;
+  readonly turnId: TurnId;
+  readonly toolCallId: string | undefined;
+  readonly toolName: string;
+  readonly executionClass: ReturnType<typeof getToolExecutionClass>;
+  readonly invocationKind: "model" | "programmatic";
+  readonly parentToolCallId?: ToolCallId | undefined;
+  readonly sequenceIndex?: number | undefined;
+}
+
+/** One bounded identity surface shared by canonical Tool spans and terminal logs. */
+const toolTelemetryAttributes = (descriptor: ToolTelemetryDescriptor) => ({
+  "gen_ai.operation.name": "execute_tool",
+  "gen_ai.tool.name": descriptor.toolName,
+  "gen_ai.tool.type": "function",
+  ...(descriptor.toolCallId === undefined
+    ? {}
+    : {
+        "gen_ai.tool.call.id": descriptor.toolCallId,
+        toolCallId: descriptor.toolCallId,
+      }),
+  "gen_ai.agent.name": descriptor.context.agentId,
+  "gen_ai.conversation.id": descriptor.context.conversationId,
+  "effect_agent.tool.execution_class": descriptor.executionClass,
+  "effect_agent.tool.invocation_kind": descriptor.invocationKind,
+  ...(descriptor.parentToolCallId === undefined
+    ? {}
+    : {
+        "effect_agent.tool.parent_call.id": descriptor.parentToolCallId,
+        parentToolCallId: descriptor.parentToolCallId,
+      }),
+  ...(descriptor.sequenceIndex === undefined
+    ? {}
+    : {
+        "effect_agent.tool.sequence_index": descriptor.sequenceIndex,
+        sequenceIndex: descriptor.sequenceIndex,
+      }),
+  agentId: descriptor.context.agentId,
+  conversationId: descriptor.context.conversationId,
+  runId: descriptor.context.runId,
+  turnId: descriptor.turnId,
+  toolName: descriptor.toolName,
+});
+
+/** Canonical content-free terminal signal for any application Tool handler attempt. */
+const terminalToolTelemetry = (
+  descriptor: ToolTelemetryDescriptor,
+  outcome: ToolTelemetryOutcome,
+  failureMarker?: ToolSpanFailure,
+): Effect.Effect<void> =>
+  annotateToolSpanTerminalOutcome(outcome, failureMarker).pipe(
+    Effect.andThen(
+      (outcome === "success"
+        ? Effect.logInfo("agent tool execution completed")
+        : Effect.logWarning("agent tool execution failed")
+      ).pipe(
+        Effect.annotateLogs({
+          ...toolTelemetryAttributes(descriptor),
+          "effect_agent.tool.outcome": outcome,
+          toolExecutionClass: descriptor.executionClass,
+          toolOutcome: outcome,
+        }),
+      ),
+    ),
+  );
+
 const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   context: RunContext,
   turnId: TurnId,
@@ -806,6 +876,14 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   const call = prepared.call;
   const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
   const executionClass = getToolExecutionClass(prepared.tool);
+  const telemetryDescriptor: ToolTelemetryDescriptor = {
+    context,
+    turnId,
+    toolCallId: telemetryToolCallId,
+    toolName: call.name,
+    executionClass,
+    invocationKind: "model",
+  };
   const toolSpanFailure = ToolSpanFailure.marker();
   let terminal = false;
   let terminalResultCommitted = false;
@@ -819,40 +897,11 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     | undefined;
   let propagatedFailure: Cause.Cause<ToolExecutionError> | undefined;
 
-  const terminalTelemetry = (outcome: "success" | "failure") =>
-    annotateToolSpanTerminalOutcome(
+  const terminalTelemetry = (outcome: ToolTelemetryOutcome) =>
+    terminalToolTelemetry(
+      telemetryDescriptor,
       outcome,
       outcome === "failure" ? toolSpanFailure : undefined,
-    ).pipe(
-      Effect.andThen(
-        (outcome === "success"
-          ? Effect.logInfo("agent tool execution completed")
-          : Effect.logWarning("agent tool execution failed")
-        ).pipe(
-          Effect.annotateLogs({
-            "gen_ai.operation.name": "execute_tool",
-            "gen_ai.tool.name": call.name,
-            "gen_ai.tool.type": "function",
-            ...(telemetryToolCallId === undefined
-              ? {}
-              : {
-                  "gen_ai.tool.call.id": telemetryToolCallId,
-                  toolCallId: telemetryToolCallId,
-                }),
-            "gen_ai.agent.name": context.agentId,
-            "gen_ai.conversation.id": context.conversationId,
-            "effect_agent.tool.execution_class": executionClass,
-            "effect_agent.tool.outcome": outcome,
-            agentId: context.agentId,
-            conversationId: context.conversationId,
-            runId: context.runId,
-            turnId,
-            toolName: call.name,
-            toolExecutionClass: executionClass,
-            toolOutcome: outcome,
-          }),
-        ),
-      ),
     );
 
   const isolatedTerminalTelemetry = (outcome: "success" | "failure") =>
@@ -1074,25 +1123,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     }),
     Stream.withSpan(`execute_tool ${call.name}`, {
       kind: "internal",
-      attributes: {
-        "gen_ai.operation.name": "execute_tool",
-        "gen_ai.tool.name": call.name,
-        "gen_ai.tool.type": "function",
-        ...(telemetryToolCallId === undefined
-          ? {}
-          : {
-              "gen_ai.tool.call.id": telemetryToolCallId,
-              toolCallId: telemetryToolCallId,
-            }),
-        "gen_ai.agent.name": context.agentId,
-        "gen_ai.conversation.id": context.conversationId,
-        "effect_agent.tool.execution_class": executionClass,
-        agentId: context.agentId,
-        conversationId: context.conversationId,
-        runId: context.runId,
-        turnId,
-        toolName: call.name,
-      },
+      attributes: toolTelemetryAttributes(telemetryDescriptor),
     }),
   );
 
@@ -1180,6 +1211,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // signatures.
       const hookServices = yield* Effect.context<HookRequirements>();
 
+      const executable =
+        settledCallIds === undefined
+          ? prepared
+          : prepared.filter((call) => !settledCallIds.has(call.call.id));
+
       // Durable preparation runs strictly after every approval resolved
       // approved and before any handler acquires a permit. `readonly` calls
       // need no uncertainty protocol; a batch whose calls are all `readonly`
@@ -1217,15 +1253,12 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? passthroughDurableStep()
           : makeDurableStepService(call.toolCallId, durability.step, hookServices);
 
-      // One live broker per outer call: provision and the settling closer
-      // must share one lifecycle.
+      // One live broker per executable outer call: construction resolves its
+      // telemetry requirement from Context at this engine-owned operation
+      // edge, and provision plus the settling closer share one lifecycle.
       const liveBrokers = new Map<string, LiveToolBroker>();
-      const brokerFor = (call: PreparedToolCall<Tools>): LiveToolBroker => {
-        const existing = liveBrokers.get(call.call.id);
-        if (existing !== undefined) {
-          return existing;
-        }
-        const created = makeToolBrokerService({
+      for (const call of executable) {
+        const broker = yield* makeToolBrokerService({
           context,
           turnId,
           outerToolCallId: call.toolCallId,
@@ -1234,8 +1267,14 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           budget: options.budget,
           hookServices,
         });
-        liveBrokers.set(call.call.id, created);
-        return created;
+        liveBrokers.set(call.call.id, broker);
+      }
+      const brokerFor = (call: PreparedToolCall<Tools>): LiveToolBroker => {
+        const broker = liveBrokers.get(call.call.id);
+        if (broker === undefined) {
+          throw new Error(`Missing live Tool broker for executable call ${call.call.id}`);
+        }
+        return broker;
       };
 
       // This batch's live `SubagentDurability` service: durable over the
@@ -1253,11 +1292,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // index so `AgentChildPending` lists its children deterministically
       // regardless of parallel handler completion order.
       const waitingByDeclaration = new Map<number, ToolCallWaiting>();
-
-      const executable =
-        settledCallIds === undefined
-          ? prepared
-          : prepared.filter((call) => !settledCallIds.has(call.call.id));
 
       const groups: Array<ReadonlyArray<PreparedToolCall<Tools>>> = [];
       let parallel: Array<PreparedToolCall<Tools>> = [];
@@ -3424,6 +3458,87 @@ class BrokerHandlerFailure {
   constructor(readonly error: unknown) {}
 }
 
+/**
+ * Measure one started programmatic handler with the same canonical span semantics as a
+ * model-declared handler. A private marker gives value-level failures a failed exported status;
+ * the marker is removed before the broker outcome returns, while an original Effect Cause is
+ * restored unchanged outside the span.
+ */
+const stripProgrammaticToolSpanFailure = (
+  cause: Cause.Cause<ToolSpanFailure>,
+  marker: ToolSpanFailure,
+): { readonly found: boolean; readonly residual: Cause.Cause<never> } => {
+  let found = false;
+  const residual: Array<Cause.Reason<never>> = [];
+  for (const reason of cause.reasons) {
+    if (Cause.isFailReason(reason)) {
+      if (reason.error === marker) {
+        found = true;
+      } else {
+        // This Effect's only typed failure is its fresh marker. Preserve a future invariant break
+        // as a defect instead of consuming an unauthenticated same-class value.
+        residual.push(Cause.makeDieReason(reason.error));
+      }
+    } else {
+      residual.push(reason);
+    }
+  }
+  return { found, residual: Cause.fromReasons(residual) };
+};
+
+const observeProgrammaticToolCall = <R>(
+  telemetry: ToolSpanTelemetryService,
+  descriptor: ToolTelemetryDescriptor,
+  effect: Effect.Effect<ProgrammaticCallOutcome, never, R>,
+): Effect.Effect<ProgrammaticCallOutcome, never, R> =>
+  Effect.suspend(() => {
+    const marker = ToolSpanFailure.marker();
+    let terminalResult: ProgrammaticCallOutcome | undefined;
+    let propagatedFailure: Cause.Cause<never> | undefined;
+
+    const measured: Effect.Effect<ProgrammaticCallOutcome, ToolSpanFailure, R> = Effect.exit(
+      effect,
+    ).pipe(
+      Effect.flatMap((exit): Effect.Effect<ProgrammaticCallOutcome, ToolSpanFailure> => {
+        if (Exit.isFailure(exit)) {
+          if (exit.cause.reasons.length > 0 && exit.cause.reasons.every(Cause.isInterruptReason)) {
+            return Effect.failCause(exit.cause);
+          }
+          propagatedFailure = exit.cause;
+          return isolateToolTerminalTelemetry(
+            terminalToolTelemetry(descriptor, "failure", marker),
+          ).pipe(Effect.andThen(Effect.fail(marker)));
+        }
+
+        terminalResult = exit.value;
+        const outcome: ToolTelemetryOutcome =
+          exit.value._tag === "ProgrammaticCallSuccess" ? "success" : "failure";
+        return isolateToolTerminalTelemetry(
+          terminalToolTelemetry(descriptor, outcome, outcome === "failure" ? marker : undefined),
+        ).pipe(
+          Effect.andThen(outcome === "failure" ? Effect.fail(marker) : Effect.succeed(exit.value)),
+        );
+      }),
+      Effect.withSpan(`execute_tool ${descriptor.toolName}`, {
+        kind: "internal",
+        attributes: toolTelemetryAttributes(descriptor),
+      }),
+    );
+
+    return telemetry.isolateEffectSpanLifecycle(measured).pipe(
+      Effect.catchCause((cause) => {
+        const { found, residual } = stripProgrammaticToolSpanFailure(cause, marker);
+        const restored =
+          propagatedFailure === undefined ? residual : Cause.combine(propagatedFailure, residual);
+        if (!found) return Effect.failCause(restored);
+        if (restored.reasons.length > 0) return Effect.failCause(restored);
+        return terminalResult === undefined
+          ? Effect.die("Programmatic Tool telemetry completed without a terminal result")
+          : Effect.succeed(terminalResult);
+      }),
+    );
+  });
+
 // Platform-neutral UTF-8 byte counting (the engine's TS lib declares no
 // TextEncoder); same code-point walk as the capabilities redaction module.
 const brokerUtf8ByteLength = (value: string): number => {
@@ -3477,6 +3592,14 @@ interface LiveToolBroker {
  */
 const makeToolBrokerService = <HookError, HookRequirements>(
   binding: ToolBrokerBinding<HookError, HookRequirements>,
+): Effect.Effect<LiveToolBroker, never, ToolSpanTelemetry> =>
+  Effect.map(ToolSpanTelemetry, (toolSpanTelemetry) =>
+    makeToolBrokerServiceWithTelemetry(binding, toolSpanTelemetry),
+  );
+
+const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
+  binding: ToolBrokerBinding<HookError, HookRequirements>,
+  toolSpanTelemetry: ToolSpanTelemetryService,
 ): LiveToolBroker => {
   const lifecycle = { closed: false };
   const service: ToolBrokerService = {
@@ -3589,129 +3712,137 @@ const makeToolBrokerService = <HookError, HookRequirements>(
 
             const index = state.nextIndex++;
             const handleId = `${binding.outerToolCallId}#${index}`;
-            yield* Effect.logDebug("agent programmatic tool handler started").pipe(
-              Effect.annotateLogs({
-                agentId: binding.context.agentId,
-                runId: binding.context.runId,
-                turnId: binding.turnId,
-                toolCallId: binding.outerToolCallId,
-                toolName: input.toolName,
-                sequenceIndex: index,
+            const telemetryDescriptor: ToolTelemetryDescriptor = {
+              context: binding.context,
+              turnId: binding.turnId,
+              toolCallId: handleId,
+              toolName: input.toolName,
+              executionClass: getToolExecutionClass(tool),
+              invocationKind: "programmatic",
+              parentToolCallId: binding.outerToolCallId,
+              sequenceIndex: index,
+            };
+            return yield* observeProgrammaticToolCall(
+              toolSpanTelemetry,
+              telemetryDescriptor,
+              Effect.gen(function* () {
+                yield* Effect.logDebug("agent programmatic tool handler started").pipe(
+                  Effect.annotateLogs({
+                    agentId: binding.context.agentId,
+                    runId: binding.context.runId,
+                    turnId: binding.turnId,
+                    toolCallId: handleId,
+                    parentToolCallId: binding.outerToolCallId,
+                    toolName: input.toolName,
+                    sequenceIndex: index,
+                  }),
+                );
+                yield* Metric.update(toolCounter, 1);
+
+                let terminal:
+                  | { readonly encodedResult: unknown; readonly isFailure: boolean }
+                  | undefined;
+                let resultAfterTerminal = false;
+                const handlerFailed = yield* Stream.unwrap(
+                  toolSpanTelemetry.isolateToolkitHandle(
+                    (
+                      toolkit.handle as (
+                        name: string,
+                        params: unknown,
+                        id: string,
+                      ) => Effect.Effect<
+                        Stream.Stream<Tool.HandlerResult<Tool.Any>, unknown, unknown>,
+                        unknown,
+                        unknown
+                      >
+                    )(input.toolName, input.encodedArguments, handleId),
+                  ),
+                ).pipe(
+                  Stream.runForEach((result) =>
+                    Effect.sync(() => {
+                      // The direct path rejects a second result after the terminal
+                      // one; the broker preserves that protocol violation instead
+                      // of silently keeping the last value.
+                      if (terminal !== undefined) {
+                        resultAfterTerminal = true;
+                        return;
+                      }
+                      if (!result.preliminary) {
+                        terminal = {
+                          encodedResult: result.encodedResult,
+                          isFailure: result.isFailure,
+                        };
+                      }
+                    }),
+                  ),
+                  Effect.map(() => undefined),
+                  Effect.catch((error) => Effect.succeed(new BrokerHandlerFailure(error))),
+                );
+                if (handlerFailed instanceof BrokerHandlerFailure) {
+                  return programmaticOutcomeError(
+                    index,
+                    errorTag(handlerFailed.error),
+                    errorMessage(handlerFailed.error),
+                  );
+                }
+                if (resultAfterTerminal) {
+                  return programmaticOutcomeError(
+                    index,
+                    "ModelProtocolError",
+                    `Tool Call ${handleId} produced more than one terminal result`,
+                  );
+                }
+                if (terminal === undefined) {
+                  return programmaticOutcomeError(
+                    index,
+                    "ModelProtocolError",
+                    `Tool Call ${handleId} completed without a terminal result`,
+                  );
+                }
+                if (terminal.isFailure) {
+                  return {
+                    _tag: "ProgrammaticCallFailure",
+                    index,
+                    encodedResult: terminal.encodedResult,
+                  } as const;
+                }
+                if (
+                  Option.isNone(Schema.decodeUnknownOption(Schema.Json)(terminal.encodedResult))
+                ) {
+                  return programmaticOutcomeError(
+                    index,
+                    "ModelProtocolError",
+                    `Tool ${input.toolName} produced a success encoding outside JSON`,
+                  );
+                }
+                let encodedResult = terminal.encodedResult;
+                if (passOptions?.redactResult !== undefined) {
+                  // A redactor is a substitution point: its replacement re-crosses
+                  // the JSON boundary or the call fails closed.
+                  const redacted = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
+                  if (Option.isNone(redacted)) {
+                    return programmaticOutcomeError(
+                      index,
+                      "ModelProtocolError",
+                      `The redacted result for Tool ${input.toolName} is outside the JSON surface`,
+                    );
+                  }
+                  encodedResult = redacted.value;
+                }
+                if (passOptions?.maxResultBytes !== undefined) {
+                  const bytes = brokerEncodedByteLength(encodedResult);
+                  if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+                    return programmaticOutcomeError(
+                      index,
+                      "ProgrammaticResultLimitError",
+                      `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                    );
+                  }
+                }
+                return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
               }),
             );
-            yield* Metric.update(toolCounter, 1);
-
-            let terminal:
-              | { readonly encodedResult: unknown; readonly isFailure: boolean }
-              | undefined;
-            let resultAfterTerminal = false;
-            const handlerFailed = yield* Stream.unwrap(
-              (
-                toolkit.handle as (
-                  name: string,
-                  params: unknown,
-                  id: string,
-                ) => Effect.Effect<
-                  Stream.Stream<Tool.HandlerResult<Tool.Any>, unknown, unknown>,
-                  unknown,
-                  unknown
-                >
-              )(input.toolName, input.encodedArguments, handleId).pipe(
-                Effect.withSpan("AgentRuntime.toolkit.handle"),
-              ),
-            ).pipe(
-              Stream.runForEach((result) =>
-                Effect.sync(() => {
-                  // The direct path rejects a second result after the terminal
-                  // one; the broker preserves that protocol violation instead
-                  // of silently keeping the last value.
-                  if (terminal !== undefined) {
-                    resultAfterTerminal = true;
-                    return;
-                  }
-                  if (!result.preliminary) {
-                    terminal = {
-                      encodedResult: result.encodedResult,
-                      isFailure: result.isFailure,
-                    };
-                  }
-                }),
-              ),
-              Effect.map(() => undefined),
-              Effect.catch((error) => Effect.succeed(new BrokerHandlerFailure(error))),
-            );
-            if (handlerFailed instanceof BrokerHandlerFailure) {
-              return programmaticOutcomeError(
-                index,
-                errorTag(handlerFailed.error),
-                errorMessage(handlerFailed.error),
-              );
-            }
-            if (resultAfterTerminal) {
-              return programmaticOutcomeError(
-                index,
-                "ModelProtocolError",
-                `Tool Call ${handleId} produced more than one terminal result`,
-              );
-            }
-            if (terminal === undefined) {
-              return programmaticOutcomeError(
-                index,
-                "ModelProtocolError",
-                `Tool Call ${handleId} completed without a terminal result`,
-              );
-            }
-            if (terminal.isFailure) {
-              return {
-                _tag: "ProgrammaticCallFailure",
-                index,
-                encodedResult: terminal.encodedResult,
-              } as const;
-            }
-            if (Option.isNone(Schema.decodeUnknownOption(Schema.Json)(terminal.encodedResult))) {
-              return programmaticOutcomeError(
-                index,
-                "ModelProtocolError",
-                `Tool ${input.toolName} produced a success encoding outside JSON`,
-              );
-            }
-            let encodedResult = terminal.encodedResult;
-            if (passOptions?.redactResult !== undefined) {
-              // A redactor is a substitution point: its replacement re-crosses
-              // the JSON boundary or the call fails closed.
-              const redacted = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
-              if (Option.isNone(redacted)) {
-                return programmaticOutcomeError(
-                  index,
-                  "ModelProtocolError",
-                  `The redacted result for Tool ${input.toolName} is outside the JSON surface`,
-                );
-              }
-              encodedResult = redacted.value;
-            }
-            if (passOptions?.maxResultBytes !== undefined) {
-              const bytes = brokerEncodedByteLength(encodedResult);
-              if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-                return programmaticOutcomeError(
-                  index,
-                  "ProgrammaticResultLimitError",
-                  `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
-                );
-              }
-            }
-            return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
-          }).pipe(
-            Effect.provideContext(handlerServices),
-            Effect.withSpan("AgentRuntime.programmaticTool", {
-              attributes: {
-                agentId: binding.context.agentId,
-                runId: binding.context.runId,
-                turnId: binding.turnId,
-                toolCallId: binding.outerToolCallId,
-                toolName: input.toolName,
-              },
-            }),
-          ) as Effect.Effect<ProgrammaticCallOutcome>;
+          }).pipe(Effect.provideContext(handlerServices)) as Effect.Effect<ProgrammaticCallOutcome>;
 
         const pass: ToolBrokerPass = {
           invoke: (input) =>

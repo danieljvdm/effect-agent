@@ -222,49 +222,6 @@ The OpenTelemetry surface includes:
 
 High-cardinality IDs belong in traces/logs, not unrestricted metric labels.
 
-Framework-owned Tool telemetry is content-free by default. It records bounded identity,
-execution class, and terminal outcome fields, but never Tool parameters/results, prompts, source
-code, commands, conversation content, or failure messages. Successful terminal Tool logs are
-info, failures are warning, and start logs remain debug-only. Any application-added content
-capture is an explicit host policy and must classify and structurally redact content before
-export. Failed framework spans expose a bounded failure marker to exporters and restore the
-original typed error, defect, or interruption only outside the measured boundary. Effect AI
-Toolkit annotations land on a manually constructed non-exported span whose
-`Tracer.DisablePropagation=true` parent chain leads to the canonical span. Parameters cannot
-escape through a second framework measurement or contaminate the canonical span, while explicit
-host-owned handler spans remain enabled and filter past the local span. Applications own the
-classification/redaction of telemetry they add deliberately.
-The application-handler attempt lifecycle is success, failure, interruption, or nonterminal
-waiting; denied and provider-executed calls are call-level only and create no handler attempt.
-Framework-owned `conversationId` is identity metadata rather than conversation content and is
-exported as `gen_ai.conversation.id` plus the compatibility field; instrumentation never derives a
-conversation identifier by hashing or inspecting content.
-Provider/model Tool Call IDs are untrusted. The engine accepts only values whose entire string
-matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and validates before the value enters Turn correlation, canonical Run
-events, or application handler scheduling. Rejection is a typed `ModelProtocolError` with no Tool
-invocation. Framework telemetry records the same already-validated identifier as
-`gen_ai.tool.call.id` and the compatibility `toolCallId`.
-Logger/Tracer defects across canonical span creation, annotation, terminal logging, and closure are
-reported through Effect's `ErrorReporter` boundary without changing Tool settlement. Creation uses
-a non-exported local fallback span and closure never reruns a completed handler. Reporter defects
-are isolated, so a broken telemetry sink cannot trigger recovery of a completed external side
-effect. The terminal Run event and Turn trace result commit before derivative terminal telemetry;
-external interruption of telemetry or its reporter is restored, never consumed, but cannot erase
-that completed state. Early-close finalization reports any derivative typed failure or defect
-through the same boundary before suppressing it. Canonical span closure restores the bounded public
-outcome attribute from module-private authenticated terminal state before host export.
-Each handler attempt owns one fresh bounded span-failure marker object, and the engine recognizes
-only that exact identity. An independently constructed same-class handler failure cannot be
-mistaken for framework control flow or swallowed.
-The isolation policy is an engine-owned capability built at the Run composition boundary from the
-host's ambient Tracer; Tool execution does not replace the Tracer service locally.
-Cloudflare exporter diagnostics export only bounded framework classifications. Retained foreign
-exporter causes, arbitrary defects, and fiber IDs are never passed to the configured Logger; raw
-exporter cause inspection is an explicit host decision at the typed error boundary. A synchronous
-`waitUntil` registration rejection is an irreducible platform lifecycle failure, but automatic
-diagnostics still emit only the bounded `wait_until_registration` classification. Its arbitrary
-foreign Cause is never passed to the configured Logger by default.
-
 Minimum operational alerts:
 
 - accepted submission without timely settlement;

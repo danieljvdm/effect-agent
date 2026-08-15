@@ -215,6 +215,7 @@
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
         "effect": "catalog:",
+        "effect-cf": "catalog:",
       },
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:",
@@ -410,6 +411,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "effect": "4.0.0-beta.107",
+    "effect-cf": "0.25.3",
     "esbuild": "0.28.1",
     "lucide-react": "1.27.0",
     "miniflare": "4.20260730.0",
@@ -625,6 +627,8 @@
     "@effect/platform-node": ["@effect/platform-node@4.0.0-beta.107", "", { "dependencies": { "@effect/platform-node-shared": "^4.0.0-beta.107", "mime": "^4.1.0", "undici": "^8.7.0" }, "peerDependencies": { "effect": "^4.0.0-beta.107", "ioredis": ">=5.7.0 <6.0.0" } }, "sha512-k+6YNbV4Ck0L6YXtlgkvEnuP5tlxWD8EeWOrpn46PDqbGEwt4ONpRltTwm3tn2cyBXD0i+2P11cUH/6sdFagTA=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.0.0-rc.109", "", { "dependencies": { "@types/ws": "^8.18.1", "ws": "^8.21.0" }, "peerDependencies": { "effect": "^4.0.0-rc.109" } }, "sha512-jhZJnf81N7Z5+Z41Qr0cKT75WzGu6M1W05xrSdu/V8PK0kSFtU5hJMBxSGDWNlgWhBwK0WRZtnMHY8HLdONg1w=="],
+
+    "@effect/sql-d1": ["@effect/sql-d1@4.0.0-beta.107", "", { "dependencies": { "@cloudflare/workers-types": "^5.20260708.1" }, "peerDependencies": { "effect": "^4.0.0-beta.107" } }, "sha512-GN0RMZRQ+Kc6t4hiIbGBFMdYj2UssX27w0n1oyV+s9OZcWOdD42C2vDxUwnnKLstPDdeOMBAFX7dMekOiF2rUQ=="],
 
     "@effect/sql-sqlite-do": ["@effect/sql-sqlite-do@4.0.0-beta.107", "", { "peerDependencies": { "effect": "^4.0.0-beta.107" } }, "sha512-masFQKrc0MMWT3898133Mc6O76WosTmhtlPRaNlfYz0NBDTfrsogUoZ7bTizmBUEIngRaKFNwRJpeO/PusiE+g=="],
 
@@ -1625,6 +1629,8 @@
     "effect": ["effect@4.0.0-beta.107", "", { "dependencies": { "@standard-schema/spec": "^1.1.0", "fast-check": "^4.9.0", "kubernetes-types": "^1.30.0", "msgpackr": "^2.0.4", "uuid": "^14.0.1" } }, "sha512-OoBAv8eF+yanc+C6xhgEUnWeXUSHA6ynnscYqpkAY9GSnzZWystsIjBowVqCkLpHGlnRtdIqYT3wHwpOY6JDnQ=="],
 
     "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
+
+    "effect-cf": ["effect-cf@0.25.3", "", { "peerDependencies": { "@cloudflare/vitest-pool-workers": "^0.21.3", "@cloudflare/workers-types": "^4.20260611.1", "@effect/sql-d1": "^4.0.0-beta.107 <4.0.0-rc.0", "@effect/sql-pg": "^4.0.0-beta.107 <4.0.0-rc.0", "@effect/sql-sqlite-do": "^4.0.0-beta.107 <4.0.0-rc.0", "effect": "^4.0.0-beta.107 <4.0.0-rc.0" }, "optionalPeers": ["@cloudflare/vitest-pool-workers", "@cloudflare/workers-types", "@effect/sql-pg"] }, "sha512-iLZsAfzdYJ0KUh9u2XZlDbDw7ZNALutpmMobV2pgE/wPasUuW3jy7lcw77+Bv/4BWzGddfIX08kPiQCmj8gOGQ=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.398", "", {}, "sha512-AsvhAxopJGh6museTDMIjn6JpDYOfgu4RLlygomt87MUwBUqTfd/1EiPtx10/LZE8xpTvkP2E9Gafq7lkLtodQ=="],
 

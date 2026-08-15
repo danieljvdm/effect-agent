@@ -29,16 +29,26 @@ import {
   SubmissionLookupByKey,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
-import { DurableObject } from "cloudflare:workers";
-import { Effect, Layer, ManagedRuntime, Option, Schema, Stream } from "effect";
+import type { DurableObject as CloudflareDurableObject } from "cloudflare:workers";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
+import {
+  DurableObject as EffectCfDurableObject,
+  DurableObjectState as EffectCfDurableObjectState,
+  WorkerEnvironment,
+} from "effect-cf";
 
-import { ConversationMaintenance, DurableAlarmError, DurableAlarmService } from "./alarm.ts";
+import {
+  ConversationMaintenance,
+  DurableAlarmError,
+  DurableAlarmService,
+  type MaintenancePassFailure,
+} from "./alarm.ts";
 import {
   ConversationObjectIdentity,
   DurableObjectContext,
-  conversationNamespaceLayer,
+  ConversationObjectNamespace,
+  conversationNamespaceFromEnv,
   type CloudflareBindingError,
-  type ConversationObjectNamespace,
 } from "./bindings.ts";
 import {
   AbortRecorded,
@@ -68,18 +78,10 @@ import {
   type CloudflareDurableRuntimeOptions,
   type CloudflareDurableRuntimeServices,
 } from "./layers.ts";
-import {
-  flushCloudflareRuntimeTelemetry,
-  logCloudflareWaitUntilRegistrationFailure,
-  makeCloudflareTelemetryFlushCoordinator,
-  registerCloudflareTelemetryAfterNativeSettlement,
-  withCloudflareNativeSpanFailure,
-  type CloudflareTelemetryFlushCoordinator,
-} from "./telemetry-internal.ts";
-import { CloudflareRuntimeTelemetry } from "./telemetry.ts";
 
 /**
- * `makeConversationObjectClass(options, telemetry?)` — the Conversation Durable Object (plan §1.4,
+ * `makeConversationObjectClass(options, observability?)` — the Conversation Durable Object
+ * (plan §1.4,
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Conversation is the serialized owner (durability §6); the
  * Object never runs `runResolvedWorker`'s infinite loop — each ingress event or alarm runs
@@ -105,15 +107,12 @@ export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptio
   readonly namespaceBinding: string;
 }
 
-type ConversationObjectError<TelemetryError> =
+type EndpointServices = CloudflareDurableRuntimeServices | DurableObjectContext;
+type RuntimeServices = EndpointServices | ConversationObjectNamespace;
+type ConversationObjectInitializationError =
   | CloudflareDurableRuntimeInitializationError
   | CloudflareBindingError
-  | TelemetryError;
-
-type EndpointServices =
-  | CloudflareDurableRuntimeServices
-  | DurableObjectContext
-  | CloudflareRuntimeTelemetry;
+  | MaintenancePassFailure;
 
 /** Port envelope tags whose owner-side execution durably mutates this Object's lane. */
 const MUTATING_PORT_TAGS: ReadonlySet<string> = new Set([
@@ -609,71 +608,56 @@ const wakeEndpoint: Effect.Effect<void, never, EndpointServices> = Effect.gen(fu
   );
 });
 
-const alarmEndpoint: Effect.Effect<void, unknown, EndpointServices> = Effect.gen(function* () {
-  const maintenance = yield* ConversationMaintenance;
-  // Typed pass failures propagate: the rejected promise makes workerd retry the alarm
-  // (at-least-once delivery), and the pass's own pre-arm keeps the slot committed meanwhile.
-  yield* maintenance.pass;
-});
-
-const gateEndpoint: Effect.Effect<void, unknown, EndpointServices> = Effect.gen(function* () {
-  // Forcing ConversationMaintenance forces the whole Layer stack: migration + exact-version
-  // check + configuration decode (DEPLOY-008 fails typed here, before any mutation), then
-  // the defensive local ensure-alarm half of the invariant. LOCAL-ONLY by construction.
-  const maintenance = yield* ConversationMaintenance;
-  yield* maintenance.ensureAlarm;
-});
-
-const NATIVE_ENTRYPOINTS = [
-  "submit",
-  "await_settlement",
-  "observe",
-  "abort",
-  "resolve_approval",
-  "resolve_unknown",
-  "explain",
-  "verify",
-  "retry",
-  "obligations",
-  "port_call",
-  "wake",
-  "alarm",
-] as const;
-
-type NativeEntrypoint = (typeof NATIVE_ENTRYPOINTS)[number];
-
-/**
- * Owner-side delivery measurement. The exact endpoint Cause is hidden behind a bounded typed
- * marker while the span closes, then restored together with any newly composed real reasons.
- */
-const observeNativeEntrypoint = <A, E>(
-  entrypoint: NativeEntrypoint,
-  effect: Effect.Effect<A, E, EndpointServices>,
-): Effect.Effect<A, E, EndpointServices> =>
-  Effect.gen(function* () {
-    const identity = yield* ConversationObjectIdentity;
-    const config = yield* CloudflareDurableRuntimeConfig;
-    return yield* withCloudflareNativeSpanFailure(effect, (masked) =>
-      masked.pipe(
-        Effect.withSpan(`effect_agent.cloudflare.conversation_object.${entrypoint}`, {
-          kind: "server",
-          attributes: {
-            "effect_agent.cloudflare.entrypoint": entrypoint,
-            "effect_agent.deployment.id": config.deploymentId,
-            conversationId: identity.conversationId,
-            producerId: identity.producerId,
-          },
-        }),
-      ),
-    );
-  });
-
-const flushNativeEntrypointTelemetry = Effect.flatMap(CloudflareDurableRuntimeConfig, (config) =>
-  flushCloudflareRuntimeTelemetry(config.telemetryFlushTimeout),
+const alarmEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices> = Effect.gen(
+  function* () {
+    const maintenance = yield* ConversationMaintenance;
+    // Typed pass failures propagate: the rejected promise makes workerd retry the alarm
+    // (at-least-once delivery), and the pass's own pre-arm keeps the slot committed meanwhile.
+    yield* maintenance.pass;
+  },
 );
 
+const gateEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices> = Effect.gen(
+  function* () {
+    // Forcing ConversationMaintenance forces the whole Layer stack: migration + exact-version
+    // check + configuration decode (DEPLOY-008 fails typed here, before any mutation), then
+    // the defensive local ensure-alarm half of the invariant. LOCAL-ONLY by construction.
+    const maintenance = yield* ConversationMaintenance;
+    yield* maintenance.ensureAlarm;
+  },
+);
+
+/**
+ * Adapter from effect-cf's native Durable Object services to Effect Agent's existing platform
+ * ports. effect-cf owns the cached ManagedRuntime and supplies these values once per Object
+ * incarnation; the durable runtime continues to depend only on the narrow services below.
+ */
+const effectCfPlatformLayer = (
+  namespaceBinding: string,
+): Layer.Layer<
+  DurableObjectContext | ConversationObjectNamespace,
+  CloudflareBindingError,
+  EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
+> => {
+  const context = Layer.effect(DurableObjectContext)(
+    Effect.gen(function* () {
+      const state = yield* EffectCfDurableObjectState.DurableObjectState;
+      const env = yield* WorkerEnvironment;
+      return DurableObjectContext.of({ ctx: state.raw, env });
+    }),
+  );
+  const namespace = Layer.effect(ConversationObjectNamespace)(
+    Effect.gen(function* () {
+      const env = yield* WorkerEnvironment;
+      const binding = yield* conversationNamespaceFromEnv(env, namespaceBinding);
+      return ConversationObjectNamespace.of({ namespace: binding });
+    }),
+  );
+  return Layer.merge(context, namespace);
+};
+
 /** The public endpoint surface of one Conversation Object instance. */
-export interface ConversationObjectInstance extends DurableObject {
+export interface ConversationObjectInstance extends CloudflareDurableObject {
   submitEncoded(encoded: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
   observePage(encoded: unknown): Promise<unknown>;
@@ -686,7 +670,7 @@ export interface ConversationObjectInstance extends DurableObject {
   obligationsEncoded(encoded: unknown): Promise<unknown>;
   portCall(encoded: unknown): Promise<unknown>;
   wake(): Promise<void>;
-  alarm(): Promise<void>;
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> | void;
 }
 
 /** The constructor shape workerd instantiates for each Conversation Object. */
@@ -696,150 +680,87 @@ export interface ConversationObjectClass {
 
 /**
  * Build the application's Conversation Object class (export it from the Worker entry).
- * `telemetry` is the host composition boundary: it may require the Object context/namespace and
- * retain a typed acquisition error, while any additional output services remain available to the
- * cached runtime. `TelemetryError` stays the first explicit generic for source compatibility;
- * additional outputs infer from the Layer. Omitting it installs the content-free no-op service.
- * The explicit return type is what makes declaration emit possible: the class body carries a
- * private runtime field, and TS4094 rejects inferring an exported anonymous class type around it.
+ * effect-cf owns the cached ManagedRuntime, native RPC methods, event scopes, and post-handler
+ * OTLP flush scheduling for RPC and alarm events. The optional outer Layer is built per native
+ * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
+ * Effect Agent owning exporter lifecycle machinery.
  */
-export const makeConversationObjectClass = <
-  TelemetryError = never,
-  AdditionalTelemetryOutputs = never,
->(
+export const makeConversationObjectClass = <EventLayerError = never, EventServices = never>(
   options: ConversationObjectOptions,
-  telemetry?: Layer.Layer<
-    CloudflareRuntimeTelemetry | AdditionalTelemetryOutputs,
-    TelemetryError,
-    DurableObjectContext | ConversationObjectNamespace
+  observability?: Layer.Layer<
+    EventServices,
+    EventLayerError,
+    | DurableObjectContext
+    | ConversationObjectNamespace
+    | EffectCfDurableObjectState.DurableObjectState
+    | WorkerEnvironment
   >,
 ): ConversationObjectClass => {
-  class ConversationObject extends DurableObject {
-    readonly #runtime: ManagedRuntime.ManagedRuntime<
-      EndpointServices,
-      ConversationObjectError<TelemetryError>
-    >;
-    readonly #ctx: DurableObjectState;
-    readonly #telemetryFlush: CloudflareTelemetryFlushCoordinator;
+  const application: Layer.Layer<
+    RuntimeServices,
+    CloudflareDurableRuntimeInitializationError | CloudflareBindingError,
+    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
+  > = CloudflareDurableRuntime.layer(options).pipe(
+    Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding)),
+  );
 
-    constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
-      super(ctx, env);
-      this.#ctx = ctx;
-      const platform = Layer.mergeAll(
-        DurableObjectContext.layer(ctx, env),
-        conversationNamespaceLayer(env, options.namespaceBinding),
+  // The storage/config Layer must acquire inside Cloudflare's constructor gate. effect-cf owns
+  // the ManagedRuntime, while this effectContext ensures its first Layer build enters the gate
+  // before migration, compatibility checks, or alarm inspection touch Object storage.
+  const runtime: Layer.Layer<
+    RuntimeServices,
+    ConversationObjectInitializationError,
+    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
+  > = Layer.effectContext(
+    Effect.gen(function* () {
+      const state = yield* EffectCfDurableObjectState.DurableObjectState;
+      const scope = yield* Effect.scope;
+      return yield* state.blockConcurrencyWhile(
+        Effect.gen(function* () {
+          const services = yield* Layer.buildWithScope(application, scope);
+          yield* gateEndpoint.pipe(Effect.provide(services));
+          return services;
+        }),
       );
-      // Host observability is composed at the Worker edge, not hidden in runtime options. Its
-      // typed acquisition failure remains in the ManagedRuntime error, while the Object context
-      // and namespace are available to Layers that derive exporter configuration from `env`.
-      const hostTelemetry = (telemetry ?? CloudflareRuntimeTelemetry.layerNoop).pipe(
-        Layer.provideMerge(platform),
-      );
-      this.#runtime = ManagedRuntime.make(
-        CloudflareDurableRuntime.layer(options).pipe(
-          // Supplying the host Layer outermost makes its Logger/Tracer/Metric runtime
-          // configuration observe application Layer acquisition and every native endpoint.
-          Layer.provideMerge(hostTelemetry),
-        ),
-      );
-      this.#telemetryFlush = makeCloudflareTelemetryFlushCoordinator(
-        () => this.#runtime.runPromise(flushNativeEntrypointTelemetry),
-        {
-          onReservationDropped: () => {
-            void this.#runtime.runSyncExit(
-              Effect.logWarning(
-                "Cloudflare telemetry delivery coalesced at the batch reservation limit",
-              ).pipe(
-                Effect.annotateLogs({
-                  "effect_agent.cloudflare.telemetry.failure_kind": "reservation_limit",
-                }),
-              ),
-            );
-          },
-        },
-      );
-      // The constructor gate: local-only checks; never the recovery pass (deadlock argument,
-      // plan §1.4). A failure here fails every delivery with the typed construction error.
-      ctx.blockConcurrencyWhile(() => this.#runtime.runPromise(gateEndpoint));
-    }
+    }),
+  );
 
-    #runNative<A, E>(
-      entrypoint: NativeEntrypoint,
-      effect: Effect.Effect<A, E, EndpointServices>,
-    ): Promise<A> {
-      const delivery = this.#runtime.runPromise(observeNativeEntrypoint(entrypoint, effect));
-      // Reserve synchronously with the current native delivery, but do not await export from the
-      // RPC/alarm Promise. Each pending/trailing/queued batch waits for its assigned deliveries to
-      // settle and only its first owner registers the shared background Promise. Even an
-      // uninterruptible exporter therefore cannot delay a caller, suppress alarm retry, accumulate
-      // concurrent exporter work, an unbounded waitUntil registration queue, or unbounded retained
-      // delivery Promises. Excess arrivals are diagnosed and lossy-coalesced at the batch cap.
-      // Registration failure and every asynchronous flush failure remain isolated from delivery.
-      return registerCloudflareTelemetryAfterNativeSettlement(
-        (background) => this.#ctx.waitUntil(background),
-        delivery,
-        this.#telemetryFlush.reserve,
-        (cause) => {
-          // Native entrypoints run only after blockConcurrencyWhile has built the cached runtime.
-          // Effect Logger invocation is synchronous; runSyncExit captures a broken logger without
-          // starting an unscoped fiber or changing the delivery Promise. The exact platform value
-          // stays confined to this registration callback; the automatic Logger diagnostic is
-          // deliberately content-free.
-          void this.#runtime.runSyncExit(logCloudflareWaitUntilRegistrationFailure(cause));
-        },
-      );
-    }
+  const rpc = {
+    submitEncoded: (encoded: unknown) => submitEndpoint(encoded),
+    awaitSettlementEncoded: (encoded: unknown) => awaitSettlementEndpoint(encoded),
+    observePage: (encoded: unknown) => observePageEndpoint(encoded),
+    abortEncoded: (encoded: unknown) => abortEndpoint(encoded),
+    resolveApprovalEncoded: (encoded: unknown) => resolveApprovalEndpoint(encoded),
+    resolveUnknownEncoded: (encoded: unknown) => resolveUnknownEndpoint(encoded),
+    explainEncoded: (encoded: unknown) => explainEndpoint(encoded),
+    verifyEncoded: (encoded: unknown) => verifyEndpoint(encoded),
+    retryEncoded: (encoded: unknown) => retryEndpoint(encoded),
+    obligationsEncoded: (encoded: unknown) => obligationsEndpoint(encoded),
+    portCall: (encoded: unknown) => portCallEndpoint(encoded),
+    wake: () => wakeEndpoint,
+  } satisfies EffectCfDurableObject.DurableObjectRpc<RuntimeServices | EventServices>;
 
-    async submitEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("submit", submitEndpoint(encoded));
-    }
+  const EffectCfConversationObject = EffectCfDurableObject.make<
+    RuntimeServices,
+    ConversationObjectInitializationError,
+    EventServices,
+    EventLayerError,
+    typeof rpc
+  >(runtime, {
+    ...(observability === undefined ? {} : { eventLayer: observability }),
+    // Force the gated runtime Layer when Cloudflare loads this Object incarnation. Recovery stays
+    // in each bounded pass so cross-Object initialization cannot deadlock.
+    initialize: Effect.void,
+    rpc,
+    alarm: () => alarmEndpoint,
+  });
 
-    async awaitSettlementEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("await_settlement", awaitSettlementEndpoint(encoded));
-    }
-
-    async observePage(encoded: unknown): Promise<unknown> {
-      return this.#runNative("observe", observePageEndpoint(encoded));
-    }
-
-    async abortEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("abort", abortEndpoint(encoded));
-    }
-
-    async resolveApprovalEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("resolve_approval", resolveApprovalEndpoint(encoded));
-    }
-
-    async resolveUnknownEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("resolve_unknown", resolveUnknownEndpoint(encoded));
-    }
-
-    async explainEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("explain", explainEndpoint(encoded));
-    }
-
-    async verifyEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("verify", verifyEndpoint(encoded));
-    }
-
-    async retryEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("retry", retryEndpoint(encoded));
-    }
-
-    async obligationsEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runNative("obligations", obligationsEndpoint(encoded));
-    }
-
-    async portCall(encoded: unknown): Promise<unknown> {
-      return this.#runNative("port_call", portCallEndpoint(encoded));
-    }
-
-    async wake(): Promise<void> {
-      await this.#runNative("wake", wakeEndpoint);
-    }
-
-    override async alarm(): Promise<void> {
-      await this.#runNative("alarm", alarmEndpoint);
+  // effect-cf's class type keeps `alarm` optional even when the handler option is present. This
+  // concrete override reflects this factory's stronger contract while delegating execution to
+  // the effect-cf runtime unchanged.
+  class ConversationObject extends EffectCfConversationObject {
+    override alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> | void {
+      return super.alarm?.(alarmInfo);
     }
   }
 

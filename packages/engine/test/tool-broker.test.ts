@@ -1,11 +1,27 @@
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Cause,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Inspectable,
+  Layer,
+  Logger,
+  Option,
+  Ref,
+  References,
+  Schema,
+  Stream,
+  Tracer,
+} from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {
   AgentRuntime,
   ToolBroker,
+  ToolExecutionClass,
   type ProgrammaticCallOutcome,
   type ToolBrokerPass,
   type ToolBrokerPassOptions,
@@ -250,6 +266,174 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         }
         expect(outcome.encodedResult).toEqual(directRecorded);
       }),
+  );
+
+  it.effect(
+    "exports privacy-safe canonical telemetry for programmatic success and returned failure",
+    () => {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const logs: Array<{
+        readonly message: unknown;
+        readonly annotations: Readonly<Record<string, unknown>>;
+        readonly cause: string;
+      }> = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const logger = Logger.make<unknown, void>(({ cause, fiber, message }) => {
+        logs.push({
+          message,
+          annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+          cause: Cause.pretty(cause),
+        });
+      });
+      const argumentSecret = "select private_token from tenant_secrets";
+      const failureSecret = "database failure contains a private tenant value";
+      const ObservedQuery = Tool.make("observed_query", {
+        parameters: Schema.Struct({ sql: Schema.String }),
+        success: Schema.Struct({ rows: Schema.Array(Schema.Int) }),
+      }).annotate(ToolExecutionClass, "readonly");
+      const ObservedFailure = Tool.make("observed_failure", {
+        parameters: Schema.Struct({ sql: Schema.String }),
+        success: Schema.Struct({ rows: Schema.Array(Schema.Int) }),
+        failure: QueryFailure,
+        failureMode: "return",
+      }).annotate(ToolExecutionClass, "readonly");
+      const innerToolkit = Toolkit.make(ObservedQuery, ObservedFailure);
+
+      return Effect.gen(function* () {
+        const outcomes = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
+        yield* runOrchestrated({
+          innerToolkit,
+          innerHandlers: innerToolkit.toLayer({
+            observed_query: () =>
+              Effect.succeed({ rows: [1] }).pipe(Effect.withSpan("host.programmatic.query")),
+            observed_failure: () => Effect.fail(QueryFailure.make({ message: failureSecret })),
+          }),
+          program: (pass) =>
+            Effect.gen(function* () {
+              const success = yield* pass.invoke({
+                toolName: "observed_query",
+                encodedArguments: { sql: argumentSecret },
+              });
+              const failure = yield* pass.invoke({
+                toolName: "observed_failure",
+                encodedArguments: { sql: argumentSecret },
+              });
+              yield* Ref.set(outcomes, [success, failure]);
+              return null;
+            }),
+        }).pipe(
+          Effect.provideService(Tracer.Tracer, tracer),
+          Effect.provide(Logger.layer([logger])),
+        );
+
+        expect(yield* Ref.get(outcomes)).toMatchObject([
+          { _tag: "ProgrammaticCallSuccess", index: 0 },
+          { _tag: "ProgrammaticCallFailure", index: 1 },
+        ]);
+
+        const programmaticSpans = spans.filter(
+          (span) => span.attributes.get("effect_agent.tool.invocation_kind") === "programmatic",
+        );
+        expect(programmaticSpans.map((span) => span.name)).toEqual([
+          "execute_tool observed_query",
+          "execute_tool observed_failure",
+        ]);
+        expect(spans.some((span) => span.name === "AgentRuntime.programmaticTool")).toBe(false);
+        expect(spans.some((span) => span.name === "AgentRuntime.toolkit.handle")).toBe(false);
+
+        const [successSpan, failureSpan] = programmaticSpans;
+        expect(Object.fromEntries(successSpan?.attributes ?? [])).toMatchObject({
+          "gen_ai.operation.name": "execute_tool",
+          "gen_ai.tool.name": "observed_query",
+          "gen_ai.tool.call.id": "orchestrate-1#0",
+          "gen_ai.agent.name": "broker-host",
+          "gen_ai.conversation.id": "conversation-broker",
+          "effect_agent.tool.execution_class": "readonly",
+          "effect_agent.tool.invocation_kind": "programmatic",
+          "effect_agent.tool.outcome": "success",
+          "effect_agent.tool.parent_call.id": "orchestrate-1",
+          "effect_agent.tool.sequence_index": 0,
+          toolCallId: "orchestrate-1#0",
+          parentToolCallId: "orchestrate-1",
+          sequenceIndex: 0,
+          toolName: "observed_query",
+        });
+        expect(Object.fromEntries(failureSpan?.attributes ?? [])).toMatchObject({
+          "gen_ai.tool.name": "observed_failure",
+          "gen_ai.tool.call.id": "orchestrate-1#1",
+          "effect_agent.tool.outcome": "failure",
+          "effect_agent.tool.sequence_index": 1,
+          toolCallId: "orchestrate-1#1",
+        });
+        if (successSpan?.status._tag !== "Ended" || failureSpan?.status._tag !== "Ended") {
+          throw new Error("Expected both programmatic Tool spans to end");
+        }
+        expect(Exit.isSuccess(successSpan.status.exit)).toBe(true);
+        expect(Exit.isFailure(failureSpan.status.exit)).toBe(true);
+        if (Exit.isFailure(failureSpan.status.exit)) {
+          expect(Cause.pretty(failureSpan.status.exit.cause)).not.toContain(failureSecret);
+        }
+
+        const hostSpan = spans.find((span) => span.name === "host.programmatic.query");
+        const hostParent = Option.getOrUndefined(hostSpan?.parent ?? Option.none());
+        expect(hostParent?._tag).toBe("Span");
+        if (hostParent?._tag !== "Span") {
+          throw new Error("Expected the host span to have a canonical programmatic Tool parent");
+        }
+        expect(hostParent.name).toBe("execute_tool observed_query");
+        expect(hostParent.attributes.get("effect_agent.tool.invocation_kind")).toBe("programmatic");
+
+        const programmaticLogs = logs.filter(
+          ({ annotations }) => annotations["effect_agent.tool.invocation_kind"] === "programmatic",
+        );
+        expect(
+          programmaticLogs.map(({ annotations, message }) => ({
+            message: Array.isArray(message)
+              ? message.map((value) => Inspectable.toStringUnknown(value)).join(" ")
+              : Inspectable.toStringUnknown(message),
+            outcome: annotations.toolOutcome,
+            toolCallId: annotations.toolCallId,
+            toolName: annotations.toolName,
+          })),
+        ).toEqual([
+          {
+            message: "agent tool execution completed",
+            outcome: "success",
+            toolCallId: "orchestrate-1#0",
+            toolName: "observed_query",
+          },
+          {
+            message: "agent tool execution failed",
+            outcome: "failure",
+            toolCallId: "orchestrate-1#1",
+            toolName: "observed_failure",
+          },
+        ]);
+
+        const exportedText = [
+          ...spans.map((span) =>
+            JSON.stringify({
+              name: span.name,
+              attributes: Object.fromEntries(span.attributes),
+              events: span.events,
+              status:
+                span.status._tag === "Ended" && Exit.isFailure(span.status.exit)
+                  ? Cause.pretty(span.status.exit.cause)
+                  : span.status._tag,
+            }),
+          ),
+          ...logs.map((entry) => Inspectable.toStringUnknown(entry)),
+        ].join("\n");
+        expect(exportedText).not.toContain(argumentSecret);
+        expect(exportedText).not.toContain(failureSecret);
+      });
+    },
   );
 
   it.effect("RUN-016 allocates deterministic sequential indices from broker-owned state", () =>
