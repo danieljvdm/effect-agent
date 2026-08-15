@@ -4,14 +4,14 @@
   "main": "src/worker.ts",
   "compatibility_date": "2025-05-01",
   "compatibility_flags": ["nodejs_compat", "experimental"],
-  // The durable agent host: the real Conversation Object. Every question
-  // becomes a durable Run in its append-only canonical log (SQLite storage).
+  // The DC assembly agent host: the real Conversation Object. Every question
+  // becomes a Run recorded in its append-only canonical log (SQLite storage).
   "durable_objects": {
     "bindings": [{ "name": "AGENTS", "class_name": "InvoiceAgentConversationObject" }],
   },
   "migrations": [
     // v1 shipped the retired WarehouseObject; migrations are append-only, so
-    // the durable rebuild lands as v2 (register the Conversation Object,
+    // the DC-assembly rebuild lands as v2 (register the Conversation Object,
     // delete the retired class) rather than rewriting v1.
     { "tag": "v1", "new_sqlite_classes": ["WarehouseObject"] },
     {

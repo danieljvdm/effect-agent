@@ -48,7 +48,7 @@ export { InvoiceAgentConversationObject, CodeModeHostEntrypoint };
 declare global {
   namespace Cloudflare {
     interface Env {
-      readonly AGENTS: DurableObjectNamespace;
+      readonly AGENTS: DurableObjectNamespace<ConversationObjectRpc & Rpc.DurableObjectBranded>;
       readonly DB: D1Database;
       readonly LOADER: WorkerLoader;
       readonly CODE_MODE_HOST: CodeModeHostStub;
@@ -95,6 +95,8 @@ const AskRequestBody = Schema.Struct({
   question: Schema.optionalKey(Schema.String),
 });
 const decodeAskRequestBody = Schema.decodeUnknownOption(AskRequestBody);
+
+const MAX_BODY_BYTES = 64 * 1024;
 
 /** Parse the request body's question; any malformed body falls to the default. */
 const readQuestion = (request: Request): Effect.Effect<string> =>
@@ -169,6 +171,7 @@ const receiptFromRecords = (records: ReadonlyArray<CanonicalRecordEnvelope>) => 
   const declared = new Map<string, string | undefined>();
   const settled = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
   const duplicateIds = new Set<string>();
+  let declaredCalls = 0;
   let answer = "";
   for (const envelope of records) {
     const payload = payloadOf(envelope);
@@ -181,6 +184,7 @@ const receiptFromRecords = (records: ReadonlyArray<CanonicalRecordEnvelope>) => 
         for (const rawPart of message.value.content) {
           const part = decodeToolCallPart(rawPart);
           if (part._tag !== "Some" || part.value.name !== "run_javascript") continue;
+          declaredCalls += 1;
           if (declared.has(part.value.id)) duplicateIds.add(part.value.id);
           const params = decodeCodeParams(part.value.params);
           declared.set(part.value.id, params._tag === "Some" ? params.value.code : undefined);
@@ -219,7 +223,7 @@ const receiptFromRecords = (records: ReadonlyArray<CanonicalRecordEnvelope>) => 
       used: settled.size > 0,
       tool: "run_javascript",
       executor: dynamicWorkerImplementation.identity,
-      calls: declared.size,
+      calls: declaredCalls,
       program: soleId === undefined ? undefined : declared.get(soleId),
       result: executed?.result,
       logs: executed?.logs,
@@ -286,12 +290,13 @@ const streamCanonicalLog = (
           }),
         ),
       ),
-      // A read failure is not "no records yet": log the cause server-side and
-      // terminate the stream with a stable error record.
-      Stream.catchCause((cause) =>
+      // A TYPED read failure is not "no records yet": log it server-side and
+      // terminate the stream with a stable error record. Defects and
+      // interruption propagate untouched.
+      Stream.catch((error) =>
         Stream.fromEffect(
           Effect.sync(() => {
-            console.error("canonical log observation failed", Cause.squash(cause));
+            console.error("canonical log observation failed", error);
             return line({ error: "observation failed" });
           }),
         ),
@@ -313,6 +318,11 @@ const askHandler = Effect.gen(function* () {
   }
   if (request.method !== "POST") {
     return Response.json({ error: "POST required" }, { status: 405 });
+  }
+  // Bound the request BEFORE buffering the body, not after.
+  const contentLength = Number(request.headers.get("content-length") ?? "0");
+  if (!Number.isFinite(contentLength) || contentLength > MAX_BODY_BYTES) {
+    return Response.json({ error: "request body too large" }, { status: 413 });
   }
   const liveMode = env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0;
   const authToken = env.DEMO_AUTH_TOKEN;
@@ -355,7 +365,13 @@ const askHandler = Effect.gen(function* () {
   // durable run does not depend on anyone watching it.
   if (url.searchParams.get("stream") === "1") {
     const client = yield* CloudflareConversationClient;
-    yield* client.submit({ definition: codeModeAgent }, { question }, submitOptions);
+    const submitted = yield* client
+      .submit({ definition: codeModeAgent }, { question }, submitOptions)
+      .pipe(Effect.exit);
+    if (Exit.isFailure(submitted)) {
+      console.error("durable submit failed", Cause.squash(submitted.cause));
+      return Response.json({ error: "the durable run failed" }, { status: 500 });
+    }
     const body = yield* streamCanonicalLog(conversationId, liveMode);
     return new Response(body, {
       headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache" },
@@ -392,11 +408,7 @@ const clientLayer = Layer.unwrap(
   Effect.gen(function* () {
     const env = yield* WorkerEnvironment;
     return CloudflareConversationClient.layer.pipe(
-      Layer.provide(
-        ConversationObjectNamespace.layer(
-          env.AGENTS as unknown as DurableObjectNamespace<ConversationObjectRpc>,
-        ),
-      ),
+      Layer.provide(ConversationObjectNamespace.layer(env.AGENTS)),
     );
   }),
 );

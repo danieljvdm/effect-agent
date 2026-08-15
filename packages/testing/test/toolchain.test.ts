@@ -1464,6 +1464,22 @@ Exercise the generated release verifier.
         ).toEqual([]);
       }
 
+      // The Cloudflare-only SQL clients stay confined to the two Cloudflare
+      // packages across EVERY framework package, not just the inward set —
+      // an outward package (platform-node, pr-review, testing, the umbrella)
+      // adding them would also breach platform confinement.
+      for (const packageName of packageNames) {
+        if (cloudflarePackageNames.includes(packageName)) continue;
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
+        );
+        expect(
+          manifestDependencies(manifest).filter((dependency) =>
+            cloudflareOnlyDependencies.has(dependency),
+          ),
+        ).toEqual([]);
+      }
+
       // The confinement side: every workspace consumer of the Durable Object
       // SqlClient is one of the two Cloudflare packages, catalog-pinned.
       for (const packageName of cloudflarePackageNames) {
