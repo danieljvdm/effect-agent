@@ -248,6 +248,12 @@ export interface ChildEstablishSettled extends RunSubagentChildIdentity {
   readonly _tag: "settled";
   readonly outcome: "completed" | "failed" | "aborted";
   readonly encodedResult: unknown;
+  /**
+   * Present when the child's durable Settlement carries the honest
+   * exhaustion marker (RUN-011/RUN-018): the child completed through the
+   * final-answer resolution, so its output is a budget-truncated partial.
+   */
+  readonly finishReason?: "budget-exhausted" | undefined;
 }
 
 /**
@@ -414,6 +420,22 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * the model (durable batch-resume seam). Consumed by the Run's first Turn.
    */
   readonly resume?: RunTurnResume | undefined;
+  /**
+   * Per-Run Tool Call allowance (RUN-021): a TIGHTENING-ONLY bound below the
+   * Agent Policy's `maxToolCalls` — the effective limit is
+   * `min(policy.maxToolCalls, max(1, floor(toolCallAllowance)))`, so an
+   * allowance can never widen the Definition's ceiling. The `onExhaustion`
+   * resolution (RUN-018) keys off the effective limit, which is how an
+   * orchestrator grants a delegated child a budget extension by re-invoking
+   * with a larger allowance up to the child Definition's policy.
+   */
+  readonly toolCallAllowance?: number | undefined;
+  /**
+   * Per-Run Turn allowance (RUN-021): tightening-only below the Agent
+   * Policy's `maxTurns`, with the same normalization and the same
+   * `onExhaustion` resolution (RUN-019 grace) at the effective limit.
+   */
+  readonly turnAllowance?: number | undefined;
   /** Required when the core policy declares `costBudgetMicrousd`. */
   readonly estimateCostMicrousd?:
     | ((usage: Response.Usage) => Effect.Effect<number, HookError, HookRequirements>)

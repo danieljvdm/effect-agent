@@ -3,11 +3,7 @@ import {
   Agent,
   AgentPolicy,
   Subagent,
-  SubagentBudgetExhausted,
-  SubagentExecutionFailure,
   SubagentPolicy,
-  SubagentPrestartDenied,
-  SubagentProjectionFailure,
   SubagentRuntime,
   ToolExecutionClass,
   type RuntimeBinding,
@@ -142,11 +138,14 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200_000,
-  // Budget soft landing (RUN-018): a child that exhausts its Turn or Tool
-  // Call budget returns its partial line-anchored report on one final
-  // tool-free turn instead of failing the unit — the standing "unit-00N
-  // unreviewed: AgentPolicyError" failure mode on big units.
-  onExhaustion: "final-answer",
+  // Typed exhaustion, deliberately NOT the final-answer soft landing: a
+  // review is a coverage claim, and a child whose reads were rejected could
+  // still emit schema-valid findings — laundering budget exhaustion into
+  // "reviewed". Until host-owned evidence proves every mandatory
+  // read_file_diff completed, an exhausted child fails typed and its unit
+  // stays honestly unreviewed (containment turns that into result data
+  // without failing the run).
+  onExhaustion: "fail",
 });
 
 // ---------------------------------------------------------------------------
@@ -217,21 +216,6 @@ export const mapFileReviewChildFailure = (failure: {
     childErrorTag: failure._tag,
     message: (failure.message ?? "").slice(0, 400),
   });
-
-/**
- * The contained failure family this delegation can surface as result data
- * under the first-party `failureMode: "return"` (SUB-033). The engine-signal
- * members (`ToolCallWaiting`, `SubagentDurabilityError`) are deliberately not
- * here: they stay in the error channel by construction. Used by the coverage
- * gate to classify returned unit failures.
- */
-export const FileReviewDelegationFailure = Schema.Union([
-  FileReviewUnitFailed,
-  SubagentPrestartDenied,
-  SubagentBudgetExhausted,
-  SubagentProjectionFailure,
-  SubagentExecutionFailure,
-]);
 
 // ---------------------------------------------------------------------------
 // The coordinator's own tool: the deterministic unit plan over the changeset.
@@ -430,6 +414,13 @@ export const DelegateFileReview = delegationToolFor(fileReviewDelegation);
 
 /** The default coordinator Toolkit. */
 export const FanOutReviewToolkit = FanOutReviewer.toolkit;
+
+/**
+ * The contained failure family the delegation can surface as result data
+ * (SUB-033), derived from the delegation itself so the coverage decoder can
+ * never diverge from what the runtime actually contains.
+ */
+export const FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
 
 /** Runtime wiring: one delegation plus one explicit child Binding. */
 export const fanOutHandlersLayerFor =

@@ -638,7 +638,7 @@ describe("offline fan-out review run", () => {
   );
 
   it.effect(
-    "RUN-018 a runaway child soft-lands: none of the over-budget calls execute and the unit completes with its partial report",
+    "SUB-033 a runaway child fails typed and its unit is reported honestly, never retried",
     () =>
       Effect.gen(function* () {
         const runawayChildren: ReadonlyArray<OfflineUnitScript> = [
@@ -647,41 +647,45 @@ describe("offline fan-out review run", () => {
             unitId: "unit-002",
             diffPath: "src/core/gamma.ts",
             // One more declared call than the child AgentPolicy allows: the
-            // whole batch is rejected without executing, and the child returns
-            // its partial report on the final tool-free turn.
+            // reviewer pins typed exhaustion (a review is a coverage claim —
+            // schema-valid findings from a child whose reads never executed
+            // would launder budget exhaustion into coverage), so the child
+            // fails typed and first-party containment turns that into result
+            // data instead of failing the run.
             outcome: {
               _tag: "budget-runaway",
               declaredCalls: MAX_FILE_REVIEW_TOOL_CALLS + 1,
-              report: unitTwoReport,
             },
           },
         ];
-        const mergedReview = CodeReview.make({
-          summary: "Reviewed unit-001 and unit-002 (unit-002 on a partial, budget-exhausted pass).",
+        const honestReview = CodeReview.make({
+          summary: "unit-002 unreviewed: AgentPolicyError (exceeded its Tool Call budget).",
           verdict: "comment",
-          findings: rankAndDedupeFindings([...unitOneReport.findings, ...unitTwoReport.findings]),
+          findings: rankAndDedupeFindings([...unitOneReport.findings]),
         });
 
-        const result = yield* runOfflineFanOut({ children: runawayChildren, review: mergedReview });
+        const result = yield* runOfflineFanOut({
+          children: runawayChildren,
+          review: honestReview,
+        });
 
-        // Two child model calls: the rejected over-budget turn and the final
-        // answer — no third chance, and no handler ran for any runaway call.
-        expect(result.childCalls).toBe(4);
+        // The child failed typed on its Tool Call bound BEFORE any runaway
+        // call executed: one child model call, no second chance, run intact.
+        expect(result.childCalls).toBe(3);
         expect(result.coordinatorCalls).toBe(3);
 
-        // The child saw the synthetic policy rejection as failed tool results
-        // and answered from what it had.
-        const runawayPrompt =
-          result.childPrompts.find((prompt) => prompt.includes("runaway-unit-002-1")) ?? "";
-        expect(runawayPrompt).toContain("Tool Call budget exhausted");
-
-        // The unit COMPLETED: findings from both units, no failed units, and
-        // nothing retried. (Coverage stays "incomplete" only for the fixture's
-        // undiffable binary, exactly like the fully-happy run.)
-        expect(result.outcome.review).toEqual(mergedReview);
+        // The typed policy failure crossed the delegation boundary bounded
+        // and model-visible; the unit stays honestly unreviewed.
+        const finalPrompt = result.coordinatorPrompts[2] ?? "";
+        expect(finalPrompt).toContain("FileReviewUnitFailed");
+        expect(finalPrompt).toContain("AgentPolicyError");
+        expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
         expect(result.published).toHaveLength(1);
-        expect(result.outcome.coverage.failedUnits).toEqual([]);
-        expect(result.outcome.coverage.unreviewedPaths).toEqual(["assets/logo.png"]);
+        expect(result.outcome.coverage.status).toBe("incomplete");
+        expect(result.outcome.coverage.failedUnits).toContainEqual({
+          unitId: "unit-002",
+          errorTag: "FileReviewUnitFailed:AgentPolicyError",
+        });
       }),
   );
 });

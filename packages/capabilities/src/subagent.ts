@@ -221,6 +221,18 @@ export interface SubagentPrepareContext {
 }
 
 /**
+ * Bounded framework context handed to `projectResult` (SUB-034).
+ * `budgetExhausted` is true exactly when the child settled through the
+ * final-answer exhaustion resolution (RUN-018) — on the ephemeral path from
+ * the child result's `finishReason`, on the durable path from the child
+ * Settlement's honest marker — so the projection can surface a
+ * budget-truncated partial to the orchestrator.
+ */
+export interface SubagentResultContext {
+  readonly budgetExhausted: boolean;
+}
+
+/**
  * The delegation Tool failure Schema: the author's declared failure plus the
  * framework's preflight/budget/projection/durable-execution failure family
  * (spec/subagents.md §15). With the default `failureMode: "error"`, exactly
@@ -386,11 +398,36 @@ export interface SubagentDefineOptions<
   /**
    * Bounded result projection from the Schema-decoded child output to the
    * declared Tool success value (spec/subagents.md §4.2). This is the explicit
-   * declassification boundary for child output.
+   * declassification boundary for child output. The context carries the
+   * framework's honest exhaustion marker (SUB-034): when `budgetExhausted` is
+   * true the child settled through the final-answer resolution (RUN-018) and
+   * its output is a budget-truncated partial — surface it in the declared
+   * success Schema so the orchestrator can decide to re-delegate with a
+   * raised `toolCallAllowance`.
    */
   readonly projectResult: (
     output: TargetOutput["Type"],
+    context: SubagentResultContext,
   ) => Effect.Effect<Success["Type"], Failure["Type"], ProjectRequirements>;
+  /**
+   * Per-invocation child Tool Call allowance (SUB-034): a tightening-only
+   * bound below the child Definition's own `maxToolCalls`, additionally
+   * clamped to this delegation's `SubagentPolicy.maxToolCalls` (the
+   * per-invocation reservation slice). `fromParameters` lets the orchestrator
+   * model grant a larger allowance through an author-owned parameter field —
+   * the budget-extension flow is a fresh re-delegation with a raised
+   * allowance, never a mid-flight top-up. Ephemeral delegation only: a
+   * durable child keeps running at its Definition policy (its lane owns no
+   * per-run options channel; the reservation stays accounting-only per §7).
+   */
+  readonly toolCallAllowance?:
+    | {
+        /** Applied when `fromParameters` is absent or yields nothing. */
+        readonly default: number;
+        /** Extract the model-granted allowance from the decoded parameters. */
+        readonly fromParameters?: (parameters: Parameters["Type"]) => number | undefined;
+      }
+    | undefined;
   /** Finite delegation bounds reserved for every invocation (SUB-009). */
   readonly policy: SubagentPolicy;
   /**
@@ -443,6 +480,14 @@ export interface SubagentDelegation<
   readonly grant: SubagentGrant;
   /** The resolved expected-failure resolution (SUB-033); never absent after `define`. */
   readonly failureMode: Mode;
+  /**
+   * The canonical contained-failure family for this delegation (SUB-033):
+   * the declared failure plus the framework members. Consumers that classify
+   * returned failure data (for example a coverage gate) MUST decode through
+   * this value rather than reconstructing the union, so a framework change
+   * to the contained family can never diverge from their decoder.
+   */
+  readonly containedFailure: SubagentContainedFailure<Failure>;
   /** The real Effect AI Tool to include in the parent Toolkit (SUB-001). */
   readonly tool: SubagentTool<Name, Parameters, Success, Failure, Mode>;
 }
@@ -456,7 +501,93 @@ export interface SubagentDelegation<
  * `SubagentRuntime.layer`. Throws on an invalid delegation name or a target
  * whose Toolkit already contains a delegation Tool (SUB-029).
  */
-const define = <
+interface SubagentDefine {
+  /**
+   * Contained-failure mode (SUB-033): `failureMode: "return"` must be present
+   * as a VALUE — the resolved Tool channels follow what `define` actually
+   * constructs, so return mode cannot be claimed through a type argument
+   * while the runtime builds the error-mode Tool.
+   */
+  <
+    const Name extends string,
+    TargetInput extends Schema.Top,
+    TargetOutput extends Schema.Top,
+    TargetInstructions,
+    TargetTools extends Record<string, Tool.Any>,
+    Parameters extends Schema.Top,
+    Success extends Schema.Top,
+    Failure extends Schema.Top,
+    PrepareRequirements = never,
+    ProjectRequirements = never,
+  >(
+    name: Name,
+    options: SubagentDefineOptions<
+      TargetInput,
+      TargetOutput,
+      TargetInstructions,
+      TargetTools,
+      Parameters,
+      Success,
+      Failure,
+      PrepareRequirements,
+      ProjectRequirements,
+      "return"
+    > & { readonly failureMode: "return" },
+  ): SubagentDelegation<
+    Name,
+    TargetInput,
+    TargetOutput,
+    TargetInstructions,
+    TargetTools,
+    Parameters,
+    Success,
+    Failure,
+    PrepareRequirements,
+    ProjectRequirements,
+    "return"
+  >;
+  /** Default error mode: `failureMode` may be omitted or explicitly `"error"`. */
+  <
+    const Name extends string,
+    TargetInput extends Schema.Top,
+    TargetOutput extends Schema.Top,
+    TargetInstructions,
+    TargetTools extends Record<string, Tool.Any>,
+    Parameters extends Schema.Top,
+    Success extends Schema.Top,
+    Failure extends Schema.Top,
+    PrepareRequirements = never,
+    ProjectRequirements = never,
+  >(
+    name: Name,
+    options: SubagentDefineOptions<
+      TargetInput,
+      TargetOutput,
+      TargetInstructions,
+      TargetTools,
+      Parameters,
+      Success,
+      Failure,
+      PrepareRequirements,
+      ProjectRequirements,
+      "error"
+    >,
+  ): SubagentDelegation<
+    Name,
+    TargetInput,
+    TargetOutput,
+    TargetInstructions,
+    TargetTools,
+    Parameters,
+    Success,
+    Failure,
+    PrepareRequirements,
+    ProjectRequirements,
+    "error"
+  >;
+}
+
+const define: SubagentDefine = <
   const Name extends string,
   TargetInput extends Schema.Top,
   TargetOutput extends Schema.Top,
@@ -514,6 +645,13 @@ const define = <
   // resolved literal always inhabits `Mode`; the assertion bridges only that
   // inference gap and crosses no schema boundary.
   const failureMode = (options.failureMode ?? "error") as Mode;
+  const containedFailure = Schema.Union([
+    options.failure,
+    SubagentPrestartDenied,
+    SubagentBudgetExhausted,
+    SubagentProjectionFailure,
+    SubagentExecutionFailure,
+  ]);
   const returnModeTool = Tool.make(name, {
     description: options.description,
     parameters: options.parameters,
@@ -521,16 +659,7 @@ const define = <
     // RESULT data, so it lives in the success union; only the engine-signal
     // members remain raisable. The underlying Effect AI failureMode stays
     // "error" so the waiting signal is never encoded as a result.
-    success: Schema.Union([
-      options.success,
-      Schema.Union([
-        options.failure,
-        SubagentPrestartDenied,
-        SubagentBudgetExhausted,
-        SubagentProjectionFailure,
-        SubagentExecutionFailure,
-      ]),
-    ]),
+    success: Schema.Union([options.success, containedFailure]),
     failure: Schema.Union([ToolCallWaiting, SubagentDurabilityError]),
     needsApproval: options.needsApproval,
   });
@@ -570,6 +699,7 @@ const define = <
     delegationId,
     grant,
     failureMode,
+    containedFailure,
     tool,
   });
 };
@@ -918,6 +1048,22 @@ const settleReservation = (
     yield* reservations.release(reservationId);
   }).pipe(Effect.orDie);
 
+/**
+ * Module-private provenance wrapper (SUB-033 hardening): ONLY the operations
+ * that can genuinely produce the engine signals wrap them here, so
+ * containment classification never trusts the runtime identity of classes an
+ * author could declare in their own failure Schema — a spoofed
+ * `ToolCallWaiting` in author data is contained as data, never rethrown as a
+ * suspension signal.
+ */
+class GenuineEngineSignal {
+  readonly _tag = "GenuineEngineSignal";
+  constructor(readonly signal: ToolCallWaiting | SubagentDurabilityError) {}
+}
+
+const wrapEngineSignal = (signal: ToolCallWaiting | SubagentDurabilityError) =>
+  new GenuineEngineSignal(signal);
+
 type SubagentHandler<
   Name extends string,
   Parameters extends Schema.Top,
@@ -1251,9 +1397,22 @@ const layer = <
               ),
             ),
       };
+      // Per-invocation allowance (SUB-034): tightening-only, clamped to the
+      // delegation's own per-invocation reservation slice; the child's
+      // Definition policy stays the engine-side ceiling (RUN-021).
+      const allowanceOption = delegation.toolCallAllowance;
+      const requestedAllowance =
+        allowanceOption === undefined
+          ? undefined
+          : (allowanceOption.fromParameters?.(parameters) ?? allowanceOption.default);
+      const toolCallAllowance =
+        requestedAllowance === undefined
+          ? undefined
+          : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
       const childOptions: SpawnRunOptions<never, HookRequirements> = {
         ...seededChild,
         budget,
+        ...(toolCallAllowance === undefined ? {} : { toolCallAllowance }),
       };
 
       yield* Ref.set(startedAt, yield* Clock.currentTimeMillis);
@@ -1330,7 +1489,9 @@ const layer = <
           turns: result.turns,
           finishReason: result.finishReason,
         });
-        const projected = yield* delegation.projectResult(result.output);
+        const projected = yield* delegation.projectResult(result.output, {
+          budgetExhausted: result.finishReason === "budget-exhausted",
+        });
         const encodedResult = yield* encodeSuccess(projected).pipe(
           Effect.mapError(() =>
             SubagentProjectionFailure.make({
@@ -1462,16 +1623,18 @@ const layer = <
       // converges on the one existing child; a divergent replay (changed
       // digests, grant, allocation, or input) is denied fail-closed by the
       // coordinator and surfaces below as `"establishment-denied"`.
-      const status = yield* durability.establish({
-        toolCallId,
-        delegationId: delegation.delegationId,
-        targetAgentId: delegation.target.id,
-        depth,
-        targetDigests: durableDeclaration.targetDigests,
-        encodedChildInput: encodedInput,
-        encodedGrant,
-        encodedAllocation,
-      });
+      const status = yield* Effect.mapError(wrapEngineSignal)(
+        durability.establish({
+          toolCallId,
+          delegationId: delegation.delegationId,
+          targetAgentId: delegation.target.id,
+          depth,
+          targetDigests: durableDeclaration.targetDigests,
+          encodedChildInput: encodedInput,
+          encodedGrant,
+          encodedAllocation,
+        }),
+      );
 
       switch (status._tag) {
         case "denied": {
@@ -1492,7 +1655,7 @@ const layer = <
           // call open (no Tool failure, no batch failure policy), siblings
           // finish, and the Run suspends waitingForChild — never polling,
           // never respawning (SUB-018, SUB-030).
-          return yield* durability.waiting(toolCallId, status);
+          return yield* Effect.mapError(wrapEngineSignal)(durability.waiting(toolCallId, status));
         }
         case "settled": {
           const payload: SubagentEventBasePayload = {
@@ -1512,7 +1675,7 @@ const layer = <
           const settleFailure = <F>(
             failure: F,
             encodedFailure: unknown,
-          ): Effect.Effect<never, F | SubagentDurabilityError> =>
+          ): Effect.Effect<never, F | GenuineEngineSignal> =>
             emit({
               _tag: "SubagentFailed",
               ...payload,
@@ -1520,19 +1683,21 @@ const layer = <
               message: boundedEventText(errorMessageOf(failure)),
             }).pipe(
               Effect.andThen(
-                durability.join({
-                  toolCallId,
-                  encodedResult: encodedFailure,
-                  // Canonical history must record exactly what the live batch
-                  // continues with (SUB-019): under containment the failure is
-                  // the call's model-visible RESULT (the dispatch wrapper
-                  // converts the fail below into a success), so the joined
-                  // settlement records it as a non-failure result; the child's
-                  // own failed Settlement and the `SubagentFailed` event stay
-                  // the honest failure record.
-                  isFailure: !contained,
-                  encodedAccounting: conservativeAccounting,
-                }),
+                Effect.mapError(wrapEngineSignal)(
+                  durability.join({
+                    toolCallId,
+                    encodedResult: encodedFailure,
+                    // Canonical history must record exactly what the live
+                    // batch continues with (SUB-019): under containment the
+                    // failure is the call's model-visible RESULT (the dispatch
+                    // wrapper converts the fail below into a success), so the
+                    // joined settlement records it as a non-failure result;
+                    // the child's own failed Settlement and the
+                    // `SubagentFailed` event stay the honest failure record.
+                    isFailure: !contained,
+                    encodedAccounting: conservativeAccounting,
+                  }),
+                ),
               ),
               Effect.andThen(Effect.fail(failure)),
             );
@@ -1572,14 +1737,18 @@ const layer = <
               );
             }),
           );
-          const projected = yield* delegation.projectResult(decoded).pipe(
-            Effect.catch((declared) =>
-              encodeDeclaredFailure(declared).pipe(
-                Effect.orDie,
-                Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)),
+          const projected = yield* delegation
+            .projectResult(decoded, {
+              budgetExhausted: status.finishReason === "budget-exhausted",
+            })
+            .pipe(
+              Effect.catch((declared) =>
+                encodeDeclaredFailure(declared).pipe(
+                  Effect.orDie,
+                  Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)),
+                ),
               ),
-            ),
-          );
+            );
           const encodedResult = yield* encodeSuccess(projected).pipe(
             Effect.catch(() => {
               const failure = SubagentProjectionFailure.make({
@@ -1607,12 +1776,14 @@ const layer = <
             const encodedFailure = yield* encodeBudgetFailure(failure).pipe(Effect.orDie);
             return yield* settleFailure(failure, encodedFailure);
           }
-          yield* durability.join({
-            toolCallId,
-            encodedResult,
-            isFailure: false,
-            encodedAccounting: conservativeAccounting,
-          });
+          yield* Effect.mapError(wrapEngineSignal)(
+            durability.join({
+              toolCallId,
+              encodedResult,
+              isFailure: false,
+              encodedAccounting: conservativeAccounting,
+            }),
+          );
           yield* emit({ _tag: "SubagentJoined", ...payload });
           return projected;
         }
@@ -1621,17 +1792,27 @@ const layer = <
 
     // Containment boundary (SUB-033): under `"return"`, every expected
     // delegation failure becomes the handler's success value; exactly the
-    // engine signals re-fail. `instanceof` against the exact engine classes is
-    // identity-safe — an author-declared failure can never alias them.
+    // GENUINE engine signals re-fail unwrapped. Provenance comes from the
+    // module-private `GenuineEngineSignal` wrapper applied at the only
+    // operations that can produce those signals — an author-declared failure
+    // that happens to use the exported signal classes is contained as data,
+    // never rethrown as a suspension signal.
     const containSignals = (
-      failure: SubagentToolFailure<Failure>["Type"],
+      failure: SubagentToolFailure<Failure>["Type"] | GenuineEngineSignal,
     ): Effect.Effect<
       SubagentContainedFailure<Failure>["Type"],
       ToolCallWaiting | SubagentDurabilityError
     > =>
-      failure instanceof ToolCallWaiting || failure instanceof SubagentDurabilityError
-        ? Effect.fail(failure)
+      failure instanceof GenuineEngineSignal
+        ? Effect.fail(failure.signal)
         : Effect.succeed(failure);
+
+    // Error mode still unwraps genuine signals so the engine sees the raw
+    // `ToolCallWaiting`/`SubagentDurabilityError` it owns.
+    const unwrapSignals = (
+      failure: SubagentToolFailure<Failure>["Type"] | GenuineEngineSignal,
+    ): SubagentToolFailure<Failure>["Type"] =>
+      failure instanceof GenuineEngineSignal ? failure.signal : failure;
 
     const handlerImpl = (
       parameters: Parameters["Type"],
@@ -1660,7 +1841,9 @@ const layer = <
             Effect.provideService(SubagentDurability, durability),
             Effect.provide(captured),
           );
-          return yield* contained ? durable.pipe(Effect.catch(containSignals)) : durable;
+          return yield* contained
+            ? durable.pipe(Effect.catch(containSignals))
+            : durable.pipe(Effect.mapError(unwrapSignals));
         }
         const ephemeral = invoke(parameters, handlerContext).pipe(
           Effect.scoped,
@@ -1669,7 +1852,9 @@ const layer = <
           Effect.provideService(SubagentDurability, durability),
           Effect.provide(captured),
         );
-        return yield* contained ? ephemeral.pipe(Effect.catch(containSignals)) : ephemeral;
+        return yield* contained
+          ? ephemeral.pipe(Effect.catch(containSignals))
+          : ephemeral.pipe(Effect.mapError(unwrapSignals));
       });
 
     // `handlerImpl`'s channels are the UNION of both modes because
