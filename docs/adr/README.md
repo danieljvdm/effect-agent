@@ -30,9 +30,10 @@ The records below reflect explicit owner decisions.
 
 ## Proposed
 
-| ADR                                             | Recommendation                                                                                                                                                          |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ADR-0010](0010-declared-attached-subagents.md) | Model Subagents as declared attached delegation Tools — S1 and S2 implemented as proposed defaults ([S1 evidence](../S1-EVIDENCE.md), [S2 evidence](../S2-EVIDENCE.md)) |
+| ADR                                               | Recommendation                                                                                                                                                                                                                               |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ADR-0010](0010-declared-attached-subagents.md)   | Model Subagents as declared attached delegation Tools — S1 and S2 implemented as proposed defaults ([S1 evidence](../S1-EVIDENCE.md), [S2 evidence](../S2-EVIDENCE.md))                                                                      |
+| [ADR-0020](0020-model-visible-output-contract.md) | Inject the Agent output Schema as a model-visible contract at request materialization (prototyped proposed default); adopt the final-answer-tool as the enforced direction behind its own future ADR ([plan](../OUTPUT-CONFORMANCE-PLAN.md)) |
 
 ## Status transitions
 
