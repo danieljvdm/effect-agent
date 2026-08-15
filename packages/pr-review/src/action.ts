@@ -1,6 +1,7 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } from "effect";
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
@@ -682,7 +683,7 @@ export const main = (): void =>
         ),
       ),
       Effect.scoped,
-      Effect.provide(NodeServices.layer),
+      Effect.provide(Layer.merge(NodeServices.layer, FetchHttpClient.layer)),
     ),
     { disableErrorReporting: true },
   );

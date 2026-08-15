@@ -1,5 +1,5 @@
 import { Config, Effect, FileSystem, Layer, Option, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import type { HttpClient } from "effect/unstable/http";
 
 import type { PriorReviews, ReviewPublisher } from "./github.ts";
 import {
@@ -109,7 +109,8 @@ export const gitHubReviewLayers = (
   target: ResolvedReviewTarget,
 ): Layer.Layer<
   PullRequestSource | ReviewPublisher | PriorReviews | ReviewRetirementHost,
-  Config.ConfigError
+  Config.ConfigError,
+  HttpClient.HttpClient
 > =>
   Layer.unwrap(
     Effect.gen(function* () {
@@ -131,12 +132,11 @@ export const gitHubReviewLayers = (
         number: target.number,
         token,
       });
-      const deps = Layer.merge(targetLayer, FetchHttpClient.layer);
       return Layer.mergeAll(
-        gitHubPullRequestSourceLayer.pipe(Layer.provide(deps)),
-        gitHubReviewPublisherLayer.pipe(Layer.provide(deps)),
-        gitHubPriorReviewsLayer.pipe(Layer.provide(deps)),
-        gitHubReviewRetirementHostLayer.pipe(Layer.provide(deps)),
+        gitHubPullRequestSourceLayer.pipe(Layer.provide(targetLayer)),
+        gitHubReviewPublisherLayer.pipe(Layer.provide(targetLayer)),
+        gitHubPriorReviewsLayer.pipe(Layer.provide(targetLayer)),
+        gitHubReviewRetirementHostLayer.pipe(Layer.provide(targetLayer)),
       );
     }),
   );
