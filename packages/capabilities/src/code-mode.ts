@@ -285,6 +285,12 @@ const renderJsonSchemaType = (
       if (isRecord(schema.additionalProperties)) {
         return `Record<string, ${renderJsonSchemaType(schema.additionalProperties, defs, depth + 1, indent)}>`;
       }
+      // A bare `{ "type": "object" }` states "any JSON object" (Schema.Json's
+      // object member derives to exactly this); rendering it as an
+      // unconstrained record is faithful, not a deriver degradation.
+      if (type === "object" && !("properties" in schema) && !("additionalProperties" in schema)) {
+        return "Record<string, unknown>";
+      }
       break;
     }
     default: {
