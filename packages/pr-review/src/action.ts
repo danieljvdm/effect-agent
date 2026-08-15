@@ -1,5 +1,5 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Config, Console, Effect, FileSystem, Option, Redacted, Schema } from "effect";
+import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } from "effect";
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
@@ -628,8 +628,7 @@ export const reviewActionProgram = Effect.gen(function* () {
       ? PrReview.makeFanOut({ ...shared, model })
       : PrReview.make({ ...shared, model });
     return yield* runReviewAction(reviewer, harness).pipe(
-      Effect.provide(stateAuthenticatorLayer),
-      Effect.provide(anthropicClientLayer),
+      Effect.provide(Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)),
     );
   }
   const model = makeOpenAiReviewModel(inputs.model, inputs.effort);
@@ -637,8 +636,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     ? PrReview.makeFanOut({ ...shared, model })
     : PrReview.make({ ...shared, model });
   return yield* runReviewAction(reviewer, harness).pipe(
-    Effect.provide(stateAuthenticatorLayer),
-    Effect.provide(openAiClientLayer),
+    Effect.provide(Layer.merge(stateAuthenticatorLayer, openAiClientLayer)),
   );
 });
 

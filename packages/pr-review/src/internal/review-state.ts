@@ -185,10 +185,10 @@ export const webCryptoReviewStateAuthenticatorLayer = (
       unavailableReason: undefined,
       render: (state) =>
         Effect.gen(function* () {
-          const encoded = yield* Schema.encodeUnknownEffect(ReviewState)(state).pipe(
-            Effect.mapError((cause) => authenticationFailure("sign", cause)),
-          );
-          const payload = Encoding.encodeBase64(JSON.stringify(encoded));
+          const json = yield* Schema.encodeUnknownEffect(Schema.fromJsonString(ReviewState))(
+            state,
+          ).pipe(Effect.mapError((cause) => authenticationFailure("sign", cause)));
+          const payload = Encoding.encodeBase64(json);
           const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
           const key = yield* hmacKey(secret, "sign");
           const signature = yield* Effect.tryPromise({

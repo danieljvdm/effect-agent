@@ -38622,8 +38622,8 @@ var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(R
   status: "available",
   unavailableReason: undefined,
   render: (state) => exports_Effect.gen(function* () {
-    const encoded = yield* exports_Schema.encodeUnknownEffect(ReviewState)(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
-    const payload = exports_Encoding.encodeBase64(JSON.stringify(encoded));
+    const json = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+    const payload = exports_Encoding.encodeBase64(json);
     const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
     const key = yield* hmacKey(secret, "sign");
     const signature = yield* exports_Effect.tryPromise({
@@ -52654,11 +52654,11 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   if (inputs.provider === "anthropic") {
     const model4 = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
-    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(stateAuthenticatorLayer), exports_Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)));
   }
   const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
-  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(stateAuthenticatorLayer), exports_Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
 var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_NodeServices.layer)), { disableErrorReporting: true });
 
