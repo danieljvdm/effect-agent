@@ -956,13 +956,17 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(reports[0]?.reasons).toHaveLength(1);
       expect(reports[0]?.reasons[0]?._tag).toBe("Fail");
       if (reports[0]?.reasons[0]?._tag !== "Fail") {
-        throw new Error("Expected the early-close typed failure to reach ErrorReporter");
+        return yield* Effect.die(
+          new Error("Expected the early-close typed failure to reach ErrorReporter"),
+        );
       }
       expect(reports[0].reasons[0].error).toBe(typedFailure);
       expect(reports[1]?.reasons).toHaveLength(1);
       expect(reports[1]?.reasons[0]?._tag).toBe("Die");
       if (reports[1]?.reasons[0]?._tag !== "Die") {
-        throw new Error("Expected the early-close defect to reach ErrorReporter");
+        return yield* Effect.die(
+          new Error("Expected the early-close defect to reach ErrorReporter"),
+        );
       }
       expect(reports[1].reasons[0].defect).toBe(defect);
     }).pipe(Effect.provide(ErrorReporter.layer([reporter])));

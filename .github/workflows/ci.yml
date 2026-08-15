@@ -52,6 +52,9 @@ jobs:
       - name: Verify locked Dev Kit setup
         run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
+      - name: Patch Effect TypeScript-Go
+        run: bun run patch:tsgo
+
       # Restored after the install because a reinstall can recreate
       # node_modules, which would drop a cache restored earlier.
       - name: Restore Vite Task cache
@@ -93,6 +96,9 @@ jobs:
       - name: Verify locked Dev Kit setup
         run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
+      - name: Patch Effect TypeScript-Go
+        run: bun run patch:tsgo
+
       - name: Restore Vite Task cache
         id: task-cache
         uses: actions/cache/restore@v4
@@ -131,6 +137,9 @@ jobs:
 
       - name: Verify locked Dev Kit setup
         run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
+
+      - name: Patch Effect TypeScript-Go
+        run: bun run patch:tsgo
 
       - name: Restore Vite Task cache
         id: task-cache

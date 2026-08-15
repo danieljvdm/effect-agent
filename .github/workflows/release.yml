@@ -57,6 +57,9 @@ jobs:
       - name: Verify locked Dev Kit setup
         run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
+      - name: Patch Effect TypeScript-Go
+        run: bun run patch:tsgo
+
       - name: Version or publish
         uses: changesets/action@v1
         with:
