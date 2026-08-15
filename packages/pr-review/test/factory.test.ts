@@ -410,3 +410,38 @@ describe("factory type proofs", () => {
     ]).toEqual([true, true, true, true, true, true, true]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Containment of bad read requests: a model asking for an out-of-changeset
+// path gets a typed refusal it can correct — the review continues (the live
+// regression: PR #26's third review died on exactly this).
+// ---------------------------------------------------------------------------
+
+describe("out-of-changeset reads", () => {
+  it.effect("refuses the read as a result and completes the review", () =>
+    Effect.gen(function* () {
+      const scripted = yield* makePromptKeyedModel("bad-read-reviewer", (promptJson) => {
+        if (promptJson.includes("bad-read-1")) {
+          // The refusal is model-visible: the violation reached the prompt.
+          expect(promptJson).toContain("ReviewInputViolation");
+          expect(promptJson).toContain("not part of this pull request's changeset");
+          return scriptedFinalParts(
+            JSON.stringify(Schema.encodeSync(CodeReview)(singleFindingReview)),
+          );
+        }
+        return scriptedToolTurn({
+          type: "tool-call",
+          id: "bad-read-1",
+          name: "read_file",
+          params: { path: "src/internal/not-in-changeset.ts" },
+          providerExecuted: false,
+        });
+      });
+      const reviewer = PrReview.make({ model: scripted.model });
+      const { outcome, published } = yield* runFactoryReviewer(reviewer.run);
+      expect(outcome).toBeDefined();
+      expect(published).toHaveLength(1);
+      expect(published[0]?.comments).toHaveLength(1);
+    }),
+  );
+});

@@ -100,6 +100,8 @@ a lookup fault reviews instead of skipping.
 ## Hosts
 
 - **GitHub Actions**: the repository ships a prebuilt node-runtime action
+  supporting a committed review-profile document via `guidance-file` (this
+  repository's own profile lives at `.github/review-guidance.md`)
   (`action/` at the repo root) — `uses` it with an API-key secret and nothing
   else. For custom reviewers in CI, `@effect-agent/pr-review/action` exports
   `runReviewAction` (event resolution, typed draft/non-PR skips, step

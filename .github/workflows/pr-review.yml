@@ -40,3 +40,12 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Dogfood the subagent fan-out variant (S1 attached delegation).
           fan-out: "true"
+          # The repository's deep Effect-architecture review profile —
+          # distilled from the effect-architecture-audit skill and AGENTS.md's
+          # non-negotiables. Fan-out injects it into every child reviewer.
+          guidance-file: .github/review-guidance.md
+          # Generated and vendored surfaces the reviewer should never spend
+          # budget on: the lockfiles, the committed action bundle, changesets
+          # output, and dev-kit-managed skill copies.
+          ignore: "bun.lock,dev-kit.lock.json,action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
+          max-findings: "12"

@@ -36335,7 +36335,7 @@ var ReadFileDiff = exports_Tool.make("read_file_diff", {
   parameters: FileDiffQuery,
   success: FileDiffView,
   failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "error",
+  failureMode: "return",
   dependencies: [PullRequestSource]
 }).annotate(ToolExecutionClass, "readonly");
 
@@ -36359,7 +36359,7 @@ var ReadFile = exports_Tool.make("read_file", {
   parameters: FileSliceQuery,
   success: FileSlice,
   failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "error",
+  failureMode: "return",
   dependencies: [PullRequestSource]
 }).annotate(ToolExecutionClass, "readonly");
 var ReviewToolkit = exports_Toolkit.make(ListChangedFiles, ReadFileDiff, ReadFile);
@@ -36479,7 +36479,7 @@ ${mission.body}` : "The author provided no description.",
     "Work in this order:",
     "1. Call list_changed_files once to see the changeset.",
     "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-    "3. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+    "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
     "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
     '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
     `Report at most ${maxFindings} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
@@ -36625,7 +36625,7 @@ var makeFileReviewerInstructions = (options = {}) => (brief) => [
   ...staticGuidanceLines(options.guidance),
   "Work in this order:",
   "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-  "2. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+  "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
   "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
   `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.`,
   `Report at most ${MAX_CHILD_FINDINGS} findings; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`
@@ -49800,6 +49800,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const applyVerdict = yield* exports_Config.boolean("PR_REVIEW_APPLY_VERDICT").pipe(exports_Config.withDefault(false));
   const fanOut = yield* exports_Config.boolean("PR_REVIEW_FAN_OUT").pipe(exports_Config.withDefault(false));
   const guidance = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE"));
+  const guidanceFile = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""));
   const maxFindings = yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_FINDINGS"));
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
@@ -49811,11 +49812,48 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     applyVerdict,
     fanOut,
     guidance: exports_Option.getOrUndefined(guidance),
+    guidanceFile: exports_Option.getOrUndefined(guidanceFile),
     ignore: ignoreRaw.split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0),
     maxFindings: exports_Option.getOrUndefined(maxFindings),
     failOn,
     skipUnchanged
   };
+});
+var MAX_GUIDANCE_FILE_CHARS = 20000;
+
+class GuidanceFileUnreadable extends exports_Schema.TaggedError()("GuidanceFileUnreadable", {
+  path: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Cannot use guidance file '${this.path}': ${this.reason}`;
+  }
+}
+var resolveGuidance2 = exports_Effect.fn("resolveGuidance")(function* (inputs) {
+  const filePath = inputs.guidanceFile;
+  if (filePath === undefined)
+    return inputs.guidance;
+  const relative = yield* normalizeRepoRelativePath(filePath).pipe(exports_Effect.mapError((violation) => GuidanceFileUnreadable.make({ path: filePath, reason: violation.reason })));
+  const fs = yield* exports_FileSystem.FileSystem;
+  const unreadable = (error2) => GuidanceFileUnreadable.make({
+    path: relative,
+    reason: `${error2._tag}: ${error2.message}`.slice(0, 2048)
+  });
+  const stat3 = yield* fs.stat(relative).pipe(exports_Effect.mapError(unreadable));
+  const oversized = GuidanceFileUnreadable.make({
+    path: relative,
+    reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`
+  });
+  if (stat3.size > BigInt(MAX_GUIDANCE_FILE_CHARS) * 4n) {
+    return yield* oversized;
+  }
+  const content = yield* fs.readFileString(relative).pipe(exports_Effect.mapError(unreadable));
+  if (content.length > MAX_GUIDANCE_FILE_CHARS) {
+    return yield* oversized;
+  }
+  const combined = [content.trim(), inputs.guidance ?? ""].filter((part) => part.length > 0).join(`
+`);
+  return combined.length > 0 ? combined : undefined;
 });
 var outputLine = (name, value4) => `${name}=${value4.replaceAll(`
 `, " ").slice(0, 1000)}
@@ -49891,8 +49929,9 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const guidance = yield* resolveGuidance2(inputs);
   const shared = {
-    guidance: inputs.guidance,
+    guidance,
     ignore: inputs.ignore,
     maxFindings: inputs.maxFindings,
     applyVerdict: inputs.applyVerdict
@@ -49921,6 +49960,7 @@ var INPUT_TO_ENV = [
   ["INPUT_APPLY-VERDICT", "PR_REVIEW_APPLY_VERDICT"],
   ["INPUT_FAN-OUT", "PR_REVIEW_FAN_OUT"],
   ["INPUT_GUIDANCE", "PR_REVIEW_GUIDANCE"],
+  ["INPUT_GUIDANCE-FILE", "PR_REVIEW_GUIDANCE_FILE"],
   ["INPUT_IGNORE", "PR_REVIEW_IGNORE"],
   ["INPUT_MAX-FINDINGS", "PR_REVIEW_MAX_FINDINGS"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],

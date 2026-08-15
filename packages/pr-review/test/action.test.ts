@@ -10,9 +10,13 @@ import {
   Ref,
   Schema,
 } from "effect";
+import { PlatformError, SystemError } from "effect/PlatformError";
 
 import {
+  GuidanceFileUnreadable,
+  MAX_GUIDANCE_FILE_CHARS,
   resolveActionInputs,
+  resolveGuidance,
   ReviewGateFailed,
   runReviewAction,
   type ReviewActionResult,
@@ -58,6 +62,7 @@ describe("resolveActionInputs", () => {
         applyVerdict: false,
         fanOut: false,
         guidance: undefined,
+        guidanceFile: undefined,
         ignore: [],
         maxFindings: undefined,
         failOn: "never",
@@ -76,6 +81,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_APPLY_VERDICT: "true",
           PR_REVIEW_FAN_OUT: "true",
           PR_REVIEW_GUIDANCE: "Flag naked Promises.",
+          PR_REVIEW_GUIDANCE_FILE: ".github/review-guidance.md",
           PR_REVIEW_IGNORE: " **/*.lock , dist/** ,",
           PR_REVIEW_MAX_FINDINGS: "7",
           PR_REVIEW_FAIL_ON: "request-changes",
@@ -89,6 +95,7 @@ describe("resolveActionInputs", () => {
         applyVerdict: true,
         fanOut: true,
         guidance: "Flag naked Promises.",
+        guidanceFile: ".github/review-guidance.md",
         ignore: ["**/*.lock", "dist/**"],
         maxFindings: 7,
         failOn: "request-changes",
@@ -302,6 +309,120 @@ describe("runReviewAction unchanged-changeset skip", () => {
       }).pipe(Effect.provide(Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some(FP)))));
       expect(result._tag).toBe("Completed");
       expect(yield* Ref.get(invoked)).toBe(1);
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The committed review-profile file.
+// ---------------------------------------------------------------------------
+
+const fileInfo = (size: number): FileSystem.File.Info => ({
+  type: "File",
+  mtime: Option.none(),
+  atime: Option.none(),
+  birthtime: Option.none(),
+  dev: 0,
+  ino: Option.none(),
+  mode: 0o644,
+  nlink: Option.none(),
+  uid: Option.none(),
+  gid: Option.none(),
+  rdev: Option.none(),
+  size: FileSystem.Size(size),
+  blksize: Option.none(),
+  blocks: Option.none(),
+});
+
+describe("resolveGuidance", () => {
+  const PROFILE_PATH = ".github/review-guidance.md";
+  const withProfileFs = (content: string | undefined) =>
+    Layer.succeed(FileSystem.FileSystem)(
+      FileSystem.makeNoop({
+        stat: (path) =>
+          content !== undefined && path === PROFILE_PATH
+            ? Effect.succeed(fileInfo(content.length))
+            : Effect.fail(
+                new PlatformError(
+                  new SystemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "stat",
+                  }),
+                ),
+              ),
+        readFileString: (path) =>
+          content !== undefined && path === PROFILE_PATH
+            ? Effect.succeed(content)
+            : Effect.fail(
+                new PlatformError(
+                  new SystemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "readFileString",
+                  }),
+                ),
+              ),
+      }),
+    );
+
+  it.effect("passes inline guidance through when no file is configured", () =>
+    Effect.gen(function* () {
+      expect(yield* resolveGuidance({ guidance: "inline", guidanceFile: undefined })).toBe(
+        "inline",
+      );
+      expect(yield* resolveGuidance({ guidance: undefined, guidanceFile: undefined })).toBe(
+        undefined,
+      );
+    }).pipe(Effect.provide(withProfileFs(undefined))),
+  );
+
+  it.effect("reads the profile and appends any inline guidance", () =>
+    Effect.gen(function* () {
+      const alone = yield* resolveGuidance({
+        guidance: undefined,
+        guidanceFile: PROFILE_PATH,
+      }).pipe(Effect.provide(withProfileFs("Deep architecture profile.\n")));
+      expect(alone).toBe("Deep architecture profile.");
+
+      const combined = yield* resolveGuidance({
+        guidance: "Also: be brief.",
+        guidanceFile: PROFILE_PATH,
+      }).pipe(Effect.provide(withProfileFs("Deep architecture profile.")));
+      expect(combined).toBe("Deep architecture profile.\nAlso: be brief.");
+    }),
+  );
+
+  it.effect("fails typed when the configured profile cannot be read", () =>
+    Effect.gen(function* () {
+      const exit = yield* resolveGuidance({
+        guidance: undefined,
+        guidanceFile: PROFILE_PATH,
+      }).pipe(Effect.provide(withProfileFs(undefined)), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(GuidanceFileUnreadable)(failure)).toBe(true);
+    }),
+  );
+});
+
+// (Bound check for the committed review profile: refused, never truncated.)
+describe("resolveGuidance bound", () => {
+  it.effect("refuses an oversized guidance file typed", () =>
+    Effect.gen(function* () {
+      const oversized = "x".repeat(MAX_GUIDANCE_FILE_CHARS + 1);
+      const fs = Layer.succeed(FileSystem.FileSystem)(
+        FileSystem.makeNoop({
+          stat: () => Effect.succeed(fileInfo(oversized.length)),
+          readFileString: () => Effect.succeed(oversized),
+        }),
+      );
+      const exit = yield* resolveGuidance({
+        guidance: undefined,
+        guidanceFile: "huge.md",
+      }).pipe(Effect.provide(fs), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(GuidanceFileUnreadable)(failure)).toBe(true);
+      expect(String(failure)).toContain("guidance bound");
     }),
   );
 });
