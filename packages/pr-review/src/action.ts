@@ -93,7 +93,10 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   } satisfies ResolvedActionInputs;
 });
 
-/** A configured guidance file could not be read; configuration faults fail loudly. */
+/** A guidance file larger than this is refused, never silently truncated. */
+export const MAX_GUIDANCE_FILE_CHARS = 20_000;
+
+/** A configured guidance file could not be used; configuration faults fail loudly. */
 export class GuidanceFileUnreadable extends Schema.TaggedError<GuidanceFileUnreadable>()(
   "GuidanceFileUnreadable",
   {
@@ -102,7 +105,7 @@ export class GuidanceFileUnreadable extends Schema.TaggedError<GuidanceFileUnrea
   },
 ) {
   override get message() {
-    return `Cannot read guidance file '${this.path}': ${this.reason}`;
+    return `Cannot use guidance file '${this.path}': ${this.reason}`;
   }
 }
 
@@ -119,13 +122,20 @@ export const resolveGuidance = Effect.fn("resolveGuidance")(function* (inputs: {
   const filePath = inputs.guidanceFile;
   if (filePath === undefined) return inputs.guidance;
   const fs = yield* FileSystem.FileSystem;
-  const content = yield* fs
-    .readFileString(filePath)
-    .pipe(
-      Effect.mapError((error) =>
-        GuidanceFileUnreadable.make({ path: filePath, reason: error.message }),
-      ),
-    );
+  const content = yield* fs.readFileString(filePath).pipe(
+    Effect.mapError((error) =>
+      GuidanceFileUnreadable.make({
+        path: filePath,
+        reason: `${error._tag}: ${error.message}`.slice(0, 2_048),
+      }),
+    ),
+  );
+  if (content.length > MAX_GUIDANCE_FILE_CHARS) {
+    return yield* GuidanceFileUnreadable.make({
+      path: filePath,
+      reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`,
+    });
+  }
   const combined = [content.trim(), inputs.guidance ?? ""]
     .filter((part) => part.length > 0)
     .join("\n");

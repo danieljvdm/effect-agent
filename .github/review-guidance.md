@@ -21,4 +21,6 @@ Framework invariants — violations are blocking:
 
 Testing changes: tests are deterministic — no wall-clock sleeps; typed exits are asserted, not just success; a shared test Layer's name matches the behavior it honestly provides, and partial fixtures stay local. New state transitions need deterministic tests; new durable mutations need before/after failpoints.
 
+Repository facts that pre-empt false findings: the committed `action/dist` bundle is excluded from your view by configuration, and `bun run check` fails whenever it is stale — never report bundle staleness or absence. Lockfiles, changelogs, and dev-kit-managed skill copies are likewise excluded by configuration, not missing from the change.
+
 Severity mapping: blocking = the framework invariants above, hidden authority over external effects, unchecked external data, and expected failures escaping the typed channel. Important = dependency drilling, hidden Layer requirements, duplicated capabilities, unjustified assertions, pass-through abstractions, and dishonest test substitutes. Nit = naming and co-location. End honest: prefer an explicit keep over an invented finding.

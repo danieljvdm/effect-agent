@@ -49819,13 +49819,14 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     skipUnchanged
   };
 });
+var MAX_GUIDANCE_FILE_CHARS = 20000;
 
 class GuidanceFileUnreadable extends exports_Schema.TaggedError()("GuidanceFileUnreadable", {
   path: exports_Schema.String,
   reason: exports_Schema.String
 }) {
   get message() {
-    return `Cannot read guidance file '${this.path}': ${this.reason}`;
+    return `Cannot use guidance file '${this.path}': ${this.reason}`;
   }
 }
 var resolveGuidance2 = exports_Effect.fn("resolveGuidance")(function* (inputs) {
@@ -49833,7 +49834,16 @@ var resolveGuidance2 = exports_Effect.fn("resolveGuidance")(function* (inputs) {
   if (filePath === undefined)
     return inputs.guidance;
   const fs = yield* exports_FileSystem.FileSystem;
-  const content = yield* fs.readFileString(filePath).pipe(exports_Effect.mapError((error2) => GuidanceFileUnreadable.make({ path: filePath, reason: error2.message })));
+  const content = yield* fs.readFileString(filePath).pipe(exports_Effect.mapError((error2) => GuidanceFileUnreadable.make({
+    path: filePath,
+    reason: `${error2._tag}: ${error2.message}`.slice(0, 2048)
+  })));
+  if (content.length > MAX_GUIDANCE_FILE_CHARS) {
+    return yield* GuidanceFileUnreadable.make({
+      path: filePath,
+      reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`
+    });
+  }
   const combined = [content.trim(), inputs.guidance ?? ""].filter((part) => part.length > 0).join(`
 `);
   return combined.length > 0 ? combined : undefined;

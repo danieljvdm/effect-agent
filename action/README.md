@@ -32,6 +32,11 @@ jobs:
 
 No `actions/checkout` is required: the reviewer reads the pull request
 through the GitHub API and never checks out or executes untrusted PR code.
+(`guidance-file` is the exception: it reads from the workspace, so on
+`pull_request` events the profile comes from the PR's merge ref — the same
+trust level as the workflow file itself, which PRs can also edit. Repos that
+want a base-ref profile should check the file out from the base branch, and
+must not combine `guidance-file` with `pull_request_target`.)
 
 Re-reviews of an unchanged changeset are skipped by default: each posted
 review embeds a changeset fingerprint, so base-branch auto-merges and

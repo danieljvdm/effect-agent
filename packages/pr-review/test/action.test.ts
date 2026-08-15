@@ -14,6 +14,7 @@ import { PlatformError, SystemError } from "effect/PlatformError";
 
 import {
   GuidanceFileUnreadable,
+  MAX_GUIDANCE_FILE_CHARS,
   resolveActionInputs,
   resolveGuidance,
   ReviewGateFailed,
@@ -371,6 +372,25 @@ describe("resolveGuidance", () => {
       }).pipe(Effect.provide(withProfileFs(undefined)), Effect.exit);
       const failure = failureFrom(exit);
       expect(Schema.is(GuidanceFileUnreadable)(failure)).toBe(true);
+    }),
+  );
+});
+
+// (Bound check for the committed review profile: refused, never truncated.)
+describe("resolveGuidance bound", () => {
+  it.effect("refuses an oversized guidance file typed", () =>
+    Effect.gen(function* () {
+      const oversized = "x".repeat(MAX_GUIDANCE_FILE_CHARS + 1);
+      const fs = Layer.succeed(FileSystem.FileSystem)(
+        FileSystem.makeNoop({ readFileString: () => Effect.succeed(oversized) }),
+      );
+      const exit = yield* resolveGuidance({
+        guidance: undefined,
+        guidanceFile: "huge.md",
+      }).pipe(Effect.provide(fs), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(GuidanceFileUnreadable)(failure)).toBe(true);
+      expect(String(failure)).toContain("guidance bound");
     }),
   );
 });
