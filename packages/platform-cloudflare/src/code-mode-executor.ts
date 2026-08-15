@@ -169,7 +169,14 @@ export default class CodeModeHarness extends WorkerEntrypoint {
     // syntactically invalid program fails the whole harness at load (mapped
     // to a source error by the host). Using a static import keeps this module
     // free of dynamic-import expressions, which single-script Miniflare hosts
-    // reject.
+    // reject. The isolation boundary does NOT depend on the ordering of this
+    // import versus the console/namespace shims installed below: the loaded
+    // Worker has globalOutbound: null and no bindings, secrets, or env from
+    // the Worker Loader config BEFORE any module in the graph evaluates, so
+    // module-level program code has no ambient authority regardless. The
+    // shims below are usability wrappers (bounded console, namespace globals),
+    // and the accepted program is a single async-function expression whose
+    // body runs only when invoked here — after the shims exist.
     const program = programDefault;
     if (typeof program !== "function") {
       return { _tag: "source-not-a-function", actual: typeof program };
@@ -378,9 +385,12 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
 
     const host = yield* CodeExecutionHost;
     passCounterState.next += 1;
-    const passId = `code-mode-pass-${passCounterState.next}-${Math.floor(
-      (yield* Clock.currentTimeMillis) % 1_000_000_000,
-    )}`;
+    // The pass id is the only credential a loaded program presents to reach
+    // its host authority, so it must be unguessable: a program cannot forge
+    // another pass's id even if two passes were ever concurrent (the broker
+    // keeps them sequential, but the id must not rely on that). The counter
+    // prefix keeps ids debuggable; the random suffix makes them unforgeable.
+    const passId = `code-mode-pass-${passCounterState.next}-${crypto.randomUUID()}`;
 
     // Promise-side host calls bridge into the Effect world through a pending
     // list served by a scoped fiber, exactly like the deterministic
@@ -501,10 +511,10 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
         try: () => options.loader.load(workerCode as never),
         catch: (cause) => {
           const text = cause instanceof Error ? cause.message : String(cause);
-          // A module-compile error at load is invalid generated source, not
-          // an infrastructure failure — the fixed harness is valid, so the
-          // fault is in program.js.
-          if (/syntaxerror|failed to start worker/i.test(text)) {
+          // Blame the program's source ONLY on a genuine compile diagnostic;
+          // any other load rejection is an infrastructure start failure, not
+          // the model's fault (see classifyWorkerFailure for the same split).
+          if (/syntaxerror|failed to (compile|parse)/i.test(text)) {
             return CodeSourceError.make({
               implementation: dynamicWorkerImplementation,
               reason: "invalid",
@@ -659,10 +669,13 @@ const classifyWorkerFailure = (
     }
   })();
   // `WorkerLoader.load()` is lazy, so a module-compile error in the generated
-  // program surfaces here at first use. Invalid generated source is a
-  // `CodeSourceError`, not an infrastructure failure — the fixed harness is
-  // valid, so the fault is in program.js.
-  if (/syntaxerror|failed to start worker|failed to compile/i.test(text)) {
+  // program surfaces here at first use. Blame the program's source ONLY on a
+  // genuine compile diagnostic (a `SyntaxError` or an explicit compile
+  // failure) — the fixed harness is valid, so the fault is in program.js. A
+  // bare "failed to start Worker" without a compile diagnostic is an
+  // infrastructure start failure, not the model's fault, so it must NOT be
+  // misclassified as a source error.
+  if (/syntaxerror|failed to (compile|parse)/i.test(text)) {
     return CodeSourceError.make({
       implementation: dynamicWorkerImplementation,
       reason: "invalid",
@@ -675,6 +688,13 @@ const classifyWorkerFailure = (
       kind: "cpu",
       maxWallTime,
       logs: [],
+    });
+  }
+  if (/failed to start worker/i.test(text)) {
+    return CodeExecutorStartError.make({
+      implementation: dynamicWorkerImplementation,
+      message: text.slice(0, 8_000),
+      cause,
     });
   }
   return CodeExecutorTerminatedError.make({
