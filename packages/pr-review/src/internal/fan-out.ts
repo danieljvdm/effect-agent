@@ -59,6 +59,12 @@ export const MAX_CHILD_FINDINGS = 8;
 /** One child returns at most this many non-anchored concerns. */
 export const MAX_CHILD_CONCERNS = 3;
 
+/**
+ * One mandatory diff read plus one bounded context read for every path in a
+ * maximum-size unit. Keep the child and delegation reservation aligned.
+ */
+export const MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
+
 // ---------------------------------------------------------------------------
 // The child: a file reviewer over one unit. Its toolkit is intentionally
 // smaller than the flat reviewer's — diff and head-file reads only, no
@@ -138,7 +144,7 @@ export const fileReviewerInstructions = makeFileReviewerInstructions();
 /** The default per-unit child execution bounds. */
 export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 8,
-  maxToolCalls: 16,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200_000,
@@ -193,7 +199,7 @@ export const fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
   maxConcurrency: 3,
   maxTurns: 8,
-  maxToolCalls: 16,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes",
 });
 

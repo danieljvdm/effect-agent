@@ -6,6 +6,11 @@ import { ChangedFile } from "./diff.ts";
 import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
 import {
+  ReviewHeadComparison,
+  ReviewStateAuthenticator,
+  type ReviewState,
+} from "./review-state.ts";
+import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
   normalizeRepoRelativePath,
@@ -62,7 +67,7 @@ const GitHubPullRequestWire = Schema.Struct({
   title: Schema.String,
   body: Schema.NullOr(Schema.String),
   changed_files: Schema.Int,
-  base: Schema.Struct({ ref: Schema.String }),
+  base: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
   head: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
 });
 
@@ -201,6 +206,7 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
           title: wire.title.slice(0, 400),
           body: (wire.body ?? "").slice(0, 20_000),
           baseRef: wire.base.ref,
+          baseSha: wire.base.sha,
           headRef: wire.head.ref,
           headSha: wire.head.sha,
           totalChangedFiles: wire.changed_files,
@@ -273,7 +279,7 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
         return text;
       });
 
-    return PullRequestSource.of({ metadata, changedFiles, readFile });
+    return PullRequestSource.of({ metadata, changedFiles, anchorFiles: changedFiles, readFile });
   }),
 );
 
@@ -358,13 +364,40 @@ export class PriorReviews extends Context.Service<
   {
     /** The fingerprint embedded in the most recent marker-bearing review. */
     readonly latestFingerprint: Effect.Effect<Option.Option<string>, PriorReviewLookupFailure>;
+    /** The latest authenticated, successfully covered review state marker. */
+    readonly latestState: Effect.Effect<
+      Option.Option<ReviewState>,
+      PriorReviewLookupFailure,
+      ReviewStateAuthenticator
+    >;
+    /** Compare a previously reviewed head to the live current head. */
+    readonly compareHeads: (
+      baseSha: string,
+      headSha: string,
+    ) => Effect.Effect<ReviewHeadComparison, PriorReviewLookupFailure>;
   }
 >()("@effect-agent/pr-review/PriorReviews") {}
 
 const GitHubPriorReviewWire = Schema.Struct({
   body: Schema.NullOr(Schema.String),
+  commit_id: Schema.String,
+  user: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.String,
+        type: Schema.String,
+      }),
+    ),
+  ),
 });
 const GitHubPriorReviewsPageWire = Schema.Array(GitHubPriorReviewWire);
+
+const GitHubCompareWire = Schema.Struct({
+  status: Schema.Literals(["ahead", "behind", "diverged", "identical"]),
+  base_commit: Schema.Struct({ sha: Schema.String }),
+  merge_base_commit: Schema.Struct({ sha: Schema.String }),
+  files: GitHubFilesPageWire,
+});
 
 /** Reviews are paged chronologically; scanning stays bounded. */
 const MAX_PRIOR_REVIEW_PAGES = 5;
@@ -384,35 +417,100 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
       PriorReviewLookupFailure.make({
         reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
       });
-    const latestFingerprint = Effect.gen(function* () {
-      const perPage = 100;
-      let latest = Option.none<string>();
-      for (let page = 1; page <= MAX_PRIOR_REVIEW_PAGES; page += 1) {
+    const readMarkers = (authenticator: Option.Option<ReviewStateAuthenticator["Service"]>) =>
+      Effect.gen(function* () {
+        const perPage = 100;
+        let latest = Option.none<string>();
+        let latestState = Option.none<ReviewState>();
+        for (let page = 1; page <= MAX_PRIOR_REVIEW_PAGES; page += 1) {
+          const response = yield* HttpClient.execute(
+            withCommonHeaders(
+              HttpClientRequest.get(`${prefix}/reviews`).pipe(
+                HttpClientRequest.acceptJson,
+                HttpClientRequest.setUrlParams({
+                  per_page: String(perPage),
+                  page: String(page),
+                }),
+              ),
+              target.token,
+            ),
+          ).pipe(
+            Effect.flatMap(HttpClientResponse.filterStatusOk),
+            Effect.mapError(asLookupFailure),
+          );
+          const wires = yield* response.json.pipe(
+            Effect.mapError(asLookupFailure),
+            Effect.flatMap((body) => decodePage(body).pipe(Effect.mapError(asLookupFailure))),
+          );
+          for (const wire of wires) {
+            // State controls what required scope may be omitted. The author gate
+            // rejects user prose; the terminal marker is additionally HMAC
+            // authenticated so another bot workflow or model text cannot forge it.
+            if (wire.user?.login !== "github-actions[bot]" || wire.user.type !== "Bot") continue;
+            const fingerprint = extractFingerprint(wire.body ?? "");
+            if (fingerprint !== undefined) latest = Option.some(fingerprint);
+            if (Option.isSome(authenticator)) {
+              const state = yield* authenticator.value.extract(wire.body ?? "").pipe(
+                Effect.mapError((error) =>
+                  PriorReviewLookupFailure.make({
+                    reason: `${error._tag}: ${error.reason}`.slice(0, 2_048),
+                  }),
+                ),
+              );
+              if (Option.isSome(state) && state.value.reviewedHeadSha === wire.commit_id) {
+                latestState = state;
+              }
+            }
+          }
+          if (wires.length < perPage) break;
+          if (page === MAX_PRIOR_REVIEW_PAGES) {
+            return yield* PriorReviewLookupFailure.make({
+              reason: `review history exceeds the bounded ${MAX_PRIOR_REVIEW_PAGES * perPage}-review lookup`,
+            });
+          }
+        }
+        return { latestFingerprint: latest, latestState };
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+    const compareHeads = (baseSha: string, headSha: string) =>
+      Effect.gen(function* () {
         const response = yield* HttpClient.execute(
           withCommonHeaders(
-            HttpClientRequest.get(`${prefix}/reviews`).pipe(
-              HttpClientRequest.acceptJson,
-              HttpClientRequest.setUrlParams({
-                per_page: String(perPage),
-                page: String(page),
-              }),
-            ),
+            HttpClientRequest.get(
+              `${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`,
+            ).pipe(HttpClientRequest.acceptJson),
             target.token,
           ),
         ).pipe(Effect.flatMap(HttpClientResponse.filterStatusOk), Effect.mapError(asLookupFailure));
-        const wires = yield* response.json.pipe(
+        const wire = yield* response.json.pipe(
           Effect.mapError(asLookupFailure),
-          Effect.flatMap((body) => decodePage(body).pipe(Effect.mapError(asLookupFailure))),
+          Effect.flatMap((body) =>
+            Schema.decodeUnknownEffect(GitHubCompareWire)(body).pipe(
+              Effect.mapError(asLookupFailure),
+            ),
+          ),
         );
-        for (const wire of wires) {
-          const fingerprint = extractFingerprint(wire.body ?? "");
-          if (fingerprint !== undefined) latest = Option.some(fingerprint);
-        }
-        if (wires.length < perPage) break;
-      }
-      return latest;
-    }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-    return PriorReviews.of({ latestFingerprint });
+        const files = wire.files.map(toChangedFile);
+        return ReviewHeadComparison.make({
+          status: wire.status,
+          baseSha: wire.base_commit.sha,
+          headSha,
+          mergeBaseSha: wire.merge_base_commit.sha,
+          files,
+          truncated: files.length >= MAX_CHANGED_FILES,
+        });
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+    return PriorReviews.of({
+      latestFingerprint: readMarkers(Option.none()).pipe(
+        Effect.map((markers) => markers.latestFingerprint),
+      ),
+      latestState: Effect.gen(function* () {
+        const authenticator = yield* ReviewStateAuthenticator;
+        return yield* readMarkers(Option.some(authenticator)).pipe(
+          Effect.map((markers) => markers.latestState),
+        );
+      }),
+      compareHeads,
+    });
   }),
 );
 

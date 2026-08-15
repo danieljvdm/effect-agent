@@ -210,6 +210,146 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
     }),
   );
 
+  it.effect(
+    "emits every staged provider event before usage and response persistence mutations",
+    () =>
+      Effect.gen(function* () {
+        const marks = yield* Ref.make<ReadonlyArray<string>>([]);
+        const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const mutationChecks = yield* Ref.make<ReadonlyArray<string>>([]);
+        const HostedLookup = Tool.providerDefined({
+          id: "test.hosted_lookup",
+          customName: "HostedLookup",
+          providerName: "hosted_lookup",
+          parameters: Schema.Struct({ query: Schema.String }),
+          success: Schema.Struct({ status: Schema.String }),
+        })(undefined);
+        const Read = Tool.make("read", {
+          parameters: Schema.Struct({ path: Schema.String }),
+          success: Schema.String,
+        });
+        const tools = Toolkit.make(HostedLookup, Read);
+        const definition = Agent.define("staged-provider-before-mutations", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Use both tools.",
+          toolkit: tools,
+          policy: policy({ maxToolCalls: 2 }),
+        });
+        const model = scriptedModel(
+          [
+            {
+              type: "tool-call",
+              id: "hosted-before-mutation",
+              name: "HostedLookup",
+              params: { query: "safe ordering" },
+              providerExecuted: true,
+            },
+            {
+              type: "tool-result",
+              id: "hosted-before-mutation",
+              name: "HostedLookup",
+              result: { status: "complete" },
+              isFailure: false,
+              providerExecuted: true,
+            },
+            {
+              type: "tool-call",
+              id: "read-after-provider",
+              name: "read",
+              params: { path: "/safe" },
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          '{"answer":"complete"}',
+        );
+        const assertStagedEventsObserved = (mutation: string) =>
+          Effect.gen(function* () {
+            const events = yield* Ref.get(observed);
+            const providerSequence = events.filter(
+              (event) =>
+                ("toolCallId" in event && event.toolCallId === "hosted-before-mutation") ||
+                (event._tag === "TurnCompleted" && event.turn === 1),
+            );
+            expect(providerSequence).toMatchObject([
+              {
+                _tag: "ToolCallDeclared",
+                toolCallId: "hosted-before-mutation",
+                toolName: "HostedLookup",
+                providerExecuted: true,
+              },
+              {
+                _tag: "ToolCallSucceeded",
+                toolCallId: "hosted-before-mutation",
+                toolName: "HostedLookup",
+                result: { status: "complete" },
+                providerExecuted: true,
+              },
+              { _tag: "TurnCompleted", turn: 1, finishReason: "tool-calls" },
+            ]);
+            const providerSequences = providerSequence.map(({ sequence }) => sequence);
+            expect(providerSequences).toEqual(
+              [...providerSequences].sort((left, right) => left - right),
+            );
+            yield* Ref.update(mutationChecks, (all) => [...all, mutation]);
+          });
+        const durability: RunDurabilityHook = {
+          commitResponse: () =>
+            assertStagedEventsObserved("commit-response").pipe(
+              Effect.andThen(Ref.update(marks, (all) => [...all, "commit-response"])),
+            ),
+          prepareToolCalls: () =>
+            assertStagedEventsObserved("prepare").pipe(
+              Effect.andThen(Ref.update(marks, (all) => [...all, "prepare"])),
+            ),
+          step: inertStepHook,
+        };
+        let modelConsumptions = 0;
+
+        const events = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "order the mixed response" },
+          {
+            durability,
+            budget: {
+              guard: (effect) => effect,
+              consume: () => {
+                modelConsumptions += 1;
+                return assertStagedEventsObserved(`consume:${modelConsumptions}`).pipe(
+                  Effect.andThen(Ref.update(marks, (all) => [...all, "consume"])),
+                );
+              },
+            },
+          },
+        ).pipe(
+          Stream.tap((event) => Ref.update(observed, (all) => [...all, event])),
+          Stream.runCollect,
+          Effect.provide(
+            tools.toLayer({
+              read: () =>
+                Ref.update(marks, (all) => [...all, "handler"]).pipe(Effect.as("read-complete")),
+            }),
+          ),
+        );
+
+        expect(yield* Ref.get(marks)).toEqual([
+          "consume",
+          "commit-response",
+          "prepare",
+          "handler",
+          "consume",
+        ]);
+        expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(2);
+        expect(yield* Ref.get(mutationChecks)).toEqual([
+          "consume:1",
+          "commit-response",
+          "prepare",
+          "consume:2",
+        ]);
+      }),
+  );
+
   it.effect("prepareToolCalls fires after every approval and before any handler permit", () =>
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);

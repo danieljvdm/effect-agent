@@ -1,46 +1,48 @@
 # Agentic pull-request review via the prebuilt ./action bundle
-# (@effect-agent/pr-review). The job runs only when the OPENAI_API_KEY secret
-# is configured (the secrets context is unavailable in `if:` conditions, so
-# presence is carried through a job-level env var). Reviews always post as
-# COMMENT events.
+# (@effect-agent/pr-review). Reviews always post as COMMENT events; a missing
+# provider credential fails the Action instead of producing a skipped green
+# check. Normal synchronize events review
+# only changes since the last compatible successfully covered head. Applying
+# the `pr-review:final-audit` label requests one deliberate full-diff audit.
 name: PR Review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
 
 permissions:
   contents: read
   pull-requests: write
 
 concurrency:
-  group: pr-review-${{ github.event.pull_request.number }}
+  # Ignored label events must not cancel a real review before their job-level
+  # condition skips them. Final-audit labels share the ordinary PR group.
+  group: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && format('pr-review-ignored-{0}-{1}', github.event.pull_request.number, github.run_id) || format('pr-review-{0}', github.event.pull_request.number) }}
   cancel-in-progress: true
 
 jobs:
   review:
-    name: review
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && 'pr-review-ignored' || 'review' }}
     # Drafts wait for ready_for_review (the action also skips drafts
     # internally; this guard saves the runner spin-up).
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
     runs-on: ubuntu-latest
     # Above the fan-out run's 15-minute duration budget, so a run approaching
     # its own budget ends gracefully instead of being killed by the runner
     # with nothing posted.
     timeout-minutes: 20
-    env:
-      HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
       - name: Check out repository
-        if: env.HAS_OPENAI_KEY == 'true'
         uses: actions/checkout@v4
 
       - name: Review the pull request and post the validated result
-        if: env.HAS_OPENAI_KEY == 'true'
         uses: ./action
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          # A dedicated secret is preferred. The provider credential is a
+          # stable workflow-only fallback and is never sent to the reviewer as state.
+          state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET || secrets.OPENAI_API_KEY }}
           # Dogfood the subagent fan-out variant (S1 attached delegation).
           fan-out: "true"
           # Position on [0,1]; resolves to the provider's "high" rung.
@@ -54,3 +56,4 @@ jobs:
           # output, and dev-kit-managed skill copies.
           ignore: "bun.lock,dev-kit.lock.json,action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
           max-findings: "12"
+          review-mode: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'final' || 'incremental' }}

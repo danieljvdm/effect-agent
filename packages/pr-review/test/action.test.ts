@@ -7,6 +7,7 @@ import {
   FileSystem,
   Layer,
   Option,
+  Redacted,
   Ref,
   Schema,
 } from "effect";
@@ -26,12 +27,16 @@ import {
   CodeReview,
   InvalidEffortInput,
   planPublication,
-  PriorReviewLookupFailure,
-  PriorReviews,
+  PullRequestMetadata,
+  ReviewCoverage,
+  ReviewFinding,
   ReviewRunOutcome,
+  ReviewState,
+  StoredReviewFinding,
+  webCryptoReviewStateAuthenticatorLayer,
   type ReviewVerdict,
 } from "../src/index.ts";
-import { staticPriorReviewsLayer } from "../src/testing.ts";
+import { staticPriorReviews } from "../src/testing.ts";
 
 const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   expect(Exit.isFailure(exit)).toBe(true);
@@ -71,6 +76,7 @@ describe("resolveActionInputs", () => {
         maxDurationMinutes: undefined,
         failOn: "never",
         skipUnchanged: true,
+        reviewMode: "incremental",
       });
     }),
   );
@@ -92,6 +98,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_MAX_DURATION_MINUTES: "12",
           PR_REVIEW_FAIL_ON: "request-changes",
           PR_REVIEW_SKIP_UNCHANGED: "false",
+          PR_REVIEW_MODE: "final",
         }),
       );
       expect(inputs).toEqual({
@@ -108,6 +115,7 @@ describe("resolveActionInputs", () => {
         maxDurationMinutes: 12,
         failOn: "request-changes",
         skipUnchanged: false,
+        reviewMode: "final",
       });
     }),
   );
@@ -150,10 +158,35 @@ describe("resolveActionInputs", () => {
 const EVENT_PATH = "/tmp/github-event.json";
 const OUTPUT_PATH = "/tmp/github-output";
 
-const fakeOutcome = (verdict: ReviewVerdict): ReviewRunOutcome => {
-  const review = CodeReview.make({ summary: "Stubbed review.", verdict, findings: [] });
+const fakeOutcome = (
+  verdict: ReviewVerdict,
+  options: { readonly blocking?: boolean; readonly incomplete?: boolean } = {},
+): ReviewRunOutcome => {
+  const findings = options.blocking
+    ? [
+        ReviewFinding.make({
+          path: "src/a.ts",
+          startLine: 1,
+          endLine: 1,
+          severity: "blocking",
+          title: "Unsafe behavior",
+          body: "This must be corrected before merge.",
+        }),
+      ]
+    : [];
+  const review = CodeReview.make({ summary: "Stubbed review.", verdict, findings });
   return ReviewRunOutcome.make({
     review,
+    activeFindings: findings,
+    activeConcerns: review.concerns ?? [],
+    coverage: ReviewCoverage.make({
+      status: options.incomplete ? "incomplete" : "complete",
+      requiredPaths: [],
+      reviewedPaths: [],
+      unreviewedPaths: [],
+      failedUnits: [],
+      reasons: options.incomplete ? ["review unit unit-001 did not complete"] : [],
+    }),
     plan: planPublication(review, [], {
       applyVerdict: false,
       headSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
@@ -182,9 +215,10 @@ const actionHarness = (eventJson: string | undefined) =>
       GITHUB_REPOSITORY: "acme/widgets",
       ...(eventJson !== undefined ? { GITHUB_EVENT_PATH: EVENT_PATH } : {}),
     };
-    const layer = Layer.merge(
+    const layer = Layer.mergeAll(
       Layer.succeed(FileSystem.FileSystem)(fs),
       ConfigProvider.layer(ConfigProvider.fromEnvRecord(env)),
+      webCryptoReviewStateAuthenticatorLayer(Redacted.make("test-review-state-secret")),
     );
     return { written, layer };
   });
@@ -239,10 +273,12 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("skipped=false");
       expect(outputs).toContain("verdict=comment");
       expect(outputs).toContain("inline-comments=0");
+      expect(outputs).toContain("conclusion=success");
+      expect(outputs).toContain("coverage=complete");
     }),
   );
 
-  it.effect("fails the job on the configured verdict gate — after writing outputs", () =>
+  it.effect("fails the check for a blocking finding regardless of model verdict or fail-on", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
         JSON.stringify({
@@ -251,101 +287,140 @@ describe("runReviewAction", () => {
         }),
       );
       const exit = yield* runReviewAction(
-        { run: () => Effect.succeed(fakeOutcome("request-changes")) },
-        { post: false, failOn: "request-changes" },
+        { run: () => Effect.succeed(fakeOutcome("comment", { blocking: true })) },
+        { post: false, failOn: "never" },
       ).pipe(Effect.provide(harness.layer), Effect.exit);
       const failure = failureFrom(exit);
       expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
+      if (Schema.is(ReviewGateFailed)(failure)) {
+        expect(failure.conclusion).toBe("blocking");
+      }
       const outputs = yield* Ref.get(harness.written);
-      expect(outputs).toContain("verdict=request-changes");
+      expect(outputs).toContain("verdict=comment");
+      expect(outputs).toContain("conclusion=blocking");
     }),
   );
-});
 
-// ---------------------------------------------------------------------------
-// Unchanged-changeset skipping: the fingerprint gate in front of the model.
-// ---------------------------------------------------------------------------
-
-describe("runReviewAction unchanged-changeset skip", () => {
-  const FP = "a".repeat(64);
-  const prEvent = JSON.stringify({
-    pull_request: { number: 5 },
-    repository: { full_name: "acme/widgets" },
-  });
-
-  const countingReviewer = (fingerprint: string) =>
+  it.effect("fails the check when required coverage is incomplete", () =>
     Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const exit = yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("approve", { incomplete: true })) },
+        { post: false },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
+      if (Schema.is(ReviewGateFailed)(failure)) {
+        expect(failure.conclusion).toBe("incomplete");
+      }
+      const outputs = yield* Ref.get(harness.written);
+      expect(outputs).toContain("verdict=approve");
+      expect(outputs).toContain("conclusion=incomplete");
+      expect(outputs).toContain("coverage=incomplete");
+    }),
+  );
+
+  it.effect("preserves legacy fingerprint skipping for explicit custom harness history", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const fingerprint = "f".repeat(64);
       const invoked = yield* Ref.make(0);
-      return {
-        invoked,
-        reviewer: {
+      const result = yield* runReviewAction(
+        {
           run: () =>
             Ref.update(invoked, (count) => count + 1).pipe(
               Effect.map(() => fakeOutcome("comment")),
             ),
           fingerprint: Effect.succeed(fingerprint),
         },
-      };
-    });
-
-  it.effect("skips without invoking the reviewer when the fingerprint matches", () =>
-    Effect.gen(function* () {
-      const harness = yield* actionHarness(prEvent);
-      const { invoked, reviewer } = yield* countingReviewer(FP);
-      const result = yield* runReviewAction(reviewer, { post: false }).pipe(
-        Effect.provide(Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some(FP)))),
-      );
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.some(fingerprint)),
+        },
+      ).pipe(Effect.provide(harness.layer));
       expect(result._tag).toBe("Skipped");
       expect(yield* Ref.get(invoked)).toBe(0);
-      const outputs = yield* Ref.get(harness.written);
-      expect(outputs).toContain("skip-reason=changeset unchanged since the last review");
-      expect(outputs).toContain(`fingerprint=${FP}`);
+      expect(yield* Ref.get(harness.written)).toContain(`fingerprint=${fingerprint}`);
     }),
   );
 
-  it.effect("reviews when the fingerprint differs from the last posted review", () =>
+  it.effect("preserves a blocking conclusion when the reviewed head is unchanged", () =>
     Effect.gen(function* () {
-      const harness = yield* actionHarness(prEvent);
-      const { invoked, reviewer } = yield* countingReviewer(FP);
-      const result = yield* runReviewAction(reviewer, { post: false }).pipe(
-        Effect.provide(
-          Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some("b".repeat(64)))),
-        ),
-      );
-      expect(result._tag).toBe("Completed");
-      expect(yield* Ref.get(invoked)).toBe(1);
-    }),
-  );
-
-  it.effect("fails open: a prior-review lookup fault reviews instead of skipping", () =>
-    Effect.gen(function* () {
-      const harness = yield* actionHarness(prEvent);
-      const { invoked, reviewer } = yield* countingReviewer(FP);
-      const failingLookup = Layer.succeed(PriorReviews)(
-        PriorReviews.of({
-          latestFingerprint: Effect.fail(
-            PriorReviewLookupFailure.make({ reason: "api unavailable" }),
-          ),
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
         }),
       );
-      const result = yield* runReviewAction(reviewer, { post: false }).pipe(
-        Effect.provide(Layer.merge(harness.layer, failingLookup)),
-      );
-      expect(result._tag).toBe("Completed");
-      expect(yield* Ref.get(invoked)).toBe(1);
-    }),
-  );
-
-  it.effect("skip-unchanged=false reviews even on a matching fingerprint", () =>
-    Effect.gen(function* () {
-      const harness = yield* actionHarness(prEvent);
-      const { invoked, reviewer } = yield* countingReviewer(FP);
-      const result = yield* runReviewAction(reviewer, {
-        post: false,
-        skipUnchanged: false,
-      }).pipe(Effect.provide(Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some(FP)))));
-      expect(result._tag).toBe("Completed");
-      expect(yield* Ref.get(invoked)).toBe(1);
+      const headSha = "1".repeat(40);
+      const baseSha = "2".repeat(40);
+      const profileFingerprint = "a".repeat(64);
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 5,
+        title: "Review target",
+        body: "",
+        baseRef: "main",
+        baseSha,
+        headRef: "fix/review",
+        headSha,
+        totalChangedFiles: 0,
+      });
+      const state = ReviewState.make({
+        version: 1,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha,
+        headRef: metadata.headRef,
+        reviewedHeadSha: headSha,
+        profileFingerprint,
+        acceptedScopeFingerprint: "b".repeat(64),
+        reviewedPathCount: 0,
+        unresolvedFindings: [
+          StoredReviewFinding.make({
+            path: "src/a.ts",
+            startLine: 1,
+            endLine: 1,
+            severity: "blocking",
+            title: "Unsafe behavior",
+            body: "This remains unresolved.",
+          }),
+        ],
+        unresolvedConcerns: [],
+        lastReviewMode: "full",
+      });
+      const invoked = yield* Ref.make(0);
+      const exit = yield* runReviewAction(
+        {
+          run: () =>
+            Ref.update(invoked, (count) => count + 1).pipe(
+              Effect.map(() => fakeOutcome("comment")),
+            ),
+          profileFingerprint: Effect.succeed(profileFingerprint),
+          snapshot: Effect.succeed({ metadata, files: [] }),
+        },
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.none(), { state: Option.some(state) }),
+        },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
+      expect(yield* Ref.get(invoked)).toBe(0);
+      const outputs = yield* Ref.get(harness.written);
+      expect(outputs).toContain("skipped=true");
+      expect(outputs).toContain("conclusion=blocking");
     }),
   );
 });

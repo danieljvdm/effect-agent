@@ -103,6 +103,8 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   abortPollInterval: PositiveMillis,
   /** Canonical observation poll cadence of the Durable Object store. */
   observationPollInterval: NonNegativeMillis,
+  /** Cooperative background-export budget; native Object delivery never awaits the flush. */
+  telemetryFlushTimeout: PositiveMillis,
   /** Per-value byte bound; must stay under the platform's 2 MB SQLite value limit. */
   maxStoredValueBytes: Schema.Int.check(
     Schema.isGreaterThan(0),
@@ -129,6 +131,7 @@ export const CLOUDFLARE_RUNTIME_DEFAULTS = {
   leaseRenewalInterval: 10_000,
   abortPollInterval: 500,
   observationPollInterval: 25,
+  telemetryFlushTimeout: 2_000,
   maxStoredValueBytes: DEFAULT_MAX_STORED_VALUE_BYTES,
   verifyOnOpen: false,
   maxQueueDepthPerLane: 256,

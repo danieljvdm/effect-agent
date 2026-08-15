@@ -31,8 +31,8 @@ import { Context, Duration, Effect, Layer, Schema } from "effect";
 import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
 import {
   ConversationObjectIdentity,
-  ConversationObjectNamespace,
   DurableObjectContext,
+  type ConversationObjectNamespace,
 } from "./bindings.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
@@ -69,6 +69,11 @@ export interface CloudflareDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
+  /**
+   * Milliseconds; default 2000. Cooperative budget for the background exporter flush registered
+   * after each native RPC, wake, or alarm span. Delivery never awaits the flush.
+   */
+  readonly telemetryFlushTimeout?: number | undefined;
   /** Bytes; default just under the 2 MB platform value limit. */
   readonly maxStoredValueBytes?: number | undefined;
   /** Default false. */
@@ -180,6 +185,8 @@ const configFromOptions = (
     abortPollInterval: options.abortPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.abortPollInterval,
     observationPollInterval:
       options.observationPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.observationPollInterval,
+    telemetryFlushTimeout:
+      options.telemetryFlushTimeout ?? CLOUDFLARE_RUNTIME_DEFAULTS.telemetryFlushTimeout,
     maxStoredValueBytes:
       options.maxStoredValueBytes ?? CLOUDFLARE_RUNTIME_DEFAULTS.maxStoredValueBytes,
     verifyOnOpen: options.verifyOnOpen ?? CLOUDFLARE_RUNTIME_DEFAULTS.verifyOnOpen,
@@ -254,9 +261,9 @@ const resolveBindings = (
  * Storage compatibility is verified during construction: an incompatible database fails the
  * Layer typed (`DoStorageCompatibilityError`) before anything is mutated (DEPLOY-008).
  *
- * Requires only the two binding services (`DurableObjectContext`,
- * `ConversationObjectNamespace`) — platform values enter exclusively through Layers
- * (DEPLOY-010).
+ * Requires the two binding services (`DurableObjectContext`, `ConversationObjectNamespace`).
+ * Host observability belongs to the Worker composition edge because native entrypoint lifecycle
+ * instrumentation, rather than this durable runtime assembly, consumes it (DEPLOY-010).
  */
 export class CloudflareDurableRuntime {
   static layer(
@@ -365,11 +372,13 @@ export class CloudflareDurableRuntime {
           Layer.provideMerge(base),
         );
 
-        return Layer.mergeAll(
+        const application = Layer.mergeAll(
           runtimeStack,
           ConversationMaintenance.layer.pipe(Layer.provide(runtimeStack)),
           portsEndpointLayer,
         );
+
+        return application;
       }),
     );
   }

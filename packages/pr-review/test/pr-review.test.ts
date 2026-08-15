@@ -6,6 +6,7 @@ import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
   anchorViolation,
+  assessReviewCoverage,
   annotatePatch,
   ChangedFile,
   CodeReview,
@@ -25,9 +26,16 @@ import {
   ReadFile,
   ReadFileDiff,
   ReviewConcern,
+  ReviewCoverage,
+  ReviewExecutionContext,
   ReviewFinding,
+  ReviewHeadComparison,
   ReviewPublicationPlan,
+  ReviewState,
   ReviewToolkitLayer,
+  selectReviewRange,
+  selectedPullRequestSourceLayer,
+  StoredReviewFinding,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -45,6 +53,31 @@ describe("OpenAI tool schema compatibility", () => {
       expect(jsonSchema.type).toBe("object");
       expect(jsonSchema.anyOf).toBeUndefined();
     }
+  });
+});
+
+describe("host coverage diagnostics", () => {
+  it("bounds externally sourced path lists before constructing ReviewCoverage", () => {
+    const longFiles = Array.from({ length: 3 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/${String(index)}-${"a".repeat(480)}.ts`,
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+export {};",
+      }),
+    );
+    const coverage = assessReviewCoverage({
+      shape: "flat",
+      files: longFiles,
+      totalFiles: longFiles.length,
+      anchorFiles: longFiles,
+      totalAnchorFiles: longFiles.length,
+      events: [],
+    });
+    expect(coverage.status).toBe("incomplete");
+    expect(coverage.reasons.every((reason) => reason.length <= 1_000)).toBe(true);
+    expect(coverage.reasons.join("\n")).toContain("(+2 more)");
   });
 });
 
@@ -300,6 +333,21 @@ describe("publication planning", () => {
         totalChangedFiles: 2,
       }).event,
     ).toBe("APPROVE");
+    expect(
+      planPublication(approving, files, {
+        applyVerdict: true,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+        coverage: ReviewCoverage.make({
+          status: "incomplete",
+          requiredPaths: [],
+          reviewedPaths: [],
+          unreviewedPaths: [],
+          failedUnits: [],
+          reasons: ["required review unit did not complete"],
+        }),
+      }).event,
+    ).toBe("REQUEST_CHANGES");
   });
 
   it("extends the suggestion fence past any backticks in the replacement", () => {
@@ -796,6 +844,124 @@ describe("offline review run", () => {
       );
       expect(outcome.published).toBeUndefined();
       expect(yield* Ref.get(published)).toHaveLength(0);
+    }),
+  );
+
+  it.effect("carries unresolved findings from unchanged scope without re-reviewing it", () =>
+    Effect.gen(function* () {
+      const baseSha = "1".repeat(40);
+      const reviewedHeadSha = "2".repeat(40);
+      const headSha = "3".repeat(40);
+      const profileFingerprint = "a".repeat(64);
+      const unchangedFile = ChangedFile.make({
+        path: "src/unchanged.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-old\n+unchanged",
+      });
+      const correctiveFile = ChangedFile.make({
+        path: "src/corrective.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -1 +1 @@\n-before\n+after",
+      });
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 30,
+        title: "Correct one finding",
+        body: "",
+        baseRef: "main",
+        baseSha,
+        headRef: "fix/review",
+        headSha,
+        totalChangedFiles: 2,
+      });
+      const priorFinding = StoredReviewFinding.make({
+        path: "src/unchanged.ts",
+        startLine: 1,
+        endLine: 1,
+        severity: "blocking",
+        title: "Unchanged blocker",
+        body: "This remains active until its path changes.",
+      });
+      const priorState = ReviewState.make({
+        version: 1,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha,
+        headRef: metadata.headRef,
+        reviewedHeadSha,
+        profileFingerprint,
+        acceptedScopeFingerprint: "b".repeat(64),
+        reviewedPathCount: 2,
+        unresolvedFindings: [priorFinding],
+        unresolvedConcerns: [],
+        lastReviewMode: "full",
+      });
+      const selection = selectReviewRange({
+        requestedMode: "incremental",
+        current: metadata,
+        fullFiles: [unchangedFile, correctiveFile],
+        profileFingerprint,
+        priorState,
+        comparison: ReviewHeadComparison.make({
+          status: "ahead",
+          baseSha: reviewedHeadSha,
+          headSha,
+          mergeBaseSha: reviewedHeadSha,
+          files: [correctiveFile],
+          truncated: false,
+        }),
+      });
+      const currentReview = CodeReview.make({
+        summary: "The corrective delta introduces no new findings.",
+        verdict: "approve",
+        findings: [],
+      });
+      const scripted = yield* makeOfflineReviewerModel({
+        diffPath: correctiveFile.path,
+        readPath: correctiveFile.path,
+        review: currentReview,
+      });
+      const binding = Agent.withModel(PullRequestReviewer, scripted.model);
+      const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
+      const fullSource = fixturePullRequestSourceLayer(
+        FixturePullRequest.make({
+          metadata,
+          files: [
+            FixtureFile.make({ file: unchangedFile, headContent: "unchanged" }),
+            FixtureFile.make({ file: correctiveFile, headContent: "after" }),
+          ],
+        }),
+      );
+      const selectedSource = selectedPullRequestSourceLayer(selection).pipe(
+        Layer.provide(fullSource),
+      );
+      const outcome = yield* executeReview(binding, {
+        post: false,
+        applyVerdict: false,
+        reviewShape: "flat",
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ReviewToolkitLayer.pipe(Layer.provideMerge(selectedSource)),
+            collectingReviewPublisherLayer(published),
+            IdGenerator.layer,
+          ),
+        ),
+        Effect.provideService(ReviewExecutionContext, selection),
+        Effect.scoped,
+      );
+
+      expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
+      expect(outcome.coverage.status).toBe("complete");
+      expect(outcome.activeFindings.map((finding) => finding.title)).toEqual([priorFinding.title]);
+      expect(outcome.plan.body).toContain("Unresolved findings carried from unchanged scope");
+      expect(outcome.plan.body).toContain(priorFinding.title);
+      expect((yield* scripted.prompts).join("\n")).not.toContain("src/unchanged.ts");
     }),
   );
 });

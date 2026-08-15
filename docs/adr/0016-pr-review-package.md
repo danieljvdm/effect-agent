@@ -1,6 +1,6 @@
 # ADR-0016: Package the pull-request reviewer with a prebuilt GitHub Action
 
-- Status: Accepted (owner-directed, 2026-08-14; amended 2026-08-14)
+- Status: Accepted (owner-directed, 2026-08-14; amended 2026-08-14 and 2026-08-15)
 - Related decisions: [D-023](../DECISIONS.md#d-023--project-identity-and-distribution),
   [D-024](../DECISIONS.md#d-024--repository-toolchain-and-shape),
   [D-025](../DECISIONS.md#d-025--slim-toolchain-and-canonical-effect-source),
@@ -44,7 +44,7 @@ step.
 5. **Prebuilt Action**: `action/action.yml` (`using: node24`) runs the committed bundle
    `action/dist/index.mjs`, built from the package's action entry by `scripts/build-action.ts`
    (Bun's bundler via the sanctioned Bun script runtime). The committed bundle is a recorded
-   exception to the dist-is-gitignored convention; `bun run check` rebuilds it to a scratch path
+   exception to the dist-is-gitignored convention; `vp run check` rebuilds it to a scratch path
    and fails when stale.
 6. **Claims**: deployment class E everywhere; no durability wording; posting a review is a single
    external mutation after Run settlement and is never claimed exactly-once (DUR-003). A non-PR
@@ -64,8 +64,8 @@ step.
 - SEC-005's unified tool risk/redaction metadata surface is still `deferred`; the package uses
   the existing `ToolExecutionClass` annotation and enforces `readonly` for every extra tool at
   factory construction (fail-closed: unannotated tools read as `uncertain` and are rejected).
-- The bundle freshness gate ties `bun run check` to the Bun version's bundler output; a Bun
-  upgrade that changes emitted bytes requires one `bun run action:build` commit.
+- The bundle freshness gate ties `vp run check` to the Bun version's bundler output; a Bun
+  upgrade that changes emitted bytes requires one `vp run action:build` commit.
 - FRICTION items recorded by the example were re-confirmed as public-API pressure: the factory
   builds bindings structurally because `Agent.withModel`'s conditional model type cannot
   re-resolve inside a generic body, and the run path still re-decodes `AgentResult.output`.
@@ -97,7 +97,7 @@ step.
   tests (guidance injection with intact contract, ignore-glob surface removal, findings-bound
   enforcement, readonly enforcement and cross-layer handler resolution for extra tools) and
   action harness tests (input parsing, typed skips, step outputs, verdict gate).
-- `bun run check` includes the action bundle freshness gate; the bundle smoke-runs under Node 24
+- `vp run check` includes the action bundle freshness gate; the bundle smoke-runs under Node 24
   and fails typed outside a pull-request environment.
 - The repository's own PR-review workflow dogfoods `./action` with the fan-out variant.
 
@@ -146,3 +146,46 @@ dispatch; our `pull_request`-triggered check is the progress signal), separate c
 hosted trigger endpoint), posting error comments to the PR (class E's "a failed run posts
 nothing" is a contract, not a gap), and dynamic ad-hoc specialist delegation (deterministic
 units with schema'd child output are this package's reproducibility and cost story).
+
+## Amendment (2026-08-15): incremental continuity and conservative check conclusions
+
+PR #30 exposed two orchestration faults: each corrective push re-reviewed the complete PR diff
+without recovering prior scope, and the model verdict could leave the Actions `review` check green
+while the posted review contained blocking findings or incomplete fan-out coverage. Prompt changes
+cannot repair either host-boundary defect.
+
+1. **Review state is a bounded GitHub-review marker.** Every structurally complete posted review
+   embeds a versioned, terminal, HMAC-authenticated, schema-validated marker containing exact PR/base/head identity, reviewer-
+   profile and accepted-scope fingerprints, and bounded unresolved findings/concerns. This is
+   cross-run workflow continuity, not a stronger runtime deployment class: execution remains E,
+   GitHub is the external state carrier, and review posting remains non-exactly-once. The stable
+   state secret is host-only; missing/rotated credentials and non-default review authors force a
+   full fallback rather than accepting unauthenticated scope authority. Authentication is an
+   explicit host-provided Effect service with typed WebCrypto failures. Markers are branded and
+   capped at 24,000 characters; signing or size failure visibly omits continuity state so the next
+   run falls back to a full review.
+2. **Normal synchronization is incremental.** After validating state, the host compares the last
+   successfully covered head with the current head and exposes only newly affected paths still in
+   the current PR diff. Findings in unchanged paths remain active; changed or reverted paths are
+   invalidated and reassessed. Non-anchored concerns remain active until a full audit. An ancestor
+   base advance adds overlapping PR paths as explicit dependent context. Every deliberate full
+   fallback renders its reason.
+3. **Fallbacks fail safe.** Missing/malformed state, PR/ref/profile mismatch, unavailable or
+   truncated comparisons, non-ancestor heads, and material base-lineage changes select the bounded
+   full current diff. No fallback silently declares previous scope accepted.
+4. **The check conclusion is host-owned.** Complete coverage plus no active blocking finding or
+   concern is success; with complete coverage, any blocker fails as `blocking`. Any
+   failed/unassigned review unit, undiffable required path, truncated required surface,
+   coordinator/run failure, or other required coverage gap takes conservative precedence as
+   non-success `incomplete`. Model `verdict` remains presentation input and cannot weaken this
+   gate; the old `fail-on` input is compatibility-only.
+5. **Final audit is explicit.** `review-mode: final` performs one bounded full-diff audit and resets
+   the incremental baseline. The dogfood workflow invokes it only for the
+   `pr-review:final-audit` label and reruns the same required `review` check; ordinary corrective
+   `synchronize` events retain incremental mode.
+6. **Unrelated labels cannot interrupt review.** Ignored `labeled` events use a unique concurrency
+   group; only the final-audit label shares and may replace the active PR review run.
+
+Rejected: storing continuity only in prompt prose, treating a failed delegated unit as successful
+coverage because the coordinator produced JSON, and running a full audit after every corrective
+commit. Each recreates the unsafe behavior at a different layer.

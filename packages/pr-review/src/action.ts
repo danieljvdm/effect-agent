@@ -1,11 +1,11 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
+import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } from "effect";
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { readGitHubEvent, resolveReviewTarget, gitHubReviewLayers } from "./internal/github-env.ts";
-import { fingerprintUnchanged, PriorReviews } from "./internal/github.ts";
+import { PriorReviews } from "./internal/github.ts";
 import {
   anthropicClientLayer,
   DEFAULT_PROVIDER,
@@ -15,13 +15,25 @@ import {
   openAiClientLayer,
   type ReviewProvider,
 } from "./internal/providers.ts";
+import {
+  ReviewExecutionContext,
+  ReviewHeadComparison,
+  ReviewStateAuthenticator,
+  type ReviewMode,
+  type ReviewState,
+  selectReviewRange,
+  selectedPullRequestSourceLayer,
+  unavailableReviewStateAuthenticatorLayer,
+  webCryptoReviewStateAuthenticatorLayer,
+} from "./internal/review-state.ts";
 import { fanOutReviewBudgetLimits, reviewBudgetLimits } from "./internal/run.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
-import { normalizeRepoRelativePath } from "./internal/source.ts";
+import { normalizeRepoRelativePath, PullRequestSource } from "./internal/source.ts";
 
 // ---------------------------------------------------------------------------
 // The GitHub Actions entrypoint (deployment class E: one bounded ephemeral
-// run, no durability claim, no exactly-once posting). Inputs arrive as
+// run, no exactly-once posting). Bounded continuity state travels in GitHub
+// review bodies and is validated before reuse. Inputs arrive as
 // PR_REVIEW_* environment variables set by the action manifest; the target
 // pull request comes from the standard Actions event environment. A non-PR
 // or draft event is a typed skip — green job, nothing posted. Publication
@@ -29,17 +41,22 @@ import { normalizeRepoRelativePath } from "./internal/source.ts";
 // nothing.
 // ---------------------------------------------------------------------------
 
-/** When the action should turn the review verdict into a failing job. */
+/** Deprecated compatibility input; host-derived conclusions are unconditional. */
 export const FailOnPolicy = Schema.Literals(["never", "request-changes"]);
 export type FailOnPolicy = typeof FailOnPolicy.Type;
 
-/** The review ran and the configured gate rejected the verdict. */
+export const ReviewCheckConclusion = Schema.Literals(["success", "blocking", "incomplete"]);
+export type ReviewCheckConclusion = typeof ReviewCheckConclusion.Type;
+
+/** The host-derived blocking or incomplete conclusion failed the check. */
 export class ReviewGateFailed extends Schema.TaggedError<ReviewGateFailed>()("ReviewGateFailed", {
-  verdict: Schema.String,
-  failOn: FailOnPolicy,
+  conclusion: Schema.Literals(["blocking", "incomplete"]),
+  reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
+    Schema.isMinLength(1),
+  ),
 }) {
   override get message() {
-    return `Review verdict '${this.verdict}' fails the configured '${this.failOn}' gate.`;
+    return `Review check concluded '${this.conclusion}': ${this.reasons.join("; ")}`;
   }
 }
 
@@ -68,6 +85,8 @@ export interface ResolvedActionInputs {
   readonly ignore: ReadonlyArray<string>;
   readonly maxFindings: number | undefined;
   readonly maxDurationMinutes: number | undefined;
+  readonly reviewMode: ReviewMode;
+  /** Deprecated compatibility input; conclusions are always conservative. */
   readonly failOn: FailOnPolicy;
   readonly skipUnchanged: boolean;
 }
@@ -101,6 +120,9 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   const guidanceFile = yield* Config.option(Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault(""));
   const maxFindings = yield* Config.option(Config.int("PR_REVIEW_MAX_FINDINGS"));
+  const reviewMode = yield* Config.literals(["incremental", "final"], "PR_REVIEW_MODE").pipe(
+    Config.withDefault<ReviewMode>("incremental"),
+  );
   const failOn = yield* Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(
     Config.withDefault<FailOnPolicy>("never"),
   );
@@ -122,6 +144,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
       .filter((pattern) => pattern.length > 0),
     maxFindings: Option.getOrUndefined(maxFindings),
     maxDurationMinutes,
+    reviewMode,
     failOn,
     skipUnchanged,
   } satisfies ResolvedActionInputs;
@@ -217,9 +240,16 @@ export const writeStepSummary = Effect.fn("writeStepSummary")(function* (
   yield* fs.writeFileString(summaryPath, `${lines.join("\n")}\n`, { flag: "a" });
 });
 
-const outcomeOutputs = (outcome: ReviewRunOutcome): ReadonlyArray<readonly [string, string]> => [
+const outcomeOutputs = (
+  outcome: ReviewRunOutcome,
+  conclusion: ReviewCheckConclusion,
+): ReadonlyArray<readonly [string, string]> => [
   ["skipped", "false"],
+  ["conclusion", conclusion],
   ["verdict", outcome.review.verdict],
+  ["coverage", outcome.coverage.status],
+  ["review-mode", outcome.reviewMode ?? "full"],
+  ["review-reason", outcome.reviewReason ?? "direct full review"],
   ["inline-comments", String(outcome.plan.comments.length)],
   ["demoted-findings", String(outcome.plan.demoted.length)],
   ["concerns", String(outcome.review.concerns?.length ?? 0)],
@@ -235,9 +265,12 @@ const outcomeOutputs = (outcome: ReviewRunOutcome): ReadonlyArray<readonly [stri
 const outcomeSummary = (
   outcome: ReviewRunOutcome,
   modelLabel: string | undefined,
+  conclusion: ReviewCheckConclusion,
 ): ReadonlyArray<string> => [
   "### Pull-request review",
+  `- Check conclusion: **${conclusion}**`,
   `- Verdict: **${outcome.review.verdict}**`,
+  `- Coverage: **${outcome.coverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
   `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
   ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
   ...(outcome.usage === undefined
@@ -279,20 +312,77 @@ const resolveRunUrl = Effect.fn("resolveRunUrl")(function* () {
   return `${server}/${repository}/actions/runs/${runId}`;
 });
 
-/** The reviewer surface the action harness drives: a run, and optionally the
- * changeset fingerprint enabling unchanged-changeset skips. `PrReview.make`
- * and `PrReview.makeFanOut` return exactly this shape. */
+/** The reviewer surface the action harness drives. `PrReview.make` and
+ * `PrReview.makeFanOut` provide the state-selection effects; the legacy
+ * fingerprint field remains for source compatibility with custom harnesses. */
 export interface HarnessedReviewer<E, R, FingerprintE, FingerprintR> {
   readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
   readonly fingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
+  readonly profileFingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
+  readonly snapshot?:
+    | Effect.Effect<
+        {
+          readonly metadata: import("./internal/source.ts").PullRequestMetadata;
+          readonly files: ReadonlyArray<import("./internal/diff.ts").ChangedFile>;
+        },
+        FingerprintE,
+        FingerprintR
+      >
+    | undefined;
+  readonly filterFiles?:
+    | ((
+        files: ReadonlyArray<import("./internal/diff.ts").ChangedFile>,
+      ) => ReadonlyArray<import("./internal/diff.ts").ChangedFile>)
+    | undefined;
 }
+
+const blockingReasons = (input: {
+  readonly findings: ReadonlyArray<{ readonly severity: string; readonly title: string }>;
+  readonly concerns: ReadonlyArray<{ readonly severity: string; readonly title: string }>;
+}): ReadonlyArray<string> => [
+  ...input.findings
+    .filter((finding) => finding.severity === "blocking")
+    .map((finding) => `blocking finding: ${finding.title}`),
+  ...input.concerns
+    .filter((concern) => concern.severity === "blocking")
+    .map((concern) => `blocking concern: ${concern.title}`),
+];
+
+/** Host-derived check conclusion; model verdict prose cannot weaken it. */
+export const concludeReviewOutcome = (
+  outcome: ReviewRunOutcome,
+): {
+  readonly conclusion: ReviewCheckConclusion;
+  readonly reasons: ReadonlyArray<string>;
+} => {
+  if (outcome.coverage.status === "incomplete") {
+    return { conclusion: "incomplete", reasons: outcome.coverage.reasons };
+  }
+  const reasons = blockingReasons({
+    findings: outcome.activeFindings,
+    concerns: outcome.activeConcerns,
+  });
+  return reasons.length > 0
+    ? { conclusion: "blocking", reasons }
+    : { conclusion: "success", reasons };
+};
+
+const concludeReviewState = (state: ReviewState) => {
+  const reasons = blockingReasons({
+    findings: state.unresolvedFindings,
+    concerns: state.unresolvedConcerns,
+  });
+  return reasons.length > 0
+    ? ({ conclusion: "blocking", reasons } as const)
+    : ({ conclusion: "success", reasons: [] } as const);
+};
 
 /**
  * Harness one already-built reviewer inside the Actions environment: resolve
  * the target from the event, provide the GitHub source/publisher/prior
- * reviews, skip when the changeset fingerprint matches the last posted
- * review, write step outputs, and apply the verdict gate. Skips (draft,
- * non-PR event, unchanged changeset) are values, not failures. The reviewer's
+ * reviews, validate/select bounded continuity scope, write step outputs, and apply
+ * the host-derived coverage/blocker gate. Draft and non-PR skips are values;
+ * an unchanged reviewed head preserves and enforces its stored conclusion. The reviewer's
  * remaining requirements — its model client, any extra tool handlers — stay
  * visible in `R` for the caller.
  */
@@ -301,11 +391,14 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
   options: {
     readonly post?: boolean | undefined;
     readonly failOn?: FailOnPolicy | undefined;
-    /** Skip when the changeset fingerprint matches the last posted review;
-     * defaults to true when the reviewer carries a fingerprint. */
+    /** Skip model execution when the current head already has complete stored coverage. */
     readonly skipUnchanged?: boolean | undefined;
+    /** Incremental by default; `final` deliberately re-reviews the full PR diff. */
+    readonly reviewMode?: ReviewMode | undefined;
     /** Model binding descriptor for the Actions step summary. */
     readonly modelLabel?: string | undefined;
+    /** Explicit test/custom-host history override; GitHub owns the default adapter. */
+    readonly priorReviews?: PriorReviews["Service"] | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -319,43 +412,153 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       }
     }
     const target = yield* resolveReviewTarget({});
-    // An ambient PriorReviews (a test fixture, a custom store) wins over the
-    // GitHub adapter the harness provides below.
-    const ambientPriorReviews = yield* Effect.serviceOption(PriorReviews);
-    // One layer build for the fingerprint check AND the run, so both observe
+    // One layer build for state selection AND the run, so both observe
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
-      if (options.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
-        const current = yield* reviewer.fingerprint;
-        const unchanged = yield* fingerprintUnchanged(current).pipe(
-          Option.isSome(ambientPriorReviews)
-            ? Effect.provideService(PriorReviews, ambientPriorReviews.value)
-            : (effect) => effect,
-        );
-        if (unchanged) {
+      let selection: ReturnType<typeof selectReviewRange> | undefined;
+      if (reviewer.profileFingerprint !== undefined) {
+        const source = yield* PullRequestSource;
+        const [snapshot, profileFingerprint] = yield* Effect.all([
+          reviewer.snapshot ?? Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
+          reviewer.profileFingerprint,
+        ]);
+        const { metadata, files: fullFiles } = snapshot;
+        const history = options.priorReviews ?? (yield* PriorReviews);
+        const stateAuthenticator = yield* ReviewStateAuthenticator;
+        const recovered =
+          stateAuthenticator.status === "unavailable"
+            ? {
+                state: undefined,
+                failure:
+                  stateAuthenticator.unavailableReason ??
+                  "an authenticated review-state secret is not configured",
+              }
+            : yield* history.latestState.pipe(
+                Effect.match({
+                  onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
+                  onSuccess: (state) => ({
+                    state: Option.getOrUndefined(state),
+                    failure: undefined,
+                  }),
+                }),
+              );
+        let comparison: ReviewHeadComparison | undefined;
+        let baseComparison: ReviewHeadComparison | undefined;
+        if (
+          (options.reviewMode ?? "incremental") === "incremental" &&
+          recovered.state !== undefined
+        ) {
+          if (recovered.state.reviewedHeadSha === metadata.headSha) {
+            comparison = ReviewHeadComparison.make({
+              status: "identical",
+              baseSha: metadata.headSha,
+              headSha: metadata.headSha,
+              mergeBaseSha: metadata.headSha,
+              files: [],
+              truncated: false,
+            });
+          } else {
+            comparison = yield* history
+              .compareHeads(recovered.state.reviewedHeadSha, metadata.headSha)
+              .pipe(Effect.orElseSucceed(() => undefined));
+            if (comparison !== undefined && reviewer.filterFiles !== undefined) {
+              comparison = ReviewHeadComparison.make({
+                ...comparison,
+                files: reviewer.filterFiles(comparison.files),
+              });
+            }
+          }
+          if (metadata.baseSha !== undefined && recovered.state.baseSha !== metadata.baseSha) {
+            baseComparison = yield* history
+              .compareHeads(recovered.state.baseSha, metadata.baseSha)
+              .pipe(Effect.orElseSucceed(() => undefined));
+            if (baseComparison !== undefined && reviewer.filterFiles !== undefined) {
+              baseComparison = ReviewHeadComparison.make({
+                ...baseComparison,
+                files: reviewer.filterFiles(baseComparison.files),
+              });
+            }
+          }
+        }
+        selection = {
+          ...selectReviewRange({
+            requestedMode: options.reviewMode ?? "incremental",
+            current: metadata,
+            fullFiles,
+            profileFingerprint,
+            priorState: recovered.state,
+            comparison,
+            baseComparison,
+            lookupFailure: recovered.failure,
+          }),
+          stateAuthenticator,
+        };
+        if (
+          options.skipUnchanged !== false &&
+          selection.mode === "incremental" &&
+          selection.files.length === 0 &&
+          selection.priorState !== undefined
+        ) {
+          const result = concludeReviewState(selection.priorState);
+          const reason = "no changed review scope since the last successfully reviewed head";
           yield* Console.log(
-            `Skipping review of ${target.repository}#${target.number}: changeset unchanged since the last review.`,
+            `Skipping review of ${target.repository}#${target.number}: ${reason}.`,
           );
           yield* writeActionOutputs([
             ["skipped", "true"],
-            ["skip-reason", "changeset unchanged since the last review"],
-            ["fingerprint", current],
+            ["skip-reason", reason],
+            ["conclusion", result.conclusion],
+            ["coverage", "complete"],
+            ["review-mode", "incremental"],
           ]);
           yield* writeStepSummary([
             "### Pull-request review skipped",
-            "- Reason: changeset unchanged since the last review",
+            `- Reason: ${reason}`,
+            `- Preserved check conclusion: **${result.conclusion}**`,
           ]);
-          return {
-            _tag: "Skipped",
-            reason: "changeset unchanged since the last review",
-          } satisfies ReviewActionResult;
+          if (result.conclusion === "blocking") {
+            return yield* ReviewGateFailed.make({
+              conclusion: "blocking",
+              reasons: result.reasons,
+            });
+          }
+          return { _tag: "Skipped", reason } satisfies ReviewActionResult;
+        }
+      } else if (options.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
+        // Preserve the pre-state custom harness contract explicitly. The
+        // packaged reviewer always takes the authenticated state path above.
+        const current = yield* reviewer.fingerprint;
+        const history = options.priorReviews ?? (yield* PriorReviews);
+        const latest = yield* history.latestFingerprint.pipe(
+          Effect.orElseSucceed(() => Option.none<string>()),
+        );
+        if (Option.isSome(latest) && latest.value === current) {
+          const reason = "changeset unchanged since the last review";
+          yield* Console.log(
+            `Skipping review of ${target.repository}#${target.number}: ${reason}.`,
+          );
+          yield* writeActionOutputs([
+            ["skipped", "true"],
+            ["skip-reason", reason],
+            ["fingerprint", current],
+            ["conclusion", "success"],
+            ["coverage", "complete"],
+          ]);
+          yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
+          return { _tag: "Skipped", reason } satisfies ReviewActionResult;
         }
       }
       yield* Console.log(
         `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
       );
       const runUrl = yield* resolveRunUrl();
-      const outcome = yield* reviewer.run({ post: options.post ?? true, runUrl });
+      const reviewEffect = reviewer.run({ post: options.post ?? true, runUrl });
+      const outcome = yield* selection === undefined
+        ? reviewEffect
+        : reviewEffect.pipe(
+            Effect.provide(selectedPullRequestSourceLayer(selection)),
+            Effect.provideService(ReviewExecutionContext, selection),
+          );
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
@@ -363,12 +566,13 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       if (outcome.published !== undefined) {
         yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
       }
-      yield* writeActionOutputs(outcomeOutputs(outcome));
-      yield* writeStepSummary(outcomeSummary(outcome, options.modelLabel));
-      if (options.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
+      const check = concludeReviewOutcome(outcome);
+      yield* writeActionOutputs(outcomeOutputs(outcome, check.conclusion));
+      yield* writeStepSummary(outcomeSummary(outcome, options.modelLabel, check.conclusion));
+      if (check.conclusion !== "success") {
         return yield* ReviewGateFailed.make({
-          verdict: outcome.review.verdict,
-          failOn: "request-changes",
+          conclusion: check.conclusion,
+          reasons: check.reasons,
         });
       }
       return { _tag: "Completed", outcome } satisfies ReviewActionResult;
@@ -382,6 +586,17 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
  */
 export const reviewActionProgram = Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const stateSecret = Option.map(
+    yield* Config.option(Config.nonEmptyString("PR_REVIEW_STATE_SECRET")),
+    Redacted.make,
+  );
+  const stateAuthenticatorLayer = Option.match(stateSecret, {
+    onNone: () =>
+      unavailableReviewStateAuthenticatorLayer(
+        "an authenticated review-state secret is not configured",
+      ),
+    onSome: webCryptoReviewStateAuthenticatorLayer,
+  });
   const guidance = yield* resolveGuidance(inputs);
   const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
@@ -404,6 +619,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     post: inputs.post,
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
+    reviewMode: inputs.reviewMode,
     modelLabel,
   };
   if (inputs.provider === "anthropic") {
@@ -411,13 +627,17 @@ export const reviewActionProgram = Effect.gen(function* () {
     const reviewer = inputs.fanOut
       ? PrReview.makeFanOut({ ...shared, model })
       : PrReview.make({ ...shared, model });
-    return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer, harness).pipe(
+      Effect.provide(Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)),
+    );
   }
   const model = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut
     ? PrReview.makeFanOut({ ...shared, model })
     : PrReview.make({ ...shared, model });
-  return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(
+    Effect.provide(Layer.merge(stateAuthenticatorLayer, openAiClientLayer)),
+  );
 });
 
 /** Run the packaged action program on Node; the bundled action entrypoint. */

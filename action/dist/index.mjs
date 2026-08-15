@@ -1565,6 +1565,7 @@ var succeed = (success) => {
 };
 var getFailure = (self) => isSuccess(self) ? none : some(self.failure);
 var getSuccess = (self) => isFailure(self) ? none : some(self.success);
+var fromOption = /* @__PURE__ */ dual(2, (self, onNone) => isNone(self) ? fail(onNone()) : succeed(self.value));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Order.js
 function make4(compare) {
@@ -2011,8 +2012,55 @@ var Reference = Service;
 var isArrayNonEmpty = (self) => self.length > 0;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Result.js
+var exports_Result = {};
+__export(exports_Result, {
+  void: () => void_2,
+  try: () => try_,
+  transposeOption: () => transposeOption,
+  transposeMapOption: () => transposeMapOption,
+  tap: () => tap2,
+  succeedSome: () => succeedSome,
+  succeedNone: () => succeedNone,
+  succeed: () => succeed2,
+  orElse: () => orElse2,
+  merge: () => merge2,
+  match: () => match2,
+  mapError: () => mapError,
+  mapBoth: () => mapBoth,
+  map: () => map2,
+  makeEquivalence: () => makeEquivalence2,
+  liftPredicate: () => liftPredicate2,
+  let: () => let_3,
+  isSuccess: () => isSuccess2,
+  isResult: () => isResult2,
+  isFailure: () => isFailure2,
+  getSuccess: () => getSuccess3,
+  getOrUndefined: () => getOrUndefined3,
+  getOrThrowWith: () => getOrThrowWith2,
+  getOrThrow: () => getOrThrow2,
+  getOrNull: () => getOrNull2,
+  getOrElse: () => getOrElse3,
+  getFailure: () => getFailure3,
+  gen: () => gen2,
+  fromOption: () => fromOption2,
+  fromNullishOr: () => fromNullishOr2,
+  flip: () => flip,
+  flatMap: () => flatMap2,
+  filterOrFail: () => filterOrFail,
+  failVoid: () => failVoid,
+  fail: () => fail2,
+  bindTo: () => bindTo3,
+  bind: () => bind3,
+  andThen: () => andThen2,
+  all: () => all2,
+  Do: () => Do2
+});
 var succeed2 = succeed;
 var fail2 = fail;
+var void_2 = /* @__PURE__ */ succeed2(undefined);
+var failVoid = /* @__PURE__ */ fail2(undefined);
+var fromNullishOr2 = /* @__PURE__ */ dual(2, (self, onNullish) => self == null ? fail2(onNullish(self)) : succeed2(self));
+var fromOption2 = fromOption;
 var try_ = (evaluate2) => {
   if (isFunction(evaluate2)) {
     try {
@@ -2031,15 +2079,92 @@ var try_ = (evaluate2) => {
 var isResult2 = isResult;
 var isFailure2 = isFailure;
 var isSuccess2 = isSuccess;
+var getSuccess3 = getSuccess;
+var getFailure3 = getFailure;
 var makeEquivalence2 = (success, failure) => make3((x, y) => isFailure2(x) ? isFailure2(y) && failure(x.failure, y.failure) : isSuccess2(y) && success(x.success, y.success));
+var mapBoth = /* @__PURE__ */ dual(2, (self, {
+  onFailure,
+  onSuccess
+}) => isFailure2(self) ? fail2(onFailure(self.failure)) : succeed2(onSuccess(self.success)));
 var mapError = /* @__PURE__ */ dual(2, (self, f) => isFailure2(self) ? fail2(f(self.failure)) : self);
 var map2 = /* @__PURE__ */ dual(2, (self, f) => isSuccess2(self) ? succeed2(f(self.success)) : self);
 var match2 = /* @__PURE__ */ dual(2, (self, {
   onFailure,
   onSuccess
 }) => isFailure2(self) ? onFailure(self.failure) : onSuccess(self.success));
+var liftPredicate2 = /* @__PURE__ */ dual(3, (a, predicate, orFailWith) => predicate(a) ? succeed2(a) : fail2(orFailWith(a)));
+var filterOrFail = /* @__PURE__ */ dual(3, (self, predicate, orFailWith) => flatMap2(self, (a) => predicate(a) ? succeed2(a) : fail2(orFailWith(a))));
+var merge2 = /* @__PURE__ */ match2({
+  onFailure: identity,
+  onSuccess: identity
+});
 var getOrElse3 = /* @__PURE__ */ dual(2, (self, onFailure) => isFailure2(self) ? onFailure(self.failure) : self.success);
+var getOrNull2 = /* @__PURE__ */ getOrElse3(constNull);
+var getOrUndefined3 = /* @__PURE__ */ getOrElse3(constUndefined);
+var getOrThrowWith2 = /* @__PURE__ */ dual(2, (self, onFailure) => {
+  if (isSuccess2(self)) {
+    return self.success;
+  }
+  throw onFailure(self.failure);
+});
+var getOrThrow2 = /* @__PURE__ */ getOrThrowWith2(identity);
+var orElse2 = /* @__PURE__ */ dual(2, (self, that) => isFailure2(self) ? that(self.failure) : succeed2(self.success));
 var flatMap2 = /* @__PURE__ */ dual(2, (self, f) => isFailure2(self) ? fail2(self.failure) : f(self.success));
+var andThen2 = /* @__PURE__ */ dual(2, (self, f) => flatMap2(self, (a) => {
+  const out = isFunction(f) ? f(a) : f;
+  return isResult2(out) ? out : succeed2(out);
+}));
+var all2 = (input) => {
+  if (Symbol.iterator in input) {
+    const out2 = [];
+    for (const e of input) {
+      if (isFailure2(e)) {
+        return e;
+      }
+      out2.push(e.success);
+    }
+    return succeed2(out2);
+  }
+  const out = {};
+  for (const key of Object.keys(input)) {
+    const e = input[key];
+    if (isFailure2(e)) {
+      return e;
+    }
+    assignProperty(out, key, e.success);
+  }
+  return succeed2(out);
+};
+var flip = (self) => isFailure2(self) ? succeed2(self.failure) : fail2(self.success);
+var gen2 = (...args2) => {
+  const f = args2.length === 1 ? args2[0] : args2[1].bind(args2[0]);
+  const iterator = f();
+  let state = iterator.next();
+  while (!state.done) {
+    const current = state.value;
+    if (isFailure2(current)) {
+      return current;
+    }
+    state = iterator.next(current.success);
+  }
+  return succeed2(state.value);
+};
+var Do2 = /* @__PURE__ */ succeed2({});
+var bind3 = /* @__PURE__ */ bind(map2, flatMap2);
+var bindTo3 = /* @__PURE__ */ bindTo(map2);
+var let_3 = /* @__PURE__ */ let_(map2);
+var transposeOption = (self) => {
+  return isNone(self) ? succeedNone : map2(self.value, some);
+};
+var transposeMapOption = /* @__PURE__ */ dual(2, (self, f) => isNone(self) ? succeedNone : map2(f(self.value), some));
+var succeedNone = /* @__PURE__ */ succeed2(none);
+var succeedSome = (a) => succeed2(some(a));
+var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
+  if (isSuccess2(self)) {
+    f(self.success);
+  }
+  return self;
+});
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tuple.js
 var makeEquivalence3 = Tuple;
@@ -3056,6 +3181,19 @@ var PreventSchedulerYield = /* @__PURE__ */ Reference("effect/Scheduler/PreventS
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tracer.js
+var exports_Tracer = {};
+__export(exports_Tracer, {
+  make: () => make7,
+  externalSpan: () => externalSpan,
+  TracerKey: () => TracerKey,
+  Tracer: () => Tracer,
+  ParentSpanKey: () => ParentSpanKey,
+  ParentSpan: () => ParentSpan,
+  NativeSpan: () => NativeSpan,
+  MinimumTraceLevel: () => MinimumTraceLevel,
+  DisablePropagation: () => DisablePropagation,
+  CurrentTraceLevel: () => CurrentTraceLevel
+});
 var ParentSpanKey = "effect/Tracer/ParentSpan";
 
 class ParentSpan extends (/* @__PURE__ */ Service()(ParentSpanKey, {
@@ -3063,6 +3201,13 @@ class ParentSpan extends (/* @__PURE__ */ Service()(ParentSpanKey, {
 })) {
 }
 var make7 = (options) => options;
+var externalSpan = (options) => ({
+  _tag: "ExternalSpan",
+  spanId: options.spanId,
+  traceId: options.traceId,
+  sampled: options.sampled ?? true,
+  annotations: options.annotations ?? empty()
+});
 var DisablePropagation = /* @__PURE__ */ Reference("effect/Tracer/DisablePropagation", {
   defaultValue: constFalse
 });
@@ -3856,12 +4001,12 @@ var suspend = /* @__PURE__ */ makePrimitive({
     return this[args]();
   }
 });
-var fromOption2 = /* @__PURE__ */ dual((args2) => args2.length >= 2 || isOption2(args2[0]), (option, onNone) => isNone2(option) ? fail3(onNone ? onNone() : new NoSuchElementError("Effect.fromOption: Option.none")) : succeed3(option.value));
+var fromOption3 = /* @__PURE__ */ dual((args2) => args2.length >= 2 || isOption2(args2[0]), (option, onNone) => isNone2(option) ? fail3(onNone ? onNone() : new NoSuchElementError("Effect.fromOption: Option.none")) : succeed3(option.value));
 var fromResult = /* @__PURE__ */ match2({
   onFailure: fail3,
   onSuccess: succeed3
 });
-var fromNullishOr2 = (value) => value == null ? fail3(new NoSuchElementError) : succeed3(value);
+var fromNullishOr3 = (value) => value == null ? fail3(new NoSuchElementError) : succeed3(value);
 var yieldNowWith = /* @__PURE__ */ makePrimitive({
   op: "Yield",
   [evaluate](fiber) {
@@ -3877,13 +4022,13 @@ var yieldNowWith = /* @__PURE__ */ makePrimitive({
   }
 });
 var yieldNow = /* @__PURE__ */ yieldNowWith(0);
-var succeedSome = (a) => succeed3(some2(a));
-var succeedNone = /* @__PURE__ */ succeed3(/* @__PURE__ */ none2());
-var transposeOption = (self) => isNone2(self) ? succeedNone : map5(self.value, some2);
+var succeedSome2 = (a) => succeed3(some2(a));
+var succeedNone2 = /* @__PURE__ */ succeed3(/* @__PURE__ */ none2());
+var transposeOption2 = (self) => isNone2(self) ? succeedNone2 : map5(self.value, some2);
 var failCauseSync = (evaluate2) => suspend(() => failCause(internalCall(evaluate2)));
 var die = (defect) => exitDie(defect);
 var failSync = (error) => suspend(() => fail3(internalCall(error)));
-var void_2 = /* @__PURE__ */ succeed3(undefined);
+var void_3 = /* @__PURE__ */ succeed3(undefined);
 var try_2 = (options) => {
   const evaluate2 = typeof options === "function" ? options : options.try;
   const catcher = typeof options === "function" ? (cause) => new UnknownError(cause, "An error occurred in Effect.try") : options.catch;
@@ -3968,7 +4113,7 @@ var asyncFinalizer = /* @__PURE__ */ makePrimitive({
 });
 var callback = (register) => callbackOptions(register, register.length >= 2);
 var never = /* @__PURE__ */ callback(constVoid);
-var gen2 = (...args2) => suspend(() => fromIteratorUnsafe(args2.length === 1 ? args2[0]() : args2[1].call(args2[0].self)));
+var gen3 = (...args2) => suspend(() => fromIteratorUnsafe(args2.length === 1 ? args2[0]() : args2[1].call(args2[0].self)));
 var fnUntraced = (body, ...pipeables) => {
   const fn = pipeables.length === 0 ? function() {
     return suspend(() => fromIteratorUnsafe(body.apply(this, arguments)));
@@ -4094,16 +4239,16 @@ var as2 = /* @__PURE__ */ dual(2, (self, value) => {
   return flatMap3(self, (_) => b);
 });
 var asSome = (self) => map5(self, some2);
-var flip = (self) => matchEffect(self, {
+var flip2 = (self) => matchEffect(self, {
   onFailure: succeed3,
   onSuccess: fail3
 });
-var andThen2 = /* @__PURE__ */ dual(2, (self, f) => flatMap3(self, (a) => isEffect(f) ? f : internalCall(() => f(a))));
-var tap2 = /* @__PURE__ */ dual(2, (self, f) => flatMap3(self, (a) => as2(isEffect(f) ? f : internalCall(() => f(a)), a)));
+var andThen3 = /* @__PURE__ */ dual(2, (self, f) => flatMap3(self, (a) => isEffect(f) ? f : internalCall(() => f(a))));
+var tap3 = /* @__PURE__ */ dual(2, (self, f) => flatMap3(self, (a) => as2(isEffect(f) ? f : internalCall(() => f(a)), a)));
 var asVoid2 = (self) => flatMap3(self, (_) => exitVoid);
 var sandbox = (self) => catchCause(self, fail3);
-var raceAll = (all2, options) => withFiber((parent) => callback((resume) => {
-  const effects = fromIterable2(all2);
+var raceAll = (all3, options) => withFiber((parent) => callback((resume) => {
+  const effects = fromIterable2(all3);
   const len = effects.length;
   let doneCount = 0;
   let done2 = false;
@@ -4141,7 +4286,7 @@ var raceAll = (all2, options) => withFiber((parent) => callback((resume) => {
   }
   return fiberInterruptAll(fibers);
 }));
-var raceAllFirst = (all2, options) => withFiber((parent) => callback((resume) => {
+var raceAllFirst = (all3, options) => withFiber((parent) => callback((resume) => {
   let done2 = false;
   const fibers = new Set;
   const onExit = (exit) => {
@@ -4149,7 +4294,7 @@ var raceAllFirst = (all2, options) => withFiber((parent) => callback((resume) =>
     resume(fibers.size === 0 ? exit : flatMap3(uninterruptible(fiberInterruptAll(fibers)), () => exit));
   };
   let i = 0;
-  for (const effect of all2) {
+  for (const effect of all3) {
     if (done2)
       break;
     const index = i++;
@@ -4202,7 +4347,7 @@ var flatten4 = (self) => flatMap3(self, identity);
 var map5 = /* @__PURE__ */ dual(2, (self, f) => flatMap3(self, (a) => succeed3(internalCall(() => f(a)))));
 var mapEager = /* @__PURE__ */ dual(2, (self, f) => effectIsExit(self) ? exitMap(self, f) : map5(self, f));
 var mapErrorEager = /* @__PURE__ */ dual(2, (self, f) => effectIsExit(self) ? exitMapError(self, f) : mapError2(self, f));
-var mapBothEager = /* @__PURE__ */ dual(2, (self, options) => effectIsExit(self) ? exitMapBoth(self, options) : mapBoth(self, options));
+var mapBothEager = /* @__PURE__ */ dual(2, (self, options) => effectIsExit(self) ? exitMapBoth(self, options) : mapBoth2(self, options));
 var catchEager = /* @__PURE__ */ dual(2, (self, f) => {
   if (effectIsExit(self)) {
     if (self._tag === "Success")
@@ -4293,13 +4438,13 @@ var updateServiceScoped = (service2, update, options) => uninterruptible(withFib
     let next;
     if (options?.reset === undefined) {
       if (current !== updated)
-        return void_2;
+        return void_3;
       next = original;
     } else {
       next = options.reset(original, updated, current);
     }
     fiber2.setContext(add(fiber2.context, service2, next));
-    return void_2;
+    return void_3;
   });
 }));
 var context = () => getContext;
@@ -4325,15 +4470,15 @@ var provideServiceImpl = (self, service2, implementation) => updateContext(self,
 });
 var provideServiceEffect = /* @__PURE__ */ dual(3, (self, service2, acquire) => flatMap3(acquire, (implementation) => provideService(self, service2, implementation)));
 var zip = /* @__PURE__ */ dual((args2) => isEffect(args2[1]), (self, that, options) => zipWith2(self, that, (a, a2) => [a, a2], options));
-var zipWith2 = /* @__PURE__ */ dual((args2) => isEffect(args2[1]), (self, that, f, options) => options?.concurrent ? map5(all2([self, that], {
+var zipWith2 = /* @__PURE__ */ dual((args2) => isEffect(args2[1]), (self, that, f, options) => options?.concurrent ? map5(all3([self, that], {
   concurrency: 2
 }), ([a, a2]) => internalCall(() => f(a, a2))) : flatMap3(self, (a) => map5(that, (a2) => internalCall(() => f(a, a2)))));
-var filterOrFail = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, predicate, orFailWith) => filterOrElse(self, predicate, orFailWith ? (a) => fail3(orFailWith(a)) : () => fail3(new NoSuchElementError)));
-var when = /* @__PURE__ */ dual(2, (self, condition) => flatMap3(condition, (pass) => pass ? asSome(self) : succeedNone));
+var filterOrFail2 = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, predicate, orFailWith) => filterOrElse(self, predicate, orFailWith ? (a) => fail3(orFailWith(a)) : () => fail3(new NoSuchElementError)));
+var when = /* @__PURE__ */ dual(2, (self, condition) => flatMap3(condition, (pass) => pass ? asSome(self) : succeedNone2));
 var replicate = /* @__PURE__ */ dual(2, (self, n) => Array.from({
   length: n
 }, () => self));
-var replicateEffect = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, n, options) => all2(replicate(self, n), options));
+var replicateEffect = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, n, options) => all3(replicate(self, n), options));
 var forever2 = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, options) => whileLoop({
   while: constTrue,
   body: constant(options?.disableYield ? self : flatMap3(self, (_) => yieldNow)),
@@ -4364,62 +4509,62 @@ var catchCauseFilter = /* @__PURE__ */ dual(3, (self, filter4, f) => catchCause(
 }));
 var catch_ = /* @__PURE__ */ dual(2, (self, f) => catchCauseFilter(self, findError, (e) => f(e)));
 var catchNoSuchElement = (self) => matchEffect(self, {
-  onFailure: (error) => isNoSuchElementError(error) ? succeedNone : fail3(error),
-  onSuccess: succeedSome
+  onFailure: (error) => isNoSuchElementError(error) ? succeedNone2 : fail3(error),
+  onSuccess: succeedSome2
 });
 var catchDefect = /* @__PURE__ */ dual(2, (self, f) => catchCauseFilter(self, findDefect, f));
-var tapCause = /* @__PURE__ */ dual(2, (self, f) => catchCause(self, (cause) => andThen2(internalCall(() => f(cause)), failCause(cause))));
-var tapCauseIf = /* @__PURE__ */ dual(3, (self, predicate, f) => catchCauseIf(self, predicate, (cause) => andThen2(internalCall(() => f(cause)), failCause(cause))));
+var tapCause = /* @__PURE__ */ dual(2, (self, f) => catchCause(self, (cause) => andThen3(internalCall(() => f(cause)), failCause(cause))));
+var tapCauseIf = /* @__PURE__ */ dual(3, (self, predicate, f) => catchCauseIf(self, predicate, (cause) => andThen3(internalCall(() => f(cause)), failCause(cause))));
 var tapCauseFilter = /* @__PURE__ */ dual(3, (self, filter4, f) => catchCause(self, (cause) => {
   const result = filter4(cause);
   if (isFailure2(result)) {
     return failCause(cause);
   }
-  return andThen2(internalCall(() => f(result.success, cause)), failCause(cause));
+  return andThen3(internalCall(() => f(result.success, cause)), failCause(cause));
 }));
 var tapError = /* @__PURE__ */ dual(2, (self, f) => tapCauseFilter(self, findError, (e) => f(e)));
 var tapErrorTag = /* @__PURE__ */ dual(3, (self, k, f) => {
   const predicate = Array.isArray(k) ? (e) => hasProperty(e, "_tag") && k.includes(e._tag) : isTagged(k);
-  return tapError(self, (error) => predicate(error) ? f(error) : void_2);
+  return tapError(self, (error) => predicate(error) ? f(error) : void_3);
 });
 var tapDefect = /* @__PURE__ */ dual(2, (self, f) => tapCauseFilter(self, findDefect, (_) => f(_)));
-var catchIf = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, predicate, f, orElse2) => catchCause(self, (cause) => {
+var catchIf = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, predicate, f, orElse3) => catchCause(self, (cause) => {
   const error = findError(cause);
   if (isFailure2(error))
     return failCause(error.failure);
   if (!predicate(error.success)) {
-    return orElse2 ? internalCall(() => orElse2(error.success)) : failCause(cause);
+    return orElse3 ? internalCall(() => orElse3(error.success)) : failCause(cause);
   }
   return internalCall(() => f(error.success));
 }));
-var catchFilter = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, filter4, f, orElse2) => catchCause(self, (cause) => {
+var catchFilter = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, filter4, f, orElse3) => catchCause(self, (cause) => {
   const error = findError(cause);
   if (isFailure2(error))
     return failCause(error.failure);
   const result = filter4(error.success);
   if (isFailure2(result)) {
-    return orElse2 ? internalCall(() => orElse2(result.failure)) : failCause(cause);
+    return orElse3 ? internalCall(() => orElse3(result.failure)) : failCause(cause);
   }
   return internalCall(() => f(result.success));
 }));
-var catchTag = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, k, f, orElse2) => {
+var catchTag = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, k, f, orElse3) => {
   const pred = Array.isArray(k) ? (e) => hasProperty(e, "_tag") && k.includes(e._tag) : isTagged(k);
-  return catchIf(self, pred, f, orElse2);
+  return catchIf(self, pred, f, orElse3);
 });
-var catchTags = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, cases, orElse2) => {
+var catchTags = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, cases, orElse3) => {
   let keys2;
   return catchFilter(self, (e) => {
     keys2 ??= Object.keys(cases);
     return hasProperty(e, "_tag") && isString(e["_tag"]) && keys2.includes(e["_tag"]) ? succeed2(e) : fail2(e);
-  }, (e) => internalCall(() => cases[e["_tag"]](e)), orElse2);
+  }, (e) => internalCall(() => cases[e["_tag"]](e)), orElse3);
 });
-var catchReason = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, errorTag, reasonTag, f, orElse2) => catchIf(self, (e) => isTagged(e, errorTag) && hasProperty(e, "reason"), (e) => {
+var catchReason = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, errorTag, reasonTag, f, orElse3) => catchIf(self, (e) => isTagged(e, errorTag) && hasProperty(e, "reason"), (e) => {
   const reason = e.reason;
   if (isTagged(reason, reasonTag))
     return f(reason, e);
-  return orElse2 ? internalCall(() => orElse2(reason, e)) : fail3(e);
+  return orElse3 ? internalCall(() => orElse3(reason, e)) : fail3(e);
 }));
-var catchReasons = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, errorTag, cases, orElse2) => {
+var catchReasons = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, errorTag, cases, orElse3) => {
   let keys2;
   return catchIf(self, (e) => isTagged(e, errorTag) && hasProperty(e, "reason") && hasProperty(e.reason, "_tag") && isString(e.reason._tag), (e) => {
     const reason = e.reason;
@@ -4427,7 +4572,7 @@ var catchReasons = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, er
     if (keys2.includes(reason._tag)) {
       return internalCall(() => cases[reason._tag](reason, e));
     }
-    return orElse2 ? internalCall(() => orElse2(reason, e)) : fail3(e);
+    return orElse3 ? internalCall(() => orElse3(reason, e)) : fail3(e);
   });
 });
 var unwrapReason = /* @__PURE__ */ dual(2, (self, errorTag) => catchFilter(self, (e) => {
@@ -4437,7 +4582,7 @@ var unwrapReason = /* @__PURE__ */ dual(2, (self, errorTag) => catchFilter(self,
   return fail2(e);
 }, fail3));
 var mapError2 = /* @__PURE__ */ dual(2, (self, f) => catch_(self, (error) => failSync(() => f(error))));
-var mapBoth = /* @__PURE__ */ dual(2, (self, options) => matchEffect(self, {
+var mapBoth2 = /* @__PURE__ */ dual(2, (self, options) => matchEffect(self, {
   onFailure: (e) => failSync(() => options.onFailure(e)),
   onSuccess: (a) => sync(() => options.onSuccess(a))
 }));
@@ -4461,8 +4606,8 @@ var eventually = (self) => catch_(self, (_) => flatMap3(yieldNow, () => eventual
 var ignore = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, options) => {
   if (!options?.log) {
     return matchEffect(self, {
-      onFailure: (_) => void_2,
-      onSuccess: (_) => void_2
+      onFailure: (_) => void_3,
+      onSuccess: (_) => void_3
     });
   }
   const logEffect = logWithLevel(options.log === true ? undefined : options.log);
@@ -4471,20 +4616,20 @@ var ignore = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, options)
       const failure = findFail(cause);
       return isFailure2(failure) ? failCause(failure.failure) : options.message === undefined ? logEffect(cause) : logEffect(options.message, cause);
     },
-    onSuccess: (_) => void_2
+    onSuccess: (_) => void_3
   });
 });
 var ignoreCause = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, options) => {
   if (!options?.log) {
     return matchCauseEffect(self, {
-      onFailure: (_) => void_2,
-      onSuccess: (_) => void_2
+      onFailure: (_) => void_3,
+      onSuccess: (_) => void_3
     });
   }
   const logEffect = logWithLevel(options.log === true ? undefined : options.log);
   return matchCauseEffect(self, {
     onFailure: (cause) => options.message === undefined ? logEffect(cause) : logEffect(options.message, cause),
-    onSuccess: (_) => void_2
+    onSuccess: (_) => void_3
   });
 });
 var option = (self) => match4(self, {
@@ -4565,7 +4710,7 @@ var isSuccess3 = /* @__PURE__ */ matchEager({
   onFailure: () => false,
   onSuccess: () => true
 });
-var delay = /* @__PURE__ */ dual(2, (self, duration) => andThen2(sleep(duration), self));
+var delay = /* @__PURE__ */ dual(2, (self, duration) => andThen3(sleep(duration), self));
 var timeoutOrElse = /* @__PURE__ */ dual(2, (self, options) => raceFirst(self, flatMap3(sleep(options.duration), options.orElse)));
 var timeout = /* @__PURE__ */ dual(2, (self, duration) => timeoutOrElse(self, {
   duration,
@@ -4579,7 +4724,7 @@ var timed = (self) => clockWith((clock) => {
 var ScopeTypeId = "~effect/Scope";
 var ScopeCloseableTypeId = "~effect/Scope/Closeable";
 var scopeTag = /* @__PURE__ */ Service("effect/Scope");
-var scopeClose = (self, exit_) => suspend(() => scopeCloseUnsafe(self, exit_) ?? void_2);
+var scopeClose = (self, exit_) => suspend(() => scopeCloseUnsafe(self, exit_) ?? void_3);
 var scopeCloseUnsafe = (self, exit_) => {
   if (self.state._tag === "Closed")
     return;
@@ -4638,7 +4783,7 @@ var scopeAddFinalizerExit = (scope, finalizer) => {
       return finalizer(scope.state.exit);
     }
     scopeAddFinalizerUnsafe(scope, {}, finalizer);
-    return void_2;
+    return void_3;
   });
 };
 var scopeAddFinalizer = (scope, finalizer) => scopeAddFinalizerExit(scope, constant(finalizer));
@@ -4678,12 +4823,12 @@ var scoped = (self) => withFiber((fiber2) => {
     return scopeCloseUnsafe(scope2, exit2);
   });
 });
-var scopeUse = /* @__PURE__ */ dual(2, (self, scope2) => onExit(provideScope(self, scope2), (exit2) => suspend(() => scopeCloseUnsafe(scope2, exit2) ?? void_2)));
+var scopeUse = /* @__PURE__ */ dual(2, (self, scope2) => onExit(provideScope(self, scope2), (exit2) => suspend(() => scopeCloseUnsafe(scope2, exit2) ?? void_3)));
 var scopedWith = (f) => suspend(() => {
   const scope2 = scopeMakeUnsafe();
-  return onExit(f(scope2), (exit2) => suspend(() => scopeCloseUnsafe(scope2, exit2) ?? void_2));
+  return onExit(f(scope2), (exit2) => suspend(() => scopeCloseUnsafe(scope2, exit2) ?? void_3));
 });
-var acquireRelease = (acquire, release, options) => contextWith((context2) => uninterruptibleMask((restore) => flatMap3(scope, (scope2) => tap2(options?.interruptible ? restore(acquire) : acquire, (a) => scopeAddFinalizerExit(scope2, (exit2) => provideContext(release(a, exit2), context2))))));
+var acquireRelease = (acquire, release, options) => contextWith((context2) => uninterruptibleMask((restore) => flatMap3(scope, (scope2) => tap3(options?.interruptible ? restore(acquire) : acquire, (a) => scopeAddFinalizerExit(scope2, (exit2) => provideContext(release(a, exit2), context2))))));
 var addFinalizer = (finalizer) => flatMap3(scope, (scope2) => contextWith((context2) => scopeAddFinalizerExit(scope2, (exit2) => provideContext(finalizer(exit2), context2))));
 var onExitPrimitive = /* @__PURE__ */ makePrimitive({
   op: "OnExit",
@@ -4713,13 +4858,13 @@ var onExit = /* @__PURE__ */ dual(2, onExitPrimitive);
 var ensuring = /* @__PURE__ */ dual(2, (self, finalizer) => onExit(self, (_) => finalizer));
 var onExitIf = /* @__PURE__ */ dual(3, (self, predicate, f) => onExit(self, (exit2) => {
   if (!predicate(exit2)) {
-    return void_2;
+    return void_3;
   }
   return f(exit2);
 }));
 var onExitFilter = /* @__PURE__ */ dual(3, (self, filter4, f) => onExit(self, (exit2) => {
   const b = filter4(exit2);
-  return isFailure2(b) ? void_2 : f(b.success, exit2);
+  return isFailure2(b) ? void_3 : f(b.success, exit2);
 }));
 var onError = /* @__PURE__ */ dual(2, (self, f) => onExitFilter(self, exitFilterCause, f));
 var onErrorIf = /* @__PURE__ */ dual(3, (self, predicate, f) => onExitIf(self, (exit2) => {
@@ -4730,10 +4875,10 @@ var onErrorIf = /* @__PURE__ */ dual(3, (self, predicate, f) => onExitIf(self, (
 }, (exit2) => f(exit2.cause)));
 var onErrorFilter = /* @__PURE__ */ dual(3, (self, filter4, f) => onExit(self, (exit2) => {
   if (exit2._tag !== "Failure") {
-    return void_2;
+    return void_3;
   }
   const result2 = filter4(exit2.cause);
-  return isFailure2(result2) ? void_2 : f(result2.success, exit2.cause);
+  return isFailure2(result2) ? void_3 : f(result2.success, exit2.cause);
 }));
 var onInterrupt = /* @__PURE__ */ dual(2, (self, finalizer) => onErrorFilter(causeFilterInterruptors, finalizer)(self));
 var acquireUseRelease = (acquire, use, release) => uninterruptibleMask((restore) => flatMap3(acquire, (a) => onExitPrimitive(restore(use(a)), (exit2) => release(a, exit2), true)));
@@ -4813,7 +4958,7 @@ var interruptibleMask = (f) => withFiber((fiber2) => {
   return interrupted ?? effect;
 });
 var abortSignal = /* @__PURE__ */ map5(/* @__PURE__ */ acquireRelease(/* @__PURE__ */ sync(() => new AbortController), (controller) => sync(() => controller.abort())), (_) => _.signal);
-var all2 = (arg, options) => {
+var all3 = (arg, options) => {
   if (isIterable(arg)) {
     return options?.mode === "result" ? forEach(arg, result, options) : forEach(arg, identity, options);
   } else if (options?.discard) {
@@ -4853,7 +4998,7 @@ var validate = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !isEffect
   if (isArrayNonEmpty2(excluded)) {
     return fail3(excluded);
   }
-  return options?.discard ? void_2 : succeed3(satisfying);
+  return options?.discard ? void_3 : succeed3(satisfying);
 }));
 var findFirst = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !isEffect(args2[0]), (elements, predicate) => suspend(() => {
   const iterator = elements[Symbol.iterator]();
@@ -4918,7 +5063,7 @@ var forEach = /* @__PURE__ */ dual((args2) => typeof args2[1] === "function", (i
   const items = fromIterable2(iterable);
   let length = items.length;
   if (length === 0) {
-    return options?.discard ? void_2 : succeed3([]);
+    return options?.discard ? void_3 : succeed3([]);
   }
   const out = options?.discard ? undefined : new Array(length);
   const eff = forEachConcurrent({
@@ -4952,7 +5097,7 @@ var iterateEagerImpl = (options) => {
       const item = items[index];
       const effect = onItem(state, item, index);
       if (!effectIsExit(effect)) {
-        return flatMap3(exit(effect), (itemExit) => step(state, item, itemExit, index) ?? runSequential(state, items, index + 1, end) ?? void_2);
+        return flatMap3(exit(effect), (itemExit) => step(state, item, itemExit, index) ?? runSequential(state, items, index + 1, end) ?? void_3);
       }
       const terminal = step(state, item, effect, index);
       if (terminal)
@@ -5026,7 +5171,7 @@ var iterateEagerImpl = (options) => {
             return suspend(() => {
               terminal = exitVoid;
               interrupted = true;
-              return fibers ? fiberInterruptAll(fibers) : void_2;
+              return fibers ? fiberInterruptAll(fibers) : void_3;
             });
           });
         } else {
@@ -5067,7 +5212,7 @@ var iterateEagerImpl = (options) => {
                 if (eff2)
                   resume(eff2);
               } else if (done2 && fibers.size === 0) {
-                resume(terminal ?? void_2);
+                resume(terminal ?? void_3);
               }
             } catch (error) {
               resume(failDefect(error));
@@ -5094,7 +5239,7 @@ var iterateEagerImpl = (options) => {
         if (!fibers) {
           return exitVoid;
         } else if (fibers.size === 0) {
-          resume(void_2);
+          resume(void_3);
         }
       }
     };
@@ -5114,10 +5259,10 @@ var forEachConcurrent = /* @__PURE__ */ iterateEagerImpl({
     }
   }
 });
-var filterOrElse = /* @__PURE__ */ dual(3, (self, predicate, orElse2) => flatMap3(self, (a) => predicate(a) ? succeed3(a) : orElse2(a)));
-var filterMapOrElse = /* @__PURE__ */ dual(3, (self, filter4, orElse2) => flatMap3(self, (a) => {
+var filterOrElse = /* @__PURE__ */ dual(3, (self, predicate, orElse3) => flatMap3(self, (a) => predicate(a) ? succeed3(a) : orElse3(a)));
+var filterMapOrElse = /* @__PURE__ */ dual(3, (self, filter4, orElse3) => flatMap3(self, (a) => {
   const result2 = filter4(a);
-  return isFailure2(result2) ? orElse2(result2.failure) : succeed3(result2.success);
+  return isFailure2(result2) ? orElse3(result2.failure) : succeed3(result2.success);
 }));
 var filterMapOrFail = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, filter4, orFailWith) => filterMapOrElse(self, filter4, orFailWith ? (x) => fail3(orFailWith(x)) : () => fail3(new NoSuchElementError)));
 var filter4 = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !isEffect(args2[0]), (elements, predicate, options) => suspend(() => {
@@ -5127,7 +5272,7 @@ var filter4 = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !isEffect(
     if (typeof result2 === "boolean") {
       if (result2)
         out.push(a);
-      return void_2;
+      return void_3;
     }
     return map5(result2, (keep) => {
       if (keep) {
@@ -5160,10 +5305,10 @@ var filterMapEffect = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !i
     concurrency: options?.concurrency
   }), out);
 }));
-var Do2 = /* @__PURE__ */ succeed3({});
-var bindTo3 = /* @__PURE__ */ bindTo(map5);
-var bind3 = /* @__PURE__ */ bind(map5, flatMap3);
-var let_3 = /* @__PURE__ */ let_(map5);
+var Do3 = /* @__PURE__ */ succeed3({});
+var bindTo4 = /* @__PURE__ */ bindTo(map5);
+var bind4 = /* @__PURE__ */ bind(map5, flatMap3);
+var let_4 = /* @__PURE__ */ let_(map5);
 var forkChild = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, options) => withFiber((fiber2) => {
   interruptChildrenPatch();
   return succeed3(forkUnsafe(fiber2, self, options?.startImmediately, false, options?.uninterruptible ?? false));
@@ -5189,7 +5334,7 @@ var awaitAllChildren = (self) => withFiber((fiber2) => {
   return onExit(self, (_) => {
     let children = fiber2._children;
     if (children === undefined || children.size === 0) {
-      return void_2;
+      return void_3;
     } else if (initialChildren) {
       children = filter2(children, (child) => !initialChildren.has(child));
     }
@@ -5201,7 +5346,7 @@ var forkIn = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, scope2, 
   if (!fiber2._exit) {
     if (scope2.state._tag !== "Closed") {
       const key = {};
-      const finalizer = () => withFiberId((interruptor) => interruptor === fiber2.id ? void_2 : fiberInterrupt(fiber2));
+      const finalizer = () => withFiberId((interruptor) => interruptor === fiber2.id ? void_3 : fiberInterrupt(fiber2));
       scopeAddFinalizerUnsafe(scope2, key, finalizer);
       fiber2.addObserver(() => scopeRemoveFinalizerUnsafe(scope2, key));
     } else {
@@ -5360,7 +5505,7 @@ class Latch {
   }
   await = /* @__PURE__ */ callback((resume) => {
     if (this._isOpen) {
-      return resume(void_2);
+      return resume(void_3);
     }
     this.waiters.push(resume);
     return sync(() => {
@@ -5561,7 +5706,7 @@ var annotateCurrentSpan = (...args2) => withFiber((fiber2) => {
       span.attribute(args2[0], args2[1]);
     }
   }
-  return void_2;
+  return void_3;
 });
 var currentSpan = /* @__PURE__ */ withFiber((fiber2) => {
   const span = fiber2.currentSpanLocal;
@@ -5595,7 +5740,7 @@ class ClockImpl {
     else if (!Number.isFinite(millis2))
       return never;
     return callback((resume) => {
-      const continuation = millis2 > MAX_TIMER_MILLIS ? this.sleepMillis(millis2 - MAX_TIMER_MILLIS) : void_2;
+      const continuation = millis2 > MAX_TIMER_MILLIS ? this.sleepMillis(millis2 - MAX_TIMER_MILLIS) : void_3;
       const handle = setTimeout(() => resume(continuation), Math.min(millis2, MAX_TIMER_MILLIS));
       return sync(() => clearTimeout(handle));
     });
@@ -5758,7 +5903,7 @@ var annotateLogsScoped = function() {
         }
       }
       fiber2.setContext(add(fiber2.context, CurrentLogAnnotations, next2));
-      return void_2;
+      return void_3;
     });
   }));
 };
@@ -5802,7 +5947,7 @@ var logWithLevel = (level) => (...message) => {
   return withFiber((fiber2) => {
     const logLevel = level ?? fiber2.currentLogLevel;
     if (isLogLevelGreaterThan(fiber2.minimumLogLevel, logLevel)) {
-      return void_2;
+      return void_3;
     }
     const clock = fiber2.getRef(ClockRef);
     const loggers = fiber2.getRef(CurrentLoggers);
@@ -5818,7 +5963,7 @@ var logWithLevel = (level) => (...message) => {
         });
       }
     }
-    return void_2;
+    return void_3;
   });
 };
 var colors = {
@@ -5897,7 +6042,7 @@ function interruptChildrenPatch() {
 var undefined_ = /* @__PURE__ */ succeed3(undefined);
 var withErrorReporting = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, options) => onError(self, (cause) => withFiber((fiber2) => {
   reportCauseUnsafe(fiber2, cause, options?.defectsOnly);
-  return void_2;
+  return void_3;
 })));
 var reportCauseUnsafe = (fiber2, cause, defectsOnly) => {
   const reporters = fiber2.getRef(CurrentErrorReporters);
@@ -5998,7 +6143,7 @@ __export(exports_Effect, {
   withErrorReporting: () => withErrorReporting2,
   whileLoop: () => whileLoop2,
   when: () => when2,
-  void: () => void_4,
+  void: () => void_5,
   validate: () => validate2,
   useSpan: () => useSpan2,
   updateServiceScoped: () => updateServiceScoped2,
@@ -6012,7 +6157,7 @@ __export(exports_Effect, {
   tx: () => tx,
   tryPromise: () => tryPromise2,
   try: () => try_3,
-  transposeOption: () => transposeOption2,
+  transposeOption: () => transposeOption3,
   trackSuccesses: () => trackSuccesses,
   trackErrors: () => trackErrors,
   trackDuration: () => trackDuration,
@@ -6029,11 +6174,11 @@ __export(exports_Effect, {
   tapCauseIf: () => tapCauseIf2,
   tapCauseFilter: () => tapCauseFilter2,
   tapCause: () => tapCause3,
-  tap: () => tap4,
+  tap: () => tap5,
   sync: () => sync3,
   suspend: () => suspend3,
-  succeedSome: () => succeedSome2,
-  succeedNone: () => succeedNone2,
+  succeedSome: () => succeedSome3,
+  succeedNone: () => succeedNone3,
   succeed: () => succeed6,
   spanLinks: () => spanLinks2,
   spanAnnotations: () => spanAnnotations2,
@@ -6105,7 +6250,7 @@ __export(exports_Effect, {
   mapError: () => mapError4,
   mapEager: () => mapEager2,
   mapBothEager: () => mapBothEager2,
-  mapBoth: () => mapBoth3,
+  mapBoth: () => mapBoth4,
   map: () => map8,
   makeSpanScoped: () => makeSpanScoped2,
   makeSpan: () => makeSpan2,
@@ -6118,7 +6263,7 @@ __export(exports_Effect, {
   logDebug: () => logDebug,
   log: () => log,
   linkSpans: () => linkSpans2,
-  let: () => let_4,
+  let: () => let_5,
   isSuccess: () => isSuccess5,
   isFailure: () => isFailure5,
   isEffect: () => isEffect2,
@@ -6127,10 +6272,10 @@ __export(exports_Effect, {
   interrupt: () => interrupt4,
   ignoreCause: () => ignoreCause2,
   ignore: () => ignore2,
-  gen: () => gen3,
+  gen: () => gen4,
   fromResult: () => fromResult2,
-  fromOption: () => fromOption3,
-  fromNullishOr: () => fromNullishOr3,
+  fromOption: () => fromOption4,
+  fromNullishOr: () => fromNullishOr4,
   forkScoped: () => forkScoped2,
   forkIn: () => forkIn2,
   forkDetach: () => forkDetach2,
@@ -6140,14 +6285,14 @@ __export(exports_Effect, {
   fnUntracedEager: () => fnUntracedEager2,
   fnUntraced: () => fnUntraced2,
   fn: () => fn2,
-  flip: () => flip2,
+  flip: () => flip3,
   flatten: () => flatten5,
   flatMapEager: () => flatMapEager2,
   flatMap: () => flatMap5,
   firstSuccessOf: () => firstSuccessOf2,
   findFirstFilter: () => findFirstFilter2,
   findFirst: () => findFirst2,
-  filterOrFail: () => filterOrFail2,
+  filterOrFail: () => filterOrFail3,
   filterOrElse: () => filterOrElse2,
   filterMapOrFail: () => filterMapOrFail2,
   filterMapOrElse: () => filterMapOrElse2,
@@ -6188,8 +6333,8 @@ __export(exports_Effect, {
   cachedWithTTL: () => cachedWithTTL2,
   cachedInvalidateWithTTL: () => cachedInvalidateWithTTL2,
   cached: () => cached2,
-  bindTo: () => bindTo4,
-  bind: () => bind4,
+  bindTo: () => bindTo5,
+  bind: () => bind5,
   awaitAllChildren: () => awaitAllChildren2,
   asVoid: () => asVoid4,
   asSome: () => asSome2,
@@ -6198,8 +6343,8 @@ __export(exports_Effect, {
   annotateLogsScoped: () => annotateLogsScoped2,
   annotateLogs: () => annotateLogs,
   annotateCurrentSpan: () => annotateCurrentSpan2,
-  andThen: () => andThen3,
-  all: () => all3,
+  andThen: () => andThen4,
+  all: () => all4,
   addFinalizer: () => addFinalizer3,
   acquireUseRelease: () => acquireUseRelease2,
   acquireRelease: () => acquireRelease2,
@@ -6207,17 +6352,17 @@ __export(exports_Effect, {
   abortSignal: () => abortSignal2,
   TypeId: () => TypeId13,
   Transaction: () => Transaction,
-  Do: () => Do3
+  Do: () => Do4
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Exit.js
 var exports_Exit = {};
 __export(exports_Exit, {
-  void: () => void_3,
+  void: () => void_4,
   succeed: () => succeed4,
   match: () => match5,
   mapError: () => mapError3,
-  mapBoth: () => mapBoth2,
+  mapBoth: () => mapBoth3,
   map: () => map7,
   isSuccess: () => isSuccess4,
   isFailure: () => isFailure4,
@@ -6226,7 +6371,7 @@ __export(exports_Exit, {
   hasInterrupts: () => hasInterrupts3,
   hasFails: () => hasFails3,
   hasDies: () => hasDies3,
-  getSuccess: () => getSuccess3,
+  getSuccess: () => getSuccess4,
   getCause: () => getCause,
   findErrorOption: () => findErrorOption3,
   findError: () => findError3,
@@ -6247,7 +6392,7 @@ var failCause2 = exitFailCause;
 var fail5 = exitFail;
 var die3 = exitDie;
 var interrupt3 = exitInterrupt;
-var void_3 = exitVoid;
+var void_4 = exitVoid;
 var isSuccess4 = exitIsSuccess;
 var isFailure4 = exitIsFailure;
 var hasFails3 = exitHasFails;
@@ -6262,10 +6407,10 @@ var findDefect3 = exitFindDefect;
 var match5 = exitMatch;
 var map7 = exitMap;
 var mapError3 = exitMapError;
-var mapBoth2 = exitMapBoth;
+var mapBoth3 = exitMapBoth;
 var asVoid3 = exitAsVoid;
 var asVoidAll = exitAsVoidAll;
-var getSuccess3 = exitGetSuccess;
+var getSuccess4 = exitGetSuccess;
 var getCause = exitGetCause;
 var findErrorOption3 = exitFindErrorOption;
 
@@ -6278,7 +6423,7 @@ __export(exports_Layer, {
   unwrap: () => unwrap,
   tapError: () => tapError2,
   tapCause: () => tapCause2,
-  tap: () => tap3,
+  tap: () => tap4,
   syncContext: () => syncContext,
   sync: () => sync2,
   suspend: () => suspend2,
@@ -6294,7 +6439,7 @@ __export(exports_Layer, {
   orDie: () => orDie2,
   mock: () => mock,
   mergeAll: () => mergeAll2,
-  merge: () => merge2,
+  merge: () => merge3,
   makeMemoMapUnsafe: () => makeMemoMapUnsafe,
   makeMemoMap: () => makeMemoMap,
   launch: () => launch,
@@ -6403,7 +6548,7 @@ var TypeId7 = "~effect/Layer";
 var MemoMapTypeId = "~effect/Layer/MemoMap";
 var memoMapReuse = (entry, scope2) => {
   entry.observers++;
-  return andThen2(scopeAddFinalizerExit(scope2, (exit2) => entry.finalizer(exit2)), entry.effect);
+  return andThen3(scopeAddFinalizerExit(scope2, (exit2) => entry.finalizer(exit2)), entry.effect);
 };
 var isLayer = (u) => hasProperty(u, TypeId7);
 var LayerProto = {
@@ -6423,7 +6568,7 @@ var fromBuildUnsafe = (build) => {
 };
 var fromBuild = (build) => fromBuildUnsafe((memoMap, scope2) => {
   const layerScope = forkUnsafe2(scope2);
-  return onExit(build(memoMap, layerScope), (exit2) => exit2._tag === "Failure" ? close(layerScope, exit2) : void_2);
+  return onExit(build(memoMap, layerScope), (exit2) => exit2._tag === "Failure" ? close(layerScope, exit2) : void_3);
 });
 var fromBuildMemo = (build) => {
   const self = fromBuild((memoMap, scope2) => memoMap.getOrElseMemoize(self, scope2, build));
@@ -6441,7 +6586,7 @@ var memoMapBuild = (memoMap, layer, scope2, build) => {
         memoMap.map.delete(layer);
         return close(layerScope, exit2);
       }
-      return void_2;
+      return void_3;
     })
   };
   memoMap.map.set(layer, entry);
@@ -6527,21 +6672,21 @@ var mergeAllEffect = (layers, memoMap, scope2) => {
   }).pipe(map5((context2) => mergeAll(...context2)));
 };
 var mergeAll2 = (...layers) => fromBuild((memoMap, scope2) => mergeAllEffect(layers, memoMap, scope2));
-var merge2 = /* @__PURE__ */ dual(2, (self, that) => mergeAll2(self, ...Array.isArray(that) ? that : [that]));
+var merge3 = /* @__PURE__ */ dual(2, (self, that) => mergeAll2(self, ...Array.isArray(that) ? that : [that]));
 var provideWith = (self, that, f) => fromBuild((memoMap, scope2) => flatMap3(Array.isArray(that) ? mergeAllEffect(that, memoMap, scope2) : that.build(memoMap, scope2), (context2) => self.build(memoMap, scope2).pipe(provideContext(context2), map5((merged) => f(merged, context2)))));
 var provide2 = /* @__PURE__ */ dual(2, (self, that) => provideWith(self, that, identity));
 var provideMerge = /* @__PURE__ */ dual(2, (self, that) => provideWith(self, that, (self2, that2) => merge(that2, self2)));
 var flatMap4 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => flatMap3(self.build(memoMap, scope2), (context2) => f(context2).build(memoMap, scope2))));
-var tap3 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => flatMap3(self.build(memoMap, scope2), (context2) => provide(as2(f(context2), context2), scope2))));
-var tapError2 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => catch_(self.build(memoMap, scope2), (error) => provide(andThen2(f(error), fail3(error)), scope2))));
-var tapCause2 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => catchCause(self.build(memoMap, scope2), (cause) => provide(andThen2(f(cause), failCause(cause)), scope2))));
+var tap4 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => flatMap3(self.build(memoMap, scope2), (context2) => provide(as2(f(context2), context2), scope2))));
+var tapError2 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => catch_(self.build(memoMap, scope2), (error) => provide(andThen3(f(error), fail3(error)), scope2))));
+var tapCause2 = /* @__PURE__ */ dual(2, (self, f) => fromBuild((memoMap, scope2) => catchCause(self.build(memoMap, scope2), (cause) => provide(andThen3(f(cause), failCause(cause)), scope2))));
 var orDie2 = (self) => fromBuildUnsafe((memoMap, scope2) => orDie(self.build(memoMap, scope2)));
 var catch_2 = /* @__PURE__ */ dual(2, (self, onError2) => fromBuildUnsafe((memoMap, scope2) => catch_(self.build(memoMap, scope2), (e) => onError2(e).build(memoMap, scope2))));
 var catchTag2 = /* @__PURE__ */ dual(3, (self, k, f) => fromBuildUnsafe((memoMap, scope2) => catchTag(self.build(memoMap, scope2), k, (error) => f(error).build(memoMap, scope2))));
 var catchCause2 = /* @__PURE__ */ dual(2, (self, onError2) => fromBuildUnsafe((memoMap, scope2) => catchCause(self.build(memoMap, scope2), (cause) => onError2(cause).build(memoMap, scope2))));
 var updateService2 = /* @__PURE__ */ dual(3, (layer, service2, f) => provide2(layer, effect(service2, map5(service2, f))));
 var fresh = (self) => fromBuildUnsafe((_, scope2) => self.build(makeMemoMapUnsafe(), scope2));
-var launch = (self) => scoped(andThen2(build(self), never));
+var launch = (self) => scoped(andThen3(build(self), never));
 var mock = function() {
   if (arguments.length === 1) {
     return (implementation) => mockImpl(arguments[0], implementation);
@@ -6591,7 +6736,7 @@ var satisfiesErrorType = () => (layer) => layer;
 var satisfiesServicesType = () => (layer) => layer;
 var span = (name, options) => {
   options = addSpanStackTrace(options);
-  return effect(ParentSpan, options?.onEnd ? tap2(makeSpanScoped(name, options), (span2) => addFinalizer((exit2) => options.onEnd(span2, exit2))) : makeSpanScoped(name, options));
+  return effect(ParentSpan, options?.onEnd ? tap3(makeSpanScoped(name, options), (span2) => addFinalizer((exit2) => options.onEnd(span2, exit2))) : makeSpanScoped(name, options));
 };
 var parentSpan = (span2) => succeedContext(ParentSpan.context(span2));
 var withSpan2 = function() {
@@ -6600,9 +6745,9 @@ var withSpan2 = function() {
   const options = addSpanStackTrace(dataFirst ? arguments[2] : arguments[1]);
   if (dataFirst) {
     const self = arguments[0];
-    return unwrap(map5(options?.onEnd !== undefined ? tap2(makeSpanScoped(name, options), (span2) => addFinalizer((exit2) => options.onEnd(span2, exit2))) : makeSpanScoped(name, options), (span2) => withParentSpan2(self, span2)));
+    return unwrap(map5(options?.onEnd !== undefined ? tap3(makeSpanScoped(name, options), (span2) => addFinalizer((exit2) => options.onEnd(span2, exit2))) : makeSpanScoped(name, options), (span2) => withParentSpan2(self, span2)));
   }
-  return (self) => unwrap(map5(options?.onEnd !== undefined ? tap2(makeSpanScoped(name, options), (span2) => addFinalizer((exit2) => options.onEnd(span2, exit2))) : makeSpanScoped(name, options), (span2) => withParentSpan2(self, span2)));
+  return (self) => unwrap(map5(options?.onEnd !== undefined ? tap3(makeSpanScoped(name, options), (span2) => addFinalizer((exit2) => options.onEnd(span2, exit2))) : makeSpanScoped(name, options), (span2) => withParentSpan2(self, span2)));
 };
 var withParentSpan2 = function() {
   const dataFirst = isLayer(arguments[0]);
@@ -7531,15 +7676,15 @@ var provideLayer = (self, layer, options) => scopedWith((scope2) => flatMap3(opt
 var provide3 = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, source, options) => isContext(source) ? provideContext(self, source) : provideLayer(self, Array.isArray(source) ? mergeAll2(...source) : source, options));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schedule.js
-var repeatOrElse = /* @__PURE__ */ dual(3, (self, schedule, orElse2) => flatMap3(toStepWithMetadata(schedule), (step) => {
+var repeatOrElse = /* @__PURE__ */ dual(3, (self, schedule, orElse3) => flatMap3(toStepWithMetadata(schedule), (step) => {
   let meta = CurrentMetadata2.defaultValue();
-  return catch_(forever2(tap2(flatMap3(suspend(() => provideService(self, CurrentMetadata2, meta)), step), (meta_) => sync(() => {
+  return catch_(forever2(tap3(flatMap3(suspend(() => provideService(self, CurrentMetadata2, meta)), step), (meta_) => sync(() => {
     meta = meta_;
   })), {
     disableYield: true
-  }), (error) => isDone(error) ? succeed3(error.value) : orElse2(error, meta.attempt === 0 ? none2() : some2(meta)));
+  }), (error) => isDone(error) ? succeed3(error.value) : orElse3(error, meta.attempt === 0 ? none2() : some2(meta)));
 }));
-var retryOrElse = /* @__PURE__ */ dual(3, (self, policy, orElse2) => flatMap3(toStepWithMetadata(policy), (step) => {
+var retryOrElse = /* @__PURE__ */ dual(3, (self, policy, orElse3) => flatMap3(toStepWithMetadata(policy), (step) => {
   let meta = CurrentMetadata2.defaultValue();
   let lastError;
   const loop = catch_(suspend(() => provideService(self, CurrentMetadata2, meta)), (error) => {
@@ -7549,7 +7694,7 @@ var retryOrElse = /* @__PURE__ */ dual(3, (self, policy, orElse2) => flatMap3(to
       return loop;
     });
   });
-  return catchDone(loop, (out) => internalCall(() => orElse2(lastError, out)));
+  return catchDone(loop, (out) => internalCall(() => orElse3(lastError, out)));
 }));
 var repeat2 = /* @__PURE__ */ dual(2, (self, options) => {
   const schedule = typeof options === "function" ? options(identity) : isSchedule(options) ? options : buildFromOptions(options);
@@ -7791,7 +7936,7 @@ var addEntry = (resolver, request2, resume, fiber2) => {
             newBatch.map = undefined;
             batchPool.push(newBatch);
           }
-          return void_2;
+          return void_3;
         })
       };
       batch = newBatch;
@@ -7831,7 +7976,7 @@ var removeEntryUnsafe = (resolver, entry) => {
 var maybeRemoveEntry = (resolver, entry) => sync(() => removeEntryUnsafe(resolver, entry));
 function runBatch(batch) {
   if (!batch.map.has(batch.key))
-    return void_2;
+    return void_3;
   batch.map.delete(batch.key);
   return batch.run;
 }
@@ -8384,7 +8529,7 @@ function addAttributesToContext(context2, attributes) {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Effect.js
 var TypeId13 = EffectTypeId;
 var isEffect2 = isEffect;
-var all3 = all2;
+var all4 = all3;
 var partition3 = partition2;
 var reduce2 = reduce;
 var validate2 = validate;
@@ -8395,19 +8540,19 @@ var whileLoop2 = whileLoop;
 var promise2 = promise;
 var tryPromise2 = tryPromise;
 var succeed6 = succeed3;
-var succeedNone2 = succeedNone;
-var succeedSome2 = succeedSome;
+var succeedNone3 = succeedNone2;
+var succeedSome3 = succeedSome2;
 var suspend3 = suspend;
 var sync3 = sync;
-var void_4 = void_2;
+var void_5 = void_3;
 var undefined_2 = undefined_;
 var callback2 = callback;
 var never2 = never;
-var Do3 = Do2;
-var bindTo4 = bindTo3;
-var let_4 = let_3;
-var bind4 = bind3;
-var gen3 = gen2;
+var Do4 = Do3;
+var bindTo5 = bindTo4;
+var let_5 = let_4;
+var bind5 = bind4;
+var gen4 = gen3;
 var fail6 = fail3;
 var failSync2 = failSync;
 var failCause4 = failCause;
@@ -8418,13 +8563,13 @@ var yieldNow2 = yieldNow;
 var yieldNowWith2 = yieldNowWith;
 var withFiber2 = withFiber;
 var fromResult2 = fromResult;
-var fromOption3 = fromOption2;
-var transposeOption2 = transposeOption;
-var fromNullishOr3 = fromNullishOr2;
+var fromOption4 = fromOption3;
+var transposeOption3 = transposeOption2;
+var fromNullishOr4 = fromNullishOr3;
 var flatMap5 = flatMap3;
 var flatten5 = flatten4;
-var andThen3 = andThen2;
-var tap4 = tap2;
+var andThen4 = andThen3;
+var tap5 = tap3;
 var result2 = result;
 var option2 = option;
 var exit2 = exit;
@@ -8432,7 +8577,7 @@ var map8 = map5;
 var as3 = as2;
 var asSome2 = asSome;
 var asVoid4 = asVoid2;
-var flip2 = flip;
+var flip3 = flip2;
 var zip2 = zip;
 var zipWith3 = zipWith2;
 var catch_3 = catch_;
@@ -8449,7 +8594,7 @@ var catchNoSuchElement2 = catchNoSuchElement;
 var catchCauseIf2 = catchCauseIf;
 var catchCauseFilter2 = catchCauseFilter;
 var mapError4 = mapError2;
-var mapBoth3 = mapBoth;
+var mapBoth4 = mapBoth2;
 var orDie3 = orDie;
 var tapError3 = tapError;
 var tapErrorTag2 = tapErrorTag;
@@ -8482,7 +8627,7 @@ var filterMap3 = filterMap2;
 var filterMapEffect2 = filterMapEffect;
 var filterOrElse2 = filterOrElse;
 var filterMapOrElse2 = filterMapOrElse;
-var filterOrFail2 = filterOrFail;
+var filterOrFail3 = filterOrFail2;
 var filterMapOrFail2 = filterMapOrFail;
 var when2 = when;
 var match7 = match4;
@@ -8611,7 +8756,7 @@ var track = /* @__PURE__ */ dual((args2) => isEffect2(args2[0]), (self, metric, 
   const input = f === undefined ? exit3 : internalCall(() => f(exit3));
   return update(metric, input);
 }));
-var trackSuccesses = /* @__PURE__ */ dual((args2) => isEffect2(args2[0]), (self, metric, f) => tap4(self, (value2) => {
+var trackSuccesses = /* @__PURE__ */ dual((args2) => isEffect2(args2[0]), (self, metric, f) => tap5(self, (value2) => {
   const input = f === undefined ? value2 : f(value2);
   return update(metric, input);
 }));
@@ -8648,7 +8793,7 @@ var tx = (effect2) => withFiber2((fiber3) => {
     while: () => !result3,
     body: constant(restore(effect2).pipe(provideService2(Transaction, state), tapCause3(() => {
       if (!state.retry)
-        return void_4;
+        return void_5;
       return restore(awaitPendingTransaction(state));
     }), exit2)),
     step(exit3) {
@@ -8685,7 +8830,7 @@ var awaitPendingTransaction = (state) => suspend3(() => {
   return callback2((resume) => {
     const onCall = () => {
       clearPending();
-      resume(void_4);
+      resume(void_5);
     };
     for (const ref of refs) {
       ref.pending.set(key, onCall);
@@ -8749,9 +8894,9 @@ var defaultTeardown = (exit3, onExit3) => {
 var makeRunMain = (f) => dual((args2) => isEffect2(args2[0]), (effect2, options) => {
   const fiber3 = options?.disableErrorReporting === true ? runFork2(effect2) : runFork2(tapCause3(effect2, (cause) => {
     if (hasInterruptsOnly2(cause))
-      return void_4;
+      return void_5;
     const isReported = getErrorReported(squash(cause));
-    return isReported ? logError(cause) : void_4;
+    return isReported ? logError(cause) : void_5;
   }));
   try {
     const keepAlive = globalThis.setInterval(constVoid, 2147483647);
@@ -9362,7 +9507,7 @@ var isFull = (self) => map8(size2(self), (size3) => size3 === self.pubsub.capaci
 var isEmpty = (self) => map8(size2(self), (size3) => size3 === 0);
 var shutdown = (self) => uninterruptible2(withFiber2((fiber3) => {
   set(self.shutdownFlag, true);
-  return close(self.scope, interrupt3(fiber3.id)).pipe(andThen3(self.strategy.shutdown), when2(self.shutdownHook.open), asVoid4);
+  return close(self.scope, interrupt3(fiber3.id)).pipe(andThen4(self.strategy.shutdown), when2(self.shutdownHook.open), asVoid4);
 }));
 var isShutdown = (self) => sync3(() => isShutdownUnsafe(self));
 var isShutdownUnsafe = (self) => self.shutdownFlag.current;
@@ -9401,14 +9546,14 @@ var subscribe = (self) => uninterruptible2(contextWith2((services) => {
   const localScope = get(services, Scope);
   const scope3 = forkUnsafe2(self.scope);
   const subscription = makeSubscriptionUnsafe(self.pubsub, self.subscribers, self.strategy);
-  return addFinalizer2(scope3, unsubscribe(subscription)).pipe(andThen3(addFinalizerExit(localScope, (exit3) => close(scope3, exit3))), as3(subscription));
+  return addFinalizer2(scope3, unsubscribe(subscription)).pipe(andThen4(addFinalizerExit(localScope, (exit3) => close(scope3, exit3))), as3(subscription));
 }));
 var unsubscribe = (self) => uninterruptible2(withFiber2((state) => {
   set(self.shutdownFlag, true);
   return forEach2(takeAll(self.pollers), (d) => interruptWith(d, state.id), {
     discard: true,
     concurrency: "unbounded"
-  }).pipe(tap4(() => sync3(() => {
+  }).pipe(tap5(() => sync3(() => {
     self.subscribers.delete(self.subscription);
     self.subscription.unsubscribe();
     self.replayWindow.close();
@@ -9459,7 +9604,7 @@ var pollForItem = (self) => {
   self.strategy.completePollersUnsafe(self.pubsub, self.subscribers, self.subscription, self.pollers);
   return onInterrupt2(_await(deferred), () => {
     remove2(self.pollers, deferred);
-    return void_4;
+    return void_5;
   });
 };
 var takeUpTo = /* @__PURE__ */ dual(2, (self, max5) => suspend3(() => {
@@ -10229,7 +10374,7 @@ var ensureCapacity = (capacity2) => {
 class BackPressureStrategy {
   publishers = /* @__PURE__ */ make12();
   get shutdown() {
-    return withFiber2((fiber3) => forEach2(takeAll(this.publishers), ([_, deferred, last2]) => last2 ? interruptWith(deferred, fiber3.id) : void_4, {
+    return withFiber2((fiber3) => forEach2(takeAll(this.publishers), ([_, deferred, last2]) => last2 ? interruptWith(deferred, fiber3.id) : void_5, {
       concurrency: "unbounded",
       discard: true
     }));
@@ -10242,7 +10387,7 @@ class BackPressureStrategy {
       this.completeSubscribersUnsafe(pubsub, subscribers);
       return (get2(isShutdown2) ? interrupt4 : _await(deferred)).pipe(onInterrupt2(() => {
         this.removeUnsafe(deferred);
-        return void_4;
+        return void_5;
       }));
     });
   }
@@ -10292,7 +10437,7 @@ class BackPressureStrategy {
 
 class DroppingStrategy {
   get shutdown() {
-    return void_4;
+    return void_5;
   }
   handleSurplus(_pubsub, _subscribers, _elements, _isShutdown) {
     return succeed6(false);
@@ -10308,7 +10453,7 @@ class DroppingStrategy {
 
 class SlidingStrategy {
   get shutdown() {
-    return void_4;
+    return void_5;
   }
   handleSurplus(pubsub, subscribers, elements, _isShutdown) {
     return sync3(() => {
@@ -10734,11 +10879,11 @@ var collect = (self) => suspend(() => {
         out.push(items[i]);
       }
     }
-  }), () => void_2), out);
+  }), () => void_3), out);
 });
 var takeN2 = (self, n) => takeBetween2(self, n, n);
-var takeBetween2 = (self, min5, max5) => suspend(() => takeBetweenUnsafe(self, min5, max5) ?? andThen2(awaitTake(self), takeBetween2(self, 1, max5)));
-var take3 = (self) => suspend(() => takeUnsafe(self) ?? andThen2(awaitTake(self), take3(self)));
+var takeBetween2 = (self, min5, max5) => suspend(() => takeBetweenUnsafe(self, min5, max5) ?? andThen3(awaitTake(self), takeBetween2(self, 1, max5)));
+var take3 = (self) => suspend(() => takeUnsafe(self) ?? andThen3(awaitTake(self), take3(self)));
 var poll = (self) => suspend(() => {
   const result3 = takeUnsafe(self);
   if (result3 === undefined) {
@@ -10756,7 +10901,7 @@ var peek = (self) => suspend(() => {
   if (self.messages.length > 0 && self.messages.head) {
     return succeed3(self.messages.head.array[self.messages.head.offset]);
   }
-  return andThen2(awaitTake(self), peek(self));
+  return andThen3(awaitTake(self), peek(self));
 });
 var takeUnsafe = (self) => {
   if (self.state._tag === "Done") {
@@ -11031,9 +11176,9 @@ class SemaphoreImpl {
     return withFiber((fiber3) => {
       this.permits = permits;
       if (this.free < 0)
-        return void_2;
+        return void_3;
       this.releaseUnsafe(fiber3, 0);
-      return void_2;
+      return void_3;
     });
   }
   release(n) {
@@ -11046,7 +11191,7 @@ class SemaphoreImpl {
     return (self) => uninterruptibleMask((restore) => {
       const acquire = suspend(() => {
         if (this.free < n) {
-          const wait = waitForPermits(this, n, void_2);
+          const wait = waitForPermits(this, n, void_3);
           return flatMap3(restore(wait), () => acquire);
         }
         this.taken += n;
@@ -11062,7 +11207,7 @@ class SemaphoreImpl {
   withPermitsIfAvailable(n) {
     return (self) => uninterruptibleMask((restore) => {
       if (this.free < n)
-        return succeedNone;
+        return succeedNone2;
       this.taken += n;
       return onExitPrimitive(restore(asSome(self)), () => {
         this.releaseUnsafe(getCurrentFiber(), n);
@@ -11127,12 +11272,12 @@ var DefaultChunkSize = 4096;
 var asyncQueue = (scope3, f, options) => make14({
   capacity: options?.bufferSize,
   strategy: options?.strategy
-}).pipe(tap4((queue) => addFinalizer2(scope3, shutdown2(queue))), tap4((queue) => forkIn2(provide(f(queue), scope3), scope3)));
+}).pipe(tap5((queue) => addFinalizer2(scope3, shutdown2(queue))), tap5((queue) => forkIn2(provide(f(queue), scope3), scope3)));
 var callbackArray = (f, options) => fromTransform((_, scope3) => map8(asyncQueue(scope3, f, options), takeAll3));
 var suspend4 = (evaluate2) => fromTransform((upstream, scope3) => suspend3(() => toTransform(evaluate2())(upstream, scope3)));
 var acquireUseRelease3 = (acquire, use2, release2) => fromTransformBracket(fnUntraced2(function* (upstream, scope3, forkedScope) {
   let option3 = none2();
-  yield* addFinalizerExit(forkedScope, (exit3) => isSome2(option3) ? release2(option3.value, exit3) : void_4);
+  yield* addFinalizerExit(forkedScope, (exit3) => isSome2(option3) ? release2(option3.value, exit3) : void_5);
   const value2 = yield* uninterruptible2(acquire);
   option3 = some2(value2);
   return yield* toTransform(use2(value2))(upstream, scope3);
@@ -11257,7 +11402,7 @@ var mapEffectConcurrent = (self, f, options) => fromTransformBracket(fnUntraced2
     });
     yield* semaphore.take(1).pipe(flatMap5(() => pull), flatMap5((value2) => {
       trackFiber(runFork3(handle(f(value2, i++))));
-      return void_4;
+      return void_5;
     }), forever4({
       disableYield: true
     }), catchCause3((cause) => semaphore.withPermits(concurrencyN - 1)(failCause5(queue, cause))), forkIn2(forkedScope));
@@ -11283,7 +11428,7 @@ var mapEffectConcurrent = (self, f, options) => fromTransformBracket(fnUntraced2
       return offer(effects, join2(fiber3));
     }), forever4({
       disableYield: true
-    }), catchCause3((cause) => offer(effects, failCause2(cause)).pipe(andThen3(failCause5(effects, cause)))), forkIn2(forkedScope));
+    }), catchCause3((cause) => offer(effects, failCause2(cause)).pipe(andThen4(failCause5(effects, cause)))), forkIn2(forkedScope));
   }
   return take3(queue);
 }));
@@ -11303,7 +11448,7 @@ var flatMapSequential = (self, f) => fromTransform((upstream, scope3) => map8(to
     if (childScope.state._tag === "Open" && childScope.state.finalizers.size === 1) {
       return makePull;
     }
-    const close2 = close(childScope, void_3);
+    const close2 = close(childScope, void_4);
     childScope = undefined;
     return flatMap5(close2, () => makePull);
   });
@@ -11315,7 +11460,7 @@ var concatWith = /* @__PURE__ */ dual(2, (self, f) => fromTransform((upstream, s
   const forkedScope = forkUnsafe2(scope3);
   const makePull = flatMap5(toTransform(self)(upstream, forkedScope), (pull) => {
     currentPull = catchDone(pull, (leftover) => {
-      return close(forkedScope, void_3).pipe(flatMap5(() => toTransform(f(leftover))(upstream, scope3)), flatMap5((pull2) => {
+      return close(forkedScope, void_4).pipe(flatMap5(() => toTransform(f(leftover))(upstream, scope3)), flatMap5((pull2) => {
         currentPull = pull2;
         return pull2;
       }));
@@ -11340,10 +11485,10 @@ var orElseIfEmpty = /* @__PURE__ */ dual(2, (self, f) => fromTransform((upstream
   let currentPull;
   const forkedScope = forkUnsafe2(scope3);
   const makePull = flatMap5(toTransform(self)(upstream, forkedScope), (pull) => {
-    const next = pull.pipe(tap4(() => {
+    const next = pull.pipe(tap5(() => {
       currentPull = pull;
-      return void_4;
-    }), catchDone((leftover) => close(forkedScope, succeed4(leftover)).pipe(andThen3(toTransform(f(leftover))(upstream, scope3)), flatMap5((pull2) => {
+      return void_5;
+    }), catchDone((leftover) => close(forkedScope, succeed4(leftover)).pipe(andThen4(toTransform(f(leftover))(upstream, scope3)), flatMap5((pull2) => {
       currentPull = pull2;
       return pull2;
     }))));
@@ -11393,7 +11538,7 @@ var repeat4 = /* @__PURE__ */ dual(2, (self, schedule2) => toStepWithMetadata(ty
 }), unwrap2));
 var forever5 = (self) => concatWith(self, () => forever5(self));
 var schedule2 = /* @__PURE__ */ dual(2, (self, schedule3) => transformPull(self, (pull, _scope) => map8(toStepWithSleep(schedule3), (step) => {
-  const pullWithStep = tap4(pull, step);
+  const pullWithStep = tap5(pull, step);
   return pullWithStep;
 })));
 var filter7 = /* @__PURE__ */ dual(2, (self, predicate) => fromTransform((upstream, scope3) => map8(toTransform(self)(upstream, scope3), (pull) => flatMap5(pull, function loop(elem) {
@@ -11490,7 +11635,7 @@ var catchCause4 = /* @__PURE__ */ dual(2, (self, f) => fromTransform((upstream, 
       }
       const toClose = forkedScope;
       forkedScope = forkUnsafe2(scope3);
-      return close(toClose, failCause2(cause)).pipe(andThen3(toTransform(f(cause))(upstream, forkedScope)), flatMap5((childPull) => {
+      return close(toClose, failCause2(cause)).pipe(andThen4(toTransform(f(cause))(upstream, forkedScope)), flatMap5((childPull) => {
         currentPull = childPull;
         return childPull;
       }));
@@ -11507,25 +11652,25 @@ var catchCauseFilter3 = /* @__PURE__ */ dual(3, (self, filter8, f) => catchCause
   return isFailure2(result3) ? failCause6(result3.failure) : f(result3.success, cause);
 }));
 var catch_4 = /* @__PURE__ */ dual(2, (self, f) => catchCauseFilter3(self, findError2, (e) => f(e)));
-var tapError4 = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => succeed6(tapError3(pull, (err) => isDone2(err) ? void_4 : asVoid4(f(err))))));
-var catchIf3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, predicate, f, orElse2) => catch_4(self, (err) => {
-  return predicate(err) ? f(err) : orElse2 ? orElse2(err) : fail8(err);
+var tapError4 = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => succeed6(tapError3(pull, (err) => isDone2(err) ? void_5 : asVoid4(f(err))))));
+var catchIf3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, predicate, f, orElse3) => catch_4(self, (err) => {
+  return predicate(err) ? f(err) : orElse3 ? orElse3(err) : fail8(err);
 }));
-var catchFilter3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, filter8, f, orElse2) => catch_4(self, (err) => {
+var catchFilter3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, filter8, f, orElse3) => catch_4(self, (err) => {
   const result3 = filter8(err);
-  return isFailure2(result3) ? orElse2 ? orElse2(result3.failure) : fail8(result3.failure) : f(result3.success);
+  return isFailure2(result3) ? orElse3 ? orElse3(result3.failure) : fail8(result3.failure) : f(result3.success);
 }));
-var catchReason3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, errorTag, reasonTag, f, orElse2) => catch_4(self, (error) => {
+var catchReason3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, errorTag, reasonTag, f, orElse3) => catch_4(self, (error) => {
   if (isTagged(error, errorTag) && hasProperty(error, "reason")) {
     const reason = error.reason;
     if (isTagged(reason, reasonTag)) {
       return f(reason, error);
     }
-    return orElse2 ? orElse2(reason, error) : fail8(error);
+    return orElse3 ? orElse3(reason, error) : fail8(error);
   }
   return fail8(error);
 }));
-var catchReasons3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, errorTag, cases, orElse2) => {
+var catchReasons3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, errorTag, cases, orElse3) => {
   let keys2;
   return catch_4(self, (error) => {
     if (isTagged(error, errorTag) && hasProperty(error, "reason") && hasProperty(error.reason, "_tag") && isString2(error.reason._tag)) {
@@ -11534,7 +11679,7 @@ var catchReasons3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, 
       if (keys2.has(reason._tag)) {
         return cases[reason._tag](reason, error);
       }
-      return orElse2 ? orElse2(reason, error) : fail8(error);
+      return orElse3 ? orElse3(reason, error) : fail8(error);
     }
     return fail8(error);
   });
@@ -11546,7 +11691,7 @@ var ignore3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, option
     return catch_4(self, () => empty7);
   }
   const logEffect = logWithLevel2(options.log === true ? undefined : options.log);
-  return catch_4(tapCause4(self, (cause) => hasFails2(cause) ? logEffect(cause) : void_4), () => empty7);
+  return catch_4(tapCause4(self, (cause) => hasFails2(cause) ? logEffect(cause) : void_5), () => empty7);
 });
 var ignoreCause_ = (self) => catchCause4(self, () => empty7);
 var ignoreCause3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, options) => {
@@ -11561,7 +11706,7 @@ var retry3 = /* @__PURE__ */ dual(2, (self, schedule3) => suspend4(() => {
   const selfWithMeta = provideServiceEffect3(self, CurrentMetadata2, sync3(() => meta));
   const withReset = onFirst(selfWithMeta, () => {
     step = undefined;
-    return void_4;
+    return void_5;
   });
   const resolvedSchedule = typeof schedule3 === "function" ? schedule3(identity) : schedule3;
   const loop = catch_4(withReset, fnUntraced2(function* (error) {
@@ -11590,7 +11735,7 @@ var mergeAll3 = /* @__PURE__ */ dual(2, (channels, {
   const queue = yield* bounded2(bufferSize);
   yield* addFinalizer2(forkedScope, shutdown2(queue));
   const pull = yield* toTransform(channels)(upstream, scope3);
-  yield* gen3(function* () {
+  yield* gen4(function* () {
     while (true) {
       let pullFiber;
       if (semaphore) {
@@ -11598,7 +11743,7 @@ var mergeAll3 = /* @__PURE__ */ dual(2, (channels, {
           yield* semaphore.take(1);
         } else {
           pullFiber = yield* forkChild2(pull);
-          yield* raceFirst2(semaphore.take(1), andThen3(join2(pullFiber), never2));
+          yield* raceFirst2(semaphore.take(1), andThen4(join2(pullFiber), never2));
         }
       }
       const channel = pullFiber === undefined ? yield* pull : yield* join2(pullFiber);
@@ -11611,7 +11756,7 @@ var mergeAll3 = /* @__PURE__ */ dual(2, (channels, {
           yield* doneLatch.open;
         yield* interrupt5(fiber4);
       }
-      const fiber3 = yield* childPull.pipe(tap4(() => yieldNow2), flatMap5((value2) => offer(queue, value2)), forever4({
+      const fiber3 = yield* childPull.pipe(tap5(() => yieldNow2), flatMap5((value2) => offer(queue, value2)), forever4({
         disableYield: true
       }), onError2(fnUntraced2(function* (cause) {
         const halt = filterDone(cause);
@@ -11639,7 +11784,7 @@ var mergeAll3 = /* @__PURE__ */ dual(2, (channels, {
   }), forkIn2(forkedScope));
   return take3(queue);
 })));
-var merge3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]) && isChannel(args2[1]), (left, right, options) => fromTransformBracket(fnUntraced2(function* (upstream, _scope, forkedScope) {
+var merge4 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]) && isChannel(args2[1]), (left, right, options) => fromTransformBracket(fnUntraced2(function* (upstream, _scope, forkedScope) {
   const strategy = options?.haltStrategy ?? "both";
   const queue = yield* bounded2(0);
   yield* addFinalizer2(forkedScope, shutdown2(queue));
@@ -11651,23 +11796,23 @@ var merge3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]) && isChannel(ar
     }
     switch (strategy) {
       case "both": {
-        return done4 === 2 ? failCause5(queue, cause) : void_4;
+        return done4 === 2 ? failCause5(queue, cause) : void_5;
       }
       case "left":
       case "right": {
-        return side === strategy ? failCause5(queue, cause) : void_4;
+        return side === strategy ? failCause5(queue, cause) : void_5;
       }
       case "either": {
         return failCause5(queue, cause);
       }
     }
   }
-  const runSide = (side, channel, scope3) => toTransform(channel)(upstream, scope3).pipe(flatMap5((pull) => pull.pipe(flatMap5((value2) => offer(queue, value2)), forever4)), onError2((cause) => andThen3(close(scope3, doneExitFromCause(cause)), onExit3(side, cause))), forkIn2(forkedScope));
+  const runSide = (side, channel, scope3) => toTransform(channel)(upstream, scope3).pipe(flatMap5((pull) => pull.pipe(flatMap5((value2) => offer(queue, value2)), forever4)), onError2((cause) => andThen4(close(scope3, doneExitFromCause(cause)), onExit3(side, cause))), forkIn2(forkedScope));
   yield* runSide("left", left, forkUnsafe2(forkedScope));
   yield* runSide("right", right, forkUnsafe2(forkedScope));
   return take3(queue);
 })));
-var mergeEffect = /* @__PURE__ */ dual(2, (self, effect2) => merge3(self, fromEffectDrain(effect2), {
+var mergeEffect = /* @__PURE__ */ dual(2, (self, effect2) => merge4(self, fromEffectDrain(effect2), {
   haltStrategy: "left"
 }));
 var splitLines = () => fromTransform((upstream, _scope) => sync3(() => {
@@ -11789,7 +11934,7 @@ var bufferArray = /* @__PURE__ */ dual(2, (self, options) => fromTransform(fnUnt
   }), onError2((cause) => failCause5(queue, cause)), forkIn2(scope3));
   return takeAll3(queue);
 })));
-var interruptWhen = /* @__PURE__ */ dual(2, (self, effect2) => merge3(self, fromPull(succeed6(flatMap5(effect2, done2))), {
+var interruptWhen = /* @__PURE__ */ dual(2, (self, effect2) => merge4(self, fromPull(succeed6(flatMap5(effect2, done2))), {
   haltStrategy: "either"
 }));
 var haltWhen = /* @__PURE__ */ dual(2, (self, effect2) => fromTransformBracket(fnUntraced2(function* (upstream, scope3, forkedScope) {
@@ -11805,12 +11950,12 @@ var haltWhen = /* @__PURE__ */ dual(2, (self, effect2) => fromTransformBracket(f
     });
   });
 })));
-var onError3 = /* @__PURE__ */ dual(2, (self, finalizer) => onExit3(self, (exit3) => isFailure4(exit3) ? finalizer(exit3.cause) : void_4));
-var onExit3 = /* @__PURE__ */ dual(2, (self, finalizer) => fromTransformBracket((upstream, scope3, forkedScope) => addFinalizerExit(forkedScope, finalizer).pipe(andThen3(toTransform(self)(upstream, scope3)))));
+var onError3 = /* @__PURE__ */ dual(2, (self, finalizer) => onExit3(self, (exit3) => isFailure4(exit3) ? finalizer(exit3.cause) : void_5));
+var onExit3 = /* @__PURE__ */ dual(2, (self, finalizer) => fromTransformBracket((upstream, scope3, forkedScope) => addFinalizerExit(forkedScope, finalizer).pipe(andThen4(toTransform(self)(upstream, scope3)))));
 var onStart = /* @__PURE__ */ dual(2, (self, onStart2) => unwrap2(as3(onStart2, self)));
 var onFirst = /* @__PURE__ */ dual(2, (self, onFirst2) => transformPull(self, (pull) => sync3(() => {
   let isFirst = true;
-  const pullFirst = tap4(pull, (element) => {
+  const pullFirst = tap5(pull, (element) => {
     isFirst = false;
     return onFirst2(element);
   });
@@ -11852,7 +11997,7 @@ var runDrain = (self) => runWith(self, (pull) => forever4(pull, {
 var runForEach = /* @__PURE__ */ dual(2, (self, f) => runWith(self, (pull) => forever4(flatMap5(pull, f), {
   disableYield: true
 })));
-var runForEachWhile = /* @__PURE__ */ dual(2, (self, f) => runWith(self, (pull) => pull.pipe(flatMap5(f), flatMap5((cont) => cont ? void_4 : done2()), forever4({
+var runForEachWhile = /* @__PURE__ */ dual(2, (self, f) => runWith(self, (pull) => pull.pipe(flatMap5(f), flatMap5((cont) => cont ? void_5 : done2()), forever4({
   disableYield: true
 }))));
 var mkUint8Array = (self) => map8(runFold(self, () => ({
@@ -11889,10 +12034,10 @@ var runLast = (self) => suspend3(() => {
   let last2 = absent;
   return runWith(self, (pull) => forever4(flatMap5(pull, (item) => {
     last2 = item;
-    return void_4;
+    return void_5;
   }), {
     disableYield: true
-  }), () => last2 === absent ? succeedNone2 : succeedSome2(last2));
+  }), () => last2 === absent ? succeedNone3 : succeedSome3(last2));
 });
 var runFold = /* @__PURE__ */ dual(3, (self, initial, f) => suspend3(() => {
   let state = initial();
@@ -11928,7 +12073,7 @@ var runIntoQueueArray = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (se
   } else {
     failCauseUnsafe(queue, exit3.cause);
   }
-  return void_4;
+  return void_5;
 }))));
 var toQueueArray = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), /* @__PURE__ */ fnUntraced2(function* (self, options) {
   const scope3 = yield* scope2;
@@ -12017,7 +12162,7 @@ var take5 = (n) => fromTransform2((upstream) => {
       if (taken.length === n) {
         return done2();
       }
-      return void_4;
+      return void_5;
     }
     for (let i = 0;i < arr.length; i++) {
       taken.push(arr[i]);
@@ -12028,7 +12173,7 @@ var take5 = (n) => fromTransform2((upstream) => {
         return done2();
       }
     }
-    return void_4;
+    return void_5;
   }), forever4({
     disableYield: true
   }), catchDone(() => succeed6([taken, leftover])));
@@ -12037,7 +12182,7 @@ var reduceArray = (initial, f) => fromTransform2((upstream) => {
   let state = initial();
   return upstream.pipe(flatMap5((arr) => {
     state = f(state, arr);
-    return void_4;
+    return void_5;
   }), forever4({
     disableYield: true
   }), catchDone(() => succeed6([state])));
@@ -12098,7 +12243,7 @@ __export(exports_Stream, {
   tapError: () => tapError5,
   tapCause: () => tapCause5,
   tapBoth: () => tapBoth,
-  tap: () => tap5,
+  tap: () => tap6,
   takeWhileFilter: () => takeWhileFilter,
   takeWhileEffect: () => takeWhileEffect,
   takeWhile: () => takeWhile2,
@@ -12173,10 +12318,10 @@ __export(exports_Stream, {
   mergeLeft: () => mergeLeft,
   mergeEffect: () => mergeEffect2,
   mergeAll: () => mergeAll4,
-  merge: () => merge4,
+  merge: () => merge5,
   mapError: () => mapError6,
   mapEffect: () => mapEffect2,
-  mapBoth: () => mapBoth4,
+  mapBoth: () => mapBoth5,
   mapArrayEffect: () => mapArrayEffect,
   mapArray: () => mapArray,
   mapAccumEffect: () => mapAccumEffect,
@@ -12186,7 +12331,7 @@ __export(exports_Stream, {
   map: () => map10,
   make: () => make19,
   limitBytes: () => limitBytes,
-  let: () => let_5,
+  let: () => let_6,
   iterate: () => iterate,
   isStream: () => isStream,
   intersperseAffixes: () => intersperseAffixes,
@@ -12278,14 +12423,14 @@ __export(exports_Stream, {
   buffer: () => buffer2,
   broadcastN: () => broadcastN,
   broadcast: () => broadcast,
-  bindTo: () => bindTo5,
+  bindTo: () => bindTo6,
   bindEffect: () => bindEffect,
-  bind: () => bind5,
+  bind: () => bind6,
   aggregateWithin: () => aggregateWithin,
   aggregate: () => aggregate,
   accumulate: () => accumulate,
   TypeId: () => TypeId25,
-  Do: () => Do4,
+  Do: () => Do5,
   DefaultChunkSize: () => DefaultChunkSize2
 });
 
@@ -12441,13 +12586,13 @@ var make16 = (options) => withFiber2((fiber3) => {
   });
   return as3(addFinalizerExit(scope3, () => {
     if (self.state._tag === "Closed") {
-      return void_4;
+      return void_5;
     }
     const map10 = self.state.map;
     self.state = {
       _tag: "Closed"
     };
-    return forEach2(map10, ([, entry]) => exit2(close(entry.scope, void_3))).pipe(tap4(() => sync3(() => {
+    return forEach2(map10, ([, entry]) => exit2(close(entry.scope, void_4))).pipe(tap5(() => sync3(() => {
       clear3(map10);
     })));
   }), self);
@@ -12485,50 +12630,50 @@ var get4 = /* @__PURE__ */ dual(2, (self, key) => uninterruptibleMask2((restore)
     self.lookup(key).pipe(runForkWith2(makeUnsafe(context3)), runIn(entry.scope)).addObserver((exit3) => doneUnsafe(entry.deferred, exit3));
   }
   const scope3 = getUnsafe(parent.context, Scope);
-  return addFinalizer2(scope3, entry.finalizer).pipe(andThen3(restore(_await(entry.deferred))));
+  return addFinalizer2(scope3, entry.finalizer).pipe(andThen4(restore(_await(entry.deferred))));
 }));
 var release2 = (self, key, entry) => withFiber2((fiber3) => {
   entry.refCount--;
   if (entry.refCount > 0) {
-    return void_4;
+    return void_5;
   } else if (self.state._tag === "Closed" || !has3(self.state.map, key) || isZero(entry.idleTimeToLive)) {
     if (self.state._tag === "Open") {
       remove3(self.state.map, key);
     }
-    return close(entry.scope, void_3);
+    return close(entry.scope, void_4);
   } else if (!isFinite(entry.idleTimeToLive)) {
-    return void_4;
+    return void_5;
   }
   const clock = fiber3.getRef(Clock);
   entry.expiresAt = clock.currentTimeMillisUnsafe() + toMillis(entry.idleTimeToLive);
   if (entry.fiber)
-    return void_4;
+    return void_5;
   entry.fiber = interruptibleMask2(function loop(restore) {
     const now2 = clock.currentTimeMillisUnsafe();
     const remaining2 = entry.expiresAt - now2;
     if (remaining2 <= 0) {
       if (self.state._tag === "Closed" || entry.refCount > 0)
-        return void_4;
+        return void_5;
       remove3(self.state.map, key);
-      return restore(close(entry.scope, void_3));
+      return restore(close(entry.scope, void_4));
     }
     return flatMap5(clock.sleep(millis(remaining2)), () => loop(restore));
   }).pipe(ensuring2(sync3(() => {
     entry.fiber = undefined;
   })), runForkWith2(fiber3.context), runIn(self.scope));
-  return void_4;
+  return void_5;
 });
 var touch = /* @__PURE__ */ dual(2, (self, key) => clockWith3((clock) => {
   if (self.state._tag === "Closed") {
-    return void_4;
+    return void_5;
   }
   const o = get3(self.state.map, key);
   if (o._tag === "None" || isZero(o.value.idleTimeToLive)) {
-    return void_4;
+    return void_5;
   }
   const entry = o.value;
   entry.expiresAt = clock.currentTimeMillisUnsafe() + toMillis(entry.idleTimeToLive);
-  return void_4;
+  return void_5;
 }));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/rcRef.js
@@ -12567,7 +12712,7 @@ var make17 = (options) => withFiber2((fiber3) => {
   const scope3 = get(context3, Scope);
   const ref = new RcRefImpl(options.acquire, context3, scope3, options.idleTimeToLive ? fromInputUnsafe(options.idleTimeToLive) : undefined);
   return as3(addFinalizerExit(scope3, () => {
-    const close2 = ref.state._tag === "Acquired" ? close(ref.state.scope, void_3) : void_4;
+    const close2 = ref.state._tag === "Acquired" ? close(ref.state.scope, void_4) : void_5;
     ref.state = stateClosed;
     return close2;
   }), ref);
@@ -12598,7 +12743,7 @@ var getState = (self) => uninterruptibleMask2(function loop(restore) {
           };
           self.state = state;
           return state;
-        }), onExit2((exit3) => isFailure4(exit3) ? close(scope3, exit3) : void_4));
+        }), onExit2((exit3) => isFailure4(exit3) ? close(scope3, exit3) : void_5));
       }));
     }
   }
@@ -12611,26 +12756,26 @@ var get5 = /* @__PURE__ */ fnUntraced2(function* (self_) {
   yield* addFinalizerExit(scope3, () => {
     state.refCount--;
     if (state.refCount > 0) {
-      return void_4;
+      return void_5;
     }
     if (self.idleTimeToLive === undefined) {
       self.state = stateEmpty;
-      return close(state.scope, void_3);
+      return close(state.scope, void_4);
     } else if (state.invalidated) {
-      return close(state.scope, void_3);
+      return close(state.scope, void_4);
     } else if (!isFinite2) {
-      return void_4;
+      return void_5;
     }
     state.fiber = sleep2(self.idleTimeToLive).pipe(flatMap5(() => {
       if (self.state._tag === "Acquired" && self.state.refCount === 0) {
         self.state = stateEmpty;
-        return close(state.scope, void_3);
+        return close(state.scope, void_4);
       }
-      return void_4;
+      return void_5;
     }), ensuring2(sync3(() => {
       state.fiber = undefined;
     })), runForkWith2(self.context), runIn(self.scope));
-    return void_4;
+    return void_5;
   });
   return state.value;
 });
@@ -12638,16 +12783,16 @@ var invalidate = (self_) => {
   const self = self_;
   return uninterruptible2(suspend3(() => {
     if (self.state._tag !== "Acquired") {
-      return void_4;
+      return void_5;
     }
     const state = self.state;
     self.state = stateEmpty;
     state.invalidated = true;
     if (state.refCount > 0) {
-      return void_4;
+      return void_5;
     }
     state.fiber?.interruptUnsafe();
-    return close(state.scope, void_3);
+    return close(state.scope, void_4);
   }));
 };
 
@@ -12666,7 +12811,7 @@ var service3 = (service4) => fromEffect2(service2(service4));
 var serviceOption3 = (service4) => fromEffect2(serviceOption2(service4));
 var fromEffectDrain2 = (effect2) => fromPull2(succeed6(flatMap5(effect2, () => done2())));
 var fromEffectRepeat = (effect2) => fromPull2(succeed6(map8(effect2, of)));
-var fromEffectSchedule = (effect2, schedule3) => fromPull2(gen3(function* () {
+var fromEffectSchedule = (effect2, schedule3) => fromPull2(gen4(function* () {
   const step = yield* toStepWithMetadata(schedule3);
   let s = yield* provideService2(effect2, CurrentMetadata2, CurrentMetadata2.defaultValue());
   let initial = true;
@@ -12784,14 +12929,14 @@ var map10 = /* @__PURE__ */ dual(2, (self, f) => suspend5(() => {
   let i = 0;
   return fromChannel3(map9(self.channel, map4((o) => f(o, i++))));
 }));
-var mapBoth4 = /* @__PURE__ */ dual(2, (self, options) => self.pipe(map10(options.onSuccess), mapError6(options.onFailure)));
+var mapBoth5 = /* @__PURE__ */ dual(2, (self, options) => self.pipe(map10(options.onSuccess), mapError6(options.onFailure)));
 var mapArray = /* @__PURE__ */ dual(2, (self, f) => fromChannel3(map9(self.channel, f)));
 var mapEffect2 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, f, options) => self.channel.pipe(flattenArray, mapEffect(f, options), map9(of), fromChannel3));
 var flattenEffect = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, options) => mapEffect2(self, identity, options));
 var mapArrayEffect = /* @__PURE__ */ dual(2, (self, f) => fromChannel3(mapEffect(self.channel, f)));
 var result3 = (self) => self.pipe(map10(succeed2), catch_5((e) => succeed8(fail2(e))));
-var tap5 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, f, options) => mapEffect2(self, (a) => as3(f(a), a), options));
-var tapBoth = /* @__PURE__ */ dual(2, (self, options) => self.pipe(tapError5(options.onError), tap5(options.onElement, {
+var tap6 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, f, options) => mapEffect2(self, (a) => as3(f(a), a), options));
+var tapBoth = /* @__PURE__ */ dual(2, (self, options) => self.pipe(tapError5(options.onError), tap6(options.onElement, {
   concurrency: options.concurrency
 })));
 var tapSink = /* @__PURE__ */ dual(2, (self, sink) => transformPullBracket(self, fnUntraced2(function* (pull, _, scope3) {
@@ -12863,7 +13008,7 @@ var timeoutOrElse3 = /* @__PURE__ */ dual(2, (self, options) => {
     const durationMs = toMillis(duration);
     let deadline = undefined;
     const latch = makeUnsafe5(false);
-    return merge4(transformPull2(self, (pull, _scope) => suspend3(() => {
+    return merge5(transformPull2(self, (pull, _scope) => suspend3(() => {
       deadline = clock.currentTimeMillisUnsafe() + durationMs;
       latch.openUnsafe();
       return pull;
@@ -12871,7 +13016,7 @@ var timeoutOrElse3 = /* @__PURE__ */ dual(2, (self, options) => {
       latch.closeUnsafe();
       deadline = undefined;
       return arr;
-    }), succeed6)), fromEffectDrain2(gen3(function* () {
+    }), succeed6)), fromEffectDrain2(gen4(function* () {
       while (true) {
         yield* latch.await;
         if (deadline === undefined)
@@ -12896,7 +13041,7 @@ var timeoutOrElse3 = /* @__PURE__ */ dual(2, (self, options) => {
 });
 var repeatElements = /* @__PURE__ */ dual(2, (self, schedule4) => fromChannel3(fromTransform((upstream, scope3) => map8(toTransform(flattenArray(self.channel))(upstream, scope3), (pullElement) => {
   let pullRepeat = undefined;
-  const pull = gen3(function* () {
+  const pull = gen4(function* () {
     const element = yield* pullElement;
     const chunk = of(element);
     const step = yield* toStepWithSleep(schedule4);
@@ -12913,9 +13058,9 @@ var flattenIterable = (self) => flatMap7(self, fromIterable4);
 var flattenTake2 = (self) => self.channel.pipe(flattenArray, flattenTake, fromChannel3);
 var concat = /* @__PURE__ */ dual(2, (self, that) => flatten6(fromArray2([self, that])));
 var prepend2 = /* @__PURE__ */ dual(2, (self, values) => concat(fromIterable4(values), self));
-var merge4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]) && isStream(args2[1]), (self, that, options) => fromChannel3(merge3(toChannel2(self), toChannel2(that), options)));
+var merge5 = /* @__PURE__ */ dual((args2) => isStream(args2[0]) && isStream(args2[1]), (self, that, options) => fromChannel3(merge4(toChannel2(self), toChannel2(that), options)));
 var mergeEffect2 = /* @__PURE__ */ dual(2, (self, effect2) => self.channel.pipe(mergeEffect(effect2), fromChannel3));
-var mergeResult = /* @__PURE__ */ dual(2, (self, that) => merge4(map10(self, succeed2), map10(that, fail2)));
+var mergeResult = /* @__PURE__ */ dual(2, (self, that) => merge5(map10(self, succeed2), map10(that, fail2)));
 var mergeLeft = /* @__PURE__ */ dual(2, (left, right) => mergeEffect2(left, runDrain2(right)));
 var mergeRight = /* @__PURE__ */ dual(2, (left, right) => mergeEffect2(right, runDrain2(left)));
 var mergeAll4 = /* @__PURE__ */ dual(2, (streams, options) => flatten6(fromIterable4(streams), options));
@@ -12933,7 +13078,7 @@ var zipArrays = (f) => (leftArr, rightArr) => {
 var zipWithArray = /* @__PURE__ */ dual(3, (left, right, f) => fromChannel3(fromTransformBracket(fnUntraced2(function* (_, scope3) {
   const pullLeft = yield* toPullScoped(left.channel, scope3);
   const pullRight = yield* toPullScoped(right.channel, scope3);
-  const pullBoth = gen3(function* () {
+  const pullBoth = gen4(function* () {
     const fiberLeft = yield* forkIn2(pullLeft, scope3);
     const fiberRight = yield* forkIn2(pullRight, scope3);
     return yield* joinAll([fiberLeft, fiberRight]);
@@ -12941,7 +13086,7 @@ var zipWithArray = /* @__PURE__ */ dual(3, (left, right, f) => fromChannel3(from
   let state = {
     _tag: "PullBoth"
   };
-  const pull = gen3(function* () {
+  const pull = gen4(function* () {
     const [left2, right2] = state._tag === "PullBoth" ? yield* pullBoth : state._tag === "PullLeft" ? [yield* pullLeft, state.rightArray] : [state.leftArray, yield* pullRight];
     const result4 = f(left2, right2);
     if (isReadonlyArrayNonEmpty(result4[1])) {
@@ -13065,7 +13210,7 @@ var raceAll3 = (...streams) => fromChannel3(fromTransform((_, scope3) => sync3((
           return close(childScope, exit3);
         }
         winner = exit3.value[0];
-        return void_4;
+        return void_5;
       }
       return close(childScope, exit3);
     }), map8(([, chunk]) => chunk));
@@ -13087,7 +13232,7 @@ var partitionQueue = /* @__PURE__ */ dual((args2) => isStream(args2[0]), /* @__P
   const fails = yield* make14({
     capacity: capacity2
   });
-  yield* gen3(function* () {
+  yield* gen4(function* () {
     while (true) {
       const chunk = yield* pull;
       const excluded = [];
@@ -13119,7 +13264,7 @@ var partitionQueue = /* @__PURE__ */ dual((args2) => isStream(args2[0]), /* @__P
   }).pipe(onError2((cause) => {
     failCauseUnsafe(passes, cause);
     failCauseUnsafe(fails, cause);
-    return void_4;
+    return void_5;
   }), forkIn2(scope3));
   return [passes, fails];
 }));
@@ -13148,33 +13293,33 @@ var catchCause5 = /* @__PURE__ */ dual(2, (self, f) => self.channel.pipe(catchCa
 var tapCause5 = /* @__PURE__ */ dual(2, (self, f) => self.channel.pipe(tapCause4(f), fromChannel3));
 var catch_5 = /* @__PURE__ */ dual(2, (self, f) => fromChannel3(catch_4(self.channel, (error) => f(error).channel)));
 var tapError5 = /* @__PURE__ */ dual(2, (self, f) => self.channel.pipe(tapError4(f), fromChannel3));
-var catchIf4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, predicate, f, orElse2) => fromChannel3(catchIf3(toChannel2(self), predicate, (e) => f(e).channel, orElse2 && ((e) => orElse2(e).channel))));
-var catchFilter4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, filter9, f, orElse2) => fromChannel3(catchFilter3(toChannel2(self), filter9, (e) => f(e).channel, orElse2 && ((e) => orElse2(e).channel))));
-var catchTag4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, k, f, orElse2) => {
+var catchIf4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, predicate, f, orElse3) => fromChannel3(catchIf3(toChannel2(self), predicate, (e) => f(e).channel, orElse3 && ((e) => orElse3(e).channel))));
+var catchFilter4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, filter9, f, orElse3) => fromChannel3(catchFilter3(toChannel2(self), filter9, (e) => f(e).channel, orElse3 && ((e) => orElse3(e).channel))));
+var catchTag4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, k, f, orElse3) => {
   const pred = Array.isArray(k) ? (e) => hasProperty(e, "_tag") && k.includes(e._tag) : isTagged(k);
-  return catchIf4(self, pred, f, orElse2);
+  return catchIf4(self, pred, f, orElse3);
 });
-var catchTags3 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, cases, orElse2) => {
+var catchTags3 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, cases, orElse3) => {
   let keys3;
   return catchFilter4(self, (e) => {
     keys3 ??= Object.keys(cases);
     return hasProperty(e, "_tag") && isString2(e["_tag"]) && keys3.includes(e["_tag"]) ? succeed2(e) : fail2(e);
-  }, (e) => cases[e["_tag"]](e), orElse2);
+  }, (e) => cases[e["_tag"]](e), orElse3);
 });
-var catchReason4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, errorTag, reasonTag, f, orElse2) => fromChannel3(catchReason3(toChannel2(self), errorTag, reasonTag, (reason, error) => f(reason, error).channel, orElse2 && ((reason, error) => orElse2(reason, error).channel))));
-var catchReasons4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, errorTag, cases, orElse2) => {
+var catchReason4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, errorTag, reasonTag, f, orElse3) => fromChannel3(catchReason3(toChannel2(self), errorTag, reasonTag, (reason, error) => f(reason, error).channel, orElse3 && ((reason, error) => orElse3(reason, error).channel))));
+var catchReasons4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, errorTag, cases, orElse3) => {
   const handlers = Object.create(null);
   for (const key of Object.keys(cases)) {
     const handler = cases[key];
     handlers[key] = (reason, error) => handler(reason, error).channel;
   }
-  const orElseHandler = orElse2 && ((reason, error) => orElse2(reason, error).channel);
+  const orElseHandler = orElse3 && ((reason, error) => orElse3(reason, error).channel);
   return fromChannel3(catchReasons3(self.channel, errorTag, handlers, orElseHandler));
 });
 var mapError6 = /* @__PURE__ */ dual(2, (self, f) => fromChannel3(mapError5(self.channel, f)));
 var catchCauseIf4 = /* @__PURE__ */ dual(3, (self, predicate, f) => fromChannel3(catchCauseIf3(self.channel, predicate, (cause) => f(cause).channel)));
 var catchCauseFilter4 = /* @__PURE__ */ dual(3, (self, filter9, f) => fromChannel3(catchCauseFilter3(self.channel, filter9, (failure, cause) => f(failure, cause).channel)));
-var orElseIfEmpty2 = /* @__PURE__ */ dual(2, (self, orElse2) => fromChannel3(orElseIfEmpty(self.channel, (_) => toChannel2(orElse2()))));
+var orElseIfEmpty2 = /* @__PURE__ */ dual(2, (self, orElse3) => fromChannel3(orElseIfEmpty(self.channel, (_) => toChannel2(orElse3()))));
 var orElseSucceed3 = /* @__PURE__ */ dual(2, (self, f) => catch_5(self, (e) => succeed8(f(e))));
 var orDie5 = (self) => fromChannel3(orDie4(self.channel));
 var ignore4 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, options) => fromChannel3(ignore3(self.channel, options)));
@@ -13208,7 +13353,7 @@ var withExecutionPlan3 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (se
     attemptState = state;
   })), (exit3) => suspend3(() => {
     if (attemptState === undefined)
-      return void_4;
+      return void_5;
     const state = attemptState;
     attemptState = undefined;
     return emitter.end(state, exit3);
@@ -13238,7 +13383,7 @@ var withExecutionPlan3 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (se
     }
     return catch_5(preventFallbackOnPartialStream ? onFirst2(nextStream, (_) => {
       receivedElements = true;
-      return void_4;
+      return void_5;
     }) : nextStream, (error) => {
       i++;
       if (preventFallbackOnPartialStream && receivedElements) {
@@ -13293,7 +13438,7 @@ var takeUntil = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, predi
 var takeUntilEffect = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, predicate, options) => transformPull2(self, (pull, _scope) => sync3(() => {
   let i = 0;
   let done4 = false;
-  return gen3(function* () {
+  return gen4(function* () {
     if (done4)
       return yield* done2();
     const chunk = yield* pull;
@@ -13382,7 +13527,7 @@ var dropWhileFilter = /* @__PURE__ */ dual(2, (self, filter9) => transformPull2(
 var dropWhileEffect = /* @__PURE__ */ dual(2, (self, predicate) => transformPull2(self, (pull, _scope) => sync3(() => {
   let dropping3 = true;
   let index = 0;
-  const filtered = gen3(function* () {
+  const filtered = gen4(function* () {
     while (true) {
       const arr = yield* pull;
       for (let i = 0;i < arr.length; i++) {
@@ -13585,7 +13730,7 @@ var debounce = /* @__PURE__ */ dual(2, (self, duration) => transformPull2(self, 
     emitLatch.openUnsafe();
     lastArr = arr;
     emitAtMs = clock.currentTimeMillisUnsafe() + durationMs;
-    return void_4;
+    return void_5;
   }), forever4({
     disableYield: true
   }), onError2((cause_) => {
@@ -13593,7 +13738,7 @@ var debounce = /* @__PURE__ */ dual(2, (self, duration) => transformPull2(self, 
     emitAtMs = clock.currentTimeMillisUnsafe();
     emitLatch.openUnsafe();
     endLatch.openUnsafe();
-    return void_4;
+    return void_5;
   }), forkIn2(scope3));
   const sleepLoop = suspend3(function loop() {
     const now2 = clock.currentTimeMillisUnsafe();
@@ -13729,7 +13874,7 @@ var groupByImpl = (self, f, options) => transformPullBracket(self, fnUntraced2(f
   const queues = yield* make16({
     lookup: (key) => acquireRelease2(make14({
       capacity: options?.bufferSize ?? 4096
-    }).pipe(tap4((queue) => {
+    }).pipe(tap5((queue) => {
       set2(queueMap, key, queue);
       return offer(out, [key, fromQueue(queue)]);
     })), (queue) => {
@@ -13961,7 +14106,7 @@ var interleaveWith = /* @__PURE__ */ dual(3, (self, that, decider) => fromChanne
     rightDone = true;
     return succeed6(retry5);
   }));
-  return gen3(function* () {
+  return gen4(function* () {
     while (true) {
       if (leftDone && rightDone) {
         return yield* done2();
@@ -14002,12 +14147,12 @@ var withSpan5 = function() {
   }
   return (self) => fromChannel3(withSpan4(self.channel, name, options));
 };
-var Do4 = /* @__PURE__ */ succeed8({});
-var let_5 = /* @__PURE__ */ dual(3, (self, name, f) => map10(self, (a) => ({
+var Do5 = /* @__PURE__ */ succeed8({});
+var let_6 = /* @__PURE__ */ dual(3, (self, name, f) => map10(self, (a) => ({
   ...a,
   [name]: f(a)
 })));
-var bind5 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, tag, f, options) => flatMap7(self, (a) => map10(f(a), (b) => ({
+var bind6 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, tag, f, options) => flatMap7(self, (a) => map10(f(a), (b) => ({
   ...a,
   [tag]: b
 })), options));
@@ -14015,7 +14160,7 @@ var bindEffect = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, tag,
   ...a,
   [tag]: b
 })), options));
-var bindTo5 = /* @__PURE__ */ dual(2, (self, name) => map10(self, (a) => ({
+var bindTo6 = /* @__PURE__ */ dual(2, (self, name) => map10(self, (a) => ({
   [name]: a
 })));
 var run = /* @__PURE__ */ dual(2, (self, sink) => scopedWith2((scope3) => toPullScoped(self.channel, scope3).pipe(flatMap5((upstream) => sink.transform(upstream, scope3)), map8(([a]) => a))));
@@ -14129,7 +14274,7 @@ var toAsyncIterableWith = /* @__PURE__ */ dual(2, (self, context3) => ({
       if (closePromise)
         return closePromise;
       const fiber3 = currentFiber;
-      closePromise = runPromise3(as3(andThen3(fiber3 ? interrupt5(fiber3) : void_4, close(scope3, exit3)), {
+      closePromise = runPromise3(as3(andThen4(fiber3 ? interrupt5(fiber3) : void_5, close(scope3, exit3)), {
         done: true,
         value: undefined
       }));
@@ -14165,7 +14310,7 @@ var toAsyncIterableWith = /* @__PURE__ */ dual(2, (self, context3) => ({
           currentIter = exit3.value[Symbol.iterator]();
           return currentIter.next();
         } else if (isDoneCause(exit3.cause)) {
-          return close2(void_3);
+          return close2(void_4);
         }
         if (closePromise && hasInterruptsOnly2(exit3.cause)) {
           return closePromise;
@@ -14174,7 +14319,7 @@ var toAsyncIterableWith = /* @__PURE__ */ dual(2, (self, context3) => ({
         throw squash(exit3.cause);
       },
       return() {
-        return close2(void_3);
+        return close2(void_4);
       },
       async throw(error) {
         await closeAndReportError(die3(error));
@@ -14320,7 +14465,7 @@ var makeNoop = (fileSystem) => FileSystem.of({
     return fail6(notFound2("realPath", path));
   },
   remove() {
-    return void_4;
+    return void_5;
   },
   rename(oldPath) {
     return fail6(notFound2("rename", oldPath));
@@ -15601,7 +15746,7 @@ function passthrough2() {
   return passthrough_;
 }
 function onSome(f) {
-  return new Getter((oe, options) => isNone2(oe) ? succeedNone2 : f(oe.value, options));
+  return new Getter((oe, options) => isNone2(oe) ? succeedNone3 : f(oe.value, options));
 }
 function transform(f) {
   return transformOptional(map(f));
@@ -15613,7 +15758,7 @@ function transformOptional(f) {
   return new Getter((oe) => succeed6(f(oe)));
 }
 function omit2() {
-  return new Getter(() => succeedNone2);
+  return new Getter(() => succeedNone3);
 }
 function withDefault(defaultValue) {
   return new Getter((o) => {
@@ -16475,7 +16620,7 @@ class Void extends Base2 {
     return "void";
   }
 }
-var void_5 = /* @__PURE__ */ new Void;
+var void_6 = /* @__PURE__ */ new Void;
 class Never extends Base2 {
   _tag = "Never";
   getParser() {
@@ -17039,15 +17184,15 @@ class Objects extends Base2 {
     let indexes;
     const finishIndex = (s, key, k2, inputValue, exitValue) => {
       if (exitValue._tag === "Failure") {
-        return wrapPropertyKeyIssue(s, ast, key, exitValue) ?? void_3;
+        return wrapPropertyKeyIssue(s, ast, key, exitValue) ?? void_4;
       }
       const value2 = exitValue === sameExit ? inputValue : exitValue[args];
       if (k2 !== missing && value2 !== missing) {
         if (hasProperties && (expectedKeysSet.has(key) || expectedKeysSet.has(k2)))
-          return void_3;
+          return void_4;
         assignProperty(s.out, k2, value2);
       }
-      return void_3;
+      return void_4;
     };
     const parseIndex = (s, key, index, exitKey) => {
       if (!exitKey) {
@@ -17058,7 +17203,7 @@ class Objects extends Base2 {
         exitKey = eff;
       }
       if (exitKey._tag === "Failure") {
-        return wrapPropertyKeyIssue(s, ast, key, exitKey) ?? void_3;
+        return wrapPropertyKeyIssue(s, ast, key, exitKey) ?? void_4;
       }
       const k2 = exitKey === sameExit ? key : exitKey[args];
       const inputValue = s.input[key];
@@ -17613,7 +17758,7 @@ var parseUnion = /* @__PURE__ */ iterateEager()({
       if (s.successes) {
         s.successes.push(candidate);
       } else {
-        return void_3;
+        return void_4;
       }
     }
   }
@@ -17980,29 +18125,29 @@ var toType = /* @__PURE__ */ memoizeIdempotent((ast) => {
   return type;
 });
 var toEncoded = /* @__PURE__ */ memoizeIdempotent((ast) => {
-  return toType(flip3(ast));
+  return toType(flip4(ast));
 });
 function flipEncoding(ast, encoding) {
   const links = encoding;
   const len = links.length;
   const last3 = links[len - 1];
-  const ls = [new Link(flip3(replaceEncoding(ast, undefined)), links[0].transformation.flip())];
+  const ls = [new Link(flip4(replaceEncoding(ast, undefined)), links[0].transformation.flip())];
   for (let i = 1;i < len; i++) {
-    ls.unshift(new Link(flip3(links[i - 1].to), links[i].transformation.flip()));
+    ls.unshift(new Link(flip4(links[i - 1].to), links[i].transformation.flip()));
   }
-  const to = flip3(last3.to);
+  const to = flip4(last3.to);
   if (to.encoding) {
     return replaceEncoding(to, [...to.encoding, ...ls]);
   } else {
     return replaceEncoding(to, ls);
   }
 }
-var flip3 = /* @__PURE__ */ memoize((ast) => {
+var flip4 = /* @__PURE__ */ memoize((ast) => {
   if (ast.encoding) {
     return flipEncoding(ast, ast.encoding);
   }
   const out = ast;
-  return out.flip?.(flip3) ?? out.recur?.(flip3) ?? out;
+  return out.flip?.(flip4) ?? out.recur?.(flip4) ?? out;
 });
 function containsUndefined(ast) {
   switch (ast._tag) {
@@ -18557,7 +18702,7 @@ var pullIntoWritable = (options) => options.pull.pipe(flatMap5((chunk) => {
         return;
       }
     }
-    resume(void_4);
+    resume(void_5);
   });
 }), forever4({
   disableYield: true
@@ -18652,7 +18797,7 @@ var toPlatformError = (method, error, command) => {
 var taskkill = (childProcess, onExit5 = () => {}) => NodeChildProcess.execFile("taskkill", ["/pid", String(childProcess.pid), "/T", "/F"], {
   windowsHide: true
 }, onExit5);
-var make27 = /* @__PURE__ */ gen3(function* () {
+var make27 = /* @__PURE__ */ gen4(function* () {
   const fs = yield* FileSystem;
   const path = yield* Path;
   const resolveWorkingDirectory = fnUntraced2(function* (options) {
@@ -18844,11 +18989,11 @@ var make27 = /* @__PURE__ */ gen3(function* () {
     if (isSink(stderrConfig.stream)) {
       stderr = transduce(stderr, stderrConfig.stream);
     }
-    const all4 = merge4(stdout, stderr);
+    const all5 = merge5(stdout, stderr);
     return {
       stdout,
       stderr,
-      all: all4
+      all: all5
     };
   };
   const spawn2 = (command, spawnOptions) => callback2((resume) => {
@@ -18874,7 +19019,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
           if (error) {
             resume(fail6(toPlatformError("kill", toError(error), command)));
           } else {
-            resume(void_4);
+            resume(void_5);
           }
         });
       });
@@ -18901,7 +19046,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
       const error = new globalThis.Error("Failed to kill child process");
       return fail6(toPlatformError("kill", error, command));
     }
-    return void_4;
+    return void_5;
   });
   const withTimeout = (childProcess, command, options) => (kill) => {
     const killSignal = options?.killSignal ?? "SIGTERM";
@@ -18911,8 +19056,8 @@ var make27 = /* @__PURE__ */ gen3(function* () {
     });
   };
   const getSourceStream = (handle, from) => {
-    const fromOption4 = from ?? "stdout";
-    switch (fromOption4) {
+    const fromOption5 = from ?? "stdout";
+    switch (fromOption5) {
       case "stdout":
         return handle.stdout;
       case "stderr":
@@ -18920,7 +19065,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
       case "all":
         return handle.all;
       default: {
-        const fd = parseFdName(fromOption4);
+        const fd = parseFdName(fromOption5);
         if (isNotUndefined(fd)) {
           return handle.getOutputFd(fd);
         }
@@ -18951,12 +19096,12 @@ var make27 = /* @__PURE__ */ gen3(function* () {
             if (code !== 0 && isNotNull(code)) {
               return yield* ignore2(killWithTimeout(killProcessGroup));
             }
-            return yield* void_4;
+            return yield* void_5;
           }
           if (!isReferenced) {
-            return yield* void_4;
+            return yield* void_5;
           }
-          return yield* killWithTimeout((command, childProcess3, signal) => killProcessGroup(command, childProcess3, signal).pipe(catch_3(() => killProcess(command, childProcess3, signal)), andThen3(_await(exitSignal2)))).pipe(ignore2);
+          return yield* killWithTimeout((command, childProcess3, signal) => killProcessGroup(command, childProcess3, signal).pipe(catch_3(() => killProcess(command, childProcess3, signal)), andThen4(_await(exitSignal2)))).pipe(ignore2);
         }));
         const pid = ProcessId(childProcess.pid);
         childProcess.on("exit", (code) => {
@@ -18979,7 +19124,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
         });
         const stdin = yield* setupChildStdin(cmd, childProcess, stdinConfig);
         const {
-          all: all4,
+          all: all5,
           stderr,
           stdout
         } = setupChildOutputStreams(cmd, childProcess, stdoutConfig, stderrConfig);
@@ -18997,7 +19142,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
         });
         const kill = (options) => {
           const killWithTimeout = withTimeout(childProcess, cmd, options);
-          return killWithTimeout((command, childProcess2, signal) => killProcessGroup(command, childProcess2, signal).pipe(catch_3(() => killProcess(command, childProcess2, signal)), andThen3(_await(exitSignal)))).pipe(asVoid4);
+          return killWithTimeout((command, childProcess2, signal) => killProcessGroup(command, childProcess2, signal).pipe(catch_3(() => killProcess(command, childProcess2, signal)), andThen4(_await(exitSignal)))).pipe(asVoid4);
         };
         return makeHandle({
           pid,
@@ -19007,7 +19152,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
           stdin,
           stdout,
           stderr,
-          all: all4,
+          all: all5,
           getInputFd,
           getOutputFd,
           unref
@@ -19064,7 +19209,7 @@ var make27 = /* @__PURE__ */ gen3(function* () {
         const kill = (options) => forEach2([...handles].reverse(), (handle2) => ignore2(handle2.kill(options)), {
           discard: true
         });
-        const unref = gen3(function* () {
+        const unref = gen4(function* () {
           const rerefs = [];
           for (const handle2 of handles) {
             rerefs.push(yield* handle2.unref);
@@ -19442,7 +19587,7 @@ var makeFile = /* @__PURE__ */ (() => {
           if (!this.append) {
             this.position = position + BigInt(bytesWritten);
           }
-          return bytesWritten < buffer3.length ? this.writeAllChunk(buffer3.subarray(bytesWritten)) : void_4;
+          return bytesWritten < buffer3.length ? this.writeAllChunk(buffer3.subarray(bytesWritten)) : void_5;
         });
       });
     }
@@ -19587,7 +19732,7 @@ var writeFile2 = (path, data, options) => callback2((resume, signal) => {
       if (err) {
         resume(fail6(handleErrnoException("FileSystem", "writeFile")(err, [path])));
       } else {
-        resume(void_4);
+        resume(void_5);
       }
     });
   } catch (err) {
@@ -19888,7 +20033,7 @@ __export(exports_Schema, {
   fromJsonString: () => fromJsonString2,
   fromFormData: () => fromFormData2,
   fromBrand: () => fromBrand,
-  flip: () => flip4,
+  flip: () => flip5,
   fieldsAssign: () => fieldsAssign,
   extendTo: () => extendTo,
   encodeUnknownSync: () => encodeUnknownSync2,
@@ -20877,7 +21022,7 @@ function decodeUnknownSync(schema, options) {
 }
 var decodeSync = decodeUnknownSync;
 function encodeUnknownEffect(schema, options) {
-  const parser = run2(flip3(schema.ast));
+  const parser = run2(flip4(schema.ast));
   return options === undefined ? parser : (input, overrideOptions) => parser(input, mergeParseOptions(options, overrideOptions));
 }
 var encodeEffect = encodeUnknownEffect;
@@ -21173,10 +21318,10 @@ function makeCombiner(combiners, options) {
     const keys4 = Reflect.ownKeys(combiners);
     const out = {};
     for (const key of keys4) {
-      const merge5 = combiners[key].combine(self[key], that[key]);
-      if (omitKeyWhen(merge5))
+      const merge6 = combiners[key].combine(self[key], that[key]);
+      if (omitKeyWhen(merge6))
         continue;
-      assignProperty(out, key, merge5);
+      assignProperty(out, key, merge6);
     }
     return out;
   });
@@ -23583,6 +23728,16 @@ function id() {
   return identityIso;
 }
 
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Redacted.js
+var exports_Redacted = {};
+__export(exports_Redacted, {
+  wipeUnsafe: () => wipeUnsafe,
+  value: () => value3,
+  makeEquivalence: () => makeEquivalence7,
+  make: () => make36,
+  isRedacted: () => isRedacted
+});
+
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/redacted.js
 var redactedRegistry = /* @__PURE__ */ new WeakMap;
 var value2 = (self) => {
@@ -23625,6 +23780,7 @@ var Proto5 = {
   }
 };
 var value3 = value2;
+var wipeUnsafe = (self) => redactedRegistry.delete(self);
 var makeEquivalence7 = (isEquivalent) => make3((x, y) => isEquivalent(value3(x), value3(y)));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaError.js
@@ -23665,7 +23821,7 @@ function annotate3(annotations2) {
   return (self) => self.annotate(annotations2);
 }
 function annotateEncoded(annotations2) {
-  return (self) => flip4(flip4(self).annotate(annotations2));
+  return (self) => flip5(flip5(self).annotate(annotations2));
 }
 function annotateKey2(annotations2) {
   return (self) => {
@@ -23916,11 +24072,11 @@ var FlipTypeId = "~effect/Schema/flip";
 function isFlip$(schema) {
   return hasProperty(schema, FlipTypeId) && schema[FlipTypeId] === FlipTypeId;
 }
-function flip4(schema) {
+function flip5(schema) {
   if (isFlip$(schema)) {
-    return schema.schema.rebuild(flip3(schema.ast));
+    return schema.schema.rebuild(flip4(schema.ast));
   }
-  return make37(flip3(schema.ast), {
+  return make37(flip4(schema.ast), {
     [FlipTypeId]: FlipTypeId,
     schema
   });
@@ -23965,7 +24121,7 @@ var Number6 = /* @__PURE__ */ make37(number2);
 var Boolean3 = /* @__PURE__ */ make37(boolean);
 var Symbol3 = /* @__PURE__ */ make37(symbol3);
 var BigInt5 = /* @__PURE__ */ make37(bigInt);
-var Void2 = /* @__PURE__ */ make37(void_5);
+var Void2 = /* @__PURE__ */ make37(void_6);
 var ObjectKeyword2 = /* @__PURE__ */ make37(objectKeyword);
 function UniqueSymbol2(symbol4) {
   return make37(new UniqueSymbol(symbol4));
@@ -25673,7 +25829,7 @@ function Option(value4) {
   const schema = declareConstructor()([value4], ([value5]) => (input, ast, options) => {
     if (isOption2(input)) {
       if (isNone2(input)) {
-        return succeedNone2;
+        return succeedNone3;
       }
       return mapBothEager2(decodeUnknownEffect(value5)(input.value, options), {
         onSuccess: some2,
@@ -25853,7 +26009,7 @@ function Redacted(value4, options) {
   const decodeLabel = label !== undefined ? decodeUnknownEffect(Literal2(label)) : undefined;
   const schema = declareConstructor()([value4], ([value5]) => (input, ast, poptions) => {
     if (isRedacted(input)) {
-      const label2 = decodeLabel !== undefined ? mapErrorEager2(decodeLabel(input.label, poptions), (issue) => new Pointer(["label"], issue)) : void_4;
+      const label2 = decodeLabel !== undefined ? mapErrorEager2(decodeLabel(input.label, poptions), (issue) => new Pointer(["label"], issue)) : void_5;
       return flatMapEager2(label2, () => mapBothEager2(decodeUnknownEffect(value5)(value3(input), poptions), {
         onSuccess: () => input,
         onFailure: () => {
@@ -27907,7 +28063,7 @@ var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQu
   });
   const columns = sync3(() => stdout.columns ?? 0);
   const rows = sync3(() => stdout.rows ?? 0);
-  const readInput = gen3(function* () {
+  const readInput = gen4(function* () {
     const queue = yield* make14();
     const handleKeypress = (s, k) => {
       const userInput = {
@@ -27944,11 +28100,11 @@ var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQu
     return queue;
   });
   const readLine = suspend3(() => poll(lines).pipe(flatMap5(match({
-    onNone: () => scoped2(andThen3(get6(rlRef), take3(lines))),
+    onNone: () => scoped2(andThen4(get6(rlRef), take3(lines))),
     onSome: succeed6
   })), mapError4(() => new QuitError({}))));
   const display = (prompt) => uninterruptible2(callback2((resume) => {
-    stdout.write(prompt, (err) => isNullish(err) ? resume(void_4) : resume(fail6(badArgument({
+    stdout.write(prompt, (err) => isNullish(err) ? resume(void_5) : resume(fail6(badArgument({
       module: "Terminal",
       method: "display",
       description: "Failed to write prompt to stdout",
@@ -27984,7 +28140,7 @@ __export(exports_Config, {
   schema: () => schema,
   redacted: () => redacted,
   port: () => port,
-  orElse: () => orElse2,
+  orElse: () => orElse3,
   option: () => option3,
   number: () => number3,
   nonEmptyString: () => nonEmptyString,
@@ -28001,7 +28157,7 @@ __export(exports_Config, {
   duration: () => duration,
   date: () => date,
   boolean: () => boolean2,
-  all: () => all4,
+  all: () => all5,
   TrueValues: () => TrueValues,
   Record: () => Record2,
   Port: () => Port,
@@ -28184,18 +28340,18 @@ var map13 = /* @__PURE__ */ dual(2, (self, f) => {
 var mapOrFail = /* @__PURE__ */ dual(2, (self, f) => {
   return make41((provider, pathPrefix) => flatMap5(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Resolved" ? f(resolution.value).pipe(mapEager2((value4) => resolved(value4, resolution.hasInput)), mapErrorEager2((error) => evaluationFailure(error, resolution.hasInput))) : succeed6(resolution)));
 });
-var orElse2 = /* @__PURE__ */ dual(2, (self, that) => {
+var orElse3 = /* @__PURE__ */ dual(2, (self, that) => {
   return make41((provider, pathPrefix) => matchEffect3(evaluateAt(self, provider, pathPrefix), {
     onFailure: (failure) => preserveInputEvidence(evaluateAt(that(failure.error), provider, pathPrefix), failure.hasInput),
     onSuccess: (resolution) => resolution._tag === "Absent" ? evaluateAt(that(resolution.error), provider, pathPrefix) : succeed6(resolution)
   }));
 });
-function all4(arg) {
+function all5(arg) {
   const configs = Array.isArray(arg) ? arg : (Symbol.iterator in arg) ? [...arg] : arg;
   if (Array.isArray(configs)) {
-    return make41((provider, pathPrefix) => flatMapEager2(all3(configs.map((config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveArray));
+    return make41((provider, pathPrefix) => flatMapEager2(all4(configs.map((config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveArray));
   } else {
-    return make41((provider, pathPrefix) => flatMapEager2(all3(map3(configs, (config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveRecord));
+    return make41((provider, pathPrefix) => flatMapEager2(all4(map3(configs, (config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveRecord));
   }
 }
 var resolveArray = (results) => {
@@ -28260,7 +28416,7 @@ var option3 = (self) => self.pipe(map13(some2), withDefault2(none2()));
 var unwrap5 = (wrapped) => {
   if (isConfig(wrapped))
     return wrapped;
-  return all4(map3(wrapped, (config) => unwrap5(config)));
+  return all5(map3(wrapped, (config) => unwrap5(config)));
 };
 var cursorToString = () => "<configuration>";
 var loadCursor = (provider, path) => provider.load(path).pipe(orDie3, mapEager2((node) => ({
@@ -28560,6 +28716,80 @@ var withTime = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, label)
 }), () => self, () => sync(() => {
   console.timeEnd(label);
 }))));
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ErrorReporter.js
+var exports_ErrorReporter = {};
+__export(exports_ErrorReporter, {
+  severity: () => severity,
+  report: () => report,
+  make: () => make42,
+  layer: () => layer13,
+  isIgnored: () => isIgnored,
+  ignore: () => ignore5,
+  getSeverity: () => getSeverity,
+  getAttributes: () => getAttributes,
+  attributes: () => attributes,
+  TypeId: () => TypeId41,
+  CurrentErrorReporters: () => CurrentErrorReporters2
+});
+var TypeId41 = "~effect/ErrorReporter";
+var make42 = (report) => {
+  const reported = new WeakSet;
+  return {
+    [TypeId41]: TypeId41,
+    report(options) {
+      if (reported.has(options.cause))
+        return;
+      reported.add(options.cause);
+      for (let i = 0;i < options.cause.reasons.length; i++) {
+        const reason = options.cause.reasons[i];
+        if (reason._tag === "Interrupt")
+          continue;
+        const original = reason._tag === "Fail" ? reason.error : reason.defect;
+        const isObject2 = typeof original === "object" && original !== null;
+        if (isObject2) {
+          if (reported.has(original))
+            continue;
+          reported.add(original);
+        }
+        if (isIgnored(original))
+          continue;
+        const pretty2 = causePrettyError(original, reason.annotations);
+        report({
+          ...options,
+          error: pretty2,
+          severity: isObject2 ? getSeverity(original) : "Info",
+          attributes: isObject2 ? getAttributes(original) : emptyAttributes
+        });
+      }
+    }
+  };
+};
+var CurrentErrorReporters2 = CurrentErrorReporters;
+var layer13 = (reporters, options) => effect(CurrentErrorReporters2, withFiber2(fnUntraced2(function* (fiber3) {
+  const currentReporters = new Set(options?.mergeWithExisting === true ? fiber3.getRef(CurrentErrorReporters) : []);
+  for (const reporter of reporters) {
+    currentReporters.add(isEffect2(reporter) ? yield* reporter : reporter);
+  }
+  return currentReporters;
+})));
+var report = (cause) => withFiber2((fiber3) => {
+  reportCauseUnsafe(fiber3, cause);
+  return void_5;
+});
+var ignore5 = "~effect/ErrorReporter/ignore";
+var isIgnored = (u) => typeof u === "object" && u !== null && (ignore5 in u) && u[ignore5] === true;
+var severity = "~effect/ErrorReporter/severity";
+var getSeverity = (error2) => {
+  if (severity in error2 && values2.includes(error2[severity])) {
+    return error2[severity];
+  }
+  return "Info";
+};
+var attributes = "~effect/ErrorReporter/attributes";
+var getAttributes = (error2) => {
+  return attributes in error2 ? error2[attributes] : emptyAttributes;
+};
+var emptyAttributes = {};
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Ref.js
 var exports_Ref = {};
 __export(exports_Ref, {
@@ -28572,16 +28802,16 @@ __export(exports_Ref, {
   modifySome: () => modifySome,
   modify: () => modify4,
   makeUnsafe: () => makeUnsafe9,
-  make: () => make42,
+  make: () => make43,
   getUnsafe: () => getUnsafe5,
   getAndUpdateSome: () => getAndUpdateSome,
   getAndUpdate: () => getAndUpdate,
   getAndSet: () => getAndSet,
   get: () => get9
 });
-var TypeId41 = "~effect/Ref";
+var TypeId42 = "~effect/Ref";
 var RefProto = {
-  [TypeId41]: {
+  [TypeId42]: {
     _A: identity
   },
   ...PipeInspectableProto,
@@ -28597,7 +28827,7 @@ var makeUnsafe9 = (value4) => {
   self.ref = make11(value4);
   return self;
 };
-var make42 = (value4) => sync3(() => makeUnsafe9(value4));
+var make43 = (value4) => sync3(() => makeUnsafe9(value4));
 var get9 = (self) => sync3(() => self.ref.current);
 var set4 = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => set(self.ref, value4)));
 var getAndSet = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => {
@@ -29544,119 +29774,36 @@ var makeUsageBudget = (limits) => makeUsageBudgetRoot(UsageBudgetNodeConfig.make
   id: "standalone-run",
   limits
 }));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/LanguageModel.js
-var exports_LanguageModel = {};
-__export(exports_LanguageModel, {
-  streamText: () => streamText,
-  make: () => make48,
-  getObjectName: () => getObjectName,
-  generateText: () => generateText,
-  generateObject: () => generateObject,
-  defaultCodecTransformer: () => defaultCodecTransformer2,
-  LanguageModel: () => LanguageModel,
-  GenerateTextResponse: () => GenerateTextResponse,
-  GenerateObjectResponse: () => GenerateObjectResponse
-});
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FiberSet.js
-var TypeId42 = "~effect/FiberSet";
-var isFiberSet = (u) => hasProperty(u, TypeId42);
-var Proto8 = {
-  [TypeId42]: TypeId42,
-  [Symbol.iterator]() {
-    if (this.state._tag === "Closed") {
-      return empty2();
-    }
-    return this.state.backing[Symbol.iterator]();
-  },
-  ...PipeInspectableProto,
-  toJSON() {
-    return {
-      _id: "FiberSet",
-      state: this.state
-    };
-  }
-};
-var makeUnsafe10 = (backing, deferred) => {
-  const self = Object.create(Proto8);
-  self.state = {
-    _tag: "Open",
-    backing
-  };
-  self.deferred = deferred;
-  return self;
-};
-var make43 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
-  const state = set5.state;
-  if (state._tag === "Closed")
-    return void_4;
-  set5.state = {
-    _tag: "Closed"
-  };
-  const fibers = state.backing;
-  return interruptAll(fibers).pipe(into(set5.deferred));
-}));
-var internalFiberId = -1;
-var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
-var addUnsafe = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
-  if (self.state._tag === "Closed") {
-    fiber3.interruptUnsafe(internalFiberId);
-    return;
-  } else if (self.state.backing.has(fiber3)) {
-    return;
-  }
-  self.state.backing.add(fiber3);
-  fiber3.addObserver((exit3) => {
-    if (self.state._tag === "Closed") {
-      return;
-    }
-    self.state.backing.delete(fiber3);
-    if (isFailure4(exit3) && (options?.propagateInterruption === true ? !isInternalInterruption(exit3.cause) : !hasInterruptsOnly2(exit3.cause))) {
-      doneUnsafe(self.deferred, exit3);
-    }
-  });
-});
-var constInterruptedFiber = /* @__PURE__ */ function() {
-  let fiber3 = undefined;
-  return () => {
-    if (fiber3 === undefined) {
-      fiber3 = runFork2(interrupt4);
-    }
-    return fiber3;
-  };
-}();
-var run3 = function() {
-  const self = arguments[0];
-  if (!isEffect2(arguments[1])) {
-    const options = arguments[1];
-    return (effect2) => runImpl(self, effect2, options);
-  }
-  return runImpl(self, arguments[1], arguments[2]);
-};
-var runImpl = (self, effect2, options) => withFiber2((parent) => {
-  if (self.state._tag === "Closed") {
-    return sync3(constInterruptedFiber);
-  }
-  const fiber3 = runForkWith2(parent.context)(effect2);
-  addUnsafe(self, fiber3, options);
-  return succeed6(fiber3);
-});
-var runtime = (self) => () => map8(context2(), (services2) => {
-  const runFork3 = runForkWith2(services2);
-  return (effect2, options) => {
-    if (self.state._tag === "Closed") {
-      return constInterruptedFiber();
-    }
-    const fiber3 = runFork3(effect2, options);
-    addUnsafe(self, fiber3, options);
-    return fiber3;
-  };
-});
-var join4 = (self) => _await(self.deferred);
-var awaitEmpty = (self) => whileLoop2({
-  while: () => self.state._tag === "Open" && self.state.backing.size > 0,
-  body: () => await_(headUnsafe(self)),
-  step: constVoid
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/AiError.js
+var exports_AiError = {};
+__export(exports_AiError, {
+  reasonFromHttpStatus: () => reasonFromHttpStatus,
+  make: () => make44,
+  isAiErrorReason: () => isAiErrorReason,
+  isAiError: () => isAiError,
+  UsageInfo: () => UsageInfo,
+  UnsupportedSchemaError: () => UnsupportedSchemaError,
+  UnknownError: () => UnknownError3,
+  ToolkitRequiredError: () => ToolkitRequiredError,
+  ToolResultEncodingError: () => ToolResultEncodingError,
+  ToolParameterValidationError: () => ToolParameterValidationError,
+  ToolNotFoundError: () => ToolNotFoundError,
+  ToolConfigurationError: () => ToolConfigurationError,
+  StructuredOutputError: () => StructuredOutputError,
+  RateLimitError: () => RateLimitError,
+  QuotaExhaustedError: () => QuotaExhaustedError,
+  ProviderMetadata: () => ProviderMetadata2,
+  NetworkError: () => NetworkError,
+  InvalidUserInputError: () => InvalidUserInputError,
+  InvalidToolResultError: () => InvalidToolResultError,
+  InvalidRequestError: () => InvalidRequestError,
+  InvalidOutputError: () => InvalidOutputError,
+  InternalProviderError: () => InternalProviderError,
+  HttpContext: () => HttpContext,
+  ContentPolicyError: () => ContentPolicyError,
+  AuthenticationError: () => AuthenticationError,
+  AiErrorReason: () => AiErrorReason,
+  AiError: () => AiError
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Response.js
@@ -30354,6 +30501,7 @@ class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
     return `${this.module}.${this.method}: ${this.reason.message}`;
   }
 }
+var isAiError = (u) => hasProperty(u, TypeId43);
 var isAiErrorReason = (u) => hasProperty(u, ReasonTypeId2);
 var make44 = (params) => new AiError(params);
 var reasonFromHttpStatus = (params) => {
@@ -30397,6 +30545,120 @@ var reasonFromHttpStatus = (params) => {
       return new UnknownError3(common);
   }
 };
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/LanguageModel.js
+var exports_LanguageModel = {};
+__export(exports_LanguageModel, {
+  streamText: () => streamText,
+  make: () => make49,
+  getObjectName: () => getObjectName,
+  generateText: () => generateText,
+  generateObject: () => generateObject,
+  defaultCodecTransformer: () => defaultCodecTransformer2,
+  LanguageModel: () => LanguageModel,
+  GenerateTextResponse: () => GenerateTextResponse,
+  GenerateObjectResponse: () => GenerateObjectResponse
+});
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FiberSet.js
+var TypeId44 = "~effect/FiberSet";
+var isFiberSet = (u) => hasProperty(u, TypeId44);
+var Proto8 = {
+  [TypeId44]: TypeId44,
+  [Symbol.iterator]() {
+    if (this.state._tag === "Closed") {
+      return empty2();
+    }
+    return this.state.backing[Symbol.iterator]();
+  },
+  ...PipeInspectableProto,
+  toJSON() {
+    return {
+      _id: "FiberSet",
+      state: this.state
+    };
+  }
+};
+var makeUnsafe10 = (backing, deferred) => {
+  const self = Object.create(Proto8);
+  self.state = {
+    _tag: "Open",
+    backing
+  };
+  self.deferred = deferred;
+  return self;
+};
+var make45 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
+  const state = set5.state;
+  if (state._tag === "Closed")
+    return void_5;
+  set5.state = {
+    _tag: "Closed"
+  };
+  const fibers = state.backing;
+  return interruptAll(fibers).pipe(into(set5.deferred));
+}));
+var internalFiberId = -1;
+var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
+var addUnsafe = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
+  if (self.state._tag === "Closed") {
+    fiber3.interruptUnsafe(internalFiberId);
+    return;
+  } else if (self.state.backing.has(fiber3)) {
+    return;
+  }
+  self.state.backing.add(fiber3);
+  fiber3.addObserver((exit3) => {
+    if (self.state._tag === "Closed") {
+      return;
+    }
+    self.state.backing.delete(fiber3);
+    if (isFailure4(exit3) && (options?.propagateInterruption === true ? !isInternalInterruption(exit3.cause) : !hasInterruptsOnly2(exit3.cause))) {
+      doneUnsafe(self.deferred, exit3);
+    }
+  });
+});
+var constInterruptedFiber = /* @__PURE__ */ function() {
+  let fiber3 = undefined;
+  return () => {
+    if (fiber3 === undefined) {
+      fiber3 = runFork2(interrupt4);
+    }
+    return fiber3;
+  };
+}();
+var run3 = function() {
+  const self = arguments[0];
+  if (!isEffect2(arguments[1])) {
+    const options = arguments[1];
+    return (effect2) => runImpl(self, effect2, options);
+  }
+  return runImpl(self, arguments[1], arguments[2]);
+};
+var runImpl = (self, effect2, options) => withFiber2((parent) => {
+  if (self.state._tag === "Closed") {
+    return sync3(constInterruptedFiber);
+  }
+  const fiber3 = runForkWith2(parent.context)(effect2);
+  addUnsafe(self, fiber3, options);
+  return succeed6(fiber3);
+});
+var runtime = (self) => () => map8(context2(), (services2) => {
+  const runFork3 = runForkWith2(services2);
+  return (effect2, options) => {
+    if (self.state._tag === "Closed") {
+      return constInterruptedFiber();
+    }
+    const fiber3 = runFork3(effect2, options);
+    addUnsafe(self, fiber3, options);
+    return fiber3;
+  };
+});
+var join4 = (self) => _await(self.deferred);
+var awaitEmpty = (self) => whileLoop2({
+  while: () => self.state._tag === "Open" && self.state.backing.size > 0,
+  body: () => await_(headUnsafe(self)),
+  step: constVoid
+});
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Random.js
 var Random3 = Random;
@@ -30469,7 +30731,7 @@ __export(exports_Prompt, {
   prependSystem: () => prependSystem,
   makePart: () => makePart2,
   makeMessage: () => makeMessage,
-  make: () => make45,
+  make: () => make46,
   isPrompt: () => isPrompt,
   isPart: () => isPart2,
   isMessage: () => isMessage,
@@ -30640,8 +30902,8 @@ var ToolMessage = /* @__PURE__ */ Struct({
 });
 var toolMessage = (params) => makeMessage("tool", params);
 var Message = /* @__PURE__ */ Union2([SystemMessage, UserMessage, AssistantMessage, ToolMessage]);
-var TypeId44 = "~effect/unstable/ai/Prompt";
-var isPrompt = (u) => hasProperty(u, TypeId44);
+var TypeId45 = "~effect/unstable/ai/Prompt";
+var isPrompt = (u) => hasProperty(u, TypeId45);
 var $Prompt = /* @__PURE__ */ declare((u) => isPrompt(u), {
   identifier: "Prompt"
 });
@@ -30664,7 +30926,7 @@ var Prompt = /* @__PURE__ */ Struct({
   })
 })));
 var Proto9 = {
-  [TypeId44]: TypeId44,
+  [TypeId45]: TypeId45,
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -30674,7 +30936,7 @@ var makePrompt = (content) => Object.assign(Object.create(Proto9), {
 });
 var decodeMessagesSync = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ ArraySchema(Message));
 var empty12 = /* @__PURE__ */ makePrompt([]);
-var make45 = (input) => {
+var make46 = (input) => {
   if (typeof input === "string") {
     const part = makePart2("text", {
       text: input
@@ -30822,7 +31084,7 @@ var fromResponseParts = (parts2) => {
   return makePrompt(messages);
 };
 var concat3 = /* @__PURE__ */ dual(2, (self, input) => {
-  const other = make45(input);
+  const other = make46(input);
   if (self.content.length === 0) {
     return other;
   }
@@ -30880,7 +31142,7 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
-var make46 = /* @__PURE__ */ sync3(() => {
+var make47 = /* @__PURE__ */ sync3(() => {
   const sentParts = new Map;
   const none3 = () => {
     sentParts.clear();
@@ -30937,8 +31199,8 @@ var make46 = /* @__PURE__ */ sync3(() => {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Telemetry.js
-var addSpanAttributes = (keyPrefix, transformKey) => (span2, attributes) => {
-  for (const [key, value4] of Object.entries(attributes)) {
+var addSpanAttributes = (keyPrefix, transformKey) => (span2, attributes2) => {
+  for (const [key, value4] of Object.entries(attributes2)) {
     if (isNotNullish(value4)) {
       span2.attribute(`${keyPrefix}.${transformKey(key)}`, value4);
     }
@@ -30972,11 +31234,11 @@ class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telem
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Toolkit.js
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
-  merge: () => merge5,
-  make: () => make47,
+  merge: () => merge6,
+  make: () => make48,
   empty: () => empty13
 });
-var TypeId45 = "~effect/ai/Toolkit";
+var TypeId46 = "~effect/ai/Toolkit";
 var Proto10 = {
   .../* @__PURE__ */ Prototype2({
     label: "Toolkit",
@@ -31091,10 +31353,10 @@ var Proto10 = {
       };
     })
   }),
-  [TypeId45]: TypeId45,
+  [TypeId46]: TypeId46,
   of: identity,
   toHandlers(build2) {
-    return gen3({
+    return gen4({
       self: this
     }, function* () {
       const services2 = yield* context2();
@@ -31134,8 +31396,8 @@ var resolveInput = (...tools) => {
   return output;
 };
 var empty13 = /* @__PURE__ */ makeProto2({});
-var make47 = (...tools) => makeProto2(resolveInput(...tools));
-var merge5 = (...toolkits) => {
+var make48 = (...tools) => makeProto2(resolveInput(...tools));
+var merge6 = (...toolkits) => {
   const tools = {};
   for (const toolkit of toolkits) {
     for (const [name, tool] of Object.entries(toolkit.tools)) {
@@ -31214,7 +31476,7 @@ class GenerateObjectResponse extends GenerateTextResponse {
     this.value = value4;
   }
 }
-var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
+var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
   const codecTransformer = params.codecTransformer ?? defaultCodecTransformer2;
   const parentSpanTransformer = yield* serviceOption2(CurrentSpanTransformer);
   const getSpanTransformer = serviceOption2(CurrentSpanTransformer).pipe(map8(orElse(() => parentSpanTransformer)));
@@ -31227,7 +31489,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
   }, fnUntraced2(function* (span2) {
     const spanTransformer = yield* getSpanTransformer;
     const providerOptions = {
-      prompt: make45(options.prompt),
+      prompt: make46(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -31258,7 +31520,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }, fnUntraced2(function* (span2) {
       const spanTransformer = yield* getSpanTransformer;
       const providerOptions = {
-        prompt: make45(options.prompt),
+        prompt: make46(options.prompt),
         tools: [],
         toolChoice: "none",
         responseFormat: {
@@ -31302,7 +31564,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
     });
     const providerOptions = {
-      prompt: make45(options.prompt),
+      prompt: make46(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -31522,13 +31784,13 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
       const schema2 = NonEmptyArray(StreamPart(empty13));
       const decodeParts2 = decodeEffect2(schema2);
-      return pipe(streamWithNonIncrementalFallback(), mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap4((decodedParts) => {
+      return pipe(streamWithNonIncrementalFallback(), mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap5((decodedParts) => {
         for (const part of decodedParts) {
           if (part.type === "response-metadata" && isNotUndefined(part.id)) {
             tracker.markParts(providerOptions.prompt.content, part.id);
           }
         }
-        return void_4;
+        return void_5;
       }) : identity)));
     }
     const toolkit = yield* resolveToolkit(options.toolkit);
@@ -31551,13 +31813,13 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
       const schema2 = NonEmptyArray(StreamPart(empty13));
       const decodeParts2 = decodeEffect2(schema2);
-      return pipe(streamWithNonIncrementalFallback(), mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap4((decodedParts) => {
+      return pipe(streamWithNonIncrementalFallback(), mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap5((decodedParts) => {
         for (const part of decodedParts) {
           if (part.type === "response-metadata" && part.id) {
             tracker.markParts(providerOptions.prompt.content, part.id);
           }
         }
-        return void_4;
+        return void_5;
       }) : identity)));
     }
     let preResolvedStreamParts = [];
@@ -31614,13 +31876,13 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (options.disableToolCallResolution === true) {
       const schema2 = NonEmptyArray(StreamPart(toolkit));
       const decodeParts2 = decodeEffect2(schema2);
-      return streamWithNonIncrementalFallback().pipe(mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap4((decodedParts) => {
+      return streamWithNonIncrementalFallback().pipe(mapArrayEffect((parts2) => decodeParts2(parts2).pipe(tracker ? tap5((decodedParts) => {
         for (const part of decodedParts) {
           if (part.type === "response-metadata" && isNotUndefined(part.id)) {
             tracker.markParts(providerOptions.prompt.content, part.id);
           }
         }
-        return void_4;
+        return void_5;
       }) : identity)));
     }
     const ResponseSchema = NonEmptyArray(StreamPart(toolkit));
@@ -31630,7 +31892,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
-    const toolCallFibers = yield* make43();
+    const toolCallFibers = yield* make45();
     const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make15(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
@@ -31683,7 +31945,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
           yield* run3(toolCallFibers, toolCallSemaphore ? toolCallSemaphore.withPermit(effect2) : effect2);
         }
       }
-    })), andThen3(raceFirst2(join4(toolCallFibers), awaitEmpty(toolCallFibers))), andThen3(offerAll(queue, deferredFinishParts)), andThen3(end(queue)), tapCause3((cause) => failCause5(queue, cause)), forkScoped2);
+    })), andThen4(raceFirst2(join4(toolCallFibers), awaitEmpty(toolCallFibers))), andThen4(offerAll(queue, deferredFinishParts)), andThen4(end(queue)), tapCause3((cause) => failCause5(queue, cause)), forkScoped2);
     return fromQueue(queue);
   });
   return {
@@ -31866,7 +32128,7 @@ var resolveToolCalls = (content, toolkit, messages, concurrency) => {
   } = collectToolApprovals(messages);
   const approvedToolCallIds = new Set(approved.map((approval) => approval.toolCallId));
   const deniedByToolCallId = new Map(denied.map((denial) => [denial.toolCallId, denial]));
-  const streams = toolCalls.map((toolCall) => gen3(function* () {
+  const streams = toolCalls.map((toolCall) => gen4(function* () {
     const tool = toolkit.tools[toolCall.name];
     if (!tool) {
       return empty9;
@@ -31969,7 +32231,7 @@ var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
   providerDefined: () => providerDefined,
-  make: () => make49,
+  make: () => make50,
   isUserDefined: () => isUserDefined,
   isProviderDefined: () => isProviderDefined,
   isEmptyParamsRecord: () => isEmptyParamsRecord,
@@ -31979,7 +32241,7 @@ __export(exports_Tool, {
   getJsonSchema: () => getJsonSchema,
   getDescription: () => getDescription,
   dynamic: () => dynamic,
-  TypeId: () => TypeId46,
+  TypeId: () => TypeId47,
   Title: () => Title,
   Strict: () => Strict,
   Readonly: () => Readonly,
@@ -31992,15 +32254,15 @@ __export(exports_Tool, {
   DynamicTypeId: () => DynamicTypeId,
   Destructive: () => Destructive
 });
-var TypeId46 = "~effect/ai/Tool";
+var TypeId47 = "~effect/ai/Tool";
 var ProviderDefinedTypeId = "~effect/ai/Tool/ProviderDefined";
 var DynamicTypeId = "~effect/ai/Tool/Dynamic";
-var isUserDefined = (u) => hasProperty(u, TypeId46) && !isProviderDefined(u) && !isDynamic(u);
+var isUserDefined = (u) => hasProperty(u, TypeId47) && !isProviderDefined(u) && !isDynamic(u);
 var isProviderDefined = (u) => hasProperty(u, ProviderDefinedTypeId);
 var isDynamic = (u) => hasProperty(u, DynamicTypeId);
 var clone = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
 var Proto11 = {
-  [TypeId46]: {
+  [TypeId47]: {
     _Requirements: identity
   },
   pipe() {
@@ -32062,7 +32324,7 @@ var dynamicProto = (options) => {
   self.id = `effect/ai/Tool/${options.name}`;
   return self;
 };
-var make49 = (name, options) => {
+var make50 = (name, options) => {
   const successSchema = options?.success ?? Void2;
   const failureSchema = options?.failure ?? Never2;
   return userDefinedProto({
@@ -32236,6 +32498,465 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
+// packages/engine/src/provider-result-staging-internal.ts
+var MAX_JSON_DEPTH = 128;
+var FailedSnapshot = Symbol("@effect-agent/engine/FailedProviderResultSnapshot");
+var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(maxDepth) || maxDepth < 0) {
+    return;
+  }
+  let total = 0;
+  const ancestors = new WeakSet;
+  const add5 = (bytes) => {
+    if (bytes > maxBytes - total)
+      return false;
+    total += bytes;
+    return true;
+  };
+  const addString = (value4) => {
+    if (!add5(2))
+      return false;
+    for (let index2 = 0;index2 < value4.length; index2 += 1) {
+      const code = value4.charCodeAt(index2);
+      if (code === 34 || code === 92) {
+        if (!add5(2))
+          return false;
+      } else if (code <= 31) {
+        if (!add5(code >= 8 && code <= 13 && code !== 11 ? 2 : 6))
+          return false;
+      } else if (code <= 127) {
+        if (!add5(1))
+          return false;
+      } else if (code <= 2047) {
+        if (!add5(2))
+          return false;
+      } else if (code >= 55296 && code <= 56319) {
+        const low = value4.charCodeAt(index2 + 1);
+        if (low >= 56320 && low <= 57343) {
+          if (!add5(4))
+            return false;
+          index2 += 1;
+        } else if (!add5(6)) {
+          return false;
+        }
+      } else if (code >= 56320 && code <= 57343) {
+        if (!add5(6))
+          return false;
+      } else if (!add5(3)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const visit = (value4, depth) => {
+    if (depth > maxDepth)
+      return FailedSnapshot;
+    if (value4 === null)
+      return add5(4) ? null : FailedSnapshot;
+    switch (typeof value4) {
+      case "string":
+        return addString(value4) ? value4 : FailedSnapshot;
+      case "boolean":
+        return add5(value4 ? 4 : 5) ? value4 : FailedSnapshot;
+      case "number": {
+        if (!Number.isFinite(value4))
+          return add5(4) ? null : FailedSnapshot;
+        const encoded = JSON.stringify(value4);
+        return encoded !== undefined && add5(encoded.length) ? value4 : FailedSnapshot;
+      }
+      case "object": {
+        if (ancestors.has(value4))
+          return FailedSnapshot;
+        const isArray2 = Array.isArray(value4);
+        const prototype = Object.getPrototypeOf(value4);
+        if (prototype !== (isArray2 ? Array.prototype : Object.prototype) && prototype !== null) {
+          return FailedSnapshot;
+        }
+        if (Object.getOwnPropertyDescriptor(value4, "toJSON") !== undefined || prototype !== null && Object.getOwnPropertyDescriptor(prototype, "toJSON") !== undefined) {
+          return FailedSnapshot;
+        }
+        ancestors.add(value4);
+        try {
+          if (isArray2) {
+            const lengthDescriptor = Object.getOwnPropertyDescriptor(value4, "length");
+            if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || typeof lengthDescriptor.value !== "number" || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) {
+              return FailedSnapshot;
+            }
+            if (!add5(1))
+              return FailedSnapshot;
+            const snapshot3 = [];
+            for (let index2 = 0;index2 < lengthDescriptor.value; index2 += 1) {
+              if (index2 > 0 && !add5(1))
+                return FailedSnapshot;
+              const descriptor = Object.getOwnPropertyDescriptor(value4, index2);
+              if (descriptor === undefined) {
+                if (!add5(4))
+                  return FailedSnapshot;
+                snapshot3.push(null);
+                continue;
+              }
+              if (!("value" in descriptor))
+                return FailedSnapshot;
+              const item = visit(descriptor.value, depth + 1);
+              if (item === FailedSnapshot)
+                return FailedSnapshot;
+              snapshot3.push(item);
+            }
+            if (!add5(1))
+              return FailedSnapshot;
+            Object.setPrototypeOf(snapshot3, null);
+            return Object.freeze(snapshot3);
+          }
+          if (!add5(1))
+            return FailedSnapshot;
+          const entries3 = [];
+          let first = true;
+          for (const key in value4) {
+            const descriptor = Object.getOwnPropertyDescriptor(value4, key);
+            if (descriptor === undefined || !descriptor.enumerable)
+              continue;
+            if (!("value" in descriptor))
+              return FailedSnapshot;
+            if (!first && !add5(1))
+              return FailedSnapshot;
+            first = false;
+            if (!addString(key) || !add5(1))
+              return FailedSnapshot;
+            const item = visit(descriptor.value, depth + 1);
+            if (item === FailedSnapshot)
+              return FailedSnapshot;
+            entries3.push([key, item]);
+          }
+          if (!add5(1))
+            return FailedSnapshot;
+          const snapshot2 = Object.fromEntries(entries3);
+          Object.setPrototypeOf(snapshot2, null);
+          return Object.freeze(snapshot2);
+        } finally {
+          ancestors.delete(value4);
+        }
+      }
+      case "bigint":
+      case "function":
+      case "symbol":
+      case "undefined":
+        return FailedSnapshot;
+    }
+    return FailedSnapshot;
+  };
+  try {
+    const value4 = visit(root, 0);
+    return value4 === FailedSnapshot ? undefined : { value: value4, bytes: total };
+  } catch {
+    return;
+  }
+};
+
+// packages/engine/src/tool-telemetry-internal.ts
+class ToolSpanFailure extends exports_AiError.AiError.extend("@effect-agent/engine/ToolSpanFailure")({}) {
+  name = "ToolCallFailed";
+  static marker() {
+    return ToolSpanFailure.make({
+      module: "effect-agent",
+      method: "execute_tool",
+      reason: exports_AiError.UnknownError.make({
+        description: "Tool execution reached a failed terminal state"
+      })
+    });
+  }
+}
+var TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE = "@effect-agent/engine/ToolSpanFailureMarker";
+var terminalOutcomeTokens = new WeakMap;
+var annotateToolSpanTerminalOutcome = (outcome, failureMarker) => {
+  const token = {};
+  terminalOutcomeTokens.set(token, { outcome, failureMarker });
+  return exports_Effect.annotateCurrentSpan({
+    "effect_agent.tool.outcome": outcome,
+    [TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE]: token
+  });
+};
+var emitThenAfter = (event, after) => exports_Stream.unwrap(exports_Effect.sync(() => {
+  let firstPull = true;
+  let afterPhase = "unarmed";
+  const runAfter = exports_Effect.suspend(() => {
+    if (afterPhase !== "pending")
+      return exports_Effect.void;
+    afterPhase = "running";
+    return after.pipe(exports_Effect.onExit(() => exports_Effect.sync(() => {
+      afterPhase = "completed";
+    })));
+  });
+  const pull = exports_Effect.suspend(() => {
+    if (firstPull) {
+      return exports_Effect.map(event, (value4) => {
+        firstPull = false;
+        afterPhase = "pending";
+        return [value4];
+      });
+    }
+    return exports_Effect.andThen(runAfter, exports_Cause.done());
+  });
+  return exports_Stream.fromPull(exports_Effect.succeed(pull)).pipe(exports_Stream.ensuring(exports_Effect.exit(exports_Effect.interruptible(runAfter)).pipe(exports_Effect.flatMap((exit3) => {
+    if (exports_Exit.isSuccess(exit3))
+      return exports_Effect.void;
+    return reportDerivativeCause(exit3.cause);
+  }))));
+}));
+var stripToolSpanFailures = (cause, marker) => {
+  const found = cause.reasons.some((reason) => exports_Cause.isFailReason(reason) && reason.error === marker);
+  if (!found) {
+    return { found: false, residual: cause };
+  }
+  const reasons = cause.reasons.filter((reason) => {
+    if (exports_Cause.isFailReason(reason) && reason.error === marker) {
+      return false;
+    }
+    return true;
+  });
+  return { found: true, residual: exports_Cause.fromReasons(reasons) };
+};
+var restoreToolSpanFailureCause = (cause, marker, original) => {
+  const { found, residual } = stripToolSpanFailures(cause, marker);
+  return {
+    found,
+    restored: original === undefined ? residual : exports_Cause.combine(original, residual)
+  };
+};
+var reportDerivativeCause = (cause) => {
+  const reportableReasons = [];
+  const interruptionReasons = [];
+  for (const reason of cause.reasons) {
+    if (exports_Cause.isInterruptReason(reason))
+      interruptionReasons.push(reason);
+    else
+      reportableReasons.push(reason);
+  }
+  const reportExit = reportableReasons.length === 0 ? exports_Effect.succeed(exports_Exit.succeed(undefined)) : exports_Effect.exit(exports_ErrorReporter.report(exports_Cause.fromReasons(reportableReasons)));
+  return exports_Effect.flatMap(reportExit, (exit3) => {
+    if (exports_Exit.isFailure(exit3)) {
+      for (const reason of exit3.cause.reasons) {
+        if (exports_Cause.isInterruptReason(reason))
+          interruptionReasons.push(reason);
+      }
+    }
+    return interruptionReasons.length === 0 ? exports_Effect.void : exports_Effect.failCause(exports_Cause.fromReasons(interruptionReasons));
+  });
+};
+var isolateToolTerminalTelemetry = (telemetry) => telemetry.pipe(exports_Effect.catchCause(reportDerivativeCause));
+var MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS = 16;
+
+class ToolSpanLifecycleFailure extends Error {
+  name = "ToolSpanLifecycleFailure";
+  constructor() {
+    super("Tool span lifecycle failed");
+  }
+}
+
+class IsolatedToolSpan {
+  _tag = "Span";
+  name;
+  spanId;
+  traceId;
+  parent;
+  annotations;
+  attributes = new Map;
+  links;
+  sampled;
+  kind;
+  status;
+  #delegate;
+  #recordDefect;
+  #terminalOutcome;
+  #terminalFailure;
+  constructor(delegate, options, recordDefect) {
+    this.#delegate = delegate;
+    this.#recordDefect = recordDefect;
+    this.name = options.name;
+    this.spanId = delegate.spanId;
+    this.traceId = delegate.traceId;
+    this.parent = options.parent;
+    this.annotations = options.annotations;
+    this.links = [...options.links];
+    this.sampled = delegate.sampled;
+    this.kind = options.kind;
+    this.status = { _tag: "Started", startTime: options.startTime };
+  }
+  end(endTime, exit3) {
+    if (this.status._tag === "Ended")
+      return;
+    const exportedExit = this.#terminalOutcome === "failure" ? exports_Exit.fail(this.#terminalFailure ?? new ToolSpanLifecycleFailure) : this.#terminalOutcome === "success" ? exports_Exit.succeed(undefined) : exit3;
+    this.status = {
+      _tag: "Ended",
+      startTime: this.status.startTime,
+      endTime,
+      exit: exportedExit
+    };
+    if (this.#terminalOutcome !== undefined) {
+      this.attributes.set("effect_agent.tool.outcome", this.#terminalOutcome);
+      try {
+        this.#delegate.attribute("effect_agent.tool.outcome", this.#terminalOutcome);
+      } catch (defect) {
+        this.#recordDefect(defect);
+      }
+    }
+    try {
+      this.#delegate.end(endTime, exportedExit);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+  attribute(key, value4) {
+    if (key === TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE) {
+      if (typeof value4 === "object" && value4 !== null) {
+        const terminal = terminalOutcomeTokens.get(value4);
+        if (terminal !== undefined) {
+          this.#terminalOutcome = terminal.outcome;
+          this.#terminalFailure = terminal.failureMarker;
+        }
+      }
+      return;
+    }
+    this.attributes.set(key, value4);
+    try {
+      this.#delegate.attribute(key, value4);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+  event(name, startTime, attributes2) {
+    try {
+      this.#delegate.event(name, startTime, attributes2);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+  addLinks(links) {
+    this.links.push(...links);
+    try {
+      this.#delegate.addLinks(links);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+}
+var makeIsolatedToolTracer = (delegate) => {
+  const defects = [];
+  const recordDefect = (defect) => {
+    if (defects.length < MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS)
+      defects.push(defect);
+  };
+  let delegateContext;
+  try {
+    delegateContext = delegate.context?.bind(delegate);
+  } catch (defect) {
+    recordDefect(defect);
+    delegateContext = undefined;
+  }
+  const context3 = delegateContext === undefined ? undefined : (primitive, fiber3) => {
+    let evaluation = { _tag: "Pending" };
+    const currentEvaluation = () => evaluation;
+    const evaluate2 = (currentFiber) => {
+      switch (evaluation._tag) {
+        case "Succeeded":
+          return evaluation.value;
+        case "Failed":
+          throw evaluation.error;
+        case "Pending": {
+          try {
+            const value4 = primitive["~effect/Effect/evaluate"](currentFiber);
+            evaluation = { _tag: "Succeeded", value: value4 };
+            return value4;
+          } catch (error2) {
+            evaluation = { _tag: "Failed", error: error2 };
+            throw error2;
+          }
+        }
+      }
+    };
+    const guardedPrimitive = {
+      ["~effect/Effect/evaluate"]: evaluate2
+    };
+    try {
+      delegateContext(guardedPrimitive, fiber3);
+    } catch (defect) {
+      const observed2 = currentEvaluation();
+      switch (observed2._tag) {
+        case "Failed":
+          throw observed2.error;
+        case "Succeeded":
+          recordDefect(defect);
+          return observed2.value;
+        case "Pending":
+          recordDefect(defect);
+          return evaluate2(fiber3);
+      }
+    }
+    const observed = currentEvaluation();
+    switch (observed._tag) {
+      case "Failed":
+        throw observed.error;
+      case "Succeeded":
+        return observed.value;
+      case "Pending":
+        return evaluate2(fiber3);
+    }
+  };
+  const tracer3 = exports_Tracer.make({
+    context: context3,
+    span(options) {
+      let delegateSpan;
+      try {
+        delegateSpan = delegate.span(options);
+      } catch (defect) {
+        recordDefect(defect);
+        return new exports_Tracer.NativeSpan(options);
+      }
+      try {
+        return new IsolatedToolSpan(delegateSpan, options, recordDefect);
+      } catch (defect) {
+        recordDefect(defect);
+        try {
+          delegateSpan.end(options.startTime, exports_Exit.fail(new ToolSpanLifecycleFailure));
+        } catch (closeDefect) {
+          recordDefect(closeDefect);
+        }
+        return new exports_Tracer.NativeSpan(options);
+      }
+    }
+  });
+  const reportLifecycleDefects = exports_Effect.suspend(() => {
+    const pending = defects.splice(0);
+    return exports_Effect.forEach(pending, (defect) => isolateToolTerminalTelemetry(exports_ErrorReporter.report(exports_Cause.die(defect))), { discard: true });
+  });
+  return { tracer: tracer3, reportLifecycleDefects };
+};
+
+class ToolSpanTelemetry extends exports_Context.Service()("@effect-agent/engine/ToolSpanTelemetry") {
+  static layer = exports_Layer.effect(ToolSpanTelemetry, exports_Effect.map(exports_Tracer.Tracer, (delegate) => ToolSpanTelemetry.of({
+    isolateToolkitHandle: (effect2) => exports_Effect.currentSpan.pipe(exports_Effect.option, exports_Effect.flatMap((parentOption) => {
+      if (exports_Option.isNone(parentOption))
+        return effect2;
+      const parent = parentOption.value;
+      const local = new exports_Tracer.NativeSpan({
+        name: "AgentRuntime.toolkit.handle",
+        parent: exports_Option.some(parent),
+        annotations: exports_Context.add(exports_Context.empty(), exports_Tracer.DisablePropagation, true),
+        links: [],
+        startTime: 0n,
+        kind: "internal",
+        sampled: parent.sampled
+      });
+      return effect2.pipe(exports_Effect.withParentSpan(local), exports_Effect.onExit((exit3) => exports_Effect.sync(() => {
+        local.end(0n, exit3);
+      })));
+    })),
+    isolateSpanLifecycle: (stream) => exports_Stream.unwrap(exports_Effect.sync(() => {
+      const isolated = makeIsolatedToolTracer(delegate);
+      return stream.pipe(exports_Stream.provideService(exports_Tracer.Tracer, isolated.tracer), exports_Stream.ensuring(isolated.reportLifecycleDefects));
+    }))
+  })));
+}
+
 // packages/engine/src/durable-step.ts
 var ToolExecutionClass = exports_Context.Reference("@effect-agent/engine/ToolExecutionClass", { defaultValue: () => "uncertain" });
 var getToolExecutionClass = (tool) => exports_Context.get(tool.annotations, ToolExecutionClass);
@@ -32288,6 +33009,8 @@ var modelCounter = exports_Metric.counter("effect_agent_model_calls_total", {
 var toolCounter = exports_Metric.counter("effect_agent_tool_calls_total", {
   description: "Agent tool handlers started; no content or high-cardinality identifiers are recorded."
 });
+var MAX_STAGED_PROVIDER_EVENTS = 256;
+var MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
 var withSemaphorePermit = (semaphore, stream) => exports_Stream.scoped(exports_Stream.fromEffect(exports_Effect.acquireRelease(semaphore.take(1), (permits) => semaphore.release(permits).pipe(exports_Effect.asVoid))).pipe(exports_Stream.flatMap(() => stream)));
 var hasTool = (tools, name) => Object.hasOwn(tools, name);
 var startPart = (parts2, id2, description) => {
@@ -32495,16 +33218,48 @@ var preflightApproval = (context3, turnId, prepared, options) => exports_Stream.
     }
   });
 })));
+var ProviderResponsePartId = exports_Schema.String.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
+var ProviderToolCallId = ToolCallId.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
+var isTelemetryToolCallId = exports_Schema.is(ProviderToolCallId);
 var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWaiting) => {
   const call = prepared.call;
+  const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
+  const executionClass = getToolExecutionClass(prepared.tool);
+  const toolSpanFailure = ToolSpanFailure.marker();
   let terminal = false;
+  let terminalResultCommitted = false;
+  let terminalOutcome;
+  let terminalResult;
+  let propagatedFailure;
+  const terminalTelemetry = (outcome) => annotateToolSpanTerminalOutcome(outcome, outcome === "failure" ? toolSpanFailure : undefined).pipe(exports_Effect.andThen((outcome === "success" ? exports_Effect.logInfo("agent tool execution completed") : exports_Effect.logWarning("agent tool execution failed")).pipe(exports_Effect.annotateLogs({
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": call.name,
+    "gen_ai.tool.type": "function",
+    ...telemetryToolCallId === undefined ? {} : {
+      "gen_ai.tool.call.id": telemetryToolCallId,
+      toolCallId: telemetryToolCallId
+    },
+    "gen_ai.agent.name": context3.agentId,
+    "gen_ai.conversation.id": context3.conversationId,
+    "effect_agent.tool.execution_class": executionClass,
+    "effect_agent.tool.outcome": outcome,
+    agentId: context3.agentId,
+    conversationId: context3.conversationId,
+    runId: context3.runId,
+    turnId,
+    toolName: call.name,
+    toolExecutionClass: executionClass,
+    toolOutcome: outcome
+  }))));
+  const isolatedTerminalTelemetry = (outcome) => isolateToolTerminalTelemetry(terminalTelemetry(outcome));
+  const terminalEventThenTelemetry = (event, outcome, failSpan) => emitThenAfter(event, isolatedTerminalTelemetry(outcome).pipe(exports_Effect.andThen(failSpan ? exports_Effect.fail(toolSpanFailure) : exports_Effect.void)));
   const started = exports_Stream.fromEffect(exports_Effect.gen(function* () {
     const toolCallId = yield* decodeToolCallId(call.id);
     yield* exports_Effect.logDebug("agent tool handler started").pipe(exports_Effect.annotateLogs({
       agentId: context3.agentId,
       runId: context3.runId,
       turnId,
-      toolCallId,
+      ...telemetryToolCallId === undefined ? {} : { toolCallId: telemetryToolCallId },
       toolName: call.name
     }));
     yield* exports_Metric.update(toolCounter, 1);
@@ -32515,7 +33270,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
       toolName: call.name
     });
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.tool")));
-  const results = exports_Stream.unwrap(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id).pipe(exports_Effect.withSpan("AgentRuntime.toolkit.handle"))).pipe(exports_Stream.mapEffect((result4) => exports_Effect.gen(function* () {
+  const results = exports_Stream.unwrap(exports_Effect.flatMap(ToolSpanTelemetry, ({ isolateToolkitHandle }) => isolateToolkitHandle(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id)))).pipe(exports_Stream.mapEffect((result4) => exports_Effect.gen(function* () {
     if (terminal || trace2.finalToolResultIds.has(call.id)) {
       return yield* ModelProtocolError.make({
         message: `Tool Call ${call.id} produced more than one terminal result`
@@ -32523,7 +33278,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
     }
     const toolCallId = yield* decodeToolCallId(call.id);
     if (result4.preliminary) {
-      return ToolProgress.make({
+      const event = ToolProgress.make({
         ...yield* eventBase(context3),
         turnId,
         toolCallId,
@@ -32531,17 +33286,27 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
         result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
         providerExecuted: false
       });
+      return event;
     }
     terminal = true;
-    trace2.finalToolResultIds.add(call.id);
-    trace2.applicationToolResults[prepared.declarationIndex] = {
-      id: call.id,
-      name: call.name,
+    terminalOutcome = result4.isFailure ? "failure" : "success";
+    terminalResult = {
       encodedResult: result4.encodedResult,
-      isFailure: result4.isFailure
+      isFailure: result4.isFailure,
+      result: result4.result
     };
-    if (result4.isFailure) {
-      return ToolCallFailed.make({
+    return;
+  })), exports_Stream.filter((event) => event !== undefined));
+  const commitTerminalResult = exports_Effect.suspend(() => {
+    if (!terminal || terminalOutcome === undefined || terminalResult === undefined) {
+      return exports_Effect.fail(ModelProtocolError.make({
+        message: `Tool Call ${call.id} completed without a terminal result`
+      }));
+    }
+    const result4 = terminalResult;
+    return exports_Effect.gen(function* () {
+      const toolCallId = yield* decodeToolCallId(call.id);
+      const event = result4.isFailure ? ToolCallFailed.make({
         ...yield* eventBase(context3),
         turnId,
         toolCallId,
@@ -32549,45 +33314,86 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
         errorTag: errorTag(result4.result),
         message: errorMessage(result4.result),
         providerExecuted: false
+      }) : ToolCallSucceeded.make({
+        ...yield* eventBase(context3),
+        turnId,
+        toolCallId,
+        toolName: call.name,
+        result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
+        providerExecuted: false
       });
-    }
-    return ToolCallSucceeded.make({
-      ...yield* eventBase(context3),
-      turnId,
-      toolCallId,
-      toolName: call.name,
-      result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
-      providerExecuted: false
+      trace2.finalToolResultIds.add(call.id);
+      trace2.applicationToolResults[prepared.declarationIndex] = {
+        id: call.id,
+        name: call.name,
+        encodedResult: result4.encodedResult,
+        isFailure: result4.isFailure
+      };
+      terminalResultCommitted = true;
+      return event;
     });
-  })));
-  const requireTerminal = exports_Stream.fromEffect(exports_Effect.suspend(() => terminal ? exports_Effect.void : exports_Effect.fail(ModelProtocolError.make({
-    message: `Tool Call ${call.id} completed without a terminal result`
-  })))).pipe(exports_Stream.drain);
-  return started.pipe(exports_Stream.concat(results), exports_Stream.concat(requireTerminal), exports_Stream.catchCause((cause) => {
-    const waiting = waitingFromCause(cause);
+  });
+  const finalizeTerminalResult = exports_Stream.unwrap(exports_Effect.sync(() => terminalEventThenTelemetry(commitTerminalResult, terminalOutcome ?? "failure", terminalOutcome === "failure")));
+  const failTerminalResult = (cause) => {
+    terminal = true;
+    terminalOutcome = "failure";
+    terminalResult = undefined;
+    propagatedFailure = cause;
+    return terminalEventThenTelemetry(makeToolFailedEvent(context3, turnId, call, exports_Cause.squash(cause)).pipe(exports_Effect.tap(() => exports_Effect.sync(() => {
+      trace2.finalToolResultIds.add(call.id);
+      terminalResultCommitted = true;
+    }))), "failure", true);
+  };
+  const measured = started.pipe(exports_Stream.concat(results), exports_Stream.concat(finalizeTerminalResult), exports_Stream.catchCause((cause) => {
+    const { found: hasToolSpanFailure, residual: toolCause } = stripToolSpanFailures(cause, toolSpanFailure);
+    if (hasToolSpanFailure) {
+      return exports_Stream.failCause(cause);
+    }
+    if (terminalResultCommitted) {
+      return exports_Stream.failCause(toolCause);
+    }
+    if (toolCause.reasons.length > 0 && toolCause.reasons.every(exports_Cause.isInterruptReason)) {
+      return exports_Stream.failCause(toolCause);
+    }
+    const waiting = waitingFromCause(toolCause);
     if (waiting !== undefined) {
       if (terminal || trace2.finalToolResultIds.has(call.id)) {
-        return exports_Stream.fail(ModelProtocolError.make({
+        return failTerminalResult(exports_Cause.fail(ModelProtocolError.make({
           message: `Tool Call ${call.id} raised the waiting signal after its terminal result`
-        }));
+        })));
       }
       onWaiting(waiting);
       return exports_Stream.empty;
     }
     if (terminal) {
-      return exports_Stream.failCause(cause);
+      return failTerminalResult(toolCause);
     }
-    terminal = true;
-    trace2.finalToolResultIds.add(call.id);
-    return exports_Stream.fromEffect(makeToolFailedEvent(context3, turnId, call, exports_Cause.squash(cause))).pipe(exports_Stream.concat(exports_Stream.failCause(cause)));
-  }), exports_Stream.withSpan("AgentRuntime.tool", {
+    return failTerminalResult(toolCause);
+  }), exports_Stream.withSpan(`execute_tool ${call.name}`, {
+    kind: "internal",
     attributes: {
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": call.name,
+      "gen_ai.tool.type": "function",
+      ...telemetryToolCallId === undefined ? {} : {
+        "gen_ai.tool.call.id": telemetryToolCallId,
+        toolCallId: telemetryToolCallId
+      },
+      "gen_ai.agent.name": context3.agentId,
+      "gen_ai.conversation.id": context3.conversationId,
+      "effect_agent.tool.execution_class": executionClass,
       agentId: context3.agentId,
+      conversationId: context3.conversationId,
       runId: context3.runId,
       turnId,
-      toolCallId: call.id,
       toolName: call.name
     }
+  }));
+  return exports_Stream.unwrap(exports_Effect.map(ToolSpanTelemetry, ({ isolateSpanLifecycle }) => isolateSpanLifecycle(measured))).pipe(exports_Stream.catchCause((cause) => {
+    const { found, restored } = restoreToolSpanFailureCause(cause, toolSpanFailure, propagatedFailure);
+    if (!found)
+      return exports_Stream.failCause(restored);
+    return restored.reasons.length === 0 ? exports_Stream.empty : exports_Stream.failCause(restored);
   }));
 };
 var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, brokerAccounting, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
@@ -32861,6 +33667,67 @@ var eventBase = exports_Effect.fnUntraced(function* (context3) {
     timestamp
   };
 });
+var snapshotStagedProviderEvent = (trace2, payload) => exports_Effect.suspend(() => {
+  const stagedEventCount = trace2.providerResultPayloads.length + (trace2.turnCompletion === undefined ? 0 : 1);
+  if (stagedEventCount >= MAX_STAGED_PROVIDER_EVENTS) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_EVENTS}-event staged provider event limit`
+    }));
+  }
+  const snapshot2 = boundedJsonSnapshot(payload, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
+  if (snapshot2 === undefined) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`
+    }));
+  }
+  return exports_Effect.succeed(snapshot2);
+});
+var stageProviderResultPayload = (trace2, payload) => exports_Effect.gen(function* () {
+  const snapshot2 = yield* snapshotStagedProviderEvent(trace2, payload);
+  const snapshotObject = snapshot2.value;
+  if (snapshotObject === null || typeof snapshotObject !== "object" || Array.isArray(snapshotObject) || Object.getPrototypeOf(snapshotObject) !== null) {
+    return yield* ModelProtocolError.make({
+      message: "Provider Tool result could not be normalized as JSON"
+    });
+  }
+  const resultDescriptor = Object.getOwnPropertyDescriptor(snapshotObject, "result");
+  const normalizedResult = resultDescriptor !== undefined && "value" in resultDescriptor ? exports_Schema.decodeUnknownOption(exports_Schema.Json)(resultDescriptor.value) : exports_Option.none();
+  if (payload._tag !== "ToolCallFailed" && exports_Option.isNone(normalizedResult)) {
+    return yield* ModelProtocolError.make({
+      message: "Provider Tool result could not be normalized as JSON"
+    });
+  }
+  const normalized = payload._tag === "ToolCallFailed" ? Object.freeze({ ...payload }) : Object.freeze({ ...payload, result: exports_Option.getOrThrow(normalizedResult) });
+  trace2.providerResultPayloads.push(normalized);
+  trace2.providerStagedPayloadBytes += snapshot2.bytes;
+});
+var ProviderToolResultSnapshot = exports_Schema.Struct({
+  result: exports_Schema.Json,
+  metadata: exports_Schema.Record(exports_Schema.String, exports_Schema.Json)
+});
+var snapshotProviderToolResultPart = exports_Effect.fnUntraced(function* (trace2, part) {
+  const snapshot2 = boundedJsonSnapshot({ result: part.encodedResult, metadata: part.metadata }, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
+  if (snapshot2 === undefined) {
+    return yield* ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`
+    });
+  }
+  const normalized = yield* exports_Schema.decodeUnknownEffect(ProviderToolResultSnapshot)(snapshot2.value).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+    message: "Provider Tool result could not be normalized as JSON"
+  })));
+  trace2.providerStagedPayloadBytes += snapshot2.bytes;
+  return normalized;
+});
+var stampProviderResultEvent = (context3, turnId, payload) => exports_Effect.map(eventBase(context3), (base2) => {
+  switch (payload._tag) {
+    case "ToolProgress":
+      return ToolProgress.make({ ...base2, turnId, ...payload });
+    case "ToolCallSucceeded":
+      return ToolCallSucceeded.make({ ...base2, turnId, ...payload });
+    case "ToolCallFailed":
+      return ToolCallFailed.make({ ...base2, turnId, ...payload });
+  }
+});
 var decodeInput = exports_Effect.fn("AgentRuntime.decodeInput")((agent2, input) => exports_Schema.decodeUnknownEffect(agent2.definition.input)(input).pipe(exports_Effect.mapError((cause) => AgentInputError.make({
   message: cause.message
 }))));
@@ -32897,6 +33764,46 @@ var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((ins
 var decodeToolCallId = exports_Effect.fn("AgentRuntime.decodeToolCallId")((id2) => exports_Schema.decodeEffect(ToolCallId)(id2).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
   message: `Invalid Tool Call ID: ${cause.message}`
 }))));
+var decodeProviderToolCallId = exports_Effect.fn("AgentRuntime.decodeProviderToolCallId")((id2) => exports_Schema.decodeEffect(ProviderToolCallId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+  message: "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
+}))));
+var decodeProviderResponsePartId = exports_Effect.fn("AgentRuntime.decodeProviderResponsePartId")((id2) => exports_Schema.decodeEffect(ProviderResponsePartId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+  message: "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
+}))));
+var validateProviderPartIdentifiers = exports_Effect.fnUntraced(function* (part) {
+  switch (part.type) {
+    case "text-start":
+    case "text-delta":
+    case "text-end":
+    case "reasoning-start":
+    case "reasoning-delta":
+    case "reasoning-end":
+    case "source":
+      yield* decodeProviderResponsePartId(part.id);
+      return;
+    case "response-metadata":
+      if (part.id !== undefined)
+        yield* decodeProviderResponsePartId(part.id);
+      return;
+    case "tool-params-start":
+    case "tool-params-delta":
+    case "tool-params-end":
+    case "tool-call":
+    case "tool-result":
+      yield* decodeProviderToolCallId(part.id);
+      return;
+    case "tool-approval-request":
+      yield* decodeProviderResponsePartId(part.approvalId);
+      yield* decodeProviderToolCallId(part.toolCallId);
+      return;
+    case "error":
+    case "file":
+    case "finish":
+    case "reasoning":
+    case "text":
+      return;
+  }
+});
 var decodeEventJson = exports_Effect.fn("AgentRuntime.decodeEventJson")((value4, label) => exports_Schema.decodeUnknownEffect(exports_Schema.Json)(value4).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
   message: `${label} is not JSON: ${cause.message}`
 }))));
@@ -32941,7 +33848,9 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       message: "Model response emitted content after its finish part"
     });
   }
-  trace2.parts.push(part);
+  yield* validateProviderPartIdentifiers(part);
+  if (part.type !== "tool-call" && part.type !== "tool-result")
+    trace2.parts.push(part);
   switch (part.type) {
     case "text-start": {
       yield* startPart(trace2.textParts, part.id, "text");
@@ -33038,13 +33947,13 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       const tool = tools[part.name];
       const encodedParameters = yield* encodeToolCallParameters(tool, part.name, part.params);
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      trace2.parts[trace2.parts.length - 1] = exports_Response.makePart("tool-call", {
+      trace2.parts.push(exports_Response.makePart("tool-call", {
         id: part.id,
         name: part.name,
         params: parameters,
         providerExecuted: part.providerExecuted,
         metadata: part.metadata
-      });
+      }));
       trace2.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted
@@ -33091,48 +34000,63 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
         });
       }
       const toolCallId = yield* decodeToolCallId(part.id);
-      const result4 = yield* decodeEventJson(part.encodedResult, "Tool result");
+      const normalized = yield* snapshotProviderToolResultPart(trace2, part);
+      const result4 = normalized.result;
       if (part.preliminary === true) {
-        return [
-          ToolProgress.make({
-            ...yield* eventBase(context3),
-            turnId,
-            toolCallId,
-            toolName: part.name,
-            result: result4,
-            providerExecuted: part.providerExecuted
-          })
-        ];
+        yield* stageProviderResultPayload(trace2, {
+          _tag: "ToolProgress",
+          toolCallId,
+          toolName: part.name,
+          result: result4,
+          providerExecuted: true
+        });
+        trace2.parts.push(exports_Response.toolResultPart({
+          id: part.id,
+          name: part.name,
+          isFailure: part.isFailure,
+          result: result4,
+          encodedResult: result4,
+          providerExecuted: true,
+          preliminary: true,
+          metadata: normalized.metadata
+        }));
+        return [];
       }
       if (trace2.finalToolResultIds.has(part.id)) {
         return yield* ModelProtocolError.make({
           message: `Tool Call ${part.id} produced more than one terminal result`
         });
       }
-      trace2.finalToolResultIds.add(part.id);
       if (part.isFailure) {
-        return [
-          ToolCallFailed.make({
-            ...yield* eventBase(context3),
-            turnId,
-            toolCallId,
-            toolName: part.name,
-            errorTag: errorTag(part.result),
-            message: errorMessage(part.result),
-            providerExecuted: part.providerExecuted
-          })
-        ];
-      }
-      return [
-        ToolCallSucceeded.make({
-          ...yield* eventBase(context3),
-          turnId,
+        yield* stageProviderResultPayload(trace2, {
+          _tag: "ToolCallFailed",
+          toolCallId,
+          toolName: part.name,
+          errorTag: errorTag(result4),
+          message: errorMessage(result4),
+          providerExecuted: true
+        });
+      } else {
+        yield* stageProviderResultPayload(trace2, {
+          _tag: "ToolCallSucceeded",
           toolCallId,
           toolName: part.name,
           result: result4,
-          providerExecuted: part.providerExecuted
-        })
-      ];
+          providerExecuted: true
+        });
+      }
+      trace2.finalToolResultIds.add(part.id);
+      trace2.parts.push(exports_Response.toolResultPart({
+        id: part.id,
+        name: part.name,
+        isFailure: part.isFailure,
+        result: result4,
+        encodedResult: result4,
+        providerExecuted: true,
+        preliminary: false,
+        metadata: normalized.metadata
+      }));
+      return [];
     }
     case "finish": {
       const openPart = firstOpenPart(trace2);
@@ -33144,6 +34068,16 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       trace2.finished = true;
       trace2.finishReason = part.reason;
       trace2.usage = part.usage;
+      if (Array.from(trace2.toolCalls.values()).some(({ providerExecuted }) => providerExecuted)) {
+        const turnCompletion = { finishReason: part.reason };
+        const snapshot2 = yield* snapshotStagedProviderEvent(trace2, {
+          _tag: "TurnCompleted",
+          ...turnCompletion
+        });
+        trace2.turnCompletion = turnCompletion;
+        trace2.providerStagedPayloadBytes += snapshot2.bytes;
+        return [];
+      }
       return [
         TurnCompleted.make({
           ...yield* eventBase(context3),
@@ -33158,7 +34092,12 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
         message: `Model response failed: ${errorMessage(part.error)}`
       });
     }
-    default: {
+    case "file":
+    case "reasoning":
+    case "response-metadata":
+    case "source":
+    case "text":
+    case "tool-approval-request": {
       return [];
     }
   }
@@ -33191,6 +34130,9 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     toolParameterParts: new Map,
     toolCalls: new Map,
     finalToolResultIds: new Set,
+    providerResultPayloads: [],
+    providerStagedPayloadBytes: 0,
+    turnCompletion: undefined,
     applicationToolCalls: [],
     applicationCallDescriptors: [],
     applicationToolResults: [],
@@ -33229,19 +34171,16 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       turnId
     }
   }));
-  const continuation = exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const continuation = exports_Stream.unwrap(exports_Effect.sync(() => {
     if (!trace2.finished) {
       return failRunEventStream(ModelProtocolError.make({
         message: "Model response ended without a finish part"
       }));
     }
-    yield* consumeUsage(agent2, context3, trace2, options);
-    const toolCalls = priorToolCalls + trace2.toolCalls.size;
-    if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
-      return failRunEventStream(AgentPolicyError.make({
-        limit: "tool-calls",
-        message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
-      }));
+    const hasProviderCalls = Array.from(trace2.toolCalls.values()).some(({ providerExecuted }) => providerExecuted);
+    const turnCompletion = trace2.turnCompletion;
+    if (hasProviderCalls && turnCompletion === undefined) {
+      return failRunEventStream(ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }));
     }
     const providerOnly = trace2.toolCalls.size > 0 && Array.from(trace2.toolCalls.values()).every(({ providerExecuted }) => providerExecuted);
     const missingProviderResult = Array.from(trace2.toolCalls.entries()).find(([id2, call]) => call.providerExecuted && !trace2.finalToolResultIds.has(id2));
@@ -33250,6 +34189,20 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         message: `Provider-executed Tool Call ${missingProviderResult[0]} completed without a terminal result`
       }));
     }
+    const toolCalls = priorToolCalls + trace2.toolCalls.size;
+    if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
+      return failRunEventStream(AgentPolicyError.make({
+        limit: "tool-calls",
+        message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
+      }));
+    }
+    const stagedResponse = exports_Stream.fromIterable(trace2.providerResultPayloads).pipe(exports_Stream.mapEffect((payload) => stampProviderResultEvent(context3, turnId, payload)), exports_Stream.concat(turnCompletion === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => TurnCompleted.make({
+      ...base2,
+      turnId,
+      turn,
+      finishReason: turnCompletion.finishReason
+    })))));
+    const afterValidatedResponse = (next2) => stagedResponse.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.andThen(consumeUsage(agent2, context3, trace2, options), next2))));
     const historyWithResponse = (...additions) => exports_Prompt.fromMessages([
       ...prompt.content,
       ...promptFromTurnParts(trace2).content,
@@ -33277,16 +34230,15 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         return makeTurn(agent2, context3, nextPrompt, turn + 1, toolCalls, options);
       }
       const output = yield* decodeFinalOutput(agent2, trace2.text.join(""));
-      const completed = RunCompleted.make({
-        ...yield* eventBase(context3),
+      return exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
+        ...base2,
         output,
         turns: turn,
         finishReason: "model-stop"
-      });
-      return exports_Stream.succeed(completed);
+      })));
     });
     if (providerOnly && trace2.finishReason === "stop") {
-      return yield* settleOrFollowUp(historyWithResponse());
+      return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
     }
     if (trace2.toolCalls.size > 0) {
       if (trace2.finishReason !== "tool-calls") {
@@ -33301,31 +34253,35 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         }));
       }
       if (trace2.applicationToolCalls.length === 0) {
-        yield* applyRepeatedFailurePolicy(context3, trace2, agent2.definition.policy.repeatedFailureLimit);
-        return yield* continueTurn(historyWithResponse());
+        return afterValidatedResponse(exports_Effect.gen(function* () {
+          yield* applyRepeatedFailurePolicy(context3, trace2, agent2.definition.policy.repeatedFailureLimit);
+          return yield* continueTurn(historyWithResponse());
+        }));
       }
-      const toolkit = yield* agent2.definition.toolkit;
-      const concurrency = yield* schedulingConcurrency(agent2.definition.policy.toolConcurrency, options.scheduling);
-      if (options.durability !== undefined) {
-        yield* options.durability.commitResponse({
-          turn,
-          turnId,
-          responseMessages: promptFromTurnParts(trace2),
-          calls: trace2.applicationCallDescriptors
-        });
-      }
-      const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
-        maxToolCalls: agent2.definition.policy.maxToolCalls,
-        declaredToolCalls: toolCalls
-      }), options.budget);
-      return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
+      return afterValidatedResponse(exports_Effect.gen(function* () {
+        const toolkit = yield* agent2.definition.toolkit;
+        const concurrency = yield* schedulingConcurrency(agent2.definition.policy.toolConcurrency, options.scheduling);
+        if (options.durability !== undefined) {
+          yield* options.durability.commitResponse({
+            turn,
+            turnId,
+            responseMessages: promptFromTurnParts(trace2),
+            calls: trace2.applicationCallDescriptors
+          });
+        }
+        const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
+          maxToolCalls: agent2.definition.policy.maxToolCalls,
+          declaredToolCalls: toolCalls
+        }), options.budget);
+        return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
+      }));
     }
     if (trace2.finishReason !== "stop") {
       return failRunEventStream(ModelProtocolError.make({
         message: `Model stopped without a final answer (${trace2.finishReason})`
       }));
     }
-    return yield* settleOrFollowUp(historyWithResponse());
+    return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
   }));
   return started.pipe(exports_Stream.concat(response), exports_Stream.concat(continuation));
 }));
@@ -33385,6 +34341,9 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     toolParameterParts: new Map,
     toolCalls: new Map,
     finalToolResultIds: new Set,
+    providerResultPayloads: [],
+    providerStagedPayloadBytes: 0,
+    turnCompletion: undefined,
     applicationToolCalls: [],
     applicationCallDescriptors: [],
     applicationToolResults: [],
@@ -33583,7 +34542,7 @@ var stream = (agent2, input, options = {}) => {
     }), exports_Stream.provide(engineToolServices));
   }));
   const finalized = options.input?.end === undefined ? interpreted : interpreted.pipe(exports_Stream.ensuring(options.input.end()));
-  return finalized.pipe(exports_Stream.provide(agent2.model, { local: true }));
+  return finalized.pipe(exports_Stream.provide(agent2.model, { local: true }), exports_Stream.provide(ToolSpanTelemetry.layer));
 };
 var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
   const reduction = yield* exports_Stream.runFold(events2, () => ({}), (state, event) => event._tag === "RunCompleted" ? { completed: event } : state);
@@ -34658,7 +35617,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
     recordHistory: (conversationId, historyRunId, history) => exports_Effect.gen(function* () {
       const incoming = yield* exports_Effect.forEach(history.content, (message) => encodeMessage(conversationId, message).pipe(exports_Effect.map((encoded) => ({ message, encoded }))));
       const attempt = exports_Effect.gen(function* () {
-        const current = yield* exports_Ref.get(state).pipe(exports_Effect.flatMap((all5) => findSnapshot(all5, conversationId)));
+        const current = yield* exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, conversationId)));
         const currentEncoded = yield* exports_Effect.forEach(current.messages, (entry) => encodeMessage(conversationId, entry.message));
         if (incoming.length < currentEncoded.length || currentEncoded.some((encoded, index2) => encoded !== incoming[index2]?.encoded)) {
           return yield* ConversationHistoryDiverged.make({
@@ -34680,7 +35639,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
       });
       return yield* attempt;
     }),
-    snapshot: (conversationId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all5) => findSnapshot(all5, conversationId))),
+    snapshot: (conversationId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, conversationId))),
     export: (conversationId) => exports_Effect.gen(function* () {
       const snapshot2 = yield* findSnapshot(yield* exports_Ref.get(state), conversationId);
       return ConversationExport.make({
@@ -34981,9 +35940,9 @@ function Stream2(success, error2) {
 }
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId47 = "~effect/rpc/Rpc";
+var TypeId48 = "~effect/rpc/Rpc";
 var Proto12 = {
-  [TypeId47]: TypeId47,
+  [TypeId48]: TypeId48,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -35072,7 +36031,7 @@ var makeProto3 = (options) => {
   Rpc.key = `effect/rpc/Rpc/${options._tag}`;
   return Rpc;
 };
-var make50 = (tag2, options) => {
+var make51 = (tag2, options) => {
   const successSchema = options?.success ?? Void2;
   const errorSchema = options?.error ?? Never2;
   const defectSchema = options?.defect ?? Defect();
@@ -35247,7 +36206,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct(
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make50("initialize", {
+class Initialize extends (/* @__PURE__ */ make51("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -35258,7 +36217,7 @@ class Initialize extends (/* @__PURE__ */ make50("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make50("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make51("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -35267,7 +36226,7 @@ class CancelledNotification extends (/* @__PURE__ */ make50("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make50("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make51("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
@@ -35336,7 +36295,7 @@ class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make50("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make51("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -35345,7 +36304,7 @@ class ReadResource extends (/* @__PURE__ */ make50("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make50("resources/subscribe", {
+class Subscribe extends (/* @__PURE__ */ make51("resources/subscribe", {
   success: /* @__PURE__ */ Struct({}),
   error: McpError,
   payload: {
@@ -35355,7 +36314,7 @@ class Subscribe extends (/* @__PURE__ */ make50("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make50("resources/unsubscribe", {
+class Unsubscribe extends (/* @__PURE__ */ make51("resources/unsubscribe", {
   success: /* @__PURE__ */ Struct({}),
   error: McpError,
   payload: {
@@ -35365,7 +36324,7 @@ class Unsubscribe extends (/* @__PURE__ */ make50("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make50("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make51("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -35444,7 +36403,7 @@ class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetP
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make50("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make51("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -35488,7 +36447,7 @@ class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallT
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make50("tools/call", {
+class CallTool extends (/* @__PURE__ */ make51("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -35500,7 +36459,7 @@ class CallTool extends (/* @__PURE__ */ make50("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make50("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make51("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
@@ -35510,7 +36469,7 @@ class SetLevel extends (/* @__PURE__ */ make50("logging/setLevel", {
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make50("notifications/message", {
+class LoggingMessageNotification extends (/* @__PURE__ */ make51("notifications/message", {
   payload: /* @__PURE__ */ Struct({
     ...NotificationMeta.fields,
     level: LoggingLevel,
@@ -35555,7 +36514,7 @@ class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make50("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make51("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
@@ -35584,7 +36543,7 @@ class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make50("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make51("elicitation/create", {
   success: ElicitResult,
   error: McpError,
   payload: {
@@ -36484,7 +37443,7 @@ var settleReservation = (reservations, reservationId, startedAt) => exports_Effe
   }
   yield* reservations.release(reservationId);
 }).pipe(exports_Effect.orDie);
-var layer13 = (delegation, childBinding, options) => {
+var layer14 = (delegation, childBinding, options) => {
   const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
   const allocation = delegationAllocationFromPolicy(delegation.policy);
   const toolkit = exports_Toolkit.make(delegation.tool);
@@ -36782,7 +37741,7 @@ var layer13 = (delegation, childBinding, options) => {
   });
   return toolkit.toLayer(build2);
 };
-var SubagentRuntime = { layer: layer13 };
+var SubagentRuntime = { layer: layer14 };
 // packages/pr-review/src/internal/effort.ts
 var EFFORT_ALIASES = {
   low: 0,
@@ -36930,6 +37889,7 @@ class PullRequestMetadata extends exports_Schema.Class("@effect-agent/pr-review/
   title: exports_Schema.String.check(exports_Schema.isMaxLength(400)),
   body: exports_Schema.String.check(exports_Schema.isMaxLength(20000)),
   baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  baseSha: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))),
   headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
   headSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
   totalChangedFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
@@ -37303,6 +38263,7 @@ var rankAndDedupeFindings = (findings) => {
 // packages/pr-review/src/internal/fan-out.ts
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
+var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
 var FileReviewToolkit = exports_Toolkit.make(ReadFileDiff, ReadFile);
 var FileReviewToolkitLayer = FileReviewToolkit.toLayer({
   read_file_diff: readFileDiffHandler,
@@ -37345,7 +38306,7 @@ var makeFileReviewerInstructions = (options = {}) => (brief) => [
 var fileReviewerInstructions = makeFileReviewerInstructions();
 var defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 8,
-  maxToolCalls: 16,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200000
@@ -37373,7 +38334,7 @@ var fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
   maxConcurrency: 3,
   maxTurns: 8,
-  maxToolCalls: 16,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes"
 });
 var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
@@ -37476,10 +38437,10 @@ var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review"
     paths: request3.paths,
     focus: "defects-first: correctness, security, concurrency, resources, error handling"
   })),
-  projectResult: (report) => exports_Effect.succeed(FileReviewUnitResult.make({
-    unitId: report.unitId,
-    findings: report.findings,
-    ...report.concerns !== undefined ? { concerns: report.concerns } : {}
+  projectResult: (report2) => exports_Effect.succeed(FileReviewUnitResult.make({
+    unitId: report2.unitId,
+    findings: report2.findings,
+    ...report2.concerns !== undefined ? { concerns: report2.concerns } : {}
   })),
   policy: fileReviewPolicy
 });
@@ -37538,8 +38499,9 @@ var ignoringPullRequestSourceLayer = (patterns) => exports_Layer.effect(PullRequ
   const source = yield* PullRequestSource;
   const ignored = compileIgnoreGlobs(patterns);
   const changedFiles = source.changedFiles.pipe(exports_Effect.map((files) => files.filter((file) => !ignored(file.path))));
+  const anchorFiles = source.anchorFiles.pipe(exports_Effect.map((files) => files.filter((file) => !ignored(file.path))));
   const metadata = exports_Effect.gen(function* () {
-    const [meta, files] = yield* exports_Effect.all([source.metadata, source.changedFiles]);
+    const [meta, files] = yield* exports_Effect.all([source.metadata, source.anchorFiles]);
     const ignoredCount = files.filter((file) => ignored(file.path)).length;
     return PullRequestMetadata.make({
       ...meta,
@@ -37549,25 +38511,488 @@ var ignoringPullRequestSourceLayer = (patterns) => exports_Layer.effect(PullRequ
   return PullRequestSource.of({
     metadata,
     changedFiles,
+    anchorFiles,
     readFile: (path) => ignored(path) ? exports_Effect.fail(ReviewInputViolation.make({
       input: path,
       reason: "Path is excluded from this review by configuration."
     })) : source.readFile(path)
   });
 }));
+
+// packages/pr-review/src/internal/review-state.ts
+var ReviewMode = exports_Schema.Literals(["incremental", "final"]);
+var ReviewScopeMode = exports_Schema.Literals(["incremental", "full"]);
+var GitCommitSha = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64), exports_Schema.isPattern(/^[0-9a-f]{40,64}$/));
+var Fingerprint = exports_Schema.String.check(exports_Schema.isPattern(/^[0-9a-f]{64}$/));
+var StoredText = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(800));
+
+class StoredReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewFinding")({
+  path: ChangedPath,
+  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: StoredText
+}) {
+}
+
+class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewConcern")({
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: StoredText
+}) {
+}
+
+class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
+  version: exports_Schema.Literal(1),
+  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  baseSha: GitCommitSha,
+  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  reviewedHeadSha: GitCommitSha,
+  profileFingerprint: Fingerprint,
+  acceptedScopeFingerprint: Fingerprint,
+  reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
+  unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
+  unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
+  lastReviewMode: ReviewScopeMode
+}) {
+}
+var toStoredFinding = (finding) => StoredReviewFinding.make({
+  path: finding.path,
+  startLine: finding.startLine,
+  endLine: finding.endLine,
+  severity: finding.severity,
+  title: finding.title,
+  body: finding.body.slice(0, 800)
+});
+var fromStoredFinding = (finding) => ReviewFinding.make({
+  path: finding.path,
+  startLine: finding.startLine,
+  endLine: finding.endLine,
+  severity: finding.severity,
+  title: finding.title,
+  body: finding.body
+});
+var toStoredConcern = (concern) => StoredReviewConcern.make({
+  severity: concern.severity,
+  title: concern.title,
+  body: concern.body.slice(0, 800)
+});
+var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
+var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
+var STATE_MARKER_SUFFIX = " -->";
+var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
+var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+
+class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
+  operation: exports_Schema.Literals(["sign", "verify"]),
+  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
+}) {
+}
+
+class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
+  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
+}) {
+}
+
+class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
+}
+var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
+  operation,
+  reason: String(cause).slice(0, 2048)
+});
+var hmacKey = (secret, operation) => exports_Effect.tryPromise({
+  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
+  catch: (cause) => authenticationFailure(operation, cause)
+});
+var signatureBytes = (signature) => {
+  const pairs = signature.match(/../g) ?? [];
+  const buffer3 = new ArrayBuffer(pairs.length);
+  const bytes = new Uint8Array(buffer3);
+  for (let index2 = 0;index2 < pairs.length; index2 += 1) {
+    bytes[index2] = Number.parseInt(pairs[index2] ?? "", 16);
+  }
+  return buffer3;
+};
+var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+  status: "available",
+  unavailableReason: undefined,
+  render: (state) => exports_Effect.gen(function* () {
+    const json = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+    const payload = exports_Encoding.encodeBase64(json);
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    const key = yield* hmacKey(secret, "sign");
+    const signature = yield* exports_Effect.tryPromise({
+      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
+      catch: (cause) => authenticationFailure("sign", cause)
+    });
+    const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
+    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
+      return yield* ReviewStateMarkerTooLarge.make({
+        observedChars: marker.length,
+        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
+      });
+    }
+    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+  }),
+  extract: (body) => {
+    if (body.length > 60000)
+      return exports_Effect.succeed(exports_Option.none());
+    const match9 = STATE_MARKER_PATTERN.exec(body);
+    const payload = match9?.[1];
+    const signature = match9?.[2];
+    if (payload === undefined || signature === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
+    if (!exports_Schema.is(ReviewStateMarker)(marker))
+      return exports_Effect.succeed(exports_Option.none());
+    const json = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+    if (json === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json);
+    if (exports_Option.isNone(decoded))
+      return exports_Effect.succeed(exports_Option.none());
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    return exports_Effect.gen(function* () {
+      const key = yield* hmacKey(secret, "verify");
+      const valid = yield* exports_Effect.tryPromise({
+        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
+        catch: (cause) => authenticationFailure("verify", cause)
+      });
+      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
+    });
+  }
+}));
+var unavailableReviewStateAuthenticatorLayer = (reason) => {
+  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
+  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+    status: "unavailable",
+    unavailableReason: safeReason.slice(0, 1000),
+    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
+      operation: "sign",
+      reason: safeReason.slice(0, 2048)
+    })),
+    extract: () => exports_Effect.succeed(exports_Option.none())
+  }));
+};
+
+class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
+  status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
+  baseSha: GitCommitSha,
+  headSha: GitCommitSha,
+  mergeBaseSha: GitCommitSha,
+  files: exports_Schema.Array(ChangedFile).check(exports_Schema.isMaxLength(300)),
+  truncated: exports_Schema.Boolean
+}) {
+}
+var fullSelection = (input) => ({
+  mode: "full",
+  reason: input.reason,
+  files: input.files,
+  affectedPaths: input.files.flatMap((file) => file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]),
+  totalFiles: input.totalFiles,
+  baselineSha: undefined,
+  priorState: undefined,
+  profileFingerprint: input.profileFingerprint
+});
+var validateReviewState = (state, current, profileFingerprint) => {
+  if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
+    return "stored state belongs to a different pull request";
+  }
+  if (current.baseSha === undefined)
+    return "the current base commit is unavailable";
+  if (state.baseRef !== current.baseRef)
+    return "the pull request base ref changed";
+  if (state.headRef !== current.headRef)
+    return "the pull request head ref changed";
+  if (state.profileFingerprint !== profileFingerprint) {
+    return "the reviewer profile or model configuration changed";
+  }
+  return;
+};
+var selectReviewRange = (input) => {
+  const full = (reason) => fullSelection({
+    reason,
+    files: input.fullFiles,
+    totalFiles: input.current.totalChangedFiles,
+    profileFingerprint: input.profileFingerprint
+  });
+  if (input.requestedMode === "final")
+    return full("explicit final full-diff audit requested");
+  if (input.lookupFailure !== undefined) {
+    return full(`stored review state could not be recovered: ${input.lookupFailure}`);
+  }
+  if (input.priorState === undefined)
+    return full("no compatible stored review state was found");
+  const invalid2 = validateReviewState(input.priorState, input.current, input.profileFingerprint);
+  if (invalid2 !== undefined)
+    return full(invalid2);
+  const comparison = input.comparison;
+  if (comparison === undefined)
+    return full("the incremental head comparison was unavailable");
+  if (comparison.baseSha !== input.priorState.reviewedHeadSha || comparison.headSha !== input.current.headSha || comparison.mergeBaseSha !== input.priorState.reviewedHeadSha || comparison.status !== "ahead" && comparison.status !== "identical") {
+    return full("the prior reviewed head is not an ancestor of the current head");
+  }
+  if (comparison.truncated)
+    return full("the incremental comparison exceeded GitHub's file bound");
+  const affectedPaths = new Set(comparison.files.flatMap((file) => file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]));
+  let baseReason = "";
+  if (input.priorState.baseSha !== input.current.baseSha) {
+    const baseComparison = input.baseComparison;
+    if (baseComparison === undefined) {
+      return full("the pull request base changed and its lineage comparison was unavailable");
+    }
+    if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
+      return full("the pull request base changed materially or exceeded the comparison bound");
+    }
+    for (const file of baseComparison.files) {
+      affectedPaths.add(file.path);
+      if (file.previousPath !== undefined)
+        affectedPaths.add(file.previousPath);
+    }
+    baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
+  }
+  const currentPaths = new Set(input.fullFiles.flatMap((file) => file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]));
+  const selectedByPath = new Map;
+  for (const file of comparison.files) {
+    if (currentPaths.has(file.path) || file.previousPath !== undefined && currentPaths.has(file.previousPath)) {
+      selectedByPath.set(file.path, file);
+    }
+  }
+  if (input.priorState.baseSha !== input.current.baseSha) {
+    for (const file of input.fullFiles) {
+      if (affectedPaths.has(file.path) || file.previousPath !== undefined && affectedPaths.has(file.previousPath)) {
+        selectedByPath.set(file.path, file);
+      }
+    }
+  }
+  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  return {
+    mode: "incremental",
+    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    files: selectedFiles,
+    affectedPaths: [...affectedPaths].sort(),
+    totalFiles: selectedFiles.length,
+    baselineSha: input.priorState.reviewedHeadSha,
+    priorState: input.priorState,
+    profileFingerprint: input.profileFingerprint
+  };
+};
+
+class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
+}
+var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const selectedPaths = new Set(selection.files.map((file) => file.path));
+  return PullRequestSource.of({
+    metadata: source.metadata,
+    changedFiles: exports_Effect.succeed(selection.files),
+    anchorFiles: source.anchorFiles,
+    readFile: (path) => selectedPaths.has(path) ? source.readFile(path) : exports_Effect.fail(ReviewInputViolation.make({
+      input: path,
+      reason: "Path is outside this incremental review range."
+    }))
+  });
+}));
+var computeProfileFingerprint = (signature) => exports_Effect.promise(async () => {
+  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(signature));
+  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+});
+var buildProfileMission = (metadata, files) => ReviewMission.make({
+  repository: metadata.repository,
+  number: metadata.number,
+  title: metadata.title,
+  body: metadata.body,
+  baseRef: metadata.baseRef,
+  headRef: metadata.headRef,
+  changedFileCount: files.length
+});
+
+// packages/pr-review/src/internal/coverage.ts
+var ReviewShape = exports_Schema.Literals(["flat", "fan-out"]);
+
+class FailedReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewUnit")({
+  unitId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32)),
+  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
+}) {
+}
+
+class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewCoverage")({
+  status: exports_Schema.Literals(["complete", "incomplete"]),
+  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
+  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(20))
+}) {
+}
+var toolTrace = (events2) => {
+  const declared = new Map;
+  const succeeded = new Map;
+  const failed = new Map;
+  for (const event of events2) {
+    if (event._tag === "ToolCallDeclared")
+      declared.set(event.toolCallId, event);
+    if (event._tag === "ToolCallSucceeded")
+      succeeded.set(event.toolCallId, event);
+    if (event._tag === "ToolCallFailed")
+      failed.set(event.toolCallId, event);
+  }
+  return { declared, succeeded, failed };
+};
+var sortedUnique = (values3) => [...new Set(values3)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+var boundedListReason = (label, values3) => {
+  const items = sortedUnique(values3);
+  const prefix = `${label} (${items.length}): `;
+  let rendered = prefix;
+  for (let index2 = 0;index2 < items.length; index2 += 1) {
+    const item = items[index2] ?? "";
+    const separator = index2 === 0 ? "" : ", ";
+    const omitted = items.length - index2 - 1;
+    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
+    if (`${rendered}${separator}${item}${suffix}`.length > 1000) {
+      const omission = `… (+${items.length - index2} more)`;
+      return `${rendered.slice(0, 1000 - omission.length)}${omission}`;
+    }
+    rendered = `${rendered}${separator}${item}`;
+  }
+  return rendered;
+};
+var flatCoverage = (files, totalFiles, trace2) => {
+  const requiredPaths = sortedUnique(files.map((file) => file.path));
+  const reviewed = new Set;
+  const failedPaths = new Set;
+  for (const [toolCallId, declaration] of trace2.declared) {
+    if (declaration.toolName !== "read_file_diff")
+      continue;
+    const query = exports_Schema.decodeUnknownOption(FileDiffQuery)(declaration.parameters);
+    if (exports_Option.isNone(query))
+      continue;
+    if (trace2.succeeded.has(toolCallId))
+      reviewed.add(query.value.path);
+    if (trace2.failed.has(toolCallId))
+      failedPaths.add(query.value.path);
+  }
+  const undiffable = files.filter((file) => file.patch === undefined).map((file) => file.path);
+  const unreviewed = requiredPaths.filter((path) => !reviewed.has(path) || undiffable.includes(path) || failedPaths.has(path));
+  const reasons = [];
+  if (files.length < totalFiles) {
+    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
+  }
+  if (undiffable.length > 0) {
+    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
+  }
+  if (failedPaths.size > 0) {
+    reasons.push(boundedListReason("diff reads failed", failedPaths));
+  }
+  if (unreviewed.length > 0) {
+    reasons.push(boundedListReason("required paths were not successfully reviewed", unreviewed));
+  }
+  return ReviewCoverage.make({
+    status: reasons.length === 0 ? "complete" : "incomplete",
+    requiredPaths,
+    reviewedPaths: sortedUnique(reviewed),
+    unreviewedPaths: sortedUnique(unreviewed),
+    failedUnits: [],
+    reasons
+  });
+};
+var fanOutCoverage = (files, totalFiles, trace2) => {
+  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
+  const declarationsByUnit = new Map;
+  for (const [toolCallId, declaration] of trace2.declared) {
+    if (declaration.toolName !== "delegate_file_review")
+      continue;
+    const request3 = exports_Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
+    if (exports_Option.isNone(request3))
+      continue;
+    const declarations = declarationsByUnit.get(request3.value.unitId) ?? [];
+    declarations.push({ id: toolCallId, paths: request3.value.paths });
+    declarationsByUnit.set(request3.value.unitId, declarations);
+  }
+  const reviewed = new Set;
+  const unreviewed = new Set([...plan.undiffablePaths, ...plan.unassignedPaths]);
+  const failedUnits = [];
+  const reasons = [];
+  for (const unit of plan.units) {
+    const declarations = declarationsByUnit.get(unit.unitId) ?? [];
+    const expectedPaths = [...unit.paths];
+    const exact = declarations.filter((declaration) => declaration.paths.length === expectedPaths.length && declaration.paths.every((path, index2) => path === expectedPaths[index2]));
+    const successful = exact.filter((declaration) => {
+      const event = trace2.succeeded.get(declaration.id);
+      if (event === undefined || trace2.failed.has(declaration.id))
+        return false;
+      const result4 = exports_Schema.decodeUnknownOption(FileReviewUnitResult)(event.result);
+      return exports_Option.isSome(result4) && result4.value.unitId === unit.unitId;
+    });
+    if (declarations.length === 1 && exact.length === 1 && successful.length === 1) {
+      for (const path of unit.paths)
+        reviewed.add(path);
+      continue;
+    }
+    for (const path of unit.paths)
+      unreviewed.add(path);
+    const failure = declarations.map((declaration) => trace2.failed.get(declaration.id)).find((event) => event !== undefined);
+    const returnedFailure = declarations.map((declaration) => trace2.succeeded.get(declaration.id)).filter((event) => event !== undefined).map((event) => exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result)).find(exports_Option.isSome);
+    failedUnits.push(FailedReviewUnit.make({
+      unitId: unit.unitId,
+      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 1 ? "UnitAssignedMultipleTimes" : exact.length === 0 ? "UnitAssignmentMismatch" : "UnitDidNotSettleSuccessfully")
+    }));
+  }
+  if (plan.truncated) {
+    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
+  }
+  if (plan.undiffablePaths.length > 0) {
+    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
+  }
+  if (plan.unassignedPaths.length > 0) {
+    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
+  }
+  if (failedUnits.length > 0) {
+    reasons.push(boundedListReason("review units did not complete", failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`)));
+  }
+  return ReviewCoverage.make({
+    status: reasons.length === 0 ? "complete" : "incomplete",
+    requiredPaths: sortedUnique(files.map((file) => file.path)),
+    reviewedPaths: sortedUnique(reviewed),
+    unreviewedPaths: sortedUnique(unreviewed),
+    failedUnits,
+    reasons
+  });
+};
+var assessReviewCoverage = (input) => {
+  const trace2 = toolTrace(input.events);
+  const coverage = input.shape === "fan-out" ? fanOutCoverage(input.files, input.totalFiles, trace2) : flatCoverage(input.files, input.totalFiles, trace2);
+  if (input.anchorFiles.length >= input.totalAnchorFiles)
+    return coverage;
+  return ReviewCoverage.make({
+    ...coverage,
+    status: "incomplete",
+    reasons: [
+      ...coverage.reasons,
+      `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`
+    ]
+  });
+};
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
-  layer: () => layer14,
+  layer: () => layer15,
   RequestInit: () => RequestInit,
   Fetch: () => Fetch
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Headers.js
-var TypeId48 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
+var TypeId49 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
 var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
-  [TypeId48]: {
-    value: TypeId48
+  [TypeId49]: {
+    value: TypeId49
   },
   [symbolRedactable]: {
     value(context4) {
@@ -37596,7 +39021,7 @@ var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.cre
     value: BaseProto[NodeInspectSymbol]
   }
 });
-var make51 = (input) => Object.assign(Object.create(Proto13), input);
+var make52 = (input) => Object.assign(Object.create(Proto13), input);
 var Equivalence6 = /* @__PURE__ */ makeEquivalence4(/* @__PURE__ */ strictEqual());
 var empty14 = /* @__PURE__ */ Object.create(Proto13);
 var fromInput2 = (input) => {
@@ -37621,21 +39046,21 @@ var fromInput2 = (input) => {
 };
 var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto13);
 var set5 = /* @__PURE__ */ dual(3, (self, key, value4) => {
-  const out = make51(self);
+  const out = make52(self);
   out[key.toLowerCase()] = value4;
   return out;
 });
-var setAll = /* @__PURE__ */ dual(2, (self, headers) => make51({
+var setAll = /* @__PURE__ */ dual(2, (self, headers) => make52({
   ...self,
   ...fromInput2(headers)
 }));
-var merge6 = /* @__PURE__ */ dual(2, (self, headers) => {
-  const out = make51(self);
+var merge7 = /* @__PURE__ */ dual(2, (self, headers) => {
+  const out = make52(self);
   Object.assign(out, headers);
   return out;
 });
 var remove7 = /* @__PURE__ */ dual(2, (self, key) => {
-  const out = make51(self);
+  const out = make52(self);
   delete out[key.toLowerCase()];
   return out;
 });
@@ -37680,7 +39105,7 @@ __export(exports_HttpClient, {
   transform: () => transform4,
   tapRequest: () => tapRequest,
   tapError: () => tapError6,
-  tap: () => tap6,
+  tap: () => tap7,
   retryTransient: () => retryTransient,
   retry: () => retry5,
   put: () => put2,
@@ -37692,7 +39117,7 @@ __export(exports_HttpClient, {
   mapRequestEffect: () => mapRequestEffect,
   mapRequest: () => mapRequest,
   makeWith: () => makeWith2,
-  make: () => make55,
+  make: () => make56,
   layerMergedContext: () => layerMergedContext,
   isHttpClient: () => isHttpClient,
   head: () => head2,
@@ -37700,7 +39125,7 @@ __export(exports_HttpClient, {
   followRedirects: () => followRedirects,
   filterStatusOk: () => filterStatusOk2,
   filterStatus: () => filterStatus2,
-  filterOrFail: () => filterOrFail3,
+  filterOrFail: () => filterOrFail4,
   filterOrElse: () => filterOrElse3,
   execute: () => execute,
   del: () => del2,
@@ -37715,10 +39140,10 @@ __export(exports_HttpClient, {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Cookies.js
-var TypeId49 = "~effect/http/Cookies";
+var TypeId50 = "~effect/http/Cookies";
 var CookieTypeId = "~effect/http/Cookies/Cookie";
 var Proto14 = {
-  [TypeId49]: TypeId49,
+  [TypeId50]: TypeId50,
   ...BaseProto,
   toJSON() {
     return {
@@ -37890,7 +39315,7 @@ var CookieProto = {
     };
   }
 };
-var merge7 = /* @__PURE__ */ dual(2, (self, that) => fromReadonlyRecord({
+var merge8 = /* @__PURE__ */ dual(2, (self, that) => fromReadonlyRecord({
   ...self.cookies,
   ...that.cookies
 }));
@@ -37904,11 +39329,11 @@ var tryDecodeURIComponent = (str) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/UrlParams.js
-var TypeId50 = "~effect/http/UrlParams";
-var isUrlParams = (u) => hasProperty(u, TypeId50);
+var TypeId51 = "~effect/http/UrlParams";
+var isUrlParams = (u) => hasProperty(u, TypeId51);
 var Proto15 = {
   ...PipeInspectableProto,
-  [TypeId50]: TypeId50,
+  [TypeId51]: TypeId51,
   [Symbol.iterator]() {
     return this.params[Symbol.iterator]();
   },
@@ -37925,7 +39350,7 @@ var Proto15 = {
     return array(this.params.flat());
   }
 };
-var make52 = (params) => {
+var make53 = (params) => {
   const self = Object.create(Proto15);
   self.params = params;
   return self;
@@ -37944,7 +39369,7 @@ var fromInput3 = (input) => {
       out.push(parsed[i]);
     }
   }
-  return make52(out);
+  return make53(out);
 };
 var fromInputNested = (input) => {
   const entries3 = typeof input[Symbol.iterator] === "function" ? fromIterable2(input) : Object.entries(input);
@@ -37982,13 +39407,13 @@ var UrlParamsSchema = /* @__PURE__ */ declare(isUrlParams, {
   expected: "UrlParams",
   toEquivalence: () => Equivalence7,
   toCodec: () => link3()(ArraySchema(Tuple2([String6, String6])), transform2({
-    decode: make52,
+    decode: make53,
     encode: (self) => self.params
   }))
 });
-var empty15 = /* @__PURE__ */ make52([]);
-var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make52(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
-var transform3 = /* @__PURE__ */ dual(2, (self, f) => make52(f(self.params)));
+var empty15 = /* @__PURE__ */ make53([]);
+var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make53(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
+var transform3 = /* @__PURE__ */ dual(2, (self, f) => make53(f(self.params)));
 var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   const out = fromInput3(input);
   const params = out.params;
@@ -38003,7 +39428,7 @@ var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   }
   return out;
 });
-var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make52(append(self.params, [key, String(value4)])));
+var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make53(append(self.params, [key, String(value4)])));
 var appendAll3 = /* @__PURE__ */ dual(2, (self, input) => transform3(self, appendAll(fromInput3(input).params)));
 var toString = (input) => new URLSearchParams(fromInput3(input).params).toString();
 var toRecord = (self) => {
@@ -38029,7 +39454,7 @@ var schemaRecord = /* @__PURE__ */ UrlParamsSchema.pipe(/* @__PURE__ */ decodeTo
 })));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpBody.js
-var TypeId51 = "~effect/http/HttpBody";
+var TypeId52 = "~effect/http/HttpBody";
 var HttpBodyErrorTypeId = "~effect/http/HttpBody/HttpBodyError";
 
 class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
@@ -38037,9 +39462,9 @@ class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
 }
 
 class Proto16 {
-  [TypeId51];
+  [TypeId52];
   constructor() {
-    this[TypeId51] = TypeId51;
+    this[TypeId52] = TypeId52;
   }
   [NodeInspectSymbol]() {
     return this.toJSON();
@@ -38202,8 +39627,8 @@ var fileContentLength = (size9, options) => {
 var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (info2) => stream2(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options))));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientError.js
-var TypeId52 = "~effect/http/HttpClientError";
-var isHttpClientError = (u) => hasProperty(u, TypeId52);
+var TypeId53 = "~effect/http/HttpClientError";
+var isHttpClientError = (u) => hasProperty(u, TypeId53);
 
 class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) {
   constructor(props) {
@@ -38216,7 +39641,7 @@ class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) 
       super(props);
     }
   }
-  [TypeId52] = TypeId52;
+  [TypeId53] = TypeId53;
   get request() {
     return this.reason.request;
   }
@@ -38304,7 +39729,7 @@ __export(exports_HttpClientRequest, {
   options: () => options,
   modify: () => modify5,
   makeWith: () => makeWith,
-  make: () => make54,
+  make: () => make55,
   isHttpClientRequest: () => isHttpClientRequest,
   head: () => head,
   get: () => get10,
@@ -38345,7 +39770,7 @@ var updateHeaders = (headers, body) => {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Url.js
 class UrlError extends (/* @__PURE__ */ TaggedError2("UrlError")) {
 }
-var make53 = (url2, params, hash2) => try_({
+var make54 = (url2, params, hash2) => try_({
   try: () => {
     const urlInstance = new URL(url2, baseUrl());
     for (let i = 0;i < params.params.length; i++) {
@@ -38371,10 +39796,10 @@ var baseUrl = () => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientRequest.js
-var TypeId53 = "~effect/http/HttpClientRequest";
-var isHttpClientRequest = (u) => hasProperty(u, TypeId53);
+var TypeId54 = "~effect/http/HttpClientRequest";
+var isHttpClientRequest = (u) => hasProperty(u, TypeId54);
 var Proto17 = {
-  [TypeId53]: TypeId53,
+  [TypeId54]: TypeId54,
   ...BaseProto,
   toJSON() {
     return {
@@ -38402,19 +39827,19 @@ function makeWith(method, url2, urlParams2, hash2, headers, body) {
   return self;
 }
 var empty17 = /* @__PURE__ */ makeWith("GET", "", empty15, /* @__PURE__ */ none2(), empty14, empty16);
-var make54 = (method) => (url2, options) => modify5(empty17, {
+var make55 = (method) => (url2, options) => modify5(empty17, {
   method,
   url: url2,
   ...options ?? undefined
 });
-var get10 = /* @__PURE__ */ make54("GET");
-var post = /* @__PURE__ */ make54("POST");
-var patch = /* @__PURE__ */ make54("PATCH");
-var put = /* @__PURE__ */ make54("PUT");
-var del = /* @__PURE__ */ make54("DELETE");
-var head = /* @__PURE__ */ make54("HEAD");
-var options = /* @__PURE__ */ make54("OPTIONS");
-var trace2 = /* @__PURE__ */ make54("TRACE");
+var get10 = /* @__PURE__ */ make55("GET");
+var post = /* @__PURE__ */ make55("POST");
+var patch = /* @__PURE__ */ make55("PATCH");
+var put = /* @__PURE__ */ make55("PUT");
+var del = /* @__PURE__ */ make55("DELETE");
+var head = /* @__PURE__ */ make55("HEAD");
+var options = /* @__PURE__ */ make55("OPTIONS");
+var trace2 = /* @__PURE__ */ make55("TRACE");
 var modify5 = /* @__PURE__ */ dual(2, (self, options2) => {
   let result4 = self;
   if (options2.method) {
@@ -38504,7 +39929,7 @@ var bodyFormDataRecord = /* @__PURE__ */ dual(2, (self, entries3) => setBody(sel
 var bodyStream = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, body, options2) => setBody(self, stream2(body, options2?.contentType, options2?.contentLength)));
 var bodyFile = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, path, options2) => map8(file(path, options2), (body) => setBody(self, body)));
 function toUrl(self) {
-  const r = make53(self.url, self.urlParams, getOrUndefined(self.hash));
+  const r = make54(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isSuccess2(r)) {
     return some2(r.success);
   }
@@ -38536,7 +39961,7 @@ var parseContentLength = (contentLength) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 var toWebResult = (self, options2) => {
-  const url2 = make53(self.url, self.urlParams, getOrUndefined(self.hash));
+  const url2 = make54(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isFailure2(url2)) {
     return fail2(url2.failure);
   }
@@ -38600,11 +40025,11 @@ __export(exports_HttpClientResponse, {
   fromWeb: () => fromWeb2,
   filterStatusOk: () => filterStatusOk,
   filterStatus: () => filterStatus,
-  TypeId: () => TypeId55
+  TypeId: () => TypeId56
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
-var TypeId54 = "~effect/http/HttpIncomingMessage";
+var TypeId55 = "~effect/http/HttpIncomingMessage";
 var schemaBodyJson2 = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3));
   return (self) => flatMap5(self.json, (u) => decode2(u, options2));
@@ -38641,7 +40066,7 @@ var inspect = (self, that) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientResponse.js
-var TypeId55 = "~effect/http/HttpClientResponse";
+var TypeId56 = "~effect/http/HttpClientResponse";
 var fromWeb2 = (request3, source) => new WebHttpClientResponse(request3, source);
 var schemaJson = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3).annotate({
@@ -38694,16 +40119,16 @@ var filterStatusOk = (self) => self.status >= 200 && self.status < 300 ? succeed
 }));
 
 class WebHttpClientResponse extends Class2 {
-  [TypeId54];
   [TypeId55];
+  [TypeId56];
   request;
   source;
   constructor(request3, source) {
     super();
     this.request = request3;
     this.source = source;
-    this[TypeId54] = TypeId54;
     this[TypeId55] = TypeId55;
+    this[TypeId56] = TypeId56;
   }
   toJSON() {
     return inspect(this, {
@@ -38819,8 +40244,8 @@ var toHeaders = (span2) => fromRecordUnsafe({
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClient.js
-var TypeId56 = "~effect/http/HttpClient";
-var isHttpClient = (u) => hasProperty(u, TypeId56);
+var TypeId57 = "~effect/http/HttpClient";
+var isHttpClient = (u) => hasProperty(u, TypeId57);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
 var accessor = (method) => (...args2) => flatMap5(HttpClient, (client) => client[method](...args2));
 var execute = /* @__PURE__ */ accessor("execute");
@@ -38836,8 +40261,8 @@ var transformResponse = /* @__PURE__ */ dual(2, (self, f) => makeWith2((request3
 var catch_6 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, catch_3(f)));
 var catchTag5 = /* @__PURE__ */ dual(3, (self, tag2, f) => transformResponse(self, (effect2) => catchTag3(effect2, tag2, f)));
 var catchTags4 = /* @__PURE__ */ dual(2, (self, cases) => transformResponse(self, catchTags2(cases)));
-var filterOrElse3 = /* @__PURE__ */ dual(3, (self, f, orElse3) => transformResponse(self, filterOrElse2(f, orElse3)));
-var filterOrFail3 = /* @__PURE__ */ dual(3, (self, f, orFailWith) => transformResponse(self, filterOrFail2(f, orFailWith)));
+var filterOrElse3 = /* @__PURE__ */ dual(3, (self, f, orElse4) => transformResponse(self, filterOrElse2(f, orElse4)));
+var filterOrFail4 = /* @__PURE__ */ dual(3, (self, f, orFailWith) => transformResponse(self, filterOrFail3(f, orFailWith)));
 var filterStatus2 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, flatMap5(filterStatus(f))));
 var filterStatusOk2 = /* @__PURE__ */ transformResponse(/* @__PURE__ */ flatMap5(filterStatusOk));
 var makeWith2 = (postprocess, preprocess) => {
@@ -38850,7 +40275,7 @@ var makeWith2 = (postprocess, preprocess) => {
   return self;
 };
 var Proto18 = {
-  [TypeId56]: TypeId56,
+  [TypeId57]: TypeId57,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -38861,13 +40286,13 @@ var Proto18 = {
     };
   },
   .../* @__PURE__ */ Object.fromEntries(/* @__PURE__ */ allShort.map(([fullMethod, method]) => [method, function(url2, options3) {
-    return this.execute(make54(fullMethod)(url2, options3));
+    return this.execute(make55(fullMethod)(url2, options3));
   }]))
 };
-var make55 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
+var make56 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
   const scopedController = scopedRequests.get(request3);
   const controller = scopedController ?? new AbortController;
-  const urlResult = make53(request3.url, request3.urlParams, getOrUndefined(request3.hash));
+  const urlResult = make54(request3.url, request3.urlParams, getOrUndefined(request3.hash));
   if (isFailure2(urlResult)) {
     return fail6(new HttpClientError({
       reason: new InvalidUrlError({
@@ -39174,14 +40599,14 @@ var getHeader = (headers, ...keys4) => {
   }
   return;
 };
-var tap6 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, tap4(f)));
+var tap7 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, tap5(f)));
 var tapError6 = /* @__PURE__ */ dual(2, (self, f) => transformResponse(self, tapError3(f)));
-var tapRequest = /* @__PURE__ */ dual(2, (self, f) => makeWith2(self.postprocess, (request3) => tap4(self.preprocess(request3), f)));
-var withCookiesRef = /* @__PURE__ */ dual(2, (self, ref) => makeWith2((request3) => tap4(self.postprocess(request3), (response) => update2(ref, (cookies) => merge7(cookies, response.cookies))), (request3) => flatMap5(self.preprocess(request3), (request4) => map8(get9(ref), (cookies) => isEmpty4(cookies) ? request4 : setHeader(request4, "cookie", toCookieHeader(cookies))))));
+var tapRequest = /* @__PURE__ */ dual(2, (self, f) => makeWith2(self.postprocess, (request3) => tap5(self.preprocess(request3), f)));
+var withCookiesRef = /* @__PURE__ */ dual(2, (self, ref) => makeWith2((request3) => tap5(self.postprocess(request3), (response) => update2(ref, (cookies) => merge8(cookies, response.cookies))), (request3) => flatMap5(self.preprocess(request3), (request4) => map8(get9(ref), (cookies) => isEmpty4(cookies) ? request4 : setHeader(request4, "cookie", toCookieHeader(cookies))))));
 var withScope = (self) => transform4(self, (effect2, request3) => {
   const controller = new AbortController;
   scopedRequests.set(request3, controller);
-  return andThen3(addFinalizer3(() => sync3(() => controller.abort())), effect2);
+  return andThen4(addFinalizer3(() => sync3(() => controller.abort())), effect2);
 });
 var followRedirects = /* @__PURE__ */ dual((args2) => isHttpClient(args2[0]), (self, maxRedirects) => makeWith2((request3) => {
   const loop = (request4, redirects) => flatMap5(self.postprocess(succeed6(request4)), (response) => {
@@ -39253,8 +40678,8 @@ class InterruptibleResponse {
     this.original = original;
     this.controller = controller;
   }
+  [TypeId56] = TypeId56;
   [TypeId55] = TypeId55;
-  [TypeId54] = TypeId54;
   applyInterrupt(effect2) {
     return suspend3(() => {
       responseRegistry.unregister(this.original);
@@ -39323,10 +40748,10 @@ var Fetch = /* @__PURE__ */ Reference("effect/http/FetchHttpClient/Fetch", {
 
 class RequestInit extends (/* @__PURE__ */ Service()("effect/http/FetchHttpClient/RequestInit")) {
 }
-var fetch = /* @__PURE__ */ make55((request3, url2, signal, fiber3) => {
+var fetch = /* @__PURE__ */ make56((request3, url2, signal, fiber3) => {
   const fetch2 = fiber3.getRef(Fetch);
   const options3 = fiber3.context.mapUnsafe.get(RequestInit.key) ?? {};
-  let headers = options3.headers ? merge6(fromInput2(options3.headers), request3.headers) : request3.headers;
+  let headers = options3.headers ? merge7(fromInput2(options3.headers), request3.headers) : request3.headers;
   if (headers["content-length"]) {
     headers = remove7(headers, "content-length");
   }
@@ -39357,7 +40782,7 @@ var fetch = /* @__PURE__ */ make55((request3, url2, signal, fiber3) => {
   }
   return send(undefined);
 });
-var layer14 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
 // packages/pr-review/src/internal/github.ts
 class GitHubReviewTarget extends exports_Context.Service()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config) {
@@ -39378,7 +40803,7 @@ var GitHubPullRequestWire = exports_Schema.Struct({
   title: exports_Schema.String,
   body: exports_Schema.NullOr(exports_Schema.String),
   changed_files: exports_Schema.Int,
-  base: exports_Schema.Struct({ ref: exports_Schema.String }),
+  base: exports_Schema.Struct({ ref: exports_Schema.String, sha: exports_Schema.String }),
   head: exports_Schema.Struct({ ref: exports_Schema.String, sha: exports_Schema.String })
 });
 var GitHubFileWire = exports_Schema.Struct({
@@ -39448,24 +40873,25 @@ var gitHubPullRequestSourceLayer = exports_Layer.effect(PullRequestSource)(expor
     title: wire.title.slice(0, 400),
     body: (wire.body ?? "").slice(0, 20000),
     baseRef: wire.base.ref,
+    baseSha: wire.base.sha,
     headRef: wire.head.ref,
     headSha: wire.head.sha,
     totalChangedFiles: wire.changed_files
   })));
   const fetchFiles = exports_Effect.gen(function* () {
     const perPage = 100;
-    const all5 = [];
+    const all6 = [];
     for (let page = 1;page <= MAX_CHANGED_FILES / perPage; page += 1) {
       const response = yield* executeOk("listChangedFiles", withCommonHeaders(exports_HttpClientRequest.get(`${prefix}/files`).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
         per_page: String(perPage),
         page: String(page)
       })), target.token));
       const wires = yield* decodeJsonBody(GitHubFilesPageWire, "listChangedFiles")(response);
-      all5.push(...wires.map(toChangedFile));
+      all6.push(...wires.map(toChangedFile));
       if (wires.length < perPage)
         break;
     }
-    return all5;
+    return all6;
   });
   const metadata = yield* exports_Effect.cached(fetchMetadata.pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client)));
   const changedFiles = yield* exports_Effect.cached(fetchFiles.pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client)));
@@ -39490,7 +40916,7 @@ var gitHubPullRequestSourceLayer = exports_Layer.effect(PullRequestSource)(expor
     }
     return text2;
   });
-  return PullRequestSource.of({ metadata, changedFiles, readFile: readFile3 });
+  return PullRequestSource.of({ metadata, changedFiles, anchorFiles: changedFiles, readFile: readFile3 });
 }));
 var gitHubReviewPublisherLayer = exports_Layer.effect(ReviewPublisher)(exports_Effect.gen(function* () {
   const target = yield* GitHubReviewTarget;
@@ -39535,9 +40961,20 @@ class PriorReviewLookupFailure extends exports_Schema.TaggedError()("PriorReview
 class PriorReviews extends exports_Context.Service()("@effect-agent/pr-review/PriorReviews") {
 }
 var GitHubPriorReviewWire = exports_Schema.Struct({
-  body: exports_Schema.NullOr(exports_Schema.String)
+  body: exports_Schema.NullOr(exports_Schema.String),
+  commit_id: exports_Schema.String,
+  user: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Struct({
+    login: exports_Schema.String,
+    type: exports_Schema.String
+  })))
 });
 var GitHubPriorReviewsPageWire = exports_Schema.Array(GitHubPriorReviewWire);
+var GitHubCompareWire = exports_Schema.Struct({
+  status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
+  base_commit: exports_Schema.Struct({ sha: exports_Schema.String }),
+  merge_base_commit: exports_Schema.Struct({ sha: exports_Schema.String }),
+  files: GitHubFilesPageWire
+});
 var MAX_PRIOR_REVIEW_PAGES = 5;
 var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.gen(function* () {
   const target = yield* GitHubReviewTarget;
@@ -39547,9 +40984,10 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
   const asLookupFailure = (error2) => PriorReviewLookupFailure.make({
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
   });
-  const latestFingerprint = exports_Effect.gen(function* () {
+  const readMarkers = (authenticator) => exports_Effect.gen(function* () {
     const perPage = 100;
     let latest = exports_Option.none();
+    let latestState = exports_Option.none();
     for (let page = 1;page <= MAX_PRIOR_REVIEW_PAGES; page += 1) {
       const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${prefix}/reviews`).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
         per_page: String(perPage),
@@ -39557,22 +40995,52 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
       })), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
       const wires = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => decodePage(body).pipe(exports_Effect.mapError(asLookupFailure))));
       for (const wire of wires) {
+        if (wire.user?.login !== "github-actions[bot]" || wire.user.type !== "Bot")
+          continue;
         const fingerprint = extractFingerprint(wire.body ?? "");
         if (fingerprint !== undefined)
           latest = exports_Option.some(fingerprint);
+        if (exports_Option.isSome(authenticator)) {
+          const state = yield* authenticator.value.extract(wire.body ?? "").pipe(exports_Effect.mapError((error2) => PriorReviewLookupFailure.make({
+            reason: `${error2._tag}: ${error2.reason}`.slice(0, 2048)
+          })));
+          if (exports_Option.isSome(state) && state.value.reviewedHeadSha === wire.commit_id) {
+            latestState = state;
+          }
+        }
       }
       if (wires.length < perPage)
         break;
+      if (page === MAX_PRIOR_REVIEW_PAGES) {
+        return yield* PriorReviewLookupFailure.make({
+          reason: `review history exceeds the bounded ${MAX_PRIOR_REVIEW_PAGES * perPage}-review lookup`
+        });
+      }
     }
-    return latest;
+    return { latestFingerprint: latest, latestState };
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  return PriorReviews.of({ latestFingerprint });
+  const compareHeads = (baseSha, headSha) => exports_Effect.gen(function* () {
+    const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`).pipe(exports_HttpClientRequest.acceptJson), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
+    const wire = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => exports_Schema.decodeUnknownEffect(GitHubCompareWire)(body).pipe(exports_Effect.mapError(asLookupFailure))));
+    const files = wire.files.map(toChangedFile);
+    return ReviewHeadComparison.make({
+      status: wire.status,
+      baseSha: wire.base_commit.sha,
+      headSha,
+      mergeBaseSha: wire.merge_base_commit.sha,
+      files,
+      truncated: files.length >= MAX_CHANGED_FILES
+    });
+  }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  return PriorReviews.of({
+    latestFingerprint: readMarkers(exports_Option.none()).pipe(exports_Effect.map((markers) => markers.latestFingerprint)),
+    latestState: exports_Effect.gen(function* () {
+      const authenticator = yield* ReviewStateAuthenticator;
+      return yield* readMarkers(exports_Option.some(authenticator)).pipe(exports_Effect.map((markers) => markers.latestState));
+    }),
+    compareHeads
+  });
 }));
-var fingerprintUnchanged = (current) => exports_Effect.gen(function* () {
-  const priorReviews = yield* PriorReviews;
-  const latest = yield* priorReviews.latestFingerprint.pipe(exports_Effect.orElseSucceed(() => exports_Option.none()));
-  return exports_Option.isSome(latest) && latest.value === current;
-});
 
 // packages/pr-review/src/internal/render.ts
 var ReviewEvent = exports_Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]);
@@ -39628,19 +41096,26 @@ var renderDemoted = (finding, reason) => {
   return `- ${location2} **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body} _(demoted: ${reason})_`;
 };
 var countNoun = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
-var severityCounts = (review) => {
+var severityCounts = (review, carriedFindings = [], carriedConcerns = []) => {
   const severities = [
     ...review.findings.map((finding) => finding.severity),
-    ...(review.concerns ?? []).map((concern) => concern.severity)
+    ...(review.concerns ?? []).map((concern) => concern.severity),
+    ...carriedFindings.map((finding) => finding.severity),
+    ...carriedConcerns.map((concern) => concern.severity)
   ];
   return {
-    blocking: severities.filter((severity) => severity === "blocking").length,
-    important: severities.filter((severity) => severity === "important").length,
+    blocking: severities.filter((severity2) => severity2 === "blocking").length,
+    important: severities.filter((severity2) => severity2 === "important").length,
     total: severities.length
   };
 };
-var renderVerdictCallout = (review) => {
-  const counts = severityCounts(review);
+var renderVerdictCallout = (review, options3) => {
+  const counts = severityCounts(review, options3.carriedFindings, options3.carriedConcerns);
+  if (options3.coverage?.status === "incomplete") {
+    const suffix = counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
+    return `> [!CAUTION]
+> Review coverage is incomplete — the check must not pass.${suffix}`;
+  }
   if (counts.blocking > 0) {
     return `> [!CAUTION]
 > ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
@@ -39656,12 +41131,15 @@ var renderVerdictCallout = (review) => {
 };
 var renderConcern = (concern) => [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join(`
 `);
+var renderCarriedFinding = (finding) => `- \`${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}\` **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body}`;
 var commentSafe = (value4) => value4.replaceAll("--", "- -");
 var renderReviewMetadata = (options3) => [
   "<!-- effect-agent-pr-review metadata",
   `reviewed-head: ${commentSafe(options3.headSha)}`,
   ...options3.baseRef !== undefined && options3.headRef !== undefined ? [`base-ref: ${commentSafe(options3.baseRef)}`, `head-ref: ${commentSafe(options3.headRef)}`] : [],
   `files-visible: ${options3.filesVisible} of ${options3.totalChangedFiles}`,
+  ...options3.reviewMode === undefined ? [] : [`review-mode: ${options3.reviewMode}`],
+  ...options3.baselineSha === undefined ? [] : [`incremental-baseline: ${commentSafe(options3.baselineSha)}`],
   "Findings were written against the head commit above; if commits have landed",
   "since, treat file and line callouts as potentially stale and re-diff first.",
   "-->"
@@ -39714,7 +41192,33 @@ var planPublication = (review, files, options3) => {
   footerParts.push(`reviewed at ${options3.headSha.slice(0, 7)}`);
   const footer = `_${footerParts.join(" · ")}._`;
   const renderHead = (concernsKept2, demotedKept2, omitted2) => {
-    const parts2 = [renderVerdictCallout(review), "", review.summary];
+    const carriedFindings = options3.carriedFindings ?? [];
+    const carriedConcerns = options3.carriedConcerns ?? [];
+    const parts2 = [
+      renderVerdictCallout(review, {
+        carriedFindings,
+        carriedConcerns,
+        coverage: options3.coverage
+      })
+    ];
+    if (options3.reviewMode !== undefined && options3.reviewReason !== undefined) {
+      parts2.push("", options3.reviewMode === "incremental" ? `**Incremental scope:** reviewed ${options3.reviewFilesVisible ?? files.length} file(s) ${options3.reviewReason}. Unchanged accepted scope was preserved and not reopened.` : `**Full-diff scope:** ${options3.reviewReason}.`);
+    }
+    if (options3.stateNotice !== undefined) {
+      parts2.push("", `⚠️ Continuity state was not stored (${options3.stateNotice.slice(0, 1000)}); the next run will safely review the full diff.`);
+    }
+    parts2.push("", review.summary);
+    if (options3.coverage?.status === "incomplete") {
+      parts2.push("", "### \uD83D\uDED1 Incomplete coverage", "", ...options3.coverage.reasons.map((reason) => `- ${reason}`));
+    }
+    if (carriedFindings.length > 0) {
+      parts2.push("", "### Unresolved findings carried from unchanged scope", "", ...carriedFindings.map(renderCarriedFinding));
+    }
+    if (carriedConcerns.length > 0) {
+      parts2.push("", "### Unresolved concerns carried to the final audit");
+      for (const concern of carriedConcerns)
+        parts2.push("", renderConcern(concern));
+    }
     for (const concern of sortedConcerns.slice(0, concernsKept2)) {
       parts2.push("", renderConcern(concern));
     }
@@ -39731,17 +41235,20 @@ var planPublication = (review, files, options3) => {
     return parts2.join(`
 `);
   };
-  const counts = severityCounts(review);
-  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
+  const counts = severityCounts(review, options3.carriedFindings ?? [], options3.carriedConcerns ?? []);
+  const event = !options3.applyVerdict ? "COMMENT" : options3.coverage?.status === "incomplete" || counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
   const tail = [
     renderReviewMetadata({
       headSha: options3.headSha,
       baseRef: options3.baseRef,
       headRef: options3.headRef,
-      filesVisible: files.length,
-      totalChangedFiles: options3.totalChangedFiles
+      filesVisible: options3.reviewFilesVisible ?? files.length,
+      totalChangedFiles: options3.reviewTotalFiles ?? options3.totalChangedFiles,
+      reviewMode: options3.reviewMode,
+      baselineSha: options3.baselineSha
     }),
-    ...options3.fingerprint === undefined ? [] : [renderFingerprintMarker(options3.fingerprint)]
+    ...options3.fingerprint === undefined ? [] : [renderFingerprintMarker(options3.fingerprint)],
+    ...options3.stateMarker === undefined ? [] : [options3.stateMarker]
   ].join(`
 `);
   const headBudget = 60000 - tail.length - 1;
@@ -39786,11 +41293,17 @@ var fanOutReviewBudgetLimits = UsageBudgetLimits.make({
 
 class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/ReviewRunOutcome")({
   review: CodeReview,
+  activeFindings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(20)),
+  activeConcerns: exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(10)),
+  coverage: ReviewCoverage,
   plan: ReviewPublicationPlan,
   published: exports_Schema.optionalKey(PublishedReview),
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   usage: exports_Schema.optionalKey(UsageTotals),
-  usageScope: exports_Schema.optionalKey(exports_Schema.Literals(["run", "coordinator"]))
+  usageScope: exports_Schema.optionalKey(exports_Schema.Literals(["run", "coordinator"])),
+  reviewMode: exports_Schema.optionalKey(exports_Schema.Literals(["incremental", "full"])),
+  reviewReason: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(1000))),
+  state: exports_Schema.optionalKey(ReviewState)
 }) {
 }
 var buildReviewMission = (metadata, files) => ReviewMission.make({
@@ -39808,21 +41321,97 @@ var enforceFindingsBound = (review, maxFindings) => review.findings.length <= ma
   findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings),
   ...review.concerns !== undefined ? { concerns: review.concerns } : {}
 });
+var findingKey = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.severity}\x00${finding.title}`;
+var severityRank3 = {
+  blocking: 0,
+  important: 1,
+  nit: 2
+};
+var rankAndDedupeConcerns = (concerns) => {
+  const byContent = new Map;
+  for (const concern of concerns) {
+    const key = `${concern.title}\x00${concern.body}`;
+    const previous = byContent.get(key);
+    if (previous === undefined || severityRank3[concern.severity] < severityRank3[previous.severity]) {
+      byContent.set(key, concern);
+    }
+  }
+  return [...byContent.values()].sort((left, right) => severityRank3[left.severity] - severityRank3[right.severity]).slice(0, 10);
+};
 var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
+  const anchorFiles = yield* source.anchorFiles;
+  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
   const mission = buildReviewMission(metadata, files);
-  const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(files, options3.signature(mission));
+  const fullMission = buildReviewMission(metadata, anchorFiles);
+  const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
   const budget2 = yield* makeUsageBudget(options3.limits ?? reviewBudgetLimits);
-  const result4 = yield* AgentRuntime.run(binding, mission, {
+  const detached = yield* AgentRuntime.start(binding, mission, {
     budget: toRunBudgetHook(budget2),
     estimateCostMicrousd: () => exports_Effect.succeed(500)
   });
+  const result4 = yield* detached.await;
+  const events2 = yield* detached.events;
   const decoded = yield* exports_Schema.decodeUnknownEffect(CodeReview)(result4.output);
   const review = enforceFindingsBound(decoded, clampMaxFindings(options3.maxFindings));
   const usage = yield* budget2.snapshot;
-  const plan = planPublication(review, files, {
+  const affectedPaths = new Set(executionContext?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
+  const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+  const carriedCandidates = priorState?.unresolvedFindings.filter((finding) => !affectedPaths.has(finding.path)).map(fromStoredFinding) ?? [];
+  const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(0, clampMaxFindings(options3.maxFindings));
+  const activeFindingKeys = new Set(activeFindings.map(findingKey));
+  const currentFindingKeys = new Set(review.findings.map(findingKey));
+  const carriedFindings = carriedCandidates.filter((finding) => activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)));
+  const carriedConcernCandidates = priorState?.unresolvedConcerns.map(fromStoredConcern) ?? [];
+  const activeConcerns = rankAndDedupeConcerns([
+    ...carriedConcernCandidates,
+    ...review.concerns ?? []
+  ]);
+  const currentConcernKeys = new Set((review.concerns ?? []).map((concern) => `${concern.title}\x00${concern.body}`));
+  const activeConcernKeys = new Set(activeConcerns.map((concern) => `${concern.title}\x00${concern.body}`));
+  const carriedConcerns = carriedConcernCandidates.filter((concern) => {
+    const key = `${concern.title}\x00${concern.body}`;
+    return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
+  });
+  const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+  const coverage = assessReviewCoverage({
+    shape: options3.reviewShape ?? "flat",
+    files,
+    totalFiles: reviewTotalFiles,
+    anchorFiles,
+    totalAnchorFiles: metadata.totalChangedFiles,
+    events: events2
+  });
+  const stateCandidate = executionContext !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
+    version: 1,
+    repository: metadata.repository,
+    pullRequestNumber: metadata.number,
+    baseRef: metadata.baseRef,
+    baseSha: metadata.baseSha,
+    headRef: metadata.headRef,
+    reviewedHeadSha: metadata.headSha,
+    profileFingerprint: executionContext.profileFingerprint,
+    acceptedScopeFingerprint: fingerprint,
+    reviewedPathCount: anchorFiles.length,
+    unresolvedFindings: activeFindings.map(toStoredFinding),
+    unresolvedConcerns: activeConcerns.map(toStoredConcern),
+    lastReviewMode: executionContext.mode
+  }) : undefined;
+  const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
+    state: undefined,
+    marker: undefined,
+    notice: executionContext?.stateAuthenticator?.status === "unavailable" && coverage.status === "complete" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+  } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
+    onFailure: (error2) => ({
+      state: undefined,
+      marker: undefined,
+      notice: error2._tag === "ReviewStateMarkerTooLarge" ? `authenticated continuity state exceeded its ${error2.maximumChars}-character bound` : `authenticated continuity state could not be signed: ${error2.reason}`
+    }),
+    onSuccess: (marker) => ({ state: stateCandidate, marker, notice: undefined })
+  }));
+  const plan = planPublication(review, anchorFiles, {
     applyVerdict: options3.applyVerdict,
     headSha: metadata.headSha,
     totalChangedFiles: metadata.totalChangedFiles,
@@ -39832,21 +41421,47 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     runUrl: options3.runUrl,
     usage,
     usageScope: options3.usageScope,
-    fingerprint
+    fingerprint: coverage.status === "complete" ? fingerprint : undefined,
+    coverage,
+    carriedFindings,
+    carriedConcerns,
+    reviewMode: executionContext?.mode,
+    reviewReason: executionContext?.reason,
+    baselineSha: executionContext?.baselineSha,
+    reviewFilesVisible: files.length,
+    reviewTotalFiles,
+    stateMarker: continuity.marker,
+    stateNotice: continuity.notice
   });
   const scope3 = options3.usageScope === undefined ? {} : { usageScope: options3.usageScope };
   if (!options3.post) {
-    return ReviewRunOutcome.make({ review, plan, turns: result4.turns, usage, ...scope3 });
+    return ReviewRunOutcome.make({
+      review,
+      activeFindings,
+      activeConcerns,
+      coverage,
+      plan,
+      turns: result4.turns,
+      usage,
+      ...scope3,
+      ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
+      ...continuity.state === undefined ? {} : { state: continuity.state }
+    });
   }
   const publisher = yield* ReviewPublisher;
   const published = yield* publisher.publish(plan);
   return ReviewRunOutcome.make({
     review,
+    activeFindings,
+    activeConcerns,
+    coverage,
     plan,
     published,
     turns: result4.turns,
     usage,
-    ...scope3
+    ...scope3,
+    ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
+    ...continuity.state === undefined ? {} : { state: continuity.state }
   });
 });
 
@@ -39860,14 +41475,27 @@ var requireReadonly = (tools) => {
     }
   }
 };
-var provideIgnore = (effect2, ignore5) => ignore5 !== undefined && ignore5.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore5))) : effect2;
-var makeFingerprint = (signature, ignore5) => provideIgnore(exports_Effect.gen(function* () {
+var provideIgnore = (effect2, ignore6) => ignore6 !== undefined && ignore6.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore6))) : effect2;
+var makeFingerprint = (signature, ignore6) => provideIgnore(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
   return yield* computeChangesetFingerprint(files, signature(buildReviewMission(metadata, files)));
-}), ignore5);
-var make56 = (options3) => {
+}), ignore6);
+var makeProfileFingerprint = (signature, ignore6) => provideIgnore(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const metadata = yield* source.metadata;
+  const files = yield* source.anchorFiles;
+  return yield* computeProfileFingerprint(signature(buildProfileMission(metadata, files)));
+}), ignore6);
+var makeReviewSnapshot = (ignore6) => provideIgnore(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  return {
+    metadata: yield* source.metadata,
+    files: yield* source.anchorFiles
+  };
+}), ignore6);
+var make57 = (options3) => {
   const extraTools = options3.extraTools ?? EMPTY_TOOLS;
   requireReadonly(extraTools);
   const definition = Agent.define("pr-reviewer", {
@@ -39888,6 +41516,16 @@ var make56 = (options3) => {
     `applyVerdict=${String(options3.applyVerdict ?? false)}`,
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join("\x00");
+  const profileSignature = (mission) => [
+    "pr-review-profile-v1-flat",
+    JSON.stringify(resolveGuidance(options3.guidance, mission)),
+    JSON.stringify(options3.policy ?? {}),
+    JSON.stringify(extraTools.map((tool) => tool.name)),
+    JSON.stringify(options3.ignore ?? []),
+    `maxFindings=${clampMaxFindings(options3.maxFindings)}`,
+    `applyVerdict=${String(options3.applyVerdict ?? false)}`,
+    ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
+  ].join("\x00");
   const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
@@ -39896,13 +41534,20 @@ var make56 = (options3) => {
     signature,
     modelLabel: options3.modelLabel,
     runUrl: runOptions.runUrl,
-    usageScope: "run"
+    usageScope: "run",
+    reviewShape: "flat"
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition,
     binding,
     run: run5,
-    fingerprint: makeFingerprint(signature, options3.ignore)
+    fingerprint: makeFingerprint(signature, options3.ignore),
+    profileFingerprint: makeProfileFingerprint(profileSignature, options3.ignore),
+    snapshot: makeReviewSnapshot(options3.ignore),
+    filterFiles: (files) => {
+      const ignored = compileIgnoreGlobs(options3.ignore ?? []);
+      return files.filter((file2) => !ignored(file2.path));
+    }
   };
 };
 var makeFanOut = (options3) => {
@@ -39919,6 +41564,14 @@ var makeFanOut = (options3) => {
     `applyVerdict=${String(options3.applyVerdict ?? false)}`,
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join(" ");
+  const profileSignature = (_mission) => [
+    "pr-review-profile-v1-fan-out",
+    JSON.stringify(guidanceLines),
+    JSON.stringify(options3.ignore ?? []),
+    `maxFindings=${clampMaxFindings(options3.maxFindings)}`,
+    `applyVerdict=${String(options3.applyVerdict ?? false)}`,
+    ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
+  ].join("\x00");
   const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(exports_Layer.provide(exports_Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer)));
   const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
@@ -39928,17 +41581,24 @@ var makeFanOut = (options3) => {
     signature,
     modelLabel: options3.modelLabel,
     runUrl: runOptions.runUrl,
-    usageScope: "coordinator"
+    usageScope: "coordinator",
+    reviewShape: "fan-out"
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition: suite.parent,
     binding,
     childBinding,
     run: run5,
-    fingerprint: makeFingerprint(signature, options3.ignore)
+    fingerprint: makeFingerprint(signature, options3.ignore),
+    profileFingerprint: makeProfileFingerprint(profileSignature, options3.ignore),
+    snapshot: makeReviewSnapshot(options3.ignore),
+    filterFiles: (files) => {
+      const ignored = compileIgnoreGlobs(options3.ignore ?? []);
+      return files.filter((file2) => !ignored(file2.path));
+    }
   };
 };
-var PrReview = { make: make56, makeFanOut };
+var PrReview = { make: make57, makeFanOut };
 
 // packages/pr-review/src/internal/github-env.ts
 class ReviewTargetUnresolved extends exports_Schema.TaggedError()("ReviewTargetUnresolved", {
@@ -40002,9 +41662,9 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
-  make: () => make58,
+  make: () => make59,
   layerConfig: () => layerConfig,
-  layer: () => layer15,
+  layer: () => layer16,
   AnthropicClient: () => AnthropicClient
 });
 
@@ -40047,7 +41707,7 @@ var decode3 = (options3) => fromTransform((upstream, _scope) => sync3(() => {
         return fail6(error2);
       }
     }
-    return void_4;
+    return void_5;
   });
   return suspend3(function loop() {
     if (isArrayNonEmpty2(buffer3)) {
@@ -43802,7 +45462,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make57 = (httpClient, options3 = {}) => {
+var make58 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail6(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -44591,11 +46251,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make58 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make59 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make57(httpClient, {
+  const client = make58(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -44649,12 +46309,12 @@ var make58 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer15 = (options3) => effect(AnthropicClient, make58(options3));
-var layerConfig = (options3) => effect(AnthropicClient, gen3(function* () {
+var layer16 = (options3) => effect(AnthropicClient, make59(options3));
+var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make58({
+  return yield* make59({
     apiKey,
     apiUrl,
     apiVersion,
@@ -44666,8 +46326,8 @@ var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
-  make: () => make60,
-  layer: () => layer16,
+  make: () => make61,
+  layer: () => layer17,
   Config: () => Config
 });
 
@@ -45306,7 +46966,7 @@ var supportedKeywords2 = /* @__PURE__ */ new Set(["$ref", "type", "title", "desc
 var formats2 = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"]);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Model.js
-var TypeId57 = "~effect/ai/Model";
+var TypeId58 = "~effect/ai/Model";
 
 class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
 }
@@ -45314,7 +46974,7 @@ class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/
 class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
 }
 var Proto19 = {
-  [TypeId57]: TypeId57,
+  [TypeId58]: TypeId58,
   ["~effect/Layer"]: {
     _ROut: identity,
     _E: identity,
@@ -45332,9 +46992,9 @@ var Proto19 = {
     };
   }
 };
-var make59 = (provider, modelName, layer16) => Object.assign(Object.create(Proto19), {
+var make60 = (provider, modelName, layer17) => Object.assign(Object.create(Proto19), {
   provider
-}, merge2(layer16, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
+}, merge3(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
@@ -45376,16 +47036,16 @@ var formatIssue = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make59("anthropic", model2, layer16({
+var model = (model2, config) => make60("anthropic", model2, layer17({
   model: model2,
   config
 }));
-var make60 = /* @__PURE__ */ fnUntraced2(function* ({
+var make61 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
   const client = yield* AnthropicClient;
-  const makeConfig = gen3(function* () {
+  const makeConfig = gen4(function* () {
     const services2 = yield* context2();
     return {
       model: model2,
@@ -45459,7 +47119,7 @@ var make60 = /* @__PURE__ */ fnUntraced2(function* ({
       payload
     };
   });
-  return yield* make48({
+  return yield* make49({
     codecTransformer: toCodecAnthropic,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -45501,7 +47161,7 @@ var make60 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer16 = (options3) => effect(LanguageModel, make60(options3));
+var layer17 = (options3) => effect(LanguageModel, make61(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -47302,19 +48962,19 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
 var exports_OpenAiClient = {};
 __export(exports_OpenAiClient, {
   withWebSocketMode: () => withWebSocketMode,
-  make: () => make62,
+  make: () => make63,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig2,
-  layer: () => layer17,
+  layer: () => layer18,
   OpenAiSocket: () => OpenAiSocket,
   OpenAiClient: () => OpenAiClient
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/socket/Socket.js
-var TypeId58 = "~effect/socket/Socket";
+var TypeId59 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make61 = (options3) => Socket.of({
-  [TypeId58]: TypeId58,
+var make62 = (options3) => Socket.of({
+  [TypeId59]: TypeId59,
   runRaw: options3.runRaw,
   run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
   runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
@@ -47405,7 +49065,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   const acquireContext = fiber3.context;
   const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
   const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make43().pipe(provide(scope3));
+    const fiberSet = yield* make45().pipe(provide(scope3));
     const ws = yield* provide(acquire, scope3);
     const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
     let open3 = false;
@@ -47413,7 +49073,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
       if (event.data instanceof Blob) {
         const effect2 = flatMap5(promise2(() => event.data.arrayBuffer()), (buffer3) => {
           const result5 = handler(new Uint8Array(buffer3));
-          return isEffect2(result5) ? result5 : void_4;
+          return isEffect2(result5) ? result5 : void_5;
         });
         return run5(effect2);
       }
@@ -47456,7 +49116,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
       const openDeferred = makeUnsafe2();
       ws.addEventListener("open", () => {
         open3 = true;
-        doneUnsafe(openDeferred, void_4);
+        doneUnsafe(openDeferred, void_5);
       }, {
         once: true
       });
@@ -47480,7 +49140,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
     if (opts?.onOpen)
       yield* opts.onOpen;
-    return yield* catchFilter2(join4(fiberSet), SocketCloseError.filterClean((_) => !closeCodeIsError(_)), () => void_4);
+    return yield* catchFilter2(join4(fiberSet), SocketCloseError.filterClean((_) => !closeCodeIsError(_)), () => void_5);
   })).pipe(updateContext2((input) => merge(acquireContext, input)), ensuring2(sync3(() => {
     latch.closeUnsafe();
     currentWS = undefined;
@@ -47493,7 +49153,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
       } else {
         ws.send(chunk);
       }
-      return void_4;
+      return void_5;
     } catch (cause) {
       return fail6(new SocketError({
         reason: new SocketWriteError({
@@ -47503,7 +49163,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
   }));
   const writer = succeed6(write2);
-  return succeed6(make61({
+  return succeed6(make62({
     runRaw,
     writer
   }));
@@ -48152,7 +49812,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make63 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -48198,13 +49858,13 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer17 = (options3) => effect(OpenAiClient, make62(options3));
-var layerConfig2 = (options3) => effect(OpenAiClient, gen3(function* () {
+var layer18 = (options3) => effect(OpenAiClient, make63(options3));
+var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make62({
+  return yield* make63({
     apiKey,
     apiUrl,
     organizationId,
@@ -48215,9 +49875,9 @@ var layerConfig2 = (options3) => effect(OpenAiClient, gen3(function* () {
 
 class OpenAiSocket extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiClient/OpenAiSocket")) {
 }
-var makeSocket = /* @__PURE__ */ gen3(function* () {
+var makeSocket = /* @__PURE__ */ gen4(function* () {
   const client = yield* OpenAiClient;
-  const tracker = yield* make46;
+  const tracker = yield* make47;
   const socketScope = yield* scope2;
   const makeRequest = flatMap5(OpenAiConfig.getOrUndefined, (config) => {
     const httpClient = isNotUndefined(config?.transformClient) ? config.transformClient(client.client) : client.client;
@@ -48227,7 +49887,7 @@ var makeSocket = /* @__PURE__ */ gen3(function* () {
   const decoder3 = new TextDecoder;
   const queueRef = yield* make18({
     idleTimeToLive: 60000,
-    acquire: gen3(function* () {
+    acquire: gen4(function* () {
       const scope3 = yield* scope2;
       const request4 = yield* makeRequest;
       const socket = yield* makeWebSocket(request4.url.replace(/^http/, "ws")).pipe(provideService2(WebSocketConstructor, (url2) => makeWebSocket2(url2, {
@@ -48236,7 +49896,7 @@ var makeSocket = /* @__PURE__ */ gen3(function* () {
       const write2 = yield* socket.writer;
       yield* addFinalizerExit(scope3, () => {
         tracker.clearUnsafe();
-        return void_4;
+        return void_5;
       });
       const incoming = yield* unbounded2();
       const send = (message) => write2(JSON.stringify({
@@ -48317,7 +49977,7 @@ var makeSocket = /* @__PURE__ */ gen3(function* () {
   const request3 = yield* makeRequest;
   return OpenAiSocket.context({
     createResponseStream(options3) {
-      const stream4 = unwrap4(gen3(function* () {
+      const stream4 = unwrap4(gen4(function* () {
         const scope3 = yield* scope2;
         yield* acquireRelease2(semaphore.take(1), () => semaphore.release(1), {
           interruptible: true
@@ -48327,7 +49987,7 @@ var makeSocket = /* @__PURE__ */ gen3(function* () {
           incoming
         } = yield* get6(queueRef);
         let done4 = false;
-        yield* addFinalizerExit(scope3, () => done4 ? void_4 : invalidate2(queueRef));
+        yield* addFinalizerExit(scope3, () => done4 ? void_5 : invalidate2(queueRef));
         yield* send(options3).pipe(forkScoped2({
           startImmediately: true
         }));
@@ -48364,8 +50024,8 @@ var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
   model: () => model2,
-  make: () => make63,
-  layer: () => layer18,
+  make: () => make64,
+  layer: () => layer19,
   Config: () => Config2
 });
 
@@ -48415,16 +50075,16 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make59("openai", model3, layer18({
+var model2 = (model3, config) => make60("openai", model3, layer19({
   model: model3,
   config
 }));
-var make63 = /* @__PURE__ */ fnUntraced2(function* ({
+var make64 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
   const client = yield* OpenAiClient;
-  const makeConfig = gen3(function* () {
+  const makeConfig = gen4(function* () {
     const services2 = yield* context2();
     return {
       model: model3,
@@ -48480,7 +50140,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
       request3.previous_response_id = options3.previousResponseId;
     return request3;
   });
-  return yield* make48({
+  return yield* make49({
     codecTransformer: toCodecOpenAI,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -48523,7 +50183,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer18 = (options3) => effect(LanguageModel, make63(options3));
+var layer19 = (options3) => effect(LanguageModel, make64(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -50638,13 +52298,14 @@ var anthropicClientLayer = exports_AnthropicClient.layerConfig({
 
 // packages/pr-review/src/action.ts
 var FailOnPolicy = exports_Schema.Literals(["never", "request-changes"]);
+var ReviewCheckConclusion = exports_Schema.Literals(["success", "blocking", "incomplete"]);
 
 class ReviewGateFailed extends exports_Schema.TaggedError()("ReviewGateFailed", {
-  verdict: exports_Schema.String,
-  failOn: FailOnPolicy
+  conclusion: exports_Schema.Literals(["blocking", "incomplete"]),
+  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMinLength(1))
 }) {
   get message() {
-    return `Review verdict '${this.verdict}' fails the configured '${this.failOn}' gate.`;
+    return `Review check concluded '${this.conclusion}': ${this.reasons.join("; ")}`;
   }
 }
 
@@ -50677,6 +52338,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const guidanceFile = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""));
   const maxFindings = yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_FINDINGS"));
+  const reviewMode = yield* exports_Config.literals(["incremental", "final"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("incremental"));
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
   const skipUnchanged = yield* exports_Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(exports_Config.withDefault(true));
   return {
@@ -50691,6 +52353,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     ignore: ignoreRaw.split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0),
     maxFindings: exports_Option.getOrUndefined(maxFindings),
     maxDurationMinutes,
+    reviewMode,
     failOn,
     skipUnchanged
   };
@@ -50752,9 +52415,13 @@ var writeStepSummary = exports_Effect.fn("writeStepSummary")(function* (lines) {
 `)}
 `, { flag: "a" });
 });
-var outcomeOutputs = (outcome) => [
+var outcomeOutputs = (outcome, conclusion) => [
   ["skipped", "false"],
+  ["conclusion", conclusion],
   ["verdict", outcome.review.verdict],
+  ["coverage", outcome.coverage.status],
+  ["review-mode", outcome.reviewMode ?? "full"],
+  ["review-reason", outcome.reviewReason ?? "direct full review"],
   ["inline-comments", String(outcome.plan.comments.length)],
   ["demoted-findings", String(outcome.plan.demoted.length)],
   ["concerns", String(outcome.review.concerns?.length ?? 0)],
@@ -50764,9 +52431,11 @@ var outcomeOutputs = (outcome) => [
   ],
   ["review-url", outcome.published?.url ?? ""]
 ];
-var outcomeSummary = (outcome, modelLabel) => [
+var outcomeSummary = (outcome, modelLabel, conclusion) => [
   "### Pull-request review",
+  `- Check conclusion: **${conclusion}**`,
   `- Verdict: **${outcome.review.verdict}**`,
+  `- Coverage: **${outcome.coverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
   `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
   ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
   ...outcome.usage === undefined ? [] : [
@@ -50791,6 +52460,27 @@ var resolveRunUrl = exports_Effect.fn("resolveRunUrl")(function* () {
   const server = yield* exports_Config.string("GITHUB_SERVER_URL").pipe(exports_Config.withDefault("https://github.com"));
   return `${server}/${repository}/actions/runs/${runId}`;
 });
+var blockingReasons = (input) => [
+  ...input.findings.filter((finding) => finding.severity === "blocking").map((finding) => `blocking finding: ${finding.title}`),
+  ...input.concerns.filter((concern) => concern.severity === "blocking").map((concern) => `blocking concern: ${concern.title}`)
+];
+var concludeReviewOutcome = (outcome) => {
+  if (outcome.coverage.status === "incomplete") {
+    return { conclusion: "incomplete", reasons: outcome.coverage.reasons };
+  }
+  const reasons = blockingReasons({
+    findings: outcome.activeFindings,
+    concerns: outcome.activeConcerns
+  });
+  return reasons.length > 0 ? { conclusion: "blocking", reasons } : { conclusion: "success", reasons };
+};
+var concludeReviewState = (state) => {
+  const reasons = blockingReasons({
+    findings: state.unresolvedFindings,
+    concerns: state.unresolvedConcerns
+  });
+  return reasons.length > 0 ? { conclusion: "blocking", reasons } : { conclusion: "success", reasons: [] };
+};
 var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* () {
   const event = yield* readGitHubEvent();
   if (exports_Option.isSome(event)) {
@@ -50802,41 +52492,132 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     }
   }
   const target = yield* resolveReviewTarget({});
-  const ambientPriorReviews = yield* exports_Effect.serviceOption(PriorReviews);
   return yield* exports_Effect.gen(function* () {
-    if (options3.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
-      const current = yield* reviewer.fingerprint;
-      const unchanged = yield* fingerprintUnchanged(current).pipe(exports_Option.isSome(ambientPriorReviews) ? exports_Effect.provideService(PriorReviews, ambientPriorReviews.value) : (effect2) => effect2);
-      if (unchanged) {
-        yield* exports_Console.log(`Skipping review of ${target.repository}#${target.number}: changeset unchanged since the last review.`);
+    let selection;
+    if (reviewer.profileFingerprint !== undefined) {
+      const source = yield* PullRequestSource;
+      const [snapshot2, profileFingerprint] = yield* exports_Effect.all([
+        reviewer.snapshot ?? exports_Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
+        reviewer.profileFingerprint
+      ]);
+      const { metadata, files: fullFiles } = snapshot2;
+      const history = options3.priorReviews ?? (yield* PriorReviews);
+      const stateAuthenticator = yield* ReviewStateAuthenticator;
+      const recovered = stateAuthenticator.status === "unavailable" ? {
+        state: undefined,
+        failure: stateAuthenticator.unavailableReason ?? "an authenticated review-state secret is not configured"
+      } : yield* history.latestState.pipe(exports_Effect.match({
+        onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
+        onSuccess: (state) => ({
+          state: exports_Option.getOrUndefined(state),
+          failure: undefined
+        })
+      }));
+      let comparison;
+      let baseComparison;
+      if ((options3.reviewMode ?? "incremental") === "incremental" && recovered.state !== undefined) {
+        if (recovered.state.reviewedHeadSha === metadata.headSha) {
+          comparison = ReviewHeadComparison.make({
+            status: "identical",
+            baseSha: metadata.headSha,
+            headSha: metadata.headSha,
+            mergeBaseSha: metadata.headSha,
+            files: [],
+            truncated: false
+          });
+        } else {
+          comparison = yield* history.compareHeads(recovered.state.reviewedHeadSha, metadata.headSha).pipe(exports_Effect.orElseSucceed(() => {
+            return;
+          }));
+          if (comparison !== undefined && reviewer.filterFiles !== undefined) {
+            comparison = ReviewHeadComparison.make({
+              ...comparison,
+              files: reviewer.filterFiles(comparison.files)
+            });
+          }
+        }
+        if (metadata.baseSha !== undefined && recovered.state.baseSha !== metadata.baseSha) {
+          baseComparison = yield* history.compareHeads(recovered.state.baseSha, metadata.baseSha).pipe(exports_Effect.orElseSucceed(() => {
+            return;
+          }));
+          if (baseComparison !== undefined && reviewer.filterFiles !== undefined) {
+            baseComparison = ReviewHeadComparison.make({
+              ...baseComparison,
+              files: reviewer.filterFiles(baseComparison.files)
+            });
+          }
+        }
+      }
+      selection = {
+        ...selectReviewRange({
+          requestedMode: options3.reviewMode ?? "incremental",
+          current: metadata,
+          fullFiles,
+          profileFingerprint,
+          priorState: recovered.state,
+          comparison,
+          baseComparison,
+          lookupFailure: recovered.failure
+        }),
+        stateAuthenticator
+      };
+      if (options3.skipUnchanged !== false && selection.mode === "incremental" && selection.files.length === 0 && selection.priorState !== undefined) {
+        const result4 = concludeReviewState(selection.priorState);
+        const reason = "no changed review scope since the last successfully reviewed head";
+        yield* exports_Console.log(`Skipping review of ${target.repository}#${target.number}: ${reason}.`);
         yield* writeActionOutputs([
           ["skipped", "true"],
-          ["skip-reason", "changeset unchanged since the last review"],
-          ["fingerprint", current]
+          ["skip-reason", reason],
+          ["conclusion", result4.conclusion],
+          ["coverage", "complete"],
+          ["review-mode", "incremental"]
         ]);
         yield* writeStepSummary([
           "### Pull-request review skipped",
-          "- Reason: changeset unchanged since the last review"
+          `- Reason: ${reason}`,
+          `- Preserved check conclusion: **${result4.conclusion}**`
         ]);
-        return {
-          _tag: "Skipped",
-          reason: "changeset unchanged since the last review"
-        };
+        if (result4.conclusion === "blocking") {
+          return yield* ReviewGateFailed.make({
+            conclusion: "blocking",
+            reasons: result4.reasons
+          });
+        }
+        return { _tag: "Skipped", reason };
+      }
+    } else if (options3.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
+      const current = yield* reviewer.fingerprint;
+      const history = options3.priorReviews ?? (yield* PriorReviews);
+      const latest = yield* history.latestFingerprint.pipe(exports_Effect.orElseSucceed(() => exports_Option.none()));
+      if (exports_Option.isSome(latest) && latest.value === current) {
+        const reason = "changeset unchanged since the last review";
+        yield* exports_Console.log(`Skipping review of ${target.repository}#${target.number}: ${reason}.`);
+        yield* writeActionOutputs([
+          ["skipped", "true"],
+          ["skip-reason", reason],
+          ["fingerprint", current],
+          ["conclusion", "success"],
+          ["coverage", "complete"]
+        ]);
+        yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
+        return { _tag: "Skipped", reason };
       }
     }
     yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
     const runUrl = yield* resolveRunUrl();
-    const outcome = yield* reviewer.run({ post: options3.post ?? true, runUrl });
+    const reviewEffect = reviewer.run({ post: options3.post ?? true, runUrl });
+    const outcome = yield* selection === undefined ? reviewEffect : reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)), exports_Effect.provideService(ReviewExecutionContext, selection));
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
     }
-    yield* writeActionOutputs(outcomeOutputs(outcome));
-    yield* writeStepSummary(outcomeSummary(outcome, options3.modelLabel));
-    if (options3.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
+    const check2 = concludeReviewOutcome(outcome);
+    yield* writeActionOutputs(outcomeOutputs(outcome, check2.conclusion));
+    yield* writeStepSummary(outcomeSummary(outcome, options3.modelLabel, check2.conclusion));
+    if (check2.conclusion !== "success") {
       return yield* ReviewGateFailed.make({
-        verdict: outcome.review.verdict,
-        failOn: "request-changes"
+        conclusion: check2.conclusion,
+        reasons: check2.reasons
       });
     }
     return { _tag: "Completed", outcome };
@@ -50844,6 +52625,11 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const stateSecret = exports_Option.map(yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_STATE_SECRET")), exports_Redacted.make);
+  const stateAuthenticatorLayer = exports_Option.match(stateSecret, {
+    onNone: () => unavailableReviewStateAuthenticatorLayer("an authenticated review-state secret is not configured"),
+    onSome: webCryptoReviewStateAuthenticatorLayer
+  });
   const guidance = yield* resolveGuidance2(inputs);
   const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
@@ -50863,16 +52649,17 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     post: inputs.post,
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
+    reviewMode: inputs.reviewMode,
     modelLabel
   };
   if (inputs.provider === "anthropic") {
     const model4 = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
-    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, anthropicClientLayer)));
   }
   const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
-  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
 var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_NodeServices.layer)), { disableErrorReporting: true });
 
@@ -50889,8 +52676,10 @@ var INPUT_TO_ENV = [
   ["INPUT_GUIDANCE-FILE", "PR_REVIEW_GUIDANCE_FILE"],
   ["INPUT_IGNORE", "PR_REVIEW_IGNORE"],
   ["INPUT_MAX-FINDINGS", "PR_REVIEW_MAX_FINDINGS"],
+  ["INPUT_REVIEW-MODE", "PR_REVIEW_MODE"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
+  ["INPUT_STATE-SECRET", "PR_REVIEW_STATE_SECRET"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
   ["INPUT_ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY"],
   ["INPUT_GITHUB-TOKEN", "GITHUB_TOKEN"]
