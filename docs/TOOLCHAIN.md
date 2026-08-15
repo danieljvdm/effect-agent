@@ -194,7 +194,10 @@ action-free job is the sole holder of `id-token: write`. It checks the artifact
 digests, requires the release manifest to contain the exact fourteen-package fixed set at one
 `X.Y.Z-beta.N` version and the policy-owned `beta` dist-tag, verifies a pinned npm CLI tarball, and
 publishes with provenance; it does not check out repository code, install dependencies, run a
-build, or invoke a repository script. If a same-version registry entry appears during a retry, the
+build, or invoke a repository script. Per-package verify-and-publish pipelines fan out as
+concurrent background jobs (each npm process performs its own OIDC exchange); every job is
+awaited, per-package logs replay in manifest order, and any failure fails the step only after the
+full sweep. If a same-version registry entry appears during a retry, the
 job skips it only when its SRI integrity matches the prepared tarball and the registry's `beta` tag
 already selects that version. A final action-free job has tag-write but no OIDC authority and
 creates only validated framework-package tags at the triggering `main` SHA; an existing lightweight

@@ -386,7 +386,9 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
   script: string,
   options: {
     readonly checksumFailure?: "artifact" | "npm";
+    readonly npmFailTarball?: string;
     readonly packageMetadata: string;
+    readonly publishablePackages?: ReadonlyArray<string>;
     readonly registryStatus: "200" | "404";
     readonly tarball?: string;
     readonly versionMetadata: string;
@@ -400,11 +402,14 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
   const artifactDirectory = path.join(temporaryRoot, "artifact-source");
   const binDirectory = path.join(temporaryRoot, "bin");
   const expectedSumsPath = path.join(temporaryRoot, "expected-SHA256SUMS");
-  const publishCapture = path.join(temporaryRoot, "npm-publish-invoked");
+  const publishCaptureDirectory = path.join(temporaryRoot, "npm-publish-invocations");
+  const tarballManifestDirectory = path.join(temporaryRoot, "tarball-manifests");
   const trustedManifestDirectory = path.join(temporaryRoot, "trusted-manifests");
   const version = "0.0.1-beta.7";
+  const publishablePackages = options.publishablePackages ?? ["capabilities"];
   yield* fs.makeDirectory(path.join(artifactDirectory, "packages"), { recursive: true });
   yield* fs.makeDirectory(binDirectory, { recursive: true });
+  yield* fs.makeDirectory(tarballManifestDirectory, { recursive: true });
   yield* fs.makeDirectory(trustedManifestDirectory, { recursive: true });
 
   const releases: Array<{
@@ -422,11 +427,26 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
       path.join(trustedManifestDirectory, `${directory}.json`),
       `${JSON.stringify({ name: manifest.name, version })}\n`,
     );
+    const publishable = publishablePackages.includes(directory);
+    const tarball = publishable
+      ? directory === "capabilities"
+        ? (options.tarball ?? "packages/capabilities.tgz")
+        : `packages/${directory}.tgz`
+      : null;
+    if (publishable) {
+      yield* fs.writeFileString(
+        path.join(tarballManifestDirectory, `${directory}.tgz.json`),
+        `${JSON.stringify({ name: manifest.name, version })}\n`,
+      );
+      yield* fs.writeFileString(
+        path.join(artifactDirectory, "packages", `${directory}.tgz`),
+        "fixture\n",
+      );
+    }
     releases.push({
       distTag: "beta",
       name: manifest.name,
-      tarball:
-        directory === "capabilities" ? (options.tarball ?? "packages/capabilities.tgz") : null,
+      tarball,
       version,
     });
   }
@@ -436,17 +456,13 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
   );
   const expectedSums = [
     "fixture-sha  npm-12.0.2.tgz",
-    "fixture-sha  packages/capabilities.tgz",
+    ...publishablePackages.map((directory) => `fixture-sha  packages/${directory}.tgz`),
     "fixture-sha  release-manifest.json",
     "",
   ].join("\n");
   yield* fs.writeFileString(path.join(artifactDirectory, "SHA256SUMS"), expectedSums);
   yield* fs.writeFileString(expectedSumsPath, expectedSums);
   yield* fs.writeFileString(path.join(artifactDirectory, "npm-12.0.2.tgz"), "fixture\n");
-  yield* fs.writeFileString(
-    path.join(artifactDirectory, "packages", "capabilities.tgz"),
-    "fixture\n",
-  );
 
   const writeExecutable = (name: string, contents: string) =>
     Effect.gen(function* () {
@@ -518,7 +534,10 @@ if [ "\${1:-}" = "--eval" ]; then
   exit 0
 fi
 if [ "\${2:-}" = "publish" ]; then
-  printf '%s\n' "$@" > "$PUBLISH_CAPTURE"
+  mkdir -p "$PUBLISH_CAPTURE"
+  TARBALL_BASENAME="$(basename "\${3:-}")"
+  printf '%s\n' "$@" > "$PUBLISH_CAPTURE/$TARBALL_BASENAME"
+  test "$TARBALL_BASENAME" != "$PUBLISH_NPM_FAIL_TARBALL"
   exit 0
 fi
 echo "Unexpected node invocation: $*" >&2
@@ -541,7 +560,7 @@ if [ "\${1:-}" = "-xzf" ]; then
   done
 fi
 if [ "\${1:-}" = "-xOf" ]; then
-  printf '{"name":"@effect-agent/capabilities","version":"0.0.1-beta.7"}\n'
+  cat "$PUBLISH_TARBALL_MANIFESTS/$(basename "\${2:-}").json"
   exit 0
 fi
 exit 64
@@ -593,11 +612,13 @@ printf 'fixture-integrity'
       NPM_CLI_VERSION: "12.0.2",
       PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
       PUBLISH_ARTIFACT_SOURCE: artifactDirectory,
-      PUBLISH_CAPTURE: publishCapture,
+      PUBLISH_CAPTURE: publishCaptureDirectory,
       PUBLISH_CHECKSUM_FAILURE: options.checksumFailure ?? "none",
       PUBLISH_EXPECTED_SUMS: expectedSumsPath,
+      PUBLISH_NPM_FAIL_TARBALL: options.npmFailTarball ?? "none",
       PUBLISH_PACKAGE_METADATA: options.packageMetadata,
       PUBLISH_REGISTRY_STATUS: options.registryStatus,
+      PUBLISH_TARBALL_MANIFESTS: tarballManifestDirectory,
       PUBLISH_TRUSTED_MANIFESTS: trustedManifestDirectory,
       PUBLISH_VERSION_METADATA: options.versionMetadata,
       RUNNER_TEMP: path.join(temporaryRoot, "runner"),
@@ -610,14 +631,20 @@ printf 'fixture-integrity'
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
-  const publishInvocation = (yield* fs.exists(publishCapture))
-    ? (yield* fs.readFileString(publishCapture)).trim().split("\n")
+  const publishInvocations = (yield* fs.exists(publishCaptureDirectory))
+    ? yield* Effect.forEach(
+        [...(yield* fs.readDirectory(publishCaptureDirectory))].sort(),
+        (entry) =>
+          Effect.map(fs.readFileString(path.join(publishCaptureDirectory, entry)), (capture) =>
+            capture.trim().split("\n"),
+          ),
+      )
     : [];
   return {
     exitCode,
     output,
-    publishInvocation,
-    publishInvoked: publishInvocation.length > 0,
+    publishInvocations,
+    publishInvoked: publishInvocations.length > 0,
   } as const;
 });
 
@@ -973,6 +1000,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(publishStep?.run).toContain('if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]');
       expect(publishStep?.run).toContain('if [ "$REMOTE_BETA_VERSION" != "$VERSION" ]');
       expect(publishStep?.run).toContain('node "$NPM_CLI" publish "./$TARBALL"');
+      expect(publishStep?.run).toContain(
+        'publish_package "$PACKAGE" "$VERSION" "$TARBALL" "$DIST_TAG" > "$PUBLISH_LOG" 2>&1 &',
+      );
+      expect(publishStep?.run).toContain('if ! wait "${PUBLISH_PIDS[$PUBLISH_INDEX]}"');
+      expect(publishStep?.run).toContain("refusing to tag");
       expect(publishStep?.run).toContain("--ignore-scripts");
       expect(publishStep?.run).toContain("--registry https://registry.npmjs.org");
       expect(publishStep?.run).not.toContain("node_modules");
@@ -1203,10 +1235,11 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           versionMetadata: validVersionMetadata,
         });
         expect(unpublishedVersion).toMatchObject({ exitCode: 0, publishInvoked: true });
-        expect(unpublishedVersion.publishInvocation[0]).toMatch(
+        expect(unpublishedVersion.publishInvocations).toHaveLength(1);
+        expect(unpublishedVersion.publishInvocations[0]?.[0]).toMatch(
           /[/]release-artifact[/][.]npm-cli[/]package[/]bin[/]npm-cli[.]js$/,
         );
-        expect(unpublishedVersion.publishInvocation.slice(1)).toEqual([
+        expect(unpublishedVersion.publishInvocations[0]?.slice(1)).toEqual([
           "publish",
           // The ./ prefix is load-bearing: npm 12 parses a bare
           // "packages/….tgz" as a hosted-git shorthand and refuses it.
@@ -1240,6 +1273,60 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         });
         expect(unsafeTarball.exitCode).not.toBe(0);
         expect(unsafeTarball.publishInvoked).toBe(false);
+      }),
+    90_000,
+  );
+
+  it.effect(
+    "fans out package publishes and aggregates background failures",
+    () =>
+      Effect.gen(function* () {
+        const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+        const publishScript = workflowStep(
+          releaseWorkflow,
+          "publish-packages",
+          "Verify and publish prepared tarballs",
+        )?.run;
+        if (publishScript === undefined) {
+          return yield* Effect.die(new Error("Release publisher must have an executable body."));
+        }
+
+        const validVersionMetadata = JSON.stringify({
+          dist: { integrity: "sha512-fixture-integrity" },
+        });
+        const validPackageMetadata = JSON.stringify({
+          "dist-tags": { beta: "0.0.1-beta.7" },
+        });
+
+        const bothPublished = yield* runReleasePublisher(publishScript, {
+          packageMetadata: validPackageMetadata,
+          publishablePackages: ["capabilities", "sandbox"],
+          registryStatus: "404",
+          versionMetadata: validVersionMetadata,
+        });
+        expect(bothPublished).toMatchObject({ exitCode: 0, publishInvoked: true });
+        expect(bothPublished.publishInvocations.map((invocation) => invocation[2])).toEqual([
+          "./packages/capabilities.tgz",
+          "./packages/sandbox.tgz",
+        ]);
+
+        // One npm publish failing must not interrupt its sibling, and the
+        // step must still fail after the full sweep.
+        const isolatedFailure = yield* runReleasePublisher(publishScript, {
+          npmFailTarball: "capabilities.tgz",
+          packageMetadata: validPackageMetadata,
+          publishablePackages: ["capabilities", "sandbox"],
+          registryStatus: "404",
+          versionMetadata: validVersionMetadata,
+        });
+        expect(isolatedFailure.exitCode).not.toBe(0);
+        expect(isolatedFailure.publishInvocations.map((invocation) => invocation[2])).toContain(
+          "./packages/sandbox.tgz",
+        );
+        expect(isolatedFailure.output).toContain(
+          "Publishing @effect-agent/capabilities@0.0.1-beta.7 failed.",
+        );
+        expect(isolatedFailure.output).toContain("refusing to tag");
       }),
     60_000,
   );

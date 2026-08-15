@@ -406,7 +406,16 @@ jobs:
             )
           ' release-manifest.json > /dev/null
 
-          while IFS=$'\t' read -r PACKAGE VERSION TARBALL DIST_TAG; do
+          # Each package's verify-then-publish pipeline is independent (its
+          # npm process performs its own OIDC exchange), so the packages fan
+          # out as background jobs. Plain assignments, not `local`, keep
+          # errexit watching every command substitution.
+          publish_package() {
+            PACKAGE="$1"
+            VERSION="$2"
+            TARBALL="$3"
+            DIST_TAG="$4"
+
             TARBALL_BYTES="$(stat --format='%s' "$TARBALL")"
             test "$TARBALL_BYTES" -le 52428800
             tar -xOf "$TARBALL" package/package.json | jq --exit-status \
@@ -445,7 +454,38 @@ jobs:
               echo "Unexpected npm registry status ${STATUS} for ${PACKAGE}@${VERSION}." >&2
               exit 1
             fi
+          }
+
+          PUBLISH_LOG_DIRECTORY="$RUNNER_TEMP/publish-logs"
+          mkdir -p "$PUBLISH_LOG_DIRECTORY"
+          PUBLISH_COUNT=0
+          PUBLISH_PIDS=()
+          PUBLISH_NAMES=()
+          PUBLISH_LOGS=()
+          while IFS=$'\t' read -r PACKAGE VERSION TARBALL DIST_TAG; do
+            PUBLISH_COUNT=$((PUBLISH_COUNT + 1))
+            PUBLISH_LOG="$PUBLISH_LOG_DIRECTORY/${PUBLISH_COUNT}-${TARBALL##*/}.log"
+            publish_package "$PACKAGE" "$VERSION" "$TARBALL" "$DIST_TAG" > "$PUBLISH_LOG" 2>&1 &
+            PUBLISH_PIDS+=("$!")
+            PUBLISH_NAMES+=("${PACKAGE}@${VERSION}")
+            PUBLISH_LOGS+=("$PUBLISH_LOG")
           done < <(jq --raw-output '.packages[] | select(.tarball != null) | [.name, .version, .tarball, .distTag] | @tsv' release-manifest.json)
+
+          # Failures never interrupt sibling publishes: every background job
+          # is awaited, logs replay in manifest order, and any failure fails
+          # the step only after the full sweep.
+          PUBLISH_FAILURES=0
+          for PUBLISH_INDEX in "${!PUBLISH_PIDS[@]}"; do
+            if ! wait "${PUBLISH_PIDS[$PUBLISH_INDEX]}"; then
+              PUBLISH_FAILURES=$((PUBLISH_FAILURES + 1))
+              echo "Publishing ${PUBLISH_NAMES[$PUBLISH_INDEX]} failed." >&2
+            fi
+            cat "${PUBLISH_LOGS[$PUBLISH_INDEX]}"
+          done
+          if [ "$PUBLISH_FAILURES" -ne 0 ]; then
+            echo "${PUBLISH_FAILURES} package publish(es) failed; refusing to tag." >&2
+            exit 1
+          fi
 
   tag-release:
     name: Tag published packages
