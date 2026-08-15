@@ -27,7 +27,9 @@ import {
   CodeReview,
   InvalidEffortInput,
   planPublication,
+  PublishedReview,
   PullRequestMetadata,
+  ReviewRetirementHost,
   ReviewCoverage,
   ReviewFinding,
   ReviewRunOutcome,
@@ -76,6 +78,7 @@ describe("resolveActionInputs", () => {
         maxDurationMinutes: undefined,
         failOn: "never",
         skipUnchanged: true,
+        retireStaleReviews: true,
         reviewMode: "incremental",
       });
     }),
@@ -98,6 +101,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_MAX_DURATION_MINUTES: "12",
           PR_REVIEW_FAIL_ON: "request-changes",
           PR_REVIEW_SKIP_UNCHANGED: "false",
+          PR_REVIEW_RETIRE_STALE_REVIEWS: "false",
           PR_REVIEW_MODE: "final",
         }),
       );
@@ -115,6 +119,7 @@ describe("resolveActionInputs", () => {
         maxDurationMinutes: 12,
         failOn: "request-changes",
         skipUnchanged: false,
+        retireStaleReviews: false,
         reviewMode: "final",
       });
     }),
@@ -160,7 +165,11 @@ const OUTPUT_PATH = "/tmp/github-output";
 
 const fakeOutcome = (
   verdict: ReviewVerdict,
-  options: { readonly blocking?: boolean; readonly incomplete?: boolean } = {},
+  options: {
+    readonly blocking?: boolean;
+    readonly incomplete?: boolean;
+    readonly state?: ReviewState;
+  } = {},
 ): ReviewRunOutcome => {
   const findings = options.blocking
     ? [
@@ -192,6 +201,17 @@ const fakeOutcome = (
       headSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
       totalChangedFiles: 0,
     }),
+    ...(options.state === undefined
+      ? {}
+      : {
+          state: options.state,
+          published: PublishedReview.make({
+            reviewId: 12,
+            url: "memory://review/12",
+            event: "COMMENT",
+            inlineComments: 0,
+          }),
+        }),
     turns: 1,
   });
 };
@@ -275,6 +295,47 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("inline-comments=0");
       expect(outputs).toContain("conclusion=success");
       expect(outputs).toContain("coverage=complete");
+    }),
+  );
+
+  it.effect("retires prior reviews only after a state-bearing review is posted", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const state = ReviewState.make({
+        version: 1,
+        repository: "acme/widgets",
+        pullRequestNumber: 5,
+        baseRef: "main",
+        baseSha: "1".repeat(40),
+        headRef: "fix/review",
+        reviewedHeadSha: "2".repeat(40),
+        profileFingerprint: "a".repeat(64),
+        acceptedScopeFingerprint: "b".repeat(64),
+        reviewedPathCount: 0,
+        unresolvedFindings: [],
+        unresolvedConcerns: [],
+        lastReviewMode: "full",
+      });
+      const listed = yield* Ref.make(0);
+      const retirementHost = ReviewRetirementHost.of({
+        listReviews: Ref.update(listed, (count) => count + 1).pipe(Effect.as([])),
+        listComments: () => Effect.die("Unexpected comment listing"),
+        updateBody: () => Effect.die("Unexpected review edit"),
+        minimizeComment: () => Effect.die("Unexpected comment minimization"),
+      });
+
+      const result = yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("comment", { state })) },
+        { retirementHost },
+      ).pipe(Effect.provide(harness.layer));
+
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(listed)).toBe(1);
     }),
   );
 

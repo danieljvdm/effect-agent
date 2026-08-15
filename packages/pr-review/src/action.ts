@@ -15,6 +15,7 @@ import {
   openAiClientLayer,
   type ReviewProvider,
 } from "./internal/providers.ts";
+import { retireStaleReviews, ReviewRetirementHost } from "./internal/retirement.ts";
 import {
   ReviewExecutionContext,
   ReviewHeadComparison,
@@ -89,6 +90,7 @@ export interface ResolvedActionInputs {
   /** Deprecated compatibility input; conclusions are always conservative. */
   readonly failOn: FailOnPolicy;
   readonly skipUnchanged: boolean;
+  readonly retireStaleReviews: boolean;
 }
 
 /** Read the PR_REVIEW_* input surface (all optional, all defaulted). */
@@ -129,6 +131,9 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   const skipUnchanged = yield* Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(
     Config.withDefault(true),
   );
+  const retireStaleReviews = yield* Config.boolean("PR_REVIEW_RETIRE_STALE_REVIEWS").pipe(
+    Config.withDefault(true),
+  );
   return {
     provider,
     model: Option.getOrUndefined(model),
@@ -147,6 +152,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     reviewMode,
     failOn,
     skipUnchanged,
+    retireStaleReviews,
   } satisfies ResolvedActionInputs;
 });
 
@@ -399,6 +405,10 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     readonly modelLabel?: string | undefined;
     /** Explicit test/custom-host history override; GitHub owns the default adapter. */
     readonly priorReviews?: PriorReviews["Service"] | undefined;
+    /** Retire marker-bearing prior reviews after a successful post (default true). */
+    readonly retireStaleReviews?: boolean | undefined;
+    /** Explicit deterministic/custom-host retirement override. */
+    readonly retirementHost?: ReviewRetirementHost["Service"] | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -565,6 +575,22 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       );
       if (outcome.published !== undefined) {
         yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
+        if (options.retireStaleReviews !== false && outcome.state !== undefined) {
+          const retirement = retireStaleReviews({
+            currentReviewId: outcome.published.reviewId,
+            currentReviewUrl: outcome.published.url,
+            currentState: outcome.state,
+          });
+          const report = yield* options.retirementHost === undefined
+            ? retirement
+            : retirement.pipe(Effect.provideService(ReviewRetirementHost, options.retirementHost));
+          yield* Console.log(
+            `Review retirement: ${report.reviewsRetired} prior review(s), ` +
+              `${report.findingsResolved} resolved finding(s), ` +
+              `${report.commentsMinimized} minimized inline comment(s), ` +
+              `${report.failures} failure(s).`,
+          );
+        }
       }
       const check = concludeReviewOutcome(outcome);
       yield* writeActionOutputs(outcomeOutputs(outcome, check.conclusion));
@@ -620,6 +646,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
+    retireStaleReviews: inputs.retireStaleReviews,
     modelLabel,
   };
   if (inputs.provider === "anthropic") {

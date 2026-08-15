@@ -84,6 +84,13 @@ inputs:
       stored blocking/success conclusion. Set 'false' to force execution.
     required: false
     default: "true"
+  retire-stale-reviews:
+    description: >-
+      Retire marker-bearing prior bot reviews after posting a newer review
+      ('true', default): supersede their bodies and minimize inline comments
+      for findings no longer carried as unresolved.
+    required: false
+    default: "true"
   review-mode:
     description: >-
       "incremental" (default) reviews changes since the last compatible,

@@ -6,6 +6,12 @@ import { ChangedFile } from "./diff.ts";
 import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
 import {
+  RetirableReview,
+  RetirableReviewComment,
+  ReviewRetirementFailure,
+  ReviewRetirementHost,
+} from "./retirement.ts";
+import {
   ReviewHeadComparison,
   ReviewStateAuthenticator,
   type ReviewState,
@@ -27,12 +33,19 @@ import {
 // GitHubApiFailure instead of an untyped defect.
 // ---------------------------------------------------------------------------
 
+const defaultGraphqlUrl = (apiUrl: string): string =>
+  apiUrl === "https://api.github.com"
+    ? "https://api.github.com/graphql"
+    : apiUrl.replace(/\/api\/v3$/, "/api/graphql");
+
 /** Which pull request to review and how to reach the API. */
 export class GitHubReviewTarget extends Context.Service<
   GitHubReviewTarget,
   {
     /** API root, e.g. `https://api.github.com` (no trailing slash). */
     readonly apiUrl: string;
+    /** GraphQL root, e.g. `https://api.github.com/graphql`. */
+    readonly graphqlUrl: string;
     /** `owner/name`. */
     readonly repository: string;
     readonly number: number;
@@ -42,11 +55,18 @@ export class GitHubReviewTarget extends Context.Service<
 >()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config: {
     readonly apiUrl: string;
+    readonly graphqlUrl?: string | undefined;
     readonly repository: string;
     readonly number: number;
     readonly token: Option.Option<Redacted.Redacted<string>>;
   }): Layer.Layer<GitHubReviewTarget> {
-    return Layer.succeed(this, GitHubReviewTarget.of(config));
+    return Layer.succeed(
+      this,
+      GitHubReviewTarget.of({
+        ...config,
+        graphqlUrl: config.graphqlUrl ?? defaultGraphqlUrl(config.apiUrl),
+      }),
+    );
   }
 }
 
@@ -85,6 +105,39 @@ const GitHubFilesPageWire = Schema.Array(GitHubFileWire);
 const GitHubReviewWire = Schema.Struct({
   id: Schema.Int,
   html_url: Schema.String,
+});
+
+const GitHubRetirableReviewWire = Schema.Struct({
+  id: Schema.Int,
+  body: Schema.NullOr(Schema.String),
+  commit_id: Schema.String,
+});
+const GitHubRetirableReviewsPageWire = Schema.Array(GitHubRetirableReviewWire);
+
+const GitHubReviewCommentWire = Schema.Struct({
+  node_id: Schema.String,
+  path: Schema.String,
+  body: Schema.String,
+  line: Schema.NullOr(Schema.Int),
+  original_line: Schema.NullOr(Schema.Int),
+  start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+  original_start_line: Schema.optionalKey(Schema.NullOr(Schema.Int)),
+});
+const GitHubReviewCommentsPageWire = Schema.Array(GitHubReviewCommentWire);
+
+const GitHubMinimizeCommentWire = Schema.Struct({
+  data: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        minimizeComment: Schema.NullOr(
+          Schema.Struct({
+            minimizedComment: Schema.NullOr(Schema.Struct({ isMinimized: Schema.Boolean })),
+          }),
+        ),
+      }),
+    ),
+  ),
+  errors: Schema.optionalKey(Schema.Array(Schema.Struct({ message: Schema.String }))),
 });
 
 /** The publication receipt callers report back to the operator. */
@@ -336,6 +389,166 @@ export const gitHubReviewPublisherLayer: Layer.Layer<
             event: plan.event,
             inlineComments: plan.comments.length,
           });
+        }),
+    });
+  }),
+);
+
+// --- Live ReviewRetirementHost ----------------------------------------------
+
+const MAX_RETIREMENT_PAGES = 5;
+const MINIMIZE_REVIEW_COMMENT_MUTATION = `mutation MinimizeReviewComment($subjectId: ID!) {
+  minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
+    minimizedComment { isMinimized }
+  }
+}`;
+
+/** GitHub-backed host operations for cosmetic retirement after publication. */
+export const gitHubReviewRetirementHostLayer: Layer.Layer<
+  ReviewRetirementHost,
+  never,
+  GitHubReviewTarget | HttpClient.HttpClient
+> = Layer.effect(ReviewRetirementHost)(
+  Effect.gen(function* () {
+    const target = yield* GitHubReviewTarget;
+    const client = yield* HttpClient.HttpClient;
+    const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+    const asRetirementFailure =
+      (operation: string) =>
+      (error: { readonly _tag: string; readonly message?: string }): ReviewRetirementFailure =>
+        ReviewRetirementFailure.make({
+          operation,
+          reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
+        });
+    const executeRetirement = (operation: string, request: HttpClientRequest.HttpClientRequest) =>
+      HttpClient.execute(request).pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.mapError(asRetirementFailure(operation)),
+        Effect.provideService(HttpClient.HttpClient, client),
+      );
+    const decodeRetirement = <S extends Schema.Top>(schema: S, operation: string) => {
+      const decode = Schema.decodeUnknownEffect(schema);
+      return (response: HttpClientResponse.HttpClientResponse) =>
+        response.json.pipe(
+          Effect.mapError(asRetirementFailure(operation)),
+          Effect.flatMap((body) =>
+            decode(body).pipe(Effect.mapError(asRetirementFailure(operation))),
+          ),
+        );
+    };
+    const listPaged = <A>(input: {
+      readonly operation: string;
+      readonly url: string;
+      readonly decode: (
+        response: HttpClientResponse.HttpClientResponse,
+      ) => Effect.Effect<ReadonlyArray<A>, ReviewRetirementFailure>;
+    }) =>
+      Effect.gen(function* () {
+        const values: Array<A> = [];
+        const perPage = 100;
+        for (let page = 1; page <= MAX_RETIREMENT_PAGES; page += 1) {
+          const response = yield* executeRetirement(
+            input.operation,
+            withCommonHeaders(
+              HttpClientRequest.get(input.url).pipe(
+                HttpClientRequest.acceptJson,
+                HttpClientRequest.setUrlParams({
+                  per_page: String(perPage),
+                  page: String(page),
+                }),
+              ),
+              target.token,
+            ),
+          );
+          const pageValues = yield* input.decode(response);
+          values.push(...pageValues);
+          if (pageValues.length < perPage) return values;
+        }
+        return yield* ReviewRetirementFailure.make({
+          operation: input.operation,
+          reason: `history exceeds the bounded ${MAX_RETIREMENT_PAGES * 100}-item lookup`,
+        });
+      });
+
+    return ReviewRetirementHost.of({
+      listReviews: listPaged({
+        operation: "listReviewsForRetirement",
+        url: `${prefix}/reviews`,
+        decode: decodeRetirement(GitHubRetirableReviewsPageWire, "listReviewsForRetirement"),
+      }).pipe(
+        Effect.map((reviews) =>
+          reviews.map((review) =>
+            RetirableReview.make({
+              reviewId: review.id,
+              body: review.body ?? "",
+              commitSha: review.commit_id,
+            }),
+          ),
+        ),
+      ),
+      listComments: (reviewId) =>
+        listPaged({
+          operation: "listReviewCommentsForRetirement",
+          url: `${prefix}/reviews/${reviewId}/comments`,
+          decode: decodeRetirement(GitHubReviewCommentsPageWire, "listReviewCommentsForRetirement"),
+        }).pipe(
+          Effect.map((comments) =>
+            comments.map((comment) => {
+              const endLine = comment.line ?? comment.original_line;
+              const startLine = comment.start_line ?? comment.original_start_line ?? endLine;
+              return RetirableReviewComment.make({
+                nodeId: comment.node_id,
+                path: comment.path,
+                startLine,
+                endLine,
+                body: comment.body,
+              });
+            }),
+          ),
+        ),
+      updateBody: (reviewId, body) =>
+        executeRetirement(
+          "updateReview",
+          withCommonHeaders(
+            HttpClientRequest.put(`${prefix}/reviews/${reviewId}`).pipe(
+              HttpClientRequest.acceptJson,
+              HttpClientRequest.bodyJsonUnsafe({ body }),
+            ),
+            target.token,
+          ),
+        ).pipe(Effect.asVoid),
+      minimizeComment: (nodeId) =>
+        Effect.gen(function* () {
+          const response = yield* executeRetirement(
+            "minimizeComment",
+            withCommonHeaders(
+              HttpClientRequest.post(target.graphqlUrl).pipe(
+                HttpClientRequest.acceptJson,
+                HttpClientRequest.bodyJsonUnsafe({
+                  query: MINIMIZE_REVIEW_COMMENT_MUTATION,
+                  variables: { subjectId: nodeId },
+                }),
+              ),
+              target.token,
+            ),
+          );
+          const wire = yield* decodeRetirement(
+            GitHubMinimizeCommentWire,
+            "minimizeComment",
+          )(response);
+          if (
+            (wire.errors?.length ?? 0) > 0 ||
+            wire.data?.minimizeComment?.minimizedComment?.isMinimized !== true
+          ) {
+            return yield* ReviewRetirementFailure.make({
+              operation: "minimizeComment",
+              reason:
+                wire.errors
+                  ?.map((error) => error.message)
+                  .join("; ")
+                  .slice(0, 2_048) ?? "GitHub did not confirm comment minimization",
+            });
+          }
         }),
     });
   }),

@@ -41749,10 +41749,201 @@ var fetch = /* @__PURE__ */ make56((request3, url2, signal, fiber3) => {
   return send(undefined);
 });
 var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+// packages/pr-review/src/internal/retirement.ts
+var PositiveLine = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class RetirableReview extends exports_Schema.Class("@effect-agent/pr-review/RetirableReview")({
+  reviewId: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(60000)),
+  commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))
+}) {
+}
+
+class RetirableReviewComment extends exports_Schema.Class("@effect-agent/pr-review/RetirableReviewComment")({
+  nodeId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(500)),
+  startLine: exports_Schema.NullOr(PositiveLine),
+  endLine: exports_Schema.NullOr(PositiveLine),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(65536))
+}) {
+}
+
+class ReviewRetirementFailure extends exports_Schema.TaggedError()("ReviewRetirementFailure", {
+  operation: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Review retirement operation '${this.operation}' failed: ${this.reason}`;
+  }
+}
+
+class ReviewRetirementHost extends exports_Context.Service()("@effect-agent/pr-review/ReviewRetirementHost") {
+}
+
+class ReviewRetirementReport extends exports_Schema.Class("@effect-agent/pr-review/ReviewRetirementReport")({
+  reviewsRetired: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  findingsResolved: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  commentsMinimized: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  failures: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+}) {
+}
+var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
+var REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
+var FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
+var STATE_PATTERN = /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+var RETIRED_ORIGINAL_PATTERN = /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
+var MACHINE_COMMENT_PATTERN = new RegExp(`${REVIEW_METADATA_PATTERN.source}|${FINGERPRINT_PATTERN.source}|${STATE_PATTERN.source}`, "g");
+var VERDICT_CALLOUT_PATTERN = /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
+var INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit)\] ([^\n]+)\*\*$/;
+var MAX_REVIEW_BODY_CHARS = 60000;
+var hasReviewMetadataMarker = (body) => /<!-- effect-agent-pr-review metadata\n/.test(body);
+var machineComments = (body) => Array.from(body.matchAll(MACHINE_COMMENT_PATTERN), (match9) => match9[0]);
+var originalVisibleBody = (body) => {
+  const retired = RETIRED_ORIGINAL_PATTERN.exec(body)?.[1];
+  if (retired !== undefined)
+    return retired;
+  return body.replace(MACHINE_COMMENT_PATTERN, "").trim().replace(VERDICT_CALLOUT_PATTERN, "");
+};
+var findingLocation = (finding) => `${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}`;
+var renderRetiredBody = (input) => {
+  const shortSha = input.currentState.reviewedHeadSha.slice(0, 7);
+  const comments = machineComments(input.priorBody);
+  const original = originalVisibleBody(input.priorBody);
+  const resolved2 = input.resolvedFindings.length === 0 ? [] : [
+    "### Findings resolved by later review",
+    "",
+    ...input.resolvedFindings.map((finding) => `- \`${findingLocation(finding)}\` ~~${finding.title}~~ · resolved at \`${shortSha}\``),
+    ""
+  ];
+  const prefix = [
+    `> ℹ️ Superseded — ${input.resolvedFindings.length} of ${input.priorState.unresolvedFindings.length} findings resolved at \`${shortSha}\`; see [the latest review](${input.currentReviewUrl}).`,
+    "",
+    "<details>",
+    "<summary>Previous review details</summary>",
+    "",
+    ...resolved2,
+    "<!-- effect-agent-pr-review retired-original:start -->"
+  ];
+  const suffix = [
+    "<!-- effect-agent-pr-review retired-original:end -->",
+    "",
+    "</details>",
+    ...comments.length === 0 ? [] : ["", ...comments]
+  ];
+  const render = (visible) => [...prefix, visible, ...suffix].join(`
+`);
+  if (render(original).length <= MAX_REVIEW_BODY_CHARS)
+    return render(original);
+  const truncationNotice = `
+
+_Original review content truncated during retirement._`;
+  const budget2 = Math.max(0, MAX_REVIEW_BODY_CHARS - render(truncationNotice).length);
+  return render(`${original.slice(0, budget2)}${truncationNotice}`);
+};
+var decideReviewRetirement = (input) => {
+  const current = new Set(input.currentState.unresolvedFindings.map(findingIdentity));
+  const resolvedFindings = input.priorState.unresolvedFindings.filter((finding) => !current.has(findingIdentity(finding)));
+  return {
+    body: renderRetiredBody({ ...input, resolvedFindings }),
+    resolvedFindings,
+    priorFindingCount: input.priorState.unresolvedFindings.length
+  };
+};
+var inlineCommentIdentity = (comment) => {
+  if (comment.startLine === null || comment.endLine === null)
+    return;
+  const firstLine = comment.body.split(`
+`, 1)[0] ?? "";
+  const title = INLINE_FINDING_TITLE_PATTERN.exec(firstLine)?.[1];
+  return title === undefined ? undefined : findingIdentity({
+    path: comment.path,
+    startLine: comment.startLine,
+    endLine: comment.endLine,
+    title
+  });
+};
+var failOpen = (effect2, fallback, message) => effect2.pipe(exports_Effect.catchCause((cause) => exports_Effect.logWarning(`${message}: ${String(cause)}`).pipe(exports_Effect.as(fallback))));
+var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (input) {
+  const host = yield* ReviewRetirementHost;
+  const authenticator = yield* ReviewStateAuthenticator;
+  if (authenticator.status !== "available") {
+    yield* exports_Effect.logWarning("Skipping stale-review retirement because authenticated review state is unavailable.");
+    return ReviewRetirementReport.make({
+      reviewsRetired: 0,
+      findingsResolved: 0,
+      commentsMinimized: 0,
+      failures: 0
+    });
+  }
+  let failures = 0;
+  let reviewsRetired = 0;
+  let findingsResolved = 0;
+  let commentsMinimized = 0;
+  const reviews = yield* failOpen(host.listReviews, undefined, "Could not list prior reviews");
+  if (reviews === undefined) {
+    return ReviewRetirementReport.make({
+      reviewsRetired,
+      findingsResolved,
+      commentsMinimized,
+      failures: 1
+    });
+  }
+  for (const review of reviews) {
+    if (review.reviewId === input.currentReviewId || !hasReviewMetadataMarker(review.body)) {
+      continue;
+    }
+    const priorState = yield* failOpen(authenticator.extract(review.body), exports_Option.none(), `Could not authenticate prior review ${review.reviewId}`);
+    if (exports_Option.isNone(priorState))
+      continue;
+    const decision = decideReviewRetirement({
+      priorBody: review.body,
+      priorState: priorState.value,
+      currentState: input.currentState,
+      currentReviewUrl: input.currentReviewUrl
+    });
+    const updated = yield* failOpen(host.updateBody(review.reviewId, decision.body).pipe(exports_Effect.as(true)), false, `Could not retire prior review ${review.reviewId}`);
+    if (updated) {
+      reviewsRetired += 1;
+      findingsResolved += decision.resolvedFindings.length;
+    } else {
+      failures += 1;
+    }
+    if (decision.resolvedFindings.length === 0)
+      continue;
+    const comments = yield* failOpen(host.listComments(review.reviewId), undefined, `Could not list inline comments for prior review ${review.reviewId}`);
+    if (comments === undefined) {
+      failures += 1;
+      continue;
+    }
+    const resolved2 = new Set(decision.resolvedFindings.map(findingIdentity));
+    for (const comment of comments) {
+      const identity3 = inlineCommentIdentity(comment);
+      if (identity3 === undefined || !resolved2.has(identity3))
+        continue;
+      const minimized = yield* failOpen(host.minimizeComment(comment.nodeId).pipe(exports_Effect.as(true)), false, `Could not minimize resolved inline comment ${comment.nodeId}`);
+      if (minimized)
+        commentsMinimized += 1;
+      else
+        failures += 1;
+    }
+  }
+  return ReviewRetirementReport.make({
+    reviewsRetired,
+    findingsResolved,
+    commentsMinimized,
+    failures
+  });
+});
+
 // packages/pr-review/src/internal/github.ts
+var defaultGraphqlUrl = (apiUrl) => apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql");
+
 class GitHubReviewTarget extends exports_Context.Service()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config) {
-    return exports_Layer.succeed(this, GitHubReviewTarget.of(config));
+    return exports_Layer.succeed(this, GitHubReviewTarget.of({
+      ...config,
+      graphqlUrl: config.graphqlUrl ?? defaultGraphqlUrl(config.apiUrl)
+    }));
   }
 }
 
@@ -41784,6 +41975,30 @@ var GitHubFilesPageWire = exports_Schema.Array(GitHubFileWire);
 var GitHubReviewWire = exports_Schema.Struct({
   id: exports_Schema.Int,
   html_url: exports_Schema.String
+});
+var GitHubRetirableReviewWire = exports_Schema.Struct({
+  id: exports_Schema.Int,
+  body: exports_Schema.NullOr(exports_Schema.String),
+  commit_id: exports_Schema.String
+});
+var GitHubRetirableReviewsPageWire = exports_Schema.Array(GitHubRetirableReviewWire);
+var GitHubReviewCommentWire = exports_Schema.Struct({
+  node_id: exports_Schema.String,
+  path: exports_Schema.String,
+  body: exports_Schema.String,
+  line: exports_Schema.NullOr(exports_Schema.Int),
+  original_line: exports_Schema.NullOr(exports_Schema.Int),
+  start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  original_start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int))
+});
+var GitHubReviewCommentsPageWire = exports_Schema.Array(GitHubReviewCommentWire);
+var GitHubMinimizeCommentWire = exports_Schema.Struct({
+  data: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Struct({
+    minimizeComment: exports_Schema.NullOr(exports_Schema.Struct({
+      minimizedComment: exports_Schema.NullOr(exports_Schema.Struct({ isMinimized: exports_Schema.Boolean }))
+    }))
+  }))),
+  errors: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Struct({ message: exports_Schema.String })))
 });
 
 class PublishedReview extends exports_Schema.Class("@effect-agent/pr-review/PublishedReview")({
@@ -41912,6 +42127,84 @@ var gitHubReviewPublisherLayer = exports_Layer.effect(ReviewPublisher)(exports_E
         event: plan.event,
         inlineComments: plan.comments.length
       });
+    })
+  });
+}));
+var MAX_RETIREMENT_PAGES = 5;
+var MINIMIZE_REVIEW_COMMENT_MUTATION = `mutation MinimizeReviewComment($subjectId: ID!) {
+  minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
+    minimizedComment { isMinimized }
+  }
+}`;
+var gitHubReviewRetirementHostLayer = exports_Layer.effect(ReviewRetirementHost)(exports_Effect.gen(function* () {
+  const target = yield* GitHubReviewTarget;
+  const client = yield* exports_HttpClient.HttpClient;
+  const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+  const asRetirementFailure = (operation) => (error2) => ReviewRetirementFailure.make({
+    operation,
+    reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
+  });
+  const executeRetirement = (operation, request3) => exports_HttpClient.execute(request3).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asRetirementFailure(operation)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  const decodeRetirement = (schema3, operation) => {
+    const decode2 = exports_Schema.decodeUnknownEffect(schema3);
+    return (response) => response.json.pipe(exports_Effect.mapError(asRetirementFailure(operation)), exports_Effect.flatMap((body) => decode2(body).pipe(exports_Effect.mapError(asRetirementFailure(operation)))));
+  };
+  const listPaged = (input) => exports_Effect.gen(function* () {
+    const values3 = [];
+    const perPage = 100;
+    for (let page = 1;page <= MAX_RETIREMENT_PAGES; page += 1) {
+      const response = yield* executeRetirement(input.operation, withCommonHeaders(exports_HttpClientRequest.get(input.url).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
+        per_page: String(perPage),
+        page: String(page)
+      })), target.token));
+      const pageValues = yield* input.decode(response);
+      values3.push(...pageValues);
+      if (pageValues.length < perPage)
+        return values3;
+    }
+    return yield* ReviewRetirementFailure.make({
+      operation: input.operation,
+      reason: `history exceeds the bounded ${MAX_RETIREMENT_PAGES * 100}-item lookup`
+    });
+  });
+  return ReviewRetirementHost.of({
+    listReviews: listPaged({
+      operation: "listReviewsForRetirement",
+      url: `${prefix}/reviews`,
+      decode: decodeRetirement(GitHubRetirableReviewsPageWire, "listReviewsForRetirement")
+    }).pipe(exports_Effect.map((reviews) => reviews.map((review) => RetirableReview.make({
+      reviewId: review.id,
+      body: review.body ?? "",
+      commitSha: review.commit_id
+    })))),
+    listComments: (reviewId) => listPaged({
+      operation: "listReviewCommentsForRetirement",
+      url: `${prefix}/reviews/${reviewId}/comments`,
+      decode: decodeRetirement(GitHubReviewCommentsPageWire, "listReviewCommentsForRetirement")
+    }).pipe(exports_Effect.map((comments) => comments.map((comment) => {
+      const endLine = comment.line ?? comment.original_line;
+      const startLine = comment.start_line ?? comment.original_start_line ?? endLine;
+      return RetirableReviewComment.make({
+        nodeId: comment.node_id,
+        path: comment.path,
+        startLine,
+        endLine,
+        body: comment.body
+      });
+    }))),
+    updateBody: (reviewId, body) => executeRetirement("updateReview", withCommonHeaders(exports_HttpClientRequest.put(`${prefix}/reviews/${reviewId}`).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.bodyJsonUnsafe({ body })), target.token)).pipe(exports_Effect.asVoid),
+    minimizeComment: (nodeId) => exports_Effect.gen(function* () {
+      const response = yield* executeRetirement("minimizeComment", withCommonHeaders(exports_HttpClientRequest.post(target.graphqlUrl).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.bodyJsonUnsafe({
+        query: MINIMIZE_REVIEW_COMMENT_MUTATION,
+        variables: { subjectId: nodeId }
+      })), target.token));
+      const wire = yield* decodeRetirement(GitHubMinimizeCommentWire, "minimizeComment")(response);
+      if ((wire.errors?.length ?? 0) > 0 || wire.data?.minimizeComment?.minimizedComment?.isMinimized !== true) {
+        return yield* ReviewRetirementFailure.make({
+          operation: "minimizeComment",
+          reason: wire.errors?.map((error2) => error2.message).join("; ").slice(0, 2048) ?? "GitHub did not confirm comment minimization"
+        });
+      }
     })
   });
 }));
@@ -42614,15 +42907,17 @@ var resolveReviewTarget = exports_Effect.fn("resolveReviewTarget")(function* (op
 });
 var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(function* () {
   const apiUrl = yield* exports_Config.string("GITHUB_API_URL").pipe(exports_Config.withDefault("https://api.github.com"));
+  const graphqlUrl = yield* exports_Config.string("GITHUB_GRAPHQL_URL").pipe(exports_Config.withDefault(apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql")));
   const token = yield* exports_Config.option(exports_Config.redacted("GITHUB_TOKEN"));
   const targetLayer = GitHubReviewTarget.layer({
     apiUrl,
+    graphqlUrl,
     repository: target.repository,
     number: target.number,
     token
   });
   const deps = exports_Layer.merge(targetLayer, exports_FetchHttpClient.layer);
-  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(deps)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(deps)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(deps)));
+  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(deps)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(deps)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(deps)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(deps)));
 }));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
@@ -53307,6 +53602,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const reviewMode = yield* exports_Config.literals(["incremental", "final"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("incremental"));
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
   const skipUnchanged = yield* exports_Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(exports_Config.withDefault(true));
+  const retireStaleReviews2 = yield* exports_Config.boolean("PR_REVIEW_RETIRE_STALE_REVIEWS").pipe(exports_Config.withDefault(true));
   return {
     provider,
     model: exports_Option.getOrUndefined(model3),
@@ -53321,7 +53617,8 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     maxDurationMinutes,
     reviewMode,
     failOn,
-    skipUnchanged
+    skipUnchanged,
+    retireStaleReviews: retireStaleReviews2
   };
 });
 var MAX_GUIDANCE_FILE_CHARS = 20000;
@@ -53576,6 +53873,15 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
+      if (options3.retireStaleReviews !== false && outcome.state !== undefined) {
+        const retirement = retireStaleReviews({
+          currentReviewId: outcome.published.reviewId,
+          currentReviewUrl: outcome.published.url,
+          currentState: outcome.state
+        });
+        const report2 = yield* options3.retirementHost === undefined ? retirement : retirement.pipe(exports_Effect.provideService(ReviewRetirementHost, options3.retirementHost));
+        yield* exports_Console.log(`Review retirement: ${report2.reviewsRetired} prior review(s), ` + `${report2.findingsResolved} resolved finding(s), ` + `${report2.commentsMinimized} minimized inline comment(s), ` + `${report2.failures} failure(s).`);
+      }
     }
     const check2 = concludeReviewOutcome(outcome);
     yield* writeActionOutputs(outcomeOutputs(outcome, check2.conclusion));
@@ -53616,6 +53922,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
+    retireStaleReviews: inputs.retireStaleReviews,
     modelLabel
   };
   if (inputs.provider === "anthropic") {
@@ -53645,6 +53952,7 @@ var INPUT_TO_ENV = [
   ["INPUT_REVIEW-MODE", "PR_REVIEW_MODE"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
+  ["INPUT_RETIRE-STALE-REVIEWS", "PR_REVIEW_RETIRE_STALE_REVIEWS"],
   ["INPUT_STATE-SECRET", "PR_REVIEW_STATE_SECRET"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
   ["INPUT_ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY"],

@@ -13,6 +13,7 @@ export * from "./internal/ignore.ts";
 export * from "./internal/profiles.ts";
 export * from "./internal/providers.ts";
 export * from "./internal/render.ts";
+export * from "./internal/retirement.ts";
 export * from "./internal/review-agent.ts";
 export * from "./internal/review-state.ts";
 export * from "./internal/review-units.ts";
