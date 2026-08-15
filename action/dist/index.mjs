@@ -33411,7 +33411,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
   const approvalPreflight = prepared.reduce((stream, call) => stream.pipe(exports_Stream.concat(preflightApproval(context3, turnId, call, options))), exports_Stream.empty);
   const durability = options.durability;
   const hookServices = yield* exports_Effect.context();
-  const toolSpanTelemetry = yield* ToolSpanTelemetry;
+  const executable = settledCallIds === undefined ? prepared : prepared.filter((call) => !settledCallIds.has(call.call.id));
   const preparation = durability === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.suspend(() => {
     const descriptors = prepared.flatMap((call) => {
       const executionClass = getToolExecutionClass(call.tool);
@@ -33428,28 +33428,28 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
   })).pipe(exports_Stream.drain);
   const stepServiceFor = (call) => durability === undefined ? passthroughDurableStep() : makeDurableStepService(call.toolCallId, durability.step, hookServices);
   const liveBrokers = new Map;
-  const brokerFor = (call) => {
-    const existing = liveBrokers.get(call.call.id);
-    if (existing !== undefined) {
-      return existing;
-    }
-    const created = makeToolBrokerService({
+  for (const call of executable) {
+    const broker = yield* makeToolBrokerService({
       context: context3,
       turnId,
       outerToolCallId: call.toolCallId,
       maxToolCalls: brokerAccounting.maxToolCalls,
       declaredToolCalls: brokerAccounting.declaredToolCalls,
       budget: options.budget,
-      hookServices,
-      toolSpanTelemetry
+      hookServices
     });
-    liveBrokers.set(call.call.id, created);
-    return created;
+    liveBrokers.set(call.call.id, broker);
+  }
+  const brokerFor = (call) => {
+    const broker = liveBrokers.get(call.call.id);
+    if (broker === undefined) {
+      throw new Error(`Missing live Tool broker for executable call ${call.call.id}`);
+    }
+    return broker;
   };
   const subagentHook = options.subagent;
   const batchSubagentDurability = subagentHook === undefined ? ephemeralSubagentDurability : makeSubagentDurabilityService(subagentHook, hookServices);
   const waitingByDeclaration = new Map;
-  const executable = settledCallIds === undefined ? prepared : prepared.filter((call) => !settledCallIds.has(call.call.id));
   const groups = [];
   let parallel = [];
   for (const call of executable) {
@@ -34696,7 +34696,8 @@ var brokerDecodeJson = (value4) => {
     return exports_Option.none();
   }
 };
-var makeToolBrokerService = (binding) => {
+var makeToolBrokerService = (binding) => exports_Effect.map(ToolSpanTelemetry, (toolSpanTelemetry) => makeToolBrokerServiceWithTelemetry(binding, toolSpanTelemetry));
+var makeToolBrokerServiceWithTelemetry = (binding, toolSpanTelemetry) => {
   const lifecycle = { closed: false };
   const service4 = {
     openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
@@ -34762,7 +34763,7 @@ var makeToolBrokerService = (binding) => {
           parentToolCallId: binding.outerToolCallId,
           sequenceIndex: index2
         };
-        return yield* observeProgrammaticToolCall(binding.toolSpanTelemetry, telemetryDescriptor, exports_Effect.gen(function* () {
+        return yield* observeProgrammaticToolCall(toolSpanTelemetry, telemetryDescriptor, exports_Effect.gen(function* () {
           yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
             agentId: binding.context.agentId,
             runId: binding.context.runId,
@@ -34775,7 +34776,7 @@ var makeToolBrokerService = (binding) => {
           yield* exports_Metric.update(toolCounter, 1);
           let terminal;
           let resultAfterTerminal = false;
-          const handlerFailed = yield* exports_Stream.unwrap(binding.toolSpanTelemetry.isolateToolkitHandle(toolkit.handle(input.toolName, input.encodedArguments, handleId))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
+          const handlerFailed = yield* exports_Stream.unwrap(toolSpanTelemetry.isolateToolkitHandle(toolkit.handle(input.toolName, input.encodedArguments, handleId))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
             if (terminal !== undefined) {
               resultAfterTerminal = true;
               return;

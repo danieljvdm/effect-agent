@@ -189,9 +189,11 @@ transform-mode workers).
 2. `vp config` installs the repository's `.vite-hooks/pre-commit` hook.
 3. `effect-tsgo patch` patches the managed TypeScript compiler.
 
-CI skips the source checkout because production checks use installed packages, not reference
-source. Local development keeps the checkout because implementation agents often need to verify
-current Effect v4 and Effect AI behavior.
+CI installs with lifecycle scripts suppressed, verifies the locked Dev Kit outputs, and then runs
+`bun run patch:tsgo` explicitly in every job that checks, tests, or builds TypeScript. This preserves
+the postinstall compiler invariant without cloning the Effect source checkout. Local development
+keeps the checkout because implementation agents often need to verify current Effect v4 and Effect
+AI behavior.
 
 Known workaround: the `preferTypedSchemaDecoder` language-service rule is set to `"off"` in
 `tsconfig.base.json` because `@effect/tsgo` `0.33.0` nil-panics in that rule

@@ -10,7 +10,7 @@ import {
   runtimeEvictionFailpoint,
   storageEvictionFailpoint,
 } from "./fixtures.ts";
-import { flushCount, observabilityProbeLayer } from "./observability-fixture.ts";
+import { failNextFlush, flushCount, observabilityProbeLayer } from "./observability-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
 
 /**
@@ -132,6 +132,10 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
   },
   observabilityProbeLayer,
 ) {
+  failNextFlush(): void {
+    failNextFlush(this.ctx.id.name ?? this.ctx.id.toString());
+  }
+
   async flushCount(): Promise<number> {
     return flushCount(this.ctx.id.name ?? this.ctx.id.toString());
   }

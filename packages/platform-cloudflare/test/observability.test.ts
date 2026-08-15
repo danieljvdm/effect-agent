@@ -4,12 +4,13 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import type { TelemetryConversationObject } from "./worker.ts";
 
 describe("effect-cf Durable Object observability ownership", () => {
-  const runEventAndDrainFlush = async (
+  const runEventAndDrainFlush = async <A>(
     conversationId: string,
-    run: (instance: TelemetryConversationObject) => Promise<unknown> | void,
-  ): Promise<void> => {
+    run: (instance: TelemetryConversationObject) => Promise<A> | A,
+    options?: { readonly failFlush?: boolean },
+  ): Promise<A> => {
     const stub = env.TELEMETRY.get(env.TELEMETRY.idFromName(conversationId));
-    await runInDurableObject(stub, async (instance, state) => {
+    return runInDurableObject(stub, async (instance, state) => {
       const eventWaitUntilWork: Array<Promise<unknown>> = [];
       const nativeWaitUntil = state.waitUntil.bind(state);
       const waitUntil = vi.spyOn(state, "waitUntil").mockImplementation((promise) => {
@@ -18,10 +19,14 @@ describe("effect-cf Durable Object observability ownership", () => {
       });
 
       try {
-        await run(instance);
+        if (options?.failFlush === true) {
+          instance.failNextFlush();
+        }
+        const result = await run(instance);
         expect(eventWaitUntilWork).toHaveLength(1);
-        await Promise.all(eventWaitUntilWork);
+        await expect(Promise.all(eventWaitUntilWork)).resolves.toEqual([undefined]);
         expect(await instance.flushCount()).toBe(1);
+        return result;
       } finally {
         waitUntil.mockRestore();
       }
@@ -29,12 +34,42 @@ describe("effect-cf Durable Object observability ownership", () => {
   };
 
   it("routes a native RPC flush through effect-cf's event-scoped waitUntil", async () => {
-    await runEventAndDrainFlush("effect-cf-observability-rpc", (instance) =>
+    const result = await runEventAndDrainFlush("effect-cf-observability-rpc", (instance) =>
       instance.observePage({}),
     );
+
+    expect(result).toMatchObject({ _tag: "HostFailed" });
   });
 
   it("routes an alarm flush through effect-cf's event-scoped waitUntil", async () => {
-    await runEventAndDrainFlush("effect-cf-observability-alarm", (instance) => instance.alarm());
+    const result = await runEventAndDrainFlush("effect-cf-observability-alarm", (instance) =>
+      instance.alarm(),
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("isolates exporter defects from the exact native RPC result", async () => {
+    const expected = await runEventAndDrainFlush(
+      "effect-cf-observability-rpc-control",
+      (instance) => instance.observePage({}),
+    );
+    const actual = await runEventAndDrainFlush(
+      "effect-cf-observability-rpc-failing-exporter",
+      (instance) => instance.observePage({}),
+      { failFlush: true },
+    );
+
+    expect(actual).toEqual(expected);
+  });
+
+  it("isolates exporter defects from successful raw alarm delivery", async () => {
+    const result = await runEventAndDrainFlush(
+      "effect-cf-observability-alarm-failing-exporter",
+      (instance) => instance.alarm(),
+      { failFlush: true },
+    );
+
+    expect(result).toBeUndefined();
   });
 });

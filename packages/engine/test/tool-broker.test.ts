@@ -6,6 +6,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  Inspectable,
   Layer,
   Logger,
   Option,
@@ -272,7 +273,7 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
     () => {
       const spans: Array<Tracer.NativeSpan> = [];
       const logs: Array<{
-        readonly message: string;
+        readonly message: unknown;
         readonly annotations: Readonly<Record<string, unknown>>;
         readonly cause: string;
       }> = [];
@@ -285,7 +286,7 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
       });
       const logger = Logger.make<unknown, void>(({ cause, fiber, message }) => {
         logs.push({
-          message: Array.isArray(message) ? message.join(" ") : String(message),
+          message,
           annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
           cause: Cause.pretty(cause),
         });
@@ -393,7 +394,9 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         );
         expect(
           programmaticLogs.map(({ annotations, message }) => ({
-            message,
+            message: Array.isArray(message)
+              ? message.map((value) => Inspectable.toStringUnknown(value)).join(" ")
+              : Inspectable.toStringUnknown(message),
             outcome: annotations.toolOutcome,
             toolCallId: annotations.toolCallId,
             toolName: annotations.toolName,
@@ -425,7 +428,7 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
                   : span.status._tag,
             }),
           ),
-          ...logs.map((entry) => JSON.stringify(entry)),
+          ...logs.map((entry) => Inspectable.toStringUnknown(entry)),
         ].join("\n");
         expect(exportedText).not.toContain(argumentSecret);
         expect(exportedText).not.toContain(failureSecret);

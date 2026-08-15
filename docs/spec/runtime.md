@@ -122,15 +122,32 @@ The default is bounded parallel execution owned by the engine.
 
 ### Completion
 
-Every started call reaches exactly one in-memory terminal classification:
+When a declared Tool Call settles, its call-level terminal classification is:
 
 - success;
+- failure returned as a terminal Tool value;
 - typed failure in the Effect error channel;
 - infrastructure failure;
 - denied;
 - interrupted.
 
-The durable runtime adds unknown outcome.
+The DN and DC assemblies add unknown outcome. Approval suspension and unresolved Tool Calls are
+nonterminal and may remain unresolved indefinitely; the runtime does not replay an ordinary
+unresolved call merely to force settlement. Denial happens during preflight, before any application
+Handler starts. Provider-executed calls likewise have no application-handler attempt.
+
+An in-memory application-handler attempt therefore starts only for a native call that passed
+preflight. Its complete lifecycle classification set is:
+
+- success — terminal;
+- failure — terminal, including returned failures, typed or infrastructure Causes, and
+  post-terminal anomalies;
+- interruption — terminal for that in-memory attempt and preserved as interruption;
+- waiting — nonterminal and potentially indefinite.
+
+Only success and failure receive a bounded terminal telemetry outcome. Interruption produces no
+terminal outcome log. Denied and provider-executed calls remain solely call-level classifications:
+neither creates an application-handler attempt.
 
 ### Provider-executed Tools
 

@@ -1210,7 +1210,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // run hook effects without leaking `HookRequirements` into handler
       // signatures.
       const hookServices = yield* Effect.context<HookRequirements>();
-      const toolSpanTelemetry = yield* ToolSpanTelemetry;
+
+      const executable =
+        settledCallIds === undefined
+          ? prepared
+          : prepared.filter((call) => !settledCallIds.has(call.call.id));
 
       // Durable preparation runs strictly after every approval resolved
       // approved and before any handler acquires a permit. `readonly` calls
@@ -1249,15 +1253,12 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? passthroughDurableStep()
           : makeDurableStepService(call.toolCallId, durability.step, hookServices);
 
-      // One live broker per outer call: provision and the settling closer
-      // must share one lifecycle.
+      // One live broker per executable outer call: construction resolves its
+      // telemetry requirement from Context at this engine-owned operation
+      // edge, and provision plus the settling closer share one lifecycle.
       const liveBrokers = new Map<string, LiveToolBroker>();
-      const brokerFor = (call: PreparedToolCall<Tools>): LiveToolBroker => {
-        const existing = liveBrokers.get(call.call.id);
-        if (existing !== undefined) {
-          return existing;
-        }
-        const created = makeToolBrokerService({
+      for (const call of executable) {
+        const broker = yield* makeToolBrokerService({
           context,
           turnId,
           outerToolCallId: call.toolCallId,
@@ -1265,10 +1266,15 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           declaredToolCalls: brokerAccounting.declaredToolCalls,
           budget: options.budget,
           hookServices,
-          toolSpanTelemetry,
         });
-        liveBrokers.set(call.call.id, created);
-        return created;
+        liveBrokers.set(call.call.id, broker);
+      }
+      const brokerFor = (call: PreparedToolCall<Tools>): LiveToolBroker => {
+        const broker = liveBrokers.get(call.call.id);
+        if (broker === undefined) {
+          throw new Error(`Missing live Tool broker for executable call ${call.call.id}`);
+        }
+        return broker;
       };
 
       // This batch's live `SubagentDurability` service: durable over the
@@ -1286,11 +1292,6 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       // index so `AgentChildPending` lists its children deterministically
       // regardless of parallel handler completion order.
       const waitingByDeclaration = new Map<number, ToolCallWaiting>();
-
-      const executable =
-        settledCallIds === undefined
-          ? prepared
-          : prepared.filter((call) => !settledCallIds.has(call.call.id));
 
       const groups: Array<ReadonlyArray<PreparedToolCall<Tools>>> = [];
       let parallel: Array<PreparedToolCall<Tools>> = [];
@@ -3439,7 +3440,6 @@ interface ToolBrokerBinding<HookError, HookRequirements> {
   readonly declaredToolCalls: number;
   readonly budget: RunOptions<HookError, HookRequirements>["budget"];
   readonly hookServices: Context.Context<HookRequirements>;
-  readonly toolSpanTelemetry: ToolSpanTelemetryService;
 }
 
 const programmaticOutcomeError = (
@@ -3592,6 +3592,14 @@ interface LiveToolBroker {
  */
 const makeToolBrokerService = <HookError, HookRequirements>(
   binding: ToolBrokerBinding<HookError, HookRequirements>,
+): Effect.Effect<LiveToolBroker, never, ToolSpanTelemetry> =>
+  Effect.map(ToolSpanTelemetry, (toolSpanTelemetry) =>
+    makeToolBrokerServiceWithTelemetry(binding, toolSpanTelemetry),
+  );
+
+const makeToolBrokerServiceWithTelemetry = <HookError, HookRequirements>(
+  binding: ToolBrokerBinding<HookError, HookRequirements>,
+  toolSpanTelemetry: ToolSpanTelemetryService,
 ): LiveToolBroker => {
   const lifecycle = { closed: false };
   const service: ToolBrokerService = {
@@ -3715,7 +3723,7 @@ const makeToolBrokerService = <HookError, HookRequirements>(
               sequenceIndex: index,
             };
             return yield* observeProgrammaticToolCall(
-              binding.toolSpanTelemetry,
+              toolSpanTelemetry,
               telemetryDescriptor,
               Effect.gen(function* () {
                 yield* Effect.logDebug("agent programmatic tool handler started").pipe(
@@ -3736,7 +3744,7 @@ const makeToolBrokerService = <HookError, HookRequirements>(
                   | undefined;
                 let resultAfterTerminal = false;
                 const handlerFailed = yield* Stream.unwrap(
-                  binding.toolSpanTelemetry.isolateToolkitHandle(
+                  toolSpanTelemetry.isolateToolkitHandle(
                     (
                       toolkit.handle as (
                         name: string,

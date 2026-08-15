@@ -4,8 +4,13 @@ import { OtlpExporter } from "effect/unstable/observability";
 import { DurableObjectContext } from "../src/index.ts";
 
 const flushes = new Map<string, number>();
+const failingFlushes = new Set<string>();
 
 export const flushCount = (conversationId: string): number => flushes.get(conversationId) ?? 0;
+
+export const failNextFlush = (conversationId: string): void => {
+  failingFlushes.add(conversationId);
+};
 
 /** One event-scoped OTLP flusher proving the effect-cf native RPC integration. */
 export const observabilityProbeLayer = Layer.effectDiscard(
@@ -16,6 +21,9 @@ export const observabilityProbeLayer = Layer.effectDiscard(
     yield* flusher.register(
       Effect.sync(() => {
         flushes.set(conversationId, flushCount(conversationId) + 1);
+        if (failingFlushes.delete(conversationId)) {
+          throw new Error("fixture exporter defect");
+        }
       }),
     );
   }),
