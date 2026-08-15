@@ -105,10 +105,10 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     expect(result.program?.logs).toContain("scanned 5 customers, kept 3");
   }, 120_000);
 
-  it("runs a write-attempting program whose mutation is denied by the database authority", async () => {
-    // The write-denying `?probe=write` program attempts an UPDATE inside the
-    // isolated Dynamic Worker; the read-only Durable Object (query_only /
-    // SQLITE_READONLY) denies it, and the program catches the typed envelope.
+  it("denies a write-attempting program through the read-only allowlist", async () => {
+    // The `?probe=write` program attempts an UPDATE inside the isolated
+    // Dynamic Worker; the read-only allowlist denies it and the program
+    // catches the typed WarehouseQueryDenied envelope.
     const response = await runtime.dispatchFetch("http://demo/ask?probe=write", {
       method: "POST",
       body: JSON.stringify({ question: "try to zero out revenue" }),
@@ -119,5 +119,40 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       readonly program?: { readonly result: { readonly writeDenied: boolean } };
     };
     expect(result.program?.result.writeDenied).toBe(true);
+  });
+
+  it("rejects a CTE-prefixed write that a leading-keyword denylist would miss", async () => {
+    // Direct-to-DO evidence that the allowlist is not bypassable by a
+    // statement that merely does not START with a write keyword. The row
+    // count is unchanged afterward.
+    const warehouse = await runtime.getDurableObjectNamespace("WAREHOUSE");
+    const stub = warehouse.get(warehouse.idFromName("acme")) as unknown as {
+      query: (
+        sql: string,
+        parameters: ReadonlyArray<string | number | boolean | null>,
+      ) => Promise<{
+        readonly ok: boolean;
+        readonly rows: ReadonlyArray<Record<string, unknown>>;
+        readonly reason?: string;
+      }>;
+    };
+
+    // Seed and confirm the baseline read works.
+    const before = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
+    expect(before.ok).toBe(true);
+    expect(before.rows[0]?.n).toBe(5);
+
+    // A denylist keyed on the leading token would let this through; the
+    // allowlist rejects it because DELETE appears anywhere in the statement.
+    const bypass = await stub.query(
+      "WITH doomed AS (SELECT customer FROM invoice_summary) DELETE FROM invoice_summary",
+      [],
+    );
+    expect(bypass.ok).toBe(false);
+    expect(bypass.reason).toMatch(/DELETE|read-only/i);
+
+    const after = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
+    expect(after.ok).toBe(true);
+    expect(after.rows[0]?.n).toBe(5);
   });
 });

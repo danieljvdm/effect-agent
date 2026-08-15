@@ -1,15 +1,16 @@
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { DurableObject } from "cloudflare:workers";
-import { Context, Effect, Layer, Option, Predicate, Schema } from "effect";
+import { Context, Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { SqlError } from "effect/unstable/sql/SqlError";
 
 /**
  * The warehouse Durable Object: a SQLite-backed store of curated invoice data
- * that generated Code Mode programs query through a read-only SQL Tool. The
- * database is the trust boundary — it is locked with `PRAGMA query_only = ON`
- * so the connection denies every write, and only a curated `invoice_summary`
- * view is exposed. Nothing about the connection, credentials, or storage ever
+ * that generated Code Mode programs query through a read-only SQL Tool. Only a
+ * single curated `invoice_summary` table is exposed, and every query goes
+ * through the read-only ALLOWLIST scan (`scanReadOnly`) — Durable Object
+ * SQLite cannot lock the connection with `PRAGMA query_only`, so the demo
+ * permits only single read statements (see the README for the production
+ * guidance). Nothing about the connection, credentials, or storage ever
  * reaches the isolated executor: generated code sees only the brokered
  * `warehouse.query` method and its Schema-bounded result.
  *
@@ -79,13 +80,16 @@ const stripLiteralsAndComments = (sql: string): string => {
 // statement authorizer (SQLITE_AUTH), so — unlike the Node reference fixture,
 // which locks the connection read-only and lets database authority deny every
 // write (the primary boundary the plan §8.4 prescribes) — this demo enforces
-// read-only with a leading-keyword denylist over the literal-stripped
-// statement. A production deployment should back the warehouse with a
-// read-only database identity or curated read-only views instead of relying
-// on this scan.
-const writeKeywords =
-  /^\s*(insert|update|delete|replace|drop|create|alter|truncate|reindex|analyze)\b/i;
-const escapeHatchKeywords = /\b(pragma|attach|detach|vacuum|load_extension)\b/i;
+// read-only in application code. Because a denylist of write keywords is
+// bypassable (e.g. a `WITH … DELETE` common-table expression does not START
+// with a write keyword), the scan is an ALLOWLIST: the statement must be a
+// single read (`SELECT`, or a `WITH` whose body is a read) and must contain
+// no write, DDL, or escape-hatch token ANYWHERE in the literal-stripped text.
+// A production deployment should still back the warehouse with a read-only
+// database identity or curated read-only views rather than a text scan.
+const readOnlyPrefix = /^\s*(select|with)\b/i;
+const disallowedTokens =
+  /\b(insert|update|delete|replace|drop|create|alter|truncate|reindex|analyze|pragma|attach|detach|vacuum|load_extension|savepoint|release|begin|commit|rollback)\b/i;
 
 const scanReadOnly = (sql: string): string | undefined => {
   const stripped = stripLiteralsAndComments(sql);
@@ -93,21 +97,13 @@ const scanReadOnly = (sql: string): string | undefined => {
   if (semicolon !== -1 && stripped.slice(semicolon + 1).trim().length > 0) {
     return "exactly one statement is allowed per call";
   }
-  if (writeKeywords.test(stripped)) {
-    return "the warehouse is read-only";
+  if (!readOnlyPrefix.test(stripped)) {
+    return "only read-only SELECT statements are allowed";
   }
-  const denied = escapeHatchKeywords.exec(stripped);
-  return denied === null ? undefined : `${denied[1].toUpperCase()} is not available`;
-};
-
-const isWriteDenial = (error: SqlError): boolean => {
-  const cause = (error.reason as { readonly cause?: unknown }).cause;
-  return (
-    Predicate.isObject(cause) &&
-    "errcode" in cause &&
-    typeof cause.errcode === "number" &&
-    (cause.errcode & 0xff) === 8
-  );
+  const disallowed = disallowedTokens.exec(stripped);
+  return disallowed === null
+    ? undefined
+    : `${disallowed[1].toUpperCase()} is not allowed in a read-only query`;
 };
 
 const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
@@ -115,54 +111,45 @@ const utf8ByteLength = (value: string): number => new TextEncoder().encode(value
 const decodeRow = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
 
 /**
- * Run one bounded read-only query over the DO's SQLite storage. Write denial
- * comes from `PRAGMA query_only = ON` (structural `SQLITE_READONLY`), not from
- * the scanner, which only covers the escape hatches the authority cannot
- * police.
+ * Run one bounded read-only query over the DO's SQLite storage. The read-only
+ * boundary is the ALLOWLIST scan (`scanReadOnly`) — Durable Object SQLite
+ * cannot lock the connection with `PRAGMA query_only`, so this demo permits
+ * only single read statements. The row and byte caps are enforced WHILE
+ * draining the cursor (early break), so a query that would return a huge
+ * result set never fully materializes.
  */
 const runQuery = (
   storage: DurableObjectStorage,
   sql: string,
   parameters: ReadonlyArray<string | number | boolean | null>,
 ): Effect.Effect<WarehouseQueryOutcome> =>
-  Effect.gen(function* () {
+  Effect.sync(() => {
     const denied = scanReadOnly(sql);
     if (denied !== undefined) {
       return { ok: false, columns: [], rows: [], rowCount: 0, truncated: false, reason: denied };
     }
-    const client = yield* SqlClient.SqlClient;
-    const rawRows = yield* client
-      .unsafe<Record<string, unknown>>(sql, parameters as Array<unknown>)
-      .withoutTransform.pipe(
-        Effect.map((rows) => ({ ok: true as const, rows })),
-        Effect.catchTag("SqlError", (error) =>
-          Effect.succeed({
-            ok: false as const,
-            reason: isWriteDenial(error)
-              ? "the warehouse database is read-only"
-              : `query failed: ${String(error.reason.message ?? "unknown").slice(0, 500)}`,
-          }),
-        ),
-      );
-    if (!rawRows.ok) {
+    let cursor;
+    try {
+      cursor = storage.sql.exec(sql, ...parameters);
+    } catch (cause) {
       return {
         ok: false,
         columns: [],
         rows: [],
         rowCount: 0,
         truncated: false,
-        reason: rawRows.reason,
+        reason: `query failed: ${(cause instanceof Error ? cause.message : String(cause)).slice(0, 500)}`,
       };
     }
     const rows: Array<Record<string, unknown>> = [];
     let truncated = false;
     let usedBytes = 0;
-    for (const raw of rawRows.rows) {
+    for (const raw of cursor) {
       if (rows.length >= MAX_ROWS) {
         truncated = true;
         break;
       }
-      const decoded = decodeRow(raw);
+      const decoded = decodeRow(raw as Record<string, unknown>);
       if (Option.isNone(decoded)) {
         return {
           ok: false,
@@ -188,7 +175,7 @@ const runQuery = (
       rowCount: rows.length,
       truncated,
     };
-  }).pipe(Effect.provide(SqliteClient.layer({ storage })), Effect.orDie);
+  });
 
 export class WarehouseObject extends DurableObject {
   #ready = false;
@@ -250,6 +237,9 @@ export class Warehouse extends Context.Service<
   }
 >()("@effect-agent/example-code-mode-cloudflare/Warehouse") {}
 
+/** A safe tenant name: the DO is addressed by this, so bound it tightly. */
+export const isValidTenant = (tenant: string): boolean => /^[a-z0-9-]{1,32}$/.test(tenant);
+
 /** Build the Warehouse service from a resolved DO namespace + tenant name. */
 export const warehouseLayer = (
   namespace: DurableObjectNamespace<WarehouseObject>,
@@ -257,8 +247,25 @@ export const warehouseLayer = (
 ): Layer.Layer<Warehouse> =>
   Layer.succeed(Warehouse)({
     query: (sql, parameters) =>
-      Effect.promise(() => {
+      // A Durable Object RPC failure (transport, DO exception) is an EXPECTED
+      // outcome the tool handler branches on, not a defect — surface it as a
+      // typed denied outcome rather than dying the pass.
+      Effect.tryPromise((): Promise<WarehouseQueryOutcome> => {
         const stub = namespace.get(namespace.idFromName(tenant));
-        return stub.query(sql, [...parameters]);
-      }),
+        return stub.query(sql, [...parameters]) as Promise<WarehouseQueryOutcome>;
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.succeed<WarehouseQueryOutcome>({
+            ok: false,
+            columns: [],
+            rows: [],
+            rowCount: 0,
+            truncated: false,
+            reason: `warehouse unavailable: ${(error.cause instanceof Error
+              ? error.cause.message
+              : String(error.cause)
+            ).slice(0, 300)}`,
+          }),
+        ),
+      ),
   });

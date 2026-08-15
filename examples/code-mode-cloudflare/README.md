@@ -33,13 +33,21 @@ store, not a Conversation store.
 
 The plan (§8.4) prescribes database authority as the read-only boundary. On
 Durable Object SQLite the `PRAGMA query_only` lock is blocked by the storage
-authorizer (`SQLITE_AUTH`), so this demo enforces read-only with a
-leading-keyword denylist over the literal-stripped statement, and denies the
-escape hatches (`PRAGMA`, `ATTACH`, `load_extension`, multi-statement). A
-production warehouse should back this with a read-only database identity or
-curated read-only views. The Node reference fixture in `@effect-agent/testing`
-(`warehouseDbLayer`) proves the stronger database-authority path (`PRAGMA
-query_only = ON` → `SQLITE_READONLY`) that Node SQLite allows.
+authorizer (`SQLITE_AUTH`), so this demo enforces read-only in application
+code. Because a denylist of write keywords is bypassable — a `WITH … DELETE`
+common-table expression does not _start_ with a write keyword — the scan is an
+**allowlist**: the statement must be a single read (`SELECT`, or a `WITH` whose
+body is a read) and must contain no write, DDL, transaction, or escape-hatch
+token (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`PRAGMA`/`ATTACH`/`load_extension`/…)
+anywhere in the literal-stripped text. Row and byte caps are enforced while
+draining the cursor, so a query that would return a huge result set never
+fully materializes.
+
+This text scan is a demo-grade boundary. A production warehouse should back
+this with a read-only database identity or curated read-only views. The Node
+reference fixture in `@effect-agent/testing` (`warehouseDbLayer`) proves the
+stronger _database-authority_ path (`PRAGMA query_only = ON` →
+`SQLITE_READONLY`) that Node SQLite allows.
 
 ## Run the tests (no credentials)
 
@@ -58,12 +66,22 @@ default profile is a deterministic scripted model, so no API key is needed.
 ```sh
 # Optional: run the live OpenAI profile instead of the scripted one.
 bunx wrangler secret put OPENAI_API_KEY
+# When OPENAI_API_KEY is set, also set a shared secret so the paid /ask
+# endpoint cannot be driven anonymously (callers must then send
+# `Authorization: Bearer <token>`):
+bunx wrangler secret put DEMO_AUTH_TOKEN
 
 bun run --filter @effect-agent/example-code-mode-cloudflare deploy
 curl -X POST https://<your-worker>/ask \
   -H 'content-type: application/json' \
+  -H 'authorization: Bearer <your DEMO_AUTH_TOKEN>' \
   -d '{"question":"Which customers have more than $10,000 in revenue?"}'
 ```
+
+When `OPENAI_API_KEY` is set the Worker **requires** `DEMO_AUTH_TOKEN` and
+rejects requests without a matching bearer token, so the paid path never
+serves anonymous callers. The offline scripted default (no `OPENAI_API_KEY`)
+needs no token.
 
 `wrangler.jsonc` wires the `WAREHOUSE` Durable Object, the `LOADER`
 (`worker_loaders`) binding the Dynamic Worker executor loads generated programs
