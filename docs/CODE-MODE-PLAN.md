@@ -21,7 +21,9 @@ to the model.
 The Code Mode capability must not depend on Cloudflare. Cloudflare Dynamic Workers are the first
 target isolated executor because the Worker Loader can create a fresh Worker for generated code,
 deny ambient network access, and expose narrow host capabilities through Workers RPC. Other
-executors may be supplied later without changing the Code Mode Tool or its durable semantics.
+executors may be supplied later without changing the Code Mode Tool's class-`E` contract; any
+future `DN`/`DC` semantics are defined by their own accepted ADR (section 12), not by an executor
+adapter.
 
 The first useful integration slice is a read-only internal SQL query Tool. Database connections,
 credentials, tenant context, and network access remain in the host. Generated code sees only a
@@ -149,7 +151,10 @@ If the capability later gains an independently useful release boundary, it may m
 Consuming the executor port adds a new documented dependency edge, `capabilities -> sandbox`.
 The edge is inward-only and therefore legal, but it is not yet declared: C0 updates the
 dependency graph in `docs/ARCHITECTURE.md`, the dependency-direction rules in `AGENTS.md`, and
-the CI package-graph check together with this plan's approval.
+the CI package-graph check together with this plan's approval. Amending the documented graph
+through an owner-approved ADR is the established path — ADR-0016 added the
+`effect-agent <- pr-review` tier the same way — and the reverse edge (`sandbox -> capabilities`)
+remains forbidden.
 
 ### 5.2 `@effect-agent/sandbox`
 
@@ -428,7 +433,9 @@ For each pass the adapter:
 3. creates one fresh Dynamic Worker with `WorkerLoader.load()`;
 4. sets `globalOutbound: null` by default;
 5. supplies only the scoped Tool-broker RPC stub and explicitly allowed structured values;
-6. applies the configured Dynamic Worker CPU and subrequest limits;
+6. applies the configured Dynamic Worker CPU and subrequest limits plus an executor-owned
+   wall-clock deadline that interrupts the pass, cancels outstanding host calls, and disposes the
+   Worker (an asynchronously suspended pass consumes no CPU and must not outlive its deadline);
 7. invokes one fixed entrypoint;
 8. validates the returned envelope through Effect Schema;
 9. disposes the entrypoint and Worker handles in Scope finalizers.
@@ -540,10 +547,11 @@ Durable execution follows abort-and-replay:
 5. record its validated result after completion;
 6. on suspension or ownership loss, rerun the same source in a fresh executor;
 7. return recorded results for already-settled inner calls;
-8. halt at an inner call that was prepared but never settled: a `readonly` or declared-idempotent
-   call may re-execute per policy, but an `uncertain` prepared-unsettled call must resolve through
-   the ordinary reconciliation and Unknown Outcome protocol at its exact sequence position before
-   execution continues past it;
+8. halt at an inner call that was prepared but never settled: per ADR-0004's recovery rules,
+   re-execution is permitted only on proof of not-started, a recorded result, or the Tool's
+   declared `readonly`/`idempotent` class, and an `uncertain` prepared-unsettled call must resolve
+   through the ordinary reconciliation and Unknown Outcome protocol at its exact sequence position
+   before execution continues past it;
 9. require exact namespace, method, argument, and sequence agreement;
 10. terminate with a replay-divergence failure on mismatch.
 

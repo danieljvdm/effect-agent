@@ -68,8 +68,9 @@ constrains new packages.
    override.
 7. **Cloudflare adapter.** The first isolated executor is a Dynamic Worker Layer in
    `@effect-agent/platform-cloudflare`: one fresh Worker per pass, `globalOutbound: null`, only
-   the scoped broker RPC stub as capability, platform CPU limits as the runaway stop, all handles
-   disposed in Scope finalizers. No cost or performance claim is made before measurement; any
+   the scoped broker RPC stub as capability, platform CPU limits stopping synchronous runaways, an
+   executor-owned wall-clock deadline interrupting asynchronously suspended passes (cancelling
+   outstanding host calls and disposing the Worker), all handles disposed in Scope finalizers. No cost or performance claim is made before measurement; any
    future stable-ID Worker caching must include tenant and binding context in cache identity.
 8. **Durability is deferred.** `DN`/`DC` Code Mode (abort-and-replay with recorded inner calls, a
    new canonical record family, reads recorded by default, a content-addressed execution digest,
