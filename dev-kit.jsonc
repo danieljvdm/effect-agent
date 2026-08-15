@@ -1,6 +1,11 @@
 {
   "$schema": "./node_modules/@danieljvdm/dev-kit/schema/dev-kit.schema.json",
-  "include": ["dev-kit", "effect-ts", "testing", "cloudflare"],
+  // "effect" is the intentional family bundle: effect-ts (setup), the API/CLI
+  // authoring guides, the architecture audit, and Effect Atom state (used by
+  // examples/demo). durable-objects backs the storage-cloudflare and
+  // platform-cloudflare adapters; open-pull-request matches the PR-gated
+  // workflow.
+  "include": ["dev-kit", "effect", "testing", "cloudflare", "durable-objects", "open-pull-request"],
   "setup": {
     "agentInstructions": { "enabled": true },
     "claudeInstructions": { "enabled": true },
