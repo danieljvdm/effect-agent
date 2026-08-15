@@ -1,4 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
+import { Effect, Redacted } from "effect";
 
 import {
   ChangedFile,
@@ -90,14 +91,23 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
     ...overrides,
   });
 
-describe("durable review state", () => {
-  it("round-trips a schema-validated review-body marker and ignores malformed state", () => {
-    const marker = renderReviewStateMarker(priorState);
-    expect(extractReviewState(`review body\n${marker}`)).toEqual(priorState);
-    expect(extractReviewState("<!-- effect-agent-pr-review state-v1:not-base64 -->")).toBe(
-      undefined,
-    );
-  });
+describe("review state", () => {
+  it.effect("authenticates only a terminal schema-validated review-body marker", () =>
+    Effect.gen(function* () {
+      const secret = Redacted.make("stable-state-secret");
+      const marker = yield* renderReviewStateMarker(priorState, secret);
+      expect(yield* extractReviewState(`review body\n${marker}`, secret)).toEqual(priorState);
+      expect(
+        yield* extractReviewState(`review body\n${marker}\nhost footer`, secret),
+      ).toBeUndefined();
+      expect(
+        yield* extractReviewState(`review body\n${marker}`, Redacted.make("wrong-secret")),
+      ).toBeUndefined();
+      expect(
+        yield* extractReviewState("<!-- effect-agent-pr-review state-v1:not-base64 -->", secret),
+      ).toBeUndefined();
+    }),
+  );
 
   it("reviews only the corrective delta and preserves unchanged prior scope", () => {
     const selection = select();

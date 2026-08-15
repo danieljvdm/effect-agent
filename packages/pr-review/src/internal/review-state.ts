@@ -1,12 +1,12 @@
-import { Context, Effect, Encoding, Layer, Option, Result, Schema } from "effect";
+import { Context, Effect, Encoding, Layer, Option, Redacted, Result, Schema } from "effect";
 
 import { ChangedFile, ChangedPath } from "./diff.ts";
 import { FindingSeverity, ReviewConcern, ReviewFinding, ReviewMission } from "./review-agent.ts";
 import { PullRequestSource, ReviewInputViolation, type PullRequestMetadata } from "./source.ts";
 
 // ---------------------------------------------------------------------------
-// Durable review progress. The Action is still deployment class E, but every
-// completed review publishes this bounded state inside its GitHub review body.
+// Bounded review continuity. The Action is still deployment class E, but every
+// completed review can publish authenticated state inside its GitHub review body.
 // A later Action run validates the state against the live PR/base lineage and
 // uses a head-to-head comparison to select only newly affected scope.
 // ---------------------------------------------------------------------------
@@ -100,26 +100,76 @@ export const fromStoredConcern = (concern: StoredReviewConcern): ReviewConcern =
 
 const STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 const STATE_MARKER_SUFFIX = " -->";
-const STATE_MARKER_PATTERN = /<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2}) -->/g;
+const STATE_MARKER_PATTERN =
+  /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+const STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\u0000";
 
-/** Encode one schema-validated state as a comment-safe Base64 marker. */
-export const renderReviewStateMarker = (state: ReviewState): string => {
+const encodeReviewState = (state: ReviewState): string => {
   const encoded = Schema.encodeSync(ReviewState)(state);
-  return `${STATE_MARKER_PREFIX}${Encoding.encodeBase64(JSON.stringify(encoded))}${STATE_MARKER_SUFFIX}`;
+  return Encoding.encodeBase64(JSON.stringify(encoded));
 };
 
-/** Extract the last valid state marker in one review body. Invalid input is ignored. */
-export const extractReviewState = (body: string): ReviewState | undefined => {
-  let latest: ReviewState | undefined;
-  for (const match of body.matchAll(STATE_MARKER_PATTERN)) {
-    const encoded = match[1];
-    if (encoded === undefined) continue;
-    const json = Result.getOrUndefined(Encoding.decodeBase64String(encoded));
-    if (json === undefined) continue;
-    const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ReviewState))(json);
-    if (Option.isSome(decoded)) latest = decoded.value;
+const hmacKey = (secret: Redacted.Redacted<string>) =>
+  globalThis.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(Redacted.value(secret)),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign", "verify"],
+  );
+
+const signatureBytes = (signature: string): ArrayBuffer => {
+  const pairs = signature.match(/../g) ?? [];
+  const buffer = new ArrayBuffer(pairs.length);
+  const bytes = new Uint8Array(buffer);
+  for (let index = 0; index < pairs.length; index += 1) {
+    bytes[index] = Number.parseInt(pairs[index] ?? "", 16);
   }
-  return latest;
+  return buffer;
+};
+
+/** Encode and HMAC-authenticate one schema-validated terminal state marker. */
+export const renderReviewStateMarker = (
+  state: ReviewState,
+  secret: Redacted.Redacted<string>,
+): Effect.Effect<string> => {
+  const payload = encodeReviewState(state);
+  const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+  return Effect.promise(async () => {
+    const signature = await globalThis.crypto.subtle.sign("HMAC", await hmacKey(secret), message);
+    const hex = Array.from(new Uint8Array(signature))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+    return `${STATE_MARKER_PREFIX}${payload}.${hex}${STATE_MARKER_SUFFIX}`;
+  });
+};
+
+/**
+ * Verify and decode the terminal state marker. Invalid, injected, unsigned, or
+ * differently keyed input is ignored so the caller safely performs a full review.
+ */
+export const extractReviewState = (
+  body: string,
+  secret: Redacted.Redacted<string>,
+): Effect.Effect<ReviewState | undefined> => {
+  const match = STATE_MARKER_PATTERN.exec(body);
+  const payload = match?.[1];
+  const signature = match?.[2];
+  if (payload === undefined || signature === undefined) return Effect.succeed(undefined);
+  const json = Result.getOrUndefined(Encoding.decodeBase64String(payload));
+  if (json === undefined) return Effect.succeed(undefined);
+  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ReviewState))(json);
+  if (Option.isNone(decoded)) return Effect.succeed(undefined);
+  const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+  return Effect.promise(async () => {
+    const valid = await globalThis.crypto.subtle.verify(
+      "HMAC",
+      await hmacKey(secret),
+      signatureBytes(signature),
+      message,
+    );
+    return valid ? decoded.value : undefined;
+  });
 };
 
 /** The bounded result of GitHub's previous-head...current-head comparison. */
@@ -146,6 +196,8 @@ export interface ReviewSelection {
   readonly baselineSha: string | undefined;
   readonly priorState: ReviewState | undefined;
   readonly profileFingerprint: string;
+  /** Host-only key used to authenticate the next bounded continuity marker. */
+  readonly stateSecret?: Redacted.Redacted<string> | undefined;
 }
 
 const fullSelection = (input: {

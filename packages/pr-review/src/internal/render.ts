@@ -1,12 +1,10 @@
 import { Schema } from "effect";
 
 import type { ReviewCoverage } from "./coverage.ts";
-import type { ChangedFile } from "./diff.ts";
-import { commentableLines } from "./diff.ts";
+import { commentableLines, type ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
-import type { CodeReview } from "./review-agent.ts";
-import { ReviewFinding, type ReviewConcern } from "./review-agent.ts";
-import { renderReviewStateMarker, type ReviewScopeMode, type ReviewState } from "./review-state.ts";
+import { ReviewFinding, type CodeReview, type ReviewConcern } from "./review-agent.ts";
+import type { ReviewScopeMode } from "./review-state.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is
@@ -245,8 +243,8 @@ export const planPublication = (
     readonly baselineSha?: string | undefined;
     readonly reviewFilesVisible?: number | undefined;
     readonly reviewTotalFiles?: number | undefined;
-    /** Durable state is emitted only after complete host-owned coverage. */
-    readonly state?: ReviewState | undefined;
+    /** Authenticated continuity state is emitted only after complete host-owned coverage. */
+    readonly stateMarker?: string | undefined;
   },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
@@ -372,7 +370,7 @@ export const planPublication = (
   );
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
-    : counts.blocking > 0
+    : options.coverage?.status === "incomplete" || counts.blocking > 0
       ? "REQUEST_CHANGES"
       : review.verdict === "approve" && counts.important === 0
         ? "APPROVE"
@@ -391,7 +389,7 @@ export const planPublication = (
       baselineSha: options.baselineSha,
     }),
     ...(options.fingerprint === undefined ? [] : [renderFingerprintMarker(options.fingerprint)]),
-    ...(options.state === undefined ? [] : [renderReviewStateMarker(options.state)]),
+    ...(options.stateMarker === undefined ? [] : [options.stateMarker]),
   ].join("\n");
   const headBudget = 60_000 - tail.length - 1;
 

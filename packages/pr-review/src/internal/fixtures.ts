@@ -8,7 +8,7 @@ import {
   ReviewPublisher,
 } from "./github.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
-import { ReviewHeadComparison, type ReviewState } from "./review-state.ts";
+import type { ReviewHeadComparison, ReviewState } from "./review-state.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
@@ -99,7 +99,24 @@ export const collectingReviewPublisherLayer = (
     }),
   );
 
-/** Static `PriorReviews` for tests: a fixed latest fingerprint (or none). */
+/** Static `PriorReviews` service for tests: fixed history and comparisons. */
+export const staticPriorReviews = (
+  fingerprint: Option.Option<string>,
+  options: {
+    readonly state?: Option.Option<ReviewState> | undefined;
+    readonly comparison?: ReviewHeadComparison | undefined;
+  } = {},
+): PriorReviews["Service"] =>
+  PriorReviews.of({
+    latestFingerprint: Effect.succeed(fingerprint),
+    latestState: () => Effect.succeed(options.state ?? Option.none()),
+    compareHeads: () =>
+      options.comparison === undefined
+        ? Effect.fail(PriorReviewLookupFailure.make({ reason: "no fixture comparison" }))
+        : Effect.succeed(options.comparison),
+  });
+
+/** Layer form for consumers whose Effect explicitly requires `PriorReviews`. */
 export const staticPriorReviewsLayer = (
   fingerprint: Option.Option<string>,
   options: {
@@ -107,13 +124,4 @@ export const staticPriorReviewsLayer = (
     readonly comparison?: ReviewHeadComparison | undefined;
   } = {},
 ): Layer.Layer<PriorReviews> =>
-  Layer.succeed(PriorReviews)(
-    PriorReviews.of({
-      latestFingerprint: Effect.succeed(fingerprint),
-      latestState: Effect.succeed(options.state ?? Option.none()),
-      compareHeads: () =>
-        options.comparison === undefined
-          ? Effect.fail(PriorReviewLookupFailure.make({ reason: "no fixture comparison" }))
-          : Effect.succeed(options.comparison),
-    }),
-  );
+  Layer.succeed(PriorReviews)(staticPriorReviews(fingerprint, options));

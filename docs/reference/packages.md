@@ -145,7 +145,7 @@ consumer of `@effect-agent/pr-review` demonstrating the adaptation path (guidanc
 read-only tool, ignore globs); `examples/repo-ops` is the P7 internal evidence auditor. None is a
 framework or deployment package. The repository root also carries `action/`, the prebuilt
 node-runtime GitHub Action over `@effect-agent/pr-review` with its committed bundle (ADR-0016).
-Its normal synchronize path recovers validated review state and reviews only affected scope;
+Its normal synchronize path recovers authenticated review state and reviews only affected scope;
 explicit final mode audits the bounded full diff, and blocking or incomplete results fail the
 check host-side.
 

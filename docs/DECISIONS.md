@@ -491,8 +491,8 @@ Customization widens the review's inputs (guidance, extra `readonly` tools, igno
 the fail-closed publication path — anchor validation, findings bound, publication after
 settlement — is not configurable.
 
-Completed reviews also carry bounded, schema-validated continuity state in their GitHub review
-body. Normal synchronize runs validate that state and review the affected head-to-head delta;
+Completed reviews also carry bounded, HMAC-authenticated, schema-validated continuity state in
+their GitHub review body. Normal synchronize runs validate that state and review the affected head-to-head delta;
 explicit final mode audits the full diff. The Actions check is host-derived and non-success for
 any active blocker or incomplete required coverage, regardless of model verdict. See ADR-0016's
 2026-08-15 amendment.

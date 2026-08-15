@@ -19,6 +19,11 @@ inputs:
     description: "Token with pull-requests: write on this repository."
     required: false
     default: ${{ github.token }}
+  state-secret:
+    description: >-
+      Stable secret used only to HMAC-authenticate incremental review state.
+      Omitting or rotating it safely forces a full review.
+    required: false
   provider:
     description: 'Model provider: "openai" (default) or "anthropic".'
     required: false

@@ -1,5 +1,6 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
+import type { Redacted } from "effect";
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
@@ -25,8 +26,7 @@ import {
 } from "./internal/review-state.ts";
 import { fanOutReviewBudgetLimits, reviewBudgetLimits } from "./internal/run.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
-import { normalizeRepoRelativePath } from "./internal/source.ts";
-import { PullRequestSource } from "./internal/source.ts";
+import { normalizeRepoRelativePath, PullRequestSource } from "./internal/source.ts";
 
 // ---------------------------------------------------------------------------
 // The GitHub Actions entrypoint (deployment class E: one bounded ephemeral
@@ -378,7 +378,7 @@ const concludeReviewState = (state: ReviewState) => {
 /**
  * Harness one already-built reviewer inside the Actions environment: resolve
  * the target from the event, provide the GitHub source/publisher/prior
- * reviews, validate/select durable review scope, write step outputs, and apply
+ * reviews, validate/select bounded continuity scope, write step outputs, and apply
  * the host-derived coverage/blocker gate. Draft and non-PR skips are values;
  * an unchanged reviewed head preserves and enforces its stored conclusion. The reviewer's
  * remaining requirements — its model client, any extra tool handlers — stay
@@ -395,6 +395,10 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     readonly reviewMode?: ReviewMode | undefined;
     /** Model binding descriptor for the Actions step summary. */
     readonly modelLabel?: string | undefined;
+    /** Stable secret authenticating review-state markers; absence forces full reviews. */
+    readonly stateSecret?: Redacted.Redacted<string> | undefined;
+    /** Explicit test/custom-host history override; GitHub owns the default adapter. */
+    readonly priorReviews?: PriorReviews["Service"] | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -408,9 +412,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       }
     }
     const target = yield* resolveReviewTarget({});
-    // An ambient PriorReviews (a test fixture, a custom store) wins over the
-    // GitHub adapter the harness provides below.
-    const ambientPriorReviews = yield* Effect.serviceOption(PriorReviews);
     // One layer build for state selection AND the run, so both observe
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
@@ -422,15 +423,22 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           reviewer.profileFingerprint,
         ]);
         const { metadata, files: fullFiles } = snapshot;
-        const history = Option.isSome(ambientPriorReviews)
-          ? ambientPriorReviews.value
-          : yield* PriorReviews;
-        const recovered = yield* history.latestState.pipe(
-          Effect.match({
-            onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
-            onSuccess: (state) => ({ state: Option.getOrUndefined(state), failure: undefined }),
-          }),
-        );
+        const history = options.priorReviews ?? (yield* PriorReviews);
+        const recovered =
+          options.stateSecret === undefined
+            ? {
+                state: undefined,
+                failure: "an authenticated review-state secret is not configured",
+              }
+            : yield* history.latestState(options.stateSecret).pipe(
+                Effect.match({
+                  onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
+                  onSuccess: (state) => ({
+                    state: Option.getOrUndefined(state),
+                    failure: undefined,
+                  }),
+                }),
+              );
         let comparison: ReviewHeadComparison | undefined;
         let baseComparison: ReviewHeadComparison | undefined;
         if (
@@ -469,16 +477,19 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             }
           }
         }
-        selection = selectReviewRange({
-          requestedMode: options.reviewMode ?? "incremental",
-          current: metadata,
-          fullFiles,
-          profileFingerprint,
-          priorState: recovered.state,
-          comparison,
-          baseComparison,
-          lookupFailure: recovered.failure,
-        });
+        selection = {
+          ...selectReviewRange({
+            requestedMode: options.reviewMode ?? "incremental",
+            current: metadata,
+            fullFiles,
+            profileFingerprint,
+            priorState: recovered.state,
+            comparison,
+            baseComparison,
+            lookupFailure: recovered.failure,
+          }),
+          stateSecret: options.stateSecret,
+        };
         if (
           options.skipUnchanged !== false &&
           selection.mode === "incremental" &&
@@ -508,6 +519,29 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
               reasons: result.reasons,
             });
           }
+          return { _tag: "Skipped", reason } satisfies ReviewActionResult;
+        }
+      } else if (options.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
+        // Preserve the pre-state custom harness contract explicitly. The
+        // packaged reviewer always takes the authenticated state path above.
+        const current = yield* reviewer.fingerprint;
+        const history = options.priorReviews ?? (yield* PriorReviews);
+        const latest = yield* history.latestFingerprint.pipe(
+          Effect.orElseSucceed(() => Option.none<string>()),
+        );
+        if (Option.isSome(latest) && latest.value === current) {
+          const reason = "changeset unchanged since the last review";
+          yield* Console.log(
+            `Skipping review of ${target.repository}#${target.number}: ${reason}.`,
+          );
+          yield* writeActionOutputs([
+            ["skipped", "true"],
+            ["skip-reason", reason],
+            ["fingerprint", current],
+            ["conclusion", "success"],
+            ["coverage", "complete"],
+          ]);
+          yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
           return { _tag: "Skipped", reason } satisfies ReviewActionResult;
         }
       }
@@ -549,6 +583,9 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
  */
 export const reviewActionProgram = Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const stateSecret = Option.getOrUndefined(
+    yield* Config.option(Config.redacted("PR_REVIEW_STATE_SECRET")),
+  );
   const guidance = yield* resolveGuidance(inputs);
   const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
@@ -573,6 +610,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
     modelLabel,
+    stateSecret,
   };
   if (inputs.provider === "anthropic") {
     const model = makeAnthropicReviewModel(inputs.model, inputs.effort);

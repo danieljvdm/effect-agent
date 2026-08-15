@@ -100,7 +100,8 @@ ordinary gate.
 
 ## Incremental Action reviews
 
-A completely covered posted review carries bounded, versioned review state:
+A completely covered posted Action review carries bounded, versioned,
+HMAC-authenticated continuity state:
 the exact PR/base/head lineage, profile and accepted-scope fingerprints, and
 the still-unresolved findings and concerns. A later Action run validates the
 state and reviews the GitHub comparison from that reviewed head to the
@@ -110,7 +111,10 @@ changed or reverted paths invalidate their prior findings. Non-anchored
 concerns are carried conservatively until a full audit because they cannot be
 mapped safely to one path.
 
-State lookup, schema, identity, ancestry, profile, and comparison checks are
+The state marker must be terminal, signed with the configured stable
+`PR_REVIEW_STATE_SECRET`, authored by the default GitHub Actions bot, and
+pinned to the reviewed commit. State lookup, authentication, schema, identity,
+ancestry, profile, and comparison checks are
 fail-closed for scope selection: missing, stale, incompatible, or truncated
 state/comparisons produce a visible full-diff fallback. An ancestor base
 advance remains incremental and adds overlapping PR paths as affected
@@ -129,13 +133,14 @@ the full current PR diff and resets the incremental baseline; normal
   repository's own profile lives at `.github/review-guidance.md`)
   (`action/` at the repo root) — `uses` it with an API-key secret and nothing
   else. For custom reviewers in CI, `@effect-agent/pr-review/action` exports
-  `runReviewAction` (event resolution, typed draft/non-PR skips, durable range
+  `runReviewAction` (event resolution, typed draft/non-PR skips, bounded range
   selection, step outputs, and conservative check gate) to harness your own
   `reviewer.run`.
 - **CLI**: `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`
   (also exported as the `./cli` entry).
 
 Environment: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the model,
+`PR_REVIEW_STATE_SECRET` to authenticate incremental state,
 `GITHUB_TOKEN` to post (optional for public-repository reads), and the
 standard `GITHUB_REPOSITORY` / `GITHUB_EVENT_PATH` / `GITHUB_API_URL`
 variables inside Actions.

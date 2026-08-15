@@ -24,6 +24,7 @@ import {
 import {
   fromStoredConcern,
   fromStoredFinding,
+  renderReviewStateMarker,
   ReviewExecutionContext,
   ReviewState,
   toStoredConcern,
@@ -293,7 +294,8 @@ export const executeReview = <
       executionContext !== undefined &&
       coverage.status === "complete" &&
       fingerprint !== undefined &&
-      metadata.baseSha !== undefined
+      metadata.baseSha !== undefined &&
+      executionContext.stateSecret !== undefined
         ? ReviewState.make({
             version: 1,
             repository: metadata.repository,
@@ -310,6 +312,10 @@ export const executeReview = <
             lastReviewMode: executionContext.mode,
           })
         : undefined;
+    const stateMarker =
+      state === undefined || executionContext?.stateSecret === undefined
+        ? undefined
+        : yield* renderReviewStateMarker(state, executionContext.stateSecret);
     const plan = planPublication(review, anchorFiles, {
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,
@@ -329,7 +335,7 @@ export const executeReview = <
       baselineSha: executionContext?.baselineSha,
       reviewFilesVisible: files.length,
       reviewTotalFiles,
-      state,
+      stateMarker,
     });
 
     const scope =
