@@ -32,24 +32,30 @@ jobs:
       CI: "true"
       VITE_GIT_HOOKS: "0"
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository (full history for changesets)
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
 
       # Trusted publishing lives in the npm CLI; the runner's default npm
       # predates the OIDC exchange, so pin a current one.
-      - uses: actions/setup-node@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm install -g npm@latest
+      - name: Update npm (OIDC trusted publishing needs a current CLI)
+        run: npm install -g npm@latest
 
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install dependencies (frozen, scripts suppressed)
+        run: bun install --frozen-lockfile --ignore-scripts
 
-      - run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
+      - name: Verify locked Dev Kit setup
+        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
       - name: Version or publish
         uses: changesets/action@v1

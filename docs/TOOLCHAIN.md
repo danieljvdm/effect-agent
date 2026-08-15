@@ -254,8 +254,13 @@ automation are deferred until open-source preparation.
 
 ## CI and hooks
 
-The GitHub Actions workflow installs the exact Bun version, performs a frozen-lockfile install,
-and runs `bun run ready`. It does not initialize any source submodule.
+The CI workflow installs the exact Bun version with a frozen-lockfile install, then runs the
+`ready` gate as three parallel jobs — Static checks (`bun run check`), Tests (`bun run test`),
+and Build (`bun run build`) — with a fan-in job that keeps the required branch-protection check
+named `ready`. Each job restores and saves the Vite Task cache
+(`node_modules/.vite/task-cache`), so per-package gates whose fingerprinted inputs did not change
+replay instead of re-executing; runs on `main` publish the shared baseline that pull-request runs
+restore. It does not initialize any source submodule.
 
 The Vite+ pre-commit hook runs the staged formatter. CI remains authoritative: hooks improve local
 feedback but are not a correctness boundary.
