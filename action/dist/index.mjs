@@ -32933,6 +32933,10 @@ var makeIsolatedToolTracer = (delegate) => {
 
 class ToolSpanTelemetry extends exports_Context.Service()("@effect-agent/engine/ToolSpanTelemetry") {
   static layer = exports_Layer.effect(ToolSpanTelemetry, exports_Effect.map(exports_Tracer.Tracer, (delegate) => ToolSpanTelemetry.of({
+    isolateEffectSpanLifecycle: (effect2) => exports_Effect.suspend(() => {
+      const isolated = makeIsolatedToolTracer(delegate);
+      return effect2.pipe(exports_Effect.provideService(exports_Tracer.Tracer, isolated.tracer), exports_Effect.ensuring(isolated.reportLifecycleDefects));
+    }),
     isolateToolkitHandle: (effect2) => exports_Effect.currentSpan.pipe(exports_Effect.option, exports_Effect.flatMap((parentOption) => {
       if (exports_Option.isNone(parentOption))
         return effect2;
@@ -33221,36 +33225,57 @@ var preflightApproval = (context3, turnId, prepared, options) => exports_Stream.
 var ProviderResponsePartId = exports_Schema.String.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
 var ProviderToolCallId = ToolCallId.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
 var isTelemetryToolCallId = exports_Schema.is(ProviderToolCallId);
+var toolTelemetryAttributes = (descriptor) => ({
+  "gen_ai.operation.name": "execute_tool",
+  "gen_ai.tool.name": descriptor.toolName,
+  "gen_ai.tool.type": "function",
+  ...descriptor.toolCallId === undefined ? {} : {
+    "gen_ai.tool.call.id": descriptor.toolCallId,
+    toolCallId: descriptor.toolCallId
+  },
+  "gen_ai.agent.name": descriptor.context.agentId,
+  "gen_ai.conversation.id": descriptor.context.conversationId,
+  "effect_agent.tool.execution_class": descriptor.executionClass,
+  "effect_agent.tool.invocation_kind": descriptor.invocationKind,
+  ...descriptor.parentToolCallId === undefined ? {} : {
+    "effect_agent.tool.parent_call.id": descriptor.parentToolCallId,
+    parentToolCallId: descriptor.parentToolCallId
+  },
+  ...descriptor.sequenceIndex === undefined ? {} : {
+    "effect_agent.tool.sequence_index": descriptor.sequenceIndex,
+    sequenceIndex: descriptor.sequenceIndex
+  },
+  agentId: descriptor.context.agentId,
+  conversationId: descriptor.context.conversationId,
+  runId: descriptor.context.runId,
+  turnId: descriptor.turnId,
+  toolName: descriptor.toolName
+});
+var terminalToolTelemetry = (descriptor, outcome, failureMarker) => annotateToolSpanTerminalOutcome(outcome, failureMarker).pipe(exports_Effect.andThen((outcome === "success" ? exports_Effect.logInfo("agent tool execution completed") : exports_Effect.logWarning("agent tool execution failed")).pipe(exports_Effect.annotateLogs({
+  ...toolTelemetryAttributes(descriptor),
+  "effect_agent.tool.outcome": outcome,
+  toolExecutionClass: descriptor.executionClass,
+  toolOutcome: outcome
+}))));
 var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWaiting) => {
   const call = prepared.call;
   const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
   const executionClass = getToolExecutionClass(prepared.tool);
+  const telemetryDescriptor = {
+    context: context3,
+    turnId,
+    toolCallId: telemetryToolCallId,
+    toolName: call.name,
+    executionClass,
+    invocationKind: "model"
+  };
   const toolSpanFailure = ToolSpanFailure.marker();
   let terminal = false;
   let terminalResultCommitted = false;
   let terminalOutcome;
   let terminalResult;
   let propagatedFailure;
-  const terminalTelemetry = (outcome) => annotateToolSpanTerminalOutcome(outcome, outcome === "failure" ? toolSpanFailure : undefined).pipe(exports_Effect.andThen((outcome === "success" ? exports_Effect.logInfo("agent tool execution completed") : exports_Effect.logWarning("agent tool execution failed")).pipe(exports_Effect.annotateLogs({
-    "gen_ai.operation.name": "execute_tool",
-    "gen_ai.tool.name": call.name,
-    "gen_ai.tool.type": "function",
-    ...telemetryToolCallId === undefined ? {} : {
-      "gen_ai.tool.call.id": telemetryToolCallId,
-      toolCallId: telemetryToolCallId
-    },
-    "gen_ai.agent.name": context3.agentId,
-    "gen_ai.conversation.id": context3.conversationId,
-    "effect_agent.tool.execution_class": executionClass,
-    "effect_agent.tool.outcome": outcome,
-    agentId: context3.agentId,
-    conversationId: context3.conversationId,
-    runId: context3.runId,
-    turnId,
-    toolName: call.name,
-    toolExecutionClass: executionClass,
-    toolOutcome: outcome
-  }))));
+  const terminalTelemetry = (outcome) => terminalToolTelemetry(telemetryDescriptor, outcome, outcome === "failure" ? toolSpanFailure : undefined);
   const isolatedTerminalTelemetry = (outcome) => isolateToolTerminalTelemetry(terminalTelemetry(outcome));
   const terminalEventThenTelemetry = (event, outcome, failSpan) => emitThenAfter(event, isolatedTerminalTelemetry(outcome).pipe(exports_Effect.andThen(failSpan ? exports_Effect.fail(toolSpanFailure) : exports_Effect.void)));
   const started = exports_Stream.fromEffect(exports_Effect.gen(function* () {
@@ -33371,23 +33396,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
     return failTerminalResult(toolCause);
   }), exports_Stream.withSpan(`execute_tool ${call.name}`, {
     kind: "internal",
-    attributes: {
-      "gen_ai.operation.name": "execute_tool",
-      "gen_ai.tool.name": call.name,
-      "gen_ai.tool.type": "function",
-      ...telemetryToolCallId === undefined ? {} : {
-        "gen_ai.tool.call.id": telemetryToolCallId,
-        toolCallId: telemetryToolCallId
-      },
-      "gen_ai.agent.name": context3.agentId,
-      "gen_ai.conversation.id": context3.conversationId,
-      "effect_agent.tool.execution_class": executionClass,
-      agentId: context3.agentId,
-      conversationId: context3.conversationId,
-      runId: context3.runId,
-      turnId,
-      toolName: call.name
-    }
+    attributes: toolTelemetryAttributes(telemetryDescriptor)
   }));
   return exports_Stream.unwrap(exports_Effect.map(ToolSpanTelemetry, ({ isolateSpanLifecycle }) => isolateSpanLifecycle(measured))).pipe(exports_Stream.catchCause((cause) => {
     const { found, restored } = restoreToolSpanFailureCause(cause, toolSpanFailure, propagatedFailure);
@@ -33402,6 +33411,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
   const approvalPreflight = prepared.reduce((stream, call) => stream.pipe(exports_Stream.concat(preflightApproval(context3, turnId, call, options))), exports_Stream.empty);
   const durability = options.durability;
   const hookServices = yield* exports_Effect.context();
+  const toolSpanTelemetry = yield* ToolSpanTelemetry;
   const preparation = durability === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.suspend(() => {
     const descriptors = prepared.flatMap((call) => {
       const executionClass = getToolExecutionClass(call.tool);
@@ -33430,7 +33440,8 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
       maxToolCalls: brokerAccounting.maxToolCalls,
       declaredToolCalls: brokerAccounting.declaredToolCalls,
       budget: options.budget,
-      hookServices
+      hookServices,
+      toolSpanTelemetry
     });
     liveBrokers.set(call.call.id, created);
     return created;
@@ -34616,6 +34627,51 @@ class BrokerHandlerFailure {
     this.error = error2;
   }
 }
+var stripProgrammaticToolSpanFailure = (cause, marker) => {
+  let found = false;
+  const residual = [];
+  for (const reason of cause.reasons) {
+    if (exports_Cause.isFailReason(reason)) {
+      if (reason.error === marker) {
+        found = true;
+      } else {
+        residual.push(exports_Cause.makeDieReason(reason.error));
+      }
+    } else {
+      residual.push(reason);
+    }
+  }
+  return { found, residual: exports_Cause.fromReasons(residual) };
+};
+var observeProgrammaticToolCall = (telemetry, descriptor, effect2) => exports_Effect.suspend(() => {
+  const marker = ToolSpanFailure.marker();
+  let terminalResult;
+  let propagatedFailure;
+  const measured = exports_Effect.exit(effect2).pipe(exports_Effect.flatMap((exit3) => {
+    if (exports_Exit.isFailure(exit3)) {
+      if (exit3.cause.reasons.length > 0 && exit3.cause.reasons.every(exports_Cause.isInterruptReason)) {
+        return exports_Effect.failCause(exit3.cause);
+      }
+      propagatedFailure = exit3.cause;
+      return isolateToolTerminalTelemetry(terminalToolTelemetry(descriptor, "failure", marker)).pipe(exports_Effect.andThen(exports_Effect.fail(marker)));
+    }
+    terminalResult = exit3.value;
+    const outcome = exit3.value._tag === "ProgrammaticCallSuccess" ? "success" : "failure";
+    return isolateToolTerminalTelemetry(terminalToolTelemetry(descriptor, outcome, outcome === "failure" ? marker : undefined)).pipe(exports_Effect.andThen(outcome === "failure" ? exports_Effect.fail(marker) : exports_Effect.succeed(exit3.value)));
+  }), exports_Effect.withSpan(`execute_tool ${descriptor.toolName}`, {
+    kind: "internal",
+    attributes: toolTelemetryAttributes(descriptor)
+  }));
+  return telemetry.isolateEffectSpanLifecycle(measured).pipe(exports_Effect.catchCause((cause) => {
+    const { found, residual } = stripProgrammaticToolSpanFailure(cause, marker);
+    const restored = propagatedFailure === undefined ? residual : exports_Cause.combine(propagatedFailure, residual);
+    if (!found)
+      return exports_Effect.failCause(restored);
+    if (restored.reasons.length > 0)
+      return exports_Effect.failCause(restored);
+    return terminalResult === undefined ? exports_Effect.die("Programmatic Tool telemetry completed without a terminal result") : exports_Effect.succeed(terminalResult);
+  }));
+});
 var brokerUtf8ByteLength = (value4) => {
   let total = 0;
   for (const character of value4) {
@@ -34696,74 +34752,79 @@ var makeToolBrokerService = (binding) => {
         }
         const index2 = state.nextIndex++;
         const handleId = `${binding.outerToolCallId}#${index2}`;
-        yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
-          agentId: binding.context.agentId,
-          runId: binding.context.runId,
+        const telemetryDescriptor = {
+          context: binding.context,
           turnId: binding.turnId,
-          toolCallId: binding.outerToolCallId,
+          toolCallId: handleId,
           toolName: input.toolName,
+          executionClass: getToolExecutionClass(tool),
+          invocationKind: "programmatic",
+          parentToolCallId: binding.outerToolCallId,
           sequenceIndex: index2
-        }));
-        yield* exports_Metric.update(toolCounter, 1);
-        let terminal;
-        let resultAfterTerminal = false;
-        const handlerFailed = yield* exports_Stream.unwrap(toolkit.handle(input.toolName, input.encodedArguments, handleId).pipe(exports_Effect.withSpan("AgentRuntime.toolkit.handle"))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
-          if (terminal !== undefined) {
-            resultAfterTerminal = true;
+        };
+        return yield* observeProgrammaticToolCall(binding.toolSpanTelemetry, telemetryDescriptor, exports_Effect.gen(function* () {
+          yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
+            agentId: binding.context.agentId,
+            runId: binding.context.runId,
+            turnId: binding.turnId,
+            toolCallId: handleId,
+            parentToolCallId: binding.outerToolCallId,
+            toolName: input.toolName,
+            sequenceIndex: index2
+          }));
+          yield* exports_Metric.update(toolCounter, 1);
+          let terminal;
+          let resultAfterTerminal = false;
+          const handlerFailed = yield* exports_Stream.unwrap(binding.toolSpanTelemetry.isolateToolkitHandle(toolkit.handle(input.toolName, input.encodedArguments, handleId))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
+            if (terminal !== undefined) {
+              resultAfterTerminal = true;
+              return;
+            }
+            if (!result4.preliminary) {
+              terminal = {
+                encodedResult: result4.encodedResult,
+                isFailure: result4.isFailure
+              };
+            }
+          })), exports_Effect.map(() => {
             return;
+          }), exports_Effect.catch((error2) => exports_Effect.succeed(new BrokerHandlerFailure(error2))));
+          if (handlerFailed instanceof BrokerHandlerFailure) {
+            return programmaticOutcomeError(index2, errorTag(handlerFailed.error), errorMessage(handlerFailed.error));
           }
-          if (!result4.preliminary) {
-            terminal = {
-              encodedResult: result4.encodedResult,
-              isFailure: result4.isFailure
+          if (resultAfterTerminal) {
+            return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);
+          }
+          if (terminal === undefined) {
+            return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
+          }
+          if (terminal.isFailure) {
+            return {
+              _tag: "ProgrammaticCallFailure",
+              index: index2,
+              encodedResult: terminal.encodedResult
             };
           }
-        })), exports_Effect.map(() => {
-          return;
-        }), exports_Effect.catch((error2) => exports_Effect.succeed(new BrokerHandlerFailure(error2))));
-        if (handlerFailed instanceof BrokerHandlerFailure) {
-          return programmaticOutcomeError(index2, errorTag(handlerFailed.error), errorMessage(handlerFailed.error));
-        }
-        if (resultAfterTerminal) {
-          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);
-        }
-        if (terminal === undefined) {
-          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
-        }
-        if (terminal.isFailure) {
-          return {
-            _tag: "ProgrammaticCallFailure",
-            index: index2,
-            encodedResult: terminal.encodedResult
-          };
-        }
-        if (exports_Option.isNone(exports_Schema.decodeUnknownOption(exports_Schema.Json)(terminal.encodedResult))) {
-          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
-        }
-        let encodedResult = terminal.encodedResult;
-        if (passOptions?.redactResult !== undefined) {
-          const redacted2 = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
-          if (exports_Option.isNone(redacted2)) {
-            return programmaticOutcomeError(index2, "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
+          if (exports_Option.isNone(exports_Schema.decodeUnknownOption(exports_Schema.Json)(terminal.encodedResult))) {
+            return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
           }
-          encodedResult = redacted2.value;
-        }
-        if (passOptions?.maxResultBytes !== undefined) {
-          const bytes = brokerEncodedByteLength(encodedResult);
-          if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-            return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
+          let encodedResult = terminal.encodedResult;
+          if (passOptions?.redactResult !== undefined) {
+            const redacted2 = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
+            if (exports_Option.isNone(redacted2)) {
+              return programmaticOutcomeError(index2, "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
+            }
+            encodedResult = redacted2.value;
           }
-        }
-        return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
-      }).pipe(exports_Effect.provideContext(handlerServices), exports_Effect.withSpan("AgentRuntime.programmaticTool", {
-        attributes: {
-          agentId: binding.context.agentId,
-          runId: binding.context.runId,
-          turnId: binding.turnId,
-          toolCallId: binding.outerToolCallId,
-          toolName: input.toolName
-        }
-      }));
+          if (passOptions?.maxResultBytes !== undefined) {
+            const bytes = brokerEncodedByteLength(encodedResult);
+            if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+              return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
+            }
+          }
+          return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
+        }));
+      }).pipe(exports_Effect.provideContext(handlerServices));
       const pass = {
         invoke: (input) => exports_Effect.suspend(() => {
           if (lifecycle.closed) {
