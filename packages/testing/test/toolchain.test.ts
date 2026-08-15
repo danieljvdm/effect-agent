@@ -7,6 +7,7 @@ const Dependencies = Schema.Record(Schema.String, Schema.String);
 const PackageManifest = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   version: Schema.optionalKey(Schema.String),
+  private: Schema.optionalKey(Schema.Boolean),
   workspaces: Schema.optionalKey(Schema.Array(Schema.String)),
   catalog: Schema.optionalKey(Dependencies),
   dependencies: Schema.optionalKey(Dependencies),
@@ -16,6 +17,11 @@ const PackageManifest = Schema.Struct({
   peerDependencies: Schema.optionalKey(Dependencies),
 });
 type PackageManifest = typeof PackageManifest.Type;
+
+const ChangesetConfig = Schema.Struct({
+  fixed: Schema.Array(Schema.Array(Schema.String)),
+  linked: Schema.Array(Schema.Array(Schema.String)),
+});
 
 // Vite+ runs this package test from packages/testing; Bun is the pinned test runtime in CI and locally.
 const repositoryRoot = "../..";
@@ -166,6 +172,12 @@ const readManifest = (path: string) =>
     return yield* Schema.decodeEffect(Schema.fromJsonString(PackageManifest))(contents);
   });
 
+const readChangesetConfig = Effect.gen(function* () {
+  const fs = yield* FileSystem.FileSystem;
+  const contents = yield* fs.readFileString(`${repositoryRoot}/.changeset/config.json`);
+  return yield* Schema.decodeEffect(Schema.fromJsonString(ChangesetConfig))(contents);
+});
+
 const readDirectory = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -209,6 +221,26 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(rootEntries).not.toContain("wrangler.toml");
       expect(rootEntries).not.toContain("wrangler.json");
       expect(rootEntries).not.toContain("wrangler.jsonc");
+    }),
+  );
+
+  it.effect("keeps every public framework package on one fixed release train", () =>
+    Effect.gen(function* () {
+      const config = yield* readChangesetConfig;
+      const publicPackageNames: Array<string> = [];
+
+      for (const packageName of packageNames) {
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
+        );
+        if (manifest.private !== true && manifest.name !== undefined) {
+          publicPackageNames.push(manifest.name);
+        }
+      }
+
+      expect(config.fixed).toHaveLength(1);
+      expect([...(config.fixed[0] ?? [])].sort()).toEqual(publicPackageNames.sort());
+      expect(config.linked).toEqual([]);
     }),
   );
 

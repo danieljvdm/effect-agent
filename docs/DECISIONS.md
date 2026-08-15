@@ -395,12 +395,14 @@ Record: [ADR-0002](adr/0002-use-effect-ai-primitives.md)
 
 ### D-023 — Project identity and distribution
 
-**Status:** Accepted (amended 2026-08-14)
+**Status:** Accepted (amended 2026-08-14 and 2026-08-15)
 **Decision:** The project is private for now. `effect-agent` and `@effect-agent/*` remain working
 names. Public naming and governance are deferred until open-source preparation. Two halves were
 resolved by owner decision on 2026-08-14: the packages publish to npm on the opt-in **beta
 dist-tag** for live integration testing (see the TOOLCHAIN release runbook), and they carry the
-**MIT license**.
+**MIT license**. Owner decision on 2026-08-15 places every public framework workspace on one
+fixed Changesets release train: a release advances all packages to the same version even when only
+some packages have behavioral changes.
 
 ### D-024 — Repository toolchain and shape
 

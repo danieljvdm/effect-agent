@@ -139,6 +139,13 @@ install with `bun add @effect-agent/core@beta` (or an exact version).
 Leaving the channel for a stable release is `bun x changeset pre exit`
 followed by the normal sequence.
 
+All public framework workspaces form one Changesets `fixed` group. Any package changeset advances
+all fourteen packages to one shared version, including packages with no behavioral change in that
+release. This deliberately spends additional package versions in exchange for a single compatible
+release coordinate across the framework. When adding a public package, add its manifest name to
+the fixed group in `.changeset/config.json`; the toolchain test fails if the workspace and group
+diverge.
+
 Releases are automated: on every push to `main`, `.github/workflows/release.yml`
 maintains a "Version Packages (beta)" PR from the pending changesets, and
 merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
@@ -247,7 +254,8 @@ D-034):
 2. use the working `@effect-agent/<name>` scope with the sibling manifest shape (MIT,
    `publishConfig.access: public`, source-first exports) — packages publish on the `beta`
    dist-tag per D-023, and each new package needs its one-time npm trusted-publisher
-   registration before CI can publish it;
+   registration before CI can publish it; add the package to the single fixed release group in
+   `.changeset/config.json`;
 3. use `catalog:` for shared external dependencies and `workspace:*` for internal packages;
 4. extend the root `tsconfig.base.json`;
 5. add it to root `tsconfig.json` references;
