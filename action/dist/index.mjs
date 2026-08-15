@@ -38263,6 +38263,7 @@ var rankAndDedupeFindings = (findings) => {
 // packages/pr-review/src/internal/fan-out.ts
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
+var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
 var FileReviewToolkit = exports_Toolkit.make(ReadFileDiff, ReadFile);
 var FileReviewToolkitLayer = FileReviewToolkit.toLayer({
   read_file_diff: readFileDiffHandler,
@@ -38305,7 +38306,7 @@ var makeFileReviewerInstructions = (options = {}) => (brief) => [
 var fileReviewerInstructions = makeFileReviewerInstructions();
 var defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 8,
-  maxToolCalls: 16,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200000
@@ -38333,7 +38334,7 @@ var fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
   maxConcurrency: 3,
   maxTurns: 8,
-  maxToolCalls: 16,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes"
 });
 var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
