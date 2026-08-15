@@ -147,6 +147,13 @@ const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"]);
  * after Turn, Tool Call, or token exhaustion — never a plain `"model-stop"` (RUN-011); its
  * `turns` count may exceed `maxTurns` by the single grace Turn, and `exhausted` names the
  * dimension that bound.
+ *
+ * Invariant: `exhausted` is present exactly when `finishReason` is
+ * `"budget-exhausted"`. A Schema-level discriminated union would break union
+ * member identity (the same constraint recorded for `CompactionCreated`'s
+ * summary-iff-summarize rule), so the pairing is enforced at every engine
+ * construction site and pinned by engine tests; consumers treat a divergent
+ * pair fail-safe as not exhausted.
  */
 export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
   ...RunEventBase,
@@ -206,7 +213,12 @@ export class SubagentProgress extends Schema.TaggedClass<SubagentProgress>()("Su
   summary: SubagentText,
 }) {}
 
-/** Records the child run's successful terminal outcome before the parent join. */
+/**
+ * Records the child run's successful terminal outcome before the parent join.
+ * Same invariant as `RunCompleted`: `exhausted` is present exactly when
+ * `finishReason` is `"budget-exhausted"` (the pair travels verbatim from the
+ * child's terminal event); consumers treat a divergent pair fail-safe.
+ */
 export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
   "SubagentCompleted",
   {

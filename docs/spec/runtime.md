@@ -229,7 +229,8 @@ Retries are classified and local:
 
 - Model transient failure may retry before a canonical terminal response.
 - A provider context-length rejection is classified into a typed overflow. With a configured
-  `contextTokenLimit` the engine compacts (§9) and retries the model call exactly once;
+  `contextTokenLimit` the engine compacts (§9) and issues at most one framework-level retry
+  (transport ambiguity may still duplicate the external model execution);
   otherwise, or on a second overflow, the Run fails with `ContextOverflowError` rather than an
   opaque provider error.
 - Tool handler failures do not automatically retry.
@@ -293,7 +294,7 @@ Step 5 runs at the pre-Turn seam, synchronously, when the estimated next context
    instruction prefix, the summary message, and the kept tail.
 
 Cut points never split an assistant Tool call from its result, and prepared-unsettled Tool
-records are always in the kept tail (ADR-0004). On the durable runtime each compaction appends a
+records are always in the kept tail (ADR-0004). In the DN and DC assemblies each compaction appends a
 canonical `CompactionCreated` record (`kind`, `coversThrough`, optional `summary`) inside the
 epoch-fenced log it covers; the run-journal projection folds it — covered records render as the
 summary or with cleared Tool results — and an invalid range is ignored fail-safe with the full
@@ -538,12 +539,13 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   including the reserved size of the model-visible output contract the engine appends after
   preparation (RUN-028) — the engine compacts at the pre-Turn seam — pruning old Tool results,
   then summarizing through one metered model call — never splitting an assistant Tool call from
-  its result and always keeping prepared-unsettled Tool records; durable compaction appends a
-  canonical `CompactionCreated` record that projections fold, and source history is never
-  erased.
+  its result and always keeping prepared-unsettled Tool records; in the DN and DC assemblies
+  compaction appends a canonical `CompactionCreated` record that projections fold, and source
+  history is never erased.
 - **RUN-027:** A provider context-length rejection is classified typed; with compaction
-  configured the engine compacts and retries the model call exactly once; otherwise, or on a
-  second overflow, the Run fails with `ContextOverflowError`.
+  configured the engine compacts and issues at most one framework-level retry (transport
+  ambiguity may still duplicate the external model execution); otherwise, or on a second
+  overflow, the Run fails with `ContextOverflowError`.
 - **RUN-028:** Every model request of a Run whose Agent Definition declares an output Schema
   carries a model-visible representation of that Schema derived by Effect AI's JSON-Schema
   derivation, applied after context preparation and never entered into official history; a

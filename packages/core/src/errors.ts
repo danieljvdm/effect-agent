@@ -81,5 +81,6 @@ export const AgentError = Schema.Union([
   AgentApprovalPending,
   ModelProtocolError,
   AgentInterrupted,
+  ContextOverflowError,
 ]);
 export type AgentError = typeof AgentError.Type;

@@ -15,7 +15,7 @@ import {
   AiError,
   LanguageModel,
   Model,
-  type Prompt,
+  Prompt,
   type Response,
   Tool,
   Toolkit,
@@ -28,6 +28,8 @@ import {
   estimateMessageTokens,
   estimatePromptTokens,
   isContextOverflowMessage,
+  renderForSummary,
+  SUMMARY_INPUT_BUDGET,
 } from "../src/compaction.ts";
 import { AgentRuntime, type RunCompactionCommit, type RunDurabilityHook } from "../src/index.ts";
 
@@ -191,6 +193,8 @@ const driveRun = ({ policy, script, results, commitCompaction }: RunSetup) =>
               commit: () => Effect.void,
             },
             commitCompaction,
+            // Required by the durability protocol; usage staging is not under test here.
+            noteTurnUsage: () => Effect.void,
           };
     const exit = yield* AgentRuntime.stream(
       Agent.withModel(definition, model),
@@ -226,6 +230,36 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
       for (const text of negatives) {
         expect(isContextOverflowMessage(text), text).toBe(false);
       }
+    }),
+  );
+
+  it.effect("RUN-026: summarizer input clips every message and stays under the total budget", () =>
+    Effect.sync(() => {
+      const userMessage = (text: string) =>
+        Prompt.makeMessage("user", {
+          content: [Prompt.makePart("text", { text })],
+        });
+
+      // Per-message clip applies to plain text, not only tool results.
+      const oversized = renderForSummary([userMessage(`start${"x".repeat(10_000)}end`)], undefined);
+      expect(oversized.length).toBeLessThan(3_000);
+
+      // Total budget: many clipped messages exceed it; middle-out retention
+      // keeps head and tail content with one deterministic elision marker.
+      const many = Array.from({ length: 80 }, (_, index) =>
+        userMessage(`marker-${index} ${"y".repeat(1_900)}`),
+      );
+      const rendered = renderForSummary(many, "previous summary text");
+      expect(rendered.length + COMPACTION_INSTRUCTION.length).toBeLessThanOrEqual(
+        SUMMARY_INPUT_BUDGET,
+      );
+      expect(rendered.includes("previous summary text")).toBe(true);
+      expect(rendered.includes("marker-0 ")).toBe(true);
+      expect(rendered.includes("marker-79 ")).toBe(true);
+      expect(rendered.includes("omitted from summary input")).toBe(true);
+      expect(rendered.includes("marker-40 ")).toBe(false);
+      // Determinism: identical input renders identically.
+      expect(renderForSummary(many, "previous summary text")).toBe(rendered);
     }),
   );
 
@@ -334,6 +368,46 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
       expect(observedCommits[0]?.turn).toBe(3);
       expect(observedCommits[0]?.summary).toBe("Goal: find data");
     }),
+  );
+
+  it.effect(
+    "RUN-026: a repeated summarize covers only the new interval plus the previous summary",
+    () =>
+      Effect.gen(function* () {
+        const policy = AgentPolicy.make({
+          ...basePolicy,
+          maxTurns: 8,
+          maxToolCalls: 8,
+          contextTokenLimit: 1_500,
+          compaction: CompactionPolicy.make({ keepRecentTokens: 300, mode: "summarize" }),
+        });
+        const { exit, requests } = yield* driveRun({
+          policy,
+          script: [
+            toolCallParts("s1", "search", {}, usageOf(100, 5)),
+            toolCallParts("s2", "search", {}, usageOf(1_300, 5)),
+            finalParts("Goal: first summary", usageOf(50, 20)),
+            toolCallParts("s3", "search", {}, usageOf(1_300, 5)),
+            finalParts("Goal: second summary", usageOf(50, 20)),
+            finalParts('{"answer":"done"}', usageOf(400, 5)),
+          ],
+          results: ["alpha".repeat(800), "bravo".repeat(800), "charl".repeat(800)],
+          commitCompaction: () => Effect.void,
+        });
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(requests).toHaveLength(6);
+
+        const second = requests[4];
+        if (second === undefined) throw new Error("expected a second summarizer request");
+        const secondText = promptText(second.prompt);
+        // The second summarize carries the previous summary and the newly
+        // covered span — never the span the first summarize already folded.
+        expect(secondText).toContain("[Previous summary]");
+        expect(secondText).toContain("Goal: first summary");
+        expect(secondText.includes("bravo")).toBe(true);
+        expect(secondText.includes("alpha")).toBe(false);
+      }),
   );
 
   it.effect("RUN-026: mode prune proceeds past the limit without a summarizer call", () =>

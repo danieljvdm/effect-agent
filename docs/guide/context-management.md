@@ -117,17 +117,18 @@ Crossing the limit triggers compaction, synchronously, per `CompactionPolicy`:
    is charged like any other.
 
 Compaction is a view, never a rewrite. Official history and the canonical Conversation Log are
-untouched; a `CompactionPerformed` event reports each reduction. On the durable runtime each
-compaction also appends a canonical `CompactionCreated` record, and the journal projection folds
+untouched; a `CompactionPerformed` event reports each reduction. In the durable assemblies (DN
+and DC) each compaction also appends a canonical `CompactionCreated` record, and the journal
+projection folds
 it — covered records render as the summary (or with cleared Tool results) on every later Attempt
 and every later Run of the same Conversation. That last part is the point for long-lived
 Conversations: without it, every prior Run's raw Tool output replays into every new Run's
 opening prompt forever.
 
 If a provider still rejects a prompt as too long, the engine classifies the rejection, compacts,
-and retries the call exactly once; a second rejection — or overflow with no
-`contextTokenLimit` configured — fails typed with `ContextOverflowError` instead of an opaque
-provider error.
+and issues at most one framework-level retry (transport ambiguity can still duplicate the
+external call); a second rejection — or overflow with no `contextTokenLimit` configured — fails
+typed with `ContextOverflowError` instead of an opaque provider error.
 
 ## Observing usage
 

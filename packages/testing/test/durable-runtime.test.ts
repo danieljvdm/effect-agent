@@ -1565,6 +1565,10 @@ layer(testLayer)("ADR-0018 durable compaction and usage re-seed", (it) => {
           runtime.processConversation(compactor, decodeConversationId(conversation)),
         );
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+        // The hook failure is typed AND ordering holds: the summarizer call
+        // ran, but no compacted Turn request started before a successful
+        // record commit.
+        expect(second.prompts).toHaveLength(1);
         yield* clearFailpoint;
 
         const settled = yield* runtime.processConversation(
@@ -1591,6 +1595,118 @@ layer(testLayer)("ADR-0018 durable compaction and usage re-seed", (it) => {
         const lastPrompt = second.prompts.at(-1);
         if (lastPrompt === undefined) throw new Error("expected captured prompts");
         expect(promptTexts(lastPrompt)).toContain(COMPACTION_SUMMARY_PREFIX);
+      }),
+  );
+
+  it.effect(
+    "RUN-026: the durable cut never covers the threshold-crossing Turn (whole-Turn retention)",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const conversation = "conversation-compaction-cut";
+
+        // Prior run: two tool Turns then a final answer. The second Turn's
+        // settled result is huge, so a keepRecentTokens of 400 lands the
+        // reverse-scan threshold ON that settled record (mid-Turn).
+        const Probe = Tool.make("probe", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        });
+        const probeTools = Toolkit.make(Probe);
+        const probeDefinition = Agent.define("durable-probe", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Probe twice, then answer.",
+          toolkit: probeTools,
+          policy: AgentPolicy.make({
+            maxTurns: 4,
+            maxToolCalls: 3,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const probeCall = (id: string): ReadonlyArray<Response.StreamPartEncoded> => [
+          { type: "tool-call", id, name: "probe", params: {}, providerExecuted: false },
+          { type: "finish", reason: "tool-calls", usage: { inputTokens: {}, outputTokens: {} } },
+        ];
+        const calls = yield* Ref.make(0);
+        const probeLayer = probeTools.toLayer({
+          probe: () =>
+            Ref.getAndUpdate(calls, (count) => count + 1).pipe(
+              Effect.map((count) => (count === 0 ? "small" : "PAD".repeat(2_000))),
+            ),
+        });
+        const prior = yield* makeScriptedModel((call) =>
+          call === 0
+            ? probeCall("probe-1")
+            : call === 1
+              ? probeCall("probe-2")
+              : finalParts('{"answer":"probed"}'),
+        );
+        yield* runtime.submit(
+          Agent.withModel(probeDefinition, prior.model),
+          { question: "sizes?" },
+          submitOptions(conversation, "cut-1"),
+        );
+        const priorSettled = yield* runtime
+          .processConversation(
+            Agent.withModel(probeDefinition, prior.model),
+            decodeConversationId(conversation),
+          )
+          .pipe(Effect.provide(probeLayer));
+        expect(priorSettled[0]?.outcome).toBe("completed");
+
+        const compactingDefinition = Agent.define("durable-cut-compactor", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Answer from what is known.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 50,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 400, mode: "summarize" }),
+          }),
+        });
+        const second = yield* makeScriptedModel((call) =>
+          call === 0 ? finalParts("Goal: sizes probed") : finalParts('{"answer":"kept"}'),
+        );
+        const compactor = Agent.withModel(compactingDefinition, second.model);
+        yield* runtime.submit(
+          compactor,
+          { question: "what happened?" },
+          submitOptions(conversation, "cut-2"),
+        );
+        const settled = yield* runtime.processConversation(
+          compactor,
+          decodeConversationId(conversation),
+        );
+        expect(settled[0]?.outcome).toBe("completed");
+
+        const records = yield* readLog(conversation);
+        const responses = records.filter(
+          (envelope) => envelope.record.payload._tag === "ModelResponseRecorded",
+        );
+        const settleds = records.filter(
+          (envelope) => envelope.record.payload._tag === "ToolCallSettled",
+        );
+        const compactions = records.filter(
+          (envelope) => envelope.record.payload._tag === "CompactionCreated",
+        );
+        expect(responses.length).toBeGreaterThanOrEqual(3);
+        expect(settleds).toHaveLength(2);
+        expect(compactions).toHaveLength(1);
+        const payload = compactions[0]?.record.payload;
+        if (payload === undefined || payload._tag !== "CompactionCreated") {
+          throw new Error("expected a CompactionCreated record");
+        }
+        // The threshold lands on the huge second settled (mid Turn 2), so the
+        // covered prefix must end just BEFORE Turn 2's response: the whole
+        // threshold-crossing Turn stays retained.
+        expect(payload.coversThrough).toBe(settleds[0]?.sequence ?? -1);
+        expect(payload.coversThrough).toBeLessThan(responses[1]?.sequence ?? -1);
       }),
   );
 

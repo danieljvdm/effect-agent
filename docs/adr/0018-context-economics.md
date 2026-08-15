@@ -18,7 +18,7 @@ with no user-visible output. The framework's own behavior made that outcome stru
 than accidental:
 
 - Every model call re-sends the full accumulated history. The ephemeral loop appends to one
-  mutable Prompt; the durable projection folds every canonical record of the Conversation,
+  mutable Prompt; the DN/DC journal projection folds every canonical record of the Conversation,
   including every prior Run's raw tool output, into every new Run's opening prompt.
 - Nothing bounds a tool result before it enters history. A single oversized result is re-paid on
   every later call.
@@ -102,7 +102,7 @@ lets exhaustion end a run silently.
    prompt is instruction prefix + summary message + kept tail. Cut points never split an
    assistant tool call from its result, and prepared-unsettled tool records are always in the
    kept tail (ADR-0004 compatibility).
-7. **Durable compaction is a canonical record, not a rewrite.** Each compaction appends
+7. **Canonical compaction (DN and DC assemblies) is a record, not a rewrite.** Each compaction appends
    `CompactionCreated { runId, turn, kind: "clear-tool-results" | "summarize", coversThrough,
 summary? }` inside the same epoch-fenced canonical log it covers. The session selects
    `coversThrough` itself (walking its own records with the shared token estimator, cutting only
@@ -121,8 +121,10 @@ summary? }` inside the same epoch-fenced canonical log it covers. The session se
    stays the host-facing toolkit. Compaction never erases official history; only projections
    change.
 8. **Context overflow is typed and recoverable.** A provider context-length rejection is
-   classified into a typed error. With compaction configured, the engine compacts and retries
-   the model call exactly once; otherwise — or on a second overflow — the Run fails with
+   classified into a typed error. With compaction configured, the engine issues at most one
+   framework-level retry after compaction — transport or provider ambiguity may still duplicate
+   the external model execution, per the at-least-once recovery invariant. Without compaction,
+   or if the retried request overflows again, the Run fails with
    `ContextOverflowError { message, retried }` instead of an opaque provider error.
 
 ## Consequences
@@ -140,9 +142,11 @@ summary? }` inside the same epoch-fenced canonical log it covers. The session se
   every prompt carries a run-status line unless `runStatus: "off"`.
 - `CompactionCreated`'s canonical shape is reshaped (kind, coversThrough, optional summary; no
   digest); stored development conversations that carry the old shape fail decode clearly.
-- The engine gains one new durable mutation (the compaction record append), which carries
+- The DN and DC assemblies gain one new durable mutation (the compaction record append,
+  owned by their shared session coordinator), which carries
   failpoints before and after and recovery-classifier coverage like every other commit point.
-- Long-lived durable Conversations stop growing their per-wake projection cost without bound:
+- Long-lived Conversations in the DN and DC assemblies stop growing their per-wake projection
+  cost without bound:
   the fold starts from the latest valid compaction instead of the beginning of time.
 
 ## Rejected alternatives
@@ -195,7 +199,8 @@ summary? }` inside the same epoch-fenced canonical log it covers. The session se
   `AgentPolicyError`; duration breach stays fatal; a grace-Turn response that declares tool
   calls fails typed per ADR-0019's fail-closed rule.
 - Compaction: the pre-Turn trigger fires from the estimate; prune preserves pairing and the
-  protected tail; summarize is one metered call; the durable record round-trips; the projection
+  protected tail; summarize is one metered call; the canonical record round-trips (DN and DC
+  assemblies); the projection
   folds prune and summary records correctly, ignores invalid ranges fail-safe, and applies
   across Runs (`historyBefore`); failpoints cover the record append; crash between record and
   model call resumes onto the compacted projection without duplicating the record.

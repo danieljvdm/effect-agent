@@ -1,10 +1,16 @@
 import { Schema } from "effect";
 
-const PositiveInt = Schema.Int.check(Schema.isGreaterThan(0));
+/**
+ * The minimal `TruncatedToolResult` envelope (empty head/tail, a 16-digit
+ * `originalBytes`) encodes to at most 81 UTF-8 bytes; 256 guarantees every
+ * accepted bound fits the envelope plus some real content, so the bound is a
+ * hard resource guard rather than a best-effort one.
+ */
+const ENVELOPE_FLOOR_BYTES = 256;
 
 /** Byte bound applied to one encoded application Tool result before it enters history. */
 export class ToolResultBounds extends Schema.Class<ToolResultBounds>("ToolResultBounds")({
-  maxBytes: PositiveInt,
+  maxBytes: Schema.Int.check(Schema.isGreaterThanOrEqualTo(ENVELOPE_FLOOR_BYTES)),
 }) {}
 
 /**
@@ -76,10 +82,10 @@ const takeSuffixWithinBytes = (value: string, maxBytes: number): string => {
  * envelope itself fits. Slicing never splits a UTF-16 surrogate pair, so the
  * envelope always re-encodes as valid JSON.
  *
- * Floor: when `maxBytes` cannot fit even the empty envelope (tiny bounds or
- * a very large `originalBytes` field), the minimal envelope with empty
- * `head`/`tail` is returned even though it exceeds `maxBytes` — the bound is
- * a truncation policy, not a validity guarantee for pathological budgets.
+ * The Schema-level 256-byte floor on `ToolResultBounds.maxBytes` guarantees
+ * every accepted bound fits the minimal envelope (at most 81 bytes), so the
+ * returned value never exceeds `maxBytes` for a decodable bound. The
+ * minimal-envelope fallback below survives purely as defense in depth.
  */
 export const applyToolResultBounds = (encodedJson: string, bounds: ToolResultBounds): string => {
   const originalBytes = utf8ByteLength(encodedJson);

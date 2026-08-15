@@ -289,14 +289,23 @@ export const chooseSummarizeCut = (
   return Math.max(cut, state.summarizedThrough);
 };
 
-/** The messages a cut actually covers, protected block excluded, in order. */
+/**
+ * The messages a cut NEWLY covers — from the prior summarize watermark to the
+ * cut, protected block excluded, in order. Starting at `summarizedThrough`
+ * keeps repeated compactions incremental: the previously covered span lives
+ * on only through the previous summary, never as resubmitted raw history.
+ */
 export const collectCoveredMessages = (
   source: ReadonlyArray<Prompt.Message>,
   state: ContextCompactionState,
   cut: number,
 ): ReadonlyArray<Prompt.Message> => {
   const covered: Array<Prompt.Message> = [];
-  for (let index = 0; index < cut && index < source.length; index += 1) {
+  for (
+    let index = Math.max(0, state.summarizedThrough);
+    index < cut && index < source.length;
+    index += 1
+  ) {
     const message = source[index];
     if (message !== undefined && !isProtected(state, source, index)) {
       covered.push(message);
@@ -341,19 +350,31 @@ const partText = (part: Prompt.Message["content"][number] | string): string => {
 };
 
 /**
- * Render the covered span as plain text for the summarizer call. Tool
- * results are clipped so the summarization request cannot itself approach
- * the window; a previous summary is folded in so nothing silently drops out
- * of coverage across repeated compactions.
+ * Total character budget for one summarizer request, the fixed instruction
+ * and previous summary counted first. Deterministic and provider-agnostic:
+ * ~80k chars is ~20k tokens, far inside every supported window, so the
+ * overflow-recovery summarization can never itself overflow.
+ */
+export const SUMMARY_INPUT_BUDGET = 80_000;
+
+const SUMMARY_MESSAGE_CLIP = 2_000;
+const SUMMARY_ELISION_RESERVE = 128;
+
+/**
+ * Render the covered span as plain text for the summarizer call, bounded
+ * twice: every message's rendered text is clipped to a fixed length (tool
+ * results additionally clip their JSON payloads), and the whole render obeys
+ * `SUMMARY_INPUT_BUDGET` with middle-out retention — oldest and newest
+ * blocks survive, the middle collapses into one deterministic elision
+ * marker. A previous summary is folded in first so nothing silently drops
+ * out of coverage across repeated compactions.
  */
 export const renderForSummary = (
   covered: ReadonlyArray<Prompt.Message>,
   previousSummary: string | undefined,
 ): string => {
-  const lines: Array<string> = [];
-  if (previousSummary !== undefined) {
-    lines.push(`[Previous summary]\n${previousSummary}`);
-  }
+  const joiner = "\n\n";
+  const blocks: Array<string> = [];
   for (const message of covered) {
     const text =
       typeof message.content === "string"
@@ -362,9 +383,59 @@ export const renderForSummary = (
             .map((part) => partText(part))
             .filter((piece) => piece.length > 0)
             .join("\n");
-    if (text.length > 0) {
-      lines.push(`[${message.role}]\n${text}`);
-    }
+    if (text.length === 0) continue;
+    const clipped =
+      text.length > SUMMARY_MESSAGE_CLIP ? `${text.slice(0, SUMMARY_MESSAGE_CLIP)}…` : text;
+    blocks.push(`[${message.role}]\n${clipped}`);
   }
-  return lines.join("\n\n");
+  const previousBlock =
+    previousSummary === undefined ? undefined : `[Previous summary]\n${previousSummary}`;
+  const fixed =
+    (previousBlock === undefined ? 0 : previousBlock.length + joiner.length) +
+    COMPACTION_INSTRUCTION.length;
+  const budget = SUMMARY_INPUT_BUDGET - fixed - SUMMARY_ELISION_RESERVE;
+  let selected: ReadonlyArray<string> = blocks;
+  let total = 0;
+  for (const block of blocks) {
+    total += block.length + joiner.length;
+  }
+  if (total > budget) {
+    const head: Array<string> = [];
+    const tail: Array<string> = [];
+    let headLength = 0;
+    let tailLength = 0;
+    let start = 0;
+    let end = blocks.length - 1;
+    const half = Math.floor(budget / 2);
+    while (start <= end) {
+      const candidate = blocks[start];
+      if (candidate === undefined || headLength + candidate.length + joiner.length > half) break;
+      head.push(candidate);
+      headLength += candidate.length + joiner.length;
+      start += 1;
+    }
+    while (end >= start) {
+      const candidate = blocks[end];
+      if (
+        candidate === undefined ||
+        headLength + tailLength + candidate.length + joiner.length > budget
+      ) {
+        break;
+      }
+      tail.unshift(candidate);
+      tailLength += candidate.length + joiner.length;
+      end -= 1;
+    }
+    const omitted = end - start + 1;
+    selected =
+      omitted > 0
+        ? [...head, `[… ${omitted} messages omitted from summary input …]`, ...tail]
+        : [...head, ...tail];
+  }
+  const lines: Array<string> = [];
+  if (previousBlock !== undefined) {
+    lines.push(previousBlock);
+  }
+  lines.push(...selected);
+  return lines.join(joiner);
 };

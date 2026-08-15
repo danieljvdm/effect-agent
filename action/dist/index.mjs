@@ -28965,7 +28965,8 @@ var AgentError = exports_Schema.Union([
   AgentApprovalDenied,
   AgentApprovalPending,
   ModelProtocolError,
-  AgentInterrupted
+  AgentInterrupted,
+  ContextOverflowError
 ]);
 // packages/core/src/subagent.ts
 var DelegationDepth = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1));
@@ -29208,10 +29209,10 @@ var RunEvent = exports_Schema.Union([
   SubagentJoined
 ]);
 // packages/core/src/tool-result.ts
-var PositiveInt = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var ENVELOPE_FLOOR_BYTES = 256;
 
 class ToolResultBounds extends exports_Schema.Class("ToolResultBounds")({
-  maxBytes: PositiveInt
+  maxBytes: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(ENVELOPE_FLOOR_BYTES))
 }) {
 }
 
@@ -29297,12 +29298,12 @@ var applyToolResultBounds = (encodedJson, bounds) => {
 };
 
 // packages/core/src/policy.ts
-var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var NonNegativeInt = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0));
 var CompactionMode = exports_Schema.Literals(["prune", "summarize", "prune-then-summarize"]);
 
 class CompactionPolicy extends exports_Schema.Class("CompactionPolicy")({
-  keepRecentTokens: PositiveInt2,
+  keepRecentTokens: PositiveInt,
   mode: CompactionMode
 }) {
   static make(input = {}) {
@@ -29315,15 +29316,15 @@ class CompactionPolicy extends exports_Schema.Class("CompactionPolicy")({
 var FinitePositiveDuration = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var OnExhaustion = exports_Schema.Literals(["final-answer", "fail"]);
 var AgentPolicyFields = exports_Schema.Struct({
-  maxTurns: PositiveInt2,
-  maxToolCalls: PositiveInt2,
+  maxTurns: PositiveInt,
+  maxToolCalls: PositiveInt,
   maxDuration: FinitePositiveDuration,
-  toolConcurrency: PositiveInt2,
+  toolConcurrency: PositiveInt,
   repeatedFailureLimit: NonNegativeInt,
   onExhaustion: OnExhaustion,
-  tokenBudget: exports_Schema.optionalKey(PositiveInt2),
+  tokenBudget: exports_Schema.optionalKey(PositiveInt),
   costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt),
-  contextTokenLimit: exports_Schema.optionalKey(PositiveInt2),
+  contextTokenLimit: exports_Schema.optionalKey(PositiveInt),
   toolResultBounds: ToolResultBounds,
   runStatus: exports_Schema.Literals(["appended", "off"]),
   compaction: CompactionPolicy
@@ -33275,7 +33276,7 @@ var chooseSummarizeCut = (source, state, keepRecentTokens) => {
 };
 var collectCoveredMessages = (source, state, cut) => {
   const covered = [];
-  for (let index2 = 0;index2 < cut && index2 < source.length; index2 += 1) {
+  for (let index2 = Math.max(0, state.summarizedThrough);index2 < cut && index2 < source.length; index2 += 1) {
     const message = source[index2];
     if (message !== undefined && !isProtected(state, source, index2)) {
       covered.push(message);
@@ -33317,23 +33318,66 @@ var partText = (part) => {
     }
   }
 };
+var SUMMARY_INPUT_BUDGET = 80000;
+var SUMMARY_MESSAGE_CLIP = 2000;
+var SUMMARY_ELISION_RESERVE = 128;
 var renderForSummary = (covered, previousSummary) => {
-  const lines = [];
-  if (previousSummary !== undefined) {
-    lines.push(`[Previous summary]
-${previousSummary}`);
-  }
+  const joiner = `
+
+`;
+  const blocks = [];
   for (const message of covered) {
     const text = typeof message.content === "string" ? message.content : message.content.map((part) => partText(part)).filter((piece) => piece.length > 0).join(`
 `);
-    if (text.length > 0) {
-      lines.push(`[${message.role}]
-${text}`);
-    }
+    if (text.length === 0)
+      continue;
+    const clipped = text.length > SUMMARY_MESSAGE_CLIP ? `${text.slice(0, SUMMARY_MESSAGE_CLIP)}…` : text;
+    blocks.push(`[${message.role}]
+${clipped}`);
   }
-  return lines.join(`
-
-`);
+  const previousBlock = previousSummary === undefined ? undefined : `[Previous summary]
+${previousSummary}`;
+  const fixed = (previousBlock === undefined ? 0 : previousBlock.length + joiner.length) + COMPACTION_INSTRUCTION.length;
+  const budget = SUMMARY_INPUT_BUDGET - fixed - SUMMARY_ELISION_RESERVE;
+  let selected = blocks;
+  let total = 0;
+  for (const block of blocks) {
+    total += block.length + joiner.length;
+  }
+  if (total > budget) {
+    const head = [];
+    const tail = [];
+    let headLength = 0;
+    let tailLength = 0;
+    let start = 0;
+    let end3 = blocks.length - 1;
+    const half = Math.floor(budget / 2);
+    while (start <= end3) {
+      const candidate = blocks[start];
+      if (candidate === undefined || headLength + candidate.length + joiner.length > half)
+        break;
+      head.push(candidate);
+      headLength += candidate.length + joiner.length;
+      start += 1;
+    }
+    while (end3 >= start) {
+      const candidate = blocks[end3];
+      if (candidate === undefined || headLength + tailLength + candidate.length + joiner.length > budget) {
+        break;
+      }
+      tail.unshift(candidate);
+      tailLength += candidate.length + joiner.length;
+      end3 -= 1;
+    }
+    const omitted = end3 - start + 1;
+    selected = omitted > 0 ? [...head, `[… ${omitted} messages omitted from summary input …]`, ...tail] : [...head, ...tail];
+  }
+  const lines = [];
+  if (previousBlock !== undefined) {
+    lines.push(previousBlock);
+  }
+  lines.push(...selected);
+  return lines.join(joiner);
 };
 
 // packages/engine/src/durable-step.ts
@@ -34224,7 +34268,7 @@ var compactContext = (agent2, context3, source, turn, options, forceSummarize) =
   const before = estimatePromptTokens(buildCompactedView(messages, state));
   const limit = policy2.contextTokenLimit;
   const mode = policy2.compaction.mode;
-  const commitDurable = (commit) => options.durability?.commitCompaction === undefined ? exports_Effect.void : options.durability.commitCompaction(commit);
+  const commitDurable = (commit) => options.durability === undefined ? exports_Effect.void : options.durability.commitCompaction(commit);
   if (!forceSummarize && mode !== "summarize") {
     const bound = choosePruneBound(messages, state, policy2.compaction.keepRecentTokens);
     if (bound > state.clearedThrough) {
@@ -34843,7 +34887,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     ]);
     const afterValidatedResponse = (next2) => stagedResponse.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
       const consumed = yield* consumeUsage(agent2, context3, trace2.usage, trace2.toolCalls.size, options);
-      if (options.durability?.noteTurnUsage !== undefined) {
+      if (options.durability !== undefined) {
         yield* options.durability.noteTurnUsage({
           turn,
           inputTokens: context3.lastInputTokens,
@@ -35746,9 +35790,9 @@ var BoundedName = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength
 var BoundedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4 * 1024));
 var BoundedArgument = exports_Schema.String.check(exports_Schema.isMaxLength(32 * 1024));
 var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024 * 1024));
-var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var PositiveNumber = exports_Schema.Finite.check(exports_Schema.isGreaterThan(0));
-var MaxOutputBytes = PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
+var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
 var BoundedArguments = exports_Schema.Array(BoundedArgument).check(exports_Schema.isMaxLength(256));
 var BoundedEnvironmentNames = exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(128));
 var FinitePositiveDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
@@ -35778,7 +35822,7 @@ class NetworkDisabled extends exports_Schema.TaggedClass()("NetworkDisabled", {}
 
 class NetworkAllowlist extends exports_Schema.TaggedClass()("NetworkAllowlist", {
   domains: exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(256)),
-  ports: exports_Schema.Array(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(65535))).check(exports_Schema.isMaxLength(256))
+  ports: exports_Schema.Array(PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(65535))).check(exports_Schema.isMaxLength(256))
 }) {
 }
 var SandboxNetworkPolicy = exports_Schema.Union([NetworkDisabled, NetworkAllowlist]);
@@ -35790,7 +35834,7 @@ class SandboxEnvironment extends exports_Schema.Class("SandboxEnvironment")({
 
 class SandboxLimits extends exports_Schema.Class("SandboxLimits")({
   cpuCores: exports_Schema.optionalKey(PositiveNumber.check(exports_Schema.isLessThanOrEqualTo(1024))),
-  memoryBytes: exports_Schema.optionalKey(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024 * 1024 * 1024))),
+  memoryBytes: exports_Schema.optionalKey(PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024 * 1024 * 1024))),
   maxOutputBytes: MaxOutputBytes,
   maxWallTime: FinitePositiveDuration2
 }) {
@@ -35891,8 +35935,8 @@ class SandboxTimeoutError extends exports_Schema.TaggedError()("SandboxTimeoutEr
 class SandboxOutputLimitError extends exports_Schema.TaggedError()("SandboxOutputLimitError", {
   implementation: SandboxImplementation,
   stream: exports_Schema.Literals(["stdout", "stderr"]),
-  limit: PositiveInt3,
-  observed: PositiveInt3
+  limit: PositiveInt2,
+  observed: PositiveInt2
 }) {
 }
 
@@ -35926,7 +35970,7 @@ var BoundedLogLine = exports_Schema.String.check(exports_Schema.isMaxLength(16 *
 var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedLogs = exports_Schema.Array(BoundedLogLine).check(exports_Schema.isMaxLength(4096));
 var BoundedSourceText = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024 * 1024));
-var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var FinitePositiveDuration3 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var FiniteNonNegativeDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && !exports_Duration.isNegative(duration2), { expected: "a finite non-negative duration" }));
 var reservedIdentifiers = new Set([
@@ -35990,14 +36034,14 @@ class CodeExecutionNamespace extends exports_Schema.Class("CodeExecutionNamespac
 }
 
 class CodeExecutionLimits extends exports_Schema.Class("CodeExecutionLimits")({
-  maxSourceBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
+  maxSourceBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
   maxWallTime: FinitePositiveDuration3,
-  cpuMillis: exports_Schema.optionalKey(PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(5 * 60 * 1000))),
-  maxLogBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
-  maxResultBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
+  cpuMillis: exports_Schema.optionalKey(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(5 * 60 * 1000))),
+  maxLogBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
+  maxResultBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
   maxHostCalls: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(1e4)),
-  maxHostCallArgumentBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
-  maxHostCallResultBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024))
+  maxHostCallArgumentBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
+  maxHostCallResultBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024))
 }) {
 }
 
@@ -36087,7 +36131,7 @@ class CodeExecutionTimeoutError extends exports_Schema.TaggedError()("CodeExecut
 class CodeOutputLimitError extends exports_Schema.TaggedError()("CodeOutputLimitError", {
   implementation: SandboxImplementation,
   surface: exports_Schema.Literals(["logs", "result", "host-call-argument", "host-call-result"]),
-  limit: PositiveInt4,
+  limit: PositiveInt3,
   observed: exports_Schema.Natural,
   logs: BoundedLogs
 }) {
@@ -36426,7 +36470,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
 }));
 
 // packages/capabilities/src/commands.ts
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 
 class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
   id: exports_Schema.NonEmptyString,
@@ -36450,7 +36494,7 @@ class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
 var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
 var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
 
-class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt5 }) {
+class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt4 }) {
 }
 
 class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
@@ -37340,7 +37384,7 @@ class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/
 // packages/capabilities/src/mcp.ts
 var MAX_MCP_TOOLS = 128;
 var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
-var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
 var JsonArray = exports_Schema.Array(exports_Schema.Json);
 var isJsonArray = exports_Schema.is(JsonArray);
@@ -37353,10 +37397,10 @@ class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities
 
 class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
   serverId: exports_Schema.NonEmptyString,
-  maxToolCount: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
-  maxToolDescriptionBytes: PositiveInt6,
-  maxDiscoveryBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt6
+  maxToolCount: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
+  maxToolDescriptionBytes: PositiveInt5,
+  maxDiscoveryBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  connectTimeoutMillis: PositiveInt5
 }) {
 }
 
@@ -37551,9 +37595,9 @@ var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
   };
 });
 // packages/capabilities/src/scheduling.ts
-var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([
-  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt7 }),
+  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt6 }),
   exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
 ]);
 // packages/capabilities/src/subagent-reservation.ts
@@ -38009,19 +38053,19 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 }));
 
 // packages/capabilities/src/subagent.ts
-var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Natural4 = exports_Schema.Natural;
 var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
-  maxChildren: PositiveInt8,
-  maxConcurrency: PositiveInt8,
-  maxTurns: PositiveInt8,
-  maxToolCalls: PositiveInt8,
+  maxChildren: PositiveInt7,
+  maxConcurrency: PositiveInt7,
+  maxTurns: PositiveInt7,
+  maxToolCalls: PositiveInt7,
   maxDuration: FinitePositiveDuration4,
-  maxInputTokens: exports_Schema.optionalKey(PositiveInt8),
-  maxOutputTokens: exports_Schema.optionalKey(PositiveInt8),
+  maxInputTokens: exports_Schema.optionalKey(PositiveInt7),
+  maxOutputTokens: exports_Schema.optionalKey(PositiveInt7),
   maxCostMicrousd: exports_Schema.optionalKey(Natural4),
-  maxResultBytes: exports_Schema.optionalKey(PositiveInt8)
+  maxResultBytes: exports_Schema.optionalKey(PositiveInt7)
 });
 
 class SubagentPolicy extends exports_Schema.Class("@effect-agent/capabilities/SubagentPolicy")(SubagentPolicyFields) {

@@ -135,6 +135,7 @@ describe("core schemas", () => {
       }),
       ModelProtocolError.make({ message: "response completed twice" }),
       AgentInterrupted.make({ message: "consumer disconnected" }),
+      ContextOverflowError.make({ message: "prompt is too long", retried: true }),
     ] as const;
 
     for (const failure of failures) {
@@ -478,14 +479,22 @@ describe("tool result bounds", () => {
     }
   });
 
-  it("RUN-022: floors to the minimal empty envelope when maxBytes fits no content", () => {
-    const encoded = JSON.stringify({ stdout: "x".repeat(500) });
-    const output = applyToolResultBounds(encoded, ToolResultBounds.make({ maxBytes: 8 }));
+  it("RUN-022: rejects bounds below the guaranteed envelope floor at construction", () => {
+    expect(() => ToolResultBounds.make({ maxBytes: 255 })).toThrow();
+    expect(() => ToolResultBounds.make({ maxBytes: 8 })).toThrow();
+    expect(() => Schema.decodeUnknownSync(ToolResultBounds)({ maxBytes: 128 })).toThrow();
+    expect(ToolResultBounds.make({ maxBytes: 256 }).maxBytes).toBe(256);
+  });
+
+  it("RUN-022: the envelope fits within the bound at the exact 256-byte floor", () => {
+    const encoded = JSON.stringify({ stdout: "x".repeat(500_000) });
+    const output = applyToolResultBounds(encoded, ToolResultBounds.make({ maxBytes: 256 }));
     const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(JSON.parse(output));
 
-    expect(envelope.head).toBe("");
-    expect(envelope.tail).toBe("");
+    expect(utf8Bytes(output)).toBeLessThanOrEqual(256);
     expect(envelope.originalBytes).toBe(utf8Bytes(encoded));
+    expect(encoded.startsWith(envelope.head)).toBe(true);
+    expect(encoded.endsWith(envelope.tail)).toBe(true);
   });
 });
 

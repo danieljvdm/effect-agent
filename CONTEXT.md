@@ -147,7 +147,8 @@ Creation of a model-context summary or branch that reduces future prompt size wi
 canonical evidence. Physical record deletion is a separate retention operation. The engine
 compacts natively at the pre-Turn seam when the estimated next context exceeds the Context Token
 Limit — pruning old Tool results, then summarizing through one metered model call — recording
-each durable compaction as a canonical `CompactionCreated` record that projections fold
+each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
+projections fold
 (ADR-0018). Host-supplied, digest-bound compaction artifacts remain a separate capability.
 
 **Context Token Limit**  

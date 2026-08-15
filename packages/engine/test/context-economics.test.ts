@@ -9,6 +9,7 @@ import {
   ToolResultBounds,
   TruncatedToolResult,
   TurnId,
+  type RunCompleted,
   type RunEvent,
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
@@ -517,6 +518,45 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
   );
 
   it.effect(
+    "RUN-025: an ordinary completion carries neither budget-exhausted nor the exhausted marker",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const definition = Agent.define("ordinary-completion", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 4,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 100_000,
+          }),
+        });
+        const { model } = scriptedModel([finalParts('{"answer":"done"}', usageOf(2, 2))]);
+
+        const result = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "answer",
+        }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.andThen(Ref.get(events)),
+        );
+
+        const completed = result.find(
+          (event): event is RunCompleted => event._tag === "RunCompleted",
+        );
+        expect(completed).toBeDefined();
+        // The exhausted marker pairs with budget-exhausted exactly: an
+        // ordinary stop carries neither (core events JSDoc invariant).
+        expect(completed).toMatchObject({ finishReason: "model-stop" });
+        expect(completed?.exhausted).toBeUndefined();
+      }),
+  );
+
+  it.effect(
     "RUN-011: token exhaustion on a stop response completes with the answer and the exhausted marker",
     () =>
       Effect.gen(function* () {
@@ -588,6 +628,9 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
         });
         const durability: RunDurabilityHook = {
           commitResponse: () => Ref.update(commits, (count) => count + 1),
+          // Required by the durability protocol; this harness exercises neither seam.
+          commitCompaction: () => Effect.void,
+          noteTurnUsage: () => Effect.void,
           prepareToolCalls: () => Effect.void,
           step: {
             lookup: () => Effect.succeed(Option.none()),

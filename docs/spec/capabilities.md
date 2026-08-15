@@ -140,7 +140,7 @@ representation. It does not rewrite or delete the canonical log. Two forms exist
 **Engine-native compaction** is the operational path ([runtime §9](./runtime.md)): when the
 estimated next model-call context exceeds `AgentPolicy.contextTokenLimit`, the engine prunes old
 Tool results and, if needed, summarizes through one metered model call at the pre-Turn seam. On
-the durable runtime each compaction appends a canonical
+the DN and DC assemblies (their shared session coordinator) each compaction appends a canonical
 `CompactionCreated { runId, turn, kind: "clear-tool-results" | "summarize", coversThrough,
 summary? }` record inside the same epoch-fenced log it covers; the run-journal projection folds
 covered records into the summary or the cleared-result marker, and an invalid range is ignored

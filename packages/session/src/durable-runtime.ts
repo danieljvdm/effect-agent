@@ -3110,12 +3110,18 @@ const make = Effect.gen(function* () {
                 }
               }
               if (cutIndex === -1) return;
+              // The threshold-crossing record's tokens were counted as kept,
+              // so its WHOLE Turn stays retained: walk BACK to that Turn's
+              // ModelResponseRecorded and end the covered prefix just before
+              // it. Walking forward instead would fold the counted Turn — and
+              // for a newest-Turn threshold could cover all prior history.
               while (
-                cutIndex < coverable.length &&
+                cutIndex >= 0 &&
                 coverable[cutIndex]?.record.payload._tag !== "ModelResponseRecorded"
               ) {
-                cutIndex += 1;
+                cutIndex -= 1;
               }
+              if (cutIndex < 0) return;
               const lastCovered = cutIndex > 0 ? coverable[cutIndex - 1] : undefined;
               if (lastCovered === undefined) return;
               if (commit.kind === "summarize" && (commit.summary ?? "").length === 0) {

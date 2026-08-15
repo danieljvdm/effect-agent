@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   Agent,
+  type AgentError,
   type AgentInputError,
   type AgentOutputError,
   AgentPolicy,
@@ -126,6 +127,11 @@ type PolicyContextLimitOptionalityProof = Assert<
 >;
 type PolicyCompactionProof = Assert<Equal<AgentPolicy["compaction"], CompactionPolicy>>;
 type ContextOverflowTagProof = Assert<Equal<ContextOverflowError["_tag"], "ContextOverflowError">>;
+// Union MEMBERSHIP, not just the tag: extracting the member by tag from the
+// framework error union must yield exactly the class type (F5, PR #54 review).
+type ContextOverflowInAgentErrorProof = Assert<
+  Equal<Extract<AgentError, { _tag: "ContextOverflowError" }>, ContextOverflowError>
+>;
 
 describe("Agent type inference", () => {
   it("separates immutable definition from model binding", () => {
@@ -141,12 +147,14 @@ describe("Agent type inference", () => {
     const policyContextLimitOptionalityProof: PolicyContextLimitOptionalityProof = true;
     const policyCompactionProof: PolicyCompactionProof = true;
     const contextOverflowTagProof: ContextOverflowTagProof = true;
+    const contextOverflowInAgentErrorProof: ContextOverflowInAgentErrorProof = true;
 
     expect(policyExhaustionModeProof).toBe(true);
     expect(policyRunStatusProof).toBe(true);
     expect(policyContextLimitOptionalityProof).toBe(true);
     expect(policyCompactionProof).toBe(true);
     expect(contextOverflowTagProof).toBe(true);
+    expect(contextOverflowInAgentErrorProof).toBe(true);
     expect(requirementsProof).toBe(true);
     expect(definitionRequirementsProof).toBe(true);
     expect(failureProof).toBe(true);

@@ -216,19 +216,22 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
    * RUN-026: called at the pre-Turn seam right after the engine applied a
    * compaction to its model-visible view and BEFORE the model call whose
    * prompt reflects it, so a crash between the two resumes onto the compacted
-   * projection. Optional: an absent member keeps prior coordinators valid.
+   * projection. Required by the durability protocol: a coordinator that
+   * silently dropped the record would let the engine use a compacted prompt
+   * that recovery cannot reproduce.
    */
-  readonly commitCompaction?:
-    | ((commit: RunCompactionCommit) => Effect.Effect<void, Error, Requirements>)
-    | undefined;
+  readonly commitCompaction: (
+    commit: RunCompactionCommit,
+  ) => Effect.Effect<void, Error, Requirements>;
   /**
    * RUN-023: stage one completed model call's usage for the Turn's canonical
    * commit (the response record carries it for resume re-seeding). Staging is
-   * not itself a durable mutation. Optional for the same compatibility reason.
+   * not itself a durable mutation, but the member is required by the
+   * durability protocol: dropping it writes response records without the
+   * usage a later Attempt needs, so ownership changes would silently reset
+   * token budgets instead of failing closed.
    */
-  readonly noteTurnUsage?:
-    | ((usage: RunTurnUsage) => Effect.Effect<void, Error, Requirements>)
-    | undefined;
+  readonly noteTurnUsage: (usage: RunTurnUsage) => Effect.Effect<void, Error, Requirements>;
 }
 
 /**

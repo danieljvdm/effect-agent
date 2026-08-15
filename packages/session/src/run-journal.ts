@@ -423,10 +423,47 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
   };
 
   // RUN-026 pre-scan: the widest VALID compaction bounds govern the fold. A
-  // valid record covers strictly below its own sequence; a summarize record
-  // must carry its summary. Invalid records are ignored fail-safe — the full
-  // history stays authoritative. Ties on coversThrough resolve to the record
-  // appended later (higher sequence), matching at-most-once replay intent.
+  // valid record covers strictly below its own sequence, never reaches into
+  // its owner Run's records, and never splits a response from its settled
+  // tool results; a summarize record must carry its summary. Invalid records
+  // are ignored fail-safe — the full history stays authoritative. Ties on
+  // coversThrough resolve to the record appended later (higher sequence),
+  // matching at-most-once replay intent.
+  // One span per settled record, paired with its declaring response the same
+  // way the fold pairs them: a settled belongs to the most recent
+  // ModelResponseRecorded of its Run. A bound inside (response, settled)
+  // would orphan the tool message from its declaring response. Orphaned
+  // settleds (filtered later by the fold) still contribute spans —
+  // over-invalidating is the fail-safe direction.
+  const firstSequenceByRun = new Map<string, number>();
+  const lastResponseSequenceByRun = new Map<string, number>();
+  const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag === "CompactionCreated") continue;
+    if ("runId" in payload && typeof payload.runId === "string") {
+      if (!firstSequenceByRun.has(payload.runId)) {
+        firstSequenceByRun.set(payload.runId, envelope.sequence);
+      }
+    }
+    if (payload._tag === "ModelResponseRecorded") {
+      lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
+    } else if (payload._tag === "ToolCallSettled") {
+      const from = lastResponseSequenceByRun.get(payload.runId);
+      if (from !== undefined && from < envelope.sequence) {
+        settledSpans.push({ from, to: envelope.sequence });
+      }
+    }
+  }
+  const boundIsValid = (runId: string, coversThrough: number, ownSequence: number): boolean => {
+    if (coversThrough >= ownSequence) return false;
+    const ownerFirst = firstSequenceByRun.get(runId);
+    if (ownerFirst !== undefined && coversThrough >= ownerFirst) return false;
+    for (const span of settledSpans) {
+      if (span.from <= coversThrough && coversThrough < span.to) return false;
+    }
+    return true;
+  };
   let summarizeBound = 0;
   let summarizeSummary: string | undefined;
   let summarizeSequence = -1;
@@ -434,7 +471,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
   for (const envelope of records) {
     const payload = envelope.record.payload;
     if (payload._tag !== "CompactionCreated") continue;
-    if (payload.coversThrough >= envelope.sequence) continue;
+    if (!boundIsValid(payload.runId, payload.coversThrough, envelope.sequence)) continue;
     if (payload.kind === "summarize") {
       if (payload.summary === undefined) continue;
       if (

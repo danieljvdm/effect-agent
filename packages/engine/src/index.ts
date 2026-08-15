@@ -2138,9 +2138,7 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
     const mode = policy.compaction.mode;
 
     const commitDurable = (commit: RunCompactionCommit) =>
-      options.durability?.commitCompaction === undefined
-        ? Effect.void
-        : options.durability.commitCompaction(commit);
+      options.durability === undefined ? Effect.void : options.durability.commitCompaction(commit);
 
     if (!forceSummarize && mode !== "summarize") {
       const bound = choosePruneBound(messages, state, policy.compaction.keepRecentTokens);
@@ -3187,7 +3185,7 @@ const makeTurn = <
                       trace.toolCalls.size,
                       options,
                     );
-                    if (options.durability?.noteTurnUsage !== undefined) {
+                    if (options.durability !== undefined) {
                       yield* options.durability.noteTurnUsage({
                         turn,
                         inputTokens: context.lastInputTokens,

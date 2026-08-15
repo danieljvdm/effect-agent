@@ -836,6 +836,68 @@ describe("engine compaction records and projection (ADR-0018)", () => {
       }),
     );
 
+    it.effect(
+      "RUN-026: a compaction that would cover its owner Run's records is ignored fail-safe",
+      () =>
+        Effect.gen(function* () {
+          const priorTurn = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const ownerTurn = yield* turnCanonicalBatch(turnInput(secondToolTurn, 1, LATER_RUN_ID));
+          const envelopes = envelopesOf([priorTurn, ownerTurn]);
+          // coversThrough reaches into LATER_RUN_ID's own records (sequences 4+):
+          // valid by the below-own-sequence rule alone, invalid by owner precedence.
+          const compaction = envelopeAt(
+            envelopes.length + 1,
+            auditRecord("compaction-covers-owner", compactionPayload({ coversThrough: 5 })),
+          );
+          const projection = yield* projectRunJournal([...envelopes, compaction], LATER_RUN_ID);
+          const text = promptText(projection.prompt);
+          expect(text).not.toContain("compacted into this summary");
+          expect(text).toContain("book?");
+          expect(toolResults(projection.prompt)).toEqual([
+            { bookingRef: "flight-42" },
+            { bookingRef: "lodging-7" },
+            { bookingRef: "lodging-7" },
+          ]);
+        }),
+    );
+
+    it.effect(
+      "RUN-026: a compaction bound that splits a response from its tool results is ignored",
+      () =>
+        Effect.gen(function* () {
+          const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
+          const envelopes = envelopesOf([turnOne]);
+          // Sequence 1 is Turn 1's ModelResponseRecorded; its settled results
+          // sit at sequences 2-3. A bound of 1 would orphan the tool message.
+          const splitSummarize = envelopeAt(
+            envelopes.length + 1,
+            auditRecord("compaction-split-summarize", compactionPayload({ coversThrough: 1 })),
+          );
+          const splitClear = envelopeAt(
+            envelopes.length + 2,
+            auditRecord(
+              "compaction-split-clear",
+              compactionPayload({
+                kind: "clear-tool-results",
+                summary: undefined,
+                coversThrough: 1,
+              }),
+            ),
+          );
+          const projection = yield* projectRunJournal(
+            [...envelopes, splitSummarize, splitClear],
+            LATER_RUN_ID,
+          );
+          const text = promptText(projection.historyBefore);
+          expect(text).not.toContain("compacted into this summary");
+          expect(text).toContain("book?");
+          expect(toolResults(projection.historyBefore)).toEqual([
+            { bookingRef: "flight-42" },
+            { bookingRef: "lodging-7" },
+          ]);
+        }),
+    );
+
     it.effect("RUN-026: the widest valid summarize bound wins across repeated compactions", () =>
       Effect.gen(function* () {
         const turnOne = yield* turnCanonicalBatch(turnInput(toolTurnAppended));
