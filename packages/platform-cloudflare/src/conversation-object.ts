@@ -70,6 +70,7 @@ import {
 } from "./layers.ts";
 import {
   flushCloudflareRuntimeTelemetry,
+  logCloudflareWaitUntilRegistrationFailure,
   makeCloudflareTelemetryFlushCoordinator,
   registerCloudflareTelemetryAfterNativeSettlement,
   withCloudflareNativeSpanFailure,
@@ -109,7 +110,10 @@ type ConversationObjectError<TelemetryError> =
   | CloudflareBindingError
   | TelemetryError;
 
-type EndpointServices = CloudflareDurableRuntimeServices | DurableObjectContext;
+type EndpointServices =
+  | CloudflareDurableRuntimeServices
+  | DurableObjectContext
+  | CloudflareRuntimeTelemetry;
 
 /** Port envelope tags whose owner-side execution durably mutates this Object's lane. */
 const MUTATING_PORT_TAGS: ReadonlySet<string> = new Set([
@@ -775,18 +779,12 @@ export const makeConversationObjectClass = <
         (background) => this.#ctx.waitUntil(background),
         delivery,
         this.#telemetryFlush.reserve,
-        () => {
+        (cause) => {
           // Native entrypoints run only after blockConcurrencyWhile has built the cached runtime.
           // Effect Logger invocation is synchronous; runSyncExit captures a broken logger without
-          // starting an unscoped fiber or changing the delivery Promise. The caught platform Cause
-          // is intentionally unavailable here: only a framework-owned classification is logged.
-          void this.#runtime.runSyncExit(
-            Effect.logError("Cloudflare telemetry waitUntil registration failed").pipe(
-              Effect.annotateLogs({
-                "effect_agent.cloudflare.telemetry.failure_kind": "wait_until_registration",
-              }),
-            ),
-          );
+          // starting an unscoped fiber or changing the delivery Promise. The structured Cause keeps
+          // the exact synchronous platform rejection available to the host-owned diagnostic sink.
+          void this.#runtime.runSyncExit(logCloudflareWaitUntilRegistrationFailure(cause));
         },
       );
     }

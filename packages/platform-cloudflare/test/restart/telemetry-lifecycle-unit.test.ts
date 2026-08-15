@@ -16,6 +16,7 @@ import { TestClock } from "effect/testing";
 import {
   flushCloudflareRuntimeTelemetry,
   fulfillCloudflareTelemetryBackground,
+  logCloudflareWaitUntilRegistrationFailure,
   makeCloudflareTelemetryFlushCoordinator,
   MAX_CLOUDFLARE_TELEMETRY_BATCH_DELIVERIES,
   registerCloudflareTelemetryAfterNativeSettlement,
@@ -178,6 +179,7 @@ describe("Cloudflare telemetry flush boundary", () => {
     let registered: Promise<void> | undefined;
     let flushAttempts = 0;
     let diagnosticCalls = 0;
+    let diagnosedCause: unknown;
     const coordinator = makeCloudflareTelemetryFlushCoordinator(() => {
       flushAttempts += 1;
       return Promise.resolve();
@@ -190,8 +192,9 @@ describe("Cloudflare telemetry flush boundary", () => {
       },
       delivery,
       coordinator.reserve,
-      () => {
+      (cause) => {
         diagnosticCalls += 1;
+        diagnosedCause = cause;
         throw diagnosticFailure;
       },
     );
@@ -202,6 +205,32 @@ describe("Cloudflare telemetry flush boundary", () => {
     await expect(registered).resolves.toBeUndefined();
     expect(flushAttempts).toBe(0);
     expect(diagnosticCalls).toBe(1);
+    expect(diagnosedCause).toBe(registrationFailure);
+  });
+
+  it.effect("logs the exact synchronous waitUntil registration Cause structurally", () => {
+    const registrationFailure = new Error("waitUntil rejected this lifecycle");
+    const observations: Array<{
+      readonly cause: Cause.Cause<unknown>;
+      readonly annotations: Readonly<Record<string, unknown>>;
+    }> = [];
+    const logger = Logger.make<unknown, void>(({ cause, fiber }) => {
+      observations.push({
+        cause,
+        annotations: fiber.getRef(References.CurrentLogAnnotations),
+      });
+    });
+
+    return Effect.gen(function* () {
+      yield* logCloudflareWaitUntilRegistrationFailure(registrationFailure);
+
+      expect(observations).toHaveLength(1);
+      expect(observations[0]?.cause.reasons).toEqual([Cause.makeDieReason(registrationFailure)]);
+      expect(observations[0]?.cause.reasons[0]).toMatchObject({ defect: registrationFailure });
+      expect(observations[0]?.annotations).toMatchObject({
+        "effect_agent.cloudflare.telemetry.failure_kind": "wait_until_registration",
+      });
+    }).pipe(Effect.provide(Logger.layer([logger])));
   });
 
   it("issues one flush attempt for a successfully registered settled delivery", async () => {

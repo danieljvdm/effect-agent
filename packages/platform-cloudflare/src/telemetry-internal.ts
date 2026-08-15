@@ -406,19 +406,27 @@ export const registerCloudflareTelemetryAfterNativeSettlement = <A>(
   waitUntil: (promise: Promise<void>) => void,
   delivery: Promise<A>,
   reserve: (delivery: Promise<A>) => CloudflareTelemetryFlushReservation,
-  diagnoseRegistrationFailure: () => void,
+  diagnoseRegistrationFailure: (cause: unknown) => void,
 ): Promise<A> => {
   const reservation = reserve(delivery);
   if (!reservation.owner) return delivery;
   try {
     waitUntil(reservation.background);
-  } catch {
+  } catch (cause) {
     reservation.cancel();
     try {
-      diagnoseRegistrationFailure();
+      diagnoseRegistrationFailure(cause);
     } catch {
       // Even a broken diagnostic sink is derivative and cannot create an uncertain native outcome.
     }
   }
   return delivery;
 };
+
+/** @internal Synchronous host diagnostic for a rejected Cloudflare waitUntil registration. */
+export const logCloudflareWaitUntilRegistrationFailure = (cause: unknown): Effect.Effect<void> =>
+  Effect.logError(Cause.die(cause), "Cloudflare telemetry waitUntil registration failed").pipe(
+    Effect.annotateLogs({
+      "effect_agent.cloudflare.telemetry.failure_kind": "wait_until_registration",
+    }),
+  );

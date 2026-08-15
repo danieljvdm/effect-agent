@@ -128,9 +128,10 @@ Configuration families include:
 - retention;
 - feature flags and compatibility gates.
 
-`CloudflareDurableRuntime.layer` explicitly requires `CloudflareRuntimeTelemetry`. A Worker supplies
-the host Layer as the second `makeConversationObjectClass(options, telemetry)` argument; that outer
-Layer may install Effect Logger, Tracer, Metric, and exporter services, require
+Native entrypoint instrumentation in `makeConversationObjectClass` explicitly requires
+`CloudflareRuntimeTelemetry`; `CloudflareDurableRuntime.layer` itself owns only the durable runtime
+assembly. A Worker supplies the host Layer as the second
+`makeConversationObjectClass(options, telemetry)` argument; that outer Layer may install Effect Logger, Tracer, Metric, and exporter services, require
 `DurableObjectContext` or `ConversationObjectNamespace`, and fail acquisition typed. The factory
 is generic over any additional services that merged host Layer provides and retains those outputs
 in the cached runtime. Its existing first explicit generic remains the telemetry acquisition error;
@@ -283,10 +284,10 @@ success and failure, so a failed alarm remains rejected for workerd redelivery w
 continues in the background. An exporter that masks interruption can outlive
 `telemetryFlushTimeout` until Cloudflare cancels the `waitUntil` work; it still cannot hold delivery
 open or create concurrent exporter attempts. A synchronous `waitUntil` registration failure logs
-only a framework-owned `wait_until_registration` classification through the already-built runtime's
-synchronous Logger contract, cancels the unowned batch without invoking its exporter, and returns the
-already-running delivery Promise unchanged; failure of that derivative diagnostic sink is isolated
-too. The caught platform Cause is never passed to the automatic Logger.
+the framework-owned `wait_until_registration` classification and the exact platform Cause through
+the already-built runtime's synchronous Logger contract, cancels the unowned batch without invoking
+its exporter, and returns the already-running delivery Promise unchanged; failure of that derivative
+diagnostic sink is isolated too.
 
 Expected export failure, timeout, defect, and interruption logs carry only the bounded
 `effect_agent.cloudflare.telemetry.failure_kind` classification. Foreign exporter causes, arbitrary

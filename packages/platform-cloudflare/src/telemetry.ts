@@ -13,9 +13,9 @@ export class CloudflareTelemetryExportError extends Schema.TaggedError<Cloudflar
  * Host-owned exporter lifecycle for one Cloudflare Conversation Object incarnation.
  *
  * The platform package creates measurements but deliberately does not select an exporter or
- * vendor. `CloudflareDurableRuntime.layer` requires this service explicitly; applications pass its
- * provider as the second `makeConversationObjectClass` argument together with their Effect Logger,
- * Tracer, and Metric layers. That provider may read `DurableObjectContext` or
+ * vendor. Native entrypoint instrumentation consumes this service at the Worker composition edge;
+ * applications pass its provider as the second `makeConversationObjectClass` argument together
+ * with their Effect Logger, Tracer, and Metric layers. That provider may read `DurableObjectContext` or
  * `ConversationObjectNamespace`, and its typed acquisition error remains visible in construction.
  * `flush` must attempt to export every configured signal. After the native span closes, the
  * Conversation Object reserves it into a shared post-settlement batch before `ctx.waitUntil` under

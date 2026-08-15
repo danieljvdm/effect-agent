@@ -361,9 +361,8 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
             ["~effect/Effect/evaluate"]: evaluate,
           };
 
-          let delegated: X;
           try {
-            delegated = delegateContext(guardedPrimitive, fiber);
+            delegateContext(guardedPrimitive, fiber);
           } catch (defect) {
             const observed = currentEvaluation();
             switch (observed._tag) {
@@ -382,7 +381,7 @@ export const makeIsolatedToolTracer = (delegate: Tracer.Tracer): IsolatedToolTra
             case "Failed":
               throw observed.error;
             case "Succeeded":
-              return delegated;
+              return observed.value;
             case "Pending":
               return evaluate(fiber);
           }

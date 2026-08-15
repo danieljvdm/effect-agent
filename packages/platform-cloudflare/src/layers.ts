@@ -40,7 +40,6 @@ import {
   CloudflareDurableRuntimeConfigValue,
   CloudflarePlatformConfigError,
 } from "./config.ts";
-import { CloudflareRuntimeTelemetry } from "./telemetry.ts";
 import { conversationPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
@@ -149,8 +148,7 @@ export type CloudflareDurableRuntimeServices =
   | ConversationObjectIdentity
   | DurableAlarmService
   | ConversationMaintenance
-  | ConversationObjectPorts
-  | CloudflareRuntimeTelemetry;
+  | ConversationObjectPorts;
 
 /**
  * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
@@ -263,10 +261,9 @@ const resolveBindings = (
  * Storage compatibility is verified during construction: an incompatible database fails the
  * Layer typed (`DoStorageCompatibilityError`) before anything is mutated (DEPLOY-008).
  *
- * Requires the two binding services (`DurableObjectContext`, `ConversationObjectNamespace`) plus
- * the host-owned `CloudflareRuntimeTelemetry` capability. Platform values and observability enter
- * exclusively through Layers (DEPLOY-010); the Worker composition edge chooses the telemetry
- * implementation and its acquisition error/dependencies remain visible there.
+ * Requires the two binding services (`DurableObjectContext`, `ConversationObjectNamespace`).
+ * Host observability belongs to the Worker composition edge because native entrypoint lifecycle
+ * instrumentation, rather than this durable runtime assembly, consumes it (DEPLOY-010).
  */
 export class CloudflareDurableRuntime {
   static layer(
@@ -274,7 +271,7 @@ export class CloudflareDurableRuntime {
   ): Layer.Layer<
     CloudflareDurableRuntimeServices,
     CloudflareDurableRuntimeInitializationError,
-    DurableObjectContext | ConversationObjectNamespace | CloudflareRuntimeTelemetry
+    DurableObjectContext | ConversationObjectNamespace
   > {
     return Layer.unwrap(
       Effect.gen(function* () {
@@ -381,13 +378,7 @@ export class CloudflareDurableRuntime {
           portsEndpointLayer,
         );
 
-        // Re-export the required host capability into the runtime used by native endpoint effects.
-        // The Worker composition edge supplies its concrete Layer outermost, preserving that
-        // Layer's acquisition error and platform requirements.
-        const telemetryRequirement = Layer.effect(CloudflareRuntimeTelemetry)(
-          CloudflareRuntimeTelemetry,
-        );
-        return application.pipe(Layer.provideMerge(telemetryRequirement));
+        return application;
       }),
     );
   }

@@ -321,7 +321,7 @@ interface TurnTrace {
   readonly finalToolResultIds: Set<string>;
   /** Provider result payloads held until the complete model response validates. */
   readonly providerResultPayloads: Array<ProviderResultEventPayload>;
-  /** Exact retained JSON bytes across every staged provider event, including Turn completion. */
+  /** Exact retained JSON bytes across provider Tool results and staged provider events. */
   providerStagedPayloadBytes: number;
   /** Turn completion held with provider results so malformed trailing parts append neither. */
   turnCompletion: { readonly finishReason: Response.FinishReason } | undefined;
@@ -769,6 +769,10 @@ const preflightApproval = <Tools extends Record<string, Tool.Any>, HookError, Ho
     ),
   );
 
+const ProviderResponsePartId = Schema.String.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+);
 const ProviderToolCallId = ToolCallId.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
@@ -1719,6 +1723,37 @@ const stageProviderResultPayload = (
     trace.providerStagedPayloadBytes += snapshot.bytes;
   });
 
+const ProviderToolResultSnapshot = Schema.Struct({
+  result: Schema.Json,
+  metadata: Schema.Record(Schema.String, Schema.Json),
+});
+
+const snapshotProviderToolResultPart = Effect.fnUntraced(function* (
+  trace: TurnTrace,
+  part: Response.ToolResultPart<string, unknown, unknown>,
+) {
+  const snapshot = boundedJsonSnapshot(
+    { result: part.encodedResult, metadata: part.metadata },
+    MAX_STAGED_PROVIDER_BYTES - trace.providerStagedPayloadBytes,
+  );
+  if (snapshot === undefined) {
+    return yield* ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`,
+    });
+  }
+  const normalized = yield* Schema.decodeUnknownEffect(ProviderToolResultSnapshot)(
+    snapshot.value,
+  ).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({
+        message: "Provider Tool result could not be normalized as JSON",
+      }),
+    ),
+  );
+  trace.providerStagedPayloadBytes += snapshot.bytes;
+  return normalized;
+});
+
 const stampProviderResultEvent = (
   context: RunContext,
   turnId: TurnId,
@@ -1838,6 +1873,52 @@ const decodeProviderToolCallId = Effect.fn("AgentRuntime.decodeProviderToolCallI
   ),
 );
 
+const decodeProviderResponsePartId = Effect.fn("AgentRuntime.decodeProviderResponsePartId")(
+  (id: string) =>
+    Schema.decodeEffect(ProviderResponsePartId)(id).pipe(
+      Effect.mapError(() =>
+        ModelProtocolError.make({
+          message:
+            "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
+        }),
+      ),
+    ),
+);
+
+const validateProviderPartIdentifiers = Effect.fnUntraced(function* (part: Response.AnyPart) {
+  switch (part.type) {
+    case "text-start":
+    case "text-delta":
+    case "text-end":
+    case "reasoning-start":
+    case "reasoning-delta":
+    case "reasoning-end":
+    case "source":
+      yield* decodeProviderResponsePartId(part.id);
+      return;
+    case "response-metadata":
+      if (part.id !== undefined) yield* decodeProviderResponsePartId(part.id);
+      return;
+    case "tool-params-start":
+    case "tool-params-delta":
+    case "tool-params-end":
+    case "tool-call":
+    case "tool-result":
+      yield* decodeProviderToolCallId(part.id);
+      return;
+    case "tool-approval-request":
+      yield* decodeProviderResponsePartId(part.approvalId);
+      yield* decodeProviderToolCallId(part.toolCallId);
+      return;
+    case "error":
+    case "file":
+    case "finish":
+    case "reasoning":
+    case "text":
+      return;
+  }
+});
+
 const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
   (value: unknown, label: string): Effect.Effect<Schema.Json, ModelProtocolError> =>
     Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
@@ -1920,18 +2001,10 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       message: "Model response emitted content after its finish part",
     });
   }
-  if (
-    part.type === "tool-params-start" ||
-    part.type === "tool-params-delta" ||
-    part.type === "tool-params-end" ||
-    part.type === "tool-call" ||
-    part.type === "tool-result"
-  ) {
-    // Provider/model Tool Call IDs are untrusted correlation keys. Reject them before they enter
-    // the Turn trace maps, canonical event stream, or application handler scheduling boundary.
-    yield* decodeProviderToolCallId(part.id);
-  }
-  trace.parts.push(part);
+  // Provider/model identifiers are untrusted correlation keys. Reject them before they enter
+  // the Turn trace, lifecycle maps, canonical event stream, diagnostics, or Tool scheduler.
+  yield* validateProviderPartIdentifiers(part);
+  if (part.type !== "tool-call" && part.type !== "tool-result") trace.parts.push(part);
   switch (part.type) {
     case "text-start": {
       yield* startPart(trace.textParts, part.id, "text");
@@ -2036,17 +2109,19 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         part.params as Tool.Parameters<ToolUnion<Tools>>,
       );
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      // Official history carries the wire form: rebuild the just-pushed trace
+      // Official history carries the wire form: rebuild the trace
       // part with the Schema-encoded parameters (the provider re-serializes
       // them on the next request regardless), while `applicationToolCalls`
       // below keeps the decoded part for the handler path — see TurnTrace.
-      trace.parts[trace.parts.length - 1] = Response.makePart("tool-call", {
-        id: part.id,
-        name: part.name,
-        params: parameters,
-        providerExecuted: part.providerExecuted,
-        metadata: part.metadata,
-      });
+      trace.parts.push(
+        Response.makePart("tool-call", {
+          id: part.id,
+          name: part.name,
+          params: parameters,
+          providerExecuted: part.providerExecuted,
+          metadata: part.metadata,
+        }),
+      );
       trace.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted,
@@ -2093,7 +2168,8 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         });
       }
       const toolCallId = yield* decodeToolCallId(part.id);
-      const result = yield* decodeEventJson(part.encodedResult, "Tool result");
+      const normalized = yield* snapshotProviderToolResultPart(trace, part);
+      const result = normalized.result;
       if (part.preliminary === true) {
         yield* stageProviderResultPayload(trace, {
           _tag: "ToolProgress",
@@ -2102,6 +2178,18 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
           result,
           providerExecuted: true,
         });
+        trace.parts.push(
+          Response.toolResultPart({
+            id: part.id,
+            name: part.name,
+            isFailure: part.isFailure,
+            result,
+            encodedResult: result,
+            providerExecuted: true,
+            preliminary: true,
+            metadata: normalized.metadata,
+          }),
+        );
         return [];
       }
       if (trace.finalToolResultIds.has(part.id)) {
@@ -2109,25 +2197,37 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
           message: `Tool Call ${part.id} produced more than one terminal result`,
         });
       }
-      trace.finalToolResultIds.add(part.id);
       if (part.isFailure) {
         yield* stageProviderResultPayload(trace, {
           _tag: "ToolCallFailed",
           toolCallId,
           toolName: part.name,
-          errorTag: errorTag(part.result),
-          message: errorMessage(part.result),
+          errorTag: errorTag(result),
+          message: errorMessage(result),
           providerExecuted: true,
         });
-        return [];
+      } else {
+        yield* stageProviderResultPayload(trace, {
+          _tag: "ToolCallSucceeded",
+          toolCallId,
+          toolName: part.name,
+          result,
+          providerExecuted: true,
+        });
       }
-      yield* stageProviderResultPayload(trace, {
-        _tag: "ToolCallSucceeded",
-        toolCallId,
-        toolName: part.name,
-        result,
-        providerExecuted: true,
-      });
+      trace.finalToolResultIds.add(part.id);
+      trace.parts.push(
+        Response.toolResultPart({
+          id: part.id,
+          name: part.name,
+          isFailure: part.isFailure,
+          result,
+          encodedResult: result,
+          providerExecuted: true,
+          preliminary: false,
+          metadata: normalized.metadata,
+        }),
+      );
       return [];
     }
     case "finish": {

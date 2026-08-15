@@ -239,8 +239,8 @@ waiting; denied and provider-executed calls are call-level only and create no ha
 Framework-owned `conversationId` is identity metadata rather than conversation content and is
 exported as `gen_ai.conversation.id` plus the compatibility field; instrumentation never derives a
 conversation identifier by hashing or inspecting content.
-Provider/model Tool Call IDs are untrusted. The engine accepts only 1–128 ASCII characters matching
-`[A-Za-z0-9][A-Za-z0-9._:-]*` and validates before the value enters Turn correlation, canonical Run
+Provider/model Tool Call IDs are untrusted. The engine accepts only values whose entire string
+matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and validates before the value enters Turn correlation, canonical Run
 events, or application handler scheduling. Rejection is a typed `ModelProtocolError` with no Tool
 invocation. Framework telemetry records the same already-validated identifier as
 `gen_ai.tool.call.id` and the compatibility `toolCallId`.
@@ -258,10 +258,12 @@ only that exact identity. An independently constructed same-class handler failur
 mistaken for framework control flow or swallowed.
 The isolation policy is an engine-owned capability built at the Run composition boundary from the
 host's ambient Tracer; Tool execution does not replace the Tracer service locally.
-Cloudflare automatic diagnostics export only bounded framework classifications. Retained foreign
-exporter causes, arbitrary defects, fiber IDs, and caught platform Causes are never passed to the
-configured Logger; raw exporter cause inspection is an explicit host decision at the typed error
-boundary.
+Cloudflare exporter diagnostics export only bounded framework classifications. Retained foreign
+exporter causes, arbitrary defects, and fiber IDs are never passed to the configured Logger; raw
+exporter cause inspection is an explicit host decision at the typed error boundary. A synchronous
+`waitUntil` registration rejection is an irreducible platform lifecycle failure, so its exact Cause
+is passed structurally to the host Logger together with the bounded
+`wait_until_registration` classification; effect-agent adds no request or conversation content.
 
 Minimum operational alerts:
 

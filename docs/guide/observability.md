@@ -52,8 +52,8 @@ the canonical span.
 | `runId`, `turnId`                   | Framework Run/Turn correlation                       |
 | `toolCallId`, `toolName`            | Backward-compatible validated/name correlation       |
 
-Provider/model Tool Call IDs are untrusted input. The engine accepts only 1–128 ASCII characters
-matching `[A-Za-z0-9][A-Za-z0-9._:-]*` and validates before Turn correlation, canonical event
+Provider/model Tool Call IDs are untrusted input. The engine accepts only values whose entire string
+matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}` and validates before Turn correlation, canonical event
 emission, or handler scheduling. An invalid ID fails the Run with a typed `ModelProtocolError` and
 never invokes the Tool. The semantic and compatibility telemetry fields therefore contain the same
 already-validated identifier used by the framework.
@@ -133,10 +133,10 @@ provide the same content-free `CloudflareRuntimeTelemetry` service. The Layer ma
 environment, may provide additional services alongside the required telemetry capability, and a
 typed acquisition failure remains part of constructor-gate failure. Those additional outputs and
 defaulted Effect Logger/Tracer/Metric overrides remain present in the cached `ManagedRuntime`.
-Omitting
-the second argument installs `CloudflareRuntimeTelemetry.layerNoop` at this Worker composition
-edge. `CloudflareDurableRuntime.layer` itself requires the telemetry service explicitly; it does
-not choose or hide a provider in runtime options.
+Omitting the second argument installs `CloudflareRuntimeTelemetry.layerNoop` at this Worker
+composition edge. `CloudflareDurableRuntime.layer` owns only durable runtime services; native
+entrypoint instrumentation consumes telemetry in `makeConversationObjectClass`, which preserves
+the host Layer's telemetry and additional outputs without choosing or hiding a provider.
 
 `flush` has the typed error channel `CloudflareTelemetryExportError`. A custom adapter maps its
 foreign exporter failure with `CloudflareTelemetryExportError.make({ cause })`, retaining the
@@ -158,11 +158,11 @@ effect-agent interrupts an interruptible exporter when the budget expires, but d
 hard deadline for exporter code that masks interruption. Cloudflare owns that remaining background
 lifetime and may cancel it when the Object is evicted.
 
-Expected exporter failure, timeout, defect, interruption, and `waitUntil` registration diagnostics
-contain only a framework-owned `effect_agent.cloudflare.telemetry.failure_kind` classification.
-Foreign exporter causes, arbitrary defects, fiber IDs, and caught platform causes are never passed
-to the configured Logger. `CloudflareTelemetryExportError.cause` remains available only when the
-host explicitly inspects the typed failure at its own diagnostic boundary. Failures stay rejected
+Expected exporter failure, timeout, defect, and interruption diagnostics contain only a
+framework-owned `effect_agent.cloudflare.telemetry.failure_kind` classification. Foreign exporter
+causes, arbitrary defects, and fiber IDs are never passed to the configured Logger.
+`CloudflareTelemetryExportError.cause` remains available only when the host explicitly inspects the
+typed failure at its own diagnostic boundary. Failures stay rejected
 through the coordinator. Only the final always-fulfilled
 `waitUntil` Promise bridge isolates background telemetry failure from the original RPC result or
 alarm retry signal. Budget expiry logs a bounded warning and remains a typed `TimeoutError` through
@@ -171,11 +171,11 @@ marker before the original Cause is restored. The cached runtime is not disposed
 Durable Objects have no guaranteed shutdown callback, and storage/runtime/exporter scopes must
 remain available for later events in the same incarnation.
 
-A synchronous `ctx.waitUntil` registration failure is also derivative: effect-agent emits only the
-bounded `wait_until_registration` classification, cancels that unowned batch ticket, then returns
-the already-running native delivery Promise unchanged rather than creating an uncertain RPC
-outcome. The caught platform Cause is not made available to the automatic Logger. The registration
-failure means Cloudflare has not accepted ownership of that background work, so the gated exporter is not invoked. The diagnostic uses the
+A synchronous `ctx.waitUntil` registration failure is also derivative: effect-agent emits the
+bounded `wait_until_registration` classification with the exact platform Cause as a structured
+Logger Cause, cancels that unowned batch ticket, then returns the already-running native delivery
+Promise unchanged rather than creating an uncertain RPC outcome. The registration failure means
+Cloudflare has not accepted ownership of that background work, so the gated exporter is not invoked. The diagnostic uses the
 already-built runtime's synchronous Logger contract; logger defects are captured without starting a
 fiber. Even a broken diagnostic sink does not change the delivery result or alarm retry signal.
 

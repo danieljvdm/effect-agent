@@ -516,6 +516,81 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     });
   });
 
+  it.effect("retains an owned normalized snapshot of provider Tool results", () => {
+    const providerResult = { status: "completed" };
+    let observedPromptResult: unknown;
+    const model = Model.make(
+      "scripted",
+      "owned-provider-result",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.gen(function* () {
+          const turn = yield* Ref.make(0);
+          return yield* LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                  Effect.map((value) => {
+                    if (value > 0) {
+                      const observedPart = request.prompt.content
+                        .find((message) => message.role === "assistant")
+                        ?.content.find(
+                          (part) => part.type === "tool-result" && part.id === "owned-result-1",
+                        );
+                      observedPromptResult =
+                        observedPart?.type === "tool-result" ? observedPart.result : undefined;
+                      return Stream.fromIterable(finalParts('{"answer":"owned"}'));
+                    }
+                    return Stream.fromIterable<Response.StreamPartEncoded>([
+                      {
+                        type: "tool-call",
+                        id: "owned-result-1",
+                        name: "HostedSearch",
+                        params: { query: "ownership" },
+                        providerExecuted: true,
+                      },
+                      {
+                        type: "tool-result",
+                        id: "owned-result-1",
+                        name: "HostedSearch",
+                        result: providerResult,
+                        isFailure: false,
+                        providerExecuted: true,
+                      },
+                    ]).pipe(
+                      Stream.concat(
+                        Stream.fromEffect(
+                          Effect.sync(() => {
+                            providerResult.status = "mutated-after-emission";
+                            return {
+                              type: "finish" as const,
+                              reason: "tool-calls" as const,
+                              usage,
+                            };
+                          }),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+          });
+        }),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const events = yield* AgentRuntime.stream(Agent.withModel(hostedDefinition, model), {
+        question: "Who owns the result?",
+      }).pipe(Stream.runCollect);
+
+      expect(events.at(-1)?._tag).toBe("RunCompleted");
+      expect(observedPromptResult).toEqual({ status: "completed" });
+      expect(observedPromptResult).not.toBe(providerResult);
+    });
+  });
+
   it.effect("exports content-free canonical Tool spans and bounded terminal logs", () => {
     const spans: Array<Tracer.NativeSpan> = [];
     const logs: Array<ExportedLogObservation> = [];
@@ -793,6 +868,108 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(observed.some((event) => event._tag === "ToolCallFailed")).toBe(false);
     }),
   );
+
+  it.effect("rejects every retained or correlated model response-part identifier", () => {
+    const invalidIdSecret = "invalid-response-part-id-must-not-enter-runtime-state";
+    const invalidId = `unsafe/${invalidIdSecret}/${"x".repeat(256)}`;
+    const cases: ReadonlyArray<{
+      readonly label: string;
+      readonly part: Response.StreamPartEncoded;
+    }> = [
+      { label: "text start", part: { type: "text-start", id: invalidId } },
+      { label: "text delta", part: { type: "text-delta", id: invalidId, delta: "ignored" } },
+      { label: "text end", part: { type: "text-end", id: invalidId } },
+      { label: "reasoning start", part: { type: "reasoning-start", id: invalidId } },
+      {
+        label: "reasoning delta",
+        part: { type: "reasoning-delta", id: invalidId, delta: "ignored" },
+      },
+      { label: "reasoning end", part: { type: "reasoning-end", id: invalidId } },
+      {
+        label: "Tool parameters start",
+        part: {
+          type: "tool-params-start",
+          id: invalidId,
+          name: "unknown",
+          providerExecuted: false,
+        },
+      },
+      {
+        label: "Tool parameters delta",
+        part: { type: "tool-params-delta", id: invalidId, delta: "{}" },
+      },
+      { label: "Tool parameters end", part: { type: "tool-params-end", id: invalidId } },
+      {
+        label: "source",
+        part: {
+          type: "source",
+          sourceType: "url",
+          id: invalidId,
+          url: "https://example.invalid/source",
+          title: "source",
+        },
+      },
+      {
+        label: "response metadata",
+        part: { type: "response-metadata", id: invalidId },
+      },
+      {
+        label: "approval",
+        part: {
+          type: "tool-approval-request",
+          approvalId: invalidId,
+          toolCallId: "valid-tool-call",
+        },
+      },
+      {
+        label: "approval Tool Call",
+        part: {
+          type: "tool-approval-request",
+          approvalId: "valid-approval",
+          toolCallId: invalidId,
+        },
+      },
+    ];
+
+    return Effect.gen(function* () {
+      yield* Effect.forEach(
+        cases,
+        ({ label, part }) =>
+          AgentRuntime.stream(makeAgent([part]), { question: label }).pipe(
+            Stream.runDrain,
+            Effect.exit,
+            Effect.map((exit) => {
+              const failure = failureFrom(exit);
+              expect(failure).toBeInstanceOf(ModelProtocolError);
+              expect(failure.message).toContain("invalid");
+              expect(failure.message).not.toContain(invalidIdSecret);
+            }),
+          ),
+        { discard: true },
+      );
+
+      const toolResultExit = yield* AgentRuntime.stream(
+        Agent.withModel(
+          hostedDefinition,
+          modelFromParts([
+            {
+              type: "tool-result",
+              id: invalidId,
+              name: "HostedSearch",
+              result: { status: "ignored" },
+              isFailure: false,
+              providerExecuted: true,
+            },
+          ]),
+        ),
+        { question: "Tool result" },
+      ).pipe(Stream.runDrain, Effect.exit);
+      const toolResultFailure = failureFrom(toolResultExit);
+      expect(toolResultFailure).toBeInstanceOf(ModelProtocolError);
+      expect(toolResultFailure.message).toContain("invalid Tool Call ID");
+      expect(toolResultFailure.message).not.toContain(invalidIdSecret);
+    });
+  });
 
   it.effect("exports one failed Tool outcome when downstream stops at its terminal event", () => {
     const spans: Array<Tracer.NativeSpan> = [];
@@ -1489,6 +1666,42 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       ).pipe(Effect.provide(ErrorReporter.layer([reporter])));
     },
   );
+
+  it.effect("does not let host tracer context substitute a primitive result", () => {
+    let evaluations = 0;
+    const delegateContext: NonNullable<Tracer.Tracer["context"]> = <X>(
+      primitive: Tracer.EffectPrimitive<X>,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ): X => primitive["~effect/Effect/evaluate"](fiber);
+    const substitutingContext = new Proxy(delegateContext, {
+      apply(target, thisArgument, argumentsList) {
+        Reflect.apply(target, thisArgument, argumentsList);
+        return "host-substituted-result";
+      },
+    });
+    const isolated = makeIsolatedToolTracer(
+      Tracer.make({
+        span: (options) => new Tracer.NativeSpan(options),
+        context: substitutingContext,
+      }),
+    );
+    const primitive: Tracer.EffectPrimitive<string> = {
+      ["~effect/Effect/evaluate"]: () => {
+        evaluations += 1;
+        return "engine-result";
+      },
+    };
+
+    return Effect.withFiber((fiber) =>
+      Effect.sync(() => {
+        const context = isolated.tracer.context;
+        if (context === undefined) throw new Error("Expected the isolated tracer context");
+
+        expect(context(primitive, fiber)).toBe("engine-result");
+        expect(evaluations).toBe(1);
+      }),
+    );
+  });
 
   it.effect("rethrows the original primitive error once when host tracer context wraps it", () => {
     const primitiveError = new Error("primitive-evaluation-error");

@@ -38,8 +38,8 @@ duplicate result overrides an apparent success to failure. At-least-once recover
 attempt with its own telemetry. Framework terminal logs contain only bounded identity/outcome
 fields. No Tool input, output, prompt,
 conversation content, command, source, or failure message is exported.
-Provider/model Tool Call IDs are untrusted and must contain 1–128 ASCII characters matching
-`[A-Za-z0-9][A-Za-z0-9._:-]*`. The engine validates before Turn correlation, canonical event
+Provider/model Tool Call IDs are untrusted and their entire value must match
+`[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`. The engine validates before Turn correlation, canonical event
 emission, or application handler scheduling; rejection is a typed protocol failure. Span/log
 correlation therefore contains only the already-validated identifier.
 The terminal Tool Run event and in-memory trace result are not committed until the handler stream
@@ -75,7 +75,7 @@ correlations, so a malformed duplicate or post-finish part cannot append a provi
 success.
 
 `@effect-agent/platform-cloudflare` exposes a host-owned `CloudflareRuntimeTelemetry` service.
-`CloudflareDurableRuntime.layer` requires it explicitly, and the Worker passes its provider as the
+the `makeConversationObjectClass` native-entrypoint runtime requires it explicitly, and the Worker passes its provider as the
 second `makeConversationObjectClass` argument rather than hiding it in runtime options. The host
 Layer may require the Durable Object context or namespace and fail acquisition typed. It is
 provided outside the complete Object application Layer so its Effect Logger/Tracer/Metric
@@ -93,14 +93,15 @@ always-fulfilled background Promise. Cycles remain capped at a first attempt plu
 attempt, with one queued cycle while trailing runs. This prevents concurrent attempts, per-delivery
 background registrations, and unbounded exporter waiters under a stalled export. Each batch also
 retains at most 64 delivery settlements; excess arrivals are lossy-coalesced into its requested
-export and produce one bounded `reservation_limit` diagnostic for that batch. Expected failures, defects, and
-interruption log only a bounded framework-owned failure classification and remain failed/interrupted
-until the final always-fulfilled `waitUntil` Promise bridge. Foreign exporter causes, arbitrary
-defects, fiber IDs, and caught platform Causes are never passed to the automatic Logger; the typed
-export error retains its cause for explicit host-controlled inspection. Timeout, exporter failure,
-or synchronous `waitUntil` registration failure never changes the original result or alarm
-rejection; registration failure is logged synchronously as `wait_until_registration` before the
-exact delivery Promise is returned, and the unowned exporter continuation is not invoked.
+export and produce one bounded `reservation_limit` diagnostic for that batch. Expected exporter
+failures, defects, and interruption log only a bounded framework-owned failure classification and
+remain failed/interrupted until the final always-fulfilled `waitUntil` Promise bridge. Foreign
+exporter causes, arbitrary defects, and fiber IDs are never passed to the automatic Logger; the
+typed export error retains its cause for explicit host-controlled inspection. Timeout, exporter
+failure, or synchronous `waitUntil` registration failure never changes the original result or alarm
+rejection. Registration failure is logged synchronously with its exact platform Cause and the
+`wait_until_registration` classification before the exact delivery Promise is returned, and the
+unowned exporter continuation is not invoked.
 Native rejection spans are sanitized before the original Cause is restored. The runtime remains
 cached for the Object incarnation; it is not disposed per delivery. Hosts configure one
 native-delivery flush owner and do not duplicate this path with effect-cf or another native

@@ -157,8 +157,9 @@ ID, Agent Definition ID, declared execution class, and framework Run/Turn correl
 in-memory handler attempt classified as success or failure, one terminal annotation/log is emitted
 only after the handler stream is known complete. The framework-owned Conversation ID is recorded
 as both `gen_ai.conversation.id` and backward-compatible `conversationId`; no conversation
-identifier is synthesized from content. Provider/model Tool Call IDs are accepted only when they
-contain 1–128 ASCII characters matching `[A-Za-z0-9][A-Za-z0-9._:-]*`. Validation occurs before a
+identifier is synthesized from content. Provider/model Tool Call IDs are accepted only when their
+entire string matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`. The same bounded full-string grammar
+applies to response-part lifecycle, source, response, and approval identifiers. Validation occurs before a
 model-supplied ID enters Turn correlation, a canonical Run event, or application handler
 scheduling; rejection is a typed `ModelProtocolError`. Consequently `gen_ai.tool.call.id` and the
 compatibility `toolCallId` carry only an already-validated identifier.
