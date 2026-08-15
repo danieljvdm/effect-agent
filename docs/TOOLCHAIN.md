@@ -168,7 +168,11 @@ failing `ready`; path routing is not its security boundary. A later human
 mutation with an unexpected path invokes the ordinary PR workflows, while a
 generated-only mutation has a new head without a verified check and remains
 unmergeable. The exact-tree verifier runs in a fresh read-only job checked out from the triggering
-`main` SHA; the Changesets action's workspace never reaches it.
+`main` SHA; the Changesets action's workspace never reaches it. Inside the detached trusted-base
+worktree, the verifier performs a script-suppressed frozen install before invoking that worktree's
+Changesets binary, then performs a second script-suppressed install only to regenerate the release
+lockfile. Cleanup attempts every Git and filesystem operation and reports any cleanup failure in
+the typed verification result instead of silently accepting a leaked worktree.
 
 The version job and every external action are pinned to full commit SHAs and have neither Checks
 API nor npm OIDC permission. The action-free reporting job alone has `checks: write`; immediately
@@ -182,7 +186,9 @@ After a version PR merge, an unprivileged preparation job frozen-installs and re
 versioned tree, packs every public workspace with Bun into a scope-owned staging directory, and
 atomically renames that directory into place only after every tarball and the manifest are
 complete. Failure or interruption removes the partial staging tree, so a retry never inherits an
-incomplete release artifact. The job then uploads one checksummed immutable artifact. A separate
+incomplete release artifact. The atomic rename itself is uninterruptible, and a failed preparation,
+commit, cleanup, or temporary manifest restoration remains a typed release failure with preceding
+causes preserved. The job then uploads one checksummed immutable artifact. A separate
 action-free job is the sole holder of `id-token: write`. It checks the artifact
 digests, requires the release manifest to contain the exact fourteen-package fixed set at one
 `X.Y.Z-beta.N` version and the policy-owned `beta` dist-tag, verifies a pinned npm CLI tarball, and
@@ -197,7 +203,8 @@ Each package on npmjs.com lists `release.yml` in `danieljvdm/effect-agent` as
 its trusted publisher (package Settings, a one-time registration; "Allow npm
 publish" only). In CI the release script runs in `--pack-directory` mode in
 the unprivileged preparation job: `bun pm pack` resolves the
-`workspace:`/`catalog:` protocols into the tarball. The isolated publisher
+`workspace:`/`catalog:` protocols into the tarball without consulting the npm registry. The
+transferred manifest accepts only safe `packages/<basename>.tgz` relative paths. The isolated publisher
 then uploads that tarball with the pinned npm CLI, because only npm implements
 the OIDC exchange.
 

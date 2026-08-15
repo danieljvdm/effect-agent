@@ -5,6 +5,7 @@ import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
 import { prepareReleaseArtifactDirectory } from "../../../scripts/release-artifact-directory.ts";
+import { PreparedReleaseManifest, PublishManifest } from "../../../scripts/release-publish.ts";
 import {
   InvalidCommitSha,
   ReleaseTreeMismatch,
@@ -301,6 +302,8 @@ if [ "\${1:-}" = "--method" ]; then
   exit 0
 fi
 
+ENDPOINT="\${1:-}"
+
 QUERY=""
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--jq" ]; then
@@ -312,12 +315,30 @@ while [ "$#" -gt 0 ]; do
 done
 
 case "$QUERY" in
-  ".head.sha") printf '%s\\n' "$GH_STUB_HEAD_SHA" ;;
-  ".head.repo.full_name") printf '%s\\n' "$GH_STUB_HEAD_REPOSITORY" ;;
-  ".head.ref") printf '%s\\n' "$GH_STUB_HEAD_REF" ;;
-  ".base.sha") printf '%s\\n' "$GH_STUB_BASE_SHA" ;;
-  ".base.ref") printf '%s\\n' "$GH_STUB_BASE_REF" ;;
-  *"strict_required_status_checks_policy"*) printf '%s\\n' "$GH_STUB_STRICT_READY" ;;
+  ".head.sha")
+    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+    printf '%s\\n' "$GH_STUB_HEAD_SHA"
+    ;;
+  ".head.repo.full_name")
+    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+    printf '%s\\n' "$GH_STUB_HEAD_REPOSITORY"
+    ;;
+  ".head.ref")
+    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+    printf '%s\\n' "$GH_STUB_HEAD_REF"
+    ;;
+  ".base.sha")
+    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+    printf '%s\\n' "$GH_STUB_BASE_SHA"
+    ;;
+  ".base.ref")
+    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
+    printf '%s\\n' "$GH_STUB_BASE_REF"
+    ;;
+  *"strict_required_status_checks_policy"*)
+    test "$ENDPOINT" = "repos/$GITHUB_REPOSITORY/rules/branches/main"
+    printf '%s\\n' "$GH_STUB_STRICT_READY"
+    ;;
   *) echo "Unexpected gh query: $QUERY" >&2; exit 64 ;;
 esac
 `,
@@ -360,8 +381,10 @@ esac
 const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(function* (
   script: string,
   options: {
+    readonly checksumFailure?: "artifact" | "npm";
     readonly packageMetadata: string;
     readonly registryStatus: "200" | "404";
+    readonly tarball?: string;
     readonly versionMetadata: string;
   },
 ) {
@@ -372,6 +395,7 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
   });
   const artifactDirectory = path.join(temporaryRoot, "artifact-source");
   const binDirectory = path.join(temporaryRoot, "bin");
+  const expectedSumsPath = path.join(temporaryRoot, "expected-SHA256SUMS");
   const publishCapture = path.join(temporaryRoot, "npm-publish-invoked");
   const trustedManifestDirectory = path.join(temporaryRoot, "trusted-manifests");
   const version = "0.0.1-beta.7";
@@ -397,7 +421,8 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
     releases.push({
       distTag: "beta",
       name: manifest.name,
-      tarball: directory === "capabilities" ? "packages/capabilities.tgz" : null,
+      tarball:
+        directory === "capabilities" ? (options.tarball ?? "packages/capabilities.tgz") : null,
       version,
     });
   }
@@ -405,7 +430,14 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
     path.join(artifactDirectory, "release-manifest.json"),
     `${JSON.stringify({ version: 1, packages: releases })}\n`,
   );
-  yield* fs.writeFileString(path.join(artifactDirectory, "SHA256SUMS"), "fixture\n");
+  const expectedSums = [
+    "fixture-sha  npm-12.0.2.tgz",
+    "fixture-sha  packages/capabilities.tgz",
+    "fixture-sha  release-manifest.json",
+    "",
+  ].join("\n");
+  yield* fs.writeFileString(path.join(artifactDirectory, "SHA256SUMS"), expectedSums);
+  yield* fs.writeFileString(expectedSumsPath, expectedSums);
   yield* fs.writeFileString(path.join(artifactDirectory, "npm-12.0.2.tgz"), "fixture\n");
   yield* fs.writeFileString(
     path.join(artifactDirectory, "packages", "capabilities.tgz"),
@@ -424,11 +456,13 @@ const runReleasePublisher = Effect.fn("toolchainTest.runReleasePublisher")(funct
       `#!/usr/bin/env bash
 set -euo pipefail
 REQUEST="$*"
-if [[ "$REQUEST" == *"/actions/runs/"*"/artifacts"* ]]; then
+if [[ "$REQUEST" == "api repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts --jq "* ]]; then
   printf '731\n'
-elif [[ "$REQUEST" == *"/actions/artifacts/731/zip"* ]]; then
+elif [ "$REQUEST" = "api repos/$GITHUB_REPOSITORY/actions/artifacts/731/zip" ]; then
   printf 'fixture archive\n'
 elif [[ "$REQUEST" =~ /contents/packages/([^/]+)/package.json ]]; then
+  EXPECTED_CONTENT="repos/$GITHUB_REPOSITORY/contents/packages/\${BASH_REMATCH[1]}/package.json?ref=$GITHUB_SHA"
+  [[ " $REQUEST " == *" $EXPECTED_CONTENT"* ]]
   cat "$PUBLISH_TRUSTED_MANIFESTS/\${BASH_REMATCH[1]}.json"
 else
   echo "Unexpected gh invocation: $REQUEST" >&2
@@ -456,7 +490,20 @@ cp -R "$PUBLISH_ARTIFACT_SOURCE"/. "$DESTINATION"/
     writeExecutable(
       "sha256sum",
       `#!/usr/bin/env bash
-exit 0
+set -euo pipefail
+if [ "$#" = "3" ] && [ "$1" = "--check" ] && [ "$2" = "--strict" ] && [ "$3" = "SHA256SUMS" ]; then
+  cmp SHA256SUMS "$PUBLISH_EXPECTED_SUMS"
+  test "$PUBLISH_CHECKSUM_FAILURE" != "artifact"
+  exit 0
+fi
+if [ "$#" = "2" ] && [ "$1" = "--check" ] && [ "$2" = "--strict" ]; then
+  IFS= read -r EXPECTED_LINE
+  test "$EXPECTED_LINE" = "$NPM_CLI_SHA256  npm-$NPM_CLI_VERSION.tgz"
+  test "$PUBLISH_CHECKSUM_FAILURE" != "npm"
+  exit 0
+fi
+echo "Unexpected sha256sum invocation: $*" >&2
+exit 64
 `,
     ),
     writeExecutable(
@@ -467,7 +514,7 @@ if [ "\${1:-}" = "--eval" ]; then
   exit 0
 fi
 if [ "\${2:-}" = "publish" ]; then
-  printf '%s\n' "$*" > "$PUBLISH_CAPTURE"
+  printf '%s\n' "$@" > "$PUBLISH_CAPTURE"
   exit 0
 fi
 echo "Unexpected node invocation: $*" >&2
@@ -543,6 +590,8 @@ printf 'fixture-integrity'
       PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
       PUBLISH_ARTIFACT_SOURCE: artifactDirectory,
       PUBLISH_CAPTURE: publishCapture,
+      PUBLISH_CHECKSUM_FAILURE: options.checksumFailure ?? "none",
+      PUBLISH_EXPECTED_SUMS: expectedSumsPath,
       PUBLISH_PACKAGE_METADATA: options.packageMetadata,
       PUBLISH_REGISTRY_STATUS: options.registryStatus,
       PUBLISH_TRUSTED_MANIFESTS: trustedManifestDirectory,
@@ -557,10 +606,14 @@ printf 'fixture-integrity'
     Stream.mkString(Stream.decodeText(child.all)),
     child.exitCode,
   ]);
+  const publishInvocation = (yield* fs.exists(publishCapture))
+    ? (yield* fs.readFileString(publishCapture)).trim().split("\n")
+    : [];
   return {
     exitCode,
     output,
-    publishInvoked: yield* fs.exists(publishCapture),
+    publishInvocation,
+    publishInvoked: publishInvocation.length > 0,
   } as const;
 });
 
@@ -616,6 +669,38 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect([...(config.fixed[0] ?? [])].sort()).toEqual(publicPackageNames.sort());
       expect(config.linked).toEqual([]);
     }),
+  );
+
+  it.effect(
+    "validates mutable package fields and transferred tarball paths at Schema boundaries",
+    () =>
+      Effect.gen(function* () {
+        const decoded = yield* Schema.decodeUnknownEffect(PublishManifest)({
+          name: "@effect-agent/fixture",
+          version: "0.0.1-beta.7",
+          description: "preserved package metadata",
+          dependencies: { "@effect-agent/core": "workspace:*" },
+        });
+        expect(decoded.description).toBe("preserved package metadata");
+        expect(decoded.dependencies).toEqual({ "@effect-agent/core": "workspace:*" });
+
+        yield* Schema.decodeUnknownEffect(PublishManifest)({
+          name: "@effect-agent/fixture",
+          version: "0.0.1-beta.7",
+          dependencies: { "@effect-agent/core": 7 },
+        }).pipe(Effect.flip);
+        yield* Schema.decodeUnknownEffect(PreparedReleaseManifest)({
+          version: 1,
+          packages: [
+            {
+              name: "@effect-agent/fixture",
+              version: "0.0.1-beta.7",
+              distTag: "beta",
+              tarball: "../outside.tgz",
+            },
+          ],
+        }).pipe(Effect.flip);
+      }),
   );
 
   it.effect("keeps generated release PRs behind a trusted integrity gate", () =>
@@ -1002,14 +1087,6 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
             versionMetadata: JSON.stringify({ dist: { integrity: "sha512-other" } }),
           },
           {
-            packageMetadata: "not-json",
-            versionMetadata: validVersionMetadata,
-          },
-          {
-            packageMetadata: JSON.stringify({ "dist-tags": {} }),
-            versionMetadata: validVersionMetadata,
-          },
-          {
             packageMetadata: JSON.stringify({ "dist-tags": { beta: "0.0.1-beta.6" } }),
             versionMetadata: validVersionMetadata,
           },
@@ -1030,8 +1107,43 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           versionMetadata: validVersionMetadata,
         });
         expect(unpublishedVersion).toMatchObject({ exitCode: 0, publishInvoked: true });
+        expect(unpublishedVersion.publishInvocation[0]).toMatch(
+          /[/]release-artifact[/][.]npm-cli[/]package[/]bin[/]npm-cli[.]js$/,
+        );
+        expect(unpublishedVersion.publishInvocation.slice(1)).toEqual([
+          "publish",
+          "packages/capabilities.tgz",
+          "--access",
+          "public",
+          "--ignore-scripts",
+          "--registry",
+          "https://registry.npmjs.org",
+          "--tag",
+          "beta",
+          "--provenance",
+        ]);
+
+        for (const checksumFailure of ["artifact", "npm"] as const) {
+          const checksumResult = yield* runReleasePublisher(publishScript, {
+            checksumFailure,
+            packageMetadata: validPackageMetadata,
+            registryStatus: "404",
+            versionMetadata: validVersionMetadata,
+          });
+          expect(checksumResult.exitCode).not.toBe(0);
+          expect(checksumResult.publishInvoked).toBe(false);
+        }
+
+        const unsafeTarball = yield* runReleasePublisher(publishScript, {
+          packageMetadata: validPackageMetadata,
+          registryStatus: "404",
+          tarball: "../outside.tgz",
+          versionMetadata: validVersionMetadata,
+        });
+        expect(unsafeTarball.exitCode).not.toBe(0);
+        expect(unsafeTarball.publishInvoked).toBe(false);
       }),
-    40_000,
+    60_000,
   );
 
   it.effect("publishes prepared release directories atomically and cleans failed staging", () =>
@@ -1118,6 +1230,14 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const packageDirectory = path.join(fixtureRoot, "packages", "fixture");
         const changesetDirectory = path.join(fixtureRoot, ".changeset");
         const changesetBinary = path.resolve(repositoryRoot, "node_modules", ".bin", "changeset");
+        const verifierSource = yield* readRepositoryFile("scripts/verify-changesets-release.ts");
+        expect(verifierSource).toContain('"--frozen-lockfile"');
+        expect(verifierSource).toContain(
+          'path.join(expectedWorktree, "node_modules", ".bin", "changeset")',
+        );
+        expect(verifierSource).not.toContain(
+          'path.join(root, "node_modules", ".bin", "changeset")',
+        );
 
         yield* fs.makeDirectory(packageDirectory, { recursive: true });
         yield* fs.makeDirectory(changesetDirectory, { recursive: true });
@@ -1192,6 +1312,38 @@ Exercise the generated release verifier.
           "--porcelain",
         ]);
         expect(worktreesAfterSuccess.match(/^worktree /gm)).toHaveLength(1);
+
+        let failedCleanupPath = "";
+        const cleanupCause = PlatformError.systemError({
+          _tag: "Busy",
+          module: "FileSystem",
+          method: "remove",
+        });
+        const cleanupFailingFileSystem = FileSystem.FileSystem.of({
+          ...fs,
+          remove: (target, options) => {
+            if (String(target).includes("effect-agent-changesets-release-")) {
+              failedCleanupPath = String(target);
+              return Effect.fail(cleanupCause);
+            }
+            return fs.remove(target, options);
+          },
+        });
+        const cleanupFailure = yield* Effect.flip(
+          verifyChangesetsRelease({
+            baseSha,
+            changesetBinary,
+            headSha: generatedHead,
+            repositoryRoot: fixtureRoot,
+          }).pipe(Effect.provideService(FileSystem.FileSystem, cleanupFailingFileSystem)),
+        );
+        expect(cleanupFailure).toMatchObject({
+          _tag: "VerificationCleanupError",
+          operation: "temporary directory removal",
+          message: expect.stringContaining("Busy: FileSystem.remove"),
+        });
+        expect(failedCleanupPath).not.toBe("");
+        yield* fs.remove(failedCleanupPath, { force: true, recursive: true });
 
         yield* fs.writeFileString(
           path.join(packageDirectory, "package.json"),
