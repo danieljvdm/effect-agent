@@ -8,7 +8,22 @@
   ],
   "commit": false,
   "fixed": [
-    ["effect-agent", "@effect-agent/core", "@effect-agent/engine", "@effect-agent/capabilities"]
+    [
+      "@effect-agent/capabilities",
+      "@effect-agent/core",
+      "@effect-agent/engine",
+      "@effect-agent/platform-cloudflare",
+      "@effect-agent/platform-node",
+      "@effect-agent/pr-review",
+      "@effect-agent/sandbox",
+      "@effect-agent/sandbox-local",
+      "@effect-agent/session",
+      "@effect-agent/storage-cloudflare",
+      "@effect-agent/storage-memory",
+      "@effect-agent/storage-sqlite",
+      "@effect-agent/testing",
+      "effect-agent"
+    ]
   ],
   "linked": [],
   "access": "public",
