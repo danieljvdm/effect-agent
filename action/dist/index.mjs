@@ -34129,9 +34129,6 @@ var boundEncodedToolResult = (encodedResult, bounds) => {
     return unserializableToolResult("the encoded result is not a JSON value");
   }
   const bounded3 = applyToolResultBounds(text, bounds);
-  if (bounded3 === text) {
-    return encodedResult;
-  }
   try {
     return exports_Schema.decodeSync(exports_Schema.fromJsonString(exports_Schema.Unknown))(bounded3);
   } catch (cause) {

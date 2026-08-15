@@ -1760,9 +1760,10 @@ const boundEncodedToolResult = (encodedResult: unknown, bounds: ToolResultBounds
     return unserializableToolResult("the encoded result is not a JSON value");
   }
   const bounded = applyToolResultBounds(text, bounds);
-  if (bounded === text) {
-    return encodedResult;
-  }
+  // The measured JSON representation is the ONLY value retained, in both the
+  // truncated and unmodified cases: returning the original object would let a
+  // stateful `toJSON` pass the byte check small and expand or throw on later
+  // canonical serialization, carrying unchecked state past the boundary.
   try {
     return Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(bounded);
   } catch (cause) {

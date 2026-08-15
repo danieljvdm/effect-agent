@@ -995,6 +995,54 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
     }),
   );
 
+  it.effect(
+    "RUN-022: a within-bounds Tool result is canonicalized to its measured JSON projection",
+    () =>
+      Effect.gen(function* () {
+        const UnknownTool = Tool.make("emitUnknown", {
+          parameters: Schema.Struct({}),
+          success: Schema.Unknown,
+        });
+        const unknownToolkit = Toolkit.make(UnknownTool);
+        const definition = Agent.define("bounds-canonicalize", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Use the tool once, then answer.",
+          toolkit: unknownToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("c-1", "emitUnknown", {}),
+          finalParts('{"answer":"done"}'),
+        ]);
+        // Passes the byte check via a small `toJSON` projection while the
+        // object itself carries unbounded state and an `undefined` hole:
+        // only the measured projection may be retained.
+        const toolLayer = unknownToolkit.toLayer({
+          emitUnknown: () =>
+            Effect.succeed({
+              state: "x".repeat(200_000),
+              hole: undefined,
+              toJSON: () => ({ ok: true }),
+            }),
+        });
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "c",
+        }).pipe(Effect.provide(toolLayer));
+        expect(result.output).toEqual({ answer: "done" });
+        const second = requests[1];
+        if (second === undefined) throw new Error("expected a second model request");
+        const values = toolResultValues(second.prompt);
+        expect(values).toHaveLength(1);
+        expect(values[0]).toEqual({ ok: true });
+      }),
+  );
+
   it.effect("RUN-022: an unserializable FAILED Tool result becomes the sentinel too", () =>
     Effect.gen(function* () {
       const FragileTool = Tool.make("fragile", {
