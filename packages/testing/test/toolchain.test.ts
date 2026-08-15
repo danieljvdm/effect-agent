@@ -276,37 +276,48 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
   it.effect("keeps workspace dependency edges on the documented inward-only graph", () =>
     Effect.gen(function* () {
+      // A dependency's effective target is the aliased package for an
+      // `npm:` specifier, otherwise the key itself — so a forbidden edge
+      // cannot hide behind an innocuous dependency key.
+      const npmAliasTarget = (specifier: string): string | undefined => {
+        if (!specifier.startsWith("npm:")) {
+          return undefined;
+        }
+        const aliased = specifier.slice("npm:".length);
+        const versionSeparator = aliased.indexOf("@", aliased.startsWith("@") ? 1 : 0);
+        return versionSeparator === -1 ? aliased : aliased.slice(0, versionSeparator);
+      };
+      const workspaceTarget = (name: string, specifier: string): string | undefined => {
+        const target = npmAliasTarget(specifier) ?? name;
+        if (target === "effect-agent") {
+          return target;
+        }
+        return target.startsWith("@effect-agent/")
+          ? target.slice("@effect-agent/".length)
+          : undefined;
+      };
+
       for (const packageName of packageNames) {
         const manifest = yield* readManifest(
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
-        const workspaceEdges = manifestDependencies(manifest)
-          .filter(
-            (dependency) =>
-              dependency === "effect-agent" || dependency.startsWith("@effect-agent/"),
-          )
-          .map((dependency) =>
-            dependency === "effect-agent" ? dependency : dependency.slice("@effect-agent/".length),
-          );
         const allowed = allowedWorkspaceEdges[packageName];
-        expect(
-          workspaceEdges.filter((edge) => !allowed.includes(edge)),
-          `${packageName} declares a workspace edge outside the documented dependency graph`,
-        ).toEqual([]);
-
-        // The two permitted `-> testing` edges are dev-only: they must not
-        // reappear in dependencies, peerDependencies, or optionalDependencies,
-        // where they would ship or leak into consumer resolution.
-        if (allowed.includes("testing")) {
-          for (const section of [
-            "dependencies",
-            "peerDependencies",
-            "optionalDependencies",
-          ] as const) {
+        for (const section of dependencySections) {
+          const edges = Object.entries(manifest[section] ?? {})
+            .map(([name, specifier]) => workspaceTarget(name, specifier))
+            .filter((edge): edge is string => edge !== undefined);
+          expect(
+            edges.filter((edge) => !allowed.includes(edge)),
+            `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
+          ).toEqual([]);
+          // The two permitted `-> testing` edges are dev-only: they must not
+          // reappear in dependencies, peerDependencies, or optionalDependencies,
+          // where they would ship or leak into consumer resolution.
+          if (section !== "devDependencies") {
             expect(
-              Object.keys(manifest[section] ?? {}),
+              edges,
               `${packageName} may consume @effect-agent/testing only as a devDependency`,
-            ).not.toContain("@effect-agent/testing");
+            ).not.toContain("testing");
           }
         }
       }
