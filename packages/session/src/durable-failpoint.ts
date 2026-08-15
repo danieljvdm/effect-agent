@@ -21,6 +21,7 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
   "turn:after-canonical-append",
   "turn:after-response-append",
   "turn:after-results-append",
+  "compaction:after-canonical-append",
   "tools:after-prepared-append",
   "step:after-step-append",
   "approval:after-request-append",

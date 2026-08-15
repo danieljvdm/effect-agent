@@ -134,9 +134,21 @@ Denial remains terminal per the P2 policy default.
 ## 6. Compaction
 
 Compaction converts a prefix of conversation history into a smaller context
-representation. It does not rewrite or delete the canonical log.
+representation. It does not rewrite or delete the canonical log. Two forms exist
+(ADR-0018).
 
-A compactor returns:
+**Engine-native compaction** is the operational path ([runtime §9](./runtime.md)): when the
+estimated next model-call context exceeds `AgentPolicy.contextTokenLimit`, the engine prunes old
+Tool results and, if needed, summarizes through one metered model call at the pre-Turn seam. On
+the durable runtime each compaction appends a canonical
+`CompactionCreated { runId, turn, kind: "clear-tool-results" | "summarize", coversThrough,
+summary? }` record inside the same epoch-fenced log it covers; the run-journal projection folds
+covered records into the summary or the cleared-result marker, and an invalid range is ignored
+fail-safe. No source digest is carried: the record is appended by the fenced owner into the log
+it covers, and re-verifying a digest would re-read the whole covered range on every wake.
+
+**Host-supplied compaction artifacts** cross a trust boundary and stay digest-bound. A host
+compactor returns:
 
 ```ts
 interface CompactionResult {
@@ -152,10 +164,10 @@ interface CompactionResult {
 Requirements:
 
 - input coverage is an explicit sequence range;
-- the source digest binds the result to that exact range;
+- for host-supplied artifacts, the source digest binds the result to that exact range;
 - summaries are versioned;
 - failed compaction cannot corrupt or advance conversation state;
-- replay may reuse a valid compaction artifact;
+- replay may reuse a valid compaction artifact or committed compaction record;
 - operators may rebuild compactions from the canonical log;
 - secrets excluded by policy must not enter the summary.
 
@@ -354,3 +366,7 @@ default and are excluded from ordinary span attributes.
 - **CAP-016**: Code Mode's model-visible egress — the final result, captured logs, and thrown
   values — passes one aggregate byte budget and redaction policy; intermediate results never
   leave a pass implicitly.
+- **CAP-017**: Budget snapshots are cache-aware and context-aware: `UsageTotals` and
+  `UsageDelta` carry cache-read and cache-write input tokens distinctly (with `inputTokens`
+  remaining the total), and totals expose the most recent call's input/output tokens as the
+  live-context estimate.

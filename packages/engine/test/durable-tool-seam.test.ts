@@ -632,6 +632,8 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
           "ModelStarted",
           "TextDelta",
           "TurnCompleted",
+          "BudgetWarning",
+          "BudgetWarning",
           "RunCompleted",
         ]);
         // Only the open call executed; the settled call was injected.

@@ -103,7 +103,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-sqlite (DN)", () 
     () =>
       Effect.gen(function* () {
         const report = yield* certified;
-        expect(report.tier2).toHaveLength(28 * CERTIFICATION_SCENARIOS.length);
+        expect(report.tier2).toHaveLength(29 * CERTIFICATION_SCENARIOS.length);
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
         expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
         for (const scenario of CERTIFICATION_SCENARIOS) {

@@ -1,7 +1,17 @@
-import { Duration, Effect, Schema } from "effect";
+import { Duration, Effect, Encoding, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  type BudgetWarning,
+  type CompactionPerformed,
+  type SubagentCompleted,
+  type SubagentFailed,
+  type SubagentInterrupted,
+  type SubagentJoined,
+  type SubagentProgress,
+  type SubagentRequested,
+  type SubagentStarted,
+  type ToolCallFailed,
   AgentId,
   AgentApprovalDenied,
   AgentApprovalPending,
@@ -11,27 +21,28 @@ import {
   AgentOutputError,
   AgentPolicy,
   AgentPolicyError,
+  applyToolResultBounds,
+  CompactionPolicy,
+  ContextOverflowError,
   ConversationId,
   DelegationId,
   IdGenerator,
   ModelProtocolError,
   ReceiptId,
+  RunCompleted,
   RunEvent,
   RunId,
   RunStarted,
   SettlementId,
-  SubagentCompleted,
-  SubagentFailed,
-  SubagentInterrupted,
-  SubagentJoined,
   SubagentParentLink,
-  SubagentProgress,
-  SubagentRequested,
-  SubagentStarted,
-  ToolCallFailed,
   ToolCallDeclared,
+  ToolResultBounds,
+  TruncatedToolResult,
   TurnId,
 } from "../src/index.ts";
+
+// Core is platform-neutral: no TextEncoder in its lib; hex length halves to UTF-8 bytes.
+const utf8Bytes = (value: string): number => Encoding.encodeHex(value).length / 2;
 
 describe("core schemas", () => {
   it("decodes distinct non-empty branded identifiers", () => {
@@ -372,5 +383,208 @@ describe("core schemas", () => {
     expect(firstConversation.startsWith("conversation-")).toBe(true);
     expect(run.startsWith("run-")).toBe(true);
     expect(turn.startsWith("turn-")).toBe(true);
+  });
+});
+
+describe("context-economics policy", () => {
+  it("fills context-economics defaults and accepts explicit overrides", () => {
+    const policy = AgentPolicy.make({
+      maxTurns: 2,
+      maxToolCalls: 1,
+      maxDuration: "30 seconds",
+      toolConcurrency: 1,
+    });
+
+    expect(policy.toolResultBounds.maxBytes).toBe(50 * 1024);
+    expect(policy.onExhaustion).toBe("final-answer");
+    expect(policy.runStatus).toBe("appended");
+    expect(policy.compaction.keepRecentTokens).toBe(20_000);
+    expect(policy.compaction.mode).toBe("prune-then-summarize");
+    expect(policy.contextTokenLimit).toBeUndefined();
+
+    const custom = AgentPolicy.make({
+      maxTurns: 2,
+      maxToolCalls: 1,
+      maxDuration: "30 seconds",
+      toolConcurrency: 1,
+      contextTokenLimit: 30_000,
+      toolResultBounds: ToolResultBounds.make({ maxBytes: 1_024 }),
+      onExhaustion: "fail",
+      runStatus: "off",
+      compaction: CompactionPolicy.make({ keepRecentTokens: 5_000, mode: "prune" }),
+    });
+
+    expect(custom.contextTokenLimit).toBe(30_000);
+    expect(custom.toolResultBounds.maxBytes).toBe(1_024);
+    expect(custom.onExhaustion).toBe("fail");
+    expect(custom.runStatus).toBe("off");
+    expect(custom.compaction.keepRecentTokens).toBe(5_000);
+    expect(custom.compaction.mode).toBe("prune");
+  });
+
+  it("rejects non-positive context-economics bounds", () => {
+    expect(() =>
+      AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+        contextTokenLimit: 0,
+      }),
+    ).toThrow();
+    expect(() => ToolResultBounds.make({ maxBytes: 0 })).toThrow();
+    expect(() => CompactionPolicy.make({ keepRecentTokens: 0 })).toThrow();
+    expect(() => CompactionPolicy.make({ keepRecentTokens: 2.5 })).toThrow();
+  });
+});
+
+describe("tool result bounds", () => {
+  it("RUN-022: returns a within-bounds encoded result unchanged", () => {
+    const encoded = JSON.stringify({ stdout: "ok", code: 0 });
+
+    expect(applyToolResultBounds(encoded, ToolResultBounds.make({ maxBytes: 1_024 }))).toBe(
+      encoded,
+    );
+  });
+
+  it("RUN-022: truncates an oversized result into the canonical envelope within maxBytes", () => {
+    const encoded = JSON.stringify({ stdout: "line\n".repeat(4_000), code: 0 });
+    const bounds = ToolResultBounds.make({ maxBytes: 1_024 });
+    const output = applyToolResultBounds(encoded, bounds);
+    const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(JSON.parse(output));
+
+    expect(utf8Bytes(output)).toBeLessThanOrEqual(1_024);
+    expect(envelope.truncatedToolResult).toBe(true);
+    expect(envelope.originalBytes).toBe(utf8Bytes(encoded));
+    expect(envelope.head.length).toBeGreaterThan(0);
+    expect(envelope.tail.length).toBeGreaterThan(0);
+    expect(encoded.startsWith(envelope.head)).toBe(true);
+    expect(encoded.endsWith(envelope.tail)).toBe(true);
+    expect(applyToolResultBounds(encoded, bounds)).toBe(output);
+  });
+
+  it("RUN-022: never splits multibyte characters and always emits valid JSON", () => {
+    const encoded = JSON.stringify({ text: `${"🦀".repeat(2_000)}${"端到端".repeat(2_000)}` });
+    const output = applyToolResultBounds(encoded, ToolResultBounds.make({ maxBytes: 512 }));
+    const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(JSON.parse(output));
+
+    expect(utf8Bytes(output)).toBeLessThanOrEqual(512);
+    expect(encoded.startsWith(envelope.head)).toBe(true);
+    expect(encoded.endsWith(envelope.tail)).toBe(true);
+    for (const slice of [envelope.head, envelope.tail]) {
+      for (const unit of [slice.charCodeAt(0), slice.charCodeAt(slice.length - 1)]) {
+        expect(unit >= 0xdc00 && unit <= 0xdfff && slice.length === 1).toBe(false);
+      }
+    }
+  });
+
+  it("RUN-022: floors to the minimal empty envelope when maxBytes fits no content", () => {
+    const encoded = JSON.stringify({ stdout: "x".repeat(500) });
+    const output = applyToolResultBounds(encoded, ToolResultBounds.make({ maxBytes: 8 }));
+    const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(JSON.parse(output));
+
+    expect(envelope.head).toBe("");
+    expect(envelope.tail).toBe("");
+    expect(envelope.originalBytes).toBe(utf8Bytes(encoded));
+  });
+});
+
+describe("context-economics errors and events", () => {
+  it("round-trips ContextOverflowError as an expected framework failure", () => {
+    const error = ContextOverflowError.make({
+      message: "prompt exceeds the model context window",
+      retried: true,
+    });
+    const encoded = Schema.encodeSync(ContextOverflowError)(error);
+
+    expect(error._tag).toBe("ContextOverflowError");
+    expect(Schema.decodeSync(ContextOverflowError)(encoded)).toEqual(error);
+  });
+
+  it("round-trips BudgetWarning and CompactionPerformed through the public union", () => {
+    const base = {
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 6,
+      timestamp: "2026-08-15T12:00:00.000Z",
+    } as const;
+    const warning = {
+      _tag: "BudgetWarning",
+      ...base,
+      limit: "tokens",
+      consumed: 160_000,
+      limitValue: 200_000,
+    } satisfies typeof BudgetWarning.Encoded;
+    const compaction = {
+      _tag: "CompactionPerformed",
+      ...base,
+      turn: 3,
+      kind: "summarize",
+      tokensBeforeEstimate: 180_000,
+      tokensAfterEstimate: 24_000,
+    } satisfies typeof CompactionPerformed.Encoded;
+
+    for (const encodedEvent of [warning, compaction] as const) {
+      const event = Schema.decodeSync(RunEvent)(encodedEvent);
+      expect(event._tag).toBe(encodedEvent._tag);
+      expect(Schema.encodeSync(RunEvent)(event)).toEqual(encodedEvent);
+    }
+    expect(() => Schema.decodeUnknownSync(RunEvent)({ ...warning, limit: "vibes" })).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({ ...compaction, kind: "delete-history" }),
+    ).toThrow();
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({ ...compaction, tokensBeforeEstimate: -1 }),
+    ).toThrow();
+  });
+
+  it("decodes terminal completion events with and without the exhausted marker", () => {
+    const encodedRun = {
+      _tag: "RunCompleted",
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 9,
+      timestamp: "2026-08-15T12:00:00.000Z",
+      output: { summary: "partial findings" },
+      turns: 3,
+      finishReason: "completed",
+    } satisfies typeof RunCompleted.Encoded;
+
+    expect(Schema.decodeSync(RunCompleted)(encodedRun).exhausted).toBeUndefined();
+    expect(
+      Schema.decodeUnknownSync(RunEvent)({ ...encodedRun, exhausted: "tokens" }),
+    ).toMatchObject({ _tag: "RunCompleted", exhausted: "tokens" });
+    expect(() =>
+      Schema.decodeUnknownSync(RunEvent)({ ...encodedRun, exhausted: "duration" }),
+    ).toThrow();
+
+    const encodedChild = {
+      _tag: "SubagentCompleted",
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 10,
+      timestamp: "2026-08-15T12:00:00.000Z",
+      turnId: "turn-1",
+      toolCallId: "delegate-1",
+      delegationId: "delegate-research",
+      childConversationId: "conversation-2",
+      childRunId: "run-2",
+      targetAgentId: "research-specialist",
+      depth: 1,
+      turns: 2,
+      finishReason: "completed",
+      exhausted: "turns",
+    } satisfies typeof SubagentCompleted.Encoded;
+
+    expect(Schema.decodeUnknownSync(RunEvent)(encodedChild)).toMatchObject({
+      _tag: "SubagentCompleted",
+      exhausted: "turns",
+    });
   });
 });

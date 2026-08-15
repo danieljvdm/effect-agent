@@ -83,8 +83,10 @@ the Definition's ceiling, and the `onExhaustion` resolution keys off the effecti
 the budget-extension seam: an orchestrator grants a delegated child more budget by re-invoking the
 delegation with a larger allowance below the child Definition's policy.
 
-Duration, token, cost, and hierarchical budget-hook bounds are hard rails regardless of
-`onExhaustion`. Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
+Duration, cost, and hierarchical budget-hook bounds are hard rails regardless of
+`onExhaustion`. The token dimension originally shipped as a hard rail and now participates in
+the `onExhaustion` resolution with a one-shot bound (ADR-0018's dated amendment to ADR-0019;
+RUN-025). Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
 Call outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool
 Call success resets it, and reaching `repeatedFailureLimit` fails the Run with the typed policy
 failure (`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.
@@ -226,7 +228,10 @@ This distinction must be visible in naming and documentation.
 Retries are classified and local:
 
 - Model transient failure may retry before a canonical terminal response.
-- Context overflow invokes compaction policy and at most the configured retry count.
+- A provider context-length rejection is classified into a typed overflow. With a configured
+  `contextTokenLimit` the engine compacts (§9) and retries the model call exactly once;
+  otherwise, or on a second overflow, the Run fails with `ContextOverflowError` rather than an
+  opaque provider error.
 - Tool handler failures do not automatically retry.
 - Tool infrastructure retry is opt-in and must respect idempotency/durability annotations.
 - Output encoding failure never retries as an external Tool call.
@@ -250,9 +255,72 @@ Official prior history remains the exact prefix of the newly materialized Run hi
 instructions and the current decoded input append after that prefix; a new Run must never prepend,
 rewrite, or reorder already-official messages.
 
-Compaction appends or emits a summary/branch representation and preserves the source history.
-Summary generation is a separately metered Model purpose. Failed compaction leaves the original
-history authoritative.
+### Window and budget calculation
+
+Step 4 is implemented from policy plus observed usage. The engine tracks the most recent model
+call's provider-reported input and output tokens as the live-context estimate, and estimates the
+next call's context as that value plus a chars/4 approximation of parts appended since (the whole
+prompt on the first call). Cache-read and cache-write input tokens are accounted distinctly from
+uncached input and forwarded through the budget hook. `AgentPolicy.contextTokenLimit`, when
+present, bounds one call's live context; `tokenBudget` remains the cumulative runaway stop; spend
+belongs to `costBudgetMicrousd`.
+
+### Tool result bounds
+
+Every application Tool result — MCP included — is bounded once at the settle seam by
+`AgentPolicy.toolResultBounds` (default 50 KiB) before it enters records or prompts, so both
+carry the same value. An oversized encoded result becomes the canonical `TruncatedToolResult`
+envelope preserving head, tail, and original byte size. Provider-executed results are exempt.
+
+### Run-status message
+
+With `AgentPolicy.runStatus: "appended"` (the default), each outgoing model request ends with a
+derived run-status message reflecting turns, Tool calls, tokens against budget, last-call
+context, and elapsed time, with a wrap-up warning once any tracked dimension reaches 80%. The
+message is derived at prompt-assembly time and is never persisted as canonical history.
+
+### Compaction
+
+Step 5 runs at the pre-Turn seam, synchronously, when the estimated next context exceeds
+`contextTokenLimit`, per `AgentPolicy.compaction`:
+
+1. **Prune** (`clear-tool-results`): application Tool results older than the protected
+   `keepRecentTokens` tail are replaced with `"[tool result cleared by compaction]"`, preserving
+   message structure and call/result pairing.
+2. **Summarize**, if still over and the mode allows: one metered model call on the Run's bound
+   model (its usage is consumed like any other call) produces a structured summary — goal,
+   constraints, progress, decisions, next steps, critical context. The rebuilt prompt is the
+   instruction prefix, the summary message, and the kept tail.
+
+Cut points never split an assistant Tool call from its result, and prepared-unsettled Tool
+records are always in the kept tail (ADR-0004). On the durable runtime each compaction appends a
+canonical `CompactionCreated` record (`kind`, `coversThrough`, optional `summary`) inside the
+epoch-fenced log it covers; the run-journal projection folds it — covered records render as the
+summary or with cleared Tool results — and an invalid range is ignored fail-safe with the full
+history staying authoritative. The session selects `coversThrough` itself, walking its own
+records with the shared estimator, and clamps coverage to records of PRIOR Runs only — the owner
+Run's records are never covered, because its first response record carries the evaluated
+instructions and input. The engine's in-memory rebuild is therefore a view that may cover more
+than the record; the record is canonical. A threshold compaction with no prior-Run records to
+cover commits no record and applies only in-view. Compaction appends or emits a summary representation and
+preserves the source history; failed compaction leaves the original history authoritative.
+Host-supplied, digest-bound compaction artifacts remain available through the capabilities layer
+([capabilities §6](./capabilities.md)).
+
+### Budget warnings and the token soft landing
+
+Crossing 80% of a configured budget dimension emits a `BudgetWarning` Run Event once per
+dimension (RUN-025). Turn and Tool Call exhaustion resolve through the Stop Policy's
+`onExhaustion` machinery (§3, RUN-018–RUN-020). Token exhaustion — a post-response check —
+joins the same resolution: under the default `"final-answer"`, a breaching response that
+already carries a decodable final answer at a stop completes the Run directly with that answer
+and no extra call, and otherwise the Run takes at most one constrained grace Turn
+(`toolChoice: "none"`; its usage is consumed once and exempt from re-triggering breach). Either
+way the Run settles as `RunCompleted` with `finishReason: "budget-exhausted"` and
+`exhausted: "tokens"`. A grace-Turn response that declares Tool calls fails typed
+(`ModelProtocolError`, RUN-020); under `onExhaustion: "fail"` token breach keeps the fail-fast
+contract (`AgentPolicyError`). `maxDuration` breach always fails — a grace call would extend
+wall clock past the contract.
 
 After these steps the engine appends the model-visible final-output contract to the produced
 Model Input (RUN-028): one framework-owned system message carrying the JSON Schema derived from
@@ -418,8 +486,10 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-009:** Concurrency is bounded.
 - **RUN-010:** Slow detached observers cannot determine durable liveness.
 - **RUN-011:** Budget exhaustion cannot masquerade as success. A Run that settles through the
-  final-answer resolution carries `finishReason: "budget-exhausted"` — never `"model-stop"` — on
-  the live terminal event and on the durable `SubmissionSettled` record.
+  final-answer resolution — Turn, Tool Call, or token exhaustion — carries
+  `finishReason: "budget-exhausted"` and the `exhausted` dimension marker — never
+  `"model-stop"` — on the live terminal event and on the durable `SubmissionSettled` record;
+  `onExhaustion: "fail"` fails typed before any successful stop.
 - **RUN-012:** Provider SDK types do not enter Conversation records; Effect AI Prompt and Response
   values remain the model-facing boundary.
 - **RUN-013:** No retry policy can blindly repeat an uncertain external effect.
@@ -447,9 +517,35 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-021:** Per-Run allowances are tightening-only: the effective Turn/Tool-Call limit is the
   minimum of the Agent Policy bound and the normalized allowance, never more, and the
   `onExhaustion` resolution applies at the effective limit.
+- **RUN-022:** Every application Tool result — MCP included — is bounded by policy
+  `toolResultBounds` once at the settle seam before entering records or prompts; an oversized
+  result becomes the canonical `TruncatedToolResult` envelope preserving head, tail, and
+  original byte size, and provider-executed results are exempt.
+- **RUN-023:** The engine accounts cache-read and cache-write input tokens distinctly from
+  uncached input and tracks the most recent call's input/output tokens as the live-context
+  estimate, both visible through the budget hook.
+- **RUN-024:** With policy `runStatus: "appended"`, every outgoing model request carries a
+  derived run-status message reflecting turns, Tool calls, tokens, and elapsed time; the
+  message is never persisted as canonical history.
+- **RUN-025:** Crossing 80% of a configured budget emits `BudgetWarning` once per dimension.
+  The token dimension participates in the `onExhaustion` resolution: under `"final-answer"`, a
+  token-breaching response that already carries decodable
+  final output settles directly, and otherwise the Run takes at most one constrained grace Turn
+  (`toolChoice: "none"`, its usage consumed once and exempt from re-triggering breach),
+  completing with `finishReason: "budget-exhausted"` and `exhausted: "tokens"`; under `"fail"`
+  token breach stays fatal. Duration and cost remain hard rails in both modes.
+- **RUN-026:** When the estimated next model-call context exceeds policy `contextTokenLimit` —
+  including the reserved size of the model-visible output contract the engine appends after
+  preparation (RUN-028) — the engine compacts at the pre-Turn seam — pruning old Tool results,
+  then summarizing through one metered model call — never splitting an assistant Tool call from
+  its result and always keeping prepared-unsettled Tool records; durable compaction appends a
+  canonical `CompactionCreated` record that projections fold, and source history is never
+  erased.
+- **RUN-027:** A provider context-length rejection is classified typed; with compaction
+  configured the engine compacts and retries the model call exactly once; otherwise, or on a
+  second overflow, the Run fails with `ContextOverflowError`.
 - **RUN-028:** Every model request of a Run whose Agent Definition declares an output Schema
   carries a model-visible representation of that Schema derived by Effect AI's JSON-Schema
   derivation, applied after context preparation and never entered into official history; a
   Definition whose output Schema cannot be derived runs with the documented fallback and a
-  diagnostic, never a silent difference. (RUN-022–027 are reserved by the in-flight
-  context-economics work, #54.)
+  diagnostic, never a silent difference.

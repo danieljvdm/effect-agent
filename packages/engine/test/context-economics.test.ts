@@ -1,0 +1,879 @@
+import {
+  Agent,
+  AgentPolicy,
+  AgentPolicyError,
+  ConversationId,
+  ModelProtocolError,
+  IdGenerator,
+  RunId,
+  ToolResultBounds,
+  TruncatedToolResult,
+  TurnId,
+  type RunEvent,
+} from "@effect-agent/core";
+import { expect, layer } from "@effect/vitest";
+import { Cause, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  LanguageModel,
+  Model,
+  type Prompt,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
+
+import {
+  AgentRuntime,
+  formatRunStatus,
+  type RunDurabilityHook,
+  type RunUsageDelta,
+} from "../src/index.ts";
+
+const identifiers = Layer.succeed(IdGenerator, {
+  nextConversationId: Effect.succeed(Schema.decodeSync(ConversationId)("conversation-1")),
+  nextRunId: Effect.succeed(Schema.decodeSync(RunId)("run-1")),
+  nextTurnId: Effect.succeed(Schema.decodeSync(TurnId)("turn-1")),
+});
+
+const emptyUsage = { inputTokens: {}, outputTokens: {} };
+
+const usageOf = (input: number, output: number) => ({
+  inputTokens: { total: input },
+  outputTokens: { total: output },
+});
+
+const finalParts = (
+  text: string,
+  usage: typeof emptyUsage | ReturnType<typeof usageOf> = emptyUsage,
+): ReadonlyArray<Response.StreamPartEncoded> => [
+  { type: "text-start", id: "answer" },
+  { type: "text-delta", id: "answer", delta: text },
+  { type: "text-end", id: "answer" },
+  { type: "finish", reason: "stop", usage },
+];
+
+const toolCallParts = (
+  id: string,
+  name: string,
+  params: Record<string, unknown>,
+  usage: typeof emptyUsage | ReturnType<typeof usageOf> = emptyUsage,
+): ReadonlyArray<Response.StreamPartEncoded> => [
+  { type: "tool-call", id, name, params, providerExecuted: false },
+  { type: "finish", reason: "tool-calls", usage },
+];
+
+interface CapturedRequest {
+  readonly prompt: Prompt.Prompt;
+  readonly toolCount: number;
+  readonly toolChoice: unknown;
+}
+
+/** Scripted multi-call model: one parts script per model request, with request capture. */
+const scriptedModel = (script: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>>) => {
+  const requests: Array<CapturedRequest> = [];
+  const model = Model.make(
+    "scripted",
+    "context-economics",
+    Layer.effect(
+      LanguageModel.LanguageModel,
+      LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: (request) => {
+          const index = Math.min(requests.length, script.length - 1);
+          requests.push({
+            prompt: request.prompt,
+            toolCount: request.tools.length,
+            toolChoice: request.toolChoice,
+          });
+          return Stream.fromIterable(script[index] ?? []);
+        },
+      }),
+    ),
+  );
+  return { model, requests };
+};
+
+const messageText = (message: Prompt.Prompt["content"][number]): string => {
+  if (typeof message.content === "string") {
+    return message.content;
+  }
+  return message.content
+    .map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
+    .join("");
+};
+
+const promptText = (prompt: Prompt.Prompt): string =>
+  prompt.content.map((message) => messageText(message)).join("\n");
+
+const occurrences = (haystack: string, needle: string): number => haystack.split(needle).length - 1;
+
+const toolResultValues = (prompt: Prompt.Prompt): ReadonlyArray<unknown> =>
+  prompt.content.flatMap((message) =>
+    typeof message.content === "string"
+      ? []
+      : message.content.flatMap((part) =>
+          part.type === "tool-result" ? [part.result as unknown] : [],
+        ),
+  );
+
+const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
+  expect(Exit.isFailure(exit)).toBe(true);
+  if (Exit.isSuccess(exit)) {
+    throw new Error("Expected the Effect to fail");
+  }
+  const failure = Cause.findErrorOption(exit.cause);
+  expect(Option.isSome(failure)).toBe(true);
+  if (Option.isNone(failure)) {
+    throw new Error("Expected a typed failure in the Cause");
+  }
+  return failure.value;
+};
+
+const EmitTool = Tool.make("emit", {
+  parameters: Schema.Struct({}),
+  success: Schema.Struct({ data: Schema.String }),
+});
+const emitToolkit = Toolkit.make(EmitTool);
+
+const SearchTool = Tool.make("search", {
+  parameters: Schema.Struct({}),
+  success: Schema.String,
+});
+const searchToolkit = Toolkit.make(SearchTool);
+
+const answerOutput = Schema.Struct({ answer: Schema.String });
+
+layer(identifiers)("context economics — bounding, tracking, status, exhaustion", (it) => {
+  // ---------------------------------------------------------------- RUN-022
+
+  it.effect(
+    "RUN-022: bounds an oversized application Tool result into the TruncatedToolResult envelope for prompt and events",
+    () =>
+      Effect.gen(function* () {
+        const bigData = "x".repeat(3_000);
+        const definition = Agent.define("bounds-oversized", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Use the tool once, then answer.",
+          toolkit: emitToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            toolResultBounds: ToolResultBounds.make({ maxBytes: 1_024 }),
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("emit-1", "emit", {}),
+          finalParts('{"answer":"done"}'),
+        ]);
+        const toolLayer = emitToolkit.toLayer({
+          emit: () => Effect.succeed({ data: bigData }),
+        });
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+
+        yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "big",
+        }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+        );
+
+        expect(requests).toHaveLength(2);
+        const second = requests[1];
+        if (second === undefined) throw new Error("expected a second model request");
+        const results = toolResultValues(second.prompt);
+        expect(results).toHaveLength(1);
+        const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(results[0]);
+        const originalEncoded = JSON.stringify({ data: bigData });
+        expect(envelope.originalBytes).toBe(originalEncoded.length);
+        expect(originalEncoded.startsWith(envelope.head)).toBe(true);
+        expect(originalEncoded.endsWith(envelope.tail)).toBe(true);
+        expect(JSON.stringify(results[0]).length).toBeLessThanOrEqual(1_024);
+
+        // The success event carries the same bounded value as the prompt.
+        const succeeded = (yield* Ref.get(events)).find(
+          (event) => event._tag === "ToolCallSucceeded",
+        );
+        expect(succeeded).toBeDefined();
+        if (succeeded === undefined || succeeded._tag !== "ToolCallSucceeded") {
+          throw new Error("expected ToolCallSucceeded");
+        }
+        expect(succeeded.result).toEqual(results[0]);
+      }),
+  );
+
+  it.effect("RUN-022: leaves within-bounds Tool results unchanged", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("bounds-small", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Use the tool once, then answer.",
+        toolkit: emitToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([
+        toolCallParts("emit-1", "emit", {}),
+        finalParts('{"answer":"done"}'),
+      ]);
+      const toolLayer = emitToolkit.toLayer({
+        emit: () => Effect.succeed({ data: "small" }),
+      });
+
+      yield* AgentRuntime.run(Agent.withModel(definition, model), { question: "small" }).pipe(
+        Effect.provide(toolLayer),
+      );
+
+      const second = requests[1];
+      if (second === undefined) throw new Error("expected a second model request");
+      expect(toolResultValues(second.prompt)).toEqual([{ data: "small" }]);
+    }),
+  );
+
+  it.effect("RUN-022: the default policy bounds Tool results at 50 KiB", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("bounds-default", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Use the tool once, then answer.",
+        toolkit: emitToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([
+        toolCallParts("emit-1", "emit", {}),
+        finalParts('{"answer":"done"}'),
+      ]);
+      const toolLayer = emitToolkit.toLayer({
+        emit: () => Effect.succeed({ data: "y".repeat(200_000) }),
+      });
+
+      yield* AgentRuntime.run(Agent.withModel(definition, model), { question: "huge" }).pipe(
+        Effect.provide(toolLayer),
+      );
+
+      const second = requests[1];
+      if (second === undefined) throw new Error("expected a second model request");
+      const results = toolResultValues(second.prompt);
+      const envelope = Schema.decodeUnknownSync(TruncatedToolResult)(results[0]);
+      expect(envelope.originalBytes).toBe(JSON.stringify({ data: "y".repeat(200_000) }).length);
+      expect(JSON.stringify(results[0]).length).toBeLessThanOrEqual(50 * 1024);
+    }),
+  );
+
+  // ---------------------------------------------------------------- RUN-023
+
+  it.effect(
+    "RUN-023: forwards raw cache splits per call and tracks the last call's input as the live-context estimate",
+    () =>
+      Effect.gen(function* () {
+        const deltas = yield* Ref.make<ReadonlyArray<RunUsageDelta>>([]);
+        const definition = Agent.define("live-context", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search once, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 10,
+            maxToolCalls: 10,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 1_000,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          [
+            { type: "tool-call", id: "s1", name: "search", params: {}, providerExecuted: false },
+            {
+              type: "finish",
+              reason: "tool-calls",
+              usage: {
+                inputTokens: { uncached: 2, cacheRead: 3, cacheWrite: 4 },
+                outputTokens: { total: 11 },
+              },
+            },
+          ],
+          finalParts('{"answer":"done"}', usageOf(150, 5)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+        yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "count" },
+          {
+            budget: {
+              guard: (effect) => effect,
+              consume: (delta) => Ref.update(deltas, (all) => [...all, delta]),
+            },
+          },
+        ).pipe(Effect.provide(toolLayer));
+
+        const observed = yield* Ref.get(deltas);
+        expect(observed).toHaveLength(2);
+        expect(observed[0]?.inputTokens).toBe(9);
+        expect(observed[0]?.usage.inputTokens.cacheRead).toBe(3);
+        expect(observed[0]?.usage.inputTokens.cacheWrite).toBe(4);
+        expect(observed[1]?.inputTokens).toBe(150);
+
+        // The second request's status message reflects the FIRST call's input,
+        // not the cumulative total.
+        const second = requests[1];
+        if (second === undefined) throw new Error("expected a second model request");
+        expect(promptText(second.prompt)).toContain("last-context 9");
+      }),
+  );
+
+  // ---------------------------------------------------------------- RUN-024
+
+  it.effect(
+    "RUN-024: appends one derived run-status message per outgoing request and never persists it",
+    () =>
+      Effect.gen(function* () {
+        const histories: Array<Prompt.Prompt> = [];
+        const definition = Agent.define("status-appended", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search once, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 10,
+            maxToolCalls: 10,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 1_000,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("s1", "search", {}, usageOf(100, 20)),
+          finalParts('{"answer":"done"}', usageOf(140, 5)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+        yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "status" },
+          {
+            onHistory: (history) =>
+              Effect.sync(() => {
+                histories.push(history);
+              }),
+          },
+        ).pipe(Effect.provide(toolLayer));
+
+        expect(requests).toHaveLength(2);
+        const first = requests[0];
+        const second = requests[1];
+        if (first === undefined || second === undefined) throw new Error("expected two requests");
+
+        const firstLast = first.prompt.content.at(-1);
+        expect(firstLast?.role).toBe("user");
+        expect(messageText(firstLast!)).toBe(
+          "<run-status>turn 1/10 · tool-calls 0/10 · tokens 0/1000 · last-context 0 · elapsed 0s/30s</run-status>",
+        );
+
+        const secondLast = second.prompt.content.at(-1);
+        expect(messageText(secondLast!)).toBe(
+          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 120/1000 · last-context 100 · elapsed 0s/30s</run-status>",
+        );
+        expect(occurrences(promptText(second.prompt), "<run-status>")).toBe(1);
+
+        expect(histories.length).toBeGreaterThan(0);
+        for (const history of histories) {
+          expect(promptText(history)).not.toContain("<run-status>");
+        }
+      }),
+  );
+
+  it.effect("RUN-024: omits the run-status message when policy runStatus is off", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("status-off", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          runStatus: "off",
+        }),
+      });
+      const { model, requests } = scriptedModel([finalParts('{"answer":"quiet"}')]);
+
+      yield* AgentRuntime.run(Agent.withModel(definition, model), { question: "quiet" });
+
+      const first = requests[0];
+      if (first === undefined) throw new Error("expected one request");
+      expect(promptText(first.prompt)).not.toContain("<run-status>");
+    }),
+  );
+
+  it.effect(
+    "RUN-024: the run-status message carries the wrap-up warning at 80% of a dimension",
+    () =>
+      Effect.gen(function* () {
+        const definition = Agent.define("status-warning", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search once, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 10,
+            maxToolCalls: 10,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 100,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("s1", "search", {}, usageOf(70, 15)),
+          finalParts('{"answer":"done"}', usageOf(1, 1)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+        yield* AgentRuntime.run(Agent.withModel(definition, model), { question: "warn" }).pipe(
+          Effect.provide(toolLayer),
+        );
+
+        const first = requests[0];
+        const second = requests[1];
+        if (first === undefined || second === undefined) throw new Error("expected two requests");
+        expect(promptText(first.prompt)).not.toContain("WARNING:");
+        expect(messageText(second.prompt.content.at(-1)!)).toBe(
+          "<run-status>turn 2/10 · tool-calls 1/10 · tokens 85/100 · last-context 70 · elapsed 0s/30s · WARNING: approaching limits — converge and deliver your final result now.</run-status>",
+        );
+      }),
+  );
+
+  it.effect("RUN-024: formatRunStatus renders unbounded token budgets", () =>
+    Effect.sync(() => {
+      expect(
+        formatRunStatus({
+          turn: 3,
+          maxTurns: 16,
+          toolCallsUsed: 5,
+          maxToolCalls: 32,
+          tokensConsumed: 1234,
+          tokenBudget: undefined,
+          lastInputTokens: 456,
+          elapsedSeconds: 78,
+          maxDurationSeconds: 360,
+        }),
+      ).toBe(
+        "<run-status>turn 3/16 · tool-calls 5/32 · tokens 1234/unbounded · last-context 456 · elapsed 78s/360s</run-status>",
+      );
+    }),
+  );
+
+  // ---------------------------------------------------------------- RUN-025
+
+  it.effect(
+    "RUN-025: emits BudgetWarning once when cumulative tokens cross 80% of the budget",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const definition = Agent.define("token-warning", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search twice, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 10,
+            maxToolCalls: 10,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 100,
+          }),
+        });
+        const { model } = scriptedModel([
+          toolCallParts("s1", "search", {}, usageOf(50, 10)),
+          toolCallParts("s2", "search", {}, usageOf(25, 0)),
+          finalParts('{"answer":"done"}', usageOf(5, 0)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+        yield* AgentRuntime.stream(Agent.withModel(definition, model), { question: "warn" }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+        );
+
+        const warnings = (yield* Ref.get(events)).filter((event) => event._tag === "BudgetWarning");
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toMatchObject({ limit: "tokens", consumed: 85, limitValue: 100 });
+      }),
+  );
+
+  it.effect(
+    "RUN-011: token exhaustion on a stop response completes with the answer and the exhausted marker",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const definition = Agent.define("token-exhausted-stop", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 3,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          finalParts('{"answer":"overrun"}', usageOf(2, 2)),
+        ]);
+
+        const result = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "answer",
+        }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.andThen(Ref.get(events)),
+        );
+
+        // A single model call: the breaching response already carries the
+        // final answer, so no extra finalize call is spent.
+        expect(requests).toHaveLength(1);
+        const completed = result.find((event) => event._tag === "RunCompleted");
+        expect(completed).toBeDefined();
+        expect(completed).toMatchObject({
+          output: { answer: "overrun" },
+          finishReason: "budget-exhausted",
+          exhausted: "tokens",
+        });
+      }),
+  );
+
+  it.effect(
+    "RUN-025: token exhaustion on a Tool-declaring response settles the batch synthetically and grants one constrained grace Turn",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const commits = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const definition = Agent.define("token-exhausted-tools", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 10,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("s1", "search", {}, usageOf(9, 4)),
+          finalParts('{"answer":"partial"}', usageOf(3, 1)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+        const durability: RunDurabilityHook = {
+          commitResponse: () => Ref.update(commits, (count) => count + 1),
+          prepareToolCalls: () => Effect.void,
+          step: {
+            lookup: () => Effect.succeed(Option.none()),
+            commit: () => Effect.void,
+          },
+        };
+
+        const exit = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "exhaust" },
+          { durability },
+        ).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(requests).toHaveLength(2);
+        // The breaching batch never executed a handler and, per the RUN-018
+        // synthetic-settlement path it joins, was never durably committed as
+        // a response; the model sees the rejection as a failed tool result.
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+        expect(yield* Ref.get(commits)).toBe(0);
+        const grace = requests[1];
+        if (grace === undefined) throw new Error("expected the grace request");
+        expect(grace.toolChoice).toBe("none");
+        const rejectionResults = toolResultValues(grace.prompt);
+        expect(rejectionResults).toHaveLength(1);
+        expect(rejectionResults[0]).toMatchObject({
+          limit: "tokens",
+          message: expect.stringContaining("Token budget exhausted"),
+        });
+
+        const observed = yield* Ref.get(events);
+        const rejected = observed.filter((event) => event._tag === "ToolCallFailed");
+        expect(rejected).toHaveLength(1);
+        expect(observed.some((event) => event._tag === "ToolCallStarted")).toBe(false);
+        const completed = observed.find((event) => event._tag === "RunCompleted");
+        expect(completed).toMatchObject({
+          output: { answer: "partial" },
+          finishReason: "budget-exhausted",
+          exhausted: "tokens",
+        });
+      }),
+  );
+
+  it.effect(
+    "RUN-025: Tool Call exhaustion settles budget-exhausted with the exhausted marker",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const definition = Agent.define("tool-calls-exhausted", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search until done.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 10,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("s1", "search", {}),
+          toolCallParts("s2", "search", {}),
+          finalParts('{"answer":"capped"}'),
+        ]);
+        const toolLayer = searchToolkit.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+
+        yield* AgentRuntime.stream(Agent.withModel(definition, model), { question: "cap" }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+        );
+
+        // The final permitted call executes; the exceeding batch settles
+        // synthetically and the grace Turn is tool-choice constrained.
+        expect(yield* Ref.get(handlerStarts)).toBe(1);
+        expect(requests).toHaveLength(3);
+        expect(requests[2]?.toolChoice).toBe("none");
+        const completed = (yield* Ref.get(events)).find((event) => event._tag === "RunCompleted");
+        expect(completed).toMatchObject({
+          output: { answer: "capped" },
+          finishReason: "budget-exhausted",
+          exhausted: "tool-calls",
+        });
+      }),
+  );
+
+  it.effect(
+    "RUN-025: Turn exhaustion executes the final permitted batch and settles on the grace Turn with the exhausted marker",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const definition = Agent.define("turns-exhausted", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search until done.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 1,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          toolCallParts("s1", "search", {}),
+          finalParts('{"answer":"turn-capped"}'),
+        ]);
+        const toolLayer = searchToolkit.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+
+        yield* AgentRuntime.stream(Agent.withModel(definition, model), { question: "cap" }).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+        );
+
+        // RUN-019: the pending batch at the final permitted Turn executes
+        // normally; only the grace Turn is constrained.
+        expect(yield* Ref.get(handlerStarts)).toBe(1);
+        expect(requests).toHaveLength(2);
+        expect(requests[1]?.toolChoice).toBe("none");
+        const completed = (yield* Ref.get(events)).find((event) => event._tag === "RunCompleted");
+        expect(completed).toMatchObject({
+          output: { answer: "turn-capped" },
+          finishReason: "budget-exhausted",
+          exhausted: "turns",
+        });
+      }),
+  );
+
+  it.effect(
+    "RUN-025: Turn exhaustion with a queued follow-up consumes it on the single grace Turn",
+    () =>
+      Effect.gen(function* () {
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const drained = yield* Ref.make(false);
+        const definition = Agent.define("turns-follow-up", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 1,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const { model, requests } = scriptedModel([
+          finalParts('{"answer":"first"}'),
+          finalParts('{"answer":"followed"}'),
+        ]);
+
+        yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "first" },
+          {
+            input: {
+              drain: () =>
+                Effect.gen(function* () {
+                  const already = yield* Ref.getAndSet(drained, true);
+                  return already ? [] : [{ kind: "follow-up" as const, input: "again" }];
+                }),
+            },
+          },
+        ).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+        );
+
+        // RUN-019: exactly one grace Turn past maxTurns serves the follow-up;
+        // its settlement is honest about the exhaustion.
+        expect(requests).toHaveLength(2);
+        const completed = (yield* Ref.get(events)).find((event) => event._tag === "RunCompleted");
+        expect(completed).toMatchObject({
+          output: { answer: "followed" },
+          finishReason: "budget-exhausted",
+          exhausted: "turns",
+        });
+      }),
+  );
+
+  it.effect(
+    "RUN-025: a grace-Turn response that declares Tool calls fails typed (the RUN-020 fail-closed constraint)",
+    () =>
+      Effect.gen(function* () {
+        const definition = Agent.define("finalize-declares-tools", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 10,
+          }),
+        });
+        const { model } = scriptedModel([
+          toolCallParts("s1", "search", {}, usageOf(9, 4)),
+          toolCallParts("s2", "search", {}, usageOf(1, 1)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "misbehave",
+        }).pipe(Effect.provide(toolLayer), Effect.exit);
+
+        const failure = failureFrom(exit);
+        expect(failure).toBeInstanceOf(ModelProtocolError);
+        expect(String((failure as ModelProtocolError).message)).toContain('toolChoice "none"');
+      }),
+  );
+
+  it.effect(
+    "RUN-025: a token-breaching stop response without decodable output fails as an ordinary decode failure",
+    () =>
+      Effect.gen(function* () {
+        const definition = Agent.define("finalize-bad-output", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Search, then answer.",
+          toolkit: searchToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 10,
+          }),
+        });
+        const { model } = scriptedModel([
+          toolCallParts("s1", "search", {}, usageOf(9, 4)),
+          finalParts("not json", usageOf(1, 1)),
+        ]);
+        const toolLayer = searchToolkit.toLayer({ search: () => Effect.succeed("found") });
+
+        const exit = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "garble",
+        }).pipe(Effect.provide(toolLayer), Effect.exit);
+
+        // The soft landing never launders an unusable answer: the grace
+        // Turn's undecodable output surfaces as the ordinary typed decode
+        // failure, exactly as it would without the breach.
+        const failure = failureFrom(exit);
+        expect(failure).not.toBeInstanceOf(AgentPolicyError);
+        expect((failure as { _tag?: string })._tag).toBe("AgentOutputError");
+      }),
+  );
+
+  it.effect("RUN-025: run results surface the exhausted marker", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("result-exhausted", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          tokenBudget: 3,
+        }),
+      });
+      const { model } = scriptedModel([finalParts('{"answer":"overrun"}', usageOf(2, 2))]);
+
+      const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "answer",
+      });
+
+      expect(result.finishReason).toBe("budget-exhausted");
+      expect(result.exhausted).toBe("tokens");
+      expect(result.output).toEqual({ answer: "overrun" });
+    }),
+  );
+});

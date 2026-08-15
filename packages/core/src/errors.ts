@@ -58,6 +58,20 @@ export class AgentInterrupted extends Schema.TaggedError<AgentInterrupted>()("Ag
   message: Schema.String,
 }) {}
 
+/**
+ * The provider rejected a prompt that exceeds the model context window and
+ * compaction recovery is unavailable or was already attempted once. This is
+ * an expected failure: the engine classifies the provider error rather than
+ * surfacing an opaque transport failure.
+ */
+export class ContextOverflowError extends Schema.TaggedError<ContextOverflowError>()(
+  "ContextOverflowError",
+  {
+    message: Schema.String,
+    retried: Schema.Boolean,
+  },
+) {}
+
 /** Schema for framework-owned agent errors; application and Effect AI failures remain separate. */
 export const AgentError = Schema.Union([
   AgentInputError,

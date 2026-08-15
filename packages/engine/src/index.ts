@@ -4,10 +4,14 @@ import {
   AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
+  type AgentPolicy,
   AgentPolicyError,
   type AgentId,
-  type AgentPolicy,
   ApprovalRequested,
+  applyToolResultBounds,
+  BudgetWarning,
+  CompactionPerformed,
+  ContextOverflowError,
   ConversationId,
   type Definition,
   DelegationDepth,
@@ -40,6 +44,7 @@ import {
   ToolCallSucceeded,
   ToolProgress,
   ToolCallId,
+  type ToolResultBounds,
   TurnCompleted,
   TurnStarted,
   type TurnId,
@@ -65,7 +70,7 @@ import {
   Take,
 } from "effect";
 import {
-  type AiError,
+  AiError,
   LanguageModel,
   type Model,
   Prompt,
@@ -144,6 +149,18 @@ type InstructionRequirementsOf<Instructions, Input> =
     : never;
 
 import {
+  buildCompactedView,
+  chooseSummarizeCut,
+  choosePruneBound,
+  collectCoveredMessages,
+  COMPACTION_INSTRUCTION,
+  estimatePromptTokens,
+  initialCompactionState,
+  isContextOverflowMessage,
+  renderForSummary,
+  type ContextCompactionState,
+} from "./compaction.ts";
+import {
   DurableStep,
   DurableStepError,
   getToolExecutionClass,
@@ -161,6 +178,7 @@ import {
   type RunSubagentEstablishRequest,
   type RunSubagentHook,
   type RunSubagentJoinRequest,
+  type RunCompactionCommit,
   type RunToolCallDescriptor,
   type RunTurnResume,
   type RunUsageDelta,
@@ -170,6 +188,14 @@ export * from "./durable-step.ts";
 export * from "./run-events.ts";
 export * from "./run-options.ts";
 export * from "./tool-broker.ts";
+export {
+  CLEARED_TOOL_RESULT,
+  COMPACTION_INSTRUCTION,
+  COMPACTION_SUMMARY_PREFIX,
+  estimateMessageTokens,
+  estimatePromptTokens,
+  isContextOverflowMessage,
+} from "./compaction.ts";
 
 import {
   RunEventSink,
@@ -195,6 +221,8 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     runId: RunId,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
     finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+    /** Dimension that bound when the Run settled budget-exhausted (RUN-025; the ADR-0019 S3 marker). */
+    exhausted: Schema.optionalKey(Schema.Literals(["tokens", "tool-calls", "turns"])),
   });
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
@@ -210,6 +238,7 @@ export type AgentRuntimeFailure<
 > =
   | Agent.Failure<AgentValue>
   | AgentPolicyError
+  | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentApprovalPending
@@ -266,12 +295,27 @@ interface RunContext {
   readonly conversationId: ConversationId;
   readonly runId: RunId;
   readonly pendingFollowUps: Array<Prompt.RawInput>;
+  /** Wall-clock Run start, the base of the run-status elapsed rendering (RUN-024). */
+  readonly startedAtMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
   consecutiveToolFailures: number;
   inputTokens: number;
   outputTokens: number;
+  /** The most recent model call's provider-reported tokens — the live-context estimate (RUN-023). */
+  lastInputTokens: number;
+  lastOutputTokens: number;
   costMicrousd: number;
+  /** Budget dimensions whose one-shot `BudgetWarning` already fired (RUN-025). */
+  readonly warnedLimits: Set<"tokens" | "tool-calls" | "turns">;
+  /** Held during the compaction summarizer's accounting so it cannot breach or recurse (RUN-026). */
+  finalizing: boolean;
+  /** One-shot token-breach flag: joins the final-answer derivation, never re-breaches (RUN-025). */
+  tokenExhausted: boolean;
+  /** First dimension that bound — the exhausted marker on budget-exhausted settlement (RUN-025). */
+  exhaustedDimension: "tokens" | "tool-calls" | "turns" | undefined;
+  /** Model-visible view state for engine-native compaction (RUN-026). */
+  readonly compaction: ContextCompactionState;
   sequence: number;
   /**
    * Run-wide count of programmatic (broker) Tool invocations whose handler
@@ -533,31 +577,6 @@ const prepareToolCall = <Tools extends Record<string, Tool.Any>>(
  * `encodeToolCallParameters` applies: correlation lost by dynamic record
  * lookup is restored only around a successful Schema decode.
  */
-const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>(
-  tool: ToolUnion<Tools>,
-  toolName: string,
-  encodedParams: unknown,
-): Effect.Effect<
-  Tool.Parameters<ToolUnion<Tools>>,
-  ModelProtocolError,
-  Tool.HandlerServices<ToolUnion<Tools>>
-> => {
-  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
-    input: unknown,
-  ) => Effect.Effect<
-    Tool.Parameters<ToolUnion<Tools>>,
-    Schema.SchemaError,
-    Tool.HandlerServices<ToolUnion<Tools>>
-  >;
-  return decodeParameters(encodedParams).pipe(
-    Effect.mapError((cause) =>
-      ModelProtocolError.make({
-        message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`,
-      }),
-    ),
-  );
-};
-
 /**
  * Effective Run bounds (RUN-021): per-Run allowances tighten the Agent
  * Policy's Turn and Tool Call ceilings but can never widen them — the
@@ -585,6 +604,31 @@ const effectiveRunBounds = (
   maxTurns: boundedAllowance(policy.maxTurns, options.turnAllowance),
   maxToolCalls: boundedAllowance(policy.maxToolCalls, options.toolCallAllowance),
 });
+
+const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>(
+  tool: ToolUnion<Tools>,
+  toolName: string,
+  encodedParams: unknown,
+): Effect.Effect<
+  Tool.Parameters<ToolUnion<Tools>>,
+  ModelProtocolError,
+  Tool.HandlerServices<ToolUnion<Tools>>
+> => {
+  const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
+    input: unknown,
+  ) => Effect.Effect<
+    Tool.Parameters<ToolUnion<Tools>>,
+    Schema.SchemaError,
+    Tool.HandlerServices<ToolUnion<Tools>>
+  >;
+  return decodeParameters(encodedParams).pipe(
+    Effect.mapError((cause) =>
+      ModelProtocolError.make({
+        message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`,
+      }),
+    ),
+  );
+};
 
 const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (
   context: RunContext,
@@ -683,6 +727,7 @@ const stampSubagentEvent = Effect.fn("AgentRuntime.stampSubagentEvent")(function
         ...shared,
         turns: payload.turns,
         finishReason: payload.finishReason,
+        ...(payload.exhausted !== undefined ? { exhausted: payload.exhausted } : {}),
       });
     }
     case "SubagentFailed": {
@@ -929,6 +974,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
   prepared: PreparedToolCall<Tools>,
   trace: TurnTrace,
+  resultBounds: ToolResultBounds,
   /**
    * Batch-level collector for the durable-Subagent waiting signal. A
    * `ToolCallWaiting` failure is not a Tool failure: the call stays open (no
@@ -1083,6 +1129,12 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
       const result = terminalResult;
       return Effect.gen(function* () {
         const toolCallId = yield* decodeToolCallId(call.id);
+        // RUN-022: the policy bound applies exactly once, as the result
+        // becomes terminal — the settled trace entry, the durable record,
+        // and the live success event all carry the same bounded value.
+        // Provider-executed results and the final-output path never pass
+        // through this seam.
+        const encodedResult = boundEncodedToolResult(result.encodedResult, resultBounds);
         const event: RunEvent = result.isFailure
           ? ToolCallFailed.make({
               ...(yield* eventBase(context)),
@@ -1098,14 +1150,14 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
               turnId,
               toolCallId,
               toolName: call.name,
-              result: yield* decodeEventJson(result.encodedResult, "Tool result"),
+              result: yield* decodeEventJson(encodedResult, "Tool result"),
               providerExecuted: false,
             });
         trace.finalToolResultIds.add(call.id);
         trace.applicationToolResults[prepared.declarationIndex] = {
           id: call.id,
           name: call.name,
-          encodedResult: result.encodedResult,
+          encodedResult,
           isFailure: result.isFailure,
         };
         terminalResultCommitted = true;
@@ -1242,6 +1294,8 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
    * against mid-pass.
    */
   brokerAccounting: { readonly maxToolCalls: number; readonly declaredToolCalls: number },
+  /** Policy byte bound applied to each settling result (RUN-022). */
+  resultBounds: ToolResultBounds,
   /**
    * Call IDs already settled canonically (batch-resume seam). Their recorded
    * results were injected into the trace by the caller; approval preflight
@@ -1395,9 +1449,17 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           group.map((call) =>
             withSemaphorePermit(
               semaphore,
-              executePreparedToolCall(context, turnId, toolkit, call, trace, (waiting) => {
-                waitingByDeclaration.set(call.declarationIndex, waiting);
-              }).pipe(
+              executePreparedToolCall(
+                context,
+                turnId,
+                toolkit,
+                call,
+                trace,
+                resultBounds,
+                (waiting) => {
+                  waitingByDeclaration.set(call.declarationIndex, waiting);
+                },
+              ).pipe(
                 Stream.provideService(DurableStep, stepServiceFor(call)),
                 // The live broker executes under this call's already-held
                 // permit: invocations run inside the handler's own fiber and
@@ -1676,14 +1738,110 @@ const appendInputs = <HookError, HookRequirements>(
     return history;
   });
 
+/**
+ * RUN-022: bound one application Tool result at the settle seam. The bounded
+ * value is what official history, the settled record, and the success event
+ * all carry, so every downstream surface agrees; a within-bounds result
+ * passes through with its identity preserved.
+ */
+const boundEncodedToolResult = (encodedResult: unknown, bounds: ToolResultBounds): unknown => {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(encodedResult);
+  } catch {
+    return encodedResult;
+  }
+  if (text === undefined) {
+    return encodedResult;
+  }
+  const bounded = applyToolResultBounds(text, bounds);
+  return bounded === text ? encodedResult : (JSON.parse(bounded) as unknown);
+};
+
+/** Deterministic inputs of one run-status message (RUN-024). */
+export interface RunStatusView {
+  readonly turn: number;
+  readonly maxTurns: number;
+  readonly toolCallsUsed: number;
+  readonly maxToolCalls: number;
+  readonly tokensConsumed: number;
+  readonly tokenBudget: number | undefined;
+  readonly lastInputTokens: number;
+  readonly elapsedSeconds: number;
+  readonly maxDurationSeconds: number;
+}
+
+const RUN_STATUS_WARNING =
+  " · WARNING: approaching limits — converge and deliver your final result now.";
+
+/** Fraction checks use `consumed * 5 >= limit * 4` so the 80% threshold stays integer-exact. */
+const nearingLimit = (consumed: number, limit: number): boolean => consumed * 5 >= limit * 4;
+
+/**
+ * RUN-024: render the derived run-status message appended to each outgoing
+ * model request. The format is pinned here — tests target this function.
+ */
+export const formatRunStatus = (view: RunStatusView): string => {
+  const warn =
+    nearingLimit(view.turn, view.maxTurns) ||
+    nearingLimit(view.toolCallsUsed, view.maxToolCalls) ||
+    (view.tokenBudget !== undefined && nearingLimit(view.tokensConsumed, view.tokenBudget)) ||
+    nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
+  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn ? RUN_STATUS_WARNING : ""}</run-status>`;
+};
+
+/**
+ * The run-status message is derived per request and appended only to the
+ * OUTGOING prompt: official history and durable commits never carry it, so it
+ * can never accumulate or replay.
+ */
+const outgoingModelPrompt = (
+  policy: AgentPolicy,
+  context: RunContext,
+  prepared: Prompt.Prompt,
+  turn: number,
+  declaredToolCalls: number,
+): Effect.Effect<Prompt.Prompt> =>
+  Effect.gen(function* () {
+    if (policy.runStatus !== "appended") {
+      return prepared;
+    }
+    const now = yield* Clock.currentTimeMillis;
+    const status = formatRunStatus({
+      turn,
+      maxTurns: policy.maxTurns,
+      toolCallsUsed: declaredToolCalls + context.programmaticToolCalls,
+      maxToolCalls: policy.maxToolCalls,
+      tokensConsumed: context.inputTokens + context.outputTokens,
+      tokenBudget: policy.tokenBudget,
+      lastInputTokens: context.lastInputTokens,
+      elapsedSeconds: Math.max(0, Math.floor((now - context.startedAtMillis) / 1000)),
+      maxDurationSeconds: Math.floor(Duration.toMillis(policy.maxDuration) / 1000),
+    });
+    return Prompt.fromMessages([
+      ...prepared.content,
+      Prompt.makeMessage("user", {
+        content: [Prompt.makePart("text", { text: status })],
+      }),
+    ]);
+  });
+
+/** Usage accounting outcome of one completed model response (RUN-025). */
+interface ConsumedUsage {
+  /** A finalize-eligible budget breach; fail-fast breaches never reach the caller. */
+  readonly breach: AgentPolicyError | undefined;
+  readonly warnings: ReadonlyArray<RunEvent>;
+}
+
 const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>(
   agent: AgentValue,
   context: RunContext,
-  trace: TurnTrace,
+  usage: Response.Usage | undefined,
+  toolCallCount: number,
   options: RunOptions<HookError, HookRequirements>,
-): Effect.Effect<void, AgentPolicyError | HookError, HookRequirements> =>
+): Effect.Effect<ConsumedUsage, AgentPolicyError | HookError, HookRequirements> =>
   Effect.gen(function* () {
-    if (trace.usage === undefined) {
+    if (usage === undefined) {
       return yield* AgentPolicyError.make({
         limit: "usage",
         message: "A completed model response did not report usage",
@@ -1691,21 +1849,19 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     }
     const inputTokens = Math.max(
       0,
-      trace.usage.inputTokens.total ??
-        (trace.usage.inputTokens.uncached ?? 0) +
-          (trace.usage.inputTokens.cacheRead ?? 0) +
-          (trace.usage.inputTokens.cacheWrite ?? 0),
+      usage.inputTokens.total ??
+        (usage.inputTokens.uncached ?? 0) +
+          (usage.inputTokens.cacheRead ?? 0) +
+          (usage.inputTokens.cacheWrite ?? 0),
     );
     const outputTokens = Math.max(
       0,
-      trace.usage.outputTokens.total ??
-        (trace.usage.outputTokens.text ?? 0) + (trace.usage.outputTokens.reasoning ?? 0),
+      usage.outputTokens.total ??
+        (usage.outputTokens.text ?? 0) + (usage.outputTokens.reasoning ?? 0),
     );
     const totalTokens = inputTokens + outputTokens;
     const costMicrousd =
-      options.estimateCostMicrousd === undefined
-        ? 0
-        : yield* options.estimateCostMicrousd(trace.usage);
+      options.estimateCostMicrousd === undefined ? 0 : yield* options.estimateCostMicrousd(usage);
     if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
       return yield* AgentPolicyError.make({
         limit: "cost",
@@ -1715,28 +1871,49 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     context.modelCalls += 1;
     context.inputTokens += inputTokens;
     context.outputTokens += outputTokens;
+    context.lastInputTokens = inputTokens;
+    context.lastOutputTokens = outputTokens;
     context.costMicrousd += costMicrousd;
 
-    const tokenBudget = agent.definition.policy.tokenBudget;
-    if (tokenBudget !== undefined && context.inputTokens + context.outputTokens > tokenBudget) {
-      return yield* AgentPolicyError.make({
+    const policy = agent.definition.policy;
+    const consumedTokens = context.inputTokens + context.outputTokens;
+    const tokenBudget = policy.tokenBudget;
+    let breach: AgentPolicyError | undefined;
+    if (
+      !context.finalizing &&
+      !context.tokenExhausted &&
+      tokenBudget !== undefined &&
+      consumedTokens > tokenBudget
+    ) {
+      breach = AgentPolicyError.make({
         limit: "tokens",
         message: `Agent exceeded its ${tokenBudget} token budget`,
       });
-    }
-    const costBudget = agent.definition.policy.costBudgetMicrousd;
-    if (costBudget !== undefined) {
-      if (options.estimateCostMicrousd === undefined) {
-        return yield* AgentPolicyError.make({
-          limit: "cost",
-          message: "Agent cost budget requires a model cost estimator",
-        });
+      // Fail-fast token breaches keep the pre-ADR-0018 contract exactly: no
+      // budget-hook charge and no warning event on the failing response.
+      if (policy.onExhaustion === "fail") {
+        return yield* breach;
       }
-      if (context.costMicrousd > costBudget) {
-        return yield* AgentPolicyError.make({
-          limit: "cost",
-          message: `Agent exceeded its ${costBudget} microdollar cost budget`,
-        });
+      // One-shot (RUN-025): the flag joins the final-answer derivation so the
+      // grace Turn's own usage accumulates and charges without re-breaching.
+      context.tokenExhausted = true;
+      context.exhaustedDimension ??= "tokens";
+    } else {
+      const costBudget = policy.costBudgetMicrousd;
+      if (costBudget !== undefined) {
+        if (options.estimateCostMicrousd === undefined) {
+          return yield* AgentPolicyError.make({
+            limit: "cost",
+            message: "Agent cost budget requires a model cost estimator",
+          });
+        }
+        if (context.costMicrousd > costBudget) {
+          // Cost is spend, not context: it never earns a grace Turn.
+          return yield* AgentPolicyError.make({
+            limit: "cost",
+            message: `Agent exceeded its ${costBudget} microdollar cost budget`,
+          });
+        }
       }
     }
     if (options.budget !== undefined) {
@@ -1745,12 +1922,29 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         inputTokens,
         outputTokens,
         totalTokens,
-        toolCalls: trace.toolCalls.size,
+        toolCalls: toolCallCount,
         costMicrousd,
-        usage: trace.usage,
+        usage,
       };
       yield* options.budget.consume(delta);
     }
+    const warnings: Array<RunEvent> = [];
+    if (
+      tokenBudget !== undefined &&
+      !context.warnedLimits.has("tokens") &&
+      nearingLimit(consumedTokens, tokenBudget)
+    ) {
+      context.warnedLimits.add("tokens");
+      warnings.push(
+        BudgetWarning.make({
+          ...(yield* eventBase(context)),
+          limit: "tokens",
+          consumed: consumedTokens,
+          limitValue: tokenBudget,
+        }),
+      );
+    }
+    return { breach, warnings };
   });
 
 // `Effect.fnUntraced`: this helper runs for every streamed Response Part, so a
@@ -1878,6 +2072,173 @@ const stampProviderResultEvent = (
       case "ToolCallFailed":
         return ToolCallFailed.make({ ...base, turnId, ...payload });
     }
+  });
+
+/**
+ * RUN-026: deterministic estimate of the NEXT model call's live context.
+ * Anchored on the last provider-reported call when the view has only grown
+ * since then; a fresh Run or a just-compacted view falls back to the full
+ * chars/4 estimate.
+ */
+const nextContextEstimate = (context: RunContext, view: ReadonlyArray<Prompt.Message>): number => {
+  const state = context.compaction;
+  if (
+    context.lastInputTokens > 0 &&
+    state.lastViewLength >= 0 &&
+    state.lastViewLength <= view.length
+  ) {
+    return (
+      context.lastInputTokens +
+      context.lastOutputTokens +
+      estimatePromptTokens(view.slice(state.lastViewLength))
+    );
+  }
+  return estimatePromptTokens(view);
+};
+
+/** Text a provider overflow classification matches against (message + reason). */
+const overflowText = (error: AiError.AiError): string => `${error.message} ${error.reason.message}`;
+
+/** Outcome of one compaction pass: the advisory events to splice into the Run stream. */
+interface CompactionOutcome {
+  readonly events: ReadonlyArray<RunEvent>;
+}
+
+/**
+ * RUN-026: compact the model-visible view of `source` in place on
+ * `context.compaction`. Stage 1 clears old tool results; stage 2 folds the
+ * covered span into a summary through one metered model call on the Run's
+ * bound model. Official history is never mutated — the durable commit
+ * machinery slices it by length, so only the outgoing view may change. The
+ * summarizer call's usage is consumed like any other model call, with
+ * `context.finalizing` held during its accounting so a budget breach
+ * surfaces at the next response's check instead of recursing into finalize
+ * mid-compaction; its usage is deliberately not staged for resume re-seed
+ * (only canonical response records carry usage).
+ */
+const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirements>(
+  agent: AgentValue,
+  context: RunContext,
+  source: Prompt.Prompt,
+  turn: number,
+  options: RunOptions<HookError, HookRequirements>,
+  forceSummarize: boolean,
+): Effect.Effect<
+  CompactionOutcome,
+  AgentPolicyError | AiError.AiError | HookError,
+  HookRequirements | LanguageModel.LanguageModel
+> =>
+  Effect.gen(function* () {
+    const policy = agent.definition.policy;
+    const state = context.compaction;
+    const events: Array<RunEvent> = [];
+    const messages = source.content;
+    const before = estimatePromptTokens(buildCompactedView(messages, state));
+    const limit = policy.contextTokenLimit;
+    const mode = policy.compaction.mode;
+
+    const commitDurable = (commit: RunCompactionCommit) =>
+      options.durability?.commitCompaction === undefined
+        ? Effect.void
+        : options.durability.commitCompaction(commit);
+
+    if (!forceSummarize && mode !== "summarize") {
+      const bound = choosePruneBound(messages, state, policy.compaction.keepRecentTokens);
+      if (bound > state.clearedThrough) {
+        state.clearedThrough = bound;
+        state.lastViewLength = -1;
+        const after = estimatePromptTokens(buildCompactedView(messages, state));
+        events.push(
+          CompactionPerformed.make({
+            ...(yield* eventBase(context)),
+            turn,
+            kind: "clear-tool-results",
+            tokensBeforeEstimate: before,
+            tokensAfterEstimate: after,
+          }),
+        );
+        yield* commitDurable({
+          turn,
+          kind: "clear-tool-results",
+          tokensBeforeEstimate: before,
+          tokensAfterEstimate: after,
+        });
+        if (limit !== undefined && after <= limit) {
+          return { events };
+        }
+      }
+    }
+    if (mode === "prune" && !forceSummarize) {
+      // Pruning may legitimately reclaim nothing (a single protected result):
+      // the Turn proceeds anyway — the provider may still accept, and the
+      // RUN-027 overflow path is the typed backstop when it does not.
+      return { events };
+    }
+
+    const cut = chooseSummarizeCut(messages, state, policy.compaction.keepRecentTokens);
+    const covered = collectCoveredMessages(messages, state, cut);
+    if (covered.length === 0) {
+      return { events };
+    }
+    const transcript = renderForSummary(covered, state.summary);
+    const summarizerPrompt = Prompt.fromMessages([
+      Prompt.makeMessage("user", {
+        content: [
+          Prompt.makePart("text", {
+            text: `${COMPACTION_INSTRUCTION}\n\n<transcript>\n${transcript}\n</transcript>`,
+          }),
+        ],
+      }),
+    ]);
+    const pieces: Array<string> = [];
+    let summaryUsage: Response.Usage | undefined;
+    yield* guardBudgetStream(
+      LanguageModel.streamText({ prompt: summarizerPrompt }),
+      options.budget,
+    ).pipe(
+      Stream.runForEach((part) =>
+        Effect.sync(() => {
+          if (part.type === "text-delta") {
+            pieces.push(part.delta);
+          } else if (part.type === "finish") {
+            summaryUsage = part.usage;
+          }
+        }),
+      ),
+    );
+    const wasFinalizing = context.finalizing;
+    context.finalizing = true;
+    const consumed = yield* consumeUsage(agent, context, summaryUsage, 0, options).pipe(
+      Effect.ensuring(
+        Effect.sync(() => {
+          context.finalizing = wasFinalizing;
+        }),
+      ),
+    );
+    events.push(...consumed.warnings);
+    const summaryText = pieces.join("").trim();
+    const summary = summaryText.length === 0 ? "(no summary produced)" : summaryText;
+    state.summary = summary;
+    state.summarizedThrough = cut;
+    state.lastViewLength = -1;
+    const after = estimatePromptTokens(buildCompactedView(messages, state));
+    events.push(
+      CompactionPerformed.make({
+        ...(yield* eventBase(context)),
+        turn,
+        kind: "summarize",
+        tokensBeforeEstimate: before,
+        tokensAfterEstimate: after,
+      }),
+    );
+    yield* commitDurable({
+      turn,
+      kind: "summarize",
+      summary,
+      tokensBeforeEstimate: before,
+      tokensAfterEstimate: after,
+    });
+    return { events };
   });
 
 const decodeInput = Effect.fn("AgentRuntime.decodeInput")(
@@ -2522,19 +2883,32 @@ const makeTurn = <
         }).pipe(Effect.withLogSpan("AgentRuntime.model")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
-      // Final-answer mode (RUN-018/RUN-019): once the Turn or Tool Call
-      // budget is exhausted, the model keeps its toolkit declaration but may
-      // not call it. Both conditions are pure derivations of committed state
-      // (`turn`, `priorToolCalls`, `programmaticToolCalls`), so a durable
-      // replay reconstructs the same constraint. Strict `>` keeps an
-      // exact-cap Run on today's unconstrained path byte-for-byte.
+      // Final-answer mode (RUN-018/RUN-019, extended to the token dimension
+      // by ADR-0018, RUN-025): once the Turn, Tool Call, or token budget is
+      // exhausted, the model keeps its toolkit declaration but may not call
+      // it. Turn and Tool Call conditions are pure derivations of committed
+      // state (`turn`, `priorToolCalls`, `programmaticToolCalls`); the token
+      // condition is the one-shot `tokenExhausted` flag consumeUsage stamps
+      // when the cumulative budget breaches under `"final-answer"` (durable
+      // resume re-seeds the counters, so the derivation survives ownership
+      // changes). Strict `>` keeps an exact-cap Run on today's unconstrained
+      // path byte-for-byte.
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
       const finalAnswerOnly =
         policy.onExhaustion !== "fail" &&
         (turn > bounds.maxTurns ||
-          priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls);
-
+          priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls ||
+          context.tokenExhausted);
+      if (finalAnswerOnly && context.exhaustedDimension === undefined) {
+        // First-cause dimension marker (the ADR-0019 S3 exhausted marker).
+        context.exhaustedDimension =
+          turn > bounds.maxTurns
+            ? "turns"
+            : priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls
+              ? "tool-calls"
+              : "tokens";
+      }
       if (outputContract._tag === "unrenderable" && turn === 1) {
         yield* Effect.logWarning(
           "Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted",
@@ -2546,24 +2920,150 @@ const makeTurn = <
           }),
         );
       }
-      const requestPrompt =
+      // The output contract (RUN-028) rides every outgoing request after
+      // compaction, so the window calculation reserves its estimated size the
+      // same way Tool-schema overhead is provider-side reality: the view must
+      // fit the limit WITH the contract the engine will append.
+      const outputContractTokens =
         outputContractMessage === undefined
-          ? modelContext.prompt
-          : insertOutputContract(modelContext.prompt, outputContractMessage);
-
-      const response = guardBudgetStream(
-        LanguageModel.streamText({
-          prompt: requestPrompt,
-          toolkit: agent.definition.toolkit,
-          disableToolCallResolution: true,
-          ...(finalAnswerOnly ? { toolChoice: "none" as const } : {}),
-        }),
-        options.budget,
-      ).pipe(
-        Stream.mapEffect((part) =>
-          eventsForPart(context, turnId, turn, agent.definition.toolkit.tools, trace, part),
+          ? 0
+          : estimatePromptTokens([
+              Prompt.makeMessage("system", { content: outputContractMessage }),
+            ]);
+      let preEvents: ReadonlyArray<RunEvent> = [];
+      if (policy.contextTokenLimit !== undefined && !context.finalizing) {
+        const view = buildCompactedView(modelContext.prompt.content, context.compaction);
+        const estimate = nextContextEstimate(context, view);
+        if (
+          estimate + outputContractTokens > policy.contextTokenLimit &&
+          context.compaction.lastCompactionTurn !== turn
+        ) {
+          // Loop guard: at most one threshold compaction per Turn. If the
+          // post-compaction estimate still exceeds the limit the Turn
+          // proceeds anyway — the provider may accept, and RUN-027 overflow
+          // recovery is the typed backstop when it does not.
+          context.compaction.lastCompactionTurn = turn;
+          const outcome = yield* compactContext(
+            agent,
+            context,
+            modelContext.prompt,
+            turn,
+            options,
+            false,
+          );
+          preEvents = outcome.events;
+        }
+      }
+      /** The model-visible view of the Turn basis under current compaction state. */
+      const compactedOutgoing = (): Prompt.Prompt => {
+        const view = buildCompactedView(modelContext.prompt.content, context.compaction);
+        context.compaction.lastViewLength = view.length;
+        return Prompt.fromMessages([...view]);
+      };
+      const attempt = (basis: Prompt.Prompt) =>
+        Stream.unwrap(
+          outgoingModelPrompt(policy, context, basis, turn, priorToolCalls).pipe(
+            Effect.map((outgoing) =>
+              guardBudgetStream(
+                LanguageModel.streamText({
+                  // The contract joins the final outgoing prompt (after
+                  // compaction and the run-status append), so every attempt —
+                  // including the overflow retry — carries it at the last
+                  // system block.
+                  prompt:
+                    outputContractMessage === undefined
+                      ? outgoing
+                      : insertOutputContract(outgoing, outputContractMessage),
+                  toolkit: agent.definition.toolkit,
+                  disableToolCallResolution: true,
+                  ...(finalAnswerOnly ? { toolChoice: "none" as const } : {}),
+                }),
+                options.budget,
+              ).pipe(
+                Stream.mapEffect((part) =>
+                  eventsForPart(context, turnId, turn, agent.definition.toolkit.tools, trace, part),
+                ),
+                Stream.flatMap(Stream.fromIterable),
+              ),
+            ),
+          ),
+        );
+      // RUN-027: one summarize-and-retry for a classified provider context
+      // overflow when compaction is configured; every other provider error
+      // propagates unchanged. A response that already streamed parts mutated
+      // the trace, so it is never retried.
+      const response = attempt(compactedOutgoing()).pipe(
+        Stream.catch(
+          (
+            error,
+          ): Stream.Stream<
+            RunEvent,
+            AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+            InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+          > => {
+            if (
+              !(error instanceof AiError.AiError) ||
+              !isContextOverflowMessage(overflowText(error))
+            ) {
+              return Stream.fail(error);
+            }
+            const message = overflowText(error);
+            if (trace.parts.length > 0 || policy.contextTokenLimit === undefined) {
+              return Stream.fail(ContextOverflowError.make({ message, retried: false }));
+            }
+            if (context.compaction.overflowRetryTurn === turn) {
+              return Stream.fail(ContextOverflowError.make({ message, retried: true }));
+            }
+            context.compaction.overflowRetryTurn = turn;
+            context.compaction.lastCompactionTurn = turn;
+            type TurnStream = Stream.Stream<
+              RunEvent,
+              AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+              InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+            >;
+            return Stream.unwrap(
+              Effect.gen(function* () {
+                const outcome = yield* compactContext(
+                  agent,
+                  context,
+                  modelContext.prompt,
+                  turn,
+                  options,
+                  true,
+                ).pipe(
+                  Effect.mapError(
+                    (inner): AgentRuntimeFailure<typeof agent, HookError, InstructionError> =>
+                      inner instanceof AiError.AiError &&
+                      isContextOverflowMessage(overflowText(inner))
+                        ? ContextOverflowError.make({
+                            message: overflowText(inner),
+                            retried: true,
+                          })
+                        : inner,
+                  ),
+                );
+                // The retried call is outside the outer catch: a second
+                // classified overflow converts here, typed, no retry.
+                const retried: TurnStream = attempt(compactedOutgoing()).pipe(
+                  Stream.catch(
+                    (again): TurnStream =>
+                      again instanceof AiError.AiError &&
+                      isContextOverflowMessage(overflowText(again))
+                        ? Stream.fail(
+                            ContextOverflowError.make({
+                              message: overflowText(again),
+                              retried: true,
+                            }),
+                          )
+                        : Stream.fail(again),
+                  ),
+                );
+                const events: TurnStream = Stream.fromIterable(outcome.events);
+                return events.pipe(Stream.concat(retried));
+              }),
+            );
+          },
         ),
-        Stream.flatMap(Stream.fromIterable),
         Stream.withSpan("AgentRuntime.model", {
           attributes: {
             agentId: context.agentId,
@@ -2643,23 +3143,6 @@ const makeTurn = <
                   ),
             ),
           );
-          const afterValidatedResponse = <
-            EventError,
-            EventRequirements,
-            SetupError,
-            SetupRequirements,
-          >(
-            next: Effect.Effect<
-              Stream.Stream<RunEvent, EventError, EventRequirements>,
-              SetupError,
-              SetupRequirements
-            >,
-          ) =>
-            stagedResponse.pipe(
-              Stream.concat(
-                Stream.unwrap(Effect.andThen(consumeUsage(agent, context, trace, options), next)),
-              ),
-            );
 
           /** Official history advanced through this Turn's response, plus any Tool message. */
           const historyWithResponse = (...additions: ReadonlyArray<Prompt.Message>) =>
@@ -2668,6 +3151,143 @@ const makeTurn = <
               ...promptFromTurnParts(trace).content,
               ...additions,
             ]);
+
+          /**
+           * Post-validation seam: charge the response's usage (RUN-023), stage
+           * it for the Turn's canonical commit, emit one-shot `BudgetWarning`
+           * advisories (RUN-025), and resolve a token-budget breach before
+           * `next` continues the Run. Only the token dimension surfaces as a
+           * `consumed.breach` — fail-mode and cost breaches already failed
+           * inside `consumeUsage`. A breaching stop response that decodes as
+           * the final output completes directly (the answer exists, so no
+           * grace call is spent); a breaching Tool-declaring response settles
+           * its batch synthetically through the RUN-018 path and the next
+           * Turn is final-answer constrained via `tokenExhausted`.
+           */
+          type TurnEvents = Stream.Stream<
+            RunEvent,
+            AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+            InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+          >;
+          const afterValidatedResponse = (
+            next: Effect.Effect<
+              TurnEvents,
+              AgentRuntimeFailure<typeof agent, HookError, InstructionError>,
+              InterpreterRequirements<typeof agent, HookRequirements, InstructionRequirements>
+            >,
+          ): TurnEvents =>
+            stagedResponse.pipe(
+              Stream.concat(
+                Stream.unwrap(
+                  Effect.gen(function* () {
+                    const consumed = yield* consumeUsage(
+                      agent,
+                      context,
+                      trace.usage,
+                      trace.toolCalls.size,
+                      options,
+                    );
+                    if (options.durability?.noteTurnUsage !== undefined) {
+                      yield* options.durability.noteTurnUsage({
+                        turn,
+                        inputTokens: context.lastInputTokens,
+                        outputTokens: context.lastOutputTokens,
+                      });
+                    }
+                    const pre: Array<RunEvent> = [...consumed.warnings];
+                    if (
+                      !context.warnedLimits.has("tool-calls") &&
+                      nearingLimit(toolCalls + context.programmaticToolCalls, bounds.maxToolCalls)
+                    ) {
+                      context.warnedLimits.add("tool-calls");
+                      pre.push(
+                        BudgetWarning.make({
+                          ...(yield* eventBase(context)),
+                          limit: "tool-calls",
+                          consumed: toolCalls + context.programmaticToolCalls,
+                          limitValue: bounds.maxToolCalls,
+                        }),
+                      );
+                    }
+                    if (!context.warnedLimits.has("turns") && nearingLimit(turn, bounds.maxTurns)) {
+                      context.warnedLimits.add("turns");
+                      pre.push(
+                        BudgetWarning.make({
+                          ...(yield* eventBase(context)),
+                          limit: "turns",
+                          consumed: turn,
+                          limitValue: bounds.maxTurns,
+                        }),
+                      );
+                    }
+                    const emitThen = <NextError, NextRequirements>(
+                      nextStream: Stream.Stream<RunEvent, NextError, NextRequirements>,
+                    ): Stream.Stream<RunEvent, NextError, NextRequirements> =>
+                      pre.length === 0
+                        ? nextStream
+                        : Stream.fromIterable(pre).pipe(Stream.concat(nextStream));
+                    if (consumed.breach !== undefined) {
+                      if (trace.toolCalls.size === 0 && trace.finishReason === "stop") {
+                        const output = yield* decodeFinalOutput(agent, trace.text.join("")).pipe(
+                          Effect.map(Option.some),
+                          Effect.catch(() => Effect.succeed(Option.none())),
+                        );
+                        if (Option.isSome(output)) {
+                          yield* advanceHistory(context, historyWithResponse(), options);
+                          return emitThen(
+                            Stream.fromEffect(
+                              Effect.map(eventBase(context), (base) =>
+                                RunCompleted.make({
+                                  ...base,
+                                  output: output.value,
+                                  turns: turn,
+                                  finishReason: "budget-exhausted",
+                                  exhausted: "tokens",
+                                }),
+                              ),
+                            ),
+                          );
+                        }
+                      }
+                      if (trace.applicationToolCalls.length > 0) {
+                        // RUN-025 joins the RUN-018 synthetic-settlement path:
+                        // the token-breaching batch never executes a handler,
+                        // and `tokenExhausted` (stamped by `consumeUsage`)
+                        // constrains every subsequent request.
+                        const rejection = yield* settleRejectedBatch(
+                          context,
+                          turnId,
+                          trace,
+                          AgentPolicyError.make({
+                            limit: "tokens",
+                            message: `Token budget exhausted: this Run's ${policy.tokenBudget ?? 0} token budget was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
+                          }),
+                        );
+                        return emitThen(
+                          Stream.fromIterable(rejection).pipe(
+                            Stream.concat(
+                              toolBatchContinuation(
+                                agent,
+                                context,
+                                trace,
+                                prompt,
+                                turn,
+                                toolCalls,
+                                options,
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+                      // A breaching stop response without decodable output
+                      // falls through: the ordinary settle decodes (and fails
+                      // typed) exactly as it would without the breach.
+                    }
+                    return emitThen(yield* next);
+                  }),
+                ),
+              ),
+            );
 
           /**
            * Advance official history for a Turn that always continues, drain
@@ -2728,8 +3348,11 @@ const makeTurn = <
                     turns: turn,
                     // A Run settled under the final-answer constraint reports
                     // the exhaustion honestly (RUN-011), never a plain model
-                    // stop.
+                    // stop, and carries the dimension that bound.
                     finishReason: finalAnswerOnly ? "budget-exhausted" : "model-stop",
+                    ...(finalAnswerOnly && context.exhaustedDimension !== undefined
+                      ? { exhausted: context.exhaustedDimension }
+                      : {}),
                   }),
                 ),
               );
@@ -2838,6 +3461,7 @@ const makeTurn = <
                       maxToolCalls: bounds.maxToolCalls,
                       declaredToolCalls: toolCalls,
                     },
+                    agent.definition.policy.toolResultBounds,
                   ),
                   options.budget,
                 );
@@ -2861,7 +3485,11 @@ const makeTurn = <
         }),
       );
 
-      return started.pipe(Stream.concat(response), Stream.concat(continuation));
+      return Stream.fromIterable(preEvents).pipe(
+        Stream.concat(started),
+        Stream.concat(response),
+        Stream.concat(continuation),
+      );
     }),
   );
 
@@ -3224,6 +3852,7 @@ const makeResumeTurn = <
             maxToolCalls: bounds.maxToolCalls,
             declaredToolCalls: toolCalls,
           },
+          agent.definition.policy.toolResultBounds,
           settledIds,
         ),
         options.budget,
@@ -3294,12 +3923,23 @@ const stream = <
         conversationId,
         runId,
         pendingFollowUps: [],
+        startedAtMillis,
         history: options.history ?? Prompt.empty,
-        modelCalls: 0,
+        // RUN-019: a resumed Attempt re-seeds cumulative usage from the
+        // canonical response records so token budgets and the compaction
+        // trigger keep accounting across ownership changes.
+        modelCalls: options.resumeUsage?.modelCalls ?? 0,
         consecutiveToolFailures: 0,
-        inputTokens: 0,
-        outputTokens: 0,
+        inputTokens: options.resumeUsage?.inputTokens ?? 0,
+        outputTokens: options.resumeUsage?.outputTokens ?? 0,
+        lastInputTokens: options.resumeUsage?.lastInputTokens ?? 0,
+        lastOutputTokens: options.resumeUsage?.lastOutputTokens ?? 0,
         costMicrousd: 0,
+        warnedLimits: new Set(),
+        finalizing: false,
+        tokenExhausted: false,
+        exhaustedDimension: undefined,
+        compaction: initialCompactionState(),
         sequence: 0,
         programmaticToolCalls: 0,
       };
@@ -3329,7 +3969,16 @@ const stream = <
             InstructionRequirements
           >(agent.definition.instructions, decodedInput);
           const encodedInput = yield* encodeInput(agent, decodedInput);
+          const priorHistoryLength = context.history.content.length;
           const prompt = yield* makeInitialPrompt(instructions, encodedInput, context.history);
+          // RUN-022: the instruction/input block is protected from compaction
+          // by source index. A hook-prepared prompt (durable resume) replaces
+          // the source, so index protection is unavailable there and the view
+          // falls back to protecting system-role messages.
+          if (options.context === undefined) {
+            context.compaction.protectedStart = priorHistoryLength;
+            context.compaction.protectedEnd = prompt.content.length;
+          }
           yield* advanceHistory(context, prompt, options);
           if (options.resume !== undefined) {
             // A declared-batch resume re-enters mid-Turn: steering seams
@@ -3463,6 +4112,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
       runId: completed.runId,
       turns: completed.turns,
       finishReason: completed.finishReason,
+      ...(completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {}),
     };
   });
 

@@ -4,7 +4,7 @@
     "name": "@effect-agent/storage-memory",
     "durability": "non-durable"
   },
-  "generatedAt": "1970-01-01T02:24:43.004Z",
+  "generatedAt": "1970-01-01T02:28:51.004Z",
   "tier1": [
     {
       "suite": "submission-ledger",
@@ -259,6 +259,13 @@
     },
     {
       "scenario": "plain",
+      "location": "compaction:after-canonical-append",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "plain",
       "location": "tools:after-prepared-append",
       "failpointFired": false,
       "status": "not-triggered",
@@ -455,6 +462,13 @@
     },
     {
       "scenario": "uncertain-tool",
+      "location": "compaction:after-canonical-append",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "uncertain-tool",
       "location": "tools:after-prepared-append",
       "failpointFired": true,
       "status": "converged",
@@ -651,6 +665,13 @@
     },
     {
       "scenario": "durable-steps",
+      "location": "compaction:after-canonical-append",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "durable-steps",
       "location": "tools:after-prepared-append",
       "failpointFired": true,
       "status": "converged",
@@ -847,6 +868,13 @@
     },
     {
       "scenario": "approval",
+      "location": "compaction:after-canonical-append",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "approval",
       "location": "tools:after-prepared-append",
       "failpointFired": true,
       "status": "converged",
@@ -1043,6 +1071,13 @@
     },
     {
       "scenario": "join",
+      "location": "compaction:after-canonical-append",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "join",
       "location": "tools:after-prepared-append",
       "failpointFired": false,
       "status": "not-triggered",
@@ -1233,6 +1268,13 @@
     {
       "scenario": "delegation",
       "location": "turn:after-results-append",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "delegation",
+      "location": "compaction:after-canonical-append",
       "failpointFired": false,
       "status": "not-triggered",
       "digestChainVerified": true

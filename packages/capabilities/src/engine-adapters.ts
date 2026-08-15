@@ -14,7 +14,7 @@ import { Clock, DateTime, Effect, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import {
-  ApprovalAudit,
+  type ApprovalAudit,
   type ApprovalAuditLimitExceeded,
   type ApprovalDecisionMismatch,
   ApprovalRequestDraft,
@@ -31,7 +31,7 @@ import {
   type ConversationLimitExceeded,
   type ConversationNotFound,
   conversationPrompt,
-  EphemeralConversations,
+  type EphemeralConversations,
 } from "./conversation.ts";
 import type { RedactionError, Redactor } from "./redaction.ts";
 import type { RunSchedulingOverride } from "./scheduling.ts";
@@ -187,8 +187,11 @@ export const toRunBudgetHook = (
   guard: budget.guard,
   consume: (delta) =>
     Schema.decodeUnknownEffect(UsageDelta)({
+      modelCalls: delta.modelCalls,
       inputTokens: delta.inputTokens,
       outputTokens: delta.outputTokens,
+      cacheReadInputTokens: Math.max(0, delta.usage.inputTokens.cacheRead ?? 0),
+      cacheWriteInputTokens: Math.max(0, delta.usage.inputTokens.cacheWrite ?? 0),
       toolCalls: delta.toolCalls,
       costMicrousd: delta.costMicrousd,
     }).pipe(

@@ -1,13 +1,14 @@
 import {
   Agent,
   AgentPolicy,
+  CompactionPolicy,
   ConversationId,
   IdGenerator,
   ReceiptId,
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core";
-import { ToolExecutionClass } from "@effect-agent/engine";
+import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/engine";
 import {
   AbortCommand,
   AdmissionConflict,
@@ -1235,7 +1236,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       // The resumed Attempt's model request saw the canonical prompt, tool result included,
       // without re-appended instructions or input. The second system message is the
-      // request-time model-visible output contract, which is never canonical.
+      // request-time model-visible output contract (RUN-028) and the trailing user
+      // message is the derived run-status line (RUN-024) — neither is canonical.
       expect(scripted.prompts).toHaveLength(2);
       const resumedPrompt = scripted.prompts[1];
       expect(resumedPrompt?.content.map((message) => message.role)).toEqual([
@@ -1244,6 +1246,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         "user",
         "assistant",
         "tool",
+        "user",
       ]);
 
       const records = yield* readLog(conversation);
@@ -1459,4 +1462,200 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       }),
     );
   });
+});
+
+layer(testLayer)("ADR-0018 durable compaction and usage re-seed", (it) => {
+  const usageOf = (input: number, output: number) => ({
+    inputTokens: { total: input },
+    outputTokens: { total: output },
+  });
+
+  const finalPartsWithUsage = (
+    text: string,
+    used: ReturnType<typeof usageOf>,
+  ): ReadonlyArray<Response.StreamPartEncoded> => [
+    { type: "text-start", id: "answer" },
+    { type: "text-delta", id: "answer", delta: text },
+    { type: "text-end", id: "answer" },
+    { type: "finish", reason: "stop", usage: used },
+  ];
+
+  const toolCallPartsWithUsage = (
+    used: ReturnType<typeof usageOf>,
+  ): ReadonlyArray<Response.StreamPartEncoded> => [
+    {
+      type: "tool-call",
+      id: "search-1",
+      name: "search",
+      params: { query: "sea" },
+      providerExecuted: false,
+    },
+    { type: "finish", reason: "tool-calls", usage: used },
+  ];
+
+  const promptTexts = (prompt: Prompt.Prompt): string =>
+    prompt.content
+      .map((message) =>
+        typeof message.content === "string"
+          ? message.content
+          : message.content
+              .map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
+              .join(""),
+      )
+      .join("\n");
+
+  it.effect(
+    "RUN-026: compaction commits one canonical record across a failpoint re-drive and later Runs fold it",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const conversation = "conversation-compaction";
+
+        // Submission 1: an ordinary tool Run leaves prior-Run records to cover.
+        const first = yield* makeScriptedModel((call) =>
+          call === 0 ? toolCallParts : finalParts('{"answer":"Found the sea."}'),
+        );
+        yield* runtime.submit(
+          Agent.withModel(searchDefinition, first.model),
+          { question: "Is a flight available?" },
+          submitOptions(conversation, "compaction-1"),
+        );
+        const firstSettled = yield* runtime
+          .processConversation(
+            Agent.withModel(searchDefinition, first.model),
+            decodeConversationId(conversation),
+          )
+          .pipe(Effect.provide(searchToolLayer));
+        expect(firstSettled[0]?.outcome).toBe("completed");
+
+        // Submission 2: a compacting agent whose estimated context exceeds the limit
+        // at Turn 1, forcing summarize; the summarizer response is model call 0 of
+        // each Attempt, the final answer the call after it.
+        const compactingDefinition = Agent.define("durable-compactor", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Answer from what is known.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            contextTokenLimit: 50,
+            compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
+          }),
+        });
+        const second = yield* makeScriptedModel((call) =>
+          call === 0 || call === 1
+            ? finalParts("Goal: prior run booked the flight")
+            : finalParts('{"answer":"compacted"}'),
+        );
+        const compactor = Agent.withModel(compactingDefinition, second.model);
+        yield* runtime.submit(
+          compactor,
+          { question: "what happened?" },
+          submitOptions(conversation, "compaction-2"),
+        );
+
+        // Crash immediately AFTER the compaction record commits, BEFORE the
+        // Turn's model call: the re-driven Attempt must project the compacted
+        // prompt and must NOT append a duplicate record.
+        yield* armFailpoint("compaction:after-canonical-append");
+        const crashed = yield* Effect.exit(
+          runtime.processConversation(compactor, decodeConversationId(conversation)),
+        );
+        expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        const settled = yield* runtime.processConversation(
+          compactor,
+          decodeConversationId(conversation),
+        );
+        expect(settled).toHaveLength(1);
+        expect(settled[0]?.outcome).toBe("completed");
+
+        const records = yield* readLog(conversation);
+        const compactions = records.filter(
+          (envelope) => envelope.record.payload._tag === "CompactionCreated",
+        );
+        expect(compactions).toHaveLength(1);
+        const payload = compactions[0]?.record.payload;
+        if (payload === undefined || payload._tag !== "CompactionCreated") {
+          throw new Error("expected a CompactionCreated record");
+        }
+        expect(payload.kind).toBe("summarize");
+        expect(payload.summary).toBe("Goal: prior run booked the flight");
+        expect(payload.coversThrough).toBeLessThan(compactions[0]?.sequence ?? 0);
+
+        // The settled Run's final model call saw the compacted view.
+        const lastPrompt = second.prompts.at(-1);
+        if (lastPrompt === undefined) throw new Error("expected captured prompts");
+        expect(promptTexts(lastPrompt)).toContain(COMPACTION_SUMMARY_PREFIX);
+      }),
+  );
+
+  it.effect("RUN-023: a resumed Attempt re-seeds committed usage into the token budget", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const conversation = "conversation-reseed";
+      const reseedDefinition = Agent.define("durable-reseed", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Search before answering.",
+        toolkit: searchTools,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          tokenBudget: 100,
+          onExhaustion: "fail",
+        }),
+      });
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? toolCallPartsWithUsage(usageOf(90, 5))
+          : finalPartsWithUsage('{"answer":"cheap"}', usageOf(20, 5)),
+      );
+      const agent = Agent.withModel(reseedDefinition, scripted.model);
+      yield* runtime.submit(
+        agent,
+        { question: "reseed?" },
+        submitOptions(conversation, "reseed-1"),
+      );
+
+      // Crash after the Turn-1 response commit (usage already staged into the
+      // canonical record), leaving a declared pending Tool batch to resume.
+      yield* armFailpoint("turn:after-response-append");
+      const crashed = yield* Effect.exit(
+        runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(searchToolLayer)),
+      );
+      expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      const settled = yield* runtime
+        .processConversation(agent, decodeConversationId(conversation))
+        .pipe(Effect.provide(searchToolLayer));
+      // 90+5 committed tokens re-seed the resumed Attempt; the 25-token Turn 2
+      // breaches the 100-token budget. Without re-seeding this Run would
+      // complete (25 < 100) — the failed settlement IS the re-seed proof.
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.outcome).toBe("failed");
+
+      const records = yield* readLog(conversation);
+      const response = records.find(
+        (envelope) =>
+          envelope.record.payload._tag === "ModelResponseRecorded" &&
+          envelope.record.payload.turn === 1,
+      );
+      const payload = response?.record.payload;
+      if (payload === undefined || payload._tag !== "ModelResponseRecorded") {
+        throw new Error("expected the Turn 1 response record");
+      }
+      expect(payload.inputTokens).toBe(90);
+      expect(payload.outputTokens).toBe(5);
+    }),
+  );
 });

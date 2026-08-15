@@ -114,17 +114,46 @@ export class TurnCompleted extends Schema.TaggedClass<TurnCompleted>()("TurnComp
   ]),
 }) {}
 
+/** Advisory that one policy limit crossed its warning fraction; emitted once per limit per run. */
+export class BudgetWarning extends Schema.TaggedClass<BudgetWarning>()("BudgetWarning", {
+  ...RunEventBase,
+  limit: Schema.Literals(["tokens", "tool-calls", "turns", "duration", "context"]),
+  consumed: Schema.Natural,
+  limitValue: Schema.Natural,
+}) {}
+
+/** Records that the engine reduced model context at a Turn seam without erasing source history. */
+export class CompactionPerformed extends Schema.TaggedClass<CompactionPerformed>()(
+  "CompactionPerformed",
+  {
+    ...RunEventBase,
+    turn: Schema.Int.check(Schema.isGreaterThan(0)),
+    kind: Schema.Literals(["clear-tool-results", "summarize"]),
+    tokensBeforeEstimate: Schema.Natural,
+    tokensAfterEstimate: Schema.Natural,
+  },
+) {}
+
+/**
+ * Dimension that bound when a Run settled through the final-answer resolution
+ * (ADR-0019; the token dimension per ADR-0018). This is the exhausted marker
+ * ADR-0019 S3's re-delegation grant flow consumes.
+ */
+const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"]);
+
 /**
  * Successful terminal event carrying Schema-compatible output and the completed turn count.
  * `"budget-exhausted"` marks a Run that settled through the policy's final-answer resolution
- * after Turn or Tool Call exhaustion — never a plain `"model-stop"` (RUN-011); its `turns`
- * count may exceed `maxTurns` by the single grace Turn.
+ * after Turn, Tool Call, or token exhaustion — never a plain `"model-stop"` (RUN-011); its
+ * `turns` count may exceed `maxTurns` by the single grace Turn, and `exhausted` names the
+ * dimension that bound.
  */
 export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
   ...RunEventBase,
   output: Schema.Json,
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  exhausted: Schema.optionalKey(ExhaustedLimit),
 }) {}
 
 /** Terminal event for a run that failed with an expected error. */
@@ -184,6 +213,7 @@ export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
     ...SubagentEventBase,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
     finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+    exhausted: Schema.optionalKey(ExhaustedLimit),
   },
 ) {}
 
@@ -223,6 +253,8 @@ export const RunEvent = Schema.Union([
   ToolCallFailed,
   ApprovalRequested,
   TurnCompleted,
+  BudgetWarning,
+  CompactionPerformed,
   RunCompleted,
   RunFailed,
   RunInterrupted,

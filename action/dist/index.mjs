@@ -28952,6 +28952,12 @@ class AgentInterrupted extends exports_Schema.TaggedError()("AgentInterrupted", 
   message: exports_Schema.String
 }) {
 }
+
+class ContextOverflowError extends exports_Schema.TaggedError()("ContextOverflowError", {
+  message: exports_Schema.String,
+  retried: exports_Schema.Boolean
+}) {
+}
 var AgentError = exports_Schema.Union([
   AgentInputError,
   AgentOutputError,
@@ -29082,11 +29088,30 @@ class TurnCompleted extends exports_Schema.TaggedClass()("TurnCompleted", {
 }) {
 }
 
+class BudgetWarning extends exports_Schema.TaggedClass()("BudgetWarning", {
+  ...RunEventBase,
+  limit: exports_Schema.Literals(["tokens", "tool-calls", "turns", "duration", "context"]),
+  consumed: exports_Schema.Natural,
+  limitValue: exports_Schema.Natural
+}) {
+}
+
+class CompactionPerformed extends exports_Schema.TaggedClass()("CompactionPerformed", {
+  ...RunEventBase,
+  turn: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  kind: exports_Schema.Literals(["clear-tool-results", "summarize"]),
+  tokensBeforeEstimate: exports_Schema.Natural,
+  tokensAfterEstimate: exports_Schema.Natural
+}) {
+}
+var ExhaustedLimit = exports_Schema.Literals(["tokens", "tool-calls", "turns"]);
+
 class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", {
   ...RunEventBase,
   output: exports_Schema.Json,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"])
+  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  exhausted: exports_Schema.optionalKey(ExhaustedLimit)
 }) {
 }
 
@@ -29135,7 +29160,8 @@ class SubagentProgress extends exports_Schema.TaggedClass()("SubagentProgress", 
 class SubagentCompleted extends exports_Schema.TaggedClass()("SubagentCompleted", {
   ...SubagentEventBase,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"])
+  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  exhausted: exports_Schema.optionalKey(ExhaustedLimit)
 }) {
 }
 
@@ -29167,6 +29193,8 @@ var RunEvent = exports_Schema.Union([
   ToolCallFailed,
   ApprovalRequested,
   TurnCompleted,
+  BudgetWarning,
+  CompactionPerformed,
   RunCompleted,
   RunFailed,
   RunInterrupted,
@@ -29179,20 +29207,126 @@ var RunEvent = exports_Schema.Union([
   SubagentInterrupted,
   SubagentJoined
 ]);
-// packages/core/src/policy.ts
+// packages/core/src/tool-result.ts
 var PositiveInt = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class ToolResultBounds extends exports_Schema.Class("ToolResultBounds")({
+  maxBytes: PositiveInt
+}) {
+}
+
+class TruncatedToolResult extends exports_Schema.Class("TruncatedToolResult")({
+  truncatedToolResult: exports_Schema.Literal(true),
+  originalBytes: exports_Schema.Natural,
+  head: exports_Schema.String,
+  tail: exports_Schema.String
+}) {
+}
+var codePointUtf8Length = (codePoint) => {
+  if (codePoint < 128)
+    return 1;
+  if (codePoint < 2048)
+    return 2;
+  if (codePoint < 65536)
+    return 3;
+  return 4;
+};
+var utf8ByteLength = (value4) => {
+  let bytes = 0;
+  let index2 = 0;
+  while (index2 < value4.length) {
+    const codePoint = value4.codePointAt(index2) ?? 0;
+    bytes += codePointUtf8Length(codePoint);
+    index2 += codePoint > 65535 ? 2 : 1;
+  }
+  return bytes;
+};
+var takePrefixWithinBytes = (value4, maxBytes) => {
+  let bytes = 0;
+  let index2 = 0;
+  while (index2 < value4.length) {
+    const codePoint = value4.codePointAt(index2) ?? 0;
+    const width = codePointUtf8Length(codePoint);
+    if (bytes + width > maxBytes)
+      break;
+    bytes += width;
+    index2 += codePoint > 65535 ? 2 : 1;
+  }
+  return value4.slice(0, index2);
+};
+var takeSuffixWithinBytes = (value4, maxBytes) => {
+  let bytes = 0;
+  let index2 = value4.length;
+  while (index2 > 0) {
+    const unit = value4.charCodeAt(index2 - 1);
+    const isLowSurrogate = unit >= 56320 && unit <= 57343;
+    const pairStart = isLowSurrogate && index2 >= 2 ? index2 - 2 : index2 - 1;
+    const codePoint = value4.codePointAt(pairStart) ?? 0;
+    const width = codePointUtf8Length(codePoint);
+    if (bytes + width > maxBytes)
+      break;
+    bytes += width;
+    index2 = pairStart;
+  }
+  return value4.slice(index2);
+};
+var applyToolResultBounds = (encodedJson, bounds) => {
+  const originalBytes = utf8ByteLength(encodedJson);
+  if (originalBytes <= bounds.maxBytes)
+    return encodedJson;
+  const render = (head, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head, tail })));
+  const minimal = render("", "");
+  const contentBudget = bounds.maxBytes - utf8ByteLength(minimal);
+  if (contentBudget <= 0)
+    return minimal;
+  let headBudget = Math.floor(contentBudget / 2);
+  let tailBudget = contentBudget - headBudget;
+  for (;; ) {
+    const head = takePrefixWithinBytes(encodedJson, headBudget);
+    const tail = takeSuffixWithinBytes(encodedJson, tailBudget);
+    const output = render(head, tail);
+    const outputBytes = utf8ByteLength(output);
+    if (outputBytes <= bounds.maxBytes)
+      return output;
+    if (headBudget === 0 && tailBudget === 0)
+      return minimal;
+    const shrink = Math.max(1, Math.ceil((outputBytes - bounds.maxBytes) / 2));
+    headBudget = Math.max(0, headBudget - shrink);
+    tailBudget = Math.max(0, tailBudget - shrink);
+  }
+};
+
+// packages/core/src/policy.ts
+var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var NonNegativeInt = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0));
+var CompactionMode = exports_Schema.Literals(["prune", "summarize", "prune-then-summarize"]);
+
+class CompactionPolicy extends exports_Schema.Class("CompactionPolicy")({
+  keepRecentTokens: PositiveInt2,
+  mode: CompactionMode
+}) {
+  static make(input = {}) {
+    return super.make({
+      keepRecentTokens: input.keepRecentTokens ?? 20000,
+      mode: input.mode ?? "prune-then-summarize"
+    });
+  }
+}
 var FinitePositiveDuration = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var OnExhaustion = exports_Schema.Literals(["final-answer", "fail"]);
 var AgentPolicyFields = exports_Schema.Struct({
-  maxTurns: PositiveInt,
-  maxToolCalls: PositiveInt,
+  maxTurns: PositiveInt2,
+  maxToolCalls: PositiveInt2,
   maxDuration: FinitePositiveDuration,
-  toolConcurrency: PositiveInt,
+  toolConcurrency: PositiveInt2,
   repeatedFailureLimit: NonNegativeInt,
   onExhaustion: OnExhaustion,
-  tokenBudget: exports_Schema.optionalKey(PositiveInt),
-  costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt)
+  tokenBudget: exports_Schema.optionalKey(PositiveInt2),
+  costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt),
+  contextTokenLimit: exports_Schema.optionalKey(PositiveInt2),
+  toolResultBounds: ToolResultBounds,
+  runStatus: exports_Schema.Literals(["appended", "off"]),
+  compaction: CompactionPolicy
 });
 
 class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields) {
@@ -29201,7 +29335,10 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
       ...input,
       maxDuration: exports_Duration.fromInputUnsafe(input.maxDuration),
       repeatedFailureLimit: input.repeatedFailureLimit ?? 3,
-      onExhaustion: input.onExhaustion ?? "final-answer"
+      onExhaustion: input.onExhaustion ?? "final-answer",
+      toolResultBounds: input.toolResultBounds ?? ToolResultBounds.make({ maxBytes: 50 * 1024 }),
+      runStatus: input.runStatus ?? "appended",
+      compaction: input.compaction ?? CompactionPolicy.make()
     });
   }
 }
@@ -29536,6 +29673,10 @@ var BudgetLevel = exports_Schema.Literals(["global", "tenant", "agent", "convers
 class UsageTotals extends exports_Schema.Class("@effect-agent/capabilities/UsageTotals")({
   inputTokens: Natural2,
   outputTokens: Natural2,
+  cacheReadInputTokens: Natural2,
+  cacheWriteInputTokens: Natural2,
+  lastInputTokens: Natural2,
+  lastOutputTokens: Natural2,
   toolCalls: Natural2,
   costMicrousd: Natural2,
   elapsedMillis: Natural2
@@ -29543,8 +29684,11 @@ class UsageTotals extends exports_Schema.Class("@effect-agent/capabilities/Usage
 }
 
 class UsageDelta extends exports_Schema.Class("@effect-agent/capabilities/UsageDelta")({
+  modelCalls: Natural2,
   inputTokens: Natural2,
   outputTokens: Natural2,
+  cacheReadInputTokens: Natural2,
+  cacheWriteInputTokens: Natural2,
   toolCalls: Natural2,
   costMicrousd: Natural2
 }) {
@@ -29599,20 +29743,25 @@ var levelOrder = {
 var emptyTotals = (elapsedMillis = 0) => UsageTotals.make({
   inputTokens: 0,
   outputTokens: 0,
+  cacheReadInputTokens: 0,
+  cacheWriteInputTokens: 0,
+  lastInputTokens: 0,
+  lastOutputTokens: 0,
   toolCalls: 0,
   costMicrousd: 0,
   elapsedMillis
 });
 var withElapsed = (node, now3) => UsageTotals.make({
-  inputTokens: node.totals.inputTokens,
-  outputTokens: node.totals.outputTokens,
-  toolCalls: node.totals.toolCalls,
-  costMicrousd: node.totals.costMicrousd,
+  ...node.totals,
   elapsedMillis: Math.max(0, now3 - node.startedAt)
 });
 var addUsage = (node, delta, now3) => UsageTotals.make({
   inputTokens: node.totals.inputTokens + delta.inputTokens,
   outputTokens: node.totals.outputTokens + delta.outputTokens,
+  cacheReadInputTokens: node.totals.cacheReadInputTokens + delta.cacheReadInputTokens,
+  cacheWriteInputTokens: node.totals.cacheWriteInputTokens + delta.cacheWriteInputTokens,
+  lastInputTokens: delta.modelCalls > 0 ? delta.inputTokens : node.totals.lastInputTokens,
+  lastOutputTokens: delta.modelCalls > 0 ? delta.outputTokens : node.totals.lastOutputTokens,
   toolCalls: node.totals.toolCalls + delta.toolCalls,
   costMicrousd: node.totals.costMicrousd + delta.costMicrousd,
   elapsedMillis: Math.max(0, now3 - node.startedAt)
@@ -32501,39 +32650,6 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
-// packages/engine/src/output-contract-internal.ts
-var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
-var outputSchemaContract = (definition) => {
-  try {
-    const jsonSchema = exports_Tool.getJsonSchemaFromSchema(definition.output);
-    return {
-      _tag: "rendered",
-      message: `${contractDirective}
-
-${JSON.stringify(jsonSchema, undefined, 2)}`
-    };
-  } catch (cause) {
-    return {
-      _tag: "unrenderable",
-      reason: cause instanceof Error ? cause.message : String(cause)
-    };
-  }
-};
-var insertOutputContract = (prompt, message) => {
-  const content = prompt.content;
-  let insertAt = 0;
-  for (let index2 = 0;index2 < content.length; index2 += 1) {
-    if (content[index2]?.role === "system") {
-      insertAt = index2 + 1;
-    }
-  }
-  return exports_Prompt.fromMessages([
-    ...content.slice(0, insertAt),
-    exports_Prompt.makeMessage("system", { content: message }),
-    ...content.slice(insertAt)
-  ]);
-};
-
 // packages/engine/src/provider-result-staging-internal.ts
 var MAX_JSON_DEPTH = 128;
 var FailedSnapshot = Symbol("@effect-agent/engine/FailedProviderResultSnapshot");
@@ -32997,6 +33113,229 @@ class ToolSpanTelemetry extends exports_Context.Service()("@effect-agent/engine/
   })));
 }
 
+// packages/engine/src/compaction.ts
+var CLEARED_TOOL_RESULT = "[tool result cleared by compaction]";
+var COMPACTION_SUMMARY_PREFIX = `The prior conversation was compacted into this summary:
+
+`;
+var COMPACTION_INSTRUCTION = [
+  "You are compacting an agent conversation to reclaim context space.",
+  "Summarize the transcript below for the SAME agent to continue working:",
+  "it will see only this summary plus the most recent messages.",
+  "Structure the summary exactly as:",
+  "Goal:",
+  "Constraints:",
+  "Progress:",
+  "Decisions:",
+  "Next steps:",
+  "Critical context:",
+  "Be terse. Preserve exact file paths, identifiers, and values needed to",
+  "continue. Do not continue the conversation; output only the summary."
+].join(`
+`);
+var CONTEXT_OVERFLOW_PATTERN = /context[\s_-]?length|prompt is too long|maximum context (?:length|window)|input .{0,24}too long|exceeds .{0,24}context|too many (?:input )?tokens|context[\s_-]?window[\s_-]?exceeded|context overflow/i;
+var isContextOverflowMessage = (text) => CONTEXT_OVERFLOW_PATTERN.test(text);
+var utf8Length = (text) => {
+  let bytes = 0;
+  for (const character of text) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    bytes += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
+  }
+  return bytes;
+};
+var estimateMessageTokens = (message) => {
+  let text;
+  try {
+    text = JSON.stringify(message);
+  } catch {
+    text = undefined;
+  }
+  return text === undefined ? 0 : Math.ceil(utf8Length(text) / 4);
+};
+var estimatePromptTokens = (messages) => {
+  let total = 0;
+  for (const message of messages) {
+    total += estimateMessageTokens(message);
+  }
+  return total;
+};
+var initialCompactionState = () => ({
+  protectedStart: -1,
+  protectedEnd: -1,
+  clearedThrough: 0,
+  summarizedThrough: 0,
+  summary: undefined,
+  lastCompactionTurn: 0,
+  overflowRetryTurn: 0,
+  lastViewLength: -1
+});
+var isProtected = (state, source, index2) => {
+  if (state.protectedStart >= 0) {
+    return index2 >= state.protectedStart && index2 < state.protectedEnd;
+  }
+  return source[index2]?.role === "system";
+};
+var clearedToolMessage = (message) => {
+  if (message.role !== "tool" || typeof message.content === "string") {
+    return message;
+  }
+  return exports_Prompt.makeMessage("tool", {
+    content: message.content.map((part) => part.type === "tool-result" ? exports_Prompt.makePart("tool-result", {
+      id: part.id,
+      name: part.name,
+      result: CLEARED_TOOL_RESULT,
+      isFailure: part.isFailure,
+      providerExecuted: part.providerExecuted
+    }) : part)
+  });
+};
+var renderMessage = (state, message, index2) => index2 < state.clearedThrough && message.role === "tool" ? clearedToolMessage(message) : message;
+var summaryMessage = (summary2) => exports_Prompt.makeMessage("user", {
+  content: [exports_Prompt.makePart("text", { text: `${COMPACTION_SUMMARY_PREFIX}${summary2}` })]
+});
+var buildCompactedView = (source, state) => {
+  if (state.summary === undefined && state.clearedThrough === 0) {
+    return source;
+  }
+  const view = [];
+  if (state.summary !== undefined && state.summarizedThrough > 0) {
+    for (let index2 = 0;index2 < state.summarizedThrough && index2 < source.length; index2 += 1) {
+      const message = source[index2];
+      if (message !== undefined && isProtected(state, source, index2)) {
+        view.push(renderMessage(state, message, index2));
+      }
+    }
+    view.push(summaryMessage(state.summary));
+    for (let index2 = state.summarizedThrough;index2 < source.length; index2 += 1) {
+      const message = source[index2];
+      if (message !== undefined) {
+        view.push(renderMessage(state, message, index2));
+      }
+    }
+    return view;
+  }
+  for (let index2 = 0;index2 < source.length; index2 += 1) {
+    const message = source[index2];
+    if (message !== undefined) {
+      view.push(renderMessage(state, message, index2));
+    }
+  }
+  return view;
+};
+var choosePruneBound = (source, state, keepRecentTokens) => {
+  const toolIndices = [];
+  for (let index2 = 0;index2 < source.length; index2 += 1) {
+    if (source[index2]?.role === "tool" && !isProtected(state, source, index2)) {
+      toolIndices.push(index2);
+    }
+  }
+  if (toolIndices.length <= 1) {
+    return state.clearedThrough;
+  }
+  let budget = keepRecentTokens;
+  let newestCleared = -1;
+  for (let position = toolIndices.length - 1;position >= 0; position -= 1) {
+    const index2 = toolIndices[position];
+    if (index2 === undefined)
+      continue;
+    const message = source[index2];
+    if (message === undefined)
+      continue;
+    if (position === toolIndices.length - 1) {
+      budget -= estimateMessageTokens(message);
+      continue;
+    }
+    const cost = estimateMessageTokens(message);
+    if (budget - cost >= 0 && index2 >= state.clearedThrough) {
+      budget -= cost;
+      continue;
+    }
+    newestCleared = index2;
+    break;
+  }
+  return newestCleared === -1 ? state.clearedThrough : Math.max(state.clearedThrough, newestCleared + 1);
+};
+var chooseSummarizeCut = (source, state, keepRecentTokens) => {
+  let kept = 0;
+  let cut = 0;
+  for (let index2 = source.length - 1;index2 >= 0; index2 -= 1) {
+    const message = source[index2];
+    if (message === undefined)
+      continue;
+    kept += estimateMessageTokens(renderMessage(state, message, index2));
+    if (kept >= keepRecentTokens) {
+      cut = index2;
+      break;
+    }
+  }
+  while (cut > 0 && source[cut]?.role === "tool") {
+    cut -= 1;
+  }
+  return Math.max(cut, state.summarizedThrough);
+};
+var collectCoveredMessages = (source, state, cut) => {
+  const covered = [];
+  for (let index2 = 0;index2 < cut && index2 < source.length; index2 += 1) {
+    const message = source[index2];
+    if (message !== undefined && !isProtected(state, source, index2)) {
+      covered.push(message);
+    }
+  }
+  return covered;
+};
+var SUMMARY_TOOL_RESULT_CLIP = 2000;
+var partText = (part) => {
+  if (typeof part === "string")
+    return part;
+  switch (part.type) {
+    case "text": {
+      return part.text;
+    }
+    case "reasoning": {
+      return "";
+    }
+    case "tool-call": {
+      let params;
+      try {
+        params = JSON.stringify(part.params) ?? "";
+      } catch {
+        params = "";
+      }
+      return `[tool call ${part.name} ${params.slice(0, 500)}]`;
+    }
+    case "tool-result": {
+      let result4;
+      try {
+        result4 = JSON.stringify(part.result) ?? "";
+      } catch {
+        result4 = "";
+      }
+      return `[tool result ${part.name}: ${result4.slice(0, SUMMARY_TOOL_RESULT_CLIP)}]`;
+    }
+    default: {
+      return `[${part.type}]`;
+    }
+  }
+};
+var renderForSummary = (covered, previousSummary) => {
+  const lines = [];
+  if (previousSummary !== undefined) {
+    lines.push(`[Previous summary]
+${previousSummary}`);
+  }
+  for (const message of covered) {
+    const text = typeof message.content === "string" ? message.content : message.content.map((part) => partText(part)).filter((piece) => piece.length > 0).join(`
+`);
+    if (text.length > 0) {
+      lines.push(`[${message.role}]
+${text}`);
+    }
+  }
+  return lines.join(`
+
+`);
+};
+
 // packages/engine/src/durable-step.ts
 var ToolExecutionClass = exports_Context.Reference("@effect-agent/engine/ToolExecutionClass", { defaultValue: () => "uncertain" });
 var getToolExecutionClass = (tool) => exports_Context.get(tool.annotations, ToolExecutionClass);
@@ -33107,17 +33446,17 @@ var prepareToolCall = (toolkit, call, declarationIndex) => {
     declarationIndex
   })))));
 };
+var boundedAllowance = (policyBound, allowance) => allowance === undefined || !Number.isFinite(allowance) ? policyBound : Math.min(policyBound, Math.max(1, Math.floor(allowance)));
+var effectiveRunBounds = (policy2, options) => ({
+  maxTurns: boundedAllowance(policy2.maxTurns, options.turnAllowance),
+  maxToolCalls: boundedAllowance(policy2.maxToolCalls, options.toolCallAllowance)
+});
 var decodeResumedToolCallParameters = (tool, toolName, encodedParams) => {
   const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
   return decodeParameters(encodedParams).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
     message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`
   })));
 };
-var boundedAllowance = (policyBound, allowance) => allowance === undefined || !Number.isFinite(allowance) ? policyBound : Math.min(policyBound, Math.max(1, Math.floor(allowance)));
-var effectiveRunBounds = (policy2, options) => ({
-  maxTurns: boundedAllowance(policy2.maxTurns, options.turnAllowance),
-  maxToolCalls: boundedAllowance(policy2.maxToolCalls, options.toolCallAllowance)
-});
 var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2) {
   const toolCallId = yield* decodeToolCallId(call.id);
   return ToolCallFailed.make({
@@ -33178,7 +33517,8 @@ var stampSubagentEvent = exports_Effect.fn("AgentRuntime.stampSubagentEvent")(fu
       return SubagentCompleted.make({
         ...shared,
         turns: payload.turns,
-        finishReason: payload.finishReason
+        finishReason: payload.finishReason,
+        ...payload.exhausted !== undefined ? { exhausted: payload.exhausted } : {}
       });
     }
     case "SubagentFailed": {
@@ -33321,7 +33661,7 @@ var terminalToolTelemetry = (descriptor, outcome, failureMarker) => annotateTool
   toolExecutionClass: descriptor.executionClass,
   toolOutcome: outcome
 }))));
-var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWaiting) => {
+var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, resultBounds, onWaiting) => {
   const call = prepared.call;
   const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
   const executionClass = getToolExecutionClass(prepared.tool);
@@ -33395,6 +33735,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
     const result4 = terminalResult;
     return exports_Effect.gen(function* () {
       const toolCallId = yield* decodeToolCallId(call.id);
+      const encodedResult = boundEncodedToolResult(result4.encodedResult, resultBounds);
       const event = result4.isFailure ? ToolCallFailed.make({
         ...yield* eventBase(context3),
         turnId,
@@ -33408,14 +33749,14 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
         turnId,
         toolCallId,
         toolName: call.name,
-        result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
+        result: yield* decodeEventJson(encodedResult, "Tool result"),
         providerExecuted: false
       });
       trace2.finalToolResultIds.add(call.id);
       trace2.applicationToolResults[prepared.declarationIndex] = {
         id: call.id,
         name: call.name,
-        encodedResult: result4.encodedResult,
+        encodedResult,
         isFailure: result4.isFailure
       };
       terminalResultCommitted = true;
@@ -33469,7 +33810,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
     return restored.reasons.length === 0 ? exports_Stream.empty : exports_Stream.failCause(restored);
   }));
 };
-var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, brokerAccounting, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, brokerAccounting, resultBounds, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const prepared = yield* exports_Effect.forEach(calls, (call, declarationIndex) => prepareToolCall(toolkit, call, declarationIndex));
   const semaphore = yield* exports_Semaphore.make(concurrency);
   const approvalPreflight = prepared.reduce((stream, call) => stream.pipe(exports_Stream.concat(preflightApproval(context3, turnId, call, options))), exports_Stream.empty);
@@ -33531,7 +33872,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
     groups.push(parallel);
   }
   const handlers = groups.reduce((stream, group2) => {
-    const next2 = exports_Stream.mergeAll(group2.map((call) => withSemaphorePermit(semaphore, executePreparedToolCall(context3, turnId, toolkit, call, trace2, (waiting) => {
+    const next2 = exports_Stream.mergeAll(group2.map((call) => withSemaphorePermit(semaphore, executePreparedToolCall(context3, turnId, toolkit, call, trace2, resultBounds, (waiting) => {
       waitingByDeclaration.set(call.declarationIndex, waiting);
     }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call)), exports_Stream.provideService(ToolBroker, brokerFor(call).service), exports_Stream.ensuring(exports_Effect.sync(() => brokerFor(call).close()))))), { concurrency: "unbounded" });
     return stream.pipe(exports_Stream.concat(next2));
@@ -33673,17 +34014,59 @@ var appendInputs = (context3, source, inputs, options) => exports_Effect.gen(fun
   yield* advanceHistory(context3, history, options);
   return history;
 });
-var consumeUsage = (agent2, context3, trace2, options) => exports_Effect.gen(function* () {
-  if (trace2.usage === undefined) {
+var boundEncodedToolResult = (encodedResult, bounds) => {
+  let text;
+  try {
+    text = JSON.stringify(encodedResult);
+  } catch {
+    return encodedResult;
+  }
+  if (text === undefined) {
+    return encodedResult;
+  }
+  const bounded3 = applyToolResultBounds(text, bounds);
+  return bounded3 === text ? encodedResult : JSON.parse(bounded3);
+};
+var RUN_STATUS_WARNING = " · WARNING: approaching limits — converge and deliver your final result now.";
+var nearingLimit = (consumed, limit) => consumed * 5 >= limit * 4;
+var formatRunStatus = (view) => {
+  const warn2 = nearingLimit(view.turn, view.maxTurns) || nearingLimit(view.toolCallsUsed, view.maxToolCalls) || view.tokenBudget !== undefined && nearingLimit(view.tokensConsumed, view.tokenBudget) || nearingLimit(view.elapsedSeconds, view.maxDurationSeconds);
+  return `<run-status>turn ${view.turn}/${view.maxTurns} · tool-calls ${view.toolCallsUsed}/${view.maxToolCalls} · tokens ${view.tokensConsumed}/${view.tokenBudget ?? "unbounded"} · last-context ${view.lastInputTokens} · elapsed ${view.elapsedSeconds}s/${view.maxDurationSeconds}s${warn2 ? RUN_STATUS_WARNING : ""}</run-status>`;
+};
+var outgoingModelPrompt = (policy2, context3, prepared, turn, declaredToolCalls) => exports_Effect.gen(function* () {
+  if (policy2.runStatus !== "appended") {
+    return prepared;
+  }
+  const now3 = yield* exports_Clock.currentTimeMillis;
+  const status = formatRunStatus({
+    turn,
+    maxTurns: policy2.maxTurns,
+    toolCallsUsed: declaredToolCalls + context3.programmaticToolCalls,
+    maxToolCalls: policy2.maxToolCalls,
+    tokensConsumed: context3.inputTokens + context3.outputTokens,
+    tokenBudget: policy2.tokenBudget,
+    lastInputTokens: context3.lastInputTokens,
+    elapsedSeconds: Math.max(0, Math.floor((now3 - context3.startedAtMillis) / 1000)),
+    maxDurationSeconds: Math.floor(exports_Duration.toMillis(policy2.maxDuration) / 1000)
+  });
+  return exports_Prompt.fromMessages([
+    ...prepared.content,
+    exports_Prompt.makeMessage("user", {
+      content: [exports_Prompt.makePart("text", { text: status })]
+    })
+  ]);
+});
+var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_Effect.gen(function* () {
+  if (usage === undefined) {
     return yield* AgentPolicyError.make({
       limit: "usage",
       message: "A completed model response did not report usage"
     });
   }
-  const inputTokens = Math.max(0, trace2.usage.inputTokens.total ?? (trace2.usage.inputTokens.uncached ?? 0) + (trace2.usage.inputTokens.cacheRead ?? 0) + (trace2.usage.inputTokens.cacheWrite ?? 0));
-  const outputTokens = Math.max(0, trace2.usage.outputTokens.total ?? (trace2.usage.outputTokens.text ?? 0) + (trace2.usage.outputTokens.reasoning ?? 0));
+  const inputTokens = Math.max(0, usage.inputTokens.total ?? (usage.inputTokens.uncached ?? 0) + (usage.inputTokens.cacheRead ?? 0) + (usage.inputTokens.cacheWrite ?? 0));
+  const outputTokens = Math.max(0, usage.outputTokens.total ?? (usage.outputTokens.text ?? 0) + (usage.outputTokens.reasoning ?? 0));
   const totalTokens = inputTokens + outputTokens;
-  const costMicrousd = options.estimateCostMicrousd === undefined ? 0 : yield* options.estimateCostMicrousd(trace2.usage);
+  const costMicrousd = options.estimateCostMicrousd === undefined ? 0 : yield* options.estimateCostMicrousd(usage);
   if (!Number.isInteger(costMicrousd) || costMicrousd < 0) {
     return yield* AgentPolicyError.make({
       limit: "cost",
@@ -33693,27 +34076,38 @@ var consumeUsage = (agent2, context3, trace2, options) => exports_Effect.gen(fun
   context3.modelCalls += 1;
   context3.inputTokens += inputTokens;
   context3.outputTokens += outputTokens;
+  context3.lastInputTokens = inputTokens;
+  context3.lastOutputTokens = outputTokens;
   context3.costMicrousd += costMicrousd;
-  const tokenBudget = agent2.definition.policy.tokenBudget;
-  if (tokenBudget !== undefined && context3.inputTokens + context3.outputTokens > tokenBudget) {
-    return yield* AgentPolicyError.make({
+  const policy2 = agent2.definition.policy;
+  const consumedTokens = context3.inputTokens + context3.outputTokens;
+  const tokenBudget = policy2.tokenBudget;
+  let breach;
+  if (!context3.finalizing && !context3.tokenExhausted && tokenBudget !== undefined && consumedTokens > tokenBudget) {
+    breach = AgentPolicyError.make({
       limit: "tokens",
       message: `Agent exceeded its ${tokenBudget} token budget`
     });
-  }
-  const costBudget = agent2.definition.policy.costBudgetMicrousd;
-  if (costBudget !== undefined) {
-    if (options.estimateCostMicrousd === undefined) {
-      return yield* AgentPolicyError.make({
-        limit: "cost",
-        message: "Agent cost budget requires a model cost estimator"
-      });
+    if (policy2.onExhaustion === "fail") {
+      return yield* breach;
     }
-    if (context3.costMicrousd > costBudget) {
-      return yield* AgentPolicyError.make({
-        limit: "cost",
-        message: `Agent exceeded its ${costBudget} microdollar cost budget`
-      });
+    context3.tokenExhausted = true;
+    context3.exhaustedDimension ??= "tokens";
+  } else {
+    const costBudget = policy2.costBudgetMicrousd;
+    if (costBudget !== undefined) {
+      if (options.estimateCostMicrousd === undefined) {
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: "Agent cost budget requires a model cost estimator"
+        });
+      }
+      if (context3.costMicrousd > costBudget) {
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: `Agent exceeded its ${costBudget} microdollar cost budget`
+        });
+      }
     }
   }
   if (options.budget !== undefined) {
@@ -33722,12 +34116,23 @@ var consumeUsage = (agent2, context3, trace2, options) => exports_Effect.gen(fun
       inputTokens,
       outputTokens,
       totalTokens,
-      toolCalls: trace2.toolCalls.size,
+      toolCalls: toolCallCount,
       costMicrousd,
-      usage: trace2.usage
+      usage
     };
     yield* options.budget.consume(delta);
   }
+  const warnings = [];
+  if (tokenBudget !== undefined && !context3.warnedLimits.has("tokens") && nearingLimit(consumedTokens, tokenBudget)) {
+    context3.warnedLimits.add("tokens");
+    warnings.push(BudgetWarning.make({
+      ...yield* eventBase(context3),
+      limit: "tokens",
+      consumed: consumedTokens,
+      limitValue: tokenBudget
+    }));
+  }
+  return { breach, warnings };
 });
 var eventBase = exports_Effect.fnUntraced(function* (context3) {
   const timestamp = exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis);
@@ -33802,6 +34207,106 @@ var stampProviderResultEvent = (context3, turnId, payload) => exports_Effect.map
     case "ToolCallFailed":
       return ToolCallFailed.make({ ...base2, turnId, ...payload });
   }
+});
+var nextContextEstimate = (context3, view) => {
+  const state = context3.compaction;
+  if (context3.lastInputTokens > 0 && state.lastViewLength >= 0 && state.lastViewLength <= view.length) {
+    return context3.lastInputTokens + context3.lastOutputTokens + estimatePromptTokens(view.slice(state.lastViewLength));
+  }
+  return estimatePromptTokens(view);
+};
+var overflowText = (error2) => `${error2.message} ${error2.reason.message}`;
+var compactContext = (agent2, context3, source, turn, options, forceSummarize) => exports_Effect.gen(function* () {
+  const policy2 = agent2.definition.policy;
+  const state = context3.compaction;
+  const events2 = [];
+  const messages = source.content;
+  const before = estimatePromptTokens(buildCompactedView(messages, state));
+  const limit = policy2.contextTokenLimit;
+  const mode = policy2.compaction.mode;
+  const commitDurable = (commit) => options.durability?.commitCompaction === undefined ? exports_Effect.void : options.durability.commitCompaction(commit);
+  if (!forceSummarize && mode !== "summarize") {
+    const bound = choosePruneBound(messages, state, policy2.compaction.keepRecentTokens);
+    if (bound > state.clearedThrough) {
+      state.clearedThrough = bound;
+      state.lastViewLength = -1;
+      const after2 = estimatePromptTokens(buildCompactedView(messages, state));
+      events2.push(CompactionPerformed.make({
+        ...yield* eventBase(context3),
+        turn,
+        kind: "clear-tool-results",
+        tokensBeforeEstimate: before,
+        tokensAfterEstimate: after2
+      }));
+      yield* commitDurable({
+        turn,
+        kind: "clear-tool-results",
+        tokensBeforeEstimate: before,
+        tokensAfterEstimate: after2
+      });
+      if (limit !== undefined && after2 <= limit) {
+        return { events: events2 };
+      }
+    }
+  }
+  if (mode === "prune" && !forceSummarize) {
+    return { events: events2 };
+  }
+  const cut = chooseSummarizeCut(messages, state, policy2.compaction.keepRecentTokens);
+  const covered = collectCoveredMessages(messages, state, cut);
+  if (covered.length === 0) {
+    return { events: events2 };
+  }
+  const transcript = renderForSummary(covered, state.summary);
+  const summarizerPrompt = exports_Prompt.fromMessages([
+    exports_Prompt.makeMessage("user", {
+      content: [
+        exports_Prompt.makePart("text", {
+          text: `${COMPACTION_INSTRUCTION}
+
+<transcript>
+${transcript}
+</transcript>`
+        })
+      ]
+    })
+  ]);
+  const pieces = [];
+  let summaryUsage;
+  yield* guardBudgetStream(exports_LanguageModel.streamText({ prompt: summarizerPrompt }), options.budget).pipe(exports_Stream.runForEach((part) => exports_Effect.sync(() => {
+    if (part.type === "text-delta") {
+      pieces.push(part.delta);
+    } else if (part.type === "finish") {
+      summaryUsage = part.usage;
+    }
+  })));
+  const wasFinalizing = context3.finalizing;
+  context3.finalizing = true;
+  const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, options).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
+    context3.finalizing = wasFinalizing;
+  })));
+  events2.push(...consumed.warnings);
+  const summaryText = pieces.join("").trim();
+  const summary2 = summaryText.length === 0 ? "(no summary produced)" : summaryText;
+  state.summary = summary2;
+  state.summarizedThrough = cut;
+  state.lastViewLength = -1;
+  const after = estimatePromptTokens(buildCompactedView(messages, state));
+  events2.push(CompactionPerformed.make({
+    ...yield* eventBase(context3),
+    turn,
+    kind: "summarize",
+    tokensBeforeEstimate: before,
+    tokensAfterEstimate: after
+  }));
+  yield* commitDurable({
+    turn,
+    kind: "summarize",
+    summary: summary2,
+    tokensBeforeEstimate: before,
+    tokensAfterEstimate: after
+  });
+  return { events: events2 };
 });
 var decodeInput = exports_Effect.fn("AgentRuntime.decodeInput")((agent2, input) => exports_Schema.decodeUnknownEffect(agent2.definition.input)(input).pipe(exports_Effect.mapError((cause) => AgentInputError.make({
   message: cause.message
@@ -34190,15 +34695,12 @@ var decodeFinalOutput = exports_Effect.fn("AgentRuntime.decodeFinalOutput")(func
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const ids = yield* IdGenerator;
   const turnId = yield* ids.nextTurnId;
-  const outputContract = outputSchemaContract(agent2.definition);
-  const outputContractMessage = outputContract._tag === "rendered" ? outputContract.message : undefined;
   const modelContext = options.context === undefined ? { prompt } : yield* options.context.prepare({
     conversationId: context3.conversationId,
     runId: context3.runId,
     turnId,
     turn,
-    source: prompt,
-    ...outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }
+    source: prompt
   });
   const trace2 = {
     parts: [],
@@ -34240,21 +34742,57 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.model"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options);
-  const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls);
-  if (outputContract._tag === "unrenderable" && turn === 1) {
-    yield* exports_Effect.logWarning("Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted").pipe(exports_Effect.annotateLogs({
-      agentId: context3.agentId,
-      runId: context3.runId,
-      reason: outputContract.reason
-    }));
+  const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls || context3.tokenExhausted);
+  if (finalAnswerOnly && context3.exhaustedDimension === undefined) {
+    context3.exhaustedDimension = turn > bounds.maxTurns ? "turns" : priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
   }
-  const requestPrompt = outputContractMessage === undefined ? modelContext.prompt : insertOutputContract(modelContext.prompt, outputContractMessage);
-  const response = guardBudgetStream(exports_LanguageModel.streamText({
-    prompt: requestPrompt,
+  let preEvents = [];
+  if (policy2.contextTokenLimit !== undefined && !context3.finalizing) {
+    const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
+    const estimate = nextContextEstimate(context3, view);
+    if (estimate > policy2.contextTokenLimit && context3.compaction.lastCompactionTurn !== turn) {
+      context3.compaction.lastCompactionTurn = turn;
+      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, false);
+      preEvents = outcome.events;
+    }
+  }
+  const compactedOutgoing = () => {
+    const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
+    context3.compaction.lastViewLength = view.length;
+    return exports_Prompt.fromMessages([...view]);
+  };
+  const attempt = (basis) => exports_Stream.unwrap(outgoingModelPrompt(policy2, context3, basis, turn, priorToolCalls).pipe(exports_Effect.map((outgoing) => guardBudgetStream(exports_LanguageModel.streamText({
+    prompt: outgoing,
     toolkit: agent2.definition.toolkit,
     disableToolCallResolution: true,
     ...finalAnswerOnly ? { toolChoice: "none" } : {}
-  }), options.budget).pipe(exports_Stream.mapEffect((part) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace2, part)), exports_Stream.flatMap(exports_Stream.fromIterable), exports_Stream.withSpan("AgentRuntime.model", {
+  }), options.budget).pipe(exports_Stream.mapEffect((part) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace2, part)), exports_Stream.flatMap(exports_Stream.fromIterable)))));
+  const response = attempt(compactedOutgoing()).pipe(exports_Stream.catch((error2) => {
+    if (!(error2 instanceof exports_AiError.AiError) || !isContextOverflowMessage(overflowText(error2))) {
+      return exports_Stream.fail(error2);
+    }
+    const message = overflowText(error2);
+    if (trace2.parts.length > 0 || policy2.contextTokenLimit === undefined) {
+      return exports_Stream.fail(ContextOverflowError.make({ message, retried: false }));
+    }
+    if (context3.compaction.overflowRetryTurn === turn) {
+      return exports_Stream.fail(ContextOverflowError.make({ message, retried: true }));
+    }
+    context3.compaction.overflowRetryTurn = turn;
+    context3.compaction.lastCompactionTurn = turn;
+    return exports_Stream.unwrap(exports_Effect.gen(function* () {
+      const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, true).pipe(exports_Effect.mapError((inner) => inner instanceof exports_AiError.AiError && isContextOverflowMessage(overflowText(inner)) ? ContextOverflowError.make({
+        message: overflowText(inner),
+        retried: true
+      }) : inner));
+      const retried = attempt(compactedOutgoing()).pipe(exports_Stream.catch((again) => again instanceof exports_AiError.AiError && isContextOverflowMessage(overflowText(again)) ? exports_Stream.fail(ContextOverflowError.make({
+        message: overflowText(again),
+        retried: true
+      })) : exports_Stream.fail(again)));
+      const events2 = exports_Stream.fromIterable(outcome.events);
+      return events2.pipe(exports_Stream.concat(retried));
+    }));
+  }), exports_Stream.withSpan("AgentRuntime.model", {
     attributes: {
       agentId: context3.agentId,
       runId: context3.runId,
@@ -34298,12 +34836,64 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       turn,
       finishReason: turnCompletion.finishReason
     })))));
-    const afterValidatedResponse = (next2) => stagedResponse.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.andThen(consumeUsage(agent2, context3, trace2, options), next2))));
     const historyWithResponse = (...additions) => exports_Prompt.fromMessages([
       ...prompt.content,
       ...promptFromTurnParts(trace2).content,
       ...additions
     ]);
+    const afterValidatedResponse = (next2) => stagedResponse.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.gen(function* () {
+      const consumed = yield* consumeUsage(agent2, context3, trace2.usage, trace2.toolCalls.size, options);
+      if (options.durability?.noteTurnUsage !== undefined) {
+        yield* options.durability.noteTurnUsage({
+          turn,
+          inputTokens: context3.lastInputTokens,
+          outputTokens: context3.lastOutputTokens
+        });
+      }
+      const pre = [...consumed.warnings];
+      if (!context3.warnedLimits.has("tool-calls") && nearingLimit(toolCalls + context3.programmaticToolCalls, bounds.maxToolCalls)) {
+        context3.warnedLimits.add("tool-calls");
+        pre.push(BudgetWarning.make({
+          ...yield* eventBase(context3),
+          limit: "tool-calls",
+          consumed: toolCalls + context3.programmaticToolCalls,
+          limitValue: bounds.maxToolCalls
+        }));
+      }
+      if (!context3.warnedLimits.has("turns") && nearingLimit(turn, bounds.maxTurns)) {
+        context3.warnedLimits.add("turns");
+        pre.push(BudgetWarning.make({
+          ...yield* eventBase(context3),
+          limit: "turns",
+          consumed: turn,
+          limitValue: bounds.maxTurns
+        }));
+      }
+      const emitThen = (nextStream) => pre.length === 0 ? nextStream : exports_Stream.fromIterable(pre).pipe(exports_Stream.concat(nextStream));
+      if (consumed.breach !== undefined) {
+        if (trace2.toolCalls.size === 0 && trace2.finishReason === "stop") {
+          const output = yield* decodeFinalOutput(agent2, trace2.text.join("")).pipe(exports_Effect.map(exports_Option.some), exports_Effect.catch(() => exports_Effect.succeed(exports_Option.none())));
+          if (exports_Option.isSome(output)) {
+            yield* advanceHistory(context3, historyWithResponse(), options);
+            return emitThen(exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
+              ...base2,
+              output: output.value,
+              turns: turn,
+              finishReason: "budget-exhausted",
+              exhausted: "tokens"
+            }))));
+          }
+        }
+        if (trace2.applicationToolCalls.length > 0) {
+          const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
+            limit: "tokens",
+            message: `Token budget exhausted: this Run's ${policy2.tokenBudget ?? 0} token budget was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
+          }));
+          return emitThen(exports_Stream.fromIterable(rejection).pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options))));
+        }
+      }
+      return emitThen(yield* next2);
+    }))));
     const continueTurn = (history) => exports_Effect.gen(function* () {
       yield* advanceHistory(context3, history, options);
       const steering = yield* drainInputs(context3, options);
@@ -34331,7 +34921,8 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         ...base2,
         output,
         turns: turn,
-        finishReason: finalAnswerOnly ? "budget-exhausted" : "model-stop"
+        finishReason: finalAnswerOnly ? "budget-exhausted" : "model-stop",
+        ...finalAnswerOnly && context3.exhaustedDimension !== undefined ? { exhausted: context3.exhaustedDimension } : {}
       })));
     });
     if (providerOnly && trace2.finishReason === "stop") {
@@ -34379,7 +34970,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
           maxToolCalls: bounds.maxToolCalls,
           declaredToolCalls: toolCalls
-        }), options.budget);
+        }, agent2.definition.policy.toolResultBounds), options.budget);
         return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
       }));
     }
@@ -34390,7 +34981,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     }
     return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
   }));
-  return started.pipe(exports_Stream.concat(response), exports_Stream.concat(continuation));
+  return exports_Stream.fromIterable(preEvents).pipe(exports_Stream.concat(started), exports_Stream.concat(response), exports_Stream.concat(continuation));
 }));
 var toolBatchContinuation = (agent2, context3, trace2, prompt, turn, toolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   if (trace2.finalToolResultIds.size !== trace2.toolCalls.size) {
@@ -34570,7 +35161,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
   const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
     maxToolCalls: bounds.maxToolCalls,
     declaredToolCalls: toolCalls
-  }, settledIds), options.budget);
+  }, agent2.definition.policy.toolResultBounds, settledIds), options.budget);
   return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
 }));
 var failRunEventStream = (error2) => exports_Stream.fail(error2);
@@ -34586,12 +35177,20 @@ var stream = (agent2, input, options = {}) => {
       conversationId,
       runId,
       pendingFollowUps: [],
+      startedAtMillis,
       history: options.history ?? exports_Prompt.empty,
-      modelCalls: 0,
+      modelCalls: options.resumeUsage?.modelCalls ?? 0,
       consecutiveToolFailures: 0,
-      inputTokens: 0,
-      outputTokens: 0,
+      inputTokens: options.resumeUsage?.inputTokens ?? 0,
+      outputTokens: options.resumeUsage?.outputTokens ?? 0,
+      lastInputTokens: options.resumeUsage?.lastInputTokens ?? 0,
+      lastOutputTokens: options.resumeUsage?.lastOutputTokens ?? 0,
       costMicrousd: 0,
+      warnedLimits: new Set,
+      finalizing: false,
+      tokenExhausted: false,
+      exhaustedDimension: undefined,
+      compaction: initialCompactionState(),
       sequence: 0,
       programmaticToolCalls: 0
     };
@@ -34610,7 +35209,12 @@ var stream = (agent2, input, options = {}) => {
       const decodedInput = yield* decodeInput(agent2, input);
       const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
       const encodedInput = yield* encodeInput(agent2, decodedInput);
+      const priorHistoryLength = context3.history.content.length;
       const prompt = yield* makeInitialPrompt(instructions, encodedInput, context3.history);
+      if (options.context === undefined) {
+        context3.compaction.protectedStart = priorHistoryLength;
+        context3.compaction.protectedEnd = prompt.content.length;
+      }
       yield* advanceHistory(context3, prompt, options);
       if (options.resume !== undefined) {
         return makeResumeTurn(agent2, context3, prompt, options.resume, options);
@@ -34679,7 +35283,8 @@ var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
     conversationId: completed.conversationId,
     runId: completed.runId,
     turns: completed.turns,
-    finishReason: completed.finishReason
+    finishReason: completed.finishReason,
+    ...completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {}
   };
 });
 var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, options = {}) {
@@ -35141,9 +35746,9 @@ var BoundedName = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength
 var BoundedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4 * 1024));
 var BoundedArgument = exports_Schema.String.check(exports_Schema.isMaxLength(32 * 1024));
 var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024 * 1024));
-var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var PositiveNumber = exports_Schema.Finite.check(exports_Schema.isGreaterThan(0));
-var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
+var MaxOutputBytes = PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
 var BoundedArguments = exports_Schema.Array(BoundedArgument).check(exports_Schema.isMaxLength(256));
 var BoundedEnvironmentNames = exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(128));
 var FinitePositiveDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
@@ -35173,7 +35778,7 @@ class NetworkDisabled extends exports_Schema.TaggedClass()("NetworkDisabled", {}
 
 class NetworkAllowlist extends exports_Schema.TaggedClass()("NetworkAllowlist", {
   domains: exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(256)),
-  ports: exports_Schema.Array(PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(65535))).check(exports_Schema.isMaxLength(256))
+  ports: exports_Schema.Array(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(65535))).check(exports_Schema.isMaxLength(256))
 }) {
 }
 var SandboxNetworkPolicy = exports_Schema.Union([NetworkDisabled, NetworkAllowlist]);
@@ -35185,7 +35790,7 @@ class SandboxEnvironment extends exports_Schema.Class("SandboxEnvironment")({
 
 class SandboxLimits extends exports_Schema.Class("SandboxLimits")({
   cpuCores: exports_Schema.optionalKey(PositiveNumber.check(exports_Schema.isLessThanOrEqualTo(1024))),
-  memoryBytes: exports_Schema.optionalKey(PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024 * 1024 * 1024))),
+  memoryBytes: exports_Schema.optionalKey(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024 * 1024 * 1024))),
   maxOutputBytes: MaxOutputBytes,
   maxWallTime: FinitePositiveDuration2
 }) {
@@ -35286,8 +35891,8 @@ class SandboxTimeoutError extends exports_Schema.TaggedError()("SandboxTimeoutEr
 class SandboxOutputLimitError extends exports_Schema.TaggedError()("SandboxOutputLimitError", {
   implementation: SandboxImplementation,
   stream: exports_Schema.Literals(["stdout", "stderr"]),
-  limit: PositiveInt2,
-  observed: PositiveInt2
+  limit: PositiveInt3,
+  observed: PositiveInt3
 }) {
 }
 
@@ -35321,7 +35926,7 @@ var BoundedLogLine = exports_Schema.String.check(exports_Schema.isMaxLength(16 *
 var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
 var BoundedLogs = exports_Schema.Array(BoundedLogLine).check(exports_Schema.isMaxLength(4096));
 var BoundedSourceText = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024 * 1024));
-var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var FinitePositiveDuration3 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var FiniteNonNegativeDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && !exports_Duration.isNegative(duration2), { expected: "a finite non-negative duration" }));
 var reservedIdentifiers = new Set([
@@ -35385,14 +35990,14 @@ class CodeExecutionNamespace extends exports_Schema.Class("CodeExecutionNamespac
 }
 
 class CodeExecutionLimits extends exports_Schema.Class("CodeExecutionLimits")({
-  maxSourceBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
+  maxSourceBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
   maxWallTime: FinitePositiveDuration3,
-  cpuMillis: exports_Schema.optionalKey(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(5 * 60 * 1000))),
-  maxLogBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
-  maxResultBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
+  cpuMillis: exports_Schema.optionalKey(PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(5 * 60 * 1000))),
+  maxLogBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
+  maxResultBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
   maxHostCalls: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(1e4)),
-  maxHostCallArgumentBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
-  maxHostCallResultBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024))
+  maxHostCallArgumentBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
+  maxHostCallResultBytes: PositiveInt4.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024))
 }) {
 }
 
@@ -35482,7 +36087,7 @@ class CodeExecutionTimeoutError extends exports_Schema.TaggedError()("CodeExecut
 class CodeOutputLimitError extends exports_Schema.TaggedError()("CodeOutputLimitError", {
   implementation: SandboxImplementation,
   surface: exports_Schema.Literals(["logs", "result", "host-call-argument", "host-call-result"]),
-  limit: PositiveInt3,
+  limit: PositiveInt4,
   observed: exports_Schema.Natural,
   logs: BoundedLogs
 }) {
@@ -35821,7 +36426,7 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
 }));
 
 // packages/capabilities/src/commands.ts
-var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 
 class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
   id: exports_Schema.NonEmptyString,
@@ -35845,7 +36450,7 @@ class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
 var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
 var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
 
-class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt4 }) {
+class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt5 }) {
 }
 
 class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
@@ -36073,8 +36678,11 @@ var toDurableRunApprovalHook = exports_Effect.fn("toDurableRunApprovalHook")(fun
 var toRunBudgetHook = (budget) => ({
   guard: budget.guard,
   consume: (delta) => exports_Schema.decodeUnknownEffect(UsageDelta)({
+    modelCalls: delta.modelCalls,
     inputTokens: delta.inputTokens,
     outputTokens: delta.outputTokens,
+    cacheReadInputTokens: Math.max(0, delta.usage.inputTokens.cacheRead ?? 0),
+    cacheWriteInputTokens: Math.max(0, delta.usage.inputTokens.cacheWrite ?? 0),
     toolCalls: delta.toolCalls,
     costMicrousd: delta.costMicrousd
   }).pipe(exports_Effect.mapError((error2) => BudgetAdapterError.make({
@@ -36732,7 +37340,7 @@ class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/
 // packages/capabilities/src/mcp.ts
 var MAX_MCP_TOOLS = 128;
 var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
 var JsonArray = exports_Schema.Array(exports_Schema.Json);
 var isJsonArray = exports_Schema.is(JsonArray);
@@ -36745,10 +37353,10 @@ class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities
 
 class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
   serverId: exports_Schema.NonEmptyString,
-  maxToolCount: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
-  maxToolDescriptionBytes: PositiveInt5,
-  maxDiscoveryBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt5
+  maxToolCount: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
+  maxToolDescriptionBytes: PositiveInt6,
+  maxDiscoveryBytes: PositiveInt6.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  connectTimeoutMillis: PositiveInt6
 }) {
 }
 
@@ -36943,9 +37551,9 @@ var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
   };
 });
 // packages/capabilities/src/scheduling.ts
-var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var RunSchedulingOverride = exports_Schema.Union([
-  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt6 }),
+  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt7 }),
   exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
 ]);
 // packages/capabilities/src/subagent-reservation.ts
@@ -37401,19 +38009,19 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 }));
 
 // packages/capabilities/src/subagent.ts
-var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt8 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Natural4 = exports_Schema.Natural;
 var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
-  maxChildren: PositiveInt7,
-  maxConcurrency: PositiveInt7,
-  maxTurns: PositiveInt7,
-  maxToolCalls: PositiveInt7,
+  maxChildren: PositiveInt8,
+  maxConcurrency: PositiveInt8,
+  maxTurns: PositiveInt8,
+  maxToolCalls: PositiveInt8,
   maxDuration: FinitePositiveDuration4,
-  maxInputTokens: exports_Schema.optionalKey(PositiveInt7),
-  maxOutputTokens: exports_Schema.optionalKey(PositiveInt7),
+  maxInputTokens: exports_Schema.optionalKey(PositiveInt8),
+  maxOutputTokens: exports_Schema.optionalKey(PositiveInt8),
   maxCostMicrousd: exports_Schema.optionalKey(Natural4),
-  maxResultBytes: exports_Schema.optionalKey(PositiveInt7)
+  maxResultBytes: exports_Schema.optionalKey(PositiveInt8)
 });
 
 class SubagentPolicy extends exports_Schema.Class("@effect-agent/capabilities/SubagentPolicy")(SubagentPolicyFields) {
@@ -37595,7 +38203,7 @@ var encodeBudgetFailure = exports_Schema.encodeEffect(SubagentBudgetExhausted);
 var encodeExecutionFailure = exports_Schema.encodeEffect(SubagentExecutionFailure);
 var encodeGrant = exports_Schema.encodeEffect(SubagentGrant);
 var encodeAllocationAmounts = exports_Schema.encodeEffect(SubagentReservationAmounts);
-var utf8ByteLength = (value4) => {
+var utf8ByteLength2 = (value4) => {
   let total = 0;
   for (const character of value4) {
     const codePoint = character.codePointAt(0) ?? 0;
@@ -37775,7 +38383,8 @@ var layer14 = (delegation, childBinding, options) => {
           _tag: "SubagentCompleted",
           ...payload,
           turns: result4.turns,
-          finishReason: result4.finishReason
+          finishReason: result4.finishReason,
+          ...result4.exhausted !== undefined ? { exhausted: result4.exhausted } : {}
         });
         const projected = yield* delegation.projectResult(result4.output, {
           budgetExhausted: result4.finishReason === "budget-exhausted"
@@ -37785,7 +38394,7 @@ var layer14 = (delegation, childBinding, options) => {
           stage: "result",
           message: "Projected child result did not satisfy the delegation success Schema"
         })));
-        const resultBytes = utf8ByteLength(JSON.stringify(encodedResult) ?? "");
+        const resultBytes = utf8ByteLength2(JSON.stringify(encodedResult) ?? "");
         yield* reservations.observe(reservationId, SubagentObservedUsage.make({ resultBytes })).pipe(exports_Effect.orDie);
         if (delegation.policy.maxResultBytes !== undefined && resultBytes > delegation.policy.maxResultBytes) {
           yield* emit({
@@ -37912,7 +38521,7 @@ var layer14 = (delegation, childBinding, options) => {
             });
             return encodeProjectionFailure(failure).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)));
           }));
-          const resultBytes = utf8ByteLength(JSON.stringify(encodedResult) ?? "");
+          const resultBytes = utf8ByteLength2(JSON.stringify(encodedResult) ?? "");
           if (delegation.policy.maxResultBytes !== undefined && resultBytes > delegation.policy.maxResultBytes) {
             const failure = SubagentBudgetExhausted.make({
               parentRunId: spawner.parent.runId,
