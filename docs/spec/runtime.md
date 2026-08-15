@@ -122,15 +122,90 @@ The default is bounded parallel execution owned by the engine.
 
 ### Completion
 
-Every started call reaches exactly one in-memory terminal classification:
+When a declared Tool Call settles, its call-level terminal classification is:
 
 - success;
+- failure returned as a terminal Tool value;
 - typed failure in the Effect error channel;
 - infrastructure failure;
 - denied;
 - interrupted.
 
-The durable runtime adds unknown outcome.
+The DN and DC assemblies add unknown outcome. Approval suspension and unresolved Tool Calls are
+nonterminal and may remain unresolved indefinitely; the runtime does not replay an ordinary
+unresolved call merely to force settlement. Denial happens during preflight, before any application
+Handler starts. Provider-executed calls likewise have no application-handler attempt.
+
+An in-memory application-handler attempt therefore starts only for a native call that passed
+preflight. Its complete lifecycle classification set is:
+
+- success — terminal;
+- failure — terminal, including returned failures, typed or infrastructure Causes, and
+  post-terminal anomalies;
+- interruption — terminal for that in-memory attempt and preserved as interruption;
+- waiting — nonterminal and potentially indefinite.
+
+Only success and failure receive a bounded terminal telemetry outcome. Interruption produces no
+terminal outcome log. Denied and provider-executed calls remain solely call-level classifications:
+neither creates an application-handler attempt.
+
+### Observability
+
+The application-handler lifecycle owns one canonical internal span named
+`execute_tool {gen_ai.tool.name}`. It carries the stable GenAI operation, Tool name/type, Tool Call
+ID, Agent Definition ID, declared execution class, and framework Run/Turn correlation. For an
+in-memory handler attempt classified as success or failure, one terminal annotation/log is emitted
+only after the handler stream is known complete. The framework-owned Conversation ID is recorded
+as both `gen_ai.conversation.id` and backward-compatible `conversationId`; no conversation
+identifier is synthesized from content. Provider/model Tool Call IDs are accepted only when their
+entire string matches `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`. The same bounded full-string grammar
+applies to response-part lifecycle, source, response, and approval identifiers. Validation occurs before a
+model-supplied ID enters Turn correlation, a canonical Run event, or application handler
+scheduling; rejection is a typed `ModelProtocolError`. Consequently `gen_ai.tool.call.id` and the
+compatibility `toolCallId` carry only an already-validated identifier.
+Recovery is at-least-once and may start another attempt with its own telemetry. A failure returned
+as a value closes the span failed even though it does not fail the public Effect; an error, waiting
+signal, or duplicate result after an apparent terminal result overrides the telemetry outcome to
+failure and preserves the original Cause/protocol error.
+The terminal Tool Run event and `applicationToolResults`/final-result trace commit occur only after
+the handler stream settles and before derivative terminal telemetry. A handler anomaly after a
+provisional terminal value commits one `ToolCallFailed`, never the provisional success or trace
+result, while preserving the original Cause. Telemetry interruption cannot erase completed Tool
+state. An internal emission boundary returns the singleton terminal event from the first pull,
+then gives derivative telemetry to either the next pull or structured stream finalization when
+downstream closes after that event. A synchronous phase gate allows one telemetry attempt and
+never retries an in-flight interrupted action. Once the terminal outcome annotation exists, it is
+authoritative for canonical span status even if downstream cancellation or telemetry interruption
+determines the enclosing channel Exit. That status is held in module-private identity-authenticated
+state; the public mutable `effect_agent.tool.outcome` attribute remains observation only and cannot
+control span closure. Immediately before delegate export, the wrapper restores that attribute from
+the authenticated private terminal state so the emitted classification cannot remain tampered.
+Waiting before any terminal result remains nonterminal and is not mislabeled as either outcome.
+Provider-executed Tools do not run an application handler and do not create this span.
+Failed spans see one fresh bounded framework marker object per handler attempt and recognize only
+that exact identity, so a same-class handler failure cannot enter the control path. The original
+handler Cause is restored outside the span without changing the public `E`. Effect AI's parameter annotations land on a manually
+constructed non-exported span parented by the canonical span. With
+`Tracer.DisablePropagation=true`, explicit host-owned handler spans filter past the local span and
+remain enabled as canonical-span children; no second framework handler span is exported and no
+Toolkit parameter can reach a framework-exported span.
+
+One bounded terminal log per success/failure in-memory handler attempt is emitted at info for
+success or warning for failure. Interrupted attempts emit neither. Tool parameters, results,
+prompts, source code, commands, conversation content, and
+failure messages are absent from the span and logs. High-cardinality correlation stays out of
+metric labels. Telemetry is a derivative signal: it never changes canonical events, scheduling,
+settlement, or replay. A Logger/Tracer defect anywhere in canonical span creation, annotation,
+terminal logging, or closure is forwarded to Effect's owned `ErrorReporter` boundary without
+changing the Tool event or exit. Creation falls back to a non-exported local span, closure cannot
+rerun a completed handler, and a defective reporter is isolated too. External interruption remains
+interruption; the derivative boundary reports every typed failure or defect it owns and suppresses
+those only after reporting.
+The Run composition boundary derives the internal Tool span-lifecycle capability from the host's
+ambient Tracer; Tool execution consumes that capability without selecting or providing a Tracer.
+Each reusable Tool stream materialization receives independent isolation state and defect
+reporting. If Toolkit handling runs without an ambient current span, it runs unchanged and keeps
+its typed error channel rather than manufacturing an untyped tracing precondition.
 
 ### Provider-executed Tools
 
@@ -140,6 +215,30 @@ events with that provenance, but no `ToolCallStarted` event. These calls still c
 and Turn budgets. When another Turn is required, provider results remain assistant content rather
 than becoming application Tool output messages. Their authorization, recovery, and source-trust
 limits belong to the explicit provider capability that enabled them.
+
+Provider progress/terminal events and `TurnCompleted` are staged until the complete streamed model
+Turn has validated every call/result correlation and rejected any post-finish content. A duplicate,
+mismatched, missing, or otherwise malformed terminal result therefore emits no append-only
+`ToolCallSucceeded` event from that response. Declarations may already be visible because they are
+the correlation inputs being validated; staged terminal facts become visible together only after
+the response is known complete. Staging retains payloads rather than pre-stamped Run events: the
+runtime assigns sequence and timestamp only when each validated event is actually emitted. Live
+text or reasoning deltas that were emitted while provider results remained provisional therefore
+precede those result events in the canonical stream, and the Run sequence remains monotonic in
+append order. The complete staged event suffix is emitted before usage accounting, official-history
+advancement, input draining, settlement/continuation, or response-persistence mutations begin.
+
+Because provider output is untrusted, one Turn may stage at most 256 provider events total across
+progress, terminal results, and Turn completion, and at most 1,048,576 UTF-8 bytes across all of
+their event payloads, with at most 128 nested JSON levels. The runtime normalizes each retained
+event once into an owned, frozen, plain-JSON snapshot while counting the exact bytes of that same
+snapshot only to the remaining budget; it never materializes the whole untrusted payload as a
+serialized string merely to reject it. Accessor-backed values, `toJSON` hooks, non-plain
+prototypes, reflection failures, cycles, and excessive nesting fail closed rather than being
+evaluated again at a later serialization boundary. Any bound or normalization failure is checked
+before retaining the next payload and fails the response with a typed
+`ModelProtocolError`; none of that response's staged progress, terminal, or Turn-completion events
+are emitted.
 
 A response containing only provider-executed calls may finish with `stop` and final text in the
 same Turn, because no application Handler remains unresolved. A response containing any

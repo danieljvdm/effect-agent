@@ -50,12 +50,23 @@ export default defineConfig({
                   className: "EffectBindingsConversationObject",
                   useSQLite: true,
                 },
+                TELEMETRY: {
+                  className: "TelemetryConversationObject",
+                  useSQLite: true,
+                },
+                TELEMETRY_ACQUISITION: {
+                  className: "TelemetryAcquisitionConversationObject",
+                  useSQLite: true,
+                },
               },
             },
           }),
         ],
         test: {
           name: "workerd",
+          // Telemetry fixture controls are intentionally sequential within their one test file.
+          // Pin Vitest's default so no future suite-wide concurrency toggle can invalidate them.
+          sequence: { concurrent: false },
           include: ["test/**/*.test.ts"],
           exclude: ["test/restart/**", "test/code-mode/**", "test/travel-planner-dc.test.ts"],
         },
@@ -96,6 +107,9 @@ export default defineConfig({
       {
         test: {
           name: "restart",
+          // A separate project/runtime module graph from workerd; its fixture controls are also
+          // sequential within the deterministic lifecycle unit file.
+          sequence: { concurrent: false },
           include: ["test/restart/**/*.test.ts"],
         },
       },

@@ -3056,6 +3056,19 @@ var PreventSchedulerYield = /* @__PURE__ */ Reference("effect/Scheduler/PreventS
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tracer.js
+var exports_Tracer = {};
+__export(exports_Tracer, {
+  make: () => make7,
+  externalSpan: () => externalSpan,
+  TracerKey: () => TracerKey,
+  Tracer: () => Tracer,
+  ParentSpanKey: () => ParentSpanKey,
+  ParentSpan: () => ParentSpan,
+  NativeSpan: () => NativeSpan,
+  MinimumTraceLevel: () => MinimumTraceLevel,
+  DisablePropagation: () => DisablePropagation,
+  CurrentTraceLevel: () => CurrentTraceLevel
+});
 var ParentSpanKey = "effect/Tracer/ParentSpan";
 
 class ParentSpan extends (/* @__PURE__ */ Service()(ParentSpanKey, {
@@ -3063,6 +3076,13 @@ class ParentSpan extends (/* @__PURE__ */ Service()(ParentSpanKey, {
 })) {
 }
 var make7 = (options) => options;
+var externalSpan = (options) => ({
+  _tag: "ExternalSpan",
+  spanId: options.spanId,
+  traceId: options.traceId,
+  sampled: options.sampled ?? true,
+  annotations: options.annotations ?? empty()
+});
 var DisablePropagation = /* @__PURE__ */ Reference("effect/Tracer/DisablePropagation", {
   defaultValue: constFalse
 });
@@ -28560,6 +28580,80 @@ var withTime = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, label)
 }), () => self, () => sync(() => {
   console.timeEnd(label);
 }))));
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ErrorReporter.js
+var exports_ErrorReporter = {};
+__export(exports_ErrorReporter, {
+  severity: () => severity,
+  report: () => report,
+  make: () => make42,
+  layer: () => layer13,
+  isIgnored: () => isIgnored,
+  ignore: () => ignore5,
+  getSeverity: () => getSeverity,
+  getAttributes: () => getAttributes,
+  attributes: () => attributes,
+  TypeId: () => TypeId41,
+  CurrentErrorReporters: () => CurrentErrorReporters2
+});
+var TypeId41 = "~effect/ErrorReporter";
+var make42 = (report) => {
+  const reported = new WeakSet;
+  return {
+    [TypeId41]: TypeId41,
+    report(options) {
+      if (reported.has(options.cause))
+        return;
+      reported.add(options.cause);
+      for (let i = 0;i < options.cause.reasons.length; i++) {
+        const reason = options.cause.reasons[i];
+        if (reason._tag === "Interrupt")
+          continue;
+        const original = reason._tag === "Fail" ? reason.error : reason.defect;
+        const isObject2 = typeof original === "object" && original !== null;
+        if (isObject2) {
+          if (reported.has(original))
+            continue;
+          reported.add(original);
+        }
+        if (isIgnored(original))
+          continue;
+        const pretty2 = causePrettyError(original, reason.annotations);
+        report({
+          ...options,
+          error: pretty2,
+          severity: isObject2 ? getSeverity(original) : "Info",
+          attributes: isObject2 ? getAttributes(original) : emptyAttributes
+        });
+      }
+    }
+  };
+};
+var CurrentErrorReporters2 = CurrentErrorReporters;
+var layer13 = (reporters, options) => effect(CurrentErrorReporters2, withFiber2(fnUntraced2(function* (fiber3) {
+  const currentReporters = new Set(options?.mergeWithExisting === true ? fiber3.getRef(CurrentErrorReporters) : []);
+  for (const reporter of reporters) {
+    currentReporters.add(isEffect2(reporter) ? yield* reporter : reporter);
+  }
+  return currentReporters;
+})));
+var report = (cause) => withFiber2((fiber3) => {
+  reportCauseUnsafe(fiber3, cause);
+  return void_4;
+});
+var ignore5 = "~effect/ErrorReporter/ignore";
+var isIgnored = (u) => typeof u === "object" && u !== null && (ignore5 in u) && u[ignore5] === true;
+var severity = "~effect/ErrorReporter/severity";
+var getSeverity = (error2) => {
+  if (severity in error2 && values2.includes(error2[severity])) {
+    return error2[severity];
+  }
+  return "Info";
+};
+var attributes = "~effect/ErrorReporter/attributes";
+var getAttributes = (error2) => {
+  return attributes in error2 ? error2[attributes] : emptyAttributes;
+};
+var emptyAttributes = {};
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Ref.js
 var exports_Ref = {};
 __export(exports_Ref, {
@@ -28572,16 +28666,16 @@ __export(exports_Ref, {
   modifySome: () => modifySome,
   modify: () => modify4,
   makeUnsafe: () => makeUnsafe9,
-  make: () => make42,
+  make: () => make43,
   getUnsafe: () => getUnsafe5,
   getAndUpdateSome: () => getAndUpdateSome,
   getAndUpdate: () => getAndUpdate,
   getAndSet: () => getAndSet,
   get: () => get9
 });
-var TypeId41 = "~effect/Ref";
+var TypeId42 = "~effect/Ref";
 var RefProto = {
-  [TypeId41]: {
+  [TypeId42]: {
     _A: identity
   },
   ...PipeInspectableProto,
@@ -28597,7 +28691,7 @@ var makeUnsafe9 = (value4) => {
   self.ref = make11(value4);
   return self;
 };
-var make42 = (value4) => sync3(() => makeUnsafe9(value4));
+var make43 = (value4) => sync3(() => makeUnsafe9(value4));
 var get9 = (self) => sync3(() => self.ref.current);
 var set4 = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => set(self.ref, value4)));
 var getAndSet = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => {
@@ -29544,119 +29638,36 @@ var makeUsageBudget = (limits) => makeUsageBudgetRoot(UsageBudgetNodeConfig.make
   id: "standalone-run",
   limits
 }));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/LanguageModel.js
-var exports_LanguageModel = {};
-__export(exports_LanguageModel, {
-  streamText: () => streamText,
-  make: () => make48,
-  getObjectName: () => getObjectName,
-  generateText: () => generateText,
-  generateObject: () => generateObject,
-  defaultCodecTransformer: () => defaultCodecTransformer2,
-  LanguageModel: () => LanguageModel,
-  GenerateTextResponse: () => GenerateTextResponse,
-  GenerateObjectResponse: () => GenerateObjectResponse
-});
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FiberSet.js
-var TypeId42 = "~effect/FiberSet";
-var isFiberSet = (u) => hasProperty(u, TypeId42);
-var Proto8 = {
-  [TypeId42]: TypeId42,
-  [Symbol.iterator]() {
-    if (this.state._tag === "Closed") {
-      return empty2();
-    }
-    return this.state.backing[Symbol.iterator]();
-  },
-  ...PipeInspectableProto,
-  toJSON() {
-    return {
-      _id: "FiberSet",
-      state: this.state
-    };
-  }
-};
-var makeUnsafe10 = (backing, deferred) => {
-  const self = Object.create(Proto8);
-  self.state = {
-    _tag: "Open",
-    backing
-  };
-  self.deferred = deferred;
-  return self;
-};
-var make43 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
-  const state = set5.state;
-  if (state._tag === "Closed")
-    return void_4;
-  set5.state = {
-    _tag: "Closed"
-  };
-  const fibers = state.backing;
-  return interruptAll(fibers).pipe(into(set5.deferred));
-}));
-var internalFiberId = -1;
-var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
-var addUnsafe = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
-  if (self.state._tag === "Closed") {
-    fiber3.interruptUnsafe(internalFiberId);
-    return;
-  } else if (self.state.backing.has(fiber3)) {
-    return;
-  }
-  self.state.backing.add(fiber3);
-  fiber3.addObserver((exit3) => {
-    if (self.state._tag === "Closed") {
-      return;
-    }
-    self.state.backing.delete(fiber3);
-    if (isFailure4(exit3) && (options?.propagateInterruption === true ? !isInternalInterruption(exit3.cause) : !hasInterruptsOnly2(exit3.cause))) {
-      doneUnsafe(self.deferred, exit3);
-    }
-  });
-});
-var constInterruptedFiber = /* @__PURE__ */ function() {
-  let fiber3 = undefined;
-  return () => {
-    if (fiber3 === undefined) {
-      fiber3 = runFork2(interrupt4);
-    }
-    return fiber3;
-  };
-}();
-var run3 = function() {
-  const self = arguments[0];
-  if (!isEffect2(arguments[1])) {
-    const options = arguments[1];
-    return (effect2) => runImpl(self, effect2, options);
-  }
-  return runImpl(self, arguments[1], arguments[2]);
-};
-var runImpl = (self, effect2, options) => withFiber2((parent) => {
-  if (self.state._tag === "Closed") {
-    return sync3(constInterruptedFiber);
-  }
-  const fiber3 = runForkWith2(parent.context)(effect2);
-  addUnsafe(self, fiber3, options);
-  return succeed6(fiber3);
-});
-var runtime = (self) => () => map8(context2(), (services2) => {
-  const runFork3 = runForkWith2(services2);
-  return (effect2, options) => {
-    if (self.state._tag === "Closed") {
-      return constInterruptedFiber();
-    }
-    const fiber3 = runFork3(effect2, options);
-    addUnsafe(self, fiber3, options);
-    return fiber3;
-  };
-});
-var join4 = (self) => _await(self.deferred);
-var awaitEmpty = (self) => whileLoop2({
-  while: () => self.state._tag === "Open" && self.state.backing.size > 0,
-  body: () => await_(headUnsafe(self)),
-  step: constVoid
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/AiError.js
+var exports_AiError = {};
+__export(exports_AiError, {
+  reasonFromHttpStatus: () => reasonFromHttpStatus,
+  make: () => make44,
+  isAiErrorReason: () => isAiErrorReason,
+  isAiError: () => isAiError,
+  UsageInfo: () => UsageInfo,
+  UnsupportedSchemaError: () => UnsupportedSchemaError,
+  UnknownError: () => UnknownError3,
+  ToolkitRequiredError: () => ToolkitRequiredError,
+  ToolResultEncodingError: () => ToolResultEncodingError,
+  ToolParameterValidationError: () => ToolParameterValidationError,
+  ToolNotFoundError: () => ToolNotFoundError,
+  ToolConfigurationError: () => ToolConfigurationError,
+  StructuredOutputError: () => StructuredOutputError,
+  RateLimitError: () => RateLimitError,
+  QuotaExhaustedError: () => QuotaExhaustedError,
+  ProviderMetadata: () => ProviderMetadata2,
+  NetworkError: () => NetworkError,
+  InvalidUserInputError: () => InvalidUserInputError,
+  InvalidToolResultError: () => InvalidToolResultError,
+  InvalidRequestError: () => InvalidRequestError,
+  InvalidOutputError: () => InvalidOutputError,
+  InternalProviderError: () => InternalProviderError,
+  HttpContext: () => HttpContext,
+  ContentPolicyError: () => ContentPolicyError,
+  AuthenticationError: () => AuthenticationError,
+  AiErrorReason: () => AiErrorReason,
+  AiError: () => AiError
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Response.js
@@ -30354,6 +30365,7 @@ class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
     return `${this.module}.${this.method}: ${this.reason.message}`;
   }
 }
+var isAiError = (u) => hasProperty(u, TypeId43);
 var isAiErrorReason = (u) => hasProperty(u, ReasonTypeId2);
 var make44 = (params) => new AiError(params);
 var reasonFromHttpStatus = (params) => {
@@ -30397,6 +30409,120 @@ var reasonFromHttpStatus = (params) => {
       return new UnknownError3(common);
   }
 };
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/LanguageModel.js
+var exports_LanguageModel = {};
+__export(exports_LanguageModel, {
+  streamText: () => streamText,
+  make: () => make49,
+  getObjectName: () => getObjectName,
+  generateText: () => generateText,
+  generateObject: () => generateObject,
+  defaultCodecTransformer: () => defaultCodecTransformer2,
+  LanguageModel: () => LanguageModel,
+  GenerateTextResponse: () => GenerateTextResponse,
+  GenerateObjectResponse: () => GenerateObjectResponse
+});
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FiberSet.js
+var TypeId44 = "~effect/FiberSet";
+var isFiberSet = (u) => hasProperty(u, TypeId44);
+var Proto8 = {
+  [TypeId44]: TypeId44,
+  [Symbol.iterator]() {
+    if (this.state._tag === "Closed") {
+      return empty2();
+    }
+    return this.state.backing[Symbol.iterator]();
+  },
+  ...PipeInspectableProto,
+  toJSON() {
+    return {
+      _id: "FiberSet",
+      state: this.state
+    };
+  }
+};
+var makeUnsafe10 = (backing, deferred) => {
+  const self = Object.create(Proto8);
+  self.state = {
+    _tag: "Open",
+    backing
+  };
+  self.deferred = deferred;
+  return self;
+};
+var make45 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
+  const state = set5.state;
+  if (state._tag === "Closed")
+    return void_4;
+  set5.state = {
+    _tag: "Closed"
+  };
+  const fibers = state.backing;
+  return interruptAll(fibers).pipe(into(set5.deferred));
+}));
+var internalFiberId = -1;
+var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
+var addUnsafe = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
+  if (self.state._tag === "Closed") {
+    fiber3.interruptUnsafe(internalFiberId);
+    return;
+  } else if (self.state.backing.has(fiber3)) {
+    return;
+  }
+  self.state.backing.add(fiber3);
+  fiber3.addObserver((exit3) => {
+    if (self.state._tag === "Closed") {
+      return;
+    }
+    self.state.backing.delete(fiber3);
+    if (isFailure4(exit3) && (options?.propagateInterruption === true ? !isInternalInterruption(exit3.cause) : !hasInterruptsOnly2(exit3.cause))) {
+      doneUnsafe(self.deferred, exit3);
+    }
+  });
+});
+var constInterruptedFiber = /* @__PURE__ */ function() {
+  let fiber3 = undefined;
+  return () => {
+    if (fiber3 === undefined) {
+      fiber3 = runFork2(interrupt4);
+    }
+    return fiber3;
+  };
+}();
+var run3 = function() {
+  const self = arguments[0];
+  if (!isEffect2(arguments[1])) {
+    const options = arguments[1];
+    return (effect2) => runImpl(self, effect2, options);
+  }
+  return runImpl(self, arguments[1], arguments[2]);
+};
+var runImpl = (self, effect2, options) => withFiber2((parent) => {
+  if (self.state._tag === "Closed") {
+    return sync3(constInterruptedFiber);
+  }
+  const fiber3 = runForkWith2(parent.context)(effect2);
+  addUnsafe(self, fiber3, options);
+  return succeed6(fiber3);
+});
+var runtime = (self) => () => map8(context2(), (services2) => {
+  const runFork3 = runForkWith2(services2);
+  return (effect2, options) => {
+    if (self.state._tag === "Closed") {
+      return constInterruptedFiber();
+    }
+    const fiber3 = runFork3(effect2, options);
+    addUnsafe(self, fiber3, options);
+    return fiber3;
+  };
+});
+var join4 = (self) => _await(self.deferred);
+var awaitEmpty = (self) => whileLoop2({
+  while: () => self.state._tag === "Open" && self.state.backing.size > 0,
+  body: () => await_(headUnsafe(self)),
+  step: constVoid
+});
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Random.js
 var Random3 = Random;
@@ -30469,7 +30595,7 @@ __export(exports_Prompt, {
   prependSystem: () => prependSystem,
   makePart: () => makePart2,
   makeMessage: () => makeMessage,
-  make: () => make45,
+  make: () => make46,
   isPrompt: () => isPrompt,
   isPart: () => isPart2,
   isMessage: () => isMessage,
@@ -30640,8 +30766,8 @@ var ToolMessage = /* @__PURE__ */ Struct({
 });
 var toolMessage = (params) => makeMessage("tool", params);
 var Message = /* @__PURE__ */ Union2([SystemMessage, UserMessage, AssistantMessage, ToolMessage]);
-var TypeId44 = "~effect/unstable/ai/Prompt";
-var isPrompt = (u) => hasProperty(u, TypeId44);
+var TypeId45 = "~effect/unstable/ai/Prompt";
+var isPrompt = (u) => hasProperty(u, TypeId45);
 var $Prompt = /* @__PURE__ */ declare((u) => isPrompt(u), {
   identifier: "Prompt"
 });
@@ -30664,7 +30790,7 @@ var Prompt = /* @__PURE__ */ Struct({
   })
 })));
 var Proto9 = {
-  [TypeId44]: TypeId44,
+  [TypeId45]: TypeId45,
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -30674,7 +30800,7 @@ var makePrompt = (content) => Object.assign(Object.create(Proto9), {
 });
 var decodeMessagesSync = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ ArraySchema(Message));
 var empty12 = /* @__PURE__ */ makePrompt([]);
-var make45 = (input) => {
+var make46 = (input) => {
   if (typeof input === "string") {
     const part = makePart2("text", {
       text: input
@@ -30822,7 +30948,7 @@ var fromResponseParts = (parts2) => {
   return makePrompt(messages);
 };
 var concat3 = /* @__PURE__ */ dual(2, (self, input) => {
-  const other = make45(input);
+  const other = make46(input);
   if (self.content.length === 0) {
     return other;
   }
@@ -30880,7 +31006,7 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
-var make46 = /* @__PURE__ */ sync3(() => {
+var make47 = /* @__PURE__ */ sync3(() => {
   const sentParts = new Map;
   const none3 = () => {
     sentParts.clear();
@@ -30937,8 +31063,8 @@ var make46 = /* @__PURE__ */ sync3(() => {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Telemetry.js
-var addSpanAttributes = (keyPrefix, transformKey) => (span2, attributes) => {
-  for (const [key, value4] of Object.entries(attributes)) {
+var addSpanAttributes = (keyPrefix, transformKey) => (span2, attributes2) => {
+  for (const [key, value4] of Object.entries(attributes2)) {
     if (isNotNullish(value4)) {
       span2.attribute(`${keyPrefix}.${transformKey(key)}`, value4);
     }
@@ -30973,10 +31099,10 @@ class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telem
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
   merge: () => merge5,
-  make: () => make47,
+  make: () => make48,
   empty: () => empty13
 });
-var TypeId45 = "~effect/ai/Toolkit";
+var TypeId46 = "~effect/ai/Toolkit";
 var Proto10 = {
   .../* @__PURE__ */ Prototype2({
     label: "Toolkit",
@@ -31091,7 +31217,7 @@ var Proto10 = {
       };
     })
   }),
-  [TypeId45]: TypeId45,
+  [TypeId46]: TypeId46,
   of: identity,
   toHandlers(build2) {
     return gen3({
@@ -31134,7 +31260,7 @@ var resolveInput = (...tools) => {
   return output;
 };
 var empty13 = /* @__PURE__ */ makeProto2({});
-var make47 = (...tools) => makeProto2(resolveInput(...tools));
+var make48 = (...tools) => makeProto2(resolveInput(...tools));
 var merge5 = (...toolkits) => {
   const tools = {};
   for (const toolkit of toolkits) {
@@ -31214,7 +31340,7 @@ class GenerateObjectResponse extends GenerateTextResponse {
     this.value = value4;
   }
 }
-var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
+var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
   const codecTransformer = params.codecTransformer ?? defaultCodecTransformer2;
   const parentSpanTransformer = yield* serviceOption2(CurrentSpanTransformer);
   const getSpanTransformer = serviceOption2(CurrentSpanTransformer).pipe(map8(orElse(() => parentSpanTransformer)));
@@ -31227,7 +31353,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
   }, fnUntraced2(function* (span2) {
     const spanTransformer = yield* getSpanTransformer;
     const providerOptions = {
-      prompt: make45(options.prompt),
+      prompt: make46(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -31258,7 +31384,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }, fnUntraced2(function* (span2) {
       const spanTransformer = yield* getSpanTransformer;
       const providerOptions = {
-        prompt: make45(options.prompt),
+        prompt: make46(options.prompt),
         tools: [],
         toolChoice: "none",
         responseFormat: {
@@ -31302,7 +31428,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
     });
     const providerOptions = {
-      prompt: make45(options.prompt),
+      prompt: make46(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -31630,7 +31756,7 @@ var make48 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
-    const toolCallFibers = yield* make43();
+    const toolCallFibers = yield* make45();
     const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make15(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
@@ -31969,7 +32095,7 @@ var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
   providerDefined: () => providerDefined,
-  make: () => make49,
+  make: () => make50,
   isUserDefined: () => isUserDefined,
   isProviderDefined: () => isProviderDefined,
   isEmptyParamsRecord: () => isEmptyParamsRecord,
@@ -31979,7 +32105,7 @@ __export(exports_Tool, {
   getJsonSchema: () => getJsonSchema,
   getDescription: () => getDescription,
   dynamic: () => dynamic,
-  TypeId: () => TypeId46,
+  TypeId: () => TypeId47,
   Title: () => Title,
   Strict: () => Strict,
   Readonly: () => Readonly,
@@ -31992,15 +32118,15 @@ __export(exports_Tool, {
   DynamicTypeId: () => DynamicTypeId,
   Destructive: () => Destructive
 });
-var TypeId46 = "~effect/ai/Tool";
+var TypeId47 = "~effect/ai/Tool";
 var ProviderDefinedTypeId = "~effect/ai/Tool/ProviderDefined";
 var DynamicTypeId = "~effect/ai/Tool/Dynamic";
-var isUserDefined = (u) => hasProperty(u, TypeId46) && !isProviderDefined(u) && !isDynamic(u);
+var isUserDefined = (u) => hasProperty(u, TypeId47) && !isProviderDefined(u) && !isDynamic(u);
 var isProviderDefined = (u) => hasProperty(u, ProviderDefinedTypeId);
 var isDynamic = (u) => hasProperty(u, DynamicTypeId);
 var clone = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
 var Proto11 = {
-  [TypeId46]: {
+  [TypeId47]: {
     _Requirements: identity
   },
   pipe() {
@@ -32062,7 +32188,7 @@ var dynamicProto = (options) => {
   self.id = `effect/ai/Tool/${options.name}`;
   return self;
 };
-var make49 = (name, options) => {
+var make50 = (name, options) => {
   const successSchema = options?.success ?? Void2;
   const failureSchema = options?.failure ?? Never2;
   return userDefinedProto({
@@ -32236,6 +32362,465 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
+// packages/engine/src/provider-result-staging-internal.ts
+var MAX_JSON_DEPTH = 128;
+var FailedSnapshot = Symbol("@effect-agent/engine/FailedProviderResultSnapshot");
+var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0 || !Number.isSafeInteger(maxDepth) || maxDepth < 0) {
+    return;
+  }
+  let total = 0;
+  const ancestors = new WeakSet;
+  const add5 = (bytes) => {
+    if (bytes > maxBytes - total)
+      return false;
+    total += bytes;
+    return true;
+  };
+  const addString = (value4) => {
+    if (!add5(2))
+      return false;
+    for (let index2 = 0;index2 < value4.length; index2 += 1) {
+      const code = value4.charCodeAt(index2);
+      if (code === 34 || code === 92) {
+        if (!add5(2))
+          return false;
+      } else if (code <= 31) {
+        if (!add5(code >= 8 && code <= 13 && code !== 11 ? 2 : 6))
+          return false;
+      } else if (code <= 127) {
+        if (!add5(1))
+          return false;
+      } else if (code <= 2047) {
+        if (!add5(2))
+          return false;
+      } else if (code >= 55296 && code <= 56319) {
+        const low = value4.charCodeAt(index2 + 1);
+        if (low >= 56320 && low <= 57343) {
+          if (!add5(4))
+            return false;
+          index2 += 1;
+        } else if (!add5(6)) {
+          return false;
+        }
+      } else if (code >= 56320 && code <= 57343) {
+        if (!add5(6))
+          return false;
+      } else if (!add5(3)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  const visit = (value4, depth) => {
+    if (depth > maxDepth)
+      return FailedSnapshot;
+    if (value4 === null)
+      return add5(4) ? null : FailedSnapshot;
+    switch (typeof value4) {
+      case "string":
+        return addString(value4) ? value4 : FailedSnapshot;
+      case "boolean":
+        return add5(value4 ? 4 : 5) ? value4 : FailedSnapshot;
+      case "number": {
+        if (!Number.isFinite(value4))
+          return add5(4) ? null : FailedSnapshot;
+        const encoded = JSON.stringify(value4);
+        return encoded !== undefined && add5(encoded.length) ? value4 : FailedSnapshot;
+      }
+      case "object": {
+        if (ancestors.has(value4))
+          return FailedSnapshot;
+        const isArray2 = Array.isArray(value4);
+        const prototype = Object.getPrototypeOf(value4);
+        if (prototype !== (isArray2 ? Array.prototype : Object.prototype) && prototype !== null) {
+          return FailedSnapshot;
+        }
+        if (Object.getOwnPropertyDescriptor(value4, "toJSON") !== undefined || prototype !== null && Object.getOwnPropertyDescriptor(prototype, "toJSON") !== undefined) {
+          return FailedSnapshot;
+        }
+        ancestors.add(value4);
+        try {
+          if (isArray2) {
+            const lengthDescriptor = Object.getOwnPropertyDescriptor(value4, "length");
+            if (lengthDescriptor === undefined || !("value" in lengthDescriptor) || typeof lengthDescriptor.value !== "number" || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) {
+              return FailedSnapshot;
+            }
+            if (!add5(1))
+              return FailedSnapshot;
+            const snapshot3 = [];
+            for (let index2 = 0;index2 < lengthDescriptor.value; index2 += 1) {
+              if (index2 > 0 && !add5(1))
+                return FailedSnapshot;
+              const descriptor = Object.getOwnPropertyDescriptor(value4, index2);
+              if (descriptor === undefined) {
+                if (!add5(4))
+                  return FailedSnapshot;
+                snapshot3.push(null);
+                continue;
+              }
+              if (!("value" in descriptor))
+                return FailedSnapshot;
+              const item = visit(descriptor.value, depth + 1);
+              if (item === FailedSnapshot)
+                return FailedSnapshot;
+              snapshot3.push(item);
+            }
+            if (!add5(1))
+              return FailedSnapshot;
+            Object.setPrototypeOf(snapshot3, null);
+            return Object.freeze(snapshot3);
+          }
+          if (!add5(1))
+            return FailedSnapshot;
+          const entries3 = [];
+          let first = true;
+          for (const key in value4) {
+            const descriptor = Object.getOwnPropertyDescriptor(value4, key);
+            if (descriptor === undefined || !descriptor.enumerable)
+              continue;
+            if (!("value" in descriptor))
+              return FailedSnapshot;
+            if (!first && !add5(1))
+              return FailedSnapshot;
+            first = false;
+            if (!addString(key) || !add5(1))
+              return FailedSnapshot;
+            const item = visit(descriptor.value, depth + 1);
+            if (item === FailedSnapshot)
+              return FailedSnapshot;
+            entries3.push([key, item]);
+          }
+          if (!add5(1))
+            return FailedSnapshot;
+          const snapshot2 = Object.fromEntries(entries3);
+          Object.setPrototypeOf(snapshot2, null);
+          return Object.freeze(snapshot2);
+        } finally {
+          ancestors.delete(value4);
+        }
+      }
+      case "bigint":
+      case "function":
+      case "symbol":
+      case "undefined":
+        return FailedSnapshot;
+    }
+    return FailedSnapshot;
+  };
+  try {
+    const value4 = visit(root, 0);
+    return value4 === FailedSnapshot ? undefined : { value: value4, bytes: total };
+  } catch {
+    return;
+  }
+};
+
+// packages/engine/src/tool-telemetry-internal.ts
+class ToolSpanFailure extends exports_AiError.AiError.extend("@effect-agent/engine/ToolSpanFailure")({}) {
+  name = "ToolCallFailed";
+  static marker() {
+    return ToolSpanFailure.make({
+      module: "effect-agent",
+      method: "execute_tool",
+      reason: exports_AiError.UnknownError.make({
+        description: "Tool execution reached a failed terminal state"
+      })
+    });
+  }
+}
+var TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE = "@effect-agent/engine/ToolSpanFailureMarker";
+var terminalOutcomeTokens = new WeakMap;
+var annotateToolSpanTerminalOutcome = (outcome, failureMarker) => {
+  const token = {};
+  terminalOutcomeTokens.set(token, { outcome, failureMarker });
+  return exports_Effect.annotateCurrentSpan({
+    "effect_agent.tool.outcome": outcome,
+    [TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE]: token
+  });
+};
+var emitThenAfter = (event, after) => exports_Stream.unwrap(exports_Effect.sync(() => {
+  let firstPull = true;
+  let afterPhase = "unarmed";
+  const runAfter = exports_Effect.suspend(() => {
+    if (afterPhase !== "pending")
+      return exports_Effect.void;
+    afterPhase = "running";
+    return after.pipe(exports_Effect.onExit(() => exports_Effect.sync(() => {
+      afterPhase = "completed";
+    })));
+  });
+  const pull = exports_Effect.suspend(() => {
+    if (firstPull) {
+      return exports_Effect.map(event, (value4) => {
+        firstPull = false;
+        afterPhase = "pending";
+        return [value4];
+      });
+    }
+    return exports_Effect.andThen(runAfter, exports_Cause.done());
+  });
+  return exports_Stream.fromPull(exports_Effect.succeed(pull)).pipe(exports_Stream.ensuring(exports_Effect.exit(exports_Effect.interruptible(runAfter)).pipe(exports_Effect.flatMap((exit3) => {
+    if (exports_Exit.isSuccess(exit3))
+      return exports_Effect.void;
+    return reportDerivativeCause(exit3.cause);
+  }))));
+}));
+var stripToolSpanFailures = (cause, marker) => {
+  const found = cause.reasons.some((reason) => exports_Cause.isFailReason(reason) && reason.error === marker);
+  if (!found) {
+    return { found: false, residual: cause };
+  }
+  const reasons = cause.reasons.filter((reason) => {
+    if (exports_Cause.isFailReason(reason) && reason.error === marker) {
+      return false;
+    }
+    return true;
+  });
+  return { found: true, residual: exports_Cause.fromReasons(reasons) };
+};
+var restoreToolSpanFailureCause = (cause, marker, original) => {
+  const { found, residual } = stripToolSpanFailures(cause, marker);
+  return {
+    found,
+    restored: original === undefined ? residual : exports_Cause.combine(original, residual)
+  };
+};
+var reportDerivativeCause = (cause) => {
+  const reportableReasons = [];
+  const interruptionReasons = [];
+  for (const reason of cause.reasons) {
+    if (exports_Cause.isInterruptReason(reason))
+      interruptionReasons.push(reason);
+    else
+      reportableReasons.push(reason);
+  }
+  const reportExit = reportableReasons.length === 0 ? exports_Effect.succeed(exports_Exit.succeed(undefined)) : exports_Effect.exit(exports_ErrorReporter.report(exports_Cause.fromReasons(reportableReasons)));
+  return exports_Effect.flatMap(reportExit, (exit3) => {
+    if (exports_Exit.isFailure(exit3)) {
+      for (const reason of exit3.cause.reasons) {
+        if (exports_Cause.isInterruptReason(reason))
+          interruptionReasons.push(reason);
+      }
+    }
+    return interruptionReasons.length === 0 ? exports_Effect.void : exports_Effect.failCause(exports_Cause.fromReasons(interruptionReasons));
+  });
+};
+var isolateToolTerminalTelemetry = (telemetry) => telemetry.pipe(exports_Effect.catchCause(reportDerivativeCause));
+var MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS = 16;
+
+class ToolSpanLifecycleFailure extends Error {
+  name = "ToolSpanLifecycleFailure";
+  constructor() {
+    super("Tool span lifecycle failed");
+  }
+}
+
+class IsolatedToolSpan {
+  _tag = "Span";
+  name;
+  spanId;
+  traceId;
+  parent;
+  annotations;
+  attributes = new Map;
+  links;
+  sampled;
+  kind;
+  status;
+  #delegate;
+  #recordDefect;
+  #terminalOutcome;
+  #terminalFailure;
+  constructor(delegate, options, recordDefect) {
+    this.#delegate = delegate;
+    this.#recordDefect = recordDefect;
+    this.name = options.name;
+    this.spanId = delegate.spanId;
+    this.traceId = delegate.traceId;
+    this.parent = options.parent;
+    this.annotations = options.annotations;
+    this.links = [...options.links];
+    this.sampled = delegate.sampled;
+    this.kind = options.kind;
+    this.status = { _tag: "Started", startTime: options.startTime };
+  }
+  end(endTime, exit3) {
+    if (this.status._tag === "Ended")
+      return;
+    const exportedExit = this.#terminalOutcome === "failure" ? exports_Exit.fail(this.#terminalFailure ?? new ToolSpanLifecycleFailure) : this.#terminalOutcome === "success" ? exports_Exit.succeed(undefined) : exit3;
+    this.status = {
+      _tag: "Ended",
+      startTime: this.status.startTime,
+      endTime,
+      exit: exportedExit
+    };
+    if (this.#terminalOutcome !== undefined) {
+      this.attributes.set("effect_agent.tool.outcome", this.#terminalOutcome);
+      try {
+        this.#delegate.attribute("effect_agent.tool.outcome", this.#terminalOutcome);
+      } catch (defect) {
+        this.#recordDefect(defect);
+      }
+    }
+    try {
+      this.#delegate.end(endTime, exportedExit);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+  attribute(key, value4) {
+    if (key === TOOL_SPAN_FAILURE_MARKER_ATTRIBUTE) {
+      if (typeof value4 === "object" && value4 !== null) {
+        const terminal = terminalOutcomeTokens.get(value4);
+        if (terminal !== undefined) {
+          this.#terminalOutcome = terminal.outcome;
+          this.#terminalFailure = terminal.failureMarker;
+        }
+      }
+      return;
+    }
+    this.attributes.set(key, value4);
+    try {
+      this.#delegate.attribute(key, value4);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+  event(name, startTime, attributes2) {
+    try {
+      this.#delegate.event(name, startTime, attributes2);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+  addLinks(links) {
+    this.links.push(...links);
+    try {
+      this.#delegate.addLinks(links);
+    } catch (defect) {
+      this.#recordDefect(defect);
+    }
+  }
+}
+var makeIsolatedToolTracer = (delegate) => {
+  const defects = [];
+  const recordDefect = (defect) => {
+    if (defects.length < MAX_REPORTED_SPAN_LIFECYCLE_DEFECTS)
+      defects.push(defect);
+  };
+  let delegateContext;
+  try {
+    delegateContext = delegate.context?.bind(delegate);
+  } catch (defect) {
+    recordDefect(defect);
+    delegateContext = undefined;
+  }
+  const context3 = delegateContext === undefined ? undefined : (primitive, fiber3) => {
+    let evaluation = { _tag: "Pending" };
+    const currentEvaluation = () => evaluation;
+    const evaluate2 = (currentFiber) => {
+      switch (evaluation._tag) {
+        case "Succeeded":
+          return evaluation.value;
+        case "Failed":
+          throw evaluation.error;
+        case "Pending": {
+          try {
+            const value4 = primitive["~effect/Effect/evaluate"](currentFiber);
+            evaluation = { _tag: "Succeeded", value: value4 };
+            return value4;
+          } catch (error2) {
+            evaluation = { _tag: "Failed", error: error2 };
+            throw error2;
+          }
+        }
+      }
+    };
+    const guardedPrimitive = {
+      ["~effect/Effect/evaluate"]: evaluate2
+    };
+    try {
+      delegateContext(guardedPrimitive, fiber3);
+    } catch (defect) {
+      const observed2 = currentEvaluation();
+      switch (observed2._tag) {
+        case "Failed":
+          throw observed2.error;
+        case "Succeeded":
+          recordDefect(defect);
+          return observed2.value;
+        case "Pending":
+          recordDefect(defect);
+          return evaluate2(fiber3);
+      }
+    }
+    const observed = currentEvaluation();
+    switch (observed._tag) {
+      case "Failed":
+        throw observed.error;
+      case "Succeeded":
+        return observed.value;
+      case "Pending":
+        return evaluate2(fiber3);
+    }
+  };
+  const tracer3 = exports_Tracer.make({
+    context: context3,
+    span(options) {
+      let delegateSpan;
+      try {
+        delegateSpan = delegate.span(options);
+      } catch (defect) {
+        recordDefect(defect);
+        return new exports_Tracer.NativeSpan(options);
+      }
+      try {
+        return new IsolatedToolSpan(delegateSpan, options, recordDefect);
+      } catch (defect) {
+        recordDefect(defect);
+        try {
+          delegateSpan.end(options.startTime, exports_Exit.fail(new ToolSpanLifecycleFailure));
+        } catch (closeDefect) {
+          recordDefect(closeDefect);
+        }
+        return new exports_Tracer.NativeSpan(options);
+      }
+    }
+  });
+  const reportLifecycleDefects = exports_Effect.suspend(() => {
+    const pending = defects.splice(0);
+    return exports_Effect.forEach(pending, (defect) => isolateToolTerminalTelemetry(exports_ErrorReporter.report(exports_Cause.die(defect))), { discard: true });
+  });
+  return { tracer: tracer3, reportLifecycleDefects };
+};
+
+class ToolSpanTelemetry extends exports_Context.Service()("@effect-agent/engine/ToolSpanTelemetry") {
+  static layer = exports_Layer.effect(ToolSpanTelemetry, exports_Effect.map(exports_Tracer.Tracer, (delegate) => ToolSpanTelemetry.of({
+    isolateToolkitHandle: (effect2) => exports_Effect.currentSpan.pipe(exports_Effect.option, exports_Effect.flatMap((parentOption) => {
+      if (exports_Option.isNone(parentOption))
+        return effect2;
+      const parent = parentOption.value;
+      const local = new exports_Tracer.NativeSpan({
+        name: "AgentRuntime.toolkit.handle",
+        parent: exports_Option.some(parent),
+        annotations: exports_Context.add(exports_Context.empty(), exports_Tracer.DisablePropagation, true),
+        links: [],
+        startTime: 0n,
+        kind: "internal",
+        sampled: parent.sampled
+      });
+      return effect2.pipe(exports_Effect.withParentSpan(local), exports_Effect.onExit((exit3) => exports_Effect.sync(() => {
+        local.end(0n, exit3);
+      })));
+    })),
+    isolateSpanLifecycle: (stream) => exports_Stream.unwrap(exports_Effect.sync(() => {
+      const isolated = makeIsolatedToolTracer(delegate);
+      return stream.pipe(exports_Stream.provideService(exports_Tracer.Tracer, isolated.tracer), exports_Stream.ensuring(isolated.reportLifecycleDefects));
+    }))
+  })));
+}
+
 // packages/engine/src/durable-step.ts
 var ToolExecutionClass = exports_Context.Reference("@effect-agent/engine/ToolExecutionClass", { defaultValue: () => "uncertain" });
 var getToolExecutionClass = (tool) => exports_Context.get(tool.annotations, ToolExecutionClass);
@@ -32288,6 +32873,8 @@ var modelCounter = exports_Metric.counter("effect_agent_model_calls_total", {
 var toolCounter = exports_Metric.counter("effect_agent_tool_calls_total", {
   description: "Agent tool handlers started; no content or high-cardinality identifiers are recorded."
 });
+var MAX_STAGED_PROVIDER_EVENTS = 256;
+var MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
 var withSemaphorePermit = (semaphore, stream) => exports_Stream.scoped(exports_Stream.fromEffect(exports_Effect.acquireRelease(semaphore.take(1), (permits) => semaphore.release(permits).pipe(exports_Effect.asVoid))).pipe(exports_Stream.flatMap(() => stream)));
 var hasTool = (tools, name) => Object.hasOwn(tools, name);
 var startPart = (parts2, id2, description) => {
@@ -32495,16 +33082,48 @@ var preflightApproval = (context3, turnId, prepared, options) => exports_Stream.
     }
   });
 })));
+var ProviderResponsePartId = exports_Schema.String.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
+var ProviderToolCallId = ToolCallId.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
+var isTelemetryToolCallId = exports_Schema.is(ProviderToolCallId);
 var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWaiting) => {
   const call = prepared.call;
+  const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
+  const executionClass = getToolExecutionClass(prepared.tool);
+  const toolSpanFailure = ToolSpanFailure.marker();
   let terminal = false;
+  let terminalResultCommitted = false;
+  let terminalOutcome;
+  let terminalResult;
+  let propagatedFailure;
+  const terminalTelemetry = (outcome) => annotateToolSpanTerminalOutcome(outcome, outcome === "failure" ? toolSpanFailure : undefined).pipe(exports_Effect.andThen((outcome === "success" ? exports_Effect.logInfo("agent tool execution completed") : exports_Effect.logWarning("agent tool execution failed")).pipe(exports_Effect.annotateLogs({
+    "gen_ai.operation.name": "execute_tool",
+    "gen_ai.tool.name": call.name,
+    "gen_ai.tool.type": "function",
+    ...telemetryToolCallId === undefined ? {} : {
+      "gen_ai.tool.call.id": telemetryToolCallId,
+      toolCallId: telemetryToolCallId
+    },
+    "gen_ai.agent.name": context3.agentId,
+    "gen_ai.conversation.id": context3.conversationId,
+    "effect_agent.tool.execution_class": executionClass,
+    "effect_agent.tool.outcome": outcome,
+    agentId: context3.agentId,
+    conversationId: context3.conversationId,
+    runId: context3.runId,
+    turnId,
+    toolName: call.name,
+    toolExecutionClass: executionClass,
+    toolOutcome: outcome
+  }))));
+  const isolatedTerminalTelemetry = (outcome) => isolateToolTerminalTelemetry(terminalTelemetry(outcome));
+  const terminalEventThenTelemetry = (event, outcome, failSpan) => emitThenAfter(event, isolatedTerminalTelemetry(outcome).pipe(exports_Effect.andThen(failSpan ? exports_Effect.fail(toolSpanFailure) : exports_Effect.void)));
   const started = exports_Stream.fromEffect(exports_Effect.gen(function* () {
     const toolCallId = yield* decodeToolCallId(call.id);
     yield* exports_Effect.logDebug("agent tool handler started").pipe(exports_Effect.annotateLogs({
       agentId: context3.agentId,
       runId: context3.runId,
       turnId,
-      toolCallId,
+      ...telemetryToolCallId === undefined ? {} : { toolCallId: telemetryToolCallId },
       toolName: call.name
     }));
     yield* exports_Metric.update(toolCounter, 1);
@@ -32515,7 +33134,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
       toolName: call.name
     });
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.tool")));
-  const results = exports_Stream.unwrap(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id).pipe(exports_Effect.withSpan("AgentRuntime.toolkit.handle"))).pipe(exports_Stream.mapEffect((result4) => exports_Effect.gen(function* () {
+  const results = exports_Stream.unwrap(exports_Effect.flatMap(ToolSpanTelemetry, ({ isolateToolkitHandle }) => isolateToolkitHandle(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id)))).pipe(exports_Stream.mapEffect((result4) => exports_Effect.gen(function* () {
     if (terminal || trace2.finalToolResultIds.has(call.id)) {
       return yield* ModelProtocolError.make({
         message: `Tool Call ${call.id} produced more than one terminal result`
@@ -32523,7 +33142,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
     }
     const toolCallId = yield* decodeToolCallId(call.id);
     if (result4.preliminary) {
-      return ToolProgress.make({
+      const event = ToolProgress.make({
         ...yield* eventBase(context3),
         turnId,
         toolCallId,
@@ -32531,17 +33150,27 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
         result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
         providerExecuted: false
       });
+      return event;
     }
     terminal = true;
-    trace2.finalToolResultIds.add(call.id);
-    trace2.applicationToolResults[prepared.declarationIndex] = {
-      id: call.id,
-      name: call.name,
+    terminalOutcome = result4.isFailure ? "failure" : "success";
+    terminalResult = {
       encodedResult: result4.encodedResult,
-      isFailure: result4.isFailure
+      isFailure: result4.isFailure,
+      result: result4.result
     };
-    if (result4.isFailure) {
-      return ToolCallFailed.make({
+    return;
+  })), exports_Stream.filter((event) => event !== undefined));
+  const commitTerminalResult = exports_Effect.suspend(() => {
+    if (!terminal || terminalOutcome === undefined || terminalResult === undefined) {
+      return exports_Effect.fail(ModelProtocolError.make({
+        message: `Tool Call ${call.id} completed without a terminal result`
+      }));
+    }
+    const result4 = terminalResult;
+    return exports_Effect.gen(function* () {
+      const toolCallId = yield* decodeToolCallId(call.id);
+      const event = result4.isFailure ? ToolCallFailed.make({
         ...yield* eventBase(context3),
         turnId,
         toolCallId,
@@ -32549,45 +33178,86 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
         errorTag: errorTag(result4.result),
         message: errorMessage(result4.result),
         providerExecuted: false
+      }) : ToolCallSucceeded.make({
+        ...yield* eventBase(context3),
+        turnId,
+        toolCallId,
+        toolName: call.name,
+        result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
+        providerExecuted: false
       });
-    }
-    return ToolCallSucceeded.make({
-      ...yield* eventBase(context3),
-      turnId,
-      toolCallId,
-      toolName: call.name,
-      result: yield* decodeEventJson(result4.encodedResult, "Tool result"),
-      providerExecuted: false
+      trace2.finalToolResultIds.add(call.id);
+      trace2.applicationToolResults[prepared.declarationIndex] = {
+        id: call.id,
+        name: call.name,
+        encodedResult: result4.encodedResult,
+        isFailure: result4.isFailure
+      };
+      terminalResultCommitted = true;
+      return event;
     });
-  })));
-  const requireTerminal = exports_Stream.fromEffect(exports_Effect.suspend(() => terminal ? exports_Effect.void : exports_Effect.fail(ModelProtocolError.make({
-    message: `Tool Call ${call.id} completed without a terminal result`
-  })))).pipe(exports_Stream.drain);
-  return started.pipe(exports_Stream.concat(results), exports_Stream.concat(requireTerminal), exports_Stream.catchCause((cause) => {
-    const waiting = waitingFromCause(cause);
+  });
+  const finalizeTerminalResult = exports_Stream.unwrap(exports_Effect.sync(() => terminalEventThenTelemetry(commitTerminalResult, terminalOutcome ?? "failure", terminalOutcome === "failure")));
+  const failTerminalResult = (cause) => {
+    terminal = true;
+    terminalOutcome = "failure";
+    terminalResult = undefined;
+    propagatedFailure = cause;
+    return terminalEventThenTelemetry(makeToolFailedEvent(context3, turnId, call, exports_Cause.squash(cause)).pipe(exports_Effect.tap(() => exports_Effect.sync(() => {
+      trace2.finalToolResultIds.add(call.id);
+      terminalResultCommitted = true;
+    }))), "failure", true);
+  };
+  const measured = started.pipe(exports_Stream.concat(results), exports_Stream.concat(finalizeTerminalResult), exports_Stream.catchCause((cause) => {
+    const { found: hasToolSpanFailure, residual: toolCause } = stripToolSpanFailures(cause, toolSpanFailure);
+    if (hasToolSpanFailure) {
+      return exports_Stream.failCause(cause);
+    }
+    if (terminalResultCommitted) {
+      return exports_Stream.failCause(toolCause);
+    }
+    if (toolCause.reasons.length > 0 && toolCause.reasons.every(exports_Cause.isInterruptReason)) {
+      return exports_Stream.failCause(toolCause);
+    }
+    const waiting = waitingFromCause(toolCause);
     if (waiting !== undefined) {
       if (terminal || trace2.finalToolResultIds.has(call.id)) {
-        return exports_Stream.fail(ModelProtocolError.make({
+        return failTerminalResult(exports_Cause.fail(ModelProtocolError.make({
           message: `Tool Call ${call.id} raised the waiting signal after its terminal result`
-        }));
+        })));
       }
       onWaiting(waiting);
       return exports_Stream.empty;
     }
     if (terminal) {
-      return exports_Stream.failCause(cause);
+      return failTerminalResult(toolCause);
     }
-    terminal = true;
-    trace2.finalToolResultIds.add(call.id);
-    return exports_Stream.fromEffect(makeToolFailedEvent(context3, turnId, call, exports_Cause.squash(cause))).pipe(exports_Stream.concat(exports_Stream.failCause(cause)));
-  }), exports_Stream.withSpan("AgentRuntime.tool", {
+    return failTerminalResult(toolCause);
+  }), exports_Stream.withSpan(`execute_tool ${call.name}`, {
+    kind: "internal",
     attributes: {
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": call.name,
+      "gen_ai.tool.type": "function",
+      ...telemetryToolCallId === undefined ? {} : {
+        "gen_ai.tool.call.id": telemetryToolCallId,
+        toolCallId: telemetryToolCallId
+      },
+      "gen_ai.agent.name": context3.agentId,
+      "gen_ai.conversation.id": context3.conversationId,
+      "effect_agent.tool.execution_class": executionClass,
       agentId: context3.agentId,
+      conversationId: context3.conversationId,
       runId: context3.runId,
       turnId,
-      toolCallId: call.id,
       toolName: call.name
     }
+  }));
+  return exports_Stream.unwrap(exports_Effect.map(ToolSpanTelemetry, ({ isolateSpanLifecycle }) => isolateSpanLifecycle(measured))).pipe(exports_Stream.catchCause((cause) => {
+    const { found, restored } = restoreToolSpanFailureCause(cause, toolSpanFailure, propagatedFailure);
+    if (!found)
+      return exports_Stream.failCause(restored);
+    return restored.reasons.length === 0 ? exports_Stream.empty : exports_Stream.failCause(restored);
   }));
 };
 var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, brokerAccounting, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
@@ -32861,6 +33531,67 @@ var eventBase = exports_Effect.fnUntraced(function* (context3) {
     timestamp
   };
 });
+var snapshotStagedProviderEvent = (trace2, payload) => exports_Effect.suspend(() => {
+  const stagedEventCount = trace2.providerResultPayloads.length + (trace2.turnCompletion === undefined ? 0 : 1);
+  if (stagedEventCount >= MAX_STAGED_PROVIDER_EVENTS) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_EVENTS}-event staged provider event limit`
+    }));
+  }
+  const snapshot2 = boundedJsonSnapshot(payload, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
+  if (snapshot2 === undefined) {
+    return exports_Effect.fail(ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`
+    }));
+  }
+  return exports_Effect.succeed(snapshot2);
+});
+var stageProviderResultPayload = (trace2, payload) => exports_Effect.gen(function* () {
+  const snapshot2 = yield* snapshotStagedProviderEvent(trace2, payload);
+  const snapshotObject = snapshot2.value;
+  if (snapshotObject === null || typeof snapshotObject !== "object" || Array.isArray(snapshotObject) || Object.getPrototypeOf(snapshotObject) !== null) {
+    return yield* ModelProtocolError.make({
+      message: "Provider Tool result could not be normalized as JSON"
+    });
+  }
+  const resultDescriptor = Object.getOwnPropertyDescriptor(snapshotObject, "result");
+  const normalizedResult = resultDescriptor !== undefined && "value" in resultDescriptor ? exports_Schema.decodeUnknownOption(exports_Schema.Json)(resultDescriptor.value) : exports_Option.none();
+  if (payload._tag !== "ToolCallFailed" && exports_Option.isNone(normalizedResult)) {
+    return yield* ModelProtocolError.make({
+      message: "Provider Tool result could not be normalized as JSON"
+    });
+  }
+  const normalized = payload._tag === "ToolCallFailed" ? Object.freeze({ ...payload }) : Object.freeze({ ...payload, result: exports_Option.getOrThrow(normalizedResult) });
+  trace2.providerResultPayloads.push(normalized);
+  trace2.providerStagedPayloadBytes += snapshot2.bytes;
+});
+var ProviderToolResultSnapshot = exports_Schema.Struct({
+  result: exports_Schema.Json,
+  metadata: exports_Schema.Record(exports_Schema.String, exports_Schema.Json)
+});
+var snapshotProviderToolResultPart = exports_Effect.fnUntraced(function* (trace2, part) {
+  const snapshot2 = boundedJsonSnapshot({ result: part.encodedResult, metadata: part.metadata }, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
+  if (snapshot2 === undefined) {
+    return yield* ModelProtocolError.make({
+      message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`
+    });
+  }
+  const normalized = yield* exports_Schema.decodeUnknownEffect(ProviderToolResultSnapshot)(snapshot2.value).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+    message: "Provider Tool result could not be normalized as JSON"
+  })));
+  trace2.providerStagedPayloadBytes += snapshot2.bytes;
+  return normalized;
+});
+var stampProviderResultEvent = (context3, turnId, payload) => exports_Effect.map(eventBase(context3), (base2) => {
+  switch (payload._tag) {
+    case "ToolProgress":
+      return ToolProgress.make({ ...base2, turnId, ...payload });
+    case "ToolCallSucceeded":
+      return ToolCallSucceeded.make({ ...base2, turnId, ...payload });
+    case "ToolCallFailed":
+      return ToolCallFailed.make({ ...base2, turnId, ...payload });
+  }
+});
 var decodeInput = exports_Effect.fn("AgentRuntime.decodeInput")((agent2, input) => exports_Schema.decodeUnknownEffect(agent2.definition.input)(input).pipe(exports_Effect.mapError((cause) => AgentInputError.make({
   message: cause.message
 }))));
@@ -32897,6 +33628,46 @@ var makeInitialPrompt = exports_Effect.fn("AgentRuntime.makeInitialPrompt")((ins
 var decodeToolCallId = exports_Effect.fn("AgentRuntime.decodeToolCallId")((id2) => exports_Schema.decodeEffect(ToolCallId)(id2).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
   message: `Invalid Tool Call ID: ${cause.message}`
 }))));
+var decodeProviderToolCallId = exports_Effect.fn("AgentRuntime.decodeProviderToolCallId")((id2) => exports_Schema.decodeEffect(ProviderToolCallId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+  message: "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
+}))));
+var decodeProviderResponsePartId = exports_Effect.fn("AgentRuntime.decodeProviderResponsePartId")((id2) => exports_Schema.decodeEffect(ProviderResponsePartId)(id2).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+  message: "Model supplied an invalid response part ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens"
+}))));
+var validateProviderPartIdentifiers = exports_Effect.fnUntraced(function* (part) {
+  switch (part.type) {
+    case "text-start":
+    case "text-delta":
+    case "text-end":
+    case "reasoning-start":
+    case "reasoning-delta":
+    case "reasoning-end":
+    case "source":
+      yield* decodeProviderResponsePartId(part.id);
+      return;
+    case "response-metadata":
+      if (part.id !== undefined)
+        yield* decodeProviderResponsePartId(part.id);
+      return;
+    case "tool-params-start":
+    case "tool-params-delta":
+    case "tool-params-end":
+    case "tool-call":
+    case "tool-result":
+      yield* decodeProviderToolCallId(part.id);
+      return;
+    case "tool-approval-request":
+      yield* decodeProviderResponsePartId(part.approvalId);
+      yield* decodeProviderToolCallId(part.toolCallId);
+      return;
+    case "error":
+    case "file":
+    case "finish":
+    case "reasoning":
+    case "text":
+      return;
+  }
+});
 var decodeEventJson = exports_Effect.fn("AgentRuntime.decodeEventJson")((value4, label) => exports_Schema.decodeUnknownEffect(exports_Schema.Json)(value4).pipe(exports_Effect.mapError((cause) => ModelProtocolError.make({
   message: `${label} is not JSON: ${cause.message}`
 }))));
@@ -32941,7 +33712,9 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       message: "Model response emitted content after its finish part"
     });
   }
-  trace2.parts.push(part);
+  yield* validateProviderPartIdentifiers(part);
+  if (part.type !== "tool-call" && part.type !== "tool-result")
+    trace2.parts.push(part);
   switch (part.type) {
     case "text-start": {
       yield* startPart(trace2.textParts, part.id, "text");
@@ -33038,13 +33811,13 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       const tool = tools[part.name];
       const encodedParameters = yield* encodeToolCallParameters(tool, part.name, part.params);
       const parameters = yield* decodeEventJson(encodedParameters, "Tool parameters");
-      trace2.parts[trace2.parts.length - 1] = exports_Response.makePart("tool-call", {
+      trace2.parts.push(exports_Response.makePart("tool-call", {
         id: part.id,
         name: part.name,
         params: parameters,
         providerExecuted: part.providerExecuted,
         metadata: part.metadata
-      });
+      }));
       trace2.toolCalls.set(part.id, {
         name: part.name,
         providerExecuted: part.providerExecuted
@@ -33091,48 +33864,63 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
         });
       }
       const toolCallId = yield* decodeToolCallId(part.id);
-      const result4 = yield* decodeEventJson(part.encodedResult, "Tool result");
+      const normalized = yield* snapshotProviderToolResultPart(trace2, part);
+      const result4 = normalized.result;
       if (part.preliminary === true) {
-        return [
-          ToolProgress.make({
-            ...yield* eventBase(context3),
-            turnId,
-            toolCallId,
-            toolName: part.name,
-            result: result4,
-            providerExecuted: part.providerExecuted
-          })
-        ];
+        yield* stageProviderResultPayload(trace2, {
+          _tag: "ToolProgress",
+          toolCallId,
+          toolName: part.name,
+          result: result4,
+          providerExecuted: true
+        });
+        trace2.parts.push(exports_Response.toolResultPart({
+          id: part.id,
+          name: part.name,
+          isFailure: part.isFailure,
+          result: result4,
+          encodedResult: result4,
+          providerExecuted: true,
+          preliminary: true,
+          metadata: normalized.metadata
+        }));
+        return [];
       }
       if (trace2.finalToolResultIds.has(part.id)) {
         return yield* ModelProtocolError.make({
           message: `Tool Call ${part.id} produced more than one terminal result`
         });
       }
-      trace2.finalToolResultIds.add(part.id);
       if (part.isFailure) {
-        return [
-          ToolCallFailed.make({
-            ...yield* eventBase(context3),
-            turnId,
-            toolCallId,
-            toolName: part.name,
-            errorTag: errorTag(part.result),
-            message: errorMessage(part.result),
-            providerExecuted: part.providerExecuted
-          })
-        ];
-      }
-      return [
-        ToolCallSucceeded.make({
-          ...yield* eventBase(context3),
-          turnId,
+        yield* stageProviderResultPayload(trace2, {
+          _tag: "ToolCallFailed",
+          toolCallId,
+          toolName: part.name,
+          errorTag: errorTag(result4),
+          message: errorMessage(result4),
+          providerExecuted: true
+        });
+      } else {
+        yield* stageProviderResultPayload(trace2, {
+          _tag: "ToolCallSucceeded",
           toolCallId,
           toolName: part.name,
           result: result4,
-          providerExecuted: part.providerExecuted
-        })
-      ];
+          providerExecuted: true
+        });
+      }
+      trace2.finalToolResultIds.add(part.id);
+      trace2.parts.push(exports_Response.toolResultPart({
+        id: part.id,
+        name: part.name,
+        isFailure: part.isFailure,
+        result: result4,
+        encodedResult: result4,
+        providerExecuted: true,
+        preliminary: false,
+        metadata: normalized.metadata
+      }));
+      return [];
     }
     case "finish": {
       const openPart = firstOpenPart(trace2);
@@ -33144,6 +33932,16 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       trace2.finished = true;
       trace2.finishReason = part.reason;
       trace2.usage = part.usage;
+      if (Array.from(trace2.toolCalls.values()).some(({ providerExecuted }) => providerExecuted)) {
+        const turnCompletion = { finishReason: part.reason };
+        const snapshot2 = yield* snapshotStagedProviderEvent(trace2, {
+          _tag: "TurnCompleted",
+          ...turnCompletion
+        });
+        trace2.turnCompletion = turnCompletion;
+        trace2.providerStagedPayloadBytes += snapshot2.bytes;
+        return [];
+      }
       return [
         TurnCompleted.make({
           ...yield* eventBase(context3),
@@ -33158,7 +33956,12 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
         message: `Model response failed: ${errorMessage(part.error)}`
       });
     }
-    default: {
+    case "file":
+    case "reasoning":
+    case "response-metadata":
+    case "source":
+    case "text":
+    case "tool-approval-request": {
       return [];
     }
   }
@@ -33191,6 +33994,9 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     toolParameterParts: new Map,
     toolCalls: new Map,
     finalToolResultIds: new Set,
+    providerResultPayloads: [],
+    providerStagedPayloadBytes: 0,
+    turnCompletion: undefined,
     applicationToolCalls: [],
     applicationCallDescriptors: [],
     applicationToolResults: [],
@@ -33229,19 +34035,16 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       turnId
     }
   }));
-  const continuation = exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const continuation = exports_Stream.unwrap(exports_Effect.sync(() => {
     if (!trace2.finished) {
       return failRunEventStream(ModelProtocolError.make({
         message: "Model response ended without a finish part"
       }));
     }
-    yield* consumeUsage(agent2, context3, trace2, options);
-    const toolCalls = priorToolCalls + trace2.toolCalls.size;
-    if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
-      return failRunEventStream(AgentPolicyError.make({
-        limit: "tool-calls",
-        message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
-      }));
+    const hasProviderCalls = Array.from(trace2.toolCalls.values()).some(({ providerExecuted }) => providerExecuted);
+    const turnCompletion = trace2.turnCompletion;
+    if (hasProviderCalls && turnCompletion === undefined) {
+      return failRunEventStream(ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }));
     }
     const providerOnly = trace2.toolCalls.size > 0 && Array.from(trace2.toolCalls.values()).every(({ providerExecuted }) => providerExecuted);
     const missingProviderResult = Array.from(trace2.toolCalls.entries()).find(([id2, call]) => call.providerExecuted && !trace2.finalToolResultIds.has(id2));
@@ -33250,6 +34053,20 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         message: `Provider-executed Tool Call ${missingProviderResult[0]} completed without a terminal result`
       }));
     }
+    const toolCalls = priorToolCalls + trace2.toolCalls.size;
+    if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
+      return failRunEventStream(AgentPolicyError.make({
+        limit: "tool-calls",
+        message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
+      }));
+    }
+    const stagedResponse = exports_Stream.fromIterable(trace2.providerResultPayloads).pipe(exports_Stream.mapEffect((payload) => stampProviderResultEvent(context3, turnId, payload)), exports_Stream.concat(turnCompletion === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => TurnCompleted.make({
+      ...base2,
+      turnId,
+      turn,
+      finishReason: turnCompletion.finishReason
+    })))));
+    const afterValidatedResponse = (next2) => stagedResponse.pipe(exports_Stream.concat(exports_Stream.unwrap(exports_Effect.andThen(consumeUsage(agent2, context3, trace2, options), next2))));
     const historyWithResponse = (...additions) => exports_Prompt.fromMessages([
       ...prompt.content,
       ...promptFromTurnParts(trace2).content,
@@ -33277,16 +34094,15 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         return makeTurn(agent2, context3, nextPrompt, turn + 1, toolCalls, options);
       }
       const output = yield* decodeFinalOutput(agent2, trace2.text.join(""));
-      const completed = RunCompleted.make({
-        ...yield* eventBase(context3),
+      return exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
+        ...base2,
         output,
         turns: turn,
         finishReason: "model-stop"
-      });
-      return exports_Stream.succeed(completed);
+      })));
     });
     if (providerOnly && trace2.finishReason === "stop") {
-      return yield* settleOrFollowUp(historyWithResponse());
+      return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
     }
     if (trace2.toolCalls.size > 0) {
       if (trace2.finishReason !== "tool-calls") {
@@ -33301,31 +34117,35 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         }));
       }
       if (trace2.applicationToolCalls.length === 0) {
-        yield* applyRepeatedFailurePolicy(context3, trace2, agent2.definition.policy.repeatedFailureLimit);
-        return yield* continueTurn(historyWithResponse());
+        return afterValidatedResponse(exports_Effect.gen(function* () {
+          yield* applyRepeatedFailurePolicy(context3, trace2, agent2.definition.policy.repeatedFailureLimit);
+          return yield* continueTurn(historyWithResponse());
+        }));
       }
-      const toolkit = yield* agent2.definition.toolkit;
-      const concurrency = yield* schedulingConcurrency(agent2.definition.policy.toolConcurrency, options.scheduling);
-      if (options.durability !== undefined) {
-        yield* options.durability.commitResponse({
-          turn,
-          turnId,
-          responseMessages: promptFromTurnParts(trace2),
-          calls: trace2.applicationCallDescriptors
-        });
-      }
-      const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
-        maxToolCalls: agent2.definition.policy.maxToolCalls,
-        declaredToolCalls: toolCalls
-      }), options.budget);
-      return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
+      return afterValidatedResponse(exports_Effect.gen(function* () {
+        const toolkit = yield* agent2.definition.toolkit;
+        const concurrency = yield* schedulingConcurrency(agent2.definition.policy.toolConcurrency, options.scheduling);
+        if (options.durability !== undefined) {
+          yield* options.durability.commitResponse({
+            turn,
+            turnId,
+            responseMessages: promptFromTurnParts(trace2),
+            calls: trace2.applicationCallDescriptors
+          });
+        }
+        const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
+          maxToolCalls: agent2.definition.policy.maxToolCalls,
+          declaredToolCalls: toolCalls
+        }), options.budget);
+        return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
+      }));
     }
     if (trace2.finishReason !== "stop") {
       return failRunEventStream(ModelProtocolError.make({
         message: `Model stopped without a final answer (${trace2.finishReason})`
       }));
     }
-    return yield* settleOrFollowUp(historyWithResponse());
+    return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
   }));
   return started.pipe(exports_Stream.concat(response), exports_Stream.concat(continuation));
 }));
@@ -33385,6 +34205,9 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     toolParameterParts: new Map,
     toolCalls: new Map,
     finalToolResultIds: new Set,
+    providerResultPayloads: [],
+    providerStagedPayloadBytes: 0,
+    turnCompletion: undefined,
     applicationToolCalls: [],
     applicationCallDescriptors: [],
     applicationToolResults: [],
@@ -33583,7 +34406,7 @@ var stream = (agent2, input, options = {}) => {
     }), exports_Stream.provide(engineToolServices));
   }));
   const finalized = options.input?.end === undefined ? interpreted : interpreted.pipe(exports_Stream.ensuring(options.input.end()));
-  return finalized.pipe(exports_Stream.provide(agent2.model, { local: true }));
+  return finalized.pipe(exports_Stream.provide(agent2.model, { local: true }), exports_Stream.provide(ToolSpanTelemetry.layer));
 };
 var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
   const reduction = yield* exports_Stream.runFold(events2, () => ({}), (state, event) => event._tag === "RunCompleted" ? { completed: event } : state);
@@ -34981,9 +35804,9 @@ function Stream2(success, error2) {
 }
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId47 = "~effect/rpc/Rpc";
+var TypeId48 = "~effect/rpc/Rpc";
 var Proto12 = {
-  [TypeId47]: TypeId47,
+  [TypeId48]: TypeId48,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -35072,7 +35895,7 @@ var makeProto3 = (options) => {
   Rpc.key = `effect/rpc/Rpc/${options._tag}`;
   return Rpc;
 };
-var make50 = (tag2, options) => {
+var make51 = (tag2, options) => {
   const successSchema = options?.success ?? Void2;
   const errorSchema = options?.error ?? Never2;
   const defectSchema = options?.defect ?? Defect();
@@ -35247,7 +36070,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct(
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make50("initialize", {
+class Initialize extends (/* @__PURE__ */ make51("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -35258,7 +36081,7 @@ class Initialize extends (/* @__PURE__ */ make50("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make50("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make51("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -35267,7 +36090,7 @@ class CancelledNotification extends (/* @__PURE__ */ make50("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make50("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make51("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
@@ -35336,7 +36159,7 @@ class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make50("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make51("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -35345,7 +36168,7 @@ class ReadResource extends (/* @__PURE__ */ make50("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make50("resources/subscribe", {
+class Subscribe extends (/* @__PURE__ */ make51("resources/subscribe", {
   success: /* @__PURE__ */ Struct({}),
   error: McpError,
   payload: {
@@ -35355,7 +36178,7 @@ class Subscribe extends (/* @__PURE__ */ make50("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make50("resources/unsubscribe", {
+class Unsubscribe extends (/* @__PURE__ */ make51("resources/unsubscribe", {
   success: /* @__PURE__ */ Struct({}),
   error: McpError,
   payload: {
@@ -35365,7 +36188,7 @@ class Unsubscribe extends (/* @__PURE__ */ make50("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make50("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make51("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -35444,7 +36267,7 @@ class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetP
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make50("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make51("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -35488,7 +36311,7 @@ class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallT
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make50("tools/call", {
+class CallTool extends (/* @__PURE__ */ make51("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -35500,7 +36323,7 @@ class CallTool extends (/* @__PURE__ */ make50("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make50("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make51("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
@@ -35510,7 +36333,7 @@ class SetLevel extends (/* @__PURE__ */ make50("logging/setLevel", {
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make50("notifications/message", {
+class LoggingMessageNotification extends (/* @__PURE__ */ make51("notifications/message", {
   payload: /* @__PURE__ */ Struct({
     ...NotificationMeta.fields,
     level: LoggingLevel,
@@ -35555,7 +36378,7 @@ class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make50("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make51("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
@@ -35584,7 +36407,7 @@ class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make50("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make51("elicitation/create", {
   success: ElicitResult,
   error: McpError,
   payload: {
@@ -36484,7 +37307,7 @@ var settleReservation = (reservations, reservationId, startedAt) => exports_Effe
   }
   yield* reservations.release(reservationId);
 }).pipe(exports_Effect.orDie);
-var layer13 = (delegation, childBinding, options) => {
+var layer14 = (delegation, childBinding, options) => {
   const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
   const allocation = delegationAllocationFromPolicy(delegation.policy);
   const toolkit = exports_Toolkit.make(delegation.tool);
@@ -36782,7 +37605,7 @@ var layer13 = (delegation, childBinding, options) => {
   });
   return toolkit.toLayer(build2);
 };
-var SubagentRuntime = { layer: layer13 };
+var SubagentRuntime = { layer: layer14 };
 // packages/pr-review/src/internal/effort.ts
 var EFFORT_ALIASES = {
   low: 0,
@@ -37476,10 +38299,10 @@ var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review"
     paths: request3.paths,
     focus: "defects-first: correctness, security, concurrency, resources, error handling"
   })),
-  projectResult: (report) => exports_Effect.succeed(FileReviewUnitResult.make({
-    unitId: report.unitId,
-    findings: report.findings,
-    ...report.concerns !== undefined ? { concerns: report.concerns } : {}
+  projectResult: (report2) => exports_Effect.succeed(FileReviewUnitResult.make({
+    unitId: report2.unitId,
+    findings: report2.findings,
+    ...report2.concerns !== undefined ? { concerns: report2.concerns } : {}
   })),
   policy: fileReviewPolicy
 });
@@ -37558,16 +38381,16 @@ var ignoringPullRequestSourceLayer = (patterns) => exports_Layer.effect(PullRequ
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
-  layer: () => layer14,
+  layer: () => layer15,
   RequestInit: () => RequestInit,
   Fetch: () => Fetch
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Headers.js
-var TypeId48 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
+var TypeId49 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
 var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
-  [TypeId48]: {
-    value: TypeId48
+  [TypeId49]: {
+    value: TypeId49
   },
   [symbolRedactable]: {
     value(context4) {
@@ -37596,7 +38419,7 @@ var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.cre
     value: BaseProto[NodeInspectSymbol]
   }
 });
-var make51 = (input) => Object.assign(Object.create(Proto13), input);
+var make52 = (input) => Object.assign(Object.create(Proto13), input);
 var Equivalence6 = /* @__PURE__ */ makeEquivalence4(/* @__PURE__ */ strictEqual());
 var empty14 = /* @__PURE__ */ Object.create(Proto13);
 var fromInput2 = (input) => {
@@ -37621,21 +38444,21 @@ var fromInput2 = (input) => {
 };
 var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto13);
 var set5 = /* @__PURE__ */ dual(3, (self, key, value4) => {
-  const out = make51(self);
+  const out = make52(self);
   out[key.toLowerCase()] = value4;
   return out;
 });
-var setAll = /* @__PURE__ */ dual(2, (self, headers) => make51({
+var setAll = /* @__PURE__ */ dual(2, (self, headers) => make52({
   ...self,
   ...fromInput2(headers)
 }));
 var merge6 = /* @__PURE__ */ dual(2, (self, headers) => {
-  const out = make51(self);
+  const out = make52(self);
   Object.assign(out, headers);
   return out;
 });
 var remove7 = /* @__PURE__ */ dual(2, (self, key) => {
-  const out = make51(self);
+  const out = make52(self);
   delete out[key.toLowerCase()];
   return out;
 });
@@ -37692,7 +38515,7 @@ __export(exports_HttpClient, {
   mapRequestEffect: () => mapRequestEffect,
   mapRequest: () => mapRequest,
   makeWith: () => makeWith2,
-  make: () => make55,
+  make: () => make56,
   layerMergedContext: () => layerMergedContext,
   isHttpClient: () => isHttpClient,
   head: () => head2,
@@ -37715,10 +38538,10 @@ __export(exports_HttpClient, {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Cookies.js
-var TypeId49 = "~effect/http/Cookies";
+var TypeId50 = "~effect/http/Cookies";
 var CookieTypeId = "~effect/http/Cookies/Cookie";
 var Proto14 = {
-  [TypeId49]: TypeId49,
+  [TypeId50]: TypeId50,
   ...BaseProto,
   toJSON() {
     return {
@@ -37904,11 +38727,11 @@ var tryDecodeURIComponent = (str) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/UrlParams.js
-var TypeId50 = "~effect/http/UrlParams";
-var isUrlParams = (u) => hasProperty(u, TypeId50);
+var TypeId51 = "~effect/http/UrlParams";
+var isUrlParams = (u) => hasProperty(u, TypeId51);
 var Proto15 = {
   ...PipeInspectableProto,
-  [TypeId50]: TypeId50,
+  [TypeId51]: TypeId51,
   [Symbol.iterator]() {
     return this.params[Symbol.iterator]();
   },
@@ -37925,7 +38748,7 @@ var Proto15 = {
     return array(this.params.flat());
   }
 };
-var make52 = (params) => {
+var make53 = (params) => {
   const self = Object.create(Proto15);
   self.params = params;
   return self;
@@ -37944,7 +38767,7 @@ var fromInput3 = (input) => {
       out.push(parsed[i]);
     }
   }
-  return make52(out);
+  return make53(out);
 };
 var fromInputNested = (input) => {
   const entries3 = typeof input[Symbol.iterator] === "function" ? fromIterable2(input) : Object.entries(input);
@@ -37982,13 +38805,13 @@ var UrlParamsSchema = /* @__PURE__ */ declare(isUrlParams, {
   expected: "UrlParams",
   toEquivalence: () => Equivalence7,
   toCodec: () => link3()(ArraySchema(Tuple2([String6, String6])), transform2({
-    decode: make52,
+    decode: make53,
     encode: (self) => self.params
   }))
 });
-var empty15 = /* @__PURE__ */ make52([]);
-var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make52(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
-var transform3 = /* @__PURE__ */ dual(2, (self, f) => make52(f(self.params)));
+var empty15 = /* @__PURE__ */ make53([]);
+var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make53(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
+var transform3 = /* @__PURE__ */ dual(2, (self, f) => make53(f(self.params)));
 var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   const out = fromInput3(input);
   const params = out.params;
@@ -38003,7 +38826,7 @@ var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   }
   return out;
 });
-var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make52(append(self.params, [key, String(value4)])));
+var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make53(append(self.params, [key, String(value4)])));
 var appendAll3 = /* @__PURE__ */ dual(2, (self, input) => transform3(self, appendAll(fromInput3(input).params)));
 var toString = (input) => new URLSearchParams(fromInput3(input).params).toString();
 var toRecord = (self) => {
@@ -38029,7 +38852,7 @@ var schemaRecord = /* @__PURE__ */ UrlParamsSchema.pipe(/* @__PURE__ */ decodeTo
 })));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpBody.js
-var TypeId51 = "~effect/http/HttpBody";
+var TypeId52 = "~effect/http/HttpBody";
 var HttpBodyErrorTypeId = "~effect/http/HttpBody/HttpBodyError";
 
 class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
@@ -38037,9 +38860,9 @@ class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
 }
 
 class Proto16 {
-  [TypeId51];
+  [TypeId52];
   constructor() {
-    this[TypeId51] = TypeId51;
+    this[TypeId52] = TypeId52;
   }
   [NodeInspectSymbol]() {
     return this.toJSON();
@@ -38202,8 +39025,8 @@ var fileContentLength = (size9, options) => {
 var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (info2) => stream2(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options))));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientError.js
-var TypeId52 = "~effect/http/HttpClientError";
-var isHttpClientError = (u) => hasProperty(u, TypeId52);
+var TypeId53 = "~effect/http/HttpClientError";
+var isHttpClientError = (u) => hasProperty(u, TypeId53);
 
 class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) {
   constructor(props) {
@@ -38216,7 +39039,7 @@ class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) 
       super(props);
     }
   }
-  [TypeId52] = TypeId52;
+  [TypeId53] = TypeId53;
   get request() {
     return this.reason.request;
   }
@@ -38304,7 +39127,7 @@ __export(exports_HttpClientRequest, {
   options: () => options,
   modify: () => modify5,
   makeWith: () => makeWith,
-  make: () => make54,
+  make: () => make55,
   isHttpClientRequest: () => isHttpClientRequest,
   head: () => head,
   get: () => get10,
@@ -38345,7 +39168,7 @@ var updateHeaders = (headers, body) => {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Url.js
 class UrlError extends (/* @__PURE__ */ TaggedError2("UrlError")) {
 }
-var make53 = (url2, params, hash2) => try_({
+var make54 = (url2, params, hash2) => try_({
   try: () => {
     const urlInstance = new URL(url2, baseUrl());
     for (let i = 0;i < params.params.length; i++) {
@@ -38371,10 +39194,10 @@ var baseUrl = () => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientRequest.js
-var TypeId53 = "~effect/http/HttpClientRequest";
-var isHttpClientRequest = (u) => hasProperty(u, TypeId53);
+var TypeId54 = "~effect/http/HttpClientRequest";
+var isHttpClientRequest = (u) => hasProperty(u, TypeId54);
 var Proto17 = {
-  [TypeId53]: TypeId53,
+  [TypeId54]: TypeId54,
   ...BaseProto,
   toJSON() {
     return {
@@ -38402,19 +39225,19 @@ function makeWith(method, url2, urlParams2, hash2, headers, body) {
   return self;
 }
 var empty17 = /* @__PURE__ */ makeWith("GET", "", empty15, /* @__PURE__ */ none2(), empty14, empty16);
-var make54 = (method) => (url2, options) => modify5(empty17, {
+var make55 = (method) => (url2, options) => modify5(empty17, {
   method,
   url: url2,
   ...options ?? undefined
 });
-var get10 = /* @__PURE__ */ make54("GET");
-var post = /* @__PURE__ */ make54("POST");
-var patch = /* @__PURE__ */ make54("PATCH");
-var put = /* @__PURE__ */ make54("PUT");
-var del = /* @__PURE__ */ make54("DELETE");
-var head = /* @__PURE__ */ make54("HEAD");
-var options = /* @__PURE__ */ make54("OPTIONS");
-var trace2 = /* @__PURE__ */ make54("TRACE");
+var get10 = /* @__PURE__ */ make55("GET");
+var post = /* @__PURE__ */ make55("POST");
+var patch = /* @__PURE__ */ make55("PATCH");
+var put = /* @__PURE__ */ make55("PUT");
+var del = /* @__PURE__ */ make55("DELETE");
+var head = /* @__PURE__ */ make55("HEAD");
+var options = /* @__PURE__ */ make55("OPTIONS");
+var trace2 = /* @__PURE__ */ make55("TRACE");
 var modify5 = /* @__PURE__ */ dual(2, (self, options2) => {
   let result4 = self;
   if (options2.method) {
@@ -38504,7 +39327,7 @@ var bodyFormDataRecord = /* @__PURE__ */ dual(2, (self, entries3) => setBody(sel
 var bodyStream = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, body, options2) => setBody(self, stream2(body, options2?.contentType, options2?.contentLength)));
 var bodyFile = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, path, options2) => map8(file(path, options2), (body) => setBody(self, body)));
 function toUrl(self) {
-  const r = make53(self.url, self.urlParams, getOrUndefined(self.hash));
+  const r = make54(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isSuccess2(r)) {
     return some2(r.success);
   }
@@ -38536,7 +39359,7 @@ var parseContentLength = (contentLength) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 var toWebResult = (self, options2) => {
-  const url2 = make53(self.url, self.urlParams, getOrUndefined(self.hash));
+  const url2 = make54(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isFailure2(url2)) {
     return fail2(url2.failure);
   }
@@ -38600,11 +39423,11 @@ __export(exports_HttpClientResponse, {
   fromWeb: () => fromWeb2,
   filterStatusOk: () => filterStatusOk,
   filterStatus: () => filterStatus,
-  TypeId: () => TypeId55
+  TypeId: () => TypeId56
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
-var TypeId54 = "~effect/http/HttpIncomingMessage";
+var TypeId55 = "~effect/http/HttpIncomingMessage";
 var schemaBodyJson2 = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3));
   return (self) => flatMap5(self.json, (u) => decode2(u, options2));
@@ -38641,7 +39464,7 @@ var inspect = (self, that) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientResponse.js
-var TypeId55 = "~effect/http/HttpClientResponse";
+var TypeId56 = "~effect/http/HttpClientResponse";
 var fromWeb2 = (request3, source) => new WebHttpClientResponse(request3, source);
 var schemaJson = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3).annotate({
@@ -38694,16 +39517,16 @@ var filterStatusOk = (self) => self.status >= 200 && self.status < 300 ? succeed
 }));
 
 class WebHttpClientResponse extends Class2 {
-  [TypeId54];
   [TypeId55];
+  [TypeId56];
   request;
   source;
   constructor(request3, source) {
     super();
     this.request = request3;
     this.source = source;
-    this[TypeId54] = TypeId54;
     this[TypeId55] = TypeId55;
+    this[TypeId56] = TypeId56;
   }
   toJSON() {
     return inspect(this, {
@@ -38819,8 +39642,8 @@ var toHeaders = (span2) => fromRecordUnsafe({
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClient.js
-var TypeId56 = "~effect/http/HttpClient";
-var isHttpClient = (u) => hasProperty(u, TypeId56);
+var TypeId57 = "~effect/http/HttpClient";
+var isHttpClient = (u) => hasProperty(u, TypeId57);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
 var accessor = (method) => (...args2) => flatMap5(HttpClient, (client) => client[method](...args2));
 var execute = /* @__PURE__ */ accessor("execute");
@@ -38850,7 +39673,7 @@ var makeWith2 = (postprocess, preprocess) => {
   return self;
 };
 var Proto18 = {
-  [TypeId56]: TypeId56,
+  [TypeId57]: TypeId57,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -38861,13 +39684,13 @@ var Proto18 = {
     };
   },
   .../* @__PURE__ */ Object.fromEntries(/* @__PURE__ */ allShort.map(([fullMethod, method]) => [method, function(url2, options3) {
-    return this.execute(make54(fullMethod)(url2, options3));
+    return this.execute(make55(fullMethod)(url2, options3));
   }]))
 };
-var make55 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
+var make56 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
   const scopedController = scopedRequests.get(request3);
   const controller = scopedController ?? new AbortController;
-  const urlResult = make53(request3.url, request3.urlParams, getOrUndefined(request3.hash));
+  const urlResult = make54(request3.url, request3.urlParams, getOrUndefined(request3.hash));
   if (isFailure2(urlResult)) {
     return fail6(new HttpClientError({
       reason: new InvalidUrlError({
@@ -39253,8 +40076,8 @@ class InterruptibleResponse {
     this.original = original;
     this.controller = controller;
   }
+  [TypeId56] = TypeId56;
   [TypeId55] = TypeId55;
-  [TypeId54] = TypeId54;
   applyInterrupt(effect2) {
     return suspend3(() => {
       responseRegistry.unregister(this.original);
@@ -39323,7 +40146,7 @@ var Fetch = /* @__PURE__ */ Reference("effect/http/FetchHttpClient/Fetch", {
 
 class RequestInit extends (/* @__PURE__ */ Service()("effect/http/FetchHttpClient/RequestInit")) {
 }
-var fetch = /* @__PURE__ */ make55((request3, url2, signal, fiber3) => {
+var fetch = /* @__PURE__ */ make56((request3, url2, signal, fiber3) => {
   const fetch2 = fiber3.getRef(Fetch);
   const options3 = fiber3.context.mapUnsafe.get(RequestInit.key) ?? {};
   let headers = options3.headers ? merge6(fromInput2(options3.headers), request3.headers) : request3.headers;
@@ -39357,7 +40180,7 @@ var fetch = /* @__PURE__ */ make55((request3, url2, signal, fiber3) => {
   }
   return send(undefined);
 });
-var layer14 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
 // packages/pr-review/src/internal/github.ts
 class GitHubReviewTarget extends exports_Context.Service()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config) {
@@ -39634,8 +40457,8 @@ var severityCounts = (review) => {
     ...(review.concerns ?? []).map((concern) => concern.severity)
   ];
   return {
-    blocking: severities.filter((severity) => severity === "blocking").length,
-    important: severities.filter((severity) => severity === "important").length,
+    blocking: severities.filter((severity2) => severity2 === "blocking").length,
+    important: severities.filter((severity2) => severity2 === "important").length,
     total: severities.length
   };
 };
@@ -39860,14 +40683,14 @@ var requireReadonly = (tools) => {
     }
   }
 };
-var provideIgnore = (effect2, ignore5) => ignore5 !== undefined && ignore5.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore5))) : effect2;
-var makeFingerprint = (signature, ignore5) => provideIgnore(exports_Effect.gen(function* () {
+var provideIgnore = (effect2, ignore6) => ignore6 !== undefined && ignore6.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore6))) : effect2;
+var makeFingerprint = (signature, ignore6) => provideIgnore(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
   return yield* computeChangesetFingerprint(files, signature(buildReviewMission(metadata, files)));
-}), ignore5);
-var make56 = (options3) => {
+}), ignore6);
+var make57 = (options3) => {
   const extraTools = options3.extraTools ?? EMPTY_TOOLS;
   requireReadonly(extraTools);
   const definition = Agent.define("pr-reviewer", {
@@ -39938,7 +40761,7 @@ var makeFanOut = (options3) => {
     fingerprint: makeFingerprint(signature, options3.ignore)
   };
 };
-var PrReview = { make: make56, makeFanOut };
+var PrReview = { make: make57, makeFanOut };
 
 // packages/pr-review/src/internal/github-env.ts
 class ReviewTargetUnresolved extends exports_Schema.TaggedError()("ReviewTargetUnresolved", {
@@ -40002,9 +40825,9 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
-  make: () => make58,
+  make: () => make59,
   layerConfig: () => layerConfig,
-  layer: () => layer15,
+  layer: () => layer16,
   AnthropicClient: () => AnthropicClient
 });
 
@@ -43802,7 +44625,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make57 = (httpClient, options3 = {}) => {
+var make58 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail6(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -44591,11 +45414,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make58 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make59 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make57(httpClient, {
+  const client = make58(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -44649,12 +45472,12 @@ var make58 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer15 = (options3) => effect(AnthropicClient, make58(options3));
+var layer16 = (options3) => effect(AnthropicClient, make59(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen3(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make58({
+  return yield* make59({
     apiKey,
     apiUrl,
     apiVersion,
@@ -44666,8 +45489,8 @@ var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
-  make: () => make60,
-  layer: () => layer16,
+  make: () => make61,
+  layer: () => layer17,
   Config: () => Config
 });
 
@@ -45306,7 +46129,7 @@ var supportedKeywords2 = /* @__PURE__ */ new Set(["$ref", "type", "title", "desc
 var formats2 = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"]);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Model.js
-var TypeId57 = "~effect/ai/Model";
+var TypeId58 = "~effect/ai/Model";
 
 class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
 }
@@ -45314,7 +46137,7 @@ class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/
 class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
 }
 var Proto19 = {
-  [TypeId57]: TypeId57,
+  [TypeId58]: TypeId58,
   ["~effect/Layer"]: {
     _ROut: identity,
     _E: identity,
@@ -45332,9 +46155,9 @@ var Proto19 = {
     };
   }
 };
-var make59 = (provider, modelName, layer16) => Object.assign(Object.create(Proto19), {
+var make60 = (provider, modelName, layer17) => Object.assign(Object.create(Proto19), {
   provider
-}, merge2(layer16, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
+}, merge2(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
@@ -45376,11 +46199,11 @@ var formatIssue = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make59("anthropic", model2, layer16({
+var model = (model2, config) => make60("anthropic", model2, layer17({
   model: model2,
   config
 }));
-var make60 = /* @__PURE__ */ fnUntraced2(function* ({
+var make61 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
@@ -45459,7 +46282,7 @@ var make60 = /* @__PURE__ */ fnUntraced2(function* ({
       payload
     };
   });
-  return yield* make48({
+  return yield* make49({
     codecTransformer: toCodecAnthropic,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -45501,7 +46324,7 @@ var make60 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer16 = (options3) => effect(LanguageModel, make60(options3));
+var layer17 = (options3) => effect(LanguageModel, make61(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -47302,19 +48125,19 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
 var exports_OpenAiClient = {};
 __export(exports_OpenAiClient, {
   withWebSocketMode: () => withWebSocketMode,
-  make: () => make62,
+  make: () => make63,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig2,
-  layer: () => layer17,
+  layer: () => layer18,
   OpenAiSocket: () => OpenAiSocket,
   OpenAiClient: () => OpenAiClient
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/socket/Socket.js
-var TypeId58 = "~effect/socket/Socket";
+var TypeId59 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make61 = (options3) => Socket.of({
-  [TypeId58]: TypeId58,
+var make62 = (options3) => Socket.of({
+  [TypeId59]: TypeId59,
   runRaw: options3.runRaw,
   run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
   runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
@@ -47405,7 +48228,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   const acquireContext = fiber3.context;
   const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
   const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make43().pipe(provide(scope3));
+    const fiberSet = yield* make45().pipe(provide(scope3));
     const ws = yield* provide(acquire, scope3);
     const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
     let open3 = false;
@@ -47503,7 +48326,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
   }));
   const writer = succeed6(write2);
-  return succeed6(make61({
+  return succeed6(make62({
     runRaw,
     writer
   }));
@@ -48152,7 +48975,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make63 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -48198,13 +49021,13 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer17 = (options3) => effect(OpenAiClient, make62(options3));
+var layer18 = (options3) => effect(OpenAiClient, make63(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen3(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make62({
+  return yield* make63({
     apiKey,
     apiUrl,
     organizationId,
@@ -48217,7 +49040,7 @@ class OpenAiSocket extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiC
 }
 var makeSocket = /* @__PURE__ */ gen3(function* () {
   const client = yield* OpenAiClient;
-  const tracker = yield* make46;
+  const tracker = yield* make47;
   const socketScope = yield* scope2;
   const makeRequest = flatMap5(OpenAiConfig.getOrUndefined, (config) => {
     const httpClient = isNotUndefined(config?.transformClient) ? config.transformClient(client.client) : client.client;
@@ -48364,8 +49187,8 @@ var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
   model: () => model2,
-  make: () => make63,
-  layer: () => layer18,
+  make: () => make64,
+  layer: () => layer19,
   Config: () => Config2
 });
 
@@ -48415,11 +49238,11 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make59("openai", model3, layer18({
+var model2 = (model3, config) => make60("openai", model3, layer19({
   model: model3,
   config
 }));
-var make63 = /* @__PURE__ */ fnUntraced2(function* ({
+var make64 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
@@ -48480,7 +49303,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
       request3.previous_response_id = options3.previousResponseId;
     return request3;
   });
-  return yield* make48({
+  return yield* make49({
     codecTransformer: toCodecOpenAI,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -48523,7 +49346,7 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer18 = (options3) => effect(LanguageModel, make63(options3));
+var layer19 = (options3) => effect(LanguageModel, make64(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides

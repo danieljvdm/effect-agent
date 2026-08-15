@@ -21,13 +21,17 @@ import {
   DateTime,
   Deferred,
   Effect,
+  ErrorReporter,
   Exit,
   Fiber,
   Layer,
+  Logger,
   Option,
   Ref,
+  References,
   Schema,
   Stream,
+  Tracer,
 } from "effect";
 import { TestClock } from "effect/testing";
 import {
@@ -42,11 +46,23 @@ import {
 
 import {
   AgentRuntime,
+  ToolExecutionClass,
   withTerminalDefectEvent,
   type RunBudgetHook,
   type RunTurnResume,
   type RunUsageDelta,
 } from "../src/index.ts";
+import { boundedJsonSnapshot } from "../src/provider-result-staging-internal.ts";
+import {
+  annotateToolSpanTerminalOutcome,
+  emitThenAfter,
+  isolateToolTerminalTelemetry,
+  makeIsolatedToolTracer,
+  restoreToolSpanFailureCause,
+  stripToolSpanFailures,
+  ToolSpanTelemetry,
+  ToolSpanFailure,
+} from "../src/tool-telemetry-internal.ts";
 
 class ScheduledToolFailure extends Schema.TaggedError<ScheduledToolFailure>()(
   "ScheduledToolFailure",
@@ -56,6 +72,10 @@ class ScheduledToolFailure extends Schema.TaggedError<ScheduledToolFailure>()(
 class HookFailure extends Schema.TaggedError<HookFailure>()("HookFailure", {
   message: Schema.String,
 }) {}
+
+class TestCauseSource extends Context.Service<TestCauseSource, string>()(
+  "@effect-agent/engine/test/TestCauseSource",
+) {}
 
 class BudgetGuardFailure extends Schema.TaggedError<BudgetGuardFailure>()("BudgetGuardFailure", {
   message: Schema.String,
@@ -154,6 +174,88 @@ const errorMessageForTest = (error: unknown): string =>
   typeof error.message === "string"
     ? error.message
     : String(error);
+
+/** Traverse every OTLP-facing observation value, including Maps and non-enumerable Error fields. */
+const reachableTelemetryValues = (root: unknown): ReadonlyArray<unknown> => {
+  const values: Array<unknown> = [];
+  const visited = new WeakSet<object>();
+  const visit = (value: unknown): void => {
+    values.push(value);
+    if ((typeof value !== "object" && typeof value !== "function") || value === null) return;
+    if (visited.has(value)) return;
+    visited.add(value);
+    if (value instanceof Map) {
+      for (const [key, item] of value) {
+        visit(key);
+        visit(item);
+      }
+    } else if (value instanceof Set) {
+      for (const item of value) visit(item);
+    }
+    for (const key of Reflect.ownKeys(value)) {
+      visit(key);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor !== undefined && "value" in descriptor) visit(descriptor.value);
+    }
+  };
+  visit(root);
+  return values;
+};
+
+/** Snapshot every field Effect's OTLP tracer exports, without retaining a successful Exit value. */
+const exportedSpanObservation = (span: Tracer.NativeSpan) => ({
+  name: span.name,
+  spanId: span.spanId,
+  traceId: span.traceId,
+  parentSpanId: Option.getOrUndefined(span.parent)?.spanId,
+  sampled: span.sampled,
+  kind: span.kind,
+  startTime: span.startTime,
+  status:
+    span.status._tag === "Started"
+      ? span.status
+      : {
+          _tag: span.status._tag,
+          startTime: span.status.startTime,
+          endTime: span.status.endTime,
+          failureCause: Exit.isFailure(span.status.exit) ? span.status.exit.cause : undefined,
+        },
+  attributes: Object.fromEntries(span.attributes),
+  events: span.events.map(([name, startTime, attributes]) => ({
+    name,
+    startTime,
+    attributes: { ...attributes },
+  })),
+  links: span.links.map(({ span: linkedSpan, attributes }) => ({
+    traceId: linkedSpan.traceId,
+    spanId: linkedSpan.spanId,
+    attributes: { ...attributes },
+  })),
+});
+
+/** Snapshot every input or context field Effect's pinned OTLP logger can export. */
+const exportedLogObservation = ({ cause, fiber, logLevel, message }: Logger.Options<unknown>) => ({
+  message,
+  level: logLevel,
+  cause,
+  annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+  logSpans: fiber
+    .getRef(References.CurrentLogSpans)
+    .map(([label, startTime]) => ({ label, startTime })),
+  fiberId: fiber.id,
+  currentSpan:
+    fiber.currentSpan === undefined
+      ? undefined
+      : {
+          traceId: fiber.currentSpan.traceId,
+          spanId: fiber.currentSpan.spanId,
+        },
+});
+
+type ExportedLogObservation = ReturnType<typeof exportedLogObservation>;
+
+const renderedLogMessage = (message: unknown): string =>
+  Array.isArray(message) ? message.join(" ") : String(message);
 
 layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
   it.effect("preserves official prior history as the exact prefix of a new Run", () => {
@@ -412,6 +514,1851 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(providerResultStayedAssistant).toBe(true);
       expect(result.some((event) => event._tag === "ToolCallStarted")).toBe(false);
     });
+  });
+
+  it.effect("retains an owned normalized snapshot of provider Tool results", () => {
+    const providerResult = { status: "completed" };
+    let observedPromptResult: unknown;
+    const model = Model.make(
+      "scripted",
+      "owned-provider-result",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.gen(function* () {
+          const turn = yield* Ref.make(0);
+          return yield* LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: (request) =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                  Effect.map((value) => {
+                    if (value > 0) {
+                      const observedPart = request.prompt.content
+                        .find((message) => message.role === "assistant")
+                        ?.content.find(
+                          (part) => part.type === "tool-result" && part.id === "owned-result-1",
+                        );
+                      observedPromptResult =
+                        observedPart?.type === "tool-result" ? observedPart.result : undefined;
+                      return Stream.fromIterable(finalParts('{"answer":"owned"}'));
+                    }
+                    return Stream.fromIterable<Response.StreamPartEncoded>([
+                      {
+                        type: "tool-call",
+                        id: "owned-result-1",
+                        name: "HostedSearch",
+                        params: { query: "ownership" },
+                        providerExecuted: true,
+                      },
+                      {
+                        type: "tool-result",
+                        id: "owned-result-1",
+                        name: "HostedSearch",
+                        result: providerResult,
+                        isFailure: false,
+                        providerExecuted: true,
+                      },
+                    ]).pipe(
+                      Stream.concat(
+                        Stream.fromEffect(
+                          Effect.sync(() => {
+                            providerResult.status = "mutated-after-emission";
+                            return {
+                              type: "finish" as const,
+                              reason: "tool-calls" as const,
+                              usage,
+                            };
+                          }),
+                        ),
+                      ),
+                    );
+                  }),
+                ),
+              ),
+          });
+        }),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const events = yield* AgentRuntime.stream(Agent.withModel(hostedDefinition, model), {
+        question: "Who owns the result?",
+      }).pipe(Stream.runCollect);
+
+      expect(events.at(-1)?._tag).toBe("RunCompleted");
+      expect(observedPromptResult).toEqual({ status: "completed" });
+      expect(observedPromptResult).not.toBe(providerResult);
+    });
+  });
+
+  it.effect("exports content-free canonical Tool spans and bounded terminal logs", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const logs: Array<ExportedLogObservation> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const logger = Logger.make<unknown, void>((options) => {
+      const observation = exportedLogObservation(options);
+      logs.push(observation);
+    });
+    const handlerSecret = "handler-result-must-not-be-exported";
+    const failureSecret = "failure-message-must-not-be-exported";
+    const failureToolCallId = "fail-observed-1";
+    const returnedFailure = ScheduledToolFailure.make({ message: failureSecret });
+    const Read = Tool.make("read", {
+      parameters: Schema.Struct({ path: Schema.String }),
+      success: Schema.String,
+    }).annotate(ToolExecutionClass, "readonly");
+    const Fail = Tool.make("fail", {
+      parameters: Schema.Struct({ command: Schema.String }),
+      success: Schema.String,
+      failure: ScheduledToolFailure,
+      failureMode: "return",
+    });
+    const tools = Toolkit.make(Read, Fail);
+    const model = Model.make(
+      "scripted",
+      "tool-observability",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.gen(function* () {
+          const turn = yield* Ref.make(0);
+          return yield* LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                  Effect.map((value) =>
+                    value === 0
+                      ? Stream.fromIterable<Response.StreamPartEncoded>([
+                          {
+                            type: "tool-call",
+                            id: "read-observed-1",
+                            name: "read",
+                            params: { path: "/private/source.ts" },
+                            providerExecuted: false,
+                          },
+                          {
+                            type: "tool-call",
+                            id: failureToolCallId,
+                            name: "fail",
+                            params: { command: "printenv SECRET" },
+                            providerExecuted: false,
+                          },
+                          { type: "finish", reason: "tool-calls", usage },
+                        ])
+                      : Stream.fromIterable(finalParts('{"answer":"observed"}')),
+                  ),
+                ),
+              ),
+          });
+        }),
+      ),
+    );
+    const definition = Agent.define("tool-observability", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Call both Tools.",
+      toolkit: tools,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 2,
+        maxDuration: "30 seconds",
+        toolConcurrency: 2,
+      }),
+    });
+    const toolLayer = tools.toLayer({
+      read: () => Effect.succeed(handlerSecret).pipe(Effect.withSpan("host.read")),
+      fail: () => Effect.fail(returnedFailure),
+    });
+
+    return Effect.gen(function* () {
+      const events = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "Which Tools ran?",
+      }).pipe(Stream.runCollect, Effect.provide(toolLayer));
+
+      expect(events.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
+      expect(events.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+
+      const toolSpans = spans
+        .filter((span) => span.name.startsWith("execute_tool "))
+        .toSorted((left, right) => left.name.localeCompare(right.name));
+      expect(toolSpans).toHaveLength(2);
+      expect(toolSpans.map((span) => span.name)).toEqual([
+        "execute_tool fail",
+        "execute_tool read",
+      ]);
+      expect(spans.some((span) => span.name === "AgentRuntime.toolkit.handle")).toBe(false);
+      const hostOwnedSpan = spans.find((span) => span.name === "host.read");
+      expect(hostOwnedSpan?.status._tag).toBe("Ended");
+      expect(Object.fromEntries(hostOwnedSpan?.attributes ?? [])).toEqual({});
+      expect(hostOwnedSpan?.events).toEqual([]);
+      expect(hostOwnedSpan?.links).toEqual([]);
+      const hostParent = Option.getOrUndefined(hostOwnedSpan?.parent ?? Option.none());
+      expect(hostParent?._tag).toBe("Span");
+      if (hostParent?._tag !== "Span") {
+        throw new Error("Expected the host-owned handler span to have a canonical Tool parent");
+      }
+      expect(hostParent.name).toBe("execute_tool read");
+      expect(hostOwnedSpan?.traceId).toBe(hostParent.traceId);
+
+      const [failedSpan, succeededSpan] = toolSpans;
+      expect(failedSpan?.kind).toBe("internal");
+      const failedAttributes = Object.fromEntries(failedSpan?.attributes ?? []);
+      expect(failedAttributes).toMatchObject({
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": "fail",
+        "gen_ai.tool.type": "function",
+        "gen_ai.agent.name": "tool-observability",
+        "gen_ai.conversation.id": "conversation-1",
+        "effect_agent.tool.execution_class": "uncertain",
+        "effect_agent.tool.outcome": "failure",
+        agentId: "tool-observability",
+        conversationId: "conversation-1",
+        runId: "run-1",
+        turnId: "turn-1",
+        toolCallId: failureToolCallId,
+        toolName: "fail",
+        "gen_ai.tool.call.id": failureToolCallId,
+      });
+      expect(Object.fromEntries(succeededSpan?.attributes ?? [])).toMatchObject({
+        "gen_ai.tool.name": "read",
+        "gen_ai.tool.call.id": "read-observed-1",
+        "effect_agent.tool.execution_class": "readonly",
+        "effect_agent.tool.outcome": "success",
+        toolCallId: "read-observed-1",
+      });
+      expect(failedSpan?.status._tag).toBe("Ended");
+      expect(succeededSpan?.status._tag).toBe("Ended");
+      if (failedSpan?.status._tag !== "Ended" || !Exit.isFailure(failedSpan.status.exit)) {
+        throw new Error("Expected the returned Tool failure span to end failed");
+      }
+      expect(Cause.pretty(failedSpan.status.exit.cause)).not.toContain(failureSecret);
+      if (succeededSpan?.status._tag !== "Ended") {
+        throw new Error("Expected the successful Tool span to end");
+      }
+      expect(Exit.isSuccess(succeededSpan.status.exit)).toBe(true);
+
+      const terminalLogs = logs.filter((entry) =>
+        ["agent tool execution completed", "agent tool execution failed"].includes(
+          renderedLogMessage(entry.message),
+        ),
+      );
+      expect(terminalLogs).toHaveLength(2);
+      expect(
+        terminalLogs
+          .map((entry) => ({
+            level: entry.level,
+            message: renderedLogMessage(entry.message),
+            outcome: entry.annotations.toolOutcome,
+            toolName: entry.annotations.toolName,
+          }))
+          .toSorted((left, right) => String(left.toolName).localeCompare(String(right.toolName))),
+      ).toEqual([
+        {
+          level: "Warn",
+          message: "agent tool execution failed",
+          outcome: "failure",
+          toolName: "fail",
+        },
+        {
+          level: "Info",
+          message: "agent tool execution completed",
+          outcome: "success",
+          toolName: "read",
+        },
+      ]);
+      expect(terminalLogs.map(({ annotations }) => annotations["gen_ai.operation.name"])).toEqual([
+        "execute_tool",
+        "execute_tool",
+      ]);
+      expect(terminalLogs.map(({ annotations }) => annotations["gen_ai.conversation.id"])).toEqual([
+        "conversation-1",
+        "conversation-1",
+      ]);
+      expect(terminalLogs.map(({ annotations }) => annotations.conversationId)).toEqual([
+        "conversation-1",
+        "conversation-1",
+      ]);
+      const failedLog = terminalLogs.find(({ annotations }) => annotations.toolName === "fail");
+      expect(failedLog?.annotations).toMatchObject({
+        "gen_ai.tool.call.id": failureToolCallId,
+        toolCallId: failureToolCallId,
+      });
+      const succeededLog = terminalLogs.find(({ annotations }) => annotations.toolName === "read");
+      expect(succeededLog?.annotations).toMatchObject({
+        "gen_ai.tool.call.id": "read-observed-1",
+        toolCallId: "read-observed-1",
+      });
+      const exportedValues = reachableTelemetryValues({
+        spans: spans.map(exportedSpanObservation),
+        logs,
+      });
+      expect(exportedValues).not.toContain(returnedFailure);
+      const exportedStrings = exportedValues
+        .filter((value) => typeof value === "string")
+        .join("\n");
+      expect(exportedStrings).not.toContain("/private/source.ts");
+      expect(exportedStrings).not.toContain("printenv SECRET");
+      expect(exportedStrings).not.toContain(handlerSecret);
+      expect(exportedStrings).not.toContain(failureSecret);
+    }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.provide(Logger.layer([logger])));
+  });
+
+  it.effect("rejects invalid model Tool Call IDs before correlation or handler execution", () =>
+    Effect.gen(function* () {
+      const handlerCalls = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const invalidIdSecret = "invalid-tool-call-id-must-not-reach-a-handler";
+      const invalidId = `unsafe/${invalidIdSecret}/${"x".repeat(256)}`;
+      const Read = Tool.make("read_invalid_id", {
+        parameters: Schema.Struct({ path: Schema.String }),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Read);
+      const definition = Agent.define("invalid-tool-call-id", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Call the Tool.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const model = modelFromParts([
+        {
+          type: "tool-call",
+          id: invalidId,
+          name: "read_invalid_id",
+          params: { path: "/private/source.ts" },
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const toolLayer = tools.toLayer({
+        read_invalid_id: () =>
+          Ref.update(handlerCalls, (calls) => calls + 1).pipe(Effect.as("unexpected")),
+      });
+
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "Which Tool ran?",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const observed = yield* Ref.get(events);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("invalid Tool Call ID");
+      expect(failure.message).not.toContain(invalidIdSecret);
+      expect(yield* Ref.get(handlerCalls)).toBe(0);
+      expect(observed.some((event) => event._tag === "ToolCallDeclared")).toBe(false);
+      expect(observed.some((event) => event._tag === "ToolCallStarted")).toBe(false);
+      expect(observed.some((event) => event._tag === "ToolCallSucceeded")).toBe(false);
+      expect(observed.some((event) => event._tag === "ToolCallFailed")).toBe(false);
+    }),
+  );
+
+  it.effect("rejects every retained or correlated model response-part identifier", () => {
+    const invalidIdSecret = "invalid-response-part-id-must-not-enter-runtime-state";
+    const invalidId = `unsafe/${invalidIdSecret}/${"x".repeat(256)}`;
+    const cases: ReadonlyArray<{
+      readonly label: string;
+      readonly part: Response.StreamPartEncoded;
+    }> = [
+      { label: "text start", part: { type: "text-start", id: invalidId } },
+      { label: "text delta", part: { type: "text-delta", id: invalidId, delta: "ignored" } },
+      { label: "text end", part: { type: "text-end", id: invalidId } },
+      { label: "reasoning start", part: { type: "reasoning-start", id: invalidId } },
+      {
+        label: "reasoning delta",
+        part: { type: "reasoning-delta", id: invalidId, delta: "ignored" },
+      },
+      { label: "reasoning end", part: { type: "reasoning-end", id: invalidId } },
+      {
+        label: "Tool parameters start",
+        part: {
+          type: "tool-params-start",
+          id: invalidId,
+          name: "unknown",
+          providerExecuted: false,
+        },
+      },
+      {
+        label: "Tool parameters delta",
+        part: { type: "tool-params-delta", id: invalidId, delta: "{}" },
+      },
+      { label: "Tool parameters end", part: { type: "tool-params-end", id: invalidId } },
+      {
+        label: "source",
+        part: {
+          type: "source",
+          sourceType: "url",
+          id: invalidId,
+          url: "https://example.invalid/source",
+          title: "source",
+        },
+      },
+      {
+        label: "response metadata",
+        part: { type: "response-metadata", id: invalidId },
+      },
+      {
+        label: "approval",
+        part: {
+          type: "tool-approval-request",
+          approvalId: invalidId,
+          toolCallId: "valid-tool-call",
+        },
+      },
+      {
+        label: "approval Tool Call",
+        part: {
+          type: "tool-approval-request",
+          approvalId: "valid-approval",
+          toolCallId: invalidId,
+        },
+      },
+    ];
+
+    return Effect.gen(function* () {
+      yield* Effect.forEach(
+        cases,
+        ({ label, part }) =>
+          AgentRuntime.stream(makeAgent([part]), { question: label }).pipe(
+            Stream.runDrain,
+            Effect.exit,
+            Effect.map((exit) => {
+              const failure = failureFrom(exit);
+              expect(failure).toBeInstanceOf(ModelProtocolError);
+              expect(failure.message).toContain("invalid");
+              expect(failure.message).not.toContain(invalidIdSecret);
+            }),
+          ),
+        { discard: true },
+      );
+
+      const toolResultExit = yield* AgentRuntime.stream(
+        Agent.withModel(
+          hostedDefinition,
+          modelFromParts([
+            {
+              type: "tool-result",
+              id: invalidId,
+              name: "HostedSearch",
+              result: { status: "ignored" },
+              isFailure: false,
+              providerExecuted: true,
+            },
+          ]),
+        ),
+        { question: "Tool result" },
+      ).pipe(Stream.runDrain, Effect.exit);
+      const toolResultFailure = failureFrom(toolResultExit);
+      expect(toolResultFailure).toBeInstanceOf(ModelProtocolError);
+      expect(toolResultFailure.message).toContain("invalid Tool Call ID");
+      expect(toolResultFailure.message).not.toContain(invalidIdSecret);
+    });
+  });
+
+  it.effect("exports one failed Tool outcome when downstream stops at its terminal event", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const logs: Array<ExportedLogObservation> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const logger = Logger.make<unknown, void>((options) => {
+      logs.push(exportedLogObservation(options));
+    });
+    const failureSecret = "early-close-returned-failure-must-not-be-exported";
+    const returnedFailure = ScheduledToolFailure.make({ message: failureSecret });
+    const Fail = Tool.make("fail_early", {
+      parameters: Schema.Struct({ command: Schema.String }),
+      success: Schema.String,
+      failure: ScheduledToolFailure,
+      failureMode: "return",
+    });
+    const tools = Toolkit.make(Fail);
+    const model = modelFromParts([
+      {
+        type: "tool-call",
+        id: "fail-early-1",
+        name: "fail_early",
+        params: { command: "private command" },
+        providerExecuted: false,
+      },
+      { type: "finish", reason: "tool-calls", usage },
+    ]);
+    const definition = Agent.define("early-close-tool-observability", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Call the Tool.",
+      toolkit: tools,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+    });
+
+    return Effect.gen(function* () {
+      const events = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "Fail once",
+      }).pipe(
+        Stream.takeUntil((event) => event._tag === "ToolCallFailed"),
+        Stream.runCollect,
+        Effect.provide(tools.toLayer({ fail_early: () => Effect.fail(returnedFailure) })),
+      );
+
+      expect(events.at(-1)).toMatchObject({
+        _tag: "ToolCallFailed",
+        toolCallId: "fail-early-1",
+        toolName: "fail_early",
+        providerExecuted: false,
+      });
+      const terminalLogs = logs.filter(
+        (entry) => renderedLogMessage(entry.message) === "agent tool execution failed",
+      );
+      expect(terminalLogs).toHaveLength(1);
+      expect(terminalLogs[0]?.annotations).toMatchObject({
+        "effect_agent.tool.outcome": "failure",
+        toolName: "fail_early",
+        toolOutcome: "failure",
+      });
+
+      const span = spans.find((candidate) => candidate.name === "execute_tool fail_early");
+      expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
+        "effect_agent.tool.outcome": "failure",
+      });
+      if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
+        throw new Error("Expected the early-closed returned Tool failure span to end failed");
+      }
+      const exportedValues = reachableTelemetryValues({
+        spans: [exportedSpanObservation(span)],
+        logs: terminalLogs,
+      });
+      expect(exportedValues).not.toContain(returnedFailure);
+      expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
+        failureSecret,
+      );
+    }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.provide(Logger.layer([logger])));
+  });
+
+  it.effect("runs deferred work once from an ordinary second pull", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const observed = yield* emitThenAfter(
+        Effect.succeed("terminal-event"),
+        Ref.update(attempts, (count) => count + 1),
+      ).pipe(Stream.runCollect);
+
+      expect([...observed]).toEqual(["terminal-event"]);
+      expect(yield* Ref.get(attempts)).toBe(1);
+    }),
+  );
+
+  it.effect("runs deferred work once when downstream closes after the first value", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const observed = yield* emitThenAfter(
+        Effect.succeed("terminal-event"),
+        Ref.update(attempts, (count) => count + 1),
+      ).pipe(Stream.take(1), Stream.runCollect);
+
+      expect([...observed]).toEqual(["terminal-event"]);
+      expect(yield* Ref.get(attempts)).toBe(1);
+    }),
+  );
+
+  it.effect("preserves exact interruption during an in-flight early-close finalizer", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<void>();
+      const interruptor = 7332;
+      const fiber = yield* emitThenAfter(
+        Effect.succeed("terminal-event"),
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
+      ).pipe(Stream.take(1), Stream.runCollect, Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      fiber.interruptUnsafe(interruptor);
+      const exit = yield* Fiber.await(fiber);
+
+      if (Exit.isSuccess(exit)) throw new Error("Expected early-close finalizer interruption");
+      expect(exit.cause.reasons).toHaveLength(1);
+      expect(exit.cause.reasons[0]?._tag).toBe("Interrupt");
+      if (exit.cause.reasons[0]?._tag !== "Interrupt") {
+        throw new Error("Expected exact early-close interruption Cause");
+      }
+      expect(exit.cause.reasons[0].fiberId).toBe(interruptor);
+    }),
+  );
+
+  it.effect("reports typed failures and defects owned by early-close finalization", () => {
+    const typedFailure = new Error("early-close-typed-derivative-failure");
+    const defect = new Error("early-close-derivative-defect");
+    const reports: Array<Cause.Cause<unknown>> = [];
+    const reporter = ErrorReporter.make(({ cause }) => {
+      reports.push(cause);
+    });
+
+    return Effect.gen(function* () {
+      const typedObserved = yield* emitThenAfter(
+        Effect.succeed("typed-event"),
+        Effect.fail(typedFailure),
+      ).pipe(Stream.take(1), Stream.runCollect);
+      const defectObserved = yield* emitThenAfter(
+        Effect.succeed("defect-event"),
+        Effect.die(defect),
+      ).pipe(Stream.take(1), Stream.runCollect);
+
+      expect([...typedObserved]).toEqual(["typed-event"]);
+      expect([...defectObserved]).toEqual(["defect-event"]);
+      expect(reports).toHaveLength(2);
+      expect(reports[0]?.reasons).toHaveLength(1);
+      expect(reports[0]?.reasons[0]?._tag).toBe("Fail");
+      if (reports[0]?.reasons[0]?._tag !== "Fail") {
+        return yield* Effect.die(
+          new Error("Expected the early-close typed failure to reach ErrorReporter"),
+        );
+      }
+      expect(reports[0].reasons[0].error).toBe(typedFailure);
+      expect(reports[1]?.reasons).toHaveLength(1);
+      expect(reports[1]?.reasons[0]?._tag).toBe("Die");
+      if (reports[1]?.reasons[0]?._tag !== "Die") {
+        return yield* Effect.die(
+          new Error("Expected the early-close defect to reach ErrorReporter"),
+        );
+      }
+      expect(reports[1].reasons[0].defect).toBe(defect);
+    }).pipe(Effect.provide(ErrorReporter.layer([reporter])));
+  });
+
+  it.effect("does not arm deferred work when the event fails", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const eventFailure = new Error("terminal event was not committed");
+      const exit = yield* emitThenAfter(
+        Effect.fail(eventFailure),
+        Ref.update(attempts, (count) => count + 1),
+      ).pipe(Stream.runDrain, Effect.exit);
+
+      if (Exit.isSuccess(exit)) throw new Error("Expected the event Effect to fail");
+      expect(Cause.findErrorOption(exit.cause)).toEqual(Option.some(eventFailure));
+      expect(yield* Ref.get(attempts)).toBe(0);
+    }),
+  );
+
+  it.effect("does not arm deferred work when downstream takes zero values", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const observed = yield* emitThenAfter(
+        Effect.succeed("terminal-event"),
+        Ref.update(attempts, (count) => count + 1),
+      ).pipe(Stream.take(0), Stream.runCollect);
+
+      expect([...observed]).toEqual([]);
+      expect(yield* Ref.get(attempts)).toBe(0);
+    }),
+  );
+
+  it.effect("does not arm deferred work when an opened scope closes before its first pull", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const stream = emitThenAfter(
+        Effect.succeed("terminal-event"),
+        Ref.update(attempts, (count) => count + 1),
+      );
+
+      yield* Effect.scoped(Stream.toPull(stream).pipe(Effect.asVoid));
+      expect(yield* Ref.get(attempts)).toBe(0);
+    }),
+  );
+
+  it.effect("emits the event first and never retries an interrupted deferred action", () =>
+    Effect.gen(function* () {
+      const attempts = yield* Ref.make(0);
+      const observed: Array<string> = [];
+      const exit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const telemetryEntered = yield* Deferred.make<void>();
+          const telemetryBlocked = yield* Deferred.make<void>();
+          const stream = emitThenAfter(
+            Effect.succeed("terminal-event"),
+            Ref.update(attempts, (count) => count + 1).pipe(
+              Effect.andThen(Deferred.succeed(telemetryEntered, undefined)),
+              Effect.andThen(Deferred.await(telemetryBlocked)),
+            ),
+          ).pipe(
+            Stream.tap((event) =>
+              Effect.sync(() => {
+                observed.push(event);
+              }),
+            ),
+          );
+          const pull = yield* Stream.toPull(stream);
+
+          expect(yield* pull).toEqual(["terminal-event"]);
+          expect(observed).toEqual(["terminal-event"]);
+
+          const secondPull = yield* Effect.forkChild(pull);
+          yield* Deferred.await(telemetryEntered);
+          yield* Fiber.interrupt(secondPull);
+          return yield* Fiber.await(secondPull);
+        }),
+      );
+
+      expect(observed).toEqual(["terminal-event"]);
+      if (Exit.isSuccess(exit)) throw new Error("Expected terminal telemetry interruption");
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+      expect(yield* Ref.get(attempts)).toBe(1);
+    }),
+  );
+
+  it.effect("keeps committed terminal outcomes authoritative over telemetry interruption", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+
+    return Effect.gen(function* () {
+      const telemetry = yield* ToolSpanTelemetry;
+      const failureMarker = ToolSpanFailure.marker();
+      yield* Effect.forEach(
+        ["success", "failure"] as const,
+        (outcome) =>
+          Effect.gen(function* () {
+            const entered = yield* Deferred.make<void>();
+            const blocked = yield* Deferred.make<void>();
+            const pullExit = yield* Effect.scoped(
+              Effect.gen(function* () {
+                const stream = emitThenAfter(
+                  Effect.succeed(`terminal-${outcome}`),
+                  annotateToolSpanTerminalOutcome(
+                    outcome,
+                    outcome === "failure" ? failureMarker : undefined,
+                  ).pipe(
+                    Effect.andThen(
+                      Effect.flatMap(Effect.currentSpan, (span) =>
+                        Effect.sync(() => {
+                          // Host/application code can mutate this public observation map. The
+                          // authenticated private terminal state must remain authoritative.
+                          span.attribute(
+                            "effect_agent.tool.outcome",
+                            outcome === "success" ? "failure" : "success",
+                          );
+                        }),
+                      ),
+                    ),
+                    Effect.andThen(Deferred.succeed(entered, undefined)),
+                    Effect.andThen(Deferred.await(blocked)),
+                  ),
+                ).pipe(
+                  Stream.withSpan(`execute_tool interrupted-${outcome}`),
+                  telemetry.isolateSpanLifecycle,
+                );
+                const pull = yield* Stream.toPull(stream);
+                expect(yield* pull).toEqual([`terminal-${outcome}`]);
+                const secondPull = yield* Effect.forkChild(pull);
+                yield* Deferred.await(entered);
+                yield* Fiber.interrupt(secondPull);
+                return yield* Fiber.await(secondPull);
+              }),
+            );
+            if (Exit.isSuccess(pullExit)) throw new Error("Expected telemetry interruption");
+            expect(Cause.hasInterrupts(pullExit.cause)).toBe(true);
+          }),
+        { discard: true },
+      );
+
+      for (const outcome of ["success", "failure"] as const) {
+        const span = spans.find(
+          (candidate) => candidate.name === `execute_tool interrupted-${outcome}`,
+        );
+        expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
+          "effect_agent.tool.outcome": outcome,
+        });
+        if (span?.status._tag !== "Ended") throw new Error("Expected the Tool span to end");
+        expect(Exit.isSuccess(span.status.exit)).toBe(outcome === "success");
+        if (outcome === "failure") {
+          if (Exit.isSuccess(span.status.exit)) throw new Error("Expected a failed Tool span");
+          expect(Cause.findErrorOption(span.status.exit.cause)).toEqual(Option.some(failureMarker));
+        }
+        expect(Object.fromEntries(span.attributes)).not.toHaveProperty(
+          "@effect-agent/engine/ToolSpanFailureMarker",
+        );
+      }
+    }).pipe(Effect.provide(ToolSpanTelemetry.layer), Effect.provideService(Tracer.Tracer, tracer));
+  });
+
+  it.effect("preserves the enclosing interruption when no terminal outcome exists", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+
+    return Effect.gen(function* () {
+      const telemetry = yield* ToolSpanTelemetry;
+      const entered = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<void>();
+      const pullExit = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const stream = emitThenAfter(
+            Effect.succeed("nonterminal-event"),
+            Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
+          ).pipe(Stream.withSpan("execute_tool without-outcome"), telemetry.isolateSpanLifecycle);
+          const pull = yield* Stream.toPull(stream);
+          expect(yield* pull).toEqual(["nonterminal-event"]);
+          const secondPull = yield* Effect.forkChild(pull);
+          yield* Deferred.await(entered);
+          yield* Fiber.interrupt(secondPull);
+          return yield* Fiber.await(secondPull);
+        }),
+      );
+      if (Exit.isSuccess(pullExit)) throw new Error("Expected telemetry interruption");
+
+      const span = spans.find((candidate) => candidate.name === "execute_tool without-outcome");
+      if (span?.status._tag !== "Ended" || Exit.isSuccess(span.status.exit)) {
+        throw new Error("Expected the unannotated span to preserve interruption");
+      }
+      expect(Cause.hasInterrupts(span.status.exit.cause)).toBe(true);
+    }).pipe(Effect.provide(ToolSpanTelemetry.layer), Effect.provideService(Tracer.Tracer, tracer));
+  });
+
+  it.effect("runs Toolkit handling unchanged when no current span exists", () => {
+    const tracer = Tracer.make({
+      span: (options) => new Tracer.NativeSpan(options),
+    });
+    const expectedFailure = ScheduledToolFailure.make({ message: "typed-no-parent-span" });
+    let attempts = 0;
+
+    return Effect.gen(function* () {
+      const telemetry = yield* ToolSpanTelemetry;
+      const success = yield* telemetry.isolateToolkitHandle(
+        Effect.sync(() => {
+          attempts += 1;
+          return "handled-without-parent";
+        }),
+      );
+      const failureExit = yield* telemetry
+        .isolateToolkitHandle(
+          Effect.suspend(() => {
+            attempts += 1;
+            return Effect.fail(expectedFailure);
+          }),
+        )
+        .pipe(Effect.exit);
+
+      expect(success).toBe("handled-without-parent");
+      expect(failureFrom(failureExit)).toBe(expectedFailure);
+      expect(attempts).toBe(2);
+    }).pipe(Effect.provide(ToolSpanTelemetry.layer), Effect.provideService(Tracer.Tracer, tracer));
+  });
+
+  it.effect("allocates span isolation for each execution of a reusable Stream", () => {
+    let isolationAllocations = 0;
+    const delegateContext: NonNullable<Tracer.Tracer["context"]> = <X>(
+      primitive: Tracer.EffectPrimitive<X>,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ): X => primitive["~effect/Effect/evaluate"](fiber);
+    const instrumentedContext = new Proxy(delegateContext, {
+      get(target, property, receiver) {
+        if (property === "bind") {
+          return (thisArgument: unknown) => {
+            isolationAllocations += 1;
+            return target.bind(thisArgument);
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const delegate = Tracer.make({
+      span: (options) => new Tracer.NativeSpan(options),
+      context: instrumentedContext,
+    });
+
+    return Effect.gen(function* () {
+      const telemetry = yield* ToolSpanTelemetry;
+      const reusable = Stream.succeed("value").pipe(
+        Stream.withSpan("reusable-isolated-stream"),
+        telemetry.isolateSpanLifecycle,
+      );
+      const beforeExecutions = isolationAllocations;
+      const [left, right] = yield* Effect.all(
+        [Stream.runCollect(reusable), Stream.runCollect(reusable)],
+        { concurrency: "unbounded" },
+      );
+
+      expect([...left]).toEqual(["value"]);
+      expect([...right]).toEqual(["value"]);
+      expect(isolationAllocations - beforeExecutions).toBe(2);
+    }).pipe(
+      Effect.provide(ToolSpanTelemetry.layer),
+      Effect.provideService(Tracer.Tracer, delegate),
+    );
+  });
+
+  it.effect("drains a queued terminal event before a merged producer interruption", () =>
+    Effect.gen(function* () {
+      const observed: Array<string> = [];
+      const exit = yield* Stream.mergeAll(
+        [emitThenAfter(Effect.succeed("terminal-event"), Effect.interrupt)],
+        { concurrency: "unbounded" },
+      ).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            observed.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.exit,
+      );
+
+      expect(observed).toEqual(["terminal-event"]);
+      if (Exit.isSuccess(exit)) throw new Error("Expected merged producer interruption");
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+    }),
+  );
+
+  it.effect("preserves external interruption at the terminal telemetry boundary", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const blocked = yield* Deferred.make<void>();
+      const fiber = yield* isolateToolTerminalTelemetry(
+        Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(blocked))),
+      ).pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      yield* Fiber.interrupt(fiber);
+      const exit = yield* Fiber.await(fiber);
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) throw new Error("Expected terminal telemetry interruption");
+      expect(Cause.hasInterrupts(exit.cause)).toBe(true);
+    }),
+  );
+
+  it.effect("preserves the host tracer's final sampling decision", () => {
+    const requestedSampling: Array<boolean> = [];
+    const delegate = Tracer.make({
+      span(options) {
+        requestedSampling.push(options.sampled);
+        return new Tracer.NativeSpan({ ...options, sampled: false });
+      },
+    });
+
+    return Effect.gen(function* () {
+      const telemetry = yield* ToolSpanTelemetry;
+      const observed = yield* Stream.fromEffect(
+        Effect.map(Effect.currentSpan, (span) => span.sampled),
+      )
+        .pipe(Stream.withSpan("sampling-decision"), telemetry.isolateSpanLifecycle)
+        .pipe(Stream.runCollect);
+
+      expect(requestedSampling).toEqual([true]);
+      expect([...observed]).toEqual([false]);
+    }).pipe(
+      Effect.provide(ToolSpanTelemetry.layer),
+      Effect.provideService(Tracer.Tracer, delegate),
+    );
+  });
+
+  it.effect("preserves the host tracer context receiver", () => {
+    const receiverToken = Symbol("host-tracer-receiver");
+    let contextCalls = 0;
+    class ReceiverAwareTracer implements Tracer.Tracer {
+      readonly receiver = receiverToken;
+
+      span(options: Parameters<Tracer.Tracer["span"]>[0]): Tracer.Span {
+        return new Tracer.NativeSpan(options);
+      }
+
+      context<X>(primitive: Tracer.EffectPrimitive<X>, fiber: Fiber.Fiber<unknown, unknown>): X {
+        if (this.receiver !== receiverToken) throw new Error("host tracer receiver was lost");
+        contextCalls += 1;
+        return primitive["~effect/Effect/evaluate"](fiber);
+      }
+    }
+    const delegate = new ReceiverAwareTracer();
+    const isolated = makeIsolatedToolTracer(delegate);
+    const primitive: Tracer.EffectPrimitive<string> = {
+      ["~effect/Effect/evaluate"]: () => "completed",
+    };
+
+    return Effect.withFiber((fiber) =>
+      Effect.sync(() => {
+        const context = isolated.tracer.context;
+        if (context === undefined) throw new Error("Expected the isolated tracer context");
+
+        expect(context(primitive, fiber)).toBe("completed");
+        expect(contextCalls).toBe(1);
+      }),
+    );
+  });
+
+  it.effect("isolates a defecting host tracer context getter", () => {
+    const contextDefect = new Error("host-tracer-context-getter-defect");
+    const reports: Array<Cause.Cause<unknown>> = [];
+    const delegate = Object.defineProperty(
+      Tracer.make({
+        span: (options) => new Tracer.NativeSpan(options),
+      }),
+      "context",
+      {
+        get: () => {
+          throw contextDefect;
+        },
+      },
+    );
+    const isolated = makeIsolatedToolTracer(delegate);
+    const reporter = ErrorReporter.make(({ cause }) => {
+      reports.push(cause);
+    });
+
+    return Effect.gen(function* () {
+      expect(isolated.tracer.context).toBeUndefined();
+      yield* isolated.reportLifecycleDefects;
+      expect(reports).toHaveLength(1);
+      expect(reports[0]?.reasons.filter(Cause.isDieReason).map(({ defect }) => defect)).toEqual([
+        contextDefect,
+      ]);
+    }).pipe(Effect.provide(ErrorReporter.layer([reporter])));
+  });
+
+  it.effect("preserves interruption raised while reporting span lifecycle defects", () => {
+    const contextDefect = new Error("host-tracer-context-defect-before-reporter-interruption");
+    const interruptor = 7331;
+    const delegate = Object.defineProperty(
+      Tracer.make({
+        span: (options) => new Tracer.NativeSpan(options),
+      }),
+      "context",
+      {
+        get: () => {
+          throw contextDefect;
+        },
+      },
+    );
+    const isolated = makeIsolatedToolTracer(delegate);
+    const reporter = ErrorReporter.make(({ cause, fiber }) => {
+      expect(cause.reasons).toHaveLength(1);
+      expect(cause.reasons[0]?._tag).toBe("Die");
+      if (cause.reasons[0]?._tag !== "Die") throw new Error("Expected lifecycle defect");
+      expect(cause.reasons[0].defect).toBe(contextDefect);
+      fiber.interruptUnsafe(interruptor);
+    });
+
+    return Effect.gen(function* () {
+      const reportingFiber = yield* Effect.forkChild(isolated.reportLifecycleDefects);
+      const exit = yield* Fiber.await(reportingFiber);
+      if (Exit.isSuccess(exit)) throw new Error("Expected reporter interruption");
+      expect(exit.cause.reasons).toHaveLength(1);
+      expect(exit.cause.reasons[0]?._tag).toBe("Interrupt");
+      if (exit.cause.reasons[0]?._tag !== "Interrupt") {
+        throw new Error("Expected exact reporter interruption Cause");
+      }
+      expect(exit.cause.reasons[0].fiberId).toBe(interruptor);
+    }).pipe(Effect.provide(ErrorReporter.layer([reporter])));
+  });
+
+  it.effect(
+    "evaluates the primitive once when host tracer context defects before evaluation",
+    () => {
+      const contextDefect = new Error("host-tracer-context-before-evaluation-defect");
+      const reports: Array<Cause.Cause<unknown>> = [];
+      let evaluations = 0;
+      const delegate = Tracer.make({
+        span: (options) => new Tracer.NativeSpan(options),
+        context: () => {
+          throw contextDefect;
+        },
+      });
+      const isolated = makeIsolatedToolTracer(delegate);
+      const reporter = ErrorReporter.make(({ cause }) => {
+        reports.push(cause);
+      });
+      const primitive: Tracer.EffectPrimitive<string> = {
+        ["~effect/Effect/evaluate"]: () => {
+          evaluations += 1;
+          return "completed";
+        },
+      };
+
+      return Effect.withFiber((fiber) =>
+        Effect.gen(function* () {
+          const context = isolated.tracer.context;
+          if (context === undefined) throw new Error("Expected the isolated tracer context");
+
+          expect(context(primitive, fiber)).toBe("completed");
+          expect(evaluations).toBe(1);
+          yield* isolated.reportLifecycleDefects;
+          expect(reports).toHaveLength(1);
+          expect(reports[0]?.reasons.filter(Cause.isDieReason).map(({ defect }) => defect)).toEqual(
+            [contextDefect],
+          );
+        }),
+      ).pipe(Effect.provide(ErrorReporter.layer([reporter])));
+    },
+  );
+
+  it.effect(
+    "returns the recorded primitive value when host tracer context defects afterward",
+    () => {
+      const contextDefect = new Error("host-tracer-context-after-evaluation-defect");
+      const reports: Array<Cause.Cause<unknown>> = [];
+      let evaluations = 0;
+      const delegate = Tracer.make({
+        span: (options) => new Tracer.NativeSpan(options),
+        context: <X>(
+          primitive: Tracer.EffectPrimitive<X>,
+          fiber: Fiber.Fiber<unknown, unknown>,
+        ): X => {
+          primitive["~effect/Effect/evaluate"](fiber);
+          throw contextDefect;
+        },
+      });
+      const isolated = makeIsolatedToolTracer(delegate);
+      const reporter = ErrorReporter.make(({ cause }) => {
+        reports.push(cause);
+      });
+      const primitive: Tracer.EffectPrimitive<string> = {
+        ["~effect/Effect/evaluate"]: () => {
+          evaluations += 1;
+          return "completed";
+        },
+      };
+
+      return Effect.withFiber((fiber) =>
+        Effect.gen(function* () {
+          const context = isolated.tracer.context;
+          if (context === undefined) throw new Error("Expected the isolated tracer context");
+
+          expect(context(primitive, fiber)).toBe("completed");
+          expect(evaluations).toBe(1);
+          yield* isolated.reportLifecycleDefects;
+          expect(reports).toHaveLength(1);
+          expect(reports[0]?.reasons.filter(Cause.isDieReason).map(({ defect }) => defect)).toEqual(
+            [contextDefect],
+          );
+        }),
+      ).pipe(Effect.provide(ErrorReporter.layer([reporter])));
+    },
+  );
+
+  it.effect("does not let host tracer context substitute a primitive result", () => {
+    let evaluations = 0;
+    const delegateContext: NonNullable<Tracer.Tracer["context"]> = <X>(
+      primitive: Tracer.EffectPrimitive<X>,
+      fiber: Fiber.Fiber<unknown, unknown>,
+    ): X => primitive["~effect/Effect/evaluate"](fiber);
+    const substitutingContext = new Proxy(delegateContext, {
+      apply(target, thisArgument, argumentsList) {
+        Reflect.apply(target, thisArgument, argumentsList);
+        return "host-substituted-result";
+      },
+    });
+    const isolated = makeIsolatedToolTracer(
+      Tracer.make({
+        span: (options) => new Tracer.NativeSpan(options),
+        context: substitutingContext,
+      }),
+    );
+    const primitive: Tracer.EffectPrimitive<string> = {
+      ["~effect/Effect/evaluate"]: () => {
+        evaluations += 1;
+        return "engine-result";
+      },
+    };
+
+    return Effect.withFiber((fiber) =>
+      Effect.sync(() => {
+        const context = isolated.tracer.context;
+        if (context === undefined) throw new Error("Expected the isolated tracer context");
+
+        expect(context(primitive, fiber)).toBe("engine-result");
+        expect(evaluations).toBe(1);
+      }),
+    );
+  });
+
+  it.effect("rethrows the original primitive error once when host tracer context wraps it", () => {
+    const primitiveError = new Error("primitive-evaluation-error");
+    const contextDefect = new Error("host-tracer-context-wrapper-defect");
+    const reports: Array<Cause.Cause<unknown>> = [];
+    let evaluations = 0;
+    const delegate = Tracer.make({
+      span: (options) => new Tracer.NativeSpan(options),
+      context: <X>(
+        primitive: Tracer.EffectPrimitive<X>,
+        fiber: Fiber.Fiber<unknown, unknown>,
+      ): X => {
+        try {
+          return primitive["~effect/Effect/evaluate"](fiber);
+        } catch {
+          throw contextDefect;
+        }
+      },
+    });
+    const isolated = makeIsolatedToolTracer(delegate);
+    const reporter = ErrorReporter.make(({ cause }) => {
+      reports.push(cause);
+    });
+    const primitive: Tracer.EffectPrimitive<string> = {
+      ["~effect/Effect/evaluate"]: () => {
+        evaluations += 1;
+        throw primitiveError;
+      },
+    };
+
+    return Effect.withFiber((fiber) =>
+      Effect.gen(function* () {
+        const context = isolated.tracer.context;
+        if (context === undefined) throw new Error("Expected the isolated tracer context");
+
+        let observed: unknown;
+        try {
+          context(primitive, fiber);
+        } catch (error) {
+          observed = error;
+        }
+        expect(observed).toBe(primitiveError);
+        expect(evaluations).toBe(1);
+        yield* isolated.reportLifecycleDefects;
+        expect(reports).toEqual([]);
+      }),
+    ).pipe(Effect.provide(ErrorReporter.layer([reporter])));
+  });
+
+  it.effect("keeps Tool success unchanged when terminal telemetry defects", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const logs: Array<ExportedLogObservation> = [];
+    const reports: Array<Cause.Cause<unknown>> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const telemetryDefect = new Error("terminal-logger-defect-must-not-reach-exported-span-or-log");
+    const reporterDefect = new Error("terminal-error-reporter-defect-must-be-isolated");
+    let defectiveReporterCalls = 0;
+    const logger = Logger.make<unknown, void>((options) => {
+      const rendered = renderedLogMessage(options.message);
+      logs.push(exportedLogObservation(options));
+      if (rendered === "agent tool execution completed") throw telemetryDefect;
+    });
+    const reporter = ErrorReporter.make(({ cause }) => {
+      reports.push(cause);
+      defectiveReporterCalls += 1;
+      throw reporterDefect;
+    });
+    let handlerAttempts = 0;
+
+    const Read = Tool.make("read_once", {
+      parameters: Schema.Struct({ path: Schema.String }),
+      success: Schema.String,
+    });
+    const tools = Toolkit.make(Read);
+    const model = Model.make(
+      "scripted",
+      "terminal-telemetry-defect",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        Effect.gen(function* () {
+          const turn = yield* Ref.make(0);
+          return yield* LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () =>
+              Stream.unwrap(
+                Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                  Effect.map((value) =>
+                    Stream.fromIterable<Response.StreamPartEncoded>(
+                      value === 0
+                        ? [
+                            {
+                              type: "tool-call",
+                              id: "read-once-1",
+                              name: "read_once",
+                              params: { path: "/private/tool-input" },
+                              providerExecuted: false,
+                            },
+                            { type: "finish", reason: "tool-calls", usage },
+                          ]
+                        : finalParts('{"answer":"done"}'),
+                    ),
+                  ),
+                ),
+              ),
+          });
+        }),
+      ),
+    );
+    const definition = Agent.define("terminal-telemetry-defect", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Read once, then answer.",
+      toolkit: tools,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+    });
+
+    return Effect.gen(function* () {
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "Read the file",
+      }).pipe(
+        Stream.runCollect,
+        Effect.provide(
+          tools.toLayer({
+            read_once: () =>
+              Effect.sync(() => {
+                handlerAttempts += 1;
+                return "original-success";
+              }),
+          }),
+        ),
+        Effect.exit,
+      );
+
+      if (Exit.isFailure(exit)) throw new Error("Terminal telemetry changed Tool success");
+      expect(handlerAttempts).toBe(1);
+      expect(exit.value.filter((event) => event._tag === "ToolCallSucceeded")).toEqual([
+        expect.objectContaining({
+          toolCallId: "read-once-1",
+          toolName: "read_once",
+          result: "original-success",
+          providerExecuted: false,
+        }),
+      ]);
+      expect(exit.value.filter((event) => event._tag === "RunCompleted")).toHaveLength(1);
+
+      expect(reports).toHaveLength(1);
+      expect(defectiveReporterCalls).toBe(1);
+      expect(reports[0]?.reasons.filter(Cause.isDieReason).map(({ defect }) => defect)).toEqual([
+        telemetryDefect,
+      ]);
+
+      const span = spans.find((candidate) => candidate.name === "execute_tool read_once");
+      expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
+        "effect_agent.tool.outcome": "success",
+      });
+      if (span?.status._tag !== "Ended") throw new Error("Expected the Tool span to end");
+      expect(Exit.isSuccess(span.status.exit)).toBe(true);
+
+      const exportedValues = reachableTelemetryValues({
+        spans: spans.map(exportedSpanObservation),
+        logs,
+      });
+      expect(exportedValues).not.toContain(telemetryDefect);
+      expect(exportedValues).not.toContain(reporterDefect);
+      expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
+        telemetryDefect.message,
+      );
+      expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
+        reporterDefect.message,
+      );
+      expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
+        "/private/tool-input",
+      );
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.effect(Tracer.Tracer, Effect.succeed(tracer)),
+          Logger.layer([logger]),
+          ErrorReporter.layer([reporter]),
+        ),
+      ),
+    );
+  });
+
+  it.effect(
+    "keeps completed Tool results when canonical span create, wrap, or close defects",
+    () => {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const reports: Array<Cause.Cause<unknown>> = [];
+      const createDefect = new Error("canonical-span-create-defect");
+      const wrapDefect = new Error("canonical-span-wrap-defect");
+      const wrapCloseDefect = new Error("canonical-span-wrap-close-defect");
+      const closeDefect = new Error("canonical-span-close-defect");
+      class CloseDefectSpan extends Tracer.NativeSpan {
+        override end(): void {
+          throw closeDefect;
+        }
+      }
+      const tracer = Tracer.make({
+        span(options) {
+          if (options.name === "execute_tool create_safe") throw createDefect;
+          if (options.name === "execute_tool wrap_safe") {
+            const allocated = new Tracer.NativeSpan(options);
+            spans.push(allocated);
+            return new Proxy(allocated, {
+              get(target, property) {
+                if (property === "sampled") throw wrapDefect;
+                if (property === "end") {
+                  return (endTime: bigint, exit: Exit.Exit<unknown, unknown>): void => {
+                    target.end(endTime, exit);
+                    throw wrapCloseDefect;
+                  };
+                }
+                const value = Reflect.get(target, property, target);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          }
+          const span =
+            options.name === "execute_tool close_safe"
+              ? new CloseDefectSpan(options)
+              : new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const reporter = ErrorReporter.make(({ cause }) => {
+        reports.push(cause);
+      });
+      const CreateSafe = Tool.make("create_safe", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String,
+      });
+      const WrapSafe = Tool.make("wrap_safe", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String,
+      });
+      const CloseSafe = Tool.make("close_safe", {
+        parameters: Schema.Struct({ value: Schema.String }),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(CreateSafe, WrapSafe, CloseSafe);
+      const model = Model.make(
+        "scripted",
+        "span-lifecycle-defects",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          Effect.gen(function* () {
+            const turn = yield* Ref.make(0);
+            return yield* LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: () =>
+                Stream.unwrap(
+                  Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                    Effect.map((value) =>
+                      Stream.fromIterable<Response.StreamPartEncoded>(
+                        value === 0
+                          ? [
+                              {
+                                type: "tool-call",
+                                id: "span-create-1",
+                                name: "create_safe",
+                                params: { value: "create" },
+                                providerExecuted: false,
+                              },
+                              {
+                                type: "tool-call",
+                                id: "span-wrap-1",
+                                name: "wrap_safe",
+                                params: { value: "wrap" },
+                                providerExecuted: false,
+                              },
+                              {
+                                type: "tool-call",
+                                id: "span-close-1",
+                                name: "close_safe",
+                                params: { value: "close" },
+                                providerExecuted: false,
+                              },
+                              { type: "finish", reason: "tool-calls", usage },
+                            ]
+                          : finalParts('{"answer":"done"}'),
+                      ),
+                    ),
+                  ),
+                ),
+            });
+          }),
+        ),
+      );
+      const definition = Agent.define("span-lifecycle-defects", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Call all three Tools, then answer.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 3,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      let createAttempts = 0;
+      let wrapAttempts = 0;
+      let closeAttempts = 0;
+
+      return Effect.gen(function* () {
+        const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+          question: "exercise span lifecycle",
+        }).pipe(
+          Stream.runCollect,
+          Effect.provide(
+            tools.toLayer({
+              create_safe: () =>
+                Effect.sync(() => {
+                  createAttempts += 1;
+                  return "create-result";
+                }),
+              wrap_safe: () =>
+                Effect.sync(() => {
+                  wrapAttempts += 1;
+                  return "wrap-result";
+                }),
+              close_safe: () =>
+                Effect.sync(() => {
+                  closeAttempts += 1;
+                  return "close-result";
+                }),
+            }),
+          ),
+          Effect.exit,
+        );
+
+        if (Exit.isFailure(exit)) throw new Error("Span lifecycle telemetry changed Tool success");
+        expect(createAttempts).toBe(1);
+        expect(wrapAttempts).toBe(1);
+        expect(closeAttempts).toBe(1);
+        expect(exit.value.filter((event) => event._tag === "ToolCallSucceeded")).toEqual([
+          expect.objectContaining({
+            toolCallId: "span-create-1",
+            toolName: "create_safe",
+            result: "create-result",
+          }),
+          expect.objectContaining({
+            toolCallId: "span-wrap-1",
+            toolName: "wrap_safe",
+            result: "wrap-result",
+          }),
+          expect.objectContaining({
+            toolCallId: "span-close-1",
+            toolName: "close_safe",
+            result: "close-result",
+          }),
+        ]);
+        expect(exit.value.filter((event) => event._tag === "RunCompleted")).toHaveLength(1);
+        expect(
+          reports.flatMap((cause) =>
+            cause.reasons.filter(Cause.isDieReason).map(({ defect }) => defect),
+          ),
+        ).toEqual([createDefect, wrapDefect, wrapCloseDefect, closeDefect]);
+        expect(spans.some((span) => span.name === "execute_tool create_safe")).toBe(false);
+        const wrapSpan = spans.find((span) => span.name === "execute_tool wrap_safe");
+        expect(wrapSpan?.status._tag).toBe("Ended");
+        if (wrapSpan?.status._tag !== "Ended" || !Exit.isFailure(wrapSpan.status.exit)) {
+          throw new Error("Expected the allocated wrapper-failure span to close failed");
+        }
+        expect(spans.find((span) => span.name === "execute_tool close_safe")?.status._tag).toBe(
+          "Started",
+        );
+
+        const exportedValues = reachableTelemetryValues(spans.map(exportedSpanObservation));
+        expect(exportedValues).not.toContain(createDefect);
+        expect(exportedValues).not.toContain(wrapDefect);
+        expect(exportedValues).not.toContain(wrapCloseDefect);
+        expect(exportedValues).not.toContain(closeDefect);
+        const exportedStrings = exportedValues
+          .filter((value) => typeof value === "string")
+          .join("\n");
+        expect(exportedStrings).not.toContain(createDefect.message);
+        expect(exportedStrings).not.toContain(wrapDefect.message);
+        expect(exportedStrings).not.toContain(wrapCloseDefect.message);
+        expect(exportedStrings).not.toContain(closeDefect.message);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.effect(Tracer.Tracer, Effect.succeed(tracer)),
+            ErrorReporter.layer([reporter]),
+          ),
+        ),
+      );
+    },
+  );
+
+  it.effect("overrides apparent Tool success when the handler stream later fails", () => {
+    const spans: Array<Tracer.NativeSpan> = [];
+    const logs: Array<ExportedLogObservation> = [];
+    const tracer = Tracer.make({
+      span(options) {
+        const span = new Tracer.NativeSpan(options);
+        spans.push(span);
+        return span;
+      },
+    });
+    const logger = Logger.make<unknown, void>((options) => {
+      logs.push(exportedLogObservation(options));
+    });
+    const postTerminalSecret = "post-terminal-handler-secret";
+    const postTerminalFailure = AiError.make({
+      module: "Toolkit",
+      method: "lookup.handle",
+      reason: AiError.UnknownError.make({ description: postTerminalSecret }),
+    });
+    const postTerminalInterruptor = 4242;
+    const Lookup = Tool.make("lookup", {
+      parameters: Schema.Struct({ query: Schema.String }),
+      success: Schema.String,
+    });
+    const tools = Toolkit.make(Lookup);
+    const anomalousRuntime = Effect.map(
+      tools,
+      (native) =>
+        ({
+          tools: native.tools,
+          handle: <Name extends keyof typeof tools.tools>(
+            name: Name,
+            parameters: Tool.Parameters<(typeof tools.tools)[Name]>,
+            toolCallId?: string,
+          ) =>
+            native.handle(name, parameters, toolCallId).pipe(
+              Effect.map((results) =>
+                results.pipe(
+                  // Defects and interruption have error channel `never`, so this adversarial
+                  // composed Cause works for every generic Tool without widening HandlerError.
+                  Stream.concat(
+                    Stream.failCause(
+                      Cause.combine(
+                        Cause.die(postTerminalFailure),
+                        Cause.interrupt(postTerminalInterruptor),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        }) satisfies Toolkit.WithHandler<typeof tools.tools>,
+    );
+    // Test-only Effect AI Toolkit seam: runtime execution consumes the Toolkit Effect and
+    // `tools`; handler Layer construction stays on the native `tools` value below.
+    const anomalousTools = Object.assign(anomalousRuntime, {
+      "~effect/ai/Toolkit": "~effect/ai/Toolkit" as const,
+      tools: tools.tools,
+    }) as Toolkit.Toolkit<typeof tools.tools>;
+    const model = modelFromParts([
+      {
+        type: "tool-call",
+        id: "post-terminal-1",
+        name: "lookup",
+        params: { query: "status" },
+        providerExecuted: false,
+      },
+      { type: "finish", reason: "tool-calls", usage },
+    ]);
+    const definition = Agent.define("post-terminal-tool-failure", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Look up the status.",
+      toolkit: anomalousTools,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+    });
+    const finalized = Ref.makeUnsafe(0);
+    const toolLayer = tools.toLayer({
+      lookup: () =>
+        Effect.succeed("apparently successful").pipe(
+          Effect.ensuring(Ref.update(finalized, (count) => count + 1)),
+        ),
+    });
+
+    return Effect.gen(function* () {
+      const observed = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "status",
+      }).pipe(
+        Stream.tap((event) => Ref.update(observed, (events) => [...events, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        throw new Error("Expected the post-terminal Tool failure to escape as a defect");
+      }
+      expect(
+        exit.cause.reasons
+          .filter(Cause.isDieReason)
+          .map((reason) => reason.defect)
+          .includes(postTerminalFailure),
+      ).toBe(true);
+      expect(Cause.interruptors(exit.cause).has(postTerminalInterruptor)).toBe(true);
+      expect(exit.cause.reasons.filter(Cause.isFailReason)).toEqual([]);
+      expect(yield* Ref.get(finalized)).toBe(1);
+      const terminalEvents = (yield* Ref.get(observed)).filter(
+        (event) => event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed",
+      );
+      expect(terminalEvents).toEqual([
+        expect.objectContaining({
+          _tag: "ToolCallFailed",
+          toolCallId: "post-terminal-1",
+          toolName: "lookup",
+          providerExecuted: false,
+        }),
+      ]);
+      expect(terminalEvents.some((event) => event._tag === "ToolCallSucceeded")).toBe(false);
+      const span = spans.find((candidate) => candidate.name === "execute_tool lookup");
+      expect(span).toBeDefined();
+      expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
+        "effect_agent.tool.outcome": "failure",
+      });
+      if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
+        throw new Error("Expected the post-terminal Tool span to end failed");
+      }
+      const exportedValues = reachableTelemetryValues({
+        spans: [exportedSpanObservation(span)],
+        logs,
+      });
+      expect(exportedValues).not.toContain(postTerminalFailure);
+      expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
+        postTerminalSecret,
+      );
+
+      const terminalLogs = logs.filter((entry) =>
+        ["agent tool execution completed", "agent tool execution failed"].includes(
+          renderedLogMessage(entry.message),
+        ),
+      );
+      expect(
+        terminalLogs.map((entry) => ({
+          message: renderedLogMessage(entry.message),
+          outcome: entry.annotations.toolOutcome,
+        })),
+      ).toEqual([{ message: "agent tool execution failed", outcome: "failure" }]);
+    }).pipe(Effect.provideService(Tracer.Tracer, tracer), Effect.provide(Logger.layer([logger])));
+  });
+
+  it("preserves a marker-free Tool Cause by referential identity", () => {
+    const failureReason = Cause.makeFailReason(new Error("ordinary tool failure"));
+    const defectReason = Cause.makeDieReason(new Error("ordinary tool defect"));
+    const interruptReason = Cause.makeInterruptReason(4242);
+    const original = Cause.fromReasons([failureReason, defectReason, interruptReason]);
+
+    const { found, restored } = restoreToolSpanFailureCause(
+      original,
+      ToolSpanFailure.marker(),
+      undefined,
+    );
+
+    expect(found).toBe(false);
+    expect(restored).toBe(original);
+    expect(restored.reasons).toEqual([failureReason, defectReason, interruptReason]);
+  });
+
+  it("does not consume an independently constructed Tool span failure", () => {
+    const privateMarker = ToolSpanFailure.marker();
+    const handlerFailure = ToolSpanFailure.marker();
+    const handlerCause = Cause.fail(handlerFailure);
+
+    const stripped = stripToolSpanFailures(handlerCause, privateMarker);
+
+    expect(privateMarker).toBeInstanceOf(ToolSpanFailure);
+    expect(handlerFailure).toBeInstanceOf(ToolSpanFailure);
+    expect(handlerFailure).not.toBe(privateMarker);
+    expect(stripped.found).toBe(false);
+    expect(stripped.residual).toBe(handlerCause);
+    expect(stripped.residual.reasons.filter(Cause.isFailReason).map(({ error }) => error)).toEqual([
+      handlerFailure,
+    ]);
+  });
+
+  it("removes only Tool span marker Reasons while preserving residual identity and order", () => {
+    const originalFailure = new Error("original tool cause");
+    const originalFailureReason = Cause.makeFailReason(originalFailure).annotate(
+      Context.make(TestCauseSource, "handler"),
+    );
+    const originalInterruptReason = Cause.makeInterruptReason(4242).annotate(
+      Context.make(TestCauseSource, "interrupt"),
+    );
+    const residualDefect = new Error("span wrapper residual");
+    const residualFailure = new Error("span wrapper typed residual");
+    const residualDefectReason = Cause.makeDieReason(residualDefect).annotate(
+      Context.make(TestCauseSource, "span-finalizer"),
+    );
+    const residualFailureReason = Cause.makeFailReason(residualFailure).annotate(
+      Context.make(TestCauseSource, "span-wrapper"),
+    );
+    const marker = ToolSpanFailure.marker();
+    const firstMarker = Cause.makeFailReason(marker);
+    const secondMarker = Cause.makeFailReason(marker);
+    const foreignMarker = Cause.makeFailReason(ToolSpanFailure.marker()).annotate(
+      Context.make(TestCauseSource, "handler-lookalike"),
+    );
+    const original = Cause.fromReasons([originalFailureReason, originalInterruptReason]);
+    const observed = Cause.fromReasons<Error | ToolSpanFailure>([
+      residualDefectReason,
+      firstMarker,
+      residualFailureReason,
+      foreignMarker,
+      secondMarker,
+    ]);
+
+    const stripped = stripToolSpanFailures<Error | ToolSpanFailure>(observed, marker);
+    expect(stripped.found).toBe(true);
+    expect(stripped.residual.reasons).toEqual([
+      residualDefectReason,
+      residualFailureReason,
+      foreignMarker,
+    ]);
+    expect(stripped.residual.reasons[0]).toBe(residualDefectReason);
+    expect(stripped.residual.reasons[1]).toBe(residualFailureReason);
+    expect(stripped.residual.reasons[2]).toBe(foreignMarker);
+    expect([...stripped.residual.reasons[0]!.annotations.values()]).toContain("span-finalizer");
+    expect([...stripped.residual.reasons[1]!.annotations.values()]).toContain("span-wrapper");
+    expect([...stripped.residual.reasons[2]!.annotations.values()]).toContain("handler-lookalike");
+
+    const { found, restored } = restoreToolSpanFailureCause(observed, marker, original);
+
+    expect(found).toBe(true);
+    expect(restored.reasons).toEqual([
+      originalFailureReason,
+      originalInterruptReason,
+      residualDefectReason,
+      residualFailureReason,
+      foreignMarker,
+    ]);
+    expect(restored.reasons[0]).toBe(originalFailureReason);
+    expect(restored.reasons[1]).toBe(originalInterruptReason);
+    expect(restored.reasons[2]).toBe(residualDefectReason);
+    expect(restored.reasons[3]).toBe(residualFailureReason);
+    expect(restored.reasons[4]).toBe(foreignMarker);
+    expect(restored.reasons.filter(Cause.isFailReason).some(({ error }) => error === marker)).toBe(
+      false,
+    );
   });
 
   it.effect("rejects a provider Tool result whose name differs from its declared call", () => {
@@ -1032,6 +2979,14 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("emits Started and Failed before propagating the concrete typed Tool failure", () =>
     Effect.gen(function* () {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const finalized = yield* Deferred.make<void>();
       const Fail = Tool.make("fail", {
@@ -1062,7 +3017,8 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         },
         { type: "finish", reason: "tool-calls", usage },
       ]);
-      const expected = ScheduledToolFailure.make({ message: "scheduled failure" });
+      const failureSecret = "typed-scheduled-failure-must-not-be-exported";
+      const expected = ScheduledToolFailure.make({ message: failureSecret });
       const toolLayer = tools.toLayer({
         fail: () =>
           Effect.acquireUseRelease(
@@ -1078,6 +3034,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
         Stream.runDrain,
         Effect.provide(toolLayer),
+        Effect.provideService(Tracer.Tracer, tracer),
         Effect.exit,
       );
       const failure = failureFrom(exit);
@@ -1095,6 +3052,17 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
           .map((event) => event._tag),
       ).toEqual(["ToolCallStarted", "ToolCallFailed", "RunFailed"]);
       expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(1);
+      const span = spans.find((candidate) => candidate.name === "execute_tool fail");
+      expect(span?.attributes.get("effect_agent.tool.outcome")).toBe("failure");
+      expect(span?.status._tag).toBe("Ended");
+      if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
+        throw new Error("Expected the typed Tool failure to close its span with a failed Exit");
+      }
+      const exportedValues = reachableTelemetryValues(exportedSpanObservation(span));
+      expect(exportedValues).not.toContain(expected);
+      expect(exportedValues.filter((value) => typeof value === "string").join("\n")).not.toContain(
+        failureSecret,
+      );
       expect(yield* Deferred.isDone(finalized)).toBe(true);
     }),
   );
@@ -1175,7 +3143,252 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("rejects duplicate terminal Tool results without inventing a second terminal", () =>
+  it.effect("stamps staged provider results only in their actual emission order", () =>
+    Effect.gen(function* () {
+      const parts: ReadonlyArray<Response.StreamPartEncoded> = [
+        {
+          type: "tool-call",
+          id: "hosted-sequence",
+          name: "HostedSearch",
+          params: { query: "sequence" },
+          providerExecuted: true,
+        },
+        {
+          type: "tool-result",
+          id: "hosted-sequence",
+          name: "HostedSearch",
+          result: { status: "searching" },
+          isFailure: false,
+          providerExecuted: true,
+          preliminary: true,
+        },
+        { type: "text-start", id: "hosted-answer" },
+        {
+          type: "text-delta",
+          id: "hosted-answer",
+          delta: '{"answer":"sequence-safe"}',
+        },
+        { type: "text-end", id: "hosted-answer" },
+        {
+          type: "tool-result",
+          id: "hosted-sequence",
+          name: "HostedSearch",
+          result: { status: "complete" },
+          isFailure: false,
+          providerExecuted: true,
+        },
+        { type: "finish", reason: "stop", usage },
+      ];
+
+      const events = yield* AgentRuntime.stream(
+        Agent.withModel(hostedDefinition, modelFromParts(parts)),
+        { question: "sequence" },
+      ).pipe(Stream.runCollect);
+      const observed = [...events];
+
+      expect(observed.map(({ sequence }) => sequence)).toEqual(
+        Array.from({ length: observed.length }, (_, sequence) => sequence),
+      );
+      expect(observed.map(({ _tag }) => _tag)).toEqual([
+        "RunStarted",
+        "TurnStarted",
+        "ModelStarted",
+        "ToolCallDeclared",
+        "TextDelta",
+        "ToolProgress",
+        "ToolCallSucceeded",
+        "TurnCompleted",
+        "RunCompleted",
+      ]);
+    }),
+  );
+
+  it.effect("bounds progress, terminal, and Turn-completion staged provider events together", () =>
+    Effect.gen(function* () {
+      const preliminaryResults: Array<Response.StreamPartEncoded> = Array.from(
+        { length: 255 },
+        (_, index) => ({
+          type: "tool-result" as const,
+          id: "hosted-count-bound",
+          name: "HostedSearch",
+          result: { status: String(index) },
+          isFailure: false,
+          providerExecuted: true,
+          preliminary: true,
+        }),
+      );
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(
+        Agent.withModel(
+          hostedDefinition,
+          modelFromParts([
+            {
+              type: "tool-call",
+              id: "hosted-count-bound",
+              name: "HostedSearch",
+              params: { query: "count" },
+              providerExecuted: true,
+            },
+            ...preliminaryResults,
+            {
+              type: "tool-result",
+              id: "hosted-count-bound",
+              name: "HostedSearch",
+              result: { status: "complete" },
+              isFailure: false,
+              providerExecuted: true,
+            },
+            { type: "finish", reason: "stop", usage },
+          ]),
+        ),
+        { question: "count" },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const observed = yield* Ref.get(events);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("256-event staged provider event limit");
+      expect(observed.filter((event) => event._tag === "ToolProgress")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "TurnCompleted")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("bounds the encoded bytes of staged provider results", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const exit = yield* AgentRuntime.stream(
+        Agent.withModel(
+          hostedDefinition,
+          modelFromParts([
+            {
+              type: "tool-call",
+              id: "hosted-byte-bound",
+              name: "HostedSearch",
+              params: { query: "bytes" },
+              providerExecuted: true,
+            },
+            {
+              type: "tool-result",
+              id: "hosted-byte-bound",
+              name: "HostedSearch",
+              result: { status: "x".repeat(1024 * 1024) },
+              isFailure: false,
+              providerExecuted: true,
+              preliminary: true,
+            },
+          ]),
+        ),
+        { question: "bytes" },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const observed = yield* Ref.get(events);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("1048576-byte staged provider event limit");
+      expect(observed.filter((event) => event._tag === "ToolProgress")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+    }),
+  );
+
+  it("normalizes one bounded JSON snapshot without invoking dynamic serialization behavior", () => {
+    let suffixReads = 0;
+    const payload: Array<unknown> = ["x".repeat(32)];
+    Object.defineProperty(payload, 1, {
+      enumerable: true,
+      get: () => {
+        suffixReads += 1;
+        throw new Error("the rejected suffix must not be traversed");
+      },
+    });
+
+    expect(boundedJsonSnapshot(payload, 8)).toBeUndefined();
+    expect(suffixReads).toBe(0);
+
+    let toJsonCalls = 0;
+    const inheritedToJson = Object.create({
+      toJSON: () => {
+        toJsonCalls += 1;
+        return "x".repeat(2_000_000);
+      },
+    });
+    inheritedToJson.safe = "small";
+    expect(boundedJsonSnapshot(inheritedToJson, 128)).toBeUndefined();
+
+    const ownToJson = { safe: "small" };
+    Object.defineProperty(ownToJson, "toJSON", {
+      value: () => {
+        toJsonCalls += 1;
+        return "x".repeat(2_000_000);
+      },
+    });
+    expect(boundedJsonSnapshot(ownToJson, 128)).toBeUndefined();
+
+    let accessorReads = 0;
+    const accessorBacked = {};
+    Object.defineProperty(accessorBacked, "result", {
+      enumerable: true,
+      get: () => {
+        accessorReads += 1;
+        return accessorReads === 1 ? "small" : "x".repeat(2_000_000);
+      },
+    });
+    expect(boundedJsonSnapshot(accessorBacked, 128)).toBeUndefined();
+    expect(accessorReads).toBe(0);
+    expect(toJsonCalls).toBe(0);
+
+    let proxyReads = 0;
+    const proxyTarget = { result: "small" };
+    const dynamicProxy = new Proxy(proxyTarget, {
+      get: (target, key, receiver) => {
+        proxyReads += 1;
+        return key === "result" ? "x".repeat(2_000_000) : Reflect.get(target, key, receiver);
+      },
+    });
+    const proxySnapshot = boundedJsonSnapshot(dynamicProxy, 128);
+    expect(proxySnapshot).toBeDefined();
+    expect(proxyReads).toBe(0);
+    expect(proxySnapshot?.value).toEqual({ result: "small" });
+    expect(JSON.stringify(proxySnapshot?.value)).toBe('{"result":"small"}');
+    proxyTarget.result = "changed-after-normalization";
+    expect(JSON.stringify(proxySnapshot?.value)).toBe('{"result":"small"}');
+
+    expect(boundedJsonSnapshot('é\n"', 8)).toEqual({ value: 'é\n"', bytes: 8 });
+    expect(boundedJsonSnapshot('é\n"', 7)).toBeUndefined();
+  });
+
+  it("rejects invalid bounded-snapshot limits before traversing provider data", () => {
+    let reflectionAttempts = 0;
+    const payload = new Proxy(
+      { result: "small" },
+      {
+        getPrototypeOf: (target) => {
+          reflectionAttempts += 1;
+          return Reflect.getPrototypeOf(target);
+        },
+      },
+    );
+
+    for (const maxBytes of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(boundedJsonSnapshot(payload, maxBytes)).toBeUndefined();
+    }
+    for (const maxDepth of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(boundedJsonSnapshot(payload, 128, maxDepth)).toBeUndefined();
+    }
+    expect(reflectionAttempts).toBe(0);
+  });
+
+  it.effect("rejects duplicate provider terminals before appending any Tool success", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
       const agent = Agent.withModel(
@@ -1218,7 +3431,49 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
       expect(failure).toBeInstanceOf(ModelProtocolError);
       expect(failure.message).toContain("more than one terminal result");
-      expect(observed.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(1);
+      expect(observed.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
+    }),
+  );
+
+  it.effect("rejects post-finish provider content before appending staged terminal events", () =>
+    Effect.gen(function* () {
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const agent = Agent.withModel(
+        hostedDefinition,
+        modelFromParts([
+          {
+            type: "tool-call",
+            id: "hosted-late-content",
+            name: "HostedSearch",
+            params: { query: "late" },
+            providerExecuted: true,
+          },
+          {
+            type: "tool-result",
+            id: "hosted-late-content",
+            name: "HostedSearch",
+            result: { status: "complete" },
+            isFailure: false,
+            providerExecuted: true,
+          },
+          { type: "finish", reason: "tool-calls", usage },
+          { type: "text-start", id: "after-finish" },
+        ]),
+      );
+
+      const exit = yield* AgentRuntime.stream(agent, { question: "late" }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      const observed = yield* Ref.get(events);
+
+      expect(failure).toBeInstanceOf(ModelProtocolError);
+      expect(failure.message).toContain("content after its finish part");
+      expect(observed.filter((event) => event._tag === "ToolCallSucceeded")).toHaveLength(0);
+      expect(observed.filter((event) => event._tag === "TurnCompleted")).toHaveLength(0);
       expect(observed.filter((event) => event._tag === "RunFailed")).toHaveLength(1);
     }),
   );
@@ -1422,6 +3677,105 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         model: yield* Deferred.isDone(modelFinalized),
         tool: yield* Deferred.isDone(toolFinalized),
       }).toEqual({ model: true, tool: true });
+    }),
+  );
+
+  it.effect("preserves interruption-only Tool handler Causes without failure telemetry", () =>
+    Effect.gen(function* () {
+      const spans: Array<Tracer.NativeSpan> = [];
+      const logs: Array<ExportedLogObservation> = [];
+      const tracer = Tracer.make({
+        span(options) {
+          const span = new Tracer.NativeSpan(options);
+          spans.push(span);
+          return span;
+        },
+      });
+      const logger = Logger.make<unknown, void>((options) => {
+        logs.push(exportedLogObservation(options));
+      });
+      const toolStarted = yield* Deferred.make<void>();
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const Wait = Tool.make("wait_interrupted", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const tools = Toolkit.make(Wait);
+      const definition = Agent.define("interrupted-tool-observability", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Wait for interruption.",
+        toolkit: tools,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const model = modelFromParts([
+        {
+          type: "tool-call",
+          id: "wait-interrupted-1",
+          name: "wait_interrupted",
+          params: {},
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const toolLayer = tools.toLayer({
+        wait_interrupted: () =>
+          Deferred.succeed(toolStarted, undefined).pipe(Effect.andThen(Effect.never)),
+      });
+
+      const fiber = yield* AgentRuntime.stream(Agent.withModel(definition, model), {
+        question: "wait",
+      }).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.provideService(Tracer.Tracer, tracer),
+        Effect.provide(Logger.layer([logger])),
+        Effect.forkChild,
+      );
+      yield* Deferred.await(toolStarted);
+      const interruptor = 7335;
+      fiber.interruptUnsafe(interruptor);
+      const exit = yield* Fiber.await(fiber);
+
+      if (Exit.isSuccess(exit)) throw new Error("Expected the Tool handler to be interrupted");
+      expect(exit.cause.reasons).toHaveLength(1);
+      expect(exit.cause.reasons[0]?._tag).toBe("Interrupt");
+      if (!Cause.isInterruptReason(exit.cause.reasons[0])) {
+        throw new Error("Expected an interruption-only Tool Cause");
+      }
+      expect(exit.cause.reasons[0].fiberId).toBe(interruptor);
+
+      const observed = yield* Ref.get(events);
+      expect(
+        observed.filter(
+          (event) => event._tag === "ToolCallSucceeded" || event._tag === "ToolCallFailed",
+        ),
+      ).toEqual([]);
+      const span = spans.find((candidate) => candidate.name === "execute_tool wait_interrupted");
+      expect(Object.fromEntries(span?.attributes ?? [])).not.toHaveProperty(
+        "effect_agent.tool.outcome",
+      );
+      if (span?.status._tag !== "Ended" || !Exit.isFailure(span.status.exit)) {
+        throw new Error("Expected the interrupted Tool span to end with interruption");
+      }
+      expect(span.status.exit.cause.reasons).toHaveLength(1);
+      expect(span.status.exit.cause.reasons[0]?._tag).toBe("Interrupt");
+      if (!Cause.isInterruptReason(span.status.exit.cause.reasons[0])) {
+        throw new Error("Expected the Tool span to retain interruption");
+      }
+      expect(
+        logs.filter((entry) =>
+          ["agent tool execution completed", "agent tool execution failed"].includes(
+            renderedLogMessage(entry.message),
+          ),
+        ),
+      ).toEqual([]);
     }),
   );
 
@@ -2766,10 +5120,10 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       }
       // Official history carries the wire form: plain JSON, not the decoded
       // Schema.Class instance with its DateTime field.
-      expect(Option.isSome(Schema.decodeUnknownOption(Schema.Json)(callPart.params))).toBe(true);
-      const params = callPart.params as { readonly city: string; readonly departAt: unknown };
-      expect(params.city).toBe("Kyoto");
-      expect(typeof params.departAt).toBe("string");
+      const params = yield* Schema.decodeUnknownEffect(
+        Schema.Struct({ city: Schema.String, departAt: Schema.String }),
+      )(callPart.params);
+      expect(params).toEqual({ city: "Kyoto", departAt: "2026-08-12T09:00:00.000Z" });
       // The full official history round-trips through the Prompt codec into
       // plain JSON — the property the canonical persistence boundary needs.
       const encodedHistory = yield* Schema.encodeEffect(Prompt.Prompt)(finalHistory);
