@@ -23,6 +23,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           # or: provider: anthropic + anthropic-api-key
+          guidance-file: .github/review-guidance.md # committed review profile
           guidance: |
             This is an Effect codebase. Flag naked Promises in public APIs.
           ignore: "**/*.lock,dist/**"

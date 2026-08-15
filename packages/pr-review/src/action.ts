@@ -47,6 +47,7 @@ export interface ResolvedActionInputs {
   readonly applyVerdict: boolean;
   readonly fanOut: boolean;
   readonly guidance: string | undefined;
+  readonly guidanceFile: string | undefined;
   readonly ignore: ReadonlyArray<string>;
   readonly maxFindings: number | undefined;
   readonly failOn: FailOnPolicy;
@@ -65,6 +66,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   );
   const fanOut = yield* Config.boolean("PR_REVIEW_FAN_OUT").pipe(Config.withDefault(false));
   const guidance = yield* Config.option(Config.nonEmptyString("PR_REVIEW_GUIDANCE"));
+  const guidanceFile = yield* Config.option(Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault(""));
   const maxFindings = yield* Config.option(Config.int("PR_REVIEW_MAX_FINDINGS"));
   const failOn = yield* Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(
@@ -80,6 +82,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     applyVerdict,
     fanOut,
     guidance: Option.getOrUndefined(guidance),
+    guidanceFile: Option.getOrUndefined(guidanceFile),
     ignore: ignoreRaw
       .split(",")
       .map((pattern) => pattern.trim())
@@ -88,6 +91,45 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     failOn,
     skipUnchanged,
   } satisfies ResolvedActionInputs;
+});
+
+/** A configured guidance file could not be read; configuration faults fail loudly. */
+export class GuidanceFileUnreadable extends Schema.TaggedError<GuidanceFileUnreadable>()(
+  "GuidanceFileUnreadable",
+  {
+    path: Schema.String,
+    reason: Schema.String,
+  },
+) {
+  override get message() {
+    return `Cannot read guidance file '${this.path}': ${this.reason}`;
+  }
+}
+
+/**
+ * Resolve the effective review guidance: the committed guidance file (a
+ * repository-owned review profile) first, with any inline guidance appended.
+ * A configured-but-unreadable file fails typed — a review silently running
+ * without its profile would be worse than a red job.
+ */
+export const resolveGuidance = Effect.fn("resolveGuidance")(function* (inputs: {
+  readonly guidance: string | undefined;
+  readonly guidanceFile: string | undefined;
+}) {
+  const filePath = inputs.guidanceFile;
+  if (filePath === undefined) return inputs.guidance;
+  const fs = yield* FileSystem.FileSystem;
+  const content = yield* fs
+    .readFileString(filePath)
+    .pipe(
+      Effect.mapError((error) =>
+        GuidanceFileUnreadable.make({ path: filePath, reason: error.message }),
+      ),
+    );
+  const combined = [content.trim(), inputs.guidance ?? ""]
+    .filter((part) => part.length > 0)
+    .join("\n");
+  return combined.length > 0 ? combined : undefined;
 });
 
 /** One step-output line; values must be single-line by construction. */
@@ -228,8 +270,9 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
  */
 export const reviewActionProgram = Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const guidance = yield* resolveGuidance(inputs);
   const shared = {
-    guidance: inputs.guidance,
+    guidance,
     ignore: inputs.ignore,
     maxFindings: inputs.maxFindings,
     applyVerdict: inputs.applyVerdict,

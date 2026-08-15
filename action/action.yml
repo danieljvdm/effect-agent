@@ -40,6 +40,12 @@ inputs:
   guidance:
     description: "Extra review guidance injected into the reviewer's instructions."
     required: false
+  guidance-file:
+    description: >-
+      Path to a committed review-profile file whose content is injected into
+      the reviewer's instructions (before any inline guidance). Requires
+      actions/checkout; a configured-but-unreadable file fails the job.
+    required: false
   ignore:
     description: 'Comma-separated glob patterns removed from the review surface, e.g. "**/*.lock,dist/**".'
     required: false

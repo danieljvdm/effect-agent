@@ -49800,6 +49800,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const applyVerdict = yield* exports_Config.boolean("PR_REVIEW_APPLY_VERDICT").pipe(exports_Config.withDefault(false));
   const fanOut = yield* exports_Config.boolean("PR_REVIEW_FAN_OUT").pipe(exports_Config.withDefault(false));
   const guidance = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE"));
+  const guidanceFile = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""));
   const maxFindings = yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_FINDINGS"));
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
@@ -49811,11 +49812,31 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     applyVerdict,
     fanOut,
     guidance: exports_Option.getOrUndefined(guidance),
+    guidanceFile: exports_Option.getOrUndefined(guidanceFile),
     ignore: ignoreRaw.split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0),
     maxFindings: exports_Option.getOrUndefined(maxFindings),
     failOn,
     skipUnchanged
   };
+});
+
+class GuidanceFileUnreadable extends exports_Schema.TaggedError()("GuidanceFileUnreadable", {
+  path: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Cannot read guidance file '${this.path}': ${this.reason}`;
+  }
+}
+var resolveGuidance2 = exports_Effect.fn("resolveGuidance")(function* (inputs) {
+  const filePath = inputs.guidanceFile;
+  if (filePath === undefined)
+    return inputs.guidance;
+  const fs = yield* exports_FileSystem.FileSystem;
+  const content = yield* fs.readFileString(filePath).pipe(exports_Effect.mapError((error2) => GuidanceFileUnreadable.make({ path: filePath, reason: error2.message })));
+  const combined = [content.trim(), inputs.guidance ?? ""].filter((part) => part.length > 0).join(`
+`);
+  return combined.length > 0 ? combined : undefined;
 });
 var outputLine = (name, value4) => `${name}=${value4.replaceAll(`
 `, " ").slice(0, 1000)}
@@ -49891,8 +49912,9 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
+  const guidance = yield* resolveGuidance2(inputs);
   const shared = {
-    guidance: inputs.guidance,
+    guidance,
     ignore: inputs.ignore,
     maxFindings: inputs.maxFindings,
     applyVerdict: inputs.applyVerdict
@@ -49921,6 +49943,7 @@ var INPUT_TO_ENV = [
   ["INPUT_APPLY-VERDICT", "PR_REVIEW_APPLY_VERDICT"],
   ["INPUT_FAN-OUT", "PR_REVIEW_FAN_OUT"],
   ["INPUT_GUIDANCE", "PR_REVIEW_GUIDANCE"],
+  ["INPUT_GUIDANCE-FILE", "PR_REVIEW_GUIDANCE_FILE"],
   ["INPUT_IGNORE", "PR_REVIEW_IGNORE"],
   ["INPUT_MAX-FINDINGS", "PR_REVIEW_MAX_FINDINGS"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],

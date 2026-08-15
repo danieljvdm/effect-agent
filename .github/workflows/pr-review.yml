@@ -40,13 +40,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           # Dogfood the subagent fan-out variant (S1 attached delegation).
           fan-out: "true"
-          # This repository's non-negotiables (AGENTS.md), distilled for the
-          # reviewer. Fan-out injects these lines into every child reviewer.
-          guidance: |
-            This is the effect-agent framework repository: Effect v4, schema-first, fail-closed.
-            Flag as important: public asynchronous operations returning naked Promises instead of Effect or Stream; expected failures widened to unknown/Error/any; type assertions crossing a Schema boundary; decoding untrusted values by assertion instead of Schema.
-            Flag as blocking: any code or wording claiming exactly-once external side-effect execution, or calling something "durable" without naming the DN or DC assembly; an inward package importing an outward one (dependency direction: core <- engine <- capabilities; core <- engine <- session <- storage adapters; platform packages outermost); trusting model-supplied paths, ids, or ranges without fail-closed validation.
-            Do not flag style already enforced by the toolchain (formatting, import order, lint-level nits).
+          # The repository's deep Effect-architecture review profile —
+          # distilled from the effect-architecture-audit skill and AGENTS.md's
+          # non-negotiables. Fan-out injects it into every child reviewer.
+          guidance-file: .github/review-guidance.md
           # Generated and vendored surfaces the reviewer should never spend
           # budget on: the lockfiles, the committed action bundle, changesets
           # output, and dev-kit-managed skill copies.
