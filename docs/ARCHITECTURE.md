@@ -457,6 +457,7 @@ capabilities session sandbox-local
 
 Effect AI Model Layers -> engine
 sandbox <- capabilities (the CodeExecutor port consumed by Code Mode, ADR-0017)
+sandbox <- platform packages (isolated CodeExecutor adapters, ADR-0017)
 engine + selected adapters <- platform package
 core + engine <- testing
 core + engine + capabilities <- effect-agent (umbrella) <- pr-review (ADR-0016)

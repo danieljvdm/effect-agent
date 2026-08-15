@@ -128,6 +128,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "capabilities",
     "core",
     "engine",
+    "sandbox",
     "session",
     "storage-cloudflare",
     "testing",
