@@ -429,6 +429,10 @@ export interface ToolSpanTelemetryService {
   readonly isolateSpanLifecycle: <A, E, R>(
     stream: Stream.Stream<A, E, R>,
   ) => Stream.Stream<A, E, R>;
+  /** Effect counterpart used by programmatic Tool handlers nested inside an outer Tool stream. */
+  readonly isolateEffectSpanLifecycle: <A, E, R>(
+    effect: Effect.Effect<A, E, R>,
+  ) => Effect.Effect<A, E, R>;
   /** Keep Effect AI implementation annotations local while preserving host-owned handler spans. */
   readonly isolateToolkitHandle: <A, E, R>(
     effect: Effect.Effect<A, E, R>,
@@ -448,6 +452,16 @@ export class ToolSpanTelemetry extends Context.Service<
     ToolSpanTelemetry,
     Effect.map(Tracer.Tracer, (delegate) =>
       ToolSpanTelemetry.of({
+        isolateEffectSpanLifecycle: (effect) =>
+          Effect.suspend(() => {
+            const isolated = makeIsolatedToolTracer(delegate);
+            return effect.pipe(
+              Effect.provideService(Tracer.Tracer, isolated.tracer),
+              // `Effect.ensuring` runs after the measured span's finalizer, matching the Stream
+              // boundary below while keeping the broker's value and error channels unchanged.
+              Effect.ensuring(isolated.reportLifecycleDefects),
+            );
+          }),
         isolateToolkitHandle: (effect) =>
           Effect.currentSpan.pipe(
             Effect.option,
