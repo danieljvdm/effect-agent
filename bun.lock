@@ -26,6 +26,28 @@
         "vue": "catalog:",
       },
     },
+    "examples/code-mode-cloudflare": {
+      "name": "@effect-agent/example-code-mode-cloudflare",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect-agent/capabilities": "workspace:*",
+        "@effect-agent/core": "workspace:*",
+        "@effect-agent/engine": "workspace:*",
+        "@effect-agent/platform-cloudflare": "workspace:*",
+        "@effect-agent/sandbox": "workspace:*",
+        "@effect/ai-openai": "catalog:",
+        "@effect/sql-sqlite-do": "catalog:",
+        "effect": "catalog:",
+      },
+      "devDependencies": {
+        "@cloudflare/workers-types": "catalog:",
+        "esbuild": "catalog:",
+        "miniflare": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+        "vitest": "catalog:",
+      },
+    },
     "examples/demo": {
       "name": "@effect-agent/example-demo",
       "version": "0.0.0",
@@ -559,6 +581,8 @@
     "@effect-agent/core": ["@effect-agent/core@workspace:packages/core"],
 
     "@effect-agent/engine": ["@effect-agent/engine@workspace:packages/engine"],
+
+    "@effect-agent/example-code-mode-cloudflare": ["@effect-agent/example-code-mode-cloudflare@workspace:examples/code-mode-cloudflare"],
 
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 

@@ -1,0 +1,26 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "code-mode-cloudflare",
+  "main": "src/worker.ts",
+  "compatibility_date": "2025-05-01",
+  "compatibility_flags": ["nodejs_compat", "experimental"],
+  // The SQLite-backed warehouse Durable Object the read-only SQL tool queries.
+  "durable_objects": {
+    "bindings": [{ "name": "WAREHOUSE", "class_name": "WarehouseObject" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WarehouseObject"] }],
+  // The Worker Loader binding the Dynamic Worker Code Mode executor loads
+  // generated programs through (currently beta).
+  "worker_loaders": [{ "binding": "LOADER" }],
+  // The host RPC entrypoint the isolated program calls back into, bound to
+  // this same Worker (the production seam is ctx.exports.CodeModeHostEntrypoint()).
+  "services": [
+    {
+      "binding": "CODE_MODE_HOST",
+      "service": "code-mode-cloudflare",
+      "entrypoint": "CodeModeHostEntrypoint",
+    },
+  ],
+  // OPENAI_API_KEY is an optional secret (`wrangler secret put OPENAI_API_KEY`);
+  // without it the Worker runs the deterministic scripted profile.
+}
