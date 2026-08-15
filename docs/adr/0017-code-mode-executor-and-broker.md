@@ -36,8 +36,10 @@ constrains new packages.
    and `E`.
 2. **Executor port.** A callback-capable `CodeExecutor` service is added to
    `@effect-agent/sandbox` as a sibling of the existing command-based `Sandbox`. Requests,
-   results, limits, and expected errors are Effect Schemas; live host-call bindings are scoped
-   resources and are never persisted; implementations reuse the `SandboxImplementation`
+   results, limits, and expected errors are Effect Schemas; the per-pass `CodeExecutionHost` is an
+   Effect service in the executor's requirement channel, provided at the pass edge, and its live
+   host-call bindings are scoped resources that are never persisted; implementations reuse the
+   `SandboxImplementation`
    isolation-posture idiom (CAP-010) and reject limits they cannot enforce. This adds the
    documented `capabilities -> sandbox` dependency edge.
 3. **Engine-owned broker.** Programmatic invocation reaches original Toolkit handlers only

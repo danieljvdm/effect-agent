@@ -163,10 +163,14 @@ The target shape is conceptually:
 interface CodeExecutor {
   readonly execute: (
     request: CodeExecutionRequest,
-    host: CodeExecutionHost,
-  ) => Effect.Effect<CodeExecutionResult, CodeExecutionError, Scope.Scope>;
+  ) => Effect.Effect<CodeExecutionResult, CodeExecutionError, Scope.Scope | CodeExecutionHost>;
 }
 ```
+
+`CodeExecutionHost` is an Effect service in `R`, not an ordinary argument: the capability provides
+its per-pass Layer at the pass edge, so the executor's authority to reach host Tools stays visible
+in the requirement channel and intermediate code can neither supply nor capture the
+implementation — the same per-call-provided-service pattern as `DurableStep`.
 
 Requirements:
 
@@ -286,13 +290,16 @@ enters canonical state.
 
 ### 7.2 Invocation behavior
 
-The broker receives only:
+Per-call broker input is data only:
 
-- the parent Tool Call identity;
 - the selected namespace and method;
 - the encoded arguments;
-- the deterministic sequence index;
-- the live native Toolkit handlers and engine policy context.
+- the deterministic sequence index.
+
+The live native Toolkit handlers, engine policy context, and parent Tool Call identity are
+capabilities, not invocation data: they are bound once when the per-outer-call broker service is
+constructed at the Run boundary (section 5.3), so a caller inside business execution can never
+substitute handlers or policy.
 
 It returns one Schema-encoded success or typed failure envelope. Inside the generated program a
 failed call surfaces as a rejected Promise carrying that encoded envelope (a stable tag plus
