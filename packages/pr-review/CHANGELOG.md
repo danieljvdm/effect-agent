@@ -1,5 +1,37 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.7
+
+### Minor Changes
+
+- [#54](https://github.com/danieljvdm/effect-agent/pull/54) [`afe755a`](https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Context economics ([#54](https://github.com/danieljvdm/effect-agent/issues/54), RUN-022–027/CAP-017): application tool results are bounded by default (50 KiB
+  `TruncatedToolResult` envelopes), budget accounting becomes cache-aware with last-call
+  live-context tracking, every request can carry a derived run-status message, the token
+  dimension joins the `onExhaustion` soft landing (RUN-018) with the `exhausted` dimension marker,
+  and the engine compacts natively at the pre-Turn seam (prune, then one metered summarize)
+  with a canonical `CompactionCreated` record that projections fold across Runs; provider
+  context-length rejections compact-and-retry once, then fail typed (`ContextOverflowError`).
+
+- [#50](https://github.com/danieljvdm/effect-agent/pull/50) [`b44ed77`](https://github.com/danieljvdm/effect-agent/commit/b44ed7771c3e1ace2516507b0b54d11e662f036c) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Delegation containment (D-037, ADR-0019 S2, SUB-033): `Subagent.define` gains
+  `failureMode: "error" | "return"` (default `"error"`, today's semantics). Under `"return"` every
+  expected delegation failure — the declared child failure plus `SubagentPrestartDenied`,
+  `SubagentBudgetExhausted`, `SubagentProjectionFailure`, and `SubagentExecutionFailure` — becomes
+  model-visible result data in the Tool success union instead of failing the parent Run, so one
+  dead child cannot detonate a fan-out. The engine signals (`ToolCallWaiting`,
+  `SubagentDurabilityError`) always stay in the error channel, preserving durable suspension by
+  construction, and the durable settlement join records the contained failure with the same
+  non-failure polarity the live batch continues with. pr-review retires its same-name shadow-Tool
+  workaround for the first-party option, adopts the S1 `final-answer` soft landing in all three
+  default reviewer policies (an exhausted child or coordinator now returns a partial review instead
+  of "unit unreviewed: AgentPolicyError"), and reverts the fan-out `repeatedFailureLimit` sizing
+  hack. Contained unit failures reach coverage classification with richer tags
+  (`FileReviewUnitFailed:<childErrorTag>`).
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.7
+
 ## 0.1.0-beta.6
 
 ### Patch Changes
