@@ -65,14 +65,14 @@ packages/
   storage-cloudflare/   Durable Object SQLite persistence adapter and routed port protocol
   platform-node/        Class DN Node/SQLite Layer assembly and durable host
   platform-cloudflare/  Class DC Cloudflare Layer assembly (Conversation Objects, alarms)
-  pr-review/            Packaged GitHub pull-request reviewer (factory, adapters, CLI/Action entrypoints; D-034)
+  pr-review/            Packaged GitHub pull-request reviewer (factory, adapters, CLI/Action entrypoints)
   testing/              Scripted model, fixtures, and conformance test kit
 examples/
   demo/             Leaf TanStack Start browser bench
   pr-review/        Leaf consumer of @effect-agent/pr-review (guidance, extra tool, ignore globs)
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
-action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle; ADR-0016)
+action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle)
 ```
 
 Shared compiler options live in root `tsconfig.base.json`; they do not need a workspace package.
@@ -91,7 +91,7 @@ core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 
 `testing` is an outward test kit used by tests and examples. Production packages must never depend
 on it. Additional framework package directories are created only when their roadmap phase starts
-(`pr-review` is the one owner-directed post-roadmap exception, D-034). There is no `apps/`
+(`pr-review` is the one packaged application exception). There is no `apps/`
 workspace. `examples/*` are runnable, private leaf consumers: framework packages never import
 them, and they add no deployment or durability claim.
 
@@ -168,7 +168,7 @@ owner of the `@effect-agent` scope):
 5. `bun x changeset tag && git push --follow-tags`.
 
 All fourteen packages publish under the MIT license (owner decision
-2026-08-14, resolving the licensing half of D-023). The Cloudflare pair
+2026-08-14). The Cloudflare pair
 joined the channel after their declaration-emit fix: the Durable Object
 class factory carries an explicit `ConversationObjectClass` return type
 because TS4094 rejects inferring an exported anonymous class type around a
@@ -209,7 +209,7 @@ it once a fixed tsgo lands.
 
 The attributed Flue and Pi source snapshots are separate shallow Git submodules at `repos/flue`
 and `repos/pi`. Their gitlinks are pinned to the commits recorded in
-[REFERENCE-ANALYSIS.md](REFERENCE-ANALYSIS.md). A recursive clone initializes them; an existing
+attributed research inputs. A recursive clone initializes them; an existing
 clone can initialize them with:
 
 ```sh
@@ -241,19 +241,14 @@ install. Use the `dev-kit` skill before changing managed outputs.
 These are contributor instructions. They are not the runtime Skill abstraction described in the
 product specification and must not be imported by a framework package.
 
-The [project execution guide](guides/project-execution.md#3-skill-routing) maps implementation
-work to the focused skill references. Work items and prompt packets name the references they
-require, and phase evidence records any justified exception.
-
 ## Adding a package
 
-Create a package only when a roadmap phase requires it (or a recorded owner decision, per
-D-034):
+Create a package only for a genuinely new framework concern:
 
 1. add `packages/<name>/package.json`, `src/index.ts`, and `tsconfig.json`;
 2. use the working `@effect-agent/<name>` scope with the sibling manifest shape (MIT,
    `publishConfig.access: public`, source-first exports) — packages publish on the `beta`
-   dist-tag per D-023, and each new package needs its one-time npm trusted-publisher
+   dist-tag, and each new package needs its one-time npm trusted-publisher
    registration before CI can publish it; add the package to the single fixed release group in
    `.changeset/config.json`;
 3. use `catalog:` for shared external dependencies and `workspace:*` for internal packages;
@@ -261,7 +256,7 @@ D-034):
 5. add it to root `tsconfig.json` references;
 6. declare only inward workspace dependencies;
 7. provide `check`, `test`, and `build` scripts when the package has those behaviors;
-8. update `docs/ARCHITECTURE.md` and `docs/ROADMAP.md`;
+8. update `docs/ARCHITECTURE.md`;
 9. run `bun run ready`.
 
 Package export maps point to source during private development. Distribution builds are produced

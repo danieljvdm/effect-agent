@@ -114,4 +114,4 @@ other acquired resources. Closing it interrupts children and runs finalizers.
 
 This is distinct from durable abort. Interrupting a local waiter for accepted durable work
 detaches that waiter; aborting the Submission requires an explicit persisted command
-([Durable execution](../future/durable-execution)).
+([Persistence & durability](../concepts/durability)).

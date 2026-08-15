@@ -37,15 +37,12 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
       { text: "Architecture", link: "/concepts/effect-native", activeMatch: "/concepts/" },
-      { text: "Future", link: "/future/phases", activeMatch: "/future/" },
       { text: "Reference", link: "/reference/status", activeMatch: "/reference/" },
       {
         text: "Design source",
         items: [
           { text: "Product specification", link: "/PRODUCT" },
           { text: "Technical architecture", link: "/ARCHITECTURE" },
-          { text: "Decision register", link: "/DECISIONS" },
-          { text: "Implementation roadmap", link: "/ROADMAP" },
         ],
       },
     ],
@@ -77,20 +74,11 @@ export default defineConfig({
         ],
       },
       {
-        text: "Future target",
-        items: [
-          { text: "Phases", link: "/future/phases" },
-          { text: "Durable execution", link: "/future/durable-execution" },
-          { text: "Declared Subagents", link: "/future/subagents" },
-        ],
-      },
-      {
         text: "Reference",
         items: [
           { text: "Implementation status", link: "/reference/status" },
           { text: "Package map", link: "/reference/packages" },
           { text: "Normative specifications", link: "/REQUIREMENTS" },
-          { text: "Architecture decisions", link: "/adr/" },
         ],
       },
     ],

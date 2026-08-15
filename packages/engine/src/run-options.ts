@@ -82,7 +82,7 @@ export interface RunContextRequest {
   readonly source: Prompt.Prompt;
   /**
    * The exact model-visible final-output contract the engine appends to the
-   * prepared prompt after this hook returns (ADR-0020 proposed default), or
+   * prepared prompt after this hook returns (proposed default), or
    * undefined when the definition's output Schema cannot render to JSON
    * Schema. Exposed so a limit-targeting adapter can reserve the contract's
    * overhead in its own window calculation; the hook can size for the

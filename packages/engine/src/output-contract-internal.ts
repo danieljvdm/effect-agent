@@ -2,7 +2,7 @@ import type { Agent } from "@effect-agent/core";
 import { Prompt, Tool } from "effect/unstable/ai";
 
 /**
- * Model-visible final-output contract (ADR-0020 / D-038, both **Proposed**).
+ * Model-visible final-output contract (proposed default).
  *
  * The interpreter's only output-conformance point is `decodeFinalOutput`,
  * which validates the final text after the model has already finished; the
@@ -47,7 +47,7 @@ const contractDirective =
  * An output Schema the Effect AI derivation cannot represent is reported as
  * `unrenderable`; the caller falls back to the prior behavior — the contract
  * is guidance, and a Schema that decodes but does not render must not become
- * a new failure mode (ADR-0020 decision 3).
+ * a new failure mode.
  */
 export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputContract => {
   try {

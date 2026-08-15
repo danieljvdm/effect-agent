@@ -42,7 +42,7 @@ Requirements on the calling environment:
   every Tier-2 re-drive round advances the clock past the D5 ownership lease — the
   adapter-neutral reclaim lever after a mid-Attempt fault. If your ledger is configured with a
   non-default lease, pass `ownershipLeaseDuration`.
-- **One connection root for both ports** when your adapters must share one (the ADR-0011
+- **One connection root for both ports** when your adapters must share one (the session
   "same file" rule): pass the SAME combined Layer instance for both fields — Layer
   memoization builds it once. All three shipped runners do this for their SQL adapters.
 

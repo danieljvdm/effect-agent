@@ -88,6 +88,6 @@ approval.
 
 Today, a process crash loses an active ephemeral Tool Call. The future runtime will persist a
 prepared boundary before ordinary external effects and refuse to replay an ambiguous unresolved
-call. See [Durable execution](../future/durable-execution).
+call. See [Persistence & durability](../concepts/durability).
 
 </StatusCallout>

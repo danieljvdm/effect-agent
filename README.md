@@ -39,30 +39,23 @@ and a browser test bench under `examples/demo`.
 - Current packages: `effect-agent` (umbrella over the pure surface), `core`, `engine`, `capabilities`, `sandbox`, `sandbox-local`, `session`,
   `storage-memory`, `storage-sqlite`, `storage-cloudflare`, `platform-node`,
   `platform-cloudflare`, `pr-review` (packaged pull-request reviewer with a prebuilt GitHub
-  Action at `action/`; owner decision D-034), and `testing`
-- Current implementation milestone: **the roadmap table is complete** — Phase 7 internal
-  hardening ([evidence](docs/PHASE-7-EVIDENCE.md)) closes the final phase on top of the Phase 6
-  Cloudflare runtime ([evidence](docs/PHASE-6-EVIDENCE.md)), Phase 5 durable Tools and joined
-  input ([evidence](docs/PHASE-5-EVIDENCE.md)), and the Phase 4 durable Node/SQLite runtime
-  ([evidence](docs/PHASE-4-EVIDENCE.md)); **S1 attached ephemeral and S2 durable attached
-  Subagents implemented**, with the S2 `DC` conformance row discharged by Phase 6
-- Open governance, stated plainly: roadmap completion is an engineering claim, not a governance
-  one — [ADR-0010](docs/adr/0010-declared-attached-subagents.md) is formally **Proposed**;
-  ADRs 0011–0015 and decisions D-029…D-033 are **accepted by default awaiting owner review**;
-  no hosted-Cloudflare evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in
-  live-model suites are implemented and gate-skipped, with live execution a release-lane
-  action; open-source preparation remains the deferred next chapter
-  ([roadmap](docs/ROADMAP.md))
-- Subagents: declared attached delegation Tools are implemented for both slices as
-  roadmap-assigned proposed defaults — ephemeral (`E`) delegation with the engine spawner seam
-  and in-memory budget reservations ([S1 evidence](docs/S1-EVIDENCE.md)), and durable (`DN`)
-  attached children as separately admitted Submissions with requested/started/joined canonical
-  records, parent-owned budget reservations, `waitingForChild` suspension and durable wakeup,
-  verified Settlement joins, independent parent/child fencing, durable abort propagation, and
-  exact-digest Binding resolution under real process-kill tests
-  ([S2 evidence](docs/S2-EVIDENCE.md)); ADR-0010 remains Proposed, `DC` Subagents run the same
-  matrix across two Durable Objects under eviction ([P6 evidence](docs/PHASE-6-EVIDENCE.md)),
-  and no exactly-once child external effects are claimed
+  Action at `action/`), and `testing`
+- Current implementation milestone: the full build-out is complete — the ephemeral interpreter,
+  the durable Node/SQLite runtime, durable Tools and joined input, the Cloudflare Durable Object
+  runtime, internal hardening (certification, formal models, chaos), and both Subagent slices,
+  each proven by named test suites in the tree
+- Stated plainly: completion is an engineering claim, not a stability one — no hosted-Cloudflare
+  evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in live-model suites are
+  implemented and gate-skipped, with live execution a release-lane action; open-source
+  preparation remains the deferred next chapter
+- Subagents: declared attached delegation Tools are implemented for both slices — ephemeral
+  (`E`) delegation with the engine spawner seam and in-memory budget reservations, and durable
+  (`DN`) attached children as separately admitted Submissions with requested/started/joined
+  canonical records, parent-owned budget reservations, `waitingForChild` suspension and durable
+  wakeup, verified Settlement joins, independent parent/child fencing, durable abort
+  propagation, and exact-digest Binding resolution under real process-kill tests; `DC` Subagents
+  run the same matrix across two Durable Objects under eviction, and no exactly-once child
+  external effects are claimed
 - Target platforms: Node.js/SQLite and Cloudflare Workers/Durable Objects
 - First runtime: bounded, ephemeral multi-Run Conversations with safe-seam input, approval,
   context, budget, MCP, and sandbox capabilities
@@ -80,10 +73,9 @@ and a browser test bench under `examples/demo`.
   pre-armed alarm so eviction at every failpoint recovers without an incoming request,
   admission limits checked before any ledger row, cross-Object Subagent delegation over a typed
   routed port subset, and Travel Planner canonical outcomes byte-equal to `DN` after the
-  documented cross-platform normalization ([evidence](docs/PHASE-6-EVIDENCE.md))
+  documented cross-platform normalization
 
 Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usual RFC sense.
-Decisions labeled **Proposed** are recommendations, not settled owner decisions.
 
 ## Read this first
 
@@ -94,22 +86,11 @@ interfaces. The specifications below remain the normative design source.
 1. [Product specification](docs/PRODUCT.md)
 2. [Domain language](CONTEXT.md)
 3. [Technical architecture](docs/ARCHITECTURE.md)
-4. [Owner decision register](docs/DECISIONS.md)
-5. [Implementation roadmap](docs/ROADMAP.md)
-6. [Repository toolchain](docs/TOOLCHAIN.md)
-7. [Requirements and traceability index](docs/REQUIREMENTS.md)
-8. [Instructions for implementation agents](AGENTS.md)
-9. [AI-driven project execution guide](docs/guides/project-execution.md)
-10. [Target API examples](docs/guides/examples.md)
-11. [Progressive Travel Planner reference application](docs/guides/travel-planner.md)
-12. [Reference-project analysis](docs/REFERENCE-ANALYSIS.md)
-13. [Phase 1 evidence](docs/PHASE-1-EVIDENCE.md)
-14. [Phase 2 evidence](docs/PHASE-2-EVIDENCE.md)
-15. [Phase 3 evidence](docs/PHASE-3-EVIDENCE.md)
-16. [Phase 4 evidence](docs/PHASE-4-EVIDENCE.md)
-17. [Phase 5 evidence](docs/PHASE-5-EVIDENCE.md)
-18. [Phase 6 evidence](docs/PHASE-6-EVIDENCE.md)
-19. [Phase 7 evidence](docs/PHASE-7-EVIDENCE.md)
+4. [Repository toolchain](docs/TOOLCHAIN.md)
+5. [Requirements and traceability index](docs/REQUIREMENTS.md)
+6. [Instructions for implementation agents](AGENTS.md)
+7. [Target API examples](docs/guides/examples.md)
+8. [Progressive Travel Planner reference application](docs/guides/travel-planner.md)
 
 ## Detailed specifications
 
@@ -204,8 +185,7 @@ claim durable execution after it can demonstrate:
 - [Vite+ Effect/Cloudflare template](https://github.com/danieljvdm/vp-effect-cf-template)
 - [Contributor agent skills](https://github.com/danieljvdm/agent-skills)
 
-Flue and Pi are source material documented in
-[REFERENCE-ANALYSIS.md](docs/REFERENCE-ANALYSIS.md). All normative behavior is restated in the
+Flue and Pi are source material. All normative behavior is restated in the
 Effect-native specifications. Their pinned source snapshots live in the shallow Git submodules at
 `repos/flue` and `repos/pi`; the matching Effect source lives at `repos/effect`. Effect and Effect
 AI are the runtime foundation.

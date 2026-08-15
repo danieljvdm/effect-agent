@@ -70,5 +70,5 @@ The future target is already constraining today's interfaces:
 
 That is how durability can be added without replacing the authoring model.
 
-Continue to [Durable execution](../future/durable-execution) for the implemented `DN` surface and
+Continue to the [durability specification](../spec/durability) for the implemented `DN` surface and
 the planned Phase 5 durable Tool contracts.

@@ -3,7 +3,6 @@
 Status: Phase 7 (certified internal profiles) implemented on top of the Phase 6 `DC` slice, the
 Phase 5 durable booking slice, and the S1/S2 Subagent delegation slices — every phase row in
 the progression table below is executable evidence
-Owner decision: [D-026](../DECISIONS.md#d-026--progressive-reference-application)
 
 ## 1. Purpose
 
@@ -119,7 +118,7 @@ work explicitly non-durable. P4 adds the `DN` profile: a durable planning Submis
 a Receipt, keeps one FIFO trip lane, survives restart to the same projection, supports durable
 abort, and settles exactly once — while its fixture pins `supplierBookingReplaySafe: false`
 because replay-safe booking is P5 scope (`packages/testing/src/fixtures/travel-planner/phase4.ts`,
-`packages/testing/test/travel-planner-phase4.test.ts`; [Phase 4 evidence](../PHASE-4-EVIDENCE.md)).
+`packages/testing/test/travel-planner-phase4.test.ts`).
 P5 adds the durable booking slice: an idempotency-keyed supplier desk, an approval-gated
 `uncertain` `book_flight`, an `idempotent`-by-`bookingRef` `cancel_booking`, the `book_itinerary`
 Durable Tool whose named Steps derive supplier idempotency keys from `(toolCallId, stepName)`,
@@ -127,10 +126,10 @@ a supplier reconciliation Layer, explicit Unknown Outcomes with audited resoluti
 approval suspension, and joined traveler follow-ups — with crash tests that never fabricate a
 booking result (`packages/testing/src/fixtures/travel-planner/phase5.ts`,
 `packages/testing/test/travel-planner-phase5.test.ts`,
-`packages/platform-node/test/crash/crash.test.ts`; [Phase 5 evidence](../PHASE-5-EVIDENCE.md)).
+`packages/platform-node/test/crash/crash.test.ts`).
 The S1 slice adds the ephemeral `travel-coordinator` → `destination-researcher` delegation
 (`packages/testing/src/fixtures/travel-planner/subagents.ts`,
-`packages/testing/test/travel-planner-subagents.test.ts`; [S1 evidence](../S1-EVIDENCE.md)), and
+`packages/testing/test/travel-planner-subagents.test.ts`), and
 the S2 slice re-runs that delegation as accepted work on the `DN` runtime: a separately admitted
 child Submission with a Receipt, `waitingForChild` suspension without a worker permit, durable
 wakeup, a verified join with conserved reservation accounting, abort propagation, and
@@ -139,7 +138,7 @@ invocation-counted never-re-executed proof — while pinning
 (`packages/testing/src/fixtures/travel-planner/subagents-durable.ts`,
 `packages/testing/test/travel-planner-subagents-durable.test.ts`,
 `packages/platform-node/test/crash/crash-subagents.test.ts`;
-[S2 evidence](../S2-EVIDENCE.md)).
+`packages/testing/test/durable-subagents.test.ts`).
 P6 adds the `DC` profile: the same cumulative fixtures assembled with Cloudflare Layers inside
 workerd — one SQLite-backed Durable Object per Conversation, eviction and alarm redelivery as
 the exercised recovery path, approval suspension and Unknown Outcomes across eviction,
@@ -151,7 +150,7 @@ while `exactlyOnceExternalEffects` stays `false`
 `packages/testing/test/travel-planner-phase6.test.ts`,
 `packages/platform-cloudflare/test/travel-planner-dc.test.ts`,
 `packages/platform-cloudflare/test/restart/travel-planner-restart.test.ts`;
-[Phase 6 evidence](../PHASE-6-EVIDENCE.md)).
+`packages/platform-cloudflare/test/travel-planner-dc.test.ts`).
 P7 makes the Travel Planner one of the three certified internal Agents: the dual-profile pin
 `phase7TravelPlannerProfile` records as a decodable Schema value that the offline cumulative
 suites stay deterministic and credential-free while the live-model profile is opt-in
@@ -163,7 +162,7 @@ its recovery lanes without editing storage
 (`packages/testing/src/fixtures/travel-planner/phase7.ts`,
 `examples/providers/test/live-smoke.test.ts`,
 `packages/testing/test/security/redteam-supplier-injection.test.ts`;
-[Phase 7 evidence](../PHASE-7-EVIDENCE.md)).
+the certification suites).
 
 | Phase | Maturity                    | Travel Planner increment                                                                                                                                          | Required evidence                                                                                                                                      |
 | ----: | --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |

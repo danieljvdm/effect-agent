@@ -1235,7 +1235,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       // The resumed Attempt's model request saw the canonical prompt, tool result included,
       // without re-appended instructions or input. The second system message is the
-      // request-time ADR-0020 output contract, which is never canonical.
+      // request-time model-visible output contract, which is never canonical.
       expect(scripted.prompts).toHaveLength(2);
       const resumedPrompt = scripted.prompts[1];
       expect(resumedPrompt?.content.map((message) => message.role)).toEqual([

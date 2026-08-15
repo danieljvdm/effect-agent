@@ -1,7 +1,6 @@
 # Product specification
 
-Status: **Draft**  
-Owner decisions: [DECISIONS.md](DECISIONS.md)
+Status: **Draft**
 
 ## 1. Product thesis
 
@@ -113,7 +112,7 @@ execution is an explicit expert opt-in.
 
 Bounded does not mean brittle: by default, Turn and Tool Call exhaustion resolve through one
 constrained final-answer opportunity, and the Run completes with the honest
-`finishReason: "budget-exhausted"` instead of discarding finished work (D-037). The strict
+`finishReason: "budget-exhausted"` instead of discarding finished work. The strict
 run-fatal resolution remains an explicit policy choice, and duration, token, and cost bounds are
 always hard rails.
 

@@ -126,7 +126,7 @@ configured policy explicitly says otherwise.
 On the durable runtime (Phase 5), an unresolved approval is a **durable suspension**: the
 canonical approval request record is the safe boundary (durability §8), ownership ends, and the
 lane consumes no worker permit — durable suspension itself has no implicit timeout. Suspension
-is operational ledger state with no canonical "suspended" record (ADR-0012); the resuming
+is operational ledger state with no canonical "suspended" record; the resuming
 Attempt appends the canonical decision before honoring it and replays the declared Tool batch
 without re-invoking the model. An immediate policy decision commits atomically with its request.
 Denial remains terminal per the P2 policy default.
@@ -239,7 +239,7 @@ security sandbox.
 Code Mode is distinct from a general code interpreter: one native Effect AI Tool accepts bounded
 JavaScript source written by the model, executes it in one isolated pass, and lets the program
 call an explicit allowlist of existing Effect AI Tools through typed sandbox globals
-([ADR-0017](../adr/0017-code-mode-executor-and-broker.md), D-035). The generated program is one
+The generated program is one
 async function expression invoked by a fixed harness entrypoint. The handler never invokes a
 second model.
 
@@ -294,7 +294,7 @@ Schema-validated result.
 
 An ephemeral child uses structured concurrency and belongs to its parent Scope. A durable child is
 a separate accepted Submission with immutable parent linkage and independent Attempt ownership.
-The proposed design is not implemented until ADR-0010 and its roadmap slices are accepted.
+The full proposed authority model is not yet implemented.
 
 ## 11. Persistent agent state
 

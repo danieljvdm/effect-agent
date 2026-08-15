@@ -143,7 +143,7 @@ does not mean the runtime has accepted an obligation to finish active work.
 The durable runtime first commits a Submission obligation, then returns a Receipt. Attempts may
 be replaced after a crash, but exactly one terminal Settlement is eventually recorded. The base
 Node/SQLite runtime — fencing, recovery classification, and deterministic failpoints — is
-implemented ([Phase 4 evidence](../PHASE-4-EVIDENCE)); recovery resumes at Turn boundaries, so
+implemented; recovery resumes at Turn boundaries, so
 the claim covers safe-to-repeat toolkits. Honest unknown external outcomes, durable Steps, and
 replay-safe external mutations are Phase 5 work.
 
@@ -166,4 +166,3 @@ engine, or secure remote code sandbox.
 - [Build a Definition and Binding](./getting-started)
 - [Understand the Effect-native architecture](../concepts/effect-native)
 - [See exactly what is implemented](../reference/status)
-- [Inspect the future phase interfaces](../future/phases)

@@ -263,16 +263,16 @@ the same adapter-neutral case arrays the Node adapters run — passes inside wor
 eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry (double-fire
 and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted storage), and
 fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
-are implemented and green ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)). The tested harness is
+are implemented and green (see the platform-cloudflare test suites). The tested harness is
 workerd/Miniflare; the hosted production service, its observability adapters, and live soak
 remain explicitly unclaimed — Phase 7 completed the roadmap without hosted-platform evidence
-([Phase 7 evidence](../PHASE-7-EVIDENCE.md)), and hosted-service operation stays outside the
+(see the certification suites), and hosted-service operation stays outside the
 roadmap's claims until open-source preparation revisits it.
 
 ### Dynamic Worker Code Mode executor
 
 The first isolated `CodeExecutor` adapter is a Cloudflare Dynamic Worker Layer in
-`@effect-agent/platform-cloudflare` (ADR-0017). Each pass creates one fresh Worker through the
+`@effect-agent/platform-cloudflare`. Each pass creates one fresh Worker through the
 Worker Loader with `globalOutbound: null`, supplies only the scoped Tool-broker RPC stub and
 explicitly allowed structured values, applies the configured Dynamic Worker CPU and subrequest
 limits plus an executor-owned wall-clock deadline (an asynchronously suspended pass consumes no

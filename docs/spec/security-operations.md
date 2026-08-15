@@ -161,7 +161,7 @@ Untrusted code or commands require an actual isolation adapter. Policy defaults:
 Local unisolated runners are development-only and clearly labeled.
 
 Code Mode generated programs are model output and therefore untrusted input executing in an
-isolated executor (ADR-0017). The executor grants no ambient network, filesystem, environment,
+isolated executor. The executor grants no ambient network, filesystem, environment,
 secrets, platform bindings, or host SDK; the only host authority is the narrow, Schema-validated
 Tool-broker RPC surface over the construction-time allowlist. Source inspection and AST
 normalization are usability checks, never the security boundary — genuine runtime isolation,

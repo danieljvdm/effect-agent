@@ -5,7 +5,7 @@ description: Every bound an Agent runs under — Stop Policy limits, exhaustion 
 
 # Budgets & bounded autonomy
 
-<StatusCallout status="available" phase="P2 + budget arc (D-037)" title="Finite bounds, the final-answer exhaustion resolution, per-Run allowances, hierarchical usage budgets, and delegation reservations are all implemented and tested." />
+<StatusCallout status="available" phase="P2 + budget arc" title="Finite bounds, the final-answer exhaustion resolution, per-Run allowances, hierarchical usage budgets, and delegation reservations are all implemented and tested." />
 
 Every Agent runs under finite, explicit bounds. Unlimited execution is an expert opt-in, never a
 default. But _bounded_ does not mean _brittle_: a bound the model cannot see is a cliff, and an
@@ -123,7 +123,7 @@ _after the fact_; it is deliberately not a reservation service.
 
 ## Delegation budgets
 
-A delegated child answers to three ceilings at once (spec/subagents.md §7, D-013):
+A delegated child answers to three ceilings at once (spec/subagents.md §7):
 
 ```text
 model-granted allowance ≤ delegation reservation slice ≤ child Definition policy
@@ -191,4 +191,3 @@ declared-plus-programmatic count.
 - [Run & stream guide](/guide/run-agents) — finish reasons and Run options.
 - [Runtime specification](/spec/runtime) — RUN-011, RUN-016–021 normative text.
 - [Subagent specification](/spec/subagents) — §7 hierarchical budgets, SUB-033/034.
-- [ADR-0019](/adr/0019-budget-soft-landing-and-extension) — the budget arc's decision record.
