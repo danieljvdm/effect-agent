@@ -87,7 +87,9 @@ constrains new packages.
   `CAP`/`RUN`/`DEPLOY`/`SEC`/`TEST` families (decided at C0; IDs are coverage-gate-bearing only
   once defined in `docs/spec/*.md`).
 - Mid-pass budget consumption is new engine behavior; direct model-declared calls keep their
-  current Turn-boundary accounting unchanged.
+  current Turn-boundary accounting unchanged. (Amended 2026-08-15: the accounting is still
+  unchanged, but [ADR-0019](0019-budget-soft-landing-and-extension.md) changes the _default
+  resolution_ at the Turn seam from run-fatal to a final-answer soft landing.)
 - In class `E`, inner calls produce no Canonical Records: the Conversation Log carries only the
   outer Tool Call and bounded final result, with inner-call evidence in telemetry and host-Tool
   audit metadata. This observability boundary is documented, not incidental.

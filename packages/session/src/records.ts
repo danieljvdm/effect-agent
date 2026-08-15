@@ -387,6 +387,14 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
   outcome: SettlementOutcome,
   runId: Schema.optionalKey(RunId),
   result: Schema.optionalKey(PersistedJson),
+  /**
+   * Present only when a `completed` Run settled through the final-answer
+   * exhaustion resolution (RUN-011, RUN-018): the durable log must be able to
+   * distinguish honest-exhaustion completion from ordinary completion without
+   * the live event stream. Absent for every ordinary settlement, keeping
+   * existing histories and goldens byte-stable (additive, schemaVersion 1).
+   */
+  finishReason: Schema.optionalKey(Schema.Literal("budget-exhausted")),
 }) {}
 
 /**

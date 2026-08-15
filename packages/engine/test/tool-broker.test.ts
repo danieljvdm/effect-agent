@@ -739,7 +739,9 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         output: Schema.Struct({ answer: Schema.String }),
         instructions: "Orchestrate twice.",
         toolkit: outerToolkit,
-        policy: policy({ maxToolCalls: 3, maxTurns: 4 }),
+        // "fail" pins the Turn-seam fatality this test asserts; the default
+        // final-answer resolution is covered by the RUN-018 suite.
+        policy: policy({ maxToolCalls: 3, maxTurns: 4, onExhaustion: "fail" }),
       });
       const model = Model.make(
         "scripted",

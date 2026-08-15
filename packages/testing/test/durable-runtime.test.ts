@@ -350,6 +350,116 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     }),
   );
 
+  it.effect(
+    "RUN-018 a budget-exhausted Run settles the Submission completed with canonical synthetic Tool settlements",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        // Deliberately unannotated: an uncertain-class tool normally gains
+        // `ToolCallPrepared` records under the P5 split commits — a rejected
+        // batch must never durably declare, so none may appear here.
+        const Probe = Tool.make("probe", {
+          parameters: Schema.Struct({ query: Schema.String }),
+          success: Schema.Struct({ available: Schema.Boolean }),
+        });
+        const probeTools = Toolkit.make(Probe);
+        const definition = Agent.define("durable-soft-landing", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Probe before answering.",
+          toolkit: probeTools,
+          policy: AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const handlerStarts = yield* Ref.make(0);
+        const probeToolLayer = probeTools.toLayer({
+          probe: () =>
+            Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as({ available: true })),
+        });
+        const scripted = yield* makeScriptedModel((call) =>
+          call === 0
+            ? [
+                {
+                  type: "tool-call",
+                  id: "probe-1",
+                  name: "probe",
+                  params: { query: "a" },
+                  providerExecuted: false,
+                },
+                {
+                  type: "tool-call",
+                  id: "probe-2",
+                  name: "probe",
+                  params: { query: "b" },
+                  providerExecuted: false,
+                },
+                { type: "finish", reason: "tool-calls", usage },
+              ]
+            : finalParts('{"answer":"partial, budget exhausted"}'),
+        );
+        const agent = Agent.withModel(definition, scripted.model);
+        const conversation = "conversation-soft-landing";
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "Everything about the package?" },
+          submitOptions(conversation, "soft-landing-1"),
+        );
+        const settlements = yield* runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(probeToolLayer));
+
+        expect(settlements).toHaveLength(1);
+        expect(settlements[0]?.outcome).toBe("completed");
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+
+        const submissionId = receipt.submissionId;
+        const runId = runIdForSubmission(submissionId);
+        const records = yield* readLog(conversation);
+        // The rejected Turn commits as ONE single-batch canonical Turn — no
+        // `ToolCallPrepared`, no split response batch — and the Submission
+        // settles completed with the honest durable finishReason (RUN-011).
+        expect(logTags(records)).toEqual([
+          "ConversationCreated",
+          "UserInputRecorded",
+          "ModelResponseRecorded",
+          "ToolCallSettled",
+          "ToolCallSettled",
+          "ModelResponseRecorded",
+          "SubmissionSettled",
+        ]);
+        const settledCalls = records
+          .map((envelope) => envelope.record.payload)
+          .filter((payload) => payload._tag === "ToolCallSettled");
+        for (const payload of settledCalls) {
+          expect(payload).toMatchObject({ isFailure: true });
+        }
+        const settled = records.at(-1)?.record.payload;
+        expect(settled?._tag).toBe("SubmissionSettled");
+        if (settled?._tag === "SubmissionSettled") {
+          expect(settled.outcome).toBe("completed");
+          expect(settled.runId).toBe(runId);
+          expect(settled.finishReason).toBe("budget-exhausted");
+          expect(settled.result).toEqual({ answer: "partial, budget exhausted" });
+        }
+
+        // The canonical journal alone rebuilds the exact model-visible prompt,
+        // rejected batch included.
+        const prompt = yield* promptFromCanonicalRecords(records);
+        expect(prompt.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "assistant",
+          "tool",
+          "assistant",
+        ]);
+      }),
+  );
+
   it.effect("awaitSettlement waits on the poll fallback until the lane settles", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

@@ -16,6 +16,7 @@ The records below reflect explicit owner decisions.
 | [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces                                                                                                                  |
 | [ADR-0016](0016-pr-review-package.md)                          | Package the pull-request reviewer with a prebuilt GitHub Action (owner-directed, 2026-08-14)                                                                               |
 | [ADR-0017](0017-code-mode-executor-and-broker.md)              | Code Mode: `CodeExecutor` port in sandbox, engine-owned native Tool broker, one native Tool over an explicit allowlist (owner-directed, 2026-08-14; ephemeral slices only) |
+| [ADR-0019](0019-budget-soft-landing-and-extension.md)          | Budget soft landing: `onExhaustion` final-answer default, synthetic batch settlement, one grace Turn, honest `budget-exhausted` settlement; containment and extension slices assigned (owner-directed, 2026-08-15) |
 
 ## Accepted by default
 

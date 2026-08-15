@@ -111,6 +111,12 @@ Every default policy specifies finite maximums for Turns, Tool Calls, duration, 
 Token and cost budgets SHOULD be supported when the Effect AI Model/provider reports them. Unlimited
 execution is an explicit expert opt-in.
 
+Bounded does not mean brittle: by default, Turn and Tool Call exhaustion resolve through one
+constrained final-answer opportunity, and the Run completes with the honest
+`finishReason: "budget-exhausted"` instead of discarding finished work (D-037). The strict
+run-fatal resolution remains an explicit policy choice, and duration, token, and cost bounds are
+always hard rails.
+
 ### 4.6 Provider portability is honest
 
 The framework guarantees common semantic behavior, not byte-identical behavior. Provider-specific

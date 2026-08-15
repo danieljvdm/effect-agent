@@ -266,7 +266,7 @@ interface AgentResult<A> {
   readonly runId: RunId;
   readonly turns: number;
   readonly usage: Usage;
-  readonly finishReason: "completed" | "model-stop";
+  readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
   readonly transcript: Transcript;
 }
 ```

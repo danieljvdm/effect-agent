@@ -192,7 +192,7 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     conversationId: ConversationId,
     runId: RunId,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
-    finishReason: Schema.Literals(["completed", "model-stop"]),
+    finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
   });
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
@@ -334,6 +334,8 @@ interface TurnTrace {
     readonly name: string;
     readonly encodedResult: unknown;
     readonly isFailure: boolean;
+    /** Settled synthetically by budget rejection: no handler ran, exempt from repeated-failure folding. */
+    readonly budgetRejected?: boolean;
   }>;
   finished: boolean;
   finishReason: Response.FinishReason | undefined;
@@ -570,6 +572,48 @@ const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(functi
     message: errorMessage(error),
     providerExecuted: false,
   });
+});
+
+/**
+ * Settle an over-budget declared Tool batch without starting any handler
+ * (RUN-018): every open application call is marked settled in the trace with
+ * the encoded policy failure as its model-visible result, flagged
+ * `budgetRejected` so it is exempt from repeated-failure folding, and one
+ * `ToolCallFailed` is emitted per call with no `ToolCallStarted` (the
+ * approval-denied precedent). The caller hands the trace to
+ * `toolBatchContinuation`, so the synthetic results advance history through
+ * the ordinary tool message and — under a durable coordinator that never saw
+ * a response commit for this Turn — settle canonically via the single-batch
+ * Turn commit.
+ */
+const settleRejectedBatch = Effect.fn("AgentRuntime.settleRejectedBatch")(function* (
+  context: RunContext,
+  turnId: TurnId,
+  trace: TurnTrace,
+  policyError: AgentPolicyError,
+  alreadySettled?: ReadonlySet<string>,
+): Effect.fn.Return<ReadonlyArray<RunEvent>, ModelProtocolError> {
+  const encodedResult = {
+    _tag: policyError._tag,
+    limit: policyError.limit,
+    message: policyError.message,
+  };
+  const events: Array<RunEvent> = [];
+  for (const [index, call] of trace.applicationToolCalls.entries()) {
+    if (alreadySettled?.has(call.id) === true) {
+      continue;
+    }
+    trace.finalToolResultIds.add(call.id);
+    trace.applicationToolResults[index] = {
+      id: call.id,
+      name: call.name,
+      encodedResult,
+      isFailure: true,
+      budgetRejected: true,
+    };
+    events.push(yield* makeToolFailedEvent(context, turnId, call, policyError));
+  }
+  return events;
 });
 
 /**
@@ -1493,7 +1537,9 @@ const turnToolFailures = (trace: TurnTrace): ReadonlyArray<boolean> => {
       continue;
     }
     const result = trace.applicationToolResults.find((candidate) => candidate?.id === id);
-    if (result !== undefined) {
+    // Budget-rejected calls never ran a handler; they neither advance nor
+    // reset the consecutive-failure counter.
+    if (result !== undefined && result.budgetRejected !== true) {
       outcomes.push(result.isFailure);
     }
   }
@@ -2431,11 +2477,23 @@ const makeTurn = <
         }).pipe(Effect.withLogSpan("AgentRuntime.model")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
+      // Final-answer mode (RUN-018/RUN-019): once the Turn or Tool Call
+      // budget is exhausted, the model keeps its toolkit declaration but may
+      // not call it. Both conditions are pure derivations of committed state
+      // (`turn`, `priorToolCalls`, `programmaticToolCalls`), so a durable
+      // replay reconstructs the same constraint. Strict `>` keeps an
+      // exact-cap Run on today's unconstrained path byte-for-byte.
+      const policy = agent.definition.policy;
+      const finalAnswerOnly =
+        policy.onExhaustion !== "fail" &&
+        (turn > policy.maxTurns ||
+          priorToolCalls + context.programmaticToolCalls > policy.maxToolCalls);
       const response = guardBudgetStream(
         LanguageModel.streamText({
           prompt: modelContext.prompt,
           toolkit: agent.definition.toolkit,
           disableToolCallResolution: true,
+          ...(finalAnswerOnly ? { toolChoice: "none" as const } : {}),
         }),
         options.budget,
       ).pipe(
@@ -2470,6 +2528,17 @@ const makeTurn = <
               ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }),
             );
           }
+          // Fail-closed (RUN-020): a final-answer Turn requested with
+          // `toolChoice: "none"`, so any declared call — application or
+          // provider-executed — is a protocol violation, never another
+          // rejection round.
+          if (finalAnswerOnly && trace.toolCalls.size > 0) {
+            return failRunEventStream(
+              ModelProtocolError.make({
+                message: `Model declared ${trace.toolCalls.size} Tool Call(s) under toolChoice "none" after budget exhaustion`,
+              }),
+            );
+          }
           const providerOnly =
             trace.toolCalls.size > 0 &&
             Array.from(trace.toolCalls.values()).every(({ providerExecuted }) => providerExecuted);
@@ -2484,11 +2553,12 @@ const makeTurn = <
             );
           }
           const toolCalls = priorToolCalls + trace.toolCalls.size;
-          if (toolCalls + context.programmaticToolCalls > agent.definition.policy.maxToolCalls) {
+          const overToolBudget = toolCalls + context.programmaticToolCalls > policy.maxToolCalls;
+          if (overToolBudget && policy.onExhaustion === "fail") {
             return failRunEventStream(
               AgentPolicyError.make({
                 limit: "tool-calls",
-                message: `Agent exceeded its ${agent.definition.policy.maxToolCalls} Tool Call limit`,
+                message: `Agent exceeded its ${policy.maxToolCalls} Tool Call limit`,
               }),
             );
           }
@@ -2564,11 +2634,17 @@ const makeTurn = <
                   ? steering
                   : takeFollowUps(context, options.commandDrainPolicy ?? "one");
               if (queued.length > 0) {
-                if (turn >= agent.definition.policy.maxTurns) {
+                // Final-answer mode admits exactly one grace Turn past
+                // `maxTurns` (RUN-019): `turn > maxTurns` can only be
+                // `maxTurns + 1`, so a second grace is structurally
+                // impossible.
+                const turnsBlocked =
+                  policy.onExhaustion === "fail" ? turn >= policy.maxTurns : turn > policy.maxTurns;
+                if (turnsBlocked) {
                   return failRunEventStream(
                     AgentPolicyError.make({
                       limit: "turns",
-                      message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+                      message: `Agent exceeded its ${policy.maxTurns} Turn limit`,
                     }),
                   );
                 }
@@ -2587,7 +2663,10 @@ const makeTurn = <
                     ...base,
                     output,
                     turns: turn,
-                    finishReason: "model-stop",
+                    // A Run settled under the final-answer constraint reports
+                    // the exhaustion honestly (RUN-011), never a plain model
+                    // stop.
+                    finishReason: finalAnswerOnly ? "budget-exhausted" : "model-stop",
                   }),
                 ),
               );
@@ -2605,11 +2684,50 @@ const makeTurn = <
                 }),
               );
             }
-            if (turn >= agent.definition.policy.maxTurns) {
+            const turnsBlocked =
+              policy.onExhaustion === "fail" ? turn >= policy.maxTurns : turn > policy.maxTurns;
+            if (turnsBlocked) {
               return failRunEventStream(
                 AgentPolicyError.make({
                   limit: "turns",
-                  message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+                  message: `Agent exceeded its ${policy.maxTurns} Turn limit`,
+                }),
+              );
+            }
+            // RUN-018: the over-budget batch never executes a handler and is
+            // never durably declared — it settles synthetically through the
+            // ordinary batch continuation, so the model sees one failed
+            // result per rejected call and the next Turn is final-answer
+            // constrained. `commitResponse` is deliberately skipped: with no
+            // response commit the Turn stays on the single-batch canonical
+            // commit shape and recovery replays it like any no-tool Turn. The
+            // rejected Turn's usage is still charged via
+            // `afterValidatedResponse` because the Run continues.
+            if (overToolBudget && trace.applicationToolCalls.length > 0) {
+              return afterValidatedResponse(
+                Effect.gen(function* () {
+                  const rejection = yield* settleRejectedBatch(
+                    context,
+                    turnId,
+                    trace,
+                    AgentPolicyError.make({
+                      limit: "tool-calls",
+                      message: `Tool Call budget exhausted: this Run's ${policy.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
+                    }),
+                  );
+                  return Stream.fromIterable(rejection).pipe(
+                    Stream.concat(
+                      toolBatchContinuation(
+                        agent,
+                        context,
+                        trace,
+                        prompt,
+                        turn,
+                        toolCalls,
+                        options,
+                      ),
+                    ),
+                  );
                 }),
               );
             }
@@ -2934,20 +3052,24 @@ const makeResumeTurn = <
           isFailure: settledCall.isFailure,
         };
       }
+      const policy = agent.definition.policy;
       const toolCalls = trace.toolCalls.size;
-      if (toolCalls + context.programmaticToolCalls > agent.definition.policy.maxToolCalls) {
+      const overToolBudget = toolCalls + context.programmaticToolCalls > policy.maxToolCalls;
+      if (overToolBudget && policy.onExhaustion === "fail") {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "tool-calls",
-            message: `Agent exceeded its ${agent.definition.policy.maxToolCalls} Tool Call limit`,
+            message: `Agent exceeded its ${policy.maxToolCalls} Tool Call limit`,
           }),
         );
       }
-      if (turn >= agent.definition.policy.maxTurns) {
+      const turnsBlocked =
+        policy.onExhaustion === "fail" ? turn >= policy.maxTurns : turn > policy.maxTurns;
+      if (turnsBlocked) {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "turns",
-            message: `Agent exceeded its ${agent.definition.policy.maxTurns} Turn limit`,
+            message: `Agent exceeded its ${policy.maxTurns} Turn limit`,
           }),
         );
       }
@@ -3002,6 +3124,29 @@ const makeResumeTurn = <
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
+      // RUN-018 on the resume path: a canonically declared over-budget batch
+      // settles synthetically under final-answer mode — recorded settled
+      // results stand verbatim, only open calls get the synthetic failure,
+      // and no handler starts. Once the synthetic settlements commit, the
+      // pending batch is complete and recovery offers no further resume.
+      if (overToolBudget) {
+        const rejection = yield* settleRejectedBatch(
+          context,
+          turnId,
+          trace,
+          AgentPolicyError.make({
+            limit: "tool-calls",
+            message: `Tool Call budget exhausted: this Run's ${policy.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
+          }),
+          settledIds,
+        );
+        return started.pipe(
+          Stream.concat(Stream.fromIterable(rejection)),
+          Stream.concat(
+            toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
+          ),
+        );
+      }
       const toolResults = guardBudgetStream(
         executeToolBatch(
           context,

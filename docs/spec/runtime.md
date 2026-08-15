@@ -63,11 +63,31 @@ The transition reducer should be pure wherever possible. Effects interpret decis
 hide transition rules.
 
 Stop Policy evaluation (step 16) enforces the finite Agent Policy at the Turn seam, before the
-next model request. Turn and Tool Call limits fail the Run before the work that would exceed them
-starts. Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool Call
-outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool Call
-success resets it, and reaching `repeatedFailureLimit` fails the Run with the typed policy failure
-(`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.
+next model request. Turn and Tool Call limits bound the work itself: work that would exceed them
+never starts. How exhaustion resolves is policy-selected via `onExhaustion`:
+
+- `"fail"` fails the Run typed (`AgentPolicyError`) at the seam, exactly the pre-RUN-018
+  behavior.
+- `"final-answer"` (the default) gives the model one constrained settlement opportunity. An
+  over-budget declared Tool batch never executes a handler and is never durably declared as a
+  pending batch; every open call settles synthetically as a model-visible failed result carrying
+  the encoded policy failure, exempt from repeated-failure folding. Every subsequent model
+  request forbids tool use (`toolChoice: "none"`), and Turn exhaustion admits exactly one grace
+  Turn past `maxTurns` under the same constraint. A Run that settles this way completes with
+  `finishReason: "budget-exhausted"` (RUN-011), and a model that declares a Tool Call under the
+  constraint fails the Run typed (`ModelProtocolError`, RUN-020).
+
+Duration, token, cost, and hierarchical budget-hook bounds are hard rails regardless of
+`onExhaustion`. Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
+Call outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool
+Call success resets it, and reaching `repeatedFailureLimit` fails the Run with the typed policy
+failure (`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.
+Budget-rejected synthetic settlements neither advance nor reset that counter.
+
+Note on durable Attempts: the batch-resume seam counts Tool Calls from the resumed batch onward,
+so `maxToolCalls` is enforced per Attempt under the durable coordinator. This is existing,
+documented behavior; cumulative cross-Attempt accounting would require persisted counters and is
+deliberately out of scope for RUN-018.
 
 ## 4. Effect AI response reduction
 
@@ -382,7 +402,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-008:** Interruption propagates to all attached children.
 - **RUN-009:** Concurrency is bounded.
 - **RUN-010:** Slow detached observers cannot determine durable liveness.
-- **RUN-011:** Budget exhaustion cannot masquerade as success.
+- **RUN-011:** Budget exhaustion cannot masquerade as success. A Run that settles through the
+  final-answer resolution carries `finishReason: "budget-exhausted"` — never `"model-stop"` — on
+  the live terminal event and on the durable `SubmissionSettled` record.
 - **RUN-012:** Provider SDK types do not enter Conversation records; Effect AI Prompt and Response
   values remain the model-facing boundary.
 - **RUN-013:** No retry policy can blindly repeat an uncertain external effect.
@@ -396,3 +418,14 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-017:** Every programmatic Tool call consumes the Run's Tool-call and duration budgets
   before its handler is invoked; exhaustion prevents the next call mid-pass while direct calls
   keep their Turn-boundary accounting.
+- **RUN-018:** Under `onExhaustion: "final-answer"` (the default), an over-budget declared Tool
+  batch never executes a handler and is never durably declared: every open call settles
+  synthetically as a model-visible failed result exempt from repeated-failure folding,
+  subsequent model requests forbid tool use, and the Run completes with
+  `finishReason: "budget-exhausted"`. Under `"fail"` the Run fails typed before the batch
+  starts.
+- **RUN-019:** Turn exhaustion under `"final-answer"` admits exactly one grace Turn past
+  `maxTurns`, with tool use forbidden; the pending batch at the final permitted Turn executes
+  normally, and no second grace Turn exists. Under `"fail"` the Run fails typed at the seam.
+- **RUN-020:** Final-answer Turns are fail-closed: a model that declares any Tool Call under a
+  `toolChoice: "none"` request fails the Run typed.

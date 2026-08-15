@@ -24,12 +24,16 @@ interface AgentResult<Output> {
   readonly conversationId: ConversationId;
   readonly runId: RunId;
   readonly turns: number;
-  readonly finishReason: "completed" | "model-stop";
+  readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
 }
 ```
 
-Budget exhaustion, pending approval, interruption, and failed output decoding are not successful
-finish reasons.
+Under the default `onExhaustion: "final-answer"` policy, a Run that exhausts its Turn or Tool
+Call budget settles with one constrained final-answer Turn and reports it honestly as
+`finishReason: "budget-exhausted"` (its `turns` count may exceed `maxTurns` by that one grace
+Turn). Duration, token, and cost exhaustion, pending approval, interruption, and failed output
+decoding are never successful finish reasons; with `onExhaustion: "fail"`, Turn and Tool Call
+exhaustion fail typed as well.
 
 ## Observe semantic events
 
