@@ -17,7 +17,6 @@ export * from "./config.ts";
 export * from "./alarm.ts";
 export * from "./wake-scheduler.ts";
 export * from "./transport.ts";
-export * from "./telemetry.ts";
 export * from "./layers.ts";
 export * from "./conversation-object.ts";
 export * from "./client.ts";

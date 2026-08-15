@@ -22,7 +22,6 @@ import type {
   EffectBindingsConversationObject,
   LimitedConversationObject,
   SubagentConversationObject,
-  TelemetryAcquisitionConversationObject,
   TelemetryConversationObject,
   TestConversationObject,
   TinyDatabaseConversationObject,
@@ -39,7 +38,6 @@ declare global {
       ARRAY_BINDINGS: DurableObjectNamespace<ArrayBindingsConversationObject>;
       EFFECT_BINDINGS: DurableObjectNamespace<EffectBindingsConversationObject>;
       TELEMETRY: DurableObjectNamespace<TelemetryConversationObject>;
-      TELEMETRY_ACQUISITION: DurableObjectNamespace<TelemetryAcquisitionConversationObject>;
     }
   }
 }
@@ -59,8 +57,7 @@ export type TestNamespace =
   | "DYNAMIC_BINDINGS"
   | "ARRAY_BINDINGS"
   | "EFFECT_BINDINGS"
-  | "TELEMETRY"
-  | "TELEMETRY_ACQUISITION";
+  | "TELEMETRY";
 
 /** A FRESH stub for the named Conversation (never cache stubs across aborts). */
 export const stubFor = (conversation: string, namespace: TestNamespace = "CONVERSATIONS") => {

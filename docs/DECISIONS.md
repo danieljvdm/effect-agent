@@ -502,9 +502,9 @@ otherwise unchanged.
 
 Record: [ADR-0016](adr/0016-pr-review-package.md)
 
-### D-036 — Native Tool observability and Cloudflare exporter lifecycle
+### D-036 — Native Tool observability and Cloudflare lifecycle ownership
 
-**Status:** Accepted (owner-directed, 2026-08-14)
+**Status:** Accepted (owner-directed, 2026-08-14; Cloudflare ownership amended 2026-08-15)
 
 **Decision:** Make the engine's logical application-handler lifecycle the canonical content-free
 OpenTelemetry `execute_tool` span, deriving terminal status from the actual Tool result so
@@ -520,25 +520,19 @@ defective reporter so observability never changes Tool settlement. Early-close c
 typed failures and defects rather than silently discarding them; the canonical span restores its
 bounded outcome attribute from authenticated private terminal state before export.
 
-Let Cloudflare hosts provide an outer Effect observability Layer plus a vendor-neutral flush
-service at the Worker factory boundary. The runtime Layer requires that capability explicitly;
-the host Layer may consume Object context and fail acquisition typed, while the factory alone
-chooses the no-op default when no Layer is passed. After every native RPC, port, wake, and alarm
-span closes, reserve background export for `ctx.waitUntil`; native delivery never awaits it.
-Apply a schema-validated cooperative timeout to interruptible exporters without claiming a hard
-bound for uninterruptible work. Coalesce
-deliveries per Object incarnation into shared pending/trailing/queued batch tickets before
-`waitUntil`; each batch waits for its reserved deliveries to settle and only its first owner
-registers the shared background Promise. Cap cycles at one first plus at most one trailing attempt,
-with one queued cycle while trailing runs, without concurrent exporters, per-delivery background
-registrations, or a waiter queue. Preserve typed failures, defects, and interruption until the final
-always-fulfilled `waitUntil` bridge, but automatically log only bounded framework-owned failure
-classifications. Export failure, defect, or timeout never replaces the original success/failure or
-alarm retry signal. A synchronous `waitUntil` registration failure logs only its bounded
-classification, does not invoke the unowned exporter continuation, and likewise returns the exact
-delivery Promise. Export adapters retain foreign causes in the typed
-`CloudflareTelemetryExportError` for explicit host-controlled diagnostics; foreign causes, defects,
-fiber IDs, and platform Causes never enter automatic logs. Keep the `ManagedRuntime` cached for the
-Object incarnation and change no canonical or wire schema.
+Use `effect-cf` as the single Cloudflare native lifecycle owner. `makeConversationObjectClass`
+adapts the existing Effect Agent storage, routing, alarm, and coordinator Layers into
+`effect-cf`'s `DurableObject.make`; `effect-cf` owns the cached `ManagedRuntime`, native RPC method
+execution, per-event Layer scope, `DurableObjectState.waitUntil`, optional
+`OtlpExporter.Flusher`, and content-free post-RPC flush-failure isolation on success and failure.
+The Worker may pass an event-scoped observability Layer as the factory's second argument; omitting
+it installs no framework no-op service because no Effect Agent telemetry service exists.
 
-Record: [ADR-0018](adr/0018-native-tool-observability.md)
+Effect Agent does not implement a parallel flush coordinator, reservation queue, exporter timeout,
+or `waitUntil` diagnostic boundary. `effect-cf@0.25.2` does not yet schedule the same post-exit
+flush for its raw alarm hook; that gap remains owned upstream and must not be filled by a private
+Effect Agent lifecycle implementation. Alarm rejection and retry semantics remain unchanged. No
+canonical record, wire Schema, settlement, or replay behavior changes.
+
+Records: [ADR-0018](adr/0018-native-tool-observability.md), superseded for Cloudflare lifecycle by
+[ADR-0019](adr/0019-effect-cf-cloudflare-lifecycle.md)

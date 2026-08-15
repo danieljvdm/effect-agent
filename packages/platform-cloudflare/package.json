@@ -31,7 +31,8 @@
     "@effect-agent/storage-cloudflare": "workspace:*",
     "@effect/platform-browser": "catalog:",
     "@effect/sql-sqlite-do": "catalog:",
-    "effect": "catalog:"
+    "effect": "catalog:",
+    "effect-cf": "catalog:"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "catalog:",

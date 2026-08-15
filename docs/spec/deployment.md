@@ -128,19 +128,12 @@ Configuration families include:
 - retention;
 - feature flags and compatibility gates.
 
-Native entrypoint instrumentation in `makeConversationObjectClass` explicitly requires
-`CloudflareRuntimeTelemetry`; `CloudflareDurableRuntime.layer` itself owns only the durable runtime
-assembly. A Worker supplies the host Layer as the second
-`makeConversationObjectClass(options, telemetry)` argument; that outer Layer may install Effect Logger, Tracer, Metric, and exporter services, require
-`DurableObjectContext` or `ConversationObjectNamespace`, and fail acquisition typed. The factory
-is generic over any additional services that merged host Layer provides and retains those outputs
-in the cached runtime. Its existing first explicit generic remains the telemetry acquisition error;
-additional output inference is appended for source compatibility. The factory selects
-`CloudflareRuntimeTelemetry.layerNoop` only when that second argument is omitted. The
-framework selects no vendor and runtime options do not hide a provider. `flush` fails with
-`CloudflareTelemetryExportError`, which retains a foreign exporter cause for host diagnostics.
-`telemetryFlushTimeout` is schema-validated and positive; it is a cooperative background budget
-for interruptible exporters, not a hard deadline for code that masks interruption.
+`makeConversationObjectClass(options, observability?)` accepts an optional event-scoped Effect
+Layer at the Worker factory boundary. The Layer may install Logger, Tracer, Metric, and
+`OtlpExporter.Flusher` services; require effect-cf's Durable Object state/environment services or
+Effect Agent's Object context/namespace services; and fail acquisition typed. Omitting it installs
+no framework telemetry service. Runtime options select no telemetry vendor and carry no exporter
+callback or flush timeout.
 
 Secrets are resolved through a secret provider and wrapped as redacted values.
 Startup diagnostics may list missing secret names but never values.
@@ -258,8 +251,9 @@ Cloudflare is a first-class target alongside Node. The mapping is:
 - platform-native observability adapters.
 
 Cloudflare platform APIs are wrapped as Effect services and supplied through Layers. A
-Conversation runtime requires storage, scheduling/alarm, clock, attachment, and observability
-services rather than importing bindings in the engine.
+Conversation runtime requires storage, scheduling/alarm, clock, and attachment services rather
+than importing bindings in the engine. Hosts may add observability through the optional event
+Layer; the runtime does not require a framework telemetry service.
 
 `CloudflareDurableRuntimeOptions.bindings` accepts a resolved array, a closed Effect, or a
 per-incarnation callback. The callback runs after the Object's Conversation and producer
@@ -268,43 +262,19 @@ identities are derived and receives the live `DurableObjectState`, raw Worker en
 resources such as Worker service bindings; database clients and other request-scoped resources
 remain outside the cached Durable Object runtime.
 
-Every native Conversation Object RPC, cross-Object port call, wake, and alarm attempt is measured
-at the owner delivery boundary. The entry span closes before the host-provided telemetry flush
-runs. The native RPC/alarm Promise never awaits export. Before `ctx.waitUntil`, a per-incarnation
-coordinator synchronously reserves each delivery into a shared batch. Same-turn deliveries share
-the pending first batch; deliveries received during its export share one trailing batch; deliveries
-received while trailing runs share one separate queued cycle. A batch retains at most 64 delivery
-settlement Promises, waits for those retained deliveries to settle, and only its first owner
-registers the shared always-fulfilled background Promise. Further arrivals are lossy-coalesced into
-the requested export without retaining their Promise and produce one bounded `reservation_limit`
-diagnostic per capped batch. This preserves the first/trailing/queued cap while preventing
-concurrent exporters, per-delivery `waitUntil` registrations, and unbounded delivery retention. A typed failure, defect,
-or cooperative timeout never replaces the original delivery result. This ordering applies on
-success and failure, so a failed alarm remains rejected for workerd redelivery while export
-continues in the background. An exporter that masks interruption can outlive
-`telemetryFlushTimeout` until Cloudflare cancels the `waitUntil` work; it still cannot hold delivery
-open or create concurrent exporter attempts. A synchronous `waitUntil` registration failure logs
-only the framework-owned `wait_until_registration` classification through the already-built
-runtime's synchronous Logger contract. Its arbitrary platform Cause is not logged. The boundary
-cancels the unowned batch without invoking its exporter and returns the already-running delivery
-Promise unchanged; failure of that derivative diagnostic sink is isolated too.
+`makeConversationObjectClass` uses `effect-cf`'s `DurableObject.make` as the single native
+lifecycle owner. effect-cf caches one `ManagedRuntime` for the Object incarnation, installs the
+native RPC methods, builds event Layers inside each event Scope, and schedules an optional
+`OtlpExporter.Flusher` through `DurableObjectState.waitUntil` after every native RPC on success or
+failure. Cross-Object port calls and wake are native RPC methods on that boundary. Export is
+derivative and never replaces the RPC result. effect-cf owns content-free flush and scheduling
+failure diagnostics; Effect Agent has no competing telemetry service, coordinator, timeout, or
+`waitUntil` bridge.
 
-Expected export failure, timeout, defect, and interruption logs carry only the bounded
-`effect_agent.cloudflare.telemetry.failure_kind` classification. Foreign exporter causes, arbitrary
-defects, fiber IDs, and platform Causes are not automatically logged. A
-`CloudflareTelemetryExportError` still retains its foreign cause for explicit host-controlled
-inspection. The coordinator preserves both failures from each capped two-attempt cycle. Only the
-final always-fulfilled `waitUntil` Promise bridge consumes that rejection so it cannot alter native
-delivery or become an unhandled background Promise. Cooperative budget expiry follows the same
-path as a logged typed `TimeoutError`.
-
-The host configures one native-delivery flush owner. When effect-cf or another native-entry adapter
-already owns the same exporter flush, either disable that path and provide the exporter through
-`CloudflareRuntimeTelemetry`, or retain it and merge host observability with
-`CloudflareRuntimeTelemetry.layerNoop`. Installing both would duplicate export attempts. The cached
-`ManagedRuntime` is not disposed per delivery. Cloudflare provides no guaranteed Object shutdown
-callback, so background delivery-triggered coalesced flushing—not graceful finalization—is the
-export reliability boundary.
+The raw alarm hook in `effect-cf@0.25.2` runs in the same event-scoped runtime but does not yet
+receive automatic post-exit flush scheduling. That limitation is upstream-owned. Effect Agent does
+not add an alarm-only lifecycle implementation; alarm failure continues to reject the native
+delivery so workerd can retry it, and durable correctness never depends on telemetry export.
 
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
@@ -317,8 +287,8 @@ and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted stora
 fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
 are implemented and green ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)). The tested harness is
 workerd/Miniflare; the hosted production service and live soak remain explicitly unclaimed. The
-vendor-neutral observability Layer and native lifecycle are covered in workerd, but no hosted
-exporter certification is claimed — Phase 7 completed the roadmap without hosted-platform evidence
+effect-cf native RPC integration is covered in workerd, but no hosted exporter certification is
+claimed — Phase 7 completed the roadmap without hosted-platform evidence
 ([Phase 7 evidence](../PHASE-7-EVIDENCE.md)), and hosted-service operation stays outside the
 roadmap's claims until open-source preparation revisits it.
 

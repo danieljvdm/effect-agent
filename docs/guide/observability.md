@@ -1,8 +1,7 @@
 # Observability
 
 Effect Agent emits logical measurements and leaves exporter selection to the host. Tool
-instrumentation belongs to `@effect-agent/engine`; exporter lifecycle at Cloudflare native
-delivery boundaries belongs to `@effect-agent/platform-cloudflare`. Neither package depends on
+instrumentation belongs to `@effect-agent/engine`; Cloudflare native runtime and exporter lifecycle belongs to `effect-cf`. Neither package depends on
 Sentry or another telemetry vendor.
 
 ## Tool execution
@@ -97,107 +96,66 @@ authorization, and retention policy.
 
 ## Cloudflare exporter lifecycle
 
-`makeConversationObjectClass` caches one `ManagedRuntime` per Durable Object incarnation. Supply
-the host telemetry Layer as its second argument:
+`makeConversationObjectClass` is implemented with `effect-cf`'s
+`DurableObject.make`. effect-cf owns one cached `ManagedRuntime` per Durable Object
+incarnation, native RPC method execution, per-event Layer scopes, Object state/environment
+services, `DurableObjectState.waitUntil`, and optional post-RPC OTLP flushing.
+
+Supply a host observability Layer as the factory's second argument:
 
 ```ts
-import {
-  CloudflareRuntimeTelemetry,
-  makeConversationObjectClass,
-} from "@effect-agent/platform-cloudflare";
-import { Effect, Layer } from "effect";
-import { OtlpExporter } from "effect/unstable/observability";
+import { makeConversationObjectClass } from "@effect-agent/platform-cloudflare";
+import { CloudflareOtlp } from "effect-cf";
 
-declare const HostObservability: Layer.Layer<OtlpExporter.Flusher>;
-
-const Telemetry = Layer.effect(
-  CloudflareRuntimeTelemetry,
-  Effect.map(OtlpExporter.Flusher, ({ flush }) => CloudflareRuntimeTelemetry.of({ flush })),
-).pipe(Layer.provideMerge(HostObservability));
+const Observability = CloudflareOtlp.layerDurableObject({
+  className: "ConversationObject",
+  signals: ["logs", "traces"],
+  resource: { serviceName: "effect-agent" },
+});
 
 export class ConversationObject extends makeConversationObjectClass(
   {
     namespaceBinding: "CONVERSATIONS",
     deploymentId: "production",
     producerPrefix: "conversation",
-    telemetryFlushTimeout: 2_000,
   },
-  Telemetry,
+  Observability,
 ) {}
 ```
 
-`HostObservability` is where the application installs its Effect Logger, Tracer, Metric, and
-exporter layers. `OtlpExporter.Flusher` is one implementation; any vendor or custom exporter can
-provide the same content-free `CloudflareRuntimeTelemetry` service. The Layer may require
-`DurableObjectContext` or `ConversationObjectNamespace` to derive configuration from the Object
-environment, may provide additional services alongside the required telemetry capability, and a
-typed acquisition failure remains part of constructor-gate failure. Those additional outputs and
-defaulted Effect Logger/Tracer/Metric overrides remain present in the cached `ManagedRuntime`.
-Omitting the second argument installs `CloudflareRuntimeTelemetry.layerNoop` at this Worker
-composition edge. `CloudflareDurableRuntime.layer` owns only durable runtime services; native
-entrypoint instrumentation consumes telemetry in `makeConversationObjectClass`, which preserves
-the host Layer's telemetry and additional outputs without choosing or hiding a provider.
+The Layer is built inside each native event Scope. It may provide Effect Logger, Tracer, Metric,
+and `OtlpExporter.Flusher` services; require effect-cf's `DurableObjectState` or
+`WorkerEnvironment`; consume Effect Agent's `DurableObjectContext` or
+`ConversationObjectNamespace`; and fail acquisition typed. Omitting the second argument installs
+no telemetry service and selects no vendor.
 
-`flush` has the typed error channel `CloudflareTelemetryExportError`. A custom adapter maps its
-foreign exporter failure with `CloudflareTelemetryExportError.make({ cause })`, retaining the
-original value for host diagnostics without placing it on entrypoint spans or changing delivery
-results.
+After every native RPC method, effect-cf schedules the optional flusher with
+`DurableObjectState.waitUntil`, on both handler success and failure. The RPC result does not await
+export. effect-cf isolates exporter and scheduling failures and emits content-free diagnostics;
+Effect Agent does not add a second flush path, batching coordinator, timeout, or waitUntil bridge.
+Cross-Object port calls and wake are native RPC methods on this same boundary.
 
-Every native encoded RPC, cross-Object port call, wake, and alarm attempt gets one owner-side server
-span. The native RPC/alarm Promise never awaits export. Before `ctx.waitUntil`, one per-incarnation
-coordinator synchronously reserves the delivery into a shared pending, trailing, or queued batch.
-Each batch retains at most 64 delivery settlement Promises, waits for those retained deliveries to
-settle, and only its first owner registers its shared always-fulfilled background Promise. Further
-arrivals are lossy-coalesced into the requested export without retaining their Promise and produce
-one bounded `reservation_limit` diagnostic per capped batch. Cycles remain capped at a first
-attempt plus one trailing attempt; deliveries arriving while that trailing attempt runs share one
-queued cycle. There is at most one active exporter, one coalesced trailing batch, and one queued
-cycle—never concurrent export attempts, per-delivery background registrations, or unbounded
-delivery retention. `telemetryFlushTimeout` is a cooperative budget:
-effect-agent interrupts an interruptible exporter when the budget expires, but does not claim a
-hard deadline for exporter code that masks interruption. Cloudflare owns that remaining background
-lifetime and may cancel it when the Object is evicted.
+### Raw alarm limitation
 
-Expected exporter failure, timeout, defect, and interruption diagnostics contain only a
-framework-owned `effect_agent.cloudflare.telemetry.failure_kind` classification. Foreign exporter
-causes, arbitrary defects, and fiber IDs are never passed to the configured Logger.
-`CloudflareTelemetryExportError.cause` remains available only when the host explicitly inspects the
-typed failure at its own diagnostic boundary. Failures stay rejected
-through the coordinator. Only the final always-fulfilled
-`waitUntil` Promise bridge isolates background telemetry failure from the original RPC result or
-alarm retry signal. Budget expiry logs a bounded warning and remains a typed `TimeoutError` through
-the same boundary. None of these diagnostics is attached to the already-closed native span. Native rejection spans likewise receive only a bounded failure
-marker before the original Cause is restored. The cached runtime is not disposed per event:
-Durable Objects have no guaranteed shutdown callback, and storage/runtime/exporter scopes must
-remain available for later events in the same incarnation.
-
-A synchronous `ctx.waitUntil` registration failure is also derivative: effect-agent emits only the
-bounded `wait_until_registration` classification, cancels that unowned batch ticket, then returns
-the already-running native delivery Promise unchanged rather than creating an uncertain RPC
-outcome. The arbitrary platform Cause is not sent to the configured Logger. The registration
-failure means Cloudflare has not accepted ownership of that background work, so the gated exporter
-is not invoked. The diagnostic uses the already-built runtime's synchronous Logger contract; logger
-defects are captured without starting a fiber. Even a broken diagnostic sink does not change the
-delivery result or alarm retry signal.
-
-There must be one native-delivery flush owner. If an effect-cf or host native-entry integration already
-flushes the same exporter, either disable that integration's delivery flush and provide it via
-`CloudflareRuntimeTelemetry`, or keep the existing owner and provide the Effect observability Layer
-merged with `CloudflareRuntimeTelemetry.layerNoop`. Do not install both delivery flush paths.
+In effect-cf 0.25.2, the raw `alarm` handler runs in the same event-scoped runtime, but it does not
+receive the automatic post-exit flusher scheduling that native RPC methods receive. This is an
+upstream lifecycle gap. Effect Agent deliberately does not recreate a private alarm-only
+`waitUntil` owner: alarm rejection must continue to reach workerd for retry, and the common fix
+belongs in effect-cf. Durable correctness never depends on telemetry export.
 
 ## Migrating an application wrapper
 
 Applications upgrading from `@effect-agent/*` `0.0.1-beta.5` can remove loopback executor
-wrappers that duplicate `execute_tool` names, execution classes, or outcomes after upgrading the
-engine. Cloudflare applications can also remove per-RPC manual exporter flushes after choosing the
-single lifecycle owner described above. Keep application-specific scope fields on a parent span or
-as ambient log annotations if they are still useful.
+wrappers that duplicate `execute_tool` names, execution classes, or outcomes. Cloudflare
+applications can remove manual per-RPC exporter flushing and provide their Effect observability
+Layer directly as the second `makeConversationObjectClass` argument.
 
-If an application adopted an earlier preview of this API, move `telemetry: Telemetry` out of
-`CloudflareDurableRuntimeOptions` and pass the same Layer as the second
-`makeConversationObjectClass(options, Telemetry)` argument. Acquisition requirements and typed
-errors then remain visible at the Worker composition boundary.
+If an application adopted an earlier preview of this PR, remove
+`CloudflareRuntimeTelemetry`, `CloudflareTelemetryExportError`, and
+`telemetryFlushTimeout`; those APIs were part of the superseded duplicate lifecycle
+implementation and are not exported.
 
 Verify the migration by searching for `gen_ai.operation.name=execute_tool`, checking both bounded
-outcomes, and forcing one failed alarm delivery. The downstream emergency bridge that motivated
-this API is [Kommunikasie PR #353](https://github.com/reve-ai/kommunikasie/pull/353).
+outcomes, confirming one effect-cf flush after a native RPC, and preserving failed-alarm retry
+behavior. The downstream emergency bridge that motivated this API is
+[Kommunikasie PR #353](https://github.com/reve-ai/kommunikasie/pull/353).

@@ -1,6 +1,6 @@
 # ADR-0018: Native Tool observability and Cloudflare exporter lifecycle
 
-- Status: Accepted
+- Status: Superseded by [ADR-0019](0019-effect-cf-cloudflare-lifecycle.md) for Cloudflare lifecycle
 - Date: 2026-08-14
 - Decision owners: Project owner
 - Related decisions: D-001, D-019, D-032, D-033, D-036
@@ -9,6 +9,12 @@
   [ADR-0015](0015-hardening-shape.md)
 
 ## Context
+
+> Historical note (2026-08-15): the engine Tool-observability decision remains in force. The
+> private Cloudflare runtime/flush design below was implemented on this branch and then removed
+> after `effect-cf@0.25.2` gained native RPC telemetry flushing. ADR-0019 records the corrected
+> ownership boundary without rewriting this accepted decision as though the first design had not
+> happened.
 
 A downstream `0.0.1-beta.5` Cloudflare deployment could observe successful repository Tools in
 canonical events but could not search for them in exported logs or spans. Its emergency bridge
@@ -139,6 +145,9 @@ Object eviction, as expected. In the DC assembly tested with `@effect-agent/stor
 durability belongs to canonical state, not observability.
 
 ## Validation
+
+> The Cloudflare test files named below documented the superseded implementation and were removed
+> with it. Current Cloudflare lifecycle validation is recorded in ADR-0019.
 
 - `packages/engine/test/agent-runtime.test.ts` — success, returned failure, thrown typed failure,
   post-terminal failed-event/trace deferral, span create/close/context defects, single primitive

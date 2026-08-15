@@ -20,6 +20,7 @@ The root `package.json` is the only version source for shared dependencies.
 | Vite+                             |            `0.2.6` | Formatting, linting, tests, library builds, staged checks, and task orchestration |
 | Vitest                            |           `4.1.10` | Vite+ test runtime, pinned through an override so integrations share one instance |
 | Effect                            |   `4.0.0-beta.107` | Runtime, Schema, services, and Effect AI                                          |
+| effect-cf                         |           `0.25.2` | Cloudflare entrypoint runtimes, event scopes, and native RPC telemetry lifecycle  |
 | `@effect/platform-node`           |   `4.0.0-beta.107` | Node services used by repository scripts                                          |
 | `@effect/platform-browser`        |   `4.0.0-beta.107` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
 | `@effect/sql-sqlite-do`           |   `4.0.0-beta.107` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |

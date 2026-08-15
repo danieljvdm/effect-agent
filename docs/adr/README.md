@@ -16,7 +16,8 @@ The records below reflect explicit owner decisions.
 | [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces                                                                                                                  |
 | [ADR-0016](0016-pr-review-package.md)                          | Package the pull-request reviewer with a prebuilt GitHub Action (owner-directed, 2026-08-14)                                                                               |
 | [ADR-0017](0017-code-mode-executor-and-broker.md)              | Code Mode: `CodeExecutor` port in sandbox, engine-owned native Tool broker, one native Tool over an explicit allowlist (owner-directed, 2026-08-14; ephemeral slices only) |
-| [ADR-0018](0018-native-tool-observability.md)                  | Own native Tool telemetry and Cloudflare export lifecycle                                                                                                                  |
+| [ADR-0018](0018-native-tool-observability.md)                  | Own native Tool telemetry; original Cloudflare lifecycle design superseded by ADR-0019                                                                                     |
+| [ADR-0019](0019-effect-cf-cloudflare-lifecycle.md)             | Use effect-cf as the single Cloudflare native runtime and post-RPC telemetry lifecycle owner                                                                               |
 
 ## Accepted by default
 

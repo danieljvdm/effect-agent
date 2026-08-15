@@ -258,12 +258,10 @@ only that exact identity. An independently constructed same-class handler failur
 mistaken for framework control flow or swallowed.
 The isolation policy is an engine-owned capability built at the Run composition boundary from the
 host's ambient Tracer; Tool execution does not replace the Tracer service locally.
-Cloudflare exporter diagnostics export only bounded framework classifications. Retained foreign
-exporter causes, arbitrary defects, and fiber IDs are never passed to the configured Logger; raw
-exporter cause inspection is an explicit host decision at the typed error boundary. A synchronous
-`waitUntil` registration rejection is an irreducible platform lifecycle failure, but automatic
-diagnostics still emit only the bounded `wait_until_registration` classification. Its arbitrary
-foreign Cause is never passed to the configured Logger by default.
+Cloudflare native RPC flush scheduling and its content-free failure diagnostics are owned by
+effect-cf. Effect Agent neither receives foreign exporter causes nor creates a second automatic
+diagnostic path. Hosts that add exporter or platform diagnostics remain responsible for structural
+redaction before those values reach Logger, spans, or metrics.
 
 Minimum operational alerts:
 

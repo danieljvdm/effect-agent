@@ -1,4 +1,4 @@
-import { Context, Effect, Layer } from "effect";
+import { Effect } from "effect";
 
 import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
 import {
@@ -10,12 +10,8 @@ import {
   runtimeEvictionFailpoint,
   storageEvictionFailpoint,
 } from "./fixtures.ts";
+import { flushCount, observabilityProbeLayer } from "./observability-fixture.ts";
 import { makeSubagentTestBindings, transportFaultReason } from "./subagent-fixtures.ts";
-import {
-  failingTelemetryAcquisitionRouterLayer,
-  telemetryProbeRouterLayer,
-  type TelemetryLayerAcquisitionError,
-} from "./telemetry-fixtures.ts";
 
 /**
  * The WP3 test Worker entry: the REAL `makeConversationObjectClass` output under three
@@ -74,18 +70,6 @@ const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
     return [];
   });
 
-class TelemetryHostOutput extends Context.Service<TelemetryHostOutput, string>()(
-  "@effect-agent/platform-cloudflare/test/TelemetryHostOutput",
-) {}
-
-// Compile-time public-API proof: a host observability Layer may provide additional runtime
-// services alongside the required flush capability. The Workerd span assertions below prove the
-// merged Tracer Reference is also installed in the same ManagedRuntime.
-const telemetryHostLayer = Layer.merge(
-  telemetryProbeRouterLayer,
-  Layer.succeed(TelemetryHostOutput, "host-observability-output"),
-);
-
 /** The eviction/alarm/chaos suites' Conversation Object. */
 export class TestConversationObject extends makeConversationObjectClass(baseOptions) {}
 
@@ -139,27 +123,18 @@ export class EffectBindingsConversationObject extends makeConversationObjectClas
   }
 }
 
-/** Host-telemetry probe; timeout behavior is virtual-time tested below the Workerd boundary. */
+/** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
 export class TelemetryConversationObject extends makeConversationObjectClass(
   {
     ...baseOptions,
     namespaceBinding: "TELEMETRY",
-    // Public waitUntil tests control exporter completion explicitly. Virtual-time unit coverage
-    // pins the configured cooperative budget without racing the Workerd wall clock.
-    telemetryFlushTimeout: 60_000,
-    wakeScanInterval: 60_000,
   },
-  telemetryHostLayer,
-) {}
-
-/** Compile/runtime probe: host telemetry may require the DO context and fail acquisition typed. */
-export class TelemetryAcquisitionConversationObject extends makeConversationObjectClass<TelemetryLayerAcquisitionError>(
-  {
-    ...baseOptions,
-    namespaceBinding: "TELEMETRY_ACQUISITION",
-  },
-  failingTelemetryAcquisitionRouterLayer,
-) {}
+  observabilityProbeLayer,
+) {
+  async flushCount(): Promise<number> {
+    return flushCount(this.ctx.id.name ?? this.ctx.id.toString());
+  }
+}
 
 /**
  * The WP4 cross-Object subagent matrix's Conversation Object: parent and child Conversations
