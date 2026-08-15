@@ -55,7 +55,7 @@ class CommandError extends Schema.TaggedError<CommandError>()("CommandError", {
   }
 }
 
-class ReleaseManifestSwapError extends Schema.TaggedError<ReleaseManifestSwapError>()(
+export class ReleaseManifestSwapError extends Schema.TaggedError<ReleaseManifestSwapError>()(
   "ReleaseManifestSwapError",
   {
     cause: Schema.optionalKey(Schema.Defect()),
@@ -184,7 +184,7 @@ const distExport = (sourcePath: string): { types: string; default: string } | un
   return { types: `./dist/${match[1]}.d.mts`, default: `./dist/${match[1]}.mjs` };
 };
 
-const withTemporaryManifest = <A, E, R>(
+export const withTemporaryManifest = <A, E, R>(
   manifestPath: string,
   originalBytes: string,
   publishBytes: string,
@@ -201,9 +201,19 @@ const withTemporaryManifest = <A, E, R>(
       });
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        yield* fs
+        const installExit = yield* fs
           .writeFileString(manifestPath, publishBytes)
-          .pipe(Effect.mapError(manifestError("install")));
+          .pipe(Effect.mapError(manifestError("install")), Effect.exit);
+        if (Exit.isFailure(installExit)) {
+          const restoreExit = yield* fs
+            .writeFileString(manifestPath, originalBytes)
+            .pipe(Effect.mapError(manifestError("restore")), Effect.exit);
+          return yield* Effect.failCause(
+            Exit.isFailure(restoreExit)
+              ? Cause.combine(installExit.cause, restoreExit.cause)
+              : installExit.cause,
+          );
+        }
         const useExit = yield* restore(use).pipe(Effect.exit);
         const restoreExit = yield* fs
           .writeFileString(manifestPath, originalBytes)

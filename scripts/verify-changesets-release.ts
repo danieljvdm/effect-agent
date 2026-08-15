@@ -199,6 +199,7 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
   readonly headSha: string;
   readonly repositoryRoot?: string;
   readonly changesetBinary?: string;
+  readonly bunBinary?: string;
 }) {
   const baseSha = yield* decodeCommitSha("--base-sha", options.baseSha);
   const headSha = yield* decodeCommitSha("--head-sha", options.headSha);
@@ -211,8 +212,9 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
 
   const expectedTree = yield* withExpectedWorktree(root, baseSha, (expectedWorktree) =>
     Effect.gen(function* () {
+      const bunBinary = options.bunBinary ?? "bun";
       if (options.changesetBinary === undefined) {
-        yield* runCommand(expectedWorktree, "bun", [
+        yield* runCommand(expectedWorktree, bunBinary, [
           "install",
           "--frozen-lockfile",
           "--ignore-scripts",
@@ -221,7 +223,7 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
       const changesetBinary =
         options.changesetBinary ?? path.join(expectedWorktree, "node_modules", ".bin", "changeset");
       yield* runCommand(expectedWorktree, changesetBinary, ["version"]);
-      yield* runCommand(expectedWorktree, "bun", ["install", "--ignore-scripts"]);
+      yield* runCommand(expectedWorktree, bunBinary, ["install", "--ignore-scripts"]);
       yield* runCommand(expectedWorktree, "git", ["add", "--all"]);
       return yield* runCommand(expectedWorktree, "git", ["write-tree"]);
     }),
