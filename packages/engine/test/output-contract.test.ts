@@ -15,9 +15,9 @@ import { AgentRuntime } from "../src/index.ts";
 import { insertOutputContract, outputSchemaContract } from "../src/output-contract-internal.ts";
 
 /**
- * The model-visible final-output contract (proposed default).
+ * The model-visible final-output contract (RUN-028, TEST-016).
  *
- * These suites cover the proposed default's three claims: the contract rides
+ * These suites cover the default's three claims: the contract rides
  * every model request adjacent to the last system block; official history
  * never contains it; and a live-shaped model — one that derives its answer
  * only from the request it received, never from test-known expected values —
@@ -146,7 +146,7 @@ const policy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-layer(identifiers)("model-visible output contract (proposed default)", (it) => {
+layer(identifiers)("RUN-028 model-visible output contract", (it) => {
   it.effect(
     "carries the contract on every Turn's request adjacent to the last system block and never in official history",
     () => {
@@ -244,7 +244,7 @@ layer(identifiers)("model-visible output contract (proposed default)", (it) => {
   );
 
   it.effect(
-    "a live-shaped model conforms because the engine communicated the Schema it had never seen",
+    "TEST-016 a live-shaped model conforms because the engine communicated the Schema it had never seen",
     () => {
       const captured: Array<Prompt.Prompt> = [];
       const definition = Agent.define("contract-live-shaped", {

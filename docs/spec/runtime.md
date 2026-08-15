@@ -43,7 +43,8 @@ Normative sequence:
 2. Evaluate instructions and initial context.
 3. Prepare Turn Plan.
 4. Check budgets and abort/interruption.
-5. Materialize the Effect AI Prompt and model request.
+5. Materialize the Effect AI Prompt and model request, including the model-visible final-output
+   contract (RUN-028).
 6. Stream Effect AI Response parts.
 7. Reduce them into one complete assistant response.
 8. Reject malformed or incomplete provider sequences.
@@ -253,6 +254,15 @@ Compaction appends or emits a summary/branch representation and preserves the so
 Summary generation is a separately metered Model purpose. Failed compaction leaves the original
 history authoritative.
 
+After these steps the engine appends the model-visible final-output contract to the produced
+Model Input (RUN-028): one framework-owned system message carrying the JSON Schema derived from
+the Agent's output Schema, inserted immediately after the request's last system message and never
+entered into official history. Context transforms receive the exact contract text
+(`RunContextRequest.outputContract`) so a limit-targeting adapter can reserve its overhead, and
+no transform can remove or alter it. A Definition whose output Schema cannot render to JSON
+Schema produces no contract — the field is absent and the request is unchanged, with one Turn-1
+diagnostic per Attempt.
+
 ## 10. Event interface
 
 Every semantic Run Event carries:
@@ -437,3 +447,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-021:** Per-Run allowances are tightening-only: the effective Turn/Tool-Call limit is the
   minimum of the Agent Policy bound and the normalized allowance, never more, and the
   `onExhaustion` resolution applies at the effective limit.
+- **RUN-028:** Every model request of a Run whose Agent Definition declares an output Schema
+  carries a model-visible representation of that Schema derived by Effect AI's JSON-Schema
+  derivation, applied after context preparation and never entered into official history; a
+  Definition whose output Schema cannot be derived runs with the documented fallback and a
+  diagnostic, never a silent difference. (RUN-022–027 are reserved by the in-flight
+  context-economics work, #54.)
