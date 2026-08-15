@@ -94,9 +94,14 @@ export interface RunContextHook<Error = never, Requirements = never> {
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
 }
 
-/** One model-call usage delta consumed after a complete response and before any Tool starts. */
+/**
+ * One usage delta. Turn-boundary consumption charges `modelCalls: 1` after a
+ * complete response and before any Tool starts; the programmatic Tool broker
+ * charges `modelCalls: 0, toolCalls: 1` before each inner handler starts
+ * (RUN-017).
+ */
 export interface RunUsageDelta {
-  readonly modelCalls: 1;
+  readonly modelCalls: 0 | 1;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
