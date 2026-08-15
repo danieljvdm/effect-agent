@@ -98,18 +98,29 @@ Deterministic in-memory adapters for both ports plus prompt-keyed scripted
 models that walk the real tool surface — no network, no credentials, every
 ordinary gate.
 
-## Skip unchanged changesets
+## Incremental Action reviews
 
-Repositories that auto-merge the base branch into open pull requests fire
-`synchronize` on every base update — but the effective diff usually hasn't
-changed. Every posted review embeds an invisible changeset fingerprint
-(SHA-256 over the ignore-filtered changeset plus the prompt signature), and
-the action skips typed when the current fingerprint matches the last posted
-review (`skip-unchanged` input, default `true`; `--skip-unchanged` on the
-CLI). Real changes, conflict-resolution merges, and configuration changes
-(guidance, ignore globs, bounds) produce a new fingerprint and review again.
-The check reads prior reviews through the `PriorReviews` port and fails open:
-a lookup fault reviews instead of skipping.
+A completely covered posted review carries bounded, versioned review state:
+the exact PR/base/head lineage, profile and accepted-scope fingerprints, and
+the still-unresolved findings and concerns. A later Action run validates the
+state and reviews the GitHub comparison from that reviewed head to the
+current head, not the complete base...HEAD diff. Unchanged accepted scope is
+not sent back to the model; unchanged unresolved findings remain active;
+changed or reverted paths invalidate their prior findings. Non-anchored
+concerns are carried conservatively until a full audit because they cannot be
+mapped safely to one path.
+
+State lookup, schema, identity, ancestry, profile, and comparison checks are
+fail-closed for scope selection: missing, stale, incompatible, or truncated
+state/comparisons produce a visible full-diff fallback. An ancestor base
+advance remains incremental and adds overlapping PR paths as affected
+context; a materially changed base lineage falls back to full. Re-running the
+same covered head skips model execution by default while preserving its
+stored blocking/success conclusion.
+
+`review-mode: final` is the explicit bounded merge-readiness audit. It reviews
+the full current PR diff and resets the incremental baseline; normal
+`synchronize` events use `incremental` and do not perform this audit.
 
 ## Hosts
 
@@ -118,8 +129,9 @@ a lookup fault reviews instead of skipping.
   repository's own profile lives at `.github/review-guidance.md`)
   (`action/` at the repo root) — `uses` it with an API-key secret and nothing
   else. For custom reviewers in CI, `@effect-agent/pr-review/action` exports
-  `runReviewAction` (event resolution, typed draft/non-PR skips, step
-  outputs, verdict gate) to harness your own `reviewer.run`.
+  `runReviewAction` (event resolution, typed draft/non-PR skips, durable range
+  selection, step outputs, and conservative check gate) to harness your own
+  `reviewer.run`.
 - **CLI**: `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`
   (also exported as the `./cli` entry).
 
@@ -135,4 +147,7 @@ Finite `AgentPolicy` on every definition plus run-level `UsageBudgetLimits`
 characters is refused typed. The changeset surface is bounded at 300 files:
 files beyond the bound are not fetched, and the review body reports
 `Reviewed N of M changed files` instead of claiming completeness. Fan-out
-capacity overflow is reported in the review summary, never dropped.
+capacity overflow is reported in the review summary, never dropped. Any
+blocking active finding fails the Action check. Any required-file coverage
+gap — undiffable/unassigned paths, failed units (including policy exhaustion),
+truncation, or coordinator/run failure — is non-success rather than green.

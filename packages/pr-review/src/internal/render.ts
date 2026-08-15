@@ -1,10 +1,12 @@
 import { Schema } from "effect";
 
+import type { ReviewCoverage } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
 import { commentableLines } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
 import type { CodeReview } from "./review-agent.ts";
 import { ReviewFinding, type ReviewConcern } from "./review-agent.ts";
+import { renderReviewStateMarker, type ReviewScopeMode, type ReviewState } from "./review-state.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is
@@ -88,10 +90,16 @@ const countNoun = (count: number, noun: string): string =>
   `${count} ${noun}${count === 1 ? "" : "s"}`;
 
 /** The validated finding + concern severities, tallied for callout and event. */
-const severityCounts = (review: CodeReview) => {
+const severityCounts = (
+  review: CodeReview,
+  carriedFindings: ReadonlyArray<ReviewFinding> = [],
+  carriedConcerns: ReadonlyArray<ReviewConcern> = [],
+) => {
   const severities = [
     ...review.findings.map((finding) => finding.severity),
     ...(review.concerns ?? []).map((concern) => concern.severity),
+    ...carriedFindings.map((finding) => finding.severity),
+    ...carriedConcerns.map((concern) => concern.severity),
   ];
   return {
     blocking: severities.filter((severity) => severity === "blocking").length,
@@ -106,8 +114,20 @@ const severityCounts = (review: CodeReview) => {
  * renders it as. `[!CAUTION]` is a red banner, `[!IMPORTANT]` a purple one;
  * the blockquote tiers read as informational.
  */
-const renderVerdictCallout = (review: CodeReview): string => {
-  const counts = severityCounts(review);
+const renderVerdictCallout = (
+  review: CodeReview,
+  options: {
+    readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
+    readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
+    readonly coverage?: ReviewCoverage | undefined;
+  },
+): string => {
+  const counts = severityCounts(review, options.carriedFindings, options.carriedConcerns);
+  if (options.coverage?.status === "incomplete") {
+    const suffix =
+      counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
+    return `> [!CAUTION]\n> Review coverage is incomplete — the check must not pass.${suffix}`;
+  }
   if (counts.blocking > 0) {
     return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
   }
@@ -125,6 +145,9 @@ const renderVerdictCallout = (review: CodeReview): string => {
 const renderConcern = (concern: ReviewConcern): string =>
   [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join("\n");
 
+const renderCarriedFinding = (finding: ReviewFinding): string =>
+  `- \`${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}\` **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body}`;
+
 /** HTML comments must not contain `--`; interpolated values are sanitized. */
 const commentSafe = (value: string): string => value.replaceAll("--", "- -");
 
@@ -139,6 +162,8 @@ const renderReviewMetadata = (options: {
   readonly headRef?: string | undefined;
   readonly filesVisible: number;
   readonly totalChangedFiles: number;
+  readonly reviewMode?: ReviewScopeMode | undefined;
+  readonly baselineSha?: string | undefined;
 }): string =>
   [
     "<!-- effect-agent-pr-review metadata",
@@ -150,6 +175,10 @@ const renderReviewMetadata = (options: {
     // which visible files the model actually examined, and the summary is
     // where unreviewed units are named.
     `files-visible: ${options.filesVisible} of ${options.totalChangedFiles}`,
+    ...(options.reviewMode === undefined ? [] : [`review-mode: ${options.reviewMode}`]),
+    ...(options.baselineSha === undefined
+      ? []
+      : [`incremental-baseline: ${commentSafe(options.baselineSha)}`]),
     "Findings were written against the head commit above; if commits have landed",
     "since, treat file and line callouts as potentially stale and re-diff first.",
     "-->",
@@ -205,6 +234,19 @@ export const planPublication = (
      * run can skip re-reviewing an unchanged changeset.
      */
     readonly fingerprint?: string | undefined;
+    /** Host-owned coverage; incomplete coverage is rendered and fails the check. */
+    readonly coverage?: ReviewCoverage | undefined;
+    /** Unchanged unresolved items carried from the prior successfully reviewed head. */
+    readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
+    readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
+    /** Selected review scope, made visible whenever orchestration chose it. */
+    readonly reviewMode?: ReviewScopeMode | undefined;
+    readonly reviewReason?: string | undefined;
+    readonly baselineSha?: string | undefined;
+    readonly reviewFilesVisible?: number | undefined;
+    readonly reviewTotalFiles?: number | undefined;
+    /** Durable state is emitted only after complete host-owned coverage. */
+    readonly state?: ReviewState | undefined;
   },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
@@ -249,7 +291,44 @@ export const planPublication = (
   const footer = `_${footerParts.join(" · ")}._`;
 
   const renderHead = (concernsKept: number, demotedKept: number, omitted: number): string => {
-    const parts = [renderVerdictCallout(review), "", review.summary];
+    const carriedFindings = options.carriedFindings ?? [];
+    const carriedConcerns = options.carriedConcerns ?? [];
+    const parts = [
+      renderVerdictCallout(review, {
+        carriedFindings,
+        carriedConcerns,
+        coverage: options.coverage,
+      }),
+    ];
+    if (options.reviewMode !== undefined && options.reviewReason !== undefined) {
+      parts.push(
+        "",
+        options.reviewMode === "incremental"
+          ? `**Incremental scope:** reviewed ${options.reviewFilesVisible ?? files.length} file(s) ${options.reviewReason}. Unchanged accepted scope was preserved and not reopened.`
+          : `**Full-diff scope:** ${options.reviewReason}.`,
+      );
+    }
+    parts.push("", review.summary);
+    if (options.coverage?.status === "incomplete") {
+      parts.push(
+        "",
+        "### 🛑 Incomplete coverage",
+        "",
+        ...options.coverage.reasons.map((reason) => `- ${reason}`),
+      );
+    }
+    if (carriedFindings.length > 0) {
+      parts.push(
+        "",
+        "### Unresolved findings carried from unchanged scope",
+        "",
+        ...carriedFindings.map(renderCarriedFinding),
+      );
+    }
+    if (carriedConcerns.length > 0) {
+      parts.push("", "### Unresolved concerns carried to the final audit");
+      for (const concern of carriedConcerns) parts.push("", renderConcern(concern));
+    }
     for (const concern of sortedConcerns.slice(0, concernsKept)) {
       parts.push("", renderConcern(concern));
     }
@@ -286,7 +365,11 @@ export const planPublication = (
   // count like anchored findings: anchor validation validates LOCATIONS, not
   // truth, so severity is equally model-claimed for all three, and counting
   // them only ever moves the event toward the closed direction.
-  const counts = severityCounts(review);
+  const counts = severityCounts(
+    review,
+    options.carriedFindings ?? [],
+    options.carriedConcerns ?? [],
+  );
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
     : counts.blocking > 0
@@ -302,10 +385,13 @@ export const planPublication = (
       headSha: options.headSha,
       baseRef: options.baseRef,
       headRef: options.headRef,
-      filesVisible: files.length,
-      totalChangedFiles: options.totalChangedFiles,
+      filesVisible: options.reviewFilesVisible ?? files.length,
+      totalChangedFiles: options.reviewTotalFiles ?? options.totalChangedFiles,
+      reviewMode: options.reviewMode,
+      baselineSha: options.baselineSha,
     }),
     ...(options.fingerprint === undefined ? [] : [renderFingerprintMarker(options.fingerprint)]),
+    ...(options.state === undefined ? [] : [renderReviewStateMarker(options.state)]),
   ].join("\n");
   const headBudget = 60_000 - tail.length - 1;
 

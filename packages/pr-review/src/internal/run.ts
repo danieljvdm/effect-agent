@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
   makeUsageBudget,
   toRunBudgetHook,
@@ -9,11 +9,26 @@ import {
 } from "effect-agent";
 import { type Tool } from "effect/unstable/ai";
 
+import { assessReviewCoverage, ReviewCoverage, type ReviewShape } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
-import { clampMaxFindings, CodeReview, ReviewMission } from "./review-agent.ts";
+import {
+  clampMaxFindings,
+  CodeReview,
+  ReviewConcern,
+  ReviewFinding,
+  ReviewMission,
+} from "./review-agent.ts";
+import {
+  fromStoredConcern,
+  fromStoredFinding,
+  ReviewExecutionContext,
+  ReviewState,
+  toStoredConcern,
+  toStoredFinding,
+} from "./review-state.ts";
 import { rankAndDedupeFindings } from "./review-units.ts";
 import { PullRequestSource, type PullRequestMetadata } from "./source.ts";
 
@@ -58,6 +73,12 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   "@effect-agent/pr-review/ReviewRunOutcome",
 )({
   review: CodeReview,
+  /** All currently unresolved findings, including unchanged carried scope. */
+  activeFindings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(20)),
+  /** All currently unresolved concerns, including concerns carried to final audit. */
+  activeConcerns: Schema.Array(ReviewConcern).check(Schema.isMaxLength(10)),
+  /** Host-owned structural coverage used by the Actions check conclusion. */
+  coverage: ReviewCoverage,
   plan: ReviewPublicationPlan,
   published: Schema.optionalKey(PublishedReview),
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -73,6 +94,9 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
    * unscoped usage as whole-run totals.
    */
   usageScope: Schema.optionalKey(Schema.Literals(["run", "coordinator"])),
+  reviewMode: Schema.optionalKey(Schema.Literals(["incremental", "full"])),
+  reviewReason: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(1_000))),
+  state: Schema.optionalKey(ReviewState),
 }) {}
 
 export interface ExecuteReviewOptions {
@@ -105,6 +129,8 @@ export interface ExecuteReviewOptions {
    * unlabeled number would read as whole-run totals.
    */
   readonly usageScope?: "run" | "coordinator" | undefined;
+  /** Host-owned coverage shape; defaults to the flat reviewer. */
+  readonly reviewShape?: ReviewShape | undefined;
 }
 
 /** Build the mission one review run frames from the source's snapshot. */
@@ -132,6 +158,34 @@ export const enforceFindingsBound = (review: CodeReview, maxFindings: number): C
         findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings),
         ...(review.concerns !== undefined ? { concerns: review.concerns } : {}),
       });
+
+const findingKey = (finding: ReviewFinding): string =>
+  `${finding.path}\u0000${finding.startLine}\u0000${finding.endLine}\u0000${finding.severity}\u0000${finding.title}`;
+
+const severityRank: Record<ReviewConcern["severity"], number> = {
+  blocking: 0,
+  important: 1,
+  nit: 2,
+};
+
+const rankAndDedupeConcerns = (
+  concerns: ReadonlyArray<ReviewConcern>,
+): ReadonlyArray<ReviewConcern> => {
+  const byContent = new Map<string, ReviewConcern>();
+  for (const concern of concerns) {
+    const key = `${concern.title}\u0000${concern.body}`;
+    const previous = byContent.get(key);
+    if (
+      previous === undefined ||
+      severityRank[concern.severity] < severityRank[previous.severity]
+    ) {
+      byContent.set(key, concern);
+    }
+  }
+  return [...byContent.values()]
+    .sort((left, right) => severityRank[left.severity] - severityRank[right.severity])
+    .slice(0, 10);
+};
 
 /**
  * Execute one review with any explicit Agent Binding whose contract is
@@ -163,24 +217,100 @@ export const executeReview = <
     const source = yield* PullRequestSource;
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
+    const anchorFiles = yield* source.anchorFiles;
+    const executionContext = Option.getOrUndefined(
+      yield* Effect.serviceOption(ReviewExecutionContext),
+    );
     const mission = buildReviewMission(metadata, files);
+    const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =
       options.signature === undefined
         ? undefined
-        : yield* computeChangesetFingerprint(files, options.signature(mission));
+        : yield* computeChangesetFingerprint(anchorFiles, options.signature(fullMission));
 
     const budget = yield* makeUsageBudget(options.limits ?? reviewBudgetLimits);
-    const result = yield* AgentRuntime.run(binding, mission, {
+    const detached = yield* AgentRuntime.start(binding, mission, {
       budget: toRunBudgetHook(budget),
       estimateCostMicrousd: () => Effect.succeed(500),
     });
+    const result = yield* detached.await;
+    const events = yield* detached.events;
 
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
     const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
     const review = enforceFindingsBound(decoded, clampMaxFindings(options.maxFindings));
     const usage = yield* budget.snapshot;
-    const plan = planPublication(review, files, {
+    const affectedPaths = new Set(
+      executionContext?.affectedPaths ??
+        files.flatMap((file) =>
+          file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
+        ),
+    );
+    const priorState =
+      executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+    const carriedCandidates =
+      priorState?.unresolvedFindings
+        .filter((finding) => !affectedPaths.has(finding.path))
+        .map(fromStoredFinding) ?? [];
+    const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(
+      0,
+      clampMaxFindings(options.maxFindings),
+    );
+    const activeFindingKeys = new Set(activeFindings.map(findingKey));
+    const currentFindingKeys = new Set(review.findings.map(findingKey));
+    const carriedFindings = carriedCandidates.filter(
+      (finding) =>
+        activeFindingKeys.has(findingKey(finding)) && !currentFindingKeys.has(findingKey(finding)),
+    );
+    // Non-anchored concerns cannot be mapped safely to one affected path, so
+    // incremental runs carry them conservatively until the explicit final audit.
+    const carriedConcernCandidates = priorState?.unresolvedConcerns.map(fromStoredConcern) ?? [];
+    const activeConcerns = rankAndDedupeConcerns([
+      ...carriedConcernCandidates,
+      ...(review.concerns ?? []),
+    ]);
+    const currentConcernKeys = new Set(
+      (review.concerns ?? []).map((concern) => `${concern.title}\u0000${concern.body}`),
+    );
+    const activeConcernKeys = new Set(
+      activeConcerns.map((concern) => `${concern.title}\u0000${concern.body}`),
+    );
+    const carriedConcerns = carriedConcernCandidates.filter((concern) => {
+      const key = `${concern.title}\u0000${concern.body}`;
+      return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
+    });
+    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+    const coverage = assessReviewCoverage({
+      shape: options.reviewShape ?? "flat",
+      files,
+      totalFiles: reviewTotalFiles,
+      anchorFiles,
+      totalAnchorFiles: metadata.totalChangedFiles,
+      events,
+    });
+    const state =
+      executionContext !== undefined &&
+      coverage.status === "complete" &&
+      fingerprint !== undefined &&
+      metadata.baseSha !== undefined
+        ? ReviewState.make({
+            version: 1,
+            repository: metadata.repository,
+            pullRequestNumber: metadata.number,
+            baseRef: metadata.baseRef,
+            baseSha: metadata.baseSha,
+            headRef: metadata.headRef,
+            reviewedHeadSha: metadata.headSha,
+            profileFingerprint: executionContext.profileFingerprint,
+            acceptedScopeFingerprint: fingerprint,
+            reviewedPathCount: anchorFiles.length,
+            unresolvedFindings: activeFindings.map(toStoredFinding),
+            unresolvedConcerns: activeConcerns.map(toStoredConcern),
+            lastReviewMode: executionContext.mode,
+          })
+        : undefined;
+    const plan = planPublication(review, anchorFiles, {
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,
       totalChangedFiles: metadata.totalChangedFiles,
@@ -190,22 +320,51 @@ export const executeReview = <
       runUrl: options.runUrl,
       usage,
       usageScope: options.usageScope,
-      fingerprint,
+      fingerprint: coverage.status === "complete" ? fingerprint : undefined,
+      coverage,
+      carriedFindings,
+      carriedConcerns,
+      reviewMode: executionContext?.mode,
+      reviewReason: executionContext?.reason,
+      baselineSha: executionContext?.baselineSha,
+      reviewFilesVisible: files.length,
+      reviewTotalFiles,
+      state,
     });
 
     const scope =
       options.usageScope === undefined ? {} : ({ usageScope: options.usageScope } as const);
     if (!options.post) {
-      return ReviewRunOutcome.make({ review, plan, turns: result.turns, usage, ...scope });
+      return ReviewRunOutcome.make({
+        review,
+        activeFindings,
+        activeConcerns,
+        coverage,
+        plan,
+        turns: result.turns,
+        usage,
+        ...scope,
+        ...(executionContext === undefined
+          ? {}
+          : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
+        ...(state === undefined ? {} : { state }),
+      });
     }
     const publisher = yield* ReviewPublisher;
     const published = yield* publisher.publish(plan);
     return ReviewRunOutcome.make({
       review,
+      activeFindings,
+      activeConcerns,
+      coverage,
       plan,
       published,
       turns: result.turns,
       usage,
       ...scope,
+      ...(executionContext === undefined
+        ? {}
+        : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
+      ...(state === undefined ? {} : { state }),
     });
   });

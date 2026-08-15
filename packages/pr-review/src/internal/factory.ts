@@ -17,7 +17,7 @@ import {
   makeFanOutReviewSuite,
 } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
-import { ignoringPullRequestSourceLayer } from "./ignore.ts";
+import { compileIgnoreGlobs, ignoringPullRequestSourceLayer } from "./ignore.ts";
 import {
   clampMaxFindings,
   CodeReview,
@@ -28,8 +28,10 @@ import {
   ReadFileDiff,
   ReviewMission,
   ReviewToolkitLayer,
+  resolveGuidance as resolveReviewGuidance,
   type ReviewGuidance,
 } from "./review-agent.ts";
+import { buildProfileMission, computeProfileFingerprint } from "./review-state.ts";
 import {
   buildReviewMission,
   executeReview,
@@ -147,6 +149,32 @@ const makeFingerprint = (
     ignore,
   );
 
+const makeProfileFingerprint = (
+  signature: (mission: ReviewMission) => string,
+  ignore: ReadonlyArray<string> | undefined,
+) =>
+  provideIgnore(
+    Effect.gen(function* () {
+      const source = yield* PullRequestSource;
+      const metadata = yield* source.metadata;
+      const files = yield* source.anchorFiles;
+      return yield* computeProfileFingerprint(signature(buildProfileMission(metadata, files)));
+    }),
+    ignore,
+  );
+
+const makeReviewSnapshot = (ignore: ReadonlyArray<string> | undefined) =>
+  provideIgnore(
+    Effect.gen(function* () {
+      const source = yield* PullRequestSource;
+      return {
+        metadata: yield* source.metadata,
+        files: yield* source.anchorFiles,
+      };
+    }),
+    ignore,
+  );
+
 /**
  * Build the flat reviewer: one bounded read-only agent over the whole
  * changeset. Returns the model-agnostic definition, the explicit binding, and
@@ -193,6 +221,17 @@ const make = <
       `applyVerdict=${String(options.applyVerdict ?? false)}`,
       ...(options.modelLabel === undefined ? [] : [`model=${options.modelLabel}`]),
     ].join("\u0000");
+  const profileSignature = (mission: ReviewMission): string =>
+    [
+      "pr-review-profile-v1-flat",
+      JSON.stringify(resolveReviewGuidance(options.guidance, mission)),
+      JSON.stringify(options.policy ?? {}),
+      JSON.stringify(extraTools.map((tool) => tool.name)),
+      JSON.stringify(options.ignore ?? []),
+      `maxFindings=${clampMaxFindings(options.maxFindings)}`,
+      `applyVerdict=${String(options.applyVerdict ?? false)}`,
+      ...(options.modelLabel === undefined ? [] : [`model=${options.modelLabel}`]),
+    ].join("\u0000");
 
   const run = (runOptions: RunReviewOptions = {}) =>
     provideIgnore(
@@ -205,6 +244,7 @@ const make = <
         modelLabel: options.modelLabel,
         runUrl: runOptions.runUrl,
         usageScope: "run",
+        reviewShape: "flat",
       }).pipe(Effect.provide(Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), Effect.scoped),
       options.ignore,
     );
@@ -214,6 +254,12 @@ const make = <
     binding,
     run,
     fingerprint: makeFingerprint(signature, options.ignore),
+    profileFingerprint: makeProfileFingerprint(profileSignature, options.ignore),
+    snapshot: makeReviewSnapshot(options.ignore),
+    filterFiles: (files: ReadonlyArray<import("./diff.ts").ChangedFile>) => {
+      const ignored = compileIgnoreGlobs(options.ignore ?? []);
+      return files.filter((file) => !ignored(file.path));
+    },
   } as const;
 };
 
@@ -268,6 +314,15 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
       `applyVerdict=${String(options.applyVerdict ?? false)}`,
       ...(options.modelLabel === undefined ? [] : [`model=${options.modelLabel}`]),
     ].join(" ");
+  const profileSignature = (_mission: ReviewMission): string =>
+    [
+      "pr-review-profile-v1-fan-out",
+      JSON.stringify(guidanceLines),
+      JSON.stringify(options.ignore ?? []),
+      `maxFindings=${clampMaxFindings(options.maxFindings)}`,
+      `applyVerdict=${String(options.applyVerdict ?? false)}`,
+      ...(options.modelLabel === undefined ? [] : [`model=${options.modelLabel}`]),
+    ].join("\u0000");
   const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(
     Layer.provide(
       Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer),
@@ -285,6 +340,7 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
         modelLabel: options.modelLabel,
         runUrl: runOptions.runUrl,
         usageScope: "coordinator",
+        reviewShape: "fan-out",
       }).pipe(
         Effect.provide(
           Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer),
@@ -300,6 +356,12 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
     childBinding,
     run,
     fingerprint: makeFingerprint(signature, options.ignore),
+    profileFingerprint: makeProfileFingerprint(profileSignature, options.ignore),
+    snapshot: makeReviewSnapshot(options.ignore),
+    filterFiles: (files: ReadonlyArray<import("./diff.ts").ChangedFile>) => {
+      const ignored = compileIgnoreGlobs(options.ignore ?? []);
+      return files.filter((file) => !ignored(file.path));
+    },
   } as const;
 };
 

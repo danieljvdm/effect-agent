@@ -2,8 +2,9 @@ name: "Effect Agent PR Review"
 description: >-
   Review the current pull request with @effect-agent/pr-review — a bounded,
   read-only reviewer whose findings are validated against the real diff — and
-  post the result as a pull-request review. Ephemeral (deployment class E): a
-  failed or truncated run posts nothing, and posting is never exactly-once.
+  post the result as a pull-request review. Ephemeral execution (deployment
+  class E): a runtime failure posts nothing, an incomplete settled review
+  fails the check honestly, and posting is never exactly-once.
 branding:
   icon: "eye"
   color: "purple"
@@ -66,23 +67,40 @@ inputs:
     description: "Findings bound (1-20)."
     required: false
   fail-on:
-    description: 'Fail the job on the review verdict: "never" (default) or "request-changes".'
+    description: >-
+      Deprecated compatibility input. Blocking findings and incomplete
+      coverage always fail the check; model verdicts never weaken that gate.
     required: false
     default: "never"
   skip-unchanged:
     description: >-
-      Skip the review when the changeset fingerprint matches the last posted
-      review ('true', default) — base-branch auto-merges and equivalent
-      rebases stop re-triggering reviews. Set 'false' to always review.
+      Skip model execution when the current head is already the last
+      successfully reviewed head ('true', default), while preserving the
+      stored blocking/success conclusion. Set 'false' to force execution.
     required: false
     default: "true"
+  review-mode:
+    description: >-
+      "incremental" (default) reviews changes since the last compatible,
+      successfully covered head. "final" deliberately audits the full
+      current pull-request diff.
+    required: false
+    default: "incremental"
 outputs:
   skipped:
-    description: "'true' when the event was not a reviewable pull request or the changeset was unchanged."
+    description: "'true' when the event is not reviewable or the head already has stored coverage."
   skip-reason:
     description: "Why the run skipped (set only when skipped is 'true')."
   fingerprint:
-    description: "The changeset fingerprint (set on unchanged-changeset skips)."
+    description: "Deprecated changeset-fingerprint output."
+  conclusion:
+    description: "Host-derived check conclusion: success, blocking, or incomplete."
+  coverage:
+    description: "Host-derived required-scope coverage: complete or incomplete."
+  review-mode:
+    description: "Selected scope: incremental or full."
+  review-reason:
+    description: "Why incremental or full scope was selected."
   verdict:
     description: "The review verdict: approve, comment, or request-changes."
   inline-comments:
