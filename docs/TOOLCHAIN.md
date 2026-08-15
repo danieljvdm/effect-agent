@@ -187,8 +187,9 @@ versioned tree, packs every public workspace with Bun into a scope-owned staging
 atomically renames that directory into place only after every tarball and the manifest are
 complete. Failure or interruption removes the partial staging tree, so a retry never inherits an
 incomplete release artifact. The atomic rename itself is uninterruptible, and a failed preparation,
-commit, cleanup, or temporary manifest restoration remains a typed release failure with preceding
-causes preserved. The job then uploads one checksummed immutable artifact. A separate
+commit, cleanup, or temporary manifest installation/restoration remains a typed release failure
+with preceding causes preserved. Even a partial installation failure attempts to restore the
+original manifest bytes before returning. The job then uploads one checksummed immutable artifact. A separate
 action-free job is the sole holder of `id-token: write`. It checks the artifact
 digests, requires the release manifest to contain the exact fourteen-package fixed set at one
 `X.Y.Z-beta.N` version and the policy-owned `beta` dist-tag, verifies a pinned npm CLI tarball, and

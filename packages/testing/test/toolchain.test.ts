@@ -7,7 +7,11 @@ import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
 import { prepareReleaseArtifactDirectory } from "../../../scripts/release-artifact-directory.ts";
-import { PreparedReleaseManifest, PublishManifest } from "../../../scripts/release-publish.ts";
+import {
+  PreparedReleaseManifest,
+  PublishManifest,
+  withTemporaryManifest,
+} from "../../../scripts/release-publish.ts";
 import {
   InvalidCommitSha,
   ReleaseTreeMismatch,
@@ -708,6 +712,98 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       }),
   );
 
+  it.effect("restores the source manifest after a partial temporary-install failure", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "effect-agent-manifest-swap-test-",
+      });
+      const manifestPath = path.join(temporaryRoot, "package.json");
+      const originalBytes = '{"name":"fixture","version":"1.0.0"}\n';
+      const publishBytes = '{"name":"fixture","version":"1.0.0","exports":{}}\n';
+      yield* fs.writeFileString(manifestPath, originalBytes);
+
+      const installCause = PlatformError.systemError({
+        _tag: "WriteZero",
+        module: "FileSystem",
+        method: "writeFileString",
+        pathOrDescriptor: manifestPath,
+      });
+      let writes = 0;
+      let useStarted = false;
+      const installFailingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        writeFileString: (target, contents) => {
+          if (target !== manifestPath) return fs.writeFileString(target, contents);
+          writes += 1;
+          if (writes === 1) {
+            return fs
+              .writeFileString(target, "partial\n")
+              .pipe(Effect.andThen(Effect.fail(installCause)));
+          }
+          return fs.writeFileString(target, contents);
+        },
+      });
+      const installFailure = yield* Effect.flip(
+        withTemporaryManifest(
+          manifestPath,
+          originalBytes,
+          publishBytes,
+          Effect.sync(() => {
+            useStarted = true;
+          }),
+        ).pipe(Effect.provideService(FileSystem.FileSystem, installFailingFileSystem)),
+      );
+      expect(installFailure).toMatchObject({
+        _tag: "ReleaseManifestSwapError",
+        operation: "install",
+      });
+      expect(writes).toBe(2);
+      expect(useStarted).toBe(false);
+      expect(yield* fs.readFileString(manifestPath)).toBe(originalBytes);
+
+      const restoreCause = PlatformError.systemError({
+        _tag: "Busy",
+        module: "FileSystem",
+        method: "writeFileString",
+        pathOrDescriptor: manifestPath,
+      });
+      writes = 0;
+      const installAndRestoreFailingFileSystem = FileSystem.FileSystem.of({
+        ...fs,
+        writeFileString: (target, contents) => {
+          if (target !== manifestPath) return fs.writeFileString(target, contents);
+          writes += 1;
+          if (writes === 1) {
+            return fs
+              .writeFileString(target, "partial-again\n")
+              .pipe(Effect.andThen(Effect.fail(installCause)));
+          }
+          return Effect.fail(restoreCause);
+        },
+      });
+      const combinedExit = yield* withTemporaryManifest(
+        manifestPath,
+        originalBytes,
+        publishBytes,
+        Effect.void,
+      ).pipe(
+        Effect.provideService(FileSystem.FileSystem, installAndRestoreFailingFileSystem),
+        Effect.exit,
+      );
+      expect(Exit.isFailure(combinedExit)).toBe(true);
+      if (Exit.isFailure(combinedExit)) {
+        expect(Cause.hasDies(combinedExit.cause)).toBe(false);
+        const diagnostics = Cause.pretty(combinedExit.cause);
+        expect(diagnostics).toContain("Could not install temporary publish manifest");
+        expect(diagnostics).toContain("WriteZero: FileSystem.writeFileString");
+        expect(diagnostics).toContain("Could not restore temporary publish manifest");
+        expect(diagnostics).toContain("Busy: FileSystem.writeFileString");
+      }
+    }),
+  );
+
   it.effect("keeps generated release PRs behind a trusted integrity gate", () =>
     Effect.gen(function* () {
       const [ciWorkflow, reviewWorkflow, releaseWorkflow, rootManifest] = yield* Effect.all([
@@ -1237,17 +1333,34 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         const packageDirectory = path.join(fixtureRoot, "packages", "fixture");
         const changesetDirectory = path.join(fixtureRoot, ".changeset");
         const changesetBinary = path.resolve(repositoryRoot, "node_modules", ".bin", "changeset");
-        const verifierSource = yield* readRepositoryFile("scripts/verify-changesets-release.ts");
-        expect(verifierSource).toContain('"--frozen-lockfile"');
-        expect(verifierSource).toContain(
-          'path.join(expectedWorktree, "node_modules", ".bin", "changeset")',
+        const commandCapture = path.join(temporaryRoot, "trusted-command-capture");
+        const bunStub = path.join(temporaryRoot, "bun-stub");
+        const changesetStub = path.join(temporaryRoot, "changeset-stub");
+
+        yield* fs.writeFileString(
+          changesetStub,
+          `#!/usr/bin/env bash
+set -euo pipefail
+printf 'changeset\\t%s\\t%s\\n' "$PWD" "$*" >> ${JSON.stringify(commandCapture)}
+exec ${JSON.stringify(changesetBinary)} "$@"
+`,
         );
-        expect(verifierSource).not.toContain(
-          'path.join(root, "node_modules", ".bin", "changeset")',
+        yield* fs.chmod(changesetStub, 0o755);
+        yield* fs.writeFileString(
+          bunStub,
+          `#!/usr/bin/env bash
+set -euo pipefail
+printf 'bun\\t%s\\t%s\\n' "$PWD" "$*" >> ${JSON.stringify(commandCapture)}
+bun "$@"
+mkdir -p node_modules/.bin
+ln -sf ${JSON.stringify(changesetStub)} node_modules/.bin/changeset
+`,
         );
+        yield* fs.chmod(bunStub, 0o755);
 
         yield* fs.makeDirectory(packageDirectory, { recursive: true });
         yield* fs.makeDirectory(changesetDirectory, { recursive: true });
+        yield* fs.writeFileString(path.join(fixtureRoot, ".gitignore"), "node_modules\n");
         yield* fs.writeFileString(
           path.join(fixtureRoot, "package.json"),
           `{
@@ -1286,6 +1399,8 @@ Exercise the generated release verifier.
 `,
         );
 
+        yield* runFixtureCommand(fixtureRoot, "bun", ["install", "--ignore-scripts"]);
+
         yield* runFixtureCommand(temporaryRoot, "git", [
           "init",
           "--initial-branch=main",
@@ -1319,6 +1434,28 @@ Exercise the generated release verifier.
           "--porcelain",
         ]);
         expect(worktreesAfterSuccess.match(/^worktree /gm)).toHaveLength(1);
+
+        yield* fs.writeFileString(commandCapture, "");
+        yield* verifyChangesetsRelease({
+          baseSha,
+          bunBinary: bunStub,
+          headSha: generatedHead,
+          repositoryRoot: fixtureRoot,
+        });
+        const trustedCommands = (yield* fs.readFileString(commandCapture))
+          .trim()
+          .split("\n")
+          .map((line) => line.split("\t"));
+        expect(trustedCommands.map(([tool, , args]) => [tool, args])).toEqual([
+          ["bun", "install --frozen-lockfile --ignore-scripts"],
+          ["changeset", "version"],
+          ["bun", "install --ignore-scripts"],
+        ]);
+        const trustedWorkingDirectories = new Set(trustedCommands.map(([, cwd]) => cwd));
+        expect(trustedWorkingDirectories.size).toBe(1);
+        const trustedWorkingDirectory = trustedCommands[0]?.[1];
+        expect(trustedWorkingDirectory).toMatch(/effect-agent-changesets-release-.+[/]expected$/);
+        expect(trustedWorkingDirectory).not.toBe(fixtureRoot);
 
         let failedCleanupPath = "";
         const cleanupCause = PlatformError.systemError({
