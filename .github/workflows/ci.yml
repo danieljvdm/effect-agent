@@ -99,11 +99,18 @@ jobs:
       - name: Patch Effect TypeScript-Go
         run: bun run patch:tsgo
 
+      # The test tasks' fingerprints include Vitest's own per-package cache
+      # directories (node_modules/.vite/vitest); when those are absent on a
+      # fresh runner every test task misses with "<hash> removed", so they are
+      # persisted alongside the task cache.
       - name: Restore Vite Task cache
         id: task-cache
         uses: actions/cache/restore@v4
         with:
-          path: node_modules/.vite/task-cache
+          path: |
+            node_modules/.vite/task-cache
+            packages/*/node_modules/.vite/vitest
+            examples/*/node_modules/.vite/vitest
           key: vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
@@ -116,7 +123,10 @@ jobs:
         if: success()
         uses: actions/cache/save@v4
         with:
-          path: node_modules/.vite/task-cache
+          path: |
+            node_modules/.vite/task-cache
+            packages/*/node_modules/.vite/vitest
+            examples/*/node_modules/.vite/vitest
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
   build:
