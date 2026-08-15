@@ -35,9 +35,14 @@ const openRuntime = (): Miniflare =>
 
 interface AskResult {
   readonly answer: string;
-  readonly program?: {
-    readonly result: { readonly topCustomers: ReadonlyArray<string>; readonly count: number };
-    readonly logs: ReadonlyArray<string>;
+  readonly codeMode: {
+    readonly used: boolean;
+    readonly tool: string;
+    readonly executor: string;
+    readonly calls: number;
+    readonly program?: string;
+    readonly result?: { readonly topCustomers: ReadonlyArray<string>; readonly count: number };
+    readonly logs?: ReadonlyArray<string>;
   };
   readonly profile: string;
 }
@@ -95,14 +100,22 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     // The final model answer came back.
     expect(result.answer).toContain("Stellar Freight");
 
+    // Code Mode usage is surfaced explicitly: the tool, the isolated executor,
+    // and the actual JavaScript the program was.
+    expect(result.codeMode.used).toBe(true);
+    expect(result.codeMode.tool).toBe("run_javascript");
+    expect(result.codeMode.executor).toBe("cloudflare-dynamic-worker");
+    expect(result.codeMode.calls).toBe(1);
+    expect(result.codeMode.program).toContain("warehouse.query");
+
     // The evidence that matters: the isolated program queried the REAL
     // Durable Object SQLite and returned the computed result. The seed has
     // exactly three customers above $10k, highest revenue first.
-    expect(result.program?.result).toEqual({
+    expect(result.codeMode.result).toEqual({
       topCustomers: ["Stellar Freight", "Vertex Robotics", "Nimbus Analytics"],
       count: 3,
     });
-    expect(result.program?.logs).toContain("scanned 5 customers, kept 3");
+    expect(result.codeMode.logs).toContain("scanned 5 customers, kept 3");
   }, 120_000);
 
   it("denies a write-attempting program through the read-only allowlist", async () => {
@@ -116,9 +129,9 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     const rawBody = await response.text();
     expect(response.ok, `unexpected status ${response.status}: ${rawBody}`).toBe(true);
     const result = JSON.parse(rawBody) as {
-      readonly program?: { readonly result: { readonly writeDenied: boolean } };
+      readonly codeMode: { readonly result?: { readonly writeDenied: boolean } };
     };
-    expect(result.program?.result.writeDenied).toBe(true);
+    expect(result.codeMode.result?.writeDenied).toBe(true);
   });
 
   it("rejects a CTE-prefixed write that a leading-keyword denylist would miss", async () => {

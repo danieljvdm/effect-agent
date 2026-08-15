@@ -14,5 +14,11 @@ docs/.vitepress/dist
 .env
 .env.*
 !.env.example
+# wrangler local secrets (never commit): keep only the *.example templates
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+# wrangler local dev cache
+.wrangler
 .dev-kit
 .repos

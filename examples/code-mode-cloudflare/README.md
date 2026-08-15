@@ -29,6 +29,28 @@ warehouse only through the brokered `warehouse.query` method, which runs one
 **E**: the Agent runs ephemerally; the Durable Object is the warehouse data
 store, not a Conversation store.
 
+The response makes the Code Mode usage explicit — the tool, the isolated
+executor, and the **actual JavaScript the model wrote**, alongside its result:
+
+```jsonc
+{
+  "answer": "EMEA has the highest total revenue at 69,250.",
+  "codeMode": {
+    "used": true,
+    "tool": "run_javascript",
+    "executor": "cloudflare-dynamic-worker",
+    "calls": 1,
+    "program": "async () => { const result = await warehouse.query({ sql: \"SELECT region, SUM(revenue) AS total_revenue FROM invoice_summary GROUP BY region ORDER BY total_revenue DESC LIMIT 1\" }); return result.rows[0]; }",
+    "result": { "region": "emea", "total_revenue": 69250 },
+    "logs": [],
+  },
+  "profile": "openai",
+}
+```
+
+On the offline scripted profile `program` is a fixed demonstration program and
+`profile` is `"scripted"`; on the live profile the model writes its own.
+
 ### Read-only enforcement on Durable Object SQLite
 
 The plan (§8.4) prescribes database authority as the read-only boundary. On

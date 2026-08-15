@@ -86,8 +86,13 @@ export const codeMode = CodeMode.make("run_javascript", {
 export const codeModeAgent = Agent.define("warehouse-analyst", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
-  instructions:
-    "You answer questions about invoice data by writing one JavaScript program with run_javascript. Query the warehouse, compute the answer in code, and return a concise answer string.",
+  instructions: [
+    "You answer questions about invoice data.",
+    "First call run_javascript exactly once with a program that queries the warehouse (via warehouse.query) and computes the answer in code.",
+    "The warehouse exposes a read-only `invoice_summary` table (columns: customer TEXT, region TEXT, revenue INTEGER, created_at TEXT).",
+    "After the program returns, respond with only a JSON object of exactly this shape, no prose:",
+    '{"answer": "<one concise sentence answering the question>"}',
+  ].join("\n"),
   toolkit: Toolkit.make(codeMode.tool),
   policy: AgentPolicy.make({
     maxTurns: 3,
