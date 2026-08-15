@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "toolVersion": "0.11.3",
-  "manifestDigest": "sha256:0b9dc205e81f64ea7ae62b68772aa258f4d167915289b614f594910b4f9a9243",
+  "toolVersion": "0.17.0",
+  "manifestDigest": "sha256:43296df96f702dd6673458cb0585a775771f57d22fdfaf3debccfa0e5bd14a43",
   "setup": {
     "effectSource": {
       "packageName": "effect",
@@ -11,12 +11,30 @@
       "tag": "effect@4.0.0-beta.107"
     },
     "effectTsgo": {
-      "effectTsgoVersion": "0.24.3",
+      "effectTsgoVersion": "0.33.0",
       "typescriptPackage": "typescript",
       "typescriptVersion": "7.0.2"
     }
   },
   "outputs": [
+    {
+      "resourceId": "skill:build-effect-apis@agents",
+      "path": ".agents/skills/build-effect-apis",
+      "skill": "build-effect-apis",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:27c7d684334598d0da9858c5e8bd6bd274db20bf33269b0b9286a50d1613e649"
+    },
+    {
+      "resourceId": "skill:build-effect-clis@agents",
+      "path": ".agents/skills/build-effect-clis",
+      "skill": "build-effect-clis",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:7b301376e71dcc3c040bd31cbac72296ee8c9896fd355f365ec0fff4a1fa7b6c"
+    },
     {
       "resourceId": "skill:cloudflare@agents",
       "path": ".agents/skills/cloudflare",
@@ -38,7 +56,39 @@
       "target": "agents",
       "mode": "copy",
       "kind": "directory",
-      "digest": "sha256:934e6a086784b8cc9cc19c85587ba60481f57613fb8b85e4aea6b5556da72e0f"
+      "digest": "sha256:b152fec9dcb69b3018f021e70771d42036201c53d485e79b098147733ba445ac"
+    },
+    {
+      "resourceId": "skill:durable-objects@agents",
+      "path": ".agents/skills/durable-objects",
+      "skill": "durable-objects",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:533bfa75d2074cf6ac30ab77854a665465318dd0540ff4bdbb9c5f4ef8acfb38",
+      "catalog": {
+        "source": "cloudflare-skills",
+        "repository": "https://github.com/cloudflare/skills.git",
+        "resolved": "30553f89ae1ef1e3c2917cd09d72dac992bb4e9a"
+      }
+    },
+    {
+      "resourceId": "skill:effect-architecture-audit@agents",
+      "path": ".agents/skills/effect-architecture-audit",
+      "skill": "effect-architecture-audit",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:e1ce793618ab672bb4213e415e0e02860acbb0ae81e06f421d857ac94231610e"
+    },
+    {
+      "resourceId": "skill:effect-atom-state@agents",
+      "path": ".agents/skills/effect-atom-state",
+      "skill": "effect-atom-state",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:417939e6f21850b6b73b0f5b67d1e594ba830de43a086eaa3fc7a6947cbde9eb"
     },
     {
       "resourceId": "skill:effect-ts@agents",
@@ -47,7 +97,16 @@
       "target": "agents",
       "mode": "copy",
       "kind": "directory",
-      "digest": "sha256:50786d8d351fa32953de526bc12ac67fee34fecfebff5dccde4f9fe0c3354ba3"
+      "digest": "sha256:c9b42fee517f1077152ccf7231adf5912c048179368bc78837edea2a61815286"
+    },
+    {
+      "resourceId": "skill:open-pull-request@agents",
+      "path": ".agents/skills/open-pull-request",
+      "skill": "open-pull-request",
+      "target": "agents",
+      "mode": "copy",
+      "kind": "directory",
+      "digest": "sha256:14596520a07ccfdb3743dfa826d8b3de8605f3e8205dcdcce70396acab9ed6b1"
     },
     {
       "resourceId": "skill:testing@agents",
@@ -56,7 +115,25 @@
       "target": "agents",
       "mode": "copy",
       "kind": "directory",
-      "digest": "sha256:e239ef710f905b77ae1f98b2b86d3d0911c9e5f9381a92b268a8ac8c28e9c88f"
+      "digest": "sha256:6c35e7d322cc196e98bbd37660c493302f39f5a91183b18c7b2dc2f679a36ada"
+    },
+    {
+      "resourceId": "skill:build-effect-apis@claude",
+      "path": ".claude/skills/build-effect-apis",
+      "skill": "build-effect-apis",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:f65b88adf15a4944950e30c4744ce936670c4aa79d4abc7e635715b85c86b246"
+    },
+    {
+      "resourceId": "skill:build-effect-clis@claude",
+      "path": ".claude/skills/build-effect-clis",
+      "skill": "build-effect-clis",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:29dcb16febcc219f05efe44899416d0c1a8f0e3dcd28e9dd7cc15bc876664592"
     },
     {
       "resourceId": "skill:cloudflare@claude",
@@ -82,6 +159,38 @@
       "digest": "sha256:b59ba0874ef06cb4c651bb9b3012b014c9063648577f3f3181894e8ca3086d8f"
     },
     {
+      "resourceId": "skill:durable-objects@claude",
+      "path": ".claude/skills/durable-objects",
+      "skill": "durable-objects",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:10f738071a18fcc705108a800aefa673c6f1199f8f9accf0efcac12f5c3cf5ba",
+      "catalog": {
+        "source": "cloudflare-skills",
+        "repository": "https://github.com/cloudflare/skills.git",
+        "resolved": "30553f89ae1ef1e3c2917cd09d72dac992bb4e9a"
+      }
+    },
+    {
+      "resourceId": "skill:effect-architecture-audit@claude",
+      "path": ".claude/skills/effect-architecture-audit",
+      "skill": "effect-architecture-audit",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:0e75224a7745f66915cd7033b4ebffc57f5b21929c970de3b9b779b120fc4d7e"
+    },
+    {
+      "resourceId": "skill:effect-atom-state@claude",
+      "path": ".claude/skills/effect-atom-state",
+      "skill": "effect-atom-state",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:e231bd47f19be3e4c17f0f1d4442db233256ddcf3562aa59a5e5b12d4660f879"
+    },
+    {
       "resourceId": "skill:effect-ts@claude",
       "path": ".claude/skills/effect-ts",
       "skill": "effect-ts",
@@ -89,6 +198,15 @@
       "mode": "symlink",
       "kind": "symlink",
       "digest": "sha256:057d09728194631224706ae6afbf877107388501832bf0f3e2c6516c7d55f242"
+    },
+    {
+      "resourceId": "skill:open-pull-request@claude",
+      "path": ".claude/skills/open-pull-request",
+      "skill": "open-pull-request",
+      "target": "claude",
+      "mode": "symlink",
+      "kind": "symlink",
+      "digest": "sha256:7fb29cd1804361f3d09fa0925109d56daa20bc8b038a8d0ee23c85052f11708e"
     },
     {
       "resourceId": "skill:testing@claude",
@@ -105,7 +223,7 @@
       "sourcePath": "templates/AGENTS.md",
       "mode": "copy",
       "kind": "file",
-      "digest": "sha256:acc4f12eb7801c245f6a3117b0cb9b329b3c5765f32cbc8ecb4501d7af08cd08"
+      "digest": "sha256:d6c16545eb6cfbf9e58acd45340961ca70626a6d00b676c534ef6572cfa68228"
     },
     {
       "resourceId": "setup:claude-instructions",

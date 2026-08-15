@@ -1,3 +1,18 @@
+# The pull-request gate, split into three parallel jobs (static checks,
+# tests, build) with a fan-in `ready` job so the branch-protection check name
+# stays `ready`.
+#
+# Each job restores and saves a Vite Task cache (node_modules/.vite/task-cache)
+# so per-package gates whose fingerprinted inputs did not change replay
+# instead of re-executing. The jobs use separate key namespaces because each
+# saves only the task entries it ran; a shared prefix would let one job's
+# snapshot shadow the others'. Keys are per-run (cache entries are immutable)
+# with restore-keys prefixes that pick the newest baseline, scoped first to
+# the current lockfile and falling back across dependency bumps (Vite Task
+# fingerprints inputs itself, so a stale baseline is ignored per task, never
+# trusted). Caches saved by pull-request runs are scoped to that PR's merge
+# ref, so other PRs can only reuse baselines saved from main — running on
+# main pushes publishes that shared baseline after each merge.
 name: CI
 
 on:
@@ -9,24 +24,147 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI: "true"
+  VITE_GIT_HOOKS: "0"
+
 jobs:
-  ready:
+  checks:
+    name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    env:
-      CI: "true"
-      VITE_GIT_HOOKS: "0"
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - uses: oven-sh/setup-bun@v2
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.3.14
 
-      # One frozen, script-suppressed install, then locked Dev Kit
-      # convergence (tsgo patch, managed outputs) before any check runs.
-      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Install dependencies (frozen, scripts suppressed)
+        run: bun install --frozen-lockfile --ignore-scripts
 
-      - run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
+      - name: Verify locked Dev Kit setup
+        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
-      - run: bun run ready
+      # Restored after the install because a reinstall can recreate
+      # node_modules, which would drop a cache restored earlier.
+      - name: Restore Vite Task cache
+        id: task-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-checks-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-checks-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+            vite-task-checks-${{ runner.os }}-
+
+      - name: Format, lint, type checks, and action-bundle freshness
+        run: bun run check
+
+      - name: Save Vite Task cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.task-cache.outputs.cache-primary-key }}
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies (frozen, scripts suppressed)
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Verify locked Dev Kit setup
+        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
+
+      - name: Restore Vite Task cache
+        id: task-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-test-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+            vite-task-test-${{ runner.os }}-
+
+      - name: Run package and example test suites
+        run: bun run test
+
+      - name: Save Vite Task cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.task-cache.outputs.cache-primary-key }}
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+
+      - name: Install dependencies (frozen, scripts suppressed)
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Verify locked Dev Kit setup
+        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
+
+      - name: Restore Vite Task cache
+        id: task-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: vite-task-build-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            vite-task-build-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+            vite-task-build-${{ runner.os }}-
+
+      - name: Build packages, examples, and docs
+        run: bun run build
+
+      - name: Save Vite Task cache
+        if: success()
+        uses: actions/cache/save@v4
+        with:
+          path: node_modules/.vite/task-cache
+          key: ${{ steps.task-cache.outputs.cache-primary-key }}
+
+  # Fan-in for branch protection: the required status check is named `ready`.
+  # It runs unconditionally and asserts every gate's result, because GitHub
+  # treats a SKIPPED required check as satisfied — a fan-in that merely gets
+  # skipped when a dependency fails would let the failure merge.
+  ready:
+    name: ready
+    needs: [checks, test, build]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify all gates passed
+        run: |
+          test "${{ needs.checks.result }}" = "success"
+          test "${{ needs.test.result }}" = "success"
+          test "${{ needs.build.result }}" = "success"

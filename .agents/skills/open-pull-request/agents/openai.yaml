@@ -1,0 +1,4 @@
+interface:
+  display_name: "Open Pull Request"
+  short_description: "Open clear, evidence-backed pull requests"
+  default_prompt: "Use $open-pull-request to prepare and open a clear pull request with conventional commits and proof of work."

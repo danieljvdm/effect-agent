@@ -30,7 +30,7 @@ The root `package.json` is the only version source for shared dependencies.
 | esbuild                           |           `0.28.1` | Bundles the Miniflare-lane worker entry (Miniflare no longer bundles)             |
 | Node.js                           | `22.18+ or 24.11+` | Runtime range compatible with Vite+                                               |
 | TypeScript                        |            `7.0.2` | Type checker used with the Effect compiler patch                                  |
-| `@effect/tsgo`                    |           `0.24.3` | Effect-aware TypeScript diagnostics                                               |
+| `@effect/tsgo`                    |           `0.33.0` | Effect-aware TypeScript diagnostics                                               |
 | `@types/node`                     |           `26.1.2` | Node types for repository scripts                                                 |
 | VitePress                         |   `2.0.0-alpha.18` | Markdown-driven documentation site                                                |
 | Vue                               |           `3.5.40` | VitePress theme components                                                        |
@@ -192,6 +192,11 @@ CI skips the source checkout because production checks use installed packages, n
 source. Local development keeps the checkout because implementation agents often need to verify
 current Effect v4 and Effect AI behavior.
 
+Known workaround: the `preferTypedSchemaDecoder` language-service rule is set to `"off"` in
+`tsconfig.base.json` because `@effect/tsgo` `0.33.0` nil-panics in that rule
+(`internal/rules/prefer_typed_schema_decoder.go:37`) while checking `packages/session`. Re-enable
+it once a fixed tsgo lands.
+
 The attributed Flue and Pi source snapshots are separate shallow Git submodules at `repos/flue`
 and `repos/pi`. Their gitlinks are pinned to the commits recorded in
 [REFERENCE-ANALYSIS.md](REFERENCE-ANALYSIS.md). A recursive clone initializes them; an existing
@@ -254,8 +259,13 @@ automation are deferred until open-source preparation.
 
 ## CI and hooks
 
-The GitHub Actions workflow installs the exact Bun version, performs a frozen-lockfile install,
-and runs `bun run ready`. It does not initialize any source submodule.
+The CI workflow installs the exact Bun version with a frozen-lockfile install, then runs the
+`ready` gate as three parallel jobs — Static checks (`bun run check`), Tests (`bun run test`),
+and Build (`bun run build`) — with a fan-in job that keeps the required branch-protection check
+named `ready`. Each job restores and saves the Vite Task cache
+(`node_modules/.vite/task-cache`), so per-package gates whose fingerprinted inputs did not change
+replay instead of re-executing; runs on `main` publish the shared baseline that pull-request runs
+restore. It does not initialize any source submodule.
 
 The Vite+ pre-commit hook runs the staged formatter. CI remains authoritative: hooks improve local
 feedback but are not a correctness boundary.
