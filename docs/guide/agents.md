@@ -85,12 +85,15 @@ AgentPolicy.make({
 Turns, Tool Calls, duration, and concurrency are positive finite bounds. Token and cost budgets are
 optional because not every Model reports enough usage data to enforce them honestly.
 
-`onExhaustion` selects how Turn and Tool Call exhaustion resolve. The default `"final-answer"`
-soft-lands the Run: an over-budget Tool batch is rejected with model-visible failed results, the
-model gets one final tool-free opportunity to answer, and the Run completes with the honest
-`finishReason: "budget-exhausted"`. `"fail"` fails the Run typed instead — the strict rail for
-pipelines that must never accept a truncated answer. Duration, token, cost, and repeated-failure
-bounds always fail typed.
+`onExhaustion` selects how Turn, Tool Call, and token exhaustion resolve. The default
+`"final-answer"` soft-lands the Run: an over-budget Tool batch is rejected with model-visible
+failed results, the model gets one final tool-free opportunity to answer, and the Run completes
+with the honest `finishReason: "budget-exhausted"` and an `exhausted` marker naming the
+dimension. `"fail"` fails the Run typed instead — the strict rail for pipelines that must never
+accept a truncated answer. Duration, cost, and repeated-failure bounds always fail typed.
+
+Bounded Tool results, the run-status message, `contextTokenLimit`, and compaction are covered in
+[Context management](/guide/context-management).
 
 ## Deliberate absences
 

@@ -61,6 +61,7 @@ export default defineConfig({
           { text: "Tools & Layers", link: "/guide/tools" },
           { text: "Run & stream", link: "/guide/run-agents" },
           { text: "Conversations", link: "/guide/conversations" },
+          { text: "Context management", link: "/guide/context-management" },
           { text: "Deterministic testing", link: "/guide/testing" },
         ],
       },
