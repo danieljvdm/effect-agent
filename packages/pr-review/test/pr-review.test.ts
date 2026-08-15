@@ -472,12 +472,14 @@ describe("verdict callout", () => {
         CodeReview.make({ summary: "s", verdict: "approve", findings: [finding("blocking")] }),
       ).event,
     ).toBe("REQUEST_CHANGES");
+    // A lower-severity finding rides along so an implementation that
+    // consults concerns only when findings are empty cannot pass.
     expect(
       planWithVerdict(
         CodeReview.make({
           summary: "s",
           verdict: "approve",
-          findings: [],
+          findings: [finding("nit")],
           concerns: [
             ReviewConcern.make({ severity: "blocking", title: "Blocking concern", body: "b" }),
           ],
@@ -556,26 +558,33 @@ describe("concerns, metadata, and footer", () => {
   });
 
   it("neutralizes a ref that would terminate the metadata comment", () => {
-    // Refs are external data; a `-->` inside one must not close the HTML
-    // comment early and leak or spoof the provenance block.
-    const plan = planPublication(scriptedReview, files, {
-      applyVerdict: false,
-      headSha: FIXTURE_SHA,
-      totalChangedFiles: 2,
-      baseRef: "main",
-      headRef: "feat/x-->y",
-      fingerprint: "c".repeat(64),
-    });
-    expect(plan.body).not.toContain("feat/x-->y");
-    expect(plan.body).toContain("head-ref: feat/x- ->y");
-    // The block stayed intact: its later lines are still inside the comment,
-    // and the only authoritative terminator is the host-generated one.
-    const metadataStart = plan.body.indexOf("<!-- effect-agent-pr-review metadata");
-    const metadataEnd = plan.body.indexOf("-->", metadataStart);
-    const block = plan.body.slice(metadataStart, metadataEnd);
-    expect(block).toContain("head-ref: feat/x- ->y");
-    expect(block).toContain("files-visible: 2 of 2");
-    expect(block).toContain("potentially stale");
+    // Refs are external data; a `-->` inside EITHER ref must not close the
+    // HTML comment early and leak or spoof the provenance block.
+    const hostile = "feat/x-->y";
+    const cases = [
+      { baseRef: hostile, headRef: "fix/sum", label: "base-ref" },
+      { baseRef: "main", headRef: hostile, label: "head-ref" },
+    ] as const;
+    for (const { baseRef, headRef, label } of cases) {
+      const plan = planPublication(scriptedReview, files, {
+        applyVerdict: false,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+        baseRef,
+        headRef,
+        fingerprint: "c".repeat(64),
+      });
+      expect(plan.body).not.toContain(hostile);
+      expect(plan.body).toContain(`${label}: feat/x- ->y`);
+      // The block stayed intact: its later lines are still inside the
+      // comment, and the only terminator is the host-generated one.
+      const metadataStart = plan.body.indexOf("<!-- effect-agent-pr-review metadata");
+      const metadataEnd = plan.body.indexOf("-->", metadataStart);
+      const block = plan.body.slice(metadataStart, metadataEnd);
+      expect(block).toContain(`${label}: feat/x- ->y`);
+      expect(block).toContain("files-visible: 2 of 2");
+      expect(block).toContain("potentially stale");
+    }
   });
 
   it("renders model, usage, and run link into the footer in order", () => {
