@@ -18,5 +18,14 @@ export default defineConfig(({ mode }) => {
       tsconfigPaths: true,
     },
     plugins: [tailwindcss(), tanstackStart(), viteReact()],
+    run: {
+      tasks: {
+        check: {
+          command: "tsc --noEmit",
+          input: [{ auto: true }, "!*.tsbuildinfo"],
+          output: [{ auto: true }, "!*.tsbuildinfo"],
+        },
+      },
+    },
   };
 });

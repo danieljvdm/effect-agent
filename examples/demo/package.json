@@ -5,7 +5,6 @@
   "type": "module",
   "scripts": {
     "dev": "vp dev --host 127.0.0.1 --port 4173",
-    "check": "tsc --noEmit",
     "test": "vp test --passWithNoTests",
     "build": "vp build",
     "start": "vp preview --host 127.0.0.1 --port 4173"
