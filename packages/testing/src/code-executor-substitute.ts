@@ -32,6 +32,11 @@ export const inProcessCodeExecutorImplementation = SandboxImplementation.make({
   identity: "in-process-javascript",
 });
 
+// These two caps mirror the wire schema bounds (`BoundedLogs` is at most
+// 4096 lines of at most 16 KiB each): capture must stay inside what
+// `CodeExecutionResult` can carry. A line over the per-line cap is truncated
+// with an explicit `…` marker; exceeding either the byte budget or the line
+// cap fails the pass typed.
 const MAX_LOG_LINES = 4_096;
 const MAX_LOG_LINE_CHARACTERS = 16_000;
 const MAX_THROWN_CHARACTERS = 4_000;
@@ -75,20 +80,34 @@ interface LogCapture {
   bytes: number;
 }
 
+/**
+ * Total, defect-free rendering of untrusted values: a hostile Proxy can throw
+ * from property access, `toString`, and `Symbol.toPrimitive`, and an expected
+ * program failure must never escape the typed channel as a defect while its
+ * diagnostics are being serialized.
+ */
 const formatLogValue = (value: unknown): string => {
-  if (typeof value === "string") {
-    return value;
-  }
   try {
+    if (typeof value === "string") {
+      return value;
+    }
     return JSON.stringify(value) ?? String(value);
   } catch {
-    return String(value);
+    try {
+      return String(value);
+    } catch {
+      return "[unprintable value]";
+    }
   }
 };
 
 const makeConsole = (capture: LogCapture, limits: CodeExecutionLimits) => {
   const write = (...values: ReadonlyArray<unknown>): void => {
-    const line = values.map(formatLogValue).join(" ").slice(0, MAX_LOG_LINE_CHARACTERS);
+    const joined = values.map(formatLogValue).join(" ");
+    const line =
+      joined.length > MAX_LOG_LINE_CHARACTERS
+        ? `${joined.slice(0, MAX_LOG_LINE_CHARACTERS - 1)}…`
+        : joined;
     const bytes = utf8ByteLength(line);
     if (capture.lines.length >= MAX_LOG_LINES || capture.bytes + bytes > limits.maxLogBytes) {
       throw new LogLimitSignal(capture.bytes + bytes);
@@ -122,12 +141,25 @@ const buildNamespaceObject = (
 };
 
 const boundedText = (value: unknown): string => {
-  const text = value instanceof Error ? `${value.name}: ${value.message}` : formatLogValue(value);
-  return text.slice(0, MAX_THROWN_CHARACTERS);
+  try {
+    const text = value instanceof Error ? `${value.name}: ${value.message}` : formatLogValue(value);
+    return text.slice(0, MAX_THROWN_CHARACTERS);
+  } catch {
+    return "[unserializable thrown value]";
+  }
+};
+
+/** Schema decoding of hostile values may itself throw through trap getters. */
+const safeDecodeJson = (value: unknown): Option.Option<Schema.Json> => {
+  try {
+    return Schema.decodeUnknownOption(Schema.Json)(value);
+  } catch {
+    return Option.none();
+  }
 };
 
 const boundedThrown = (value: unknown): Schema.Json => {
-  const decoded = Schema.decodeUnknownOption(Schema.Json)(value);
+  const decoded = safeDecodeJson(value);
   if (Option.isSome(decoded)) {
     try {
       const encoded = JSON.stringify(decoded.value);
@@ -150,8 +182,14 @@ const encodedJsonByteLength = (value: Schema.Json): number | undefined => {
   }
 };
 
-const decodeHostOutcome = Schema.decodeUnknownOption(CodeHostCallResult);
-const decodeJson = Schema.decodeUnknownOption(Schema.Json);
+/** Host outcomes are protocol input; a hostile value must not defect mid-decode. */
+const decodeHostOutcome = (value: unknown): Option.Option<CodeHostCallResult> => {
+  try {
+    return Schema.decodeUnknownOption(CodeHostCallResult)(value);
+  } catch {
+    return Option.none();
+  }
+};
 
 const validateRequest = (
   request: CodeExecutionRequest,
@@ -216,7 +254,7 @@ const serveHostCalls = (
           logs: [...capture.lines],
         });
       }
-      const argument = decodeJson(pending.argument);
+      const argument = safeDecodeJson(pending.argument);
       if (Option.isNone(argument)) {
         pending.reject(new TypeError("host call arguments must be JSON values"));
         continue;
@@ -323,8 +361,19 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
     });
 
     const harnessConsole = makeConsole(capture, request.limits);
+    // Admission is enforced at call creation, not only at the single-consumer
+    // dequeue: a burst of unawaited calls can enqueue at most one entry past
+    // the cap (the entry the server fails the pass on); everything beyond is
+    // rejected synchronously, so the queue stays bounded against hostile
+    // programs.
+    let issuedHostCalls = 0;
     const namespaceObjects = request.namespaces.map((namespace) =>
       buildNamespaceObject(namespace, (pending) => {
+        issuedHostCalls += 1;
+        if (issuedHostCalls > request.limits.maxHostCalls + 1) {
+          pending.reject(new Error(`host-call limit of ${request.limits.maxHostCalls} exceeded`));
+          return;
+        }
         Queue.offerUnsafe(queue, pending);
       }),
     );
@@ -360,6 +409,12 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
     });
 
     const startedAt = yield* Clock.currentTimeMillis;
+    // The wall-clock deadline interrupts only at asynchronous suspension
+    // points: a synchronous runaway shares the host thread and cannot be
+    // stopped in-process — exactly why the platform CPU enforcement cases
+    // belong to isolated adapters only (testing spec §8.1). The server fiber
+    // is interrupted when the pass settles so no host call outlives the
+    // program that issued it.
     const returned = yield* Effect.raceFirst(program, Fiber.join(server)).pipe(
       Effect.timeoutOrElse({
         duration: request.limits.maxWallTime,
@@ -371,8 +426,21 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
             logs: [...capture.lines],
           }),
       }),
+      Effect.ensuring(Fiber.interrupt(server)),
     );
     const finishedAt = yield* Clock.currentTimeMillis;
+
+    // An unawaited burst can outrun the server: the program may return before
+    // the over-limit entry is dequeued, so the admission counter is the
+    // authority — a pass that ISSUED more calls than the cap fails even when
+    // its promise settled first.
+    if (issuedHostCalls > request.limits.maxHostCalls) {
+      return yield* CodeHostCallLimitError.make({
+        implementation: inProcessCodeExecutorImplementation,
+        limit: request.limits.maxHostCalls,
+        logs: [...capture.lines],
+      });
+    }
 
     const value = yield* Schema.decodeUnknownEffect(Schema.Json)(returned).pipe(
       Effect.mapError(() =>

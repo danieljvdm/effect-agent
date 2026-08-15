@@ -497,10 +497,14 @@ Expected errors are Schema tagged and remain in `E`. The initial union should di
 
 Interruption of the host fiber itself follows ordinary Effect interruption semantics and is never
 represented in `E`. Where an inner failure belongs to the Tool rather than the executor, the
-broker envelope carries the existing framework tags — `ToolInputError`, `ApprovalRequired`,
-`PolicyDenied`, `BudgetExceeded`, `ToolInfrastructureError`, `ToolOutputError`, and the Tool's
-own declared failures — rather than a parallel Code Mode union. New tags are reserved for
-executor-side failures.
+broker envelope carries the tags the framework actually defines rather than a parallel Code Mode
+union (C2 note: the six tag names an earlier draft listed here were the documented ARCHITECTURE
+§8 taxonomy, not code): the Tool's own declared failure tags, `ModelProtocolError` for invalid
+parameters and invalid success encodings, `AgentPolicyError` for the Tool-call limit,
+`BudgetExceeded` from the budget hook, and the broker-owned preflight tags
+`ProgrammaticToolUnknownError`, `ProgrammaticApprovalUnsupportedError`,
+`ProgrammaticCallConcurrencyError`, and `ProgrammaticResultLimitError`. New tags stay reserved
+for executor- and broker-side failures.
 
 Defects, sandbox termination, and remote transport failures must not be collapsed into a generic
 successful `{ error: string }` value. A Tool may explicitly choose a model-visible failure mode,

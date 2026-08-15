@@ -94,9 +94,14 @@ export interface RunContextHook<Error = never, Requirements = never> {
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
 }
 
-/** One model-call usage delta consumed after a complete response and before any Tool starts. */
+/**
+ * One usage delta. Turn-boundary consumption charges `modelCalls: 1` after a
+ * complete response and before any Tool starts; the programmatic Tool broker
+ * charges `modelCalls: 0, toolCalls: 1` before each inner handler starts
+ * (RUN-017).
+ */
 export interface RunUsageDelta {
-  readonly modelCalls: 1;
+  readonly modelCalls: 0 | 1;
   readonly inputTokens: number;
   readonly outputTokens: number;
   readonly totalTokens: number;
@@ -105,7 +110,14 @@ export interface RunUsageDelta {
   readonly usage: Response.Usage;
 }
 
-/** Dependency-neutral hierarchical budget hook. A typed failure stops the Run. */
+/**
+ * Dependency-neutral hierarchical budget hook. A typed failure at a Turn-seam
+ * consumption or a stream-guard pull stops the Run. A mid-pass programmatic
+ * consumption failure instead becomes that call's outcome (RUN-017 —
+ * exhaustion prevents the call): the Run still stops at the next Turn seam,
+ * because the following model call's `consume` and the guarded stream pulls
+ * re-enforce the same budget.
+ */
 export interface RunBudgetHook<Error = never, Requirements = never> {
   /**
    * Guard one active model or Tool stream pull. Hierarchical budget adapters

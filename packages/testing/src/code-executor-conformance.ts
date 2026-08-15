@@ -200,10 +200,12 @@ export const codeExecutorConformanceCases = (
           Effect.flip,
           Effect.mapError(() => violation(caseName, "expected the invalid-source pass to fail")),
         );
+        // Every expected execution failure carries the posture; an adapter
+        // omitting the field must fail this case, not slip past a probe.
         if (
-          "implementation" in error &&
-          (error.implementation.isolation !== posture.isolation ||
-            error.implementation.identity !== posture.identity)
+          error.implementation === undefined ||
+          error.implementation.isolation !== posture.isolation ||
+          error.implementation.identity !== posture.identity
         ) {
           return yield* violation(
             caseName,
@@ -371,18 +373,30 @@ export const codeExecutorConformanceCases = (
     },
     {
       name: "TEST-015 fails typed when host calls exceed the executor cap",
-      run: expectFailure(
-        "TEST-015 fails typed when host calls exceed the executor cap",
-        makeRequest(
-          "async () => { await warehouse.query({}); await warehouse.query({}); await warehouse.query({}); return 1; }",
-          {
-            namespaces: [warehouseNamespace],
-            limits: CodeExecutionLimits.make({ ...baseLimits, maxHostCalls: 2 }),
-          },
-        ),
-        respondingHost(() => CodeHostCallSuccess.make({ value: null })).host,
-        "CodeHostCallLimitError",
-      ),
+      run: Effect.gen(function* () {
+        const caseName = "TEST-015 fails typed when host calls exceed the executor cap";
+        const { host, calls } = respondingHost(() => CodeHostCallSuccess.make({ value: null }));
+        yield* expectFailure(
+          caseName,
+          makeRequest(
+            "async () => { await warehouse.query({}); await warehouse.query({}); await warehouse.query({}); return 1; }",
+            {
+              namespaces: [warehouseNamespace],
+              limits: CodeExecutionLimits.make({ ...baseLimits, maxHostCalls: 2 }),
+            },
+          ),
+          host,
+          "CodeHostCallLimitError",
+        );
+        // The cap is enforced before dispatch: the over-limit call must never
+        // have reached the host, or an unauthorized side effect already ran.
+        if (calls.length !== 2) {
+          return yield* violation(
+            caseName,
+            `expected exactly 2 dispatched host calls under a cap of 2, observed ${calls.length}`,
+          );
+        }
+      }),
     },
     {
       name: "TEST-015 fails typed on a host outcome outside the protocol schema",
@@ -461,7 +475,18 @@ export const codeExecutorConformanceCases = (
           makeRequest("async () => warehouse.query({})", { namespaces: [warehouseNamespace] }),
           host,
         ).pipe(Effect.forkChild);
-        yield* Deferred.await(started);
+        // Guard against a broken adapter that settles the pass without ever
+        // reaching the host: the case must report a violation, not hang.
+        const winner = yield* Effect.raceFirst(
+          Deferred.await(started).pipe(Effect.as("started" as const)),
+          Fiber.join(fiber).pipe(Effect.exit, Effect.as("exited" as const)),
+        );
+        if (winner === "exited") {
+          return yield* violation(
+            caseName,
+            "the pass settled before any host call reached the CodeExecutionHost",
+          );
+        }
         yield* Fiber.interrupt(fiber);
         if (!witness.hostCallInterrupted) {
           return yield* violation(

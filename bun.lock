@@ -134,6 +134,7 @@
       "dependencies": {
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
+        "@effect-agent/sandbox": "workspace:*",
         "effect": "catalog:",
       },
       "devDependencies": {
