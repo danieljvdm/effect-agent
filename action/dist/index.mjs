@@ -49833,16 +49833,23 @@ var resolveGuidance2 = exports_Effect.fn("resolveGuidance")(function* (inputs) {
   const filePath = inputs.guidanceFile;
   if (filePath === undefined)
     return inputs.guidance;
+  const relative = yield* normalizeRepoRelativePath(filePath).pipe(exports_Effect.mapError((violation) => GuidanceFileUnreadable.make({ path: filePath, reason: violation.reason })));
   const fs = yield* exports_FileSystem.FileSystem;
-  const content = yield* fs.readFileString(filePath).pipe(exports_Effect.mapError((error2) => GuidanceFileUnreadable.make({
-    path: filePath,
+  const unreadable = (error2) => GuidanceFileUnreadable.make({
+    path: relative,
     reason: `${error2._tag}: ${error2.message}`.slice(0, 2048)
-  })));
+  });
+  const stat3 = yield* fs.stat(relative).pipe(exports_Effect.mapError(unreadable));
+  const oversized = GuidanceFileUnreadable.make({
+    path: relative,
+    reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`
+  });
+  if (stat3.size > BigInt(MAX_GUIDANCE_FILE_CHARS) * 4n) {
+    return yield* oversized;
+  }
+  const content = yield* fs.readFileString(relative).pipe(exports_Effect.mapError(unreadable));
   if (content.length > MAX_GUIDANCE_FILE_CHARS) {
-    return yield* GuidanceFileUnreadable.make({
-      path: filePath,
-      reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`
-    });
+    return yield* oversized;
   }
   const combined = [content.trim(), inputs.guidance ?? ""].filter((part) => part.length > 0).join(`
 `);

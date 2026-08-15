@@ -14,6 +14,7 @@ import {
   type ReviewProvider,
 } from "./internal/providers.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
+import { normalizeRepoRelativePath } from "./internal/source.ts";
 
 // ---------------------------------------------------------------------------
 // The GitHub Actions entrypoint (deployment class E: one bounded ephemeral
@@ -121,20 +122,31 @@ export const resolveGuidance = Effect.fn("resolveGuidance")(function* (inputs: {
 }) {
   const filePath = inputs.guidanceFile;
   if (filePath === undefined) return inputs.guidance;
-  const fs = yield* FileSystem.FileSystem;
-  const content = yield* fs.readFileString(filePath).pipe(
-    Effect.mapError((error) =>
-      GuidanceFileUnreadable.make({
-        path: filePath,
-        reason: `${error._tag}: ${error.message}`.slice(0, 2_048),
-      }),
+  // The profile path is operator configuration, but it stays fail-closed
+  // like every other path in this package: workspace-relative only, and the
+  // size bound is checked before the file is read into memory.
+  const relative = yield* normalizeRepoRelativePath(filePath).pipe(
+    Effect.mapError((violation) =>
+      GuidanceFileUnreadable.make({ path: filePath, reason: violation.reason }),
     ),
   );
-  if (content.length > MAX_GUIDANCE_FILE_CHARS) {
-    return yield* GuidanceFileUnreadable.make({
-      path: filePath,
-      reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`,
+  const fs = yield* FileSystem.FileSystem;
+  const unreadable = (error: { readonly _tag: string; readonly message: string }) =>
+    GuidanceFileUnreadable.make({
+      path: relative,
+      reason: `${error._tag}: ${error.message}`.slice(0, 2_048),
     });
+  const stat = yield* fs.stat(relative).pipe(Effect.mapError(unreadable));
+  const oversized = GuidanceFileUnreadable.make({
+    path: relative,
+    reason: `File is larger than the ${MAX_GUIDANCE_FILE_CHARS}-character guidance bound.`,
+  });
+  if (stat.size > BigInt(MAX_GUIDANCE_FILE_CHARS) * 4n) {
+    return yield* oversized;
+  }
+  const content = yield* fs.readFileString(relative).pipe(Effect.mapError(unreadable));
+  if (content.length > MAX_GUIDANCE_FILE_CHARS) {
+    return yield* oversized;
   }
   const combined = [content.trim(), inputs.guidance ?? ""]
     .filter((part) => part.length > 0)

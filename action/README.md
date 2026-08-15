@@ -18,6 +18,9 @@ jobs:
   review:
     runs-on: ubuntu-latest
     steps:
+      # Only needed for guidance-file (reads the committed profile); the
+      # reviewer itself never reads the checkout.
+      - uses: actions/checkout@v4
       - id: review
         uses: danieljvdm/effect-agent/action@main
         with:

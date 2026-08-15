@@ -317,11 +317,40 @@ describe("runReviewAction unchanged-changeset skip", () => {
 // The committed review-profile file.
 // ---------------------------------------------------------------------------
 
+const fileInfo = (size: number): FileSystem.File.Info => ({
+  type: "File",
+  mtime: Option.none(),
+  atime: Option.none(),
+  birthtime: Option.none(),
+  dev: 0,
+  ino: Option.none(),
+  mode: 0o644,
+  nlink: Option.none(),
+  uid: Option.none(),
+  gid: Option.none(),
+  rdev: Option.none(),
+  size: FileSystem.Size(size),
+  blksize: Option.none(),
+  blocks: Option.none(),
+});
+
 describe("resolveGuidance", () => {
   const PROFILE_PATH = ".github/review-guidance.md";
   const withProfileFs = (content: string | undefined) =>
     Layer.succeed(FileSystem.FileSystem)(
       FileSystem.makeNoop({
+        stat: (path) =>
+          content !== undefined && path === PROFILE_PATH
+            ? Effect.succeed(fileInfo(content.length))
+            : Effect.fail(
+                new PlatformError(
+                  new SystemError({
+                    _tag: "NotFound",
+                    module: "FileSystem",
+                    method: "stat",
+                  }),
+                ),
+              ),
         readFileString: (path) =>
           content !== undefined && path === PROFILE_PATH
             ? Effect.succeed(content)
@@ -382,7 +411,10 @@ describe("resolveGuidance bound", () => {
     Effect.gen(function* () {
       const oversized = "x".repeat(MAX_GUIDANCE_FILE_CHARS + 1);
       const fs = Layer.succeed(FileSystem.FileSystem)(
-        FileSystem.makeNoop({ readFileString: () => Effect.succeed(oversized) }),
+        FileSystem.makeNoop({
+          stat: () => Effect.succeed(fileInfo(oversized.length)),
+          readFileString: () => Effect.succeed(oversized),
+        }),
       );
       const exit = yield* resolveGuidance({
         guidance: undefined,
