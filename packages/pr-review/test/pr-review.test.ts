@@ -497,6 +497,29 @@ describe("verdict callout", () => {
         CodeReview.make({ summary: "s", verdict: "approve", findings: [finding("nit")] }),
       ).event,
     ).toBe("APPROVE");
+    // Concerns clamp the approval band exactly like findings do.
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "approve",
+          findings: [],
+          concerns: [
+            ReviewConcern.make({ severity: "important", title: "Important concern", body: "b" }),
+          ],
+        }),
+      ).event,
+    ).toBe("COMMENT");
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "approve",
+          findings: [],
+          concerns: [ReviewConcern.make({ severity: "nit", title: "Nit concern", body: "b" })],
+        }),
+      ).event,
+    ).toBe("APPROVE");
     // The symmetric clamp: without a blocking item, a model-claimed
     // request-changes cannot block the merge — the event stays COMMENT and
     // agrees with the callout tier.
@@ -580,6 +603,9 @@ describe("concerns, metadata, and footer", () => {
       // comment, and the only terminator is the host-generated one.
       const metadataStart = plan.body.indexOf("<!-- effect-agent-pr-review metadata");
       const metadataEnd = plan.body.indexOf("-->", metadataStart);
+      // An unterminated comment must fail here, not slip through slice(-1).
+      expect(metadataStart).toBeGreaterThanOrEqual(0);
+      expect(metadataEnd).toBeGreaterThan(metadataStart);
       const block = plan.body.slice(metadataStart, metadataEnd);
       expect(block).toContain(`${label}: feat/x- ->y`);
       expect(block).toContain("files-visible: 2 of 2");
@@ -649,11 +675,12 @@ describe("concerns, metadata, and footer", () => {
     });
     expect(plan.body.length).toBeLessThanOrEqual(60_000);
     // Whole items were shed and announced; demoted bullets go first (they
-    // already failed validation), so every concern survives complete.
+    // already failed validation), so EVERY concern survives complete.
     expect(plan.body).toContain("omitted — the body exceeded GitHub's review size cap");
     expect(plan.body).toContain("### 🛑 Keep me first");
-    expect(plan.body).toContain("CONCERN-END-keep");
-    expect(plan.body).toContain("CONCERN-END-nit");
+    for (const name of ["keep", "0", "1", "2", "3", "4", "5", "6", "7", "nit"]) {
+      expect(plan.body).toContain(`CONCERN-END-${name}`);
+    }
     // Every demoted item is either present in full or wholly absent — a
     // title without its end sentinel would mean a mid-item slice.
     let kept = 0;
