@@ -1972,3 +1972,285 @@ describe("Subagent type proofs", () => {
     expect(unboundDefinitionRejected).toBeInstanceOf(Function);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SUB-033 containment: `failureMode: "return"` turns expected delegation
+// failures into model-visible result data; only the engine signals
+// (`ToolCallWaiting`, `SubagentDurabilityError`) stay in the error channel.
+// ---------------------------------------------------------------------------
+
+const containedDelegation = Subagent.define("delegate_contained", {
+  description: "Research one bounded question; failures are contained result data.",
+  target: childDefinition,
+  parameters: ResearchParams,
+  success: ResearchFindings,
+  failure: ResearchDelegationFailed,
+  failureMode: "return",
+  prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+  projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
+  policy: researchPolicy,
+});
+
+const containedCoordinator = Agent.define("contained-coordinator", {
+  input: Schema.Struct({ mission: Schema.String }),
+  output: Schema.Struct({ report: Schema.String }),
+  instructions: "Delegate, then answer as JSON.",
+  toolkit: Toolkit.make(containedDelegation.tool),
+  policy: parentPolicy,
+});
+
+const containedLayer = <Provider, ModelProvides, ModelRequires>(
+  childBinding: RuntimeBinding<
+    typeof ChildInput,
+    typeof ChildOutput,
+    string,
+    {},
+    Provider,
+    ModelProvides,
+    ModelRequires
+  >,
+) => SubagentRuntime.layer(containedDelegation, childBinding, { mapChildFailure });
+
+const containedDurableLayer = (invocations: Ref.Ref<number>) =>
+  SubagentRuntime.layer(containedDelegation, countingChildBinding(invocations), {
+    mapChildFailure,
+    durable: { targetDigests: durableDigests },
+  });
+
+const containedParent = (name: string, topic: string, answer = '{"report":"handled"}') =>
+  Agent.withModel(
+    containedCoordinator,
+    delegatingModel(name, "delegate_contained", [{ id: "call-1", params: { topic } }], answer),
+  );
+
+layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
+  it.effect("SUB-033 contains an expected child failure as the model-visible Tool result", () =>
+    Effect.gen(function* () {
+      const childBinding = Agent.withModel(
+        childDefinition,
+        answeringModel("contained-child-invalid", "not-json"),
+      );
+      const runId = decodeRunId("parent-run-contained-failure");
+
+      const detached = yield* AgentRuntime.start(
+        containedParent("parent-contained-failure", "berlin"),
+        { mission: "m" },
+        { runId },
+      ).pipe(Effect.provide(containedLayer(childBinding)));
+      const result = yield* detached.await;
+      const events = yield* detached.events;
+
+      // The parent Run COMPLETES: the child failure is the delegation call's
+      // result data, never a Tool batch failure.
+      expect(result.output).toEqual({ report: "handled" });
+      expect(events.some((event) => event._tag === "ToolCallFailed")).toBe(false);
+      expect(events.some((event) => event._tag === "RunFailed")).toBe(false);
+      expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
+        result: { _tag: "ResearchDelegationFailed", childErrorTag: "AgentOutputError" },
+      });
+      // The child failure stays honestly visible in the Subagent lifecycle.
+      expect(findEvent(events, "SubagentFailed")).toMatchObject({
+        errorTag: "AgentOutputError",
+      });
+      expect(findEvent(events, "SubagentJoined")).toBeUndefined();
+
+      const reservations = yield* SubagentReservations;
+      const snapshot = yield* reservations.parentSnapshot(runId);
+      expectSettledOnce(snapshot.reservations[0]);
+    }),
+  );
+
+  it.effect("SUB-033 contains parent-side budget exhaustion as result data", () =>
+    Effect.gen(function* () {
+      // A delegation whose budget admits exactly one child: the second call in
+      // the same batch is contained as `SubagentBudgetExhausted` result data
+      // while the first joins normally.
+      const tightDelegation = Subagent.define("delegate_contained_tight", {
+        description: "Single-child contained delegation.",
+        target: childDefinition,
+        parameters: ResearchParams,
+        success: ResearchFindings,
+        failure: ResearchDelegationFailed,
+        failureMode: "return",
+        prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+        projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
+        policy: SubagentPolicy.make({
+          maxChildren: 1,
+          maxConcurrency: 1,
+          maxTurns: 4,
+          maxToolCalls: 4,
+          maxDuration: "10 seconds",
+        }),
+      });
+      const tightCoordinator = Agent.define("contained-tight-coordinator", {
+        input: Schema.Struct({ mission: Schema.String }),
+        output: Schema.Struct({ report: Schema.String }),
+        instructions: "Delegate twice, then answer as JSON.",
+        toolkit: Toolkit.make(tightDelegation.tool),
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          // Sequential batch: call-1 deterministically reserves the only slot.
+          toolConcurrency: 1,
+        }),
+      });
+      const childBinding = Agent.withModel(
+        childDefinition,
+        answeringModel("contained-tight-child", '{"answer":"one"}'),
+      );
+      const parent = Agent.withModel(
+        tightCoordinator,
+        delegatingModel(
+          "parent-contained-tight",
+          "delegate_contained_tight",
+          [
+            { id: "call-1", params: { topic: "first" } },
+            { id: "call-2", params: { topic: "second" } },
+          ],
+          '{"report":"partial"}',
+        ),
+      );
+      const runId = decodeRunId("parent-run-contained-tight");
+
+      const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
+        Effect.provide(SubagentRuntime.layer(tightDelegation, childBinding, { mapChildFailure })),
+      );
+      const result = yield* detached.await;
+      const events = yield* detached.events;
+
+      expect(result.output).toEqual({ report: "partial" });
+      const succeeded = events.filter((event) => event._tag === "ToolCallSucceeded");
+      expect(succeeded).toHaveLength(2);
+      expect(succeeded[0]).toMatchObject({ result: { summary: "finding:one" } });
+      expect(succeeded[1]).toMatchObject({
+        result: { _tag: "SubagentBudgetExhausted", dimension: "total-child-invocations" },
+      });
+      expect(events.some((event) => event._tag === "ToolCallFailed")).toBe(false);
+    }),
+  );
+
+  it.effect("SUB-033 the waiting signal still suspends the Run under return mode", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const child = durableChildIdentity("contained-waiting");
+      const subagent = scriptedDurableHook({ establish: () => ({ _tag: "waiting", ...child }) });
+      const runId = decodeRunId("parent-run-contained-waiting");
+
+      const exit = yield* AgentRuntime.stream(
+        containedParent("parent-contained-waiting", "waiting"),
+        { mission: "m" },
+        { runId, subagent },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(containedDurableLayer(invocations)),
+        Effect.exit,
+      );
+
+      // Containment must NEVER encode the engine-owned waiting signal as a
+      // model-visible result: the call stays open and the Run suspends.
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(AgentChildPending);
+      expect(yield* Ref.get(invocations)).toBe(0);
+      const observed = yield* Ref.get(events);
+      expect(observed.some((event) => event._tag === "ToolCallSucceeded")).toBe(false);
+      expect(observed.some((event) => event._tag === "ToolCallFailed")).toBe(false);
+      expect(observed.at(-1)?._tag).toBe("RunSuspended");
+    }),
+  );
+
+  it.effect("SUB-033 a settled failed durable child joins as a non-failure contained result", () =>
+    Effect.gen(function* () {
+      const invocations = yield* Ref.make(0);
+      const joins = yield* Ref.make<ReadonlyArray<RunSubagentJoinRequest>>([]);
+      const child = durableChildIdentity("contained-failed");
+      const subagent = scriptedDurableHook({
+        establish: () => ({
+          _tag: "settled",
+          ...child,
+          outcome: "failed",
+          encodedResult: { errorTag: "TravelPlanningFailed", message: "child failed typed" },
+        }),
+        joins,
+      });
+
+      const result = yield* AgentRuntime.run(
+        containedParent("parent-contained-durable-failed", "failed"),
+        { mission: "m" },
+        { runId: decodeRunId("parent-run-contained-durable-failed"), subagent },
+      ).pipe(Effect.provide(containedDurableLayer(invocations)), Effect.scoped);
+
+      // The parent Run completes: the bounded execution failure is the call's
+      // contained result.
+      expect(result.output).toEqual({ report: "handled" });
+      expect(yield* Ref.get(invocations)).toBe(0);
+
+      // Canonical coherence (SUB-019): the join records exactly what the live
+      // batch continues with — a NON-failure result carrying the bounded
+      // failure projection.
+      const recordedJoins = yield* Ref.get(joins);
+      expect(recordedJoins).toHaveLength(1);
+      expect(recordedJoins[0]).toMatchObject({
+        toolCallId: "call-1",
+        isFailure: false,
+        encodedAccounting: expectedConservativeAccounting,
+      });
+      expect(recordedJoins[0]?.encodedResult).toMatchObject({
+        _tag: "SubagentExecutionFailure",
+        classification: "child-failed",
+        errorTag: "TravelPlanningFailed",
+      });
+    }),
+  );
+
+  it("SUB-033 keeps the contained Tool channels typed (mode type proofs)", () => {
+    type ContainedTool = typeof containedDelegation.tool;
+    type ErrorTool = typeof researchDelegation.tool;
+
+    // Under "return" only the engine signals (plus Effect AI's own permitted
+    // error) remain raisable.
+    type ContainedHandlerErrorProof = Assert<
+      Equal<
+        Tool.HandlerError<ContainedTool>,
+        AiError.AiError | ToolCallWaiting | SubagentDurabilityError
+      >
+    >;
+    // The declared failure family is model-visible RESULT data.
+    type ContainedSuccessProof = Assert<
+      Equal<
+        Tool.Success<ContainedTool>,
+        | { readonly summary: string }
+        | ResearchDelegationFailed
+        | SubagentPrestartDenied
+        | SubagentBudgetExhausted
+        | SubagentProjectionFailure
+        | SubagentExecutionFailure
+      >
+    >;
+    // The default mode keeps today's full error-channel union.
+    type ErrorModeUnchangedProof = Assert<
+      Equal<
+        Tool.HandlerError<ErrorTool>,
+        | AiError.AiError
+        | ResearchDelegationFailed
+        | SubagentPrestartDenied
+        | SubagentBudgetExhausted
+        | SubagentProjectionFailure
+        | SubagentExecutionFailure
+        | ToolCallWaiting
+        | SubagentDurabilityError
+      >
+    >;
+
+    const containedHandlerErrorProof: ContainedHandlerErrorProof = true;
+    const containedSuccessProof: ContainedSuccessProof = true;
+    const errorModeUnchangedProof: ErrorModeUnchangedProof = true;
+    expect([
+      containedHandlerErrorProof,
+      containedSuccessProof,
+      errorModeUnchangedProof,
+    ]).not.toContain(false);
+  });
+});

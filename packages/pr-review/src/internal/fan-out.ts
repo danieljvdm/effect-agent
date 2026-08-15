@@ -2,19 +2,13 @@ import { Effect, Schema } from "effect";
 import {
   Agent,
   AgentPolicy,
-  AgentSpawner,
-  IdGenerator,
-  RunEventSink,
   Subagent,
   SubagentBudgetExhausted,
-  SubagentDurability,
-  SubagentDurabilityError,
   SubagentExecutionFailure,
   SubagentPolicy,
   SubagentPrestartDenied,
   SubagentProjectionFailure,
   SubagentRuntime,
-  ToolCallWaiting,
   ToolExecutionClass,
   type RuntimeBinding,
 } from "effect-agent";
@@ -148,10 +142,11 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200_000,
-  // S1 soft landing is not yet adopted here: the fan-out contract pins the
-  // typed "unit unreviewed" failure flow until the containment slice reworks
-  // it (planned S2/S3 of the budget arc).
-  onExhaustion: "fail",
+  // Budget soft landing (RUN-018): a child that exhausts its Turn or Tool
+  // Call budget returns its partial line-anchored report on one final
+  // tool-free turn instead of failing the unit — the standing "unit-00N
+  // unreviewed: AgentPolicyError" failure mode on big units.
+  onExhaustion: "final-answer",
 });
 
 // ---------------------------------------------------------------------------
@@ -223,44 +218,20 @@ export const mapFileReviewChildFailure = (failure: {
     message: (failure.message ?? "").slice(0, 400),
   });
 
-// ---------------------------------------------------------------------------
-// The parent-facing view of the delegation Tool.
-//
-// `Subagent.define` fixes `failureMode: "error"`, so a failed child would
-// fail the WHOLE parent Run typed — one unreviewable unit would abort the
-// entire fan-out review. This coordinator wants partial results with honest
-// reporting instead, so its Toolkit carries a same-name Tool value with the
-// identical parameter/success/failure Schemas but `failureMode: "return"`:
-// Effect AI resolves handlers by Tool NAME, so the real S1 delegation handler
-// from `SubagentRuntime.layer` still executes, and a typed unit failure
-// reaches the model as a failed tool result (bounded, encoded through the
-// declared failure union) instead of aborting the Run.
-// ---------------------------------------------------------------------------
-
-/** Exactly the failure union `Subagent.define` declares for this delegation. */
+/**
+ * The contained failure family this delegation can surface as result data
+ * under the first-party `failureMode: "return"` (SUB-033). The engine-signal
+ * members (`ToolCallWaiting`, `SubagentDurabilityError`) are deliberately not
+ * here: they stay in the error channel by construction. Used by the coverage
+ * gate to classify returned unit failures.
+ */
 export const FileReviewDelegationFailure = Schema.Union([
   FileReviewUnitFailed,
   SubagentPrestartDenied,
   SubagentBudgetExhausted,
   SubagentProjectionFailure,
   SubagentExecutionFailure,
-  ToolCallWaiting,
-  SubagentDurabilityError,
 ]);
-
-export const DelegateFileReview = Tool.make("delegate_file_review", {
-  description: delegationDescription,
-  parameters: FileReviewRequest,
-  success: FileReviewUnitResult,
-  failure: FileReviewDelegationFailure,
-  failureMode: "return",
-})
-  .addDependency(AgentSpawner)
-  .addDependency(RunEventSink)
-  .addDependency(SubagentDurability)
-  .addDependency(IdGenerator)
-  // The delegated child's whole tool surface is read-only.
-  .annotate(ToolExecutionClass, "readonly");
 
 // ---------------------------------------------------------------------------
 // The coordinator's own tool: the deterministic unit plan over the changeset.
@@ -303,8 +274,6 @@ export const FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
 // apply unchanged.
 // ---------------------------------------------------------------------------
 
-export const FanOutReviewToolkit = Toolkit.make(ListReviewUnits, DelegateFileReview);
-
 /**
  * Build the coordinator's instructions. The same consumer guidance the
  * children receive is injected between the mission framing and the procedure
@@ -341,13 +310,14 @@ export const defaultFanOutPolicy = AgentPolicy.make({
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
   maxDuration: "15 minutes",
   toolConcurrency: 3,
-  // One declared batch may legitimately contain a failed result for every
-  // review unit. Leave the coordinator one turn to report all of them, while
-  // still stopping a model that declares another failed delegation.
-  repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
+  // Contained unit failures (SUB-033) are ordinary successful Tool results,
+  // so they no longer fold into the repeated-failure counter; the default
+  // bound suffices.
+  repeatedFailureLimit: 3,
   tokenBudget: 300_000,
-  // See defaultFileReviewerPolicy: soft-landing adoption is the S2/S3 rework.
-  onExhaustion: "fail",
+  // Budget soft landing (RUN-018): an exhausted coordinator merges what it
+  // has into one best-effort review instead of discarding every child report.
+  onExhaustion: "final-answer",
 });
 
 /** Everything one fan-out configuration is made of, built as one unit so the
@@ -375,18 +345,6 @@ export interface FanOutSuiteOptions extends FanOutInstructionOptions {
   readonly maxFindings?: number | undefined;
 }
 
-const makeFanOutReviewerDefinition = (options: FanOutSuiteOptions = {}) =>
-  Agent.define("pr-fanout-reviewer", {
-    input: ReviewMission,
-    output: CodeReview,
-    instructions: makeFanOutReviewInstructions(options),
-    toolkit: FanOutReviewToolkit,
-    policy: defaultFanOutPolicy,
-    description:
-      "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
-    metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" },
-  });
-
 const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefinition>) =>
   Subagent.define("delegate_file_review", {
     description: delegationDescription,
@@ -394,6 +352,11 @@ const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefin
     parameters: FileReviewRequest,
     success: FileReviewUnitResult,
     failure: FileReviewUnitFailed,
+    // First-party containment (SUB-033): a failed unit is model-visible
+    // result data instead of a parent-Run-fatal error, so the coordinator
+    // reports it honestly and keeps reviewing the other units. This retires
+    // the former same-name shadow-Tool workaround (FRICTION #7).
+    failureMode: "return",
     prepareInput: (request) =>
       Effect.succeed(
         FileReviewBrief.make({
@@ -416,13 +379,38 @@ const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefin
     policy: fileReviewPolicy,
   });
 
+/**
+ * The coordinator-facing delegation Tool: the delegation's own first-party
+ * contained Tool plus the read-only execution class (the delegated child's
+ * whole tool surface is read-only). Effect AI resolves handlers by Tool name,
+ * so `SubagentRuntime.layer`'s handler serves this annotated copy unchanged.
+ */
+const delegationToolFor = (delegation: ReturnType<typeof makeFileReviewDelegation>) =>
+  delegation.tool.annotate(ToolExecutionClass, "readonly");
+
+const makeFanOutReviewerDefinition = (
+  options: FanOutSuiteOptions,
+  delegation: ReturnType<typeof makeFileReviewDelegation>,
+) =>
+  Agent.define("pr-fanout-reviewer", {
+    input: ReviewMission,
+    output: CodeReview,
+    instructions: makeFanOutReviewInstructions(options),
+    toolkit: Toolkit.make(ListReviewUnits, delegationToolFor(delegation)),
+    policy: defaultFanOutPolicy,
+    description:
+      "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
+    metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" },
+  });
+
 /** Build one coherent fan-out suite: child, coordinator, and delegation. */
 export const makeFanOutReviewSuite = (options: FanOutSuiteOptions = {}): FanOutReviewSuite => {
   const child = makeFileReviewerDefinition({ guidance: options.guidance });
+  const delegation = makeFileReviewDelegation(child);
   return {
     child,
-    parent: makeFanOutReviewerDefinition(options),
-    delegation: makeFileReviewDelegation(child),
+    parent: makeFanOutReviewerDefinition(options, delegation),
+    delegation,
   };
 };
 
@@ -436,6 +424,12 @@ export const FanOutReviewer = defaultSuite.parent;
 
 /** The default delegation over the default child. */
 export const fileReviewDelegation = defaultSuite.delegation;
+
+/** The default coordinator-facing delegation Tool (first-party contained mode). */
+export const DelegateFileReview = delegationToolFor(fileReviewDelegation);
+
+/** The default coordinator Toolkit. */
+export const FanOutReviewToolkit = FanOutReviewer.toolkit;
 
 /** Runtime wiring: one delegation plus one explicit child Binding. */
 export const fanOutHandlersLayerFor =

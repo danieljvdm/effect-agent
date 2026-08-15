@@ -187,7 +187,8 @@ This syntax is illustrative. Before implementation, a compile-only proof MUST sh
 - every expected child and projection failure is total-mapped to the Tool's declared,
   Schema-backed failure before the handler returns;
 - with `failureMode: "error"`, only the declared Tool failure and Effect AI's permitted AI error
-  enter the parent handler `E`; with `"return"`, the declared failure is encoded in the Tool result;
+  enter the parent handler `E`; with `"return"` (SUB-033), the contained failure family is encoded
+  in the Tool success union and only the engine signals remain in `E`;
 - interruption remains interruption and defects remain defects rather than being coerced into an
   expected Tool failure;
 - no mutable global Agent registry is required;
@@ -221,10 +222,21 @@ Definition therefore MUST provide either:
 2. the framework's bounded `SubagentExecutionFailure` projection, which contains classification
    and child references but no raw Cause, stack, provider body, or secret-bearing payload.
 
-Effect AI `failureMode: "error"` remains the default. An application may deliberately choose
-`"return"` when a Schema-backed child failure should be model-visible. The mapping is exhaustive
-over expected child runtime failures. Ephemeral interruption propagates as interruption; a child
-defect fails the handler as a defect and is sandboxed by the ordinary Tool batch policy.
+`failureMode: "error"` remains the default. An application may deliberately choose `"return"`
+(SUB-033, implemented) when Schema-backed child failures should be model-visible: the declared
+failure plus the framework delegation-failure family become result data in the Tool success
+union, so one failed child cannot fail the parent Tool batch. The mechanics are deliberately NOT
+Effect AI's native `failureMode: "return"` — that would convert every handler failure into a
+result, including the engine-owned `ToolCallWaiting` suspension signal, silently orphaning a
+durable child. Instead the underlying Effect AI Tool keeps `failureMode: "error"`, the delegation
+handler contains exactly the expected failure family into the success channel, and
+`ToolCallWaiting` and `SubagentDurabilityError` stay raisable, preserving durable suspension by
+construction. On the durable path the settlement join records the contained failure with the
+same non-failure polarity the live batch continues with (SUB-019 coherence); the child's own
+failed Settlement and the `SubagentFailed` event remain the honest failure record. The mapping is
+exhaustive over expected child runtime failures. Ephemeral interruption propagates as
+interruption; a child defect fails the handler as a defect and is sandboxed by the ordinary Tool
+batch policy.
 
 ### 4.3 Package and service ownership
 
@@ -700,10 +712,11 @@ narrow details but may not erase the tag:
 | `SubagentInterrupted`            | Ephemeral fiber interruption or durable canonical abort                                                             | Ephemeral finalizers run; durable child writes the one abort Settlement when safe                       |
 | `SubagentDefectFailure`          | Durable boundary converts a child defect to a bounded framework failure record                                      | Ephemeral form remains a defect; durable form is terminal and redacted, never an application-domain `E` |
 
-For native Effect AI `failureMode: "error"`, every expected terminal tag is total-mapped to the
-declared Tool failure and the existing Tool batch failure policy applies. With `"return"`, that
-declared failure is result data visible to the model. Pending approval and unknown outcome are
-nonterminal runtime states. Raw `Cause`, stack, provider response, secret, and Tool payload values
+With `failureMode: "error"` (the default), every expected terminal tag is total-mapped to the
+declared Tool failure and the existing Tool batch failure policy applies. With `"return"`
+(SUB-033), that declared failure is result data visible to the model through the Tool success
+union; the engine-signal members (`ToolCallWaiting`, `SubagentDurabilityError`) are never
+contained. Pending approval and unknown outcome are nonterminal runtime states. Raw `Cause`, stack, provider response, secret, and Tool payload values
 are never persisted or returned as the public parent error.
 
 No recovery rule may blindly replay an unresolved ordinary child Tool or claim exactly-once child
@@ -900,3 +913,8 @@ Require separate proposals:
   `notAdmitted`, `admitted`, and `indeterminate` results; projection absence never proves absence.
 - **SUB-032**: Child-binding and parent-declaration compatibility failures have distinct,
   framework-owned Schema records and never substitute newer code.
+- **SUB-033**: Under `failureMode: "return"` every expected delegation failure — the declared
+  child failure and the framework failure family — is contained as model-visible result data
+  instead of failing the parent Tool batch; the engine-owned waiting signal and durability error
+  always stay in the error channel, durable suspension semantics are preserved unchanged, and the
+  durable settlement join records the same non-failure polarity the live batch continues with.

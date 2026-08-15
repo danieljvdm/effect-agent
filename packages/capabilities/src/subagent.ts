@@ -246,6 +246,52 @@ export type SubagentToolFailure<Failure extends Schema.Top> = Schema.Union<
 >;
 
 /**
+ * Resolution for expected delegation failures (SUB-033, ADR-0019 S2).
+ * `"error"` (the default) keeps today's semantics: every expected failure
+ * travels the Effect error channel and fails the parent Tool batch (D-008).
+ * `"return"` contains them: the declared child failure and the framework
+ * failure family become model-visible result data instead of parent-fatal
+ * errors, so one dead child cannot detonate the whole parent Run.
+ *
+ * Effect AI's native `failureMode: "return"` is deliberately NOT used: its
+ * `Stream.catch` converts every handler failure into a result, which would
+ * encode the engine-owned `ToolCallWaiting` suspension signal as data and
+ * silently orphan a durable child. Containment therefore lives in the
+ * delegation handler — the underlying Tool keeps Effect AI
+ * `failureMode: "error"`, the Tool success Schema widens to a union of the
+ * declared success and the contained failure family, and exactly
+ * `ToolCallWaiting` and `SubagentDurabilityError` stay in the error channel,
+ * preserving durable suspension semantics by construction.
+ */
+export type SubagentFailureMode = "error" | "return";
+
+/**
+ * The failure family that becomes model-visible result data under
+ * `failureMode: "return"`: the author-declared failure plus every expected
+ * framework delegation failure. The engine-signal members are excluded by
+ * construction.
+ */
+export type SubagentContainedFailure<Failure extends Schema.Top> = Schema.Union<
+  readonly [
+    Failure,
+    typeof SubagentPrestartDenied,
+    typeof SubagentBudgetExhausted,
+    typeof SubagentProjectionFailure,
+    typeof SubagentExecutionFailure,
+  ]
+>;
+
+/**
+ * The only failures a `"return"`-mode delegation Tool can raise: the
+ * engine-owned waiting signal (consumed by the batch executor, never a Tool
+ * failure) and the durable coordinator-seam error. Neither ever reaches an
+ * ephemeral caller.
+ */
+export type SubagentReturnModeFailure = Schema.Union<
+  readonly [typeof ToolCallWaiting, typeof SubagentDurabilityError]
+>;
+
+/**
  * The native Effect AI Tool created by `Subagent.define` (SUB-001, SUB-003).
  * Its per-call dependencies are exactly the engine-provided `AgentSpawner`,
  * `RunEventSink`, and `SubagentDurability` plus `IdGenerator`; every child
@@ -258,16 +304,28 @@ export type SubagentTool<
   Parameters extends Schema.Top,
   Success extends Schema.Top,
   Failure extends Schema.Top,
-> = Tool.Tool<
-  Name,
-  {
-    readonly parameters: Parameters;
-    readonly success: Success;
-    readonly failure: SubagentToolFailure<Failure>;
-    readonly failureMode: "error";
-  },
-  AgentSpawner | RunEventSink | SubagentDurability | IdGenerator
->;
+  Mode extends SubagentFailureMode = "error",
+> = Mode extends "return"
+  ? Tool.Tool<
+      Name,
+      {
+        readonly parameters: Parameters;
+        readonly success: Schema.Union<readonly [Success, SubagentContainedFailure<Failure>]>;
+        readonly failure: SubagentReturnModeFailure;
+        readonly failureMode: "error";
+      },
+      AgentSpawner | RunEventSink | SubagentDurability | IdGenerator
+    >
+  : Tool.Tool<
+      Name,
+      {
+        readonly parameters: Parameters;
+        readonly success: Success;
+        readonly failure: SubagentToolFailure<Failure>;
+        readonly failureMode: "error";
+      },
+      AgentSpawner | RunEventSink | SubagentDurability | IdGenerator
+    >;
 
 /** Singleton Tool record provided by one `SubagentRuntime.layer`. */
 export type SubagentTools<
@@ -275,8 +333,9 @@ export type SubagentTools<
   Parameters extends Schema.Top,
   Success extends Schema.Top,
   Failure extends Schema.Top,
+  Mode extends SubagentFailureMode = "error",
 > = {
-  readonly [Key in Name]: SubagentTool<Name, Parameters, Success, Failure>;
+  readonly [Key in Name]: SubagentTool<Name, Parameters, Success, Failure, Mode>;
 };
 
 /** Options accepted by `Subagent.define`. */
@@ -290,7 +349,15 @@ export interface SubagentDefineOptions<
   Failure extends Schema.Top,
   PrepareRequirements = never,
   ProjectRequirements = never,
+  Mode extends SubagentFailureMode = "error",
 > {
+  /**
+   * Expected-failure resolution (SUB-033): `"error"` (default) fails the
+   * parent Tool batch; `"return"` contains the declared failure and the
+   * framework failure family as model-visible result data while
+   * `ToolCallWaiting`/`SubagentDurabilityError` stay in the error channel.
+   */
+  readonly failureMode?: Mode;
   /** Model-visible description of the delegated capability. */
   readonly description: string;
   /** The model-agnostic child Agent Definition this delegation targets (SUB-002). */
@@ -357,6 +424,7 @@ export interface SubagentDelegation<
   Failure extends Schema.Top,
   PrepareRequirements = never,
   ProjectRequirements = never,
+  Mode extends SubagentFailureMode = "error",
 > extends SubagentDefineOptions<
   TargetInput,
   TargetOutput,
@@ -366,14 +434,17 @@ export interface SubagentDelegation<
   Success,
   Failure,
   PrepareRequirements,
-  ProjectRequirements
+  ProjectRequirements,
+  Mode
 > {
   readonly name: Name;
   /** Stable delegation identity; S1 derives it from the unique Tool name. */
   readonly delegationId: DelegationId;
   readonly grant: SubagentGrant;
+  /** The resolved expected-failure resolution (SUB-033); never absent after `define`. */
+  readonly failureMode: Mode;
   /** The real Effect AI Tool to include in the parent Toolkit (SUB-001). */
-  readonly tool: SubagentTool<Name, Parameters, Success, Failure>;
+  readonly tool: SubagentTool<Name, Parameters, Success, Failure, Mode>;
 }
 
 /**
@@ -396,6 +467,7 @@ const define = <
   Failure extends Schema.Top,
   PrepareRequirements = never,
   ProjectRequirements = never,
+  Mode extends SubagentFailureMode = "error",
 >(
   name: Name,
   options: SubagentDefineOptions<
@@ -407,7 +479,8 @@ const define = <
     Success,
     Failure,
     PrepareRequirements,
-    ProjectRequirements
+    ProjectRequirements,
+    Mode
   >,
 ): SubagentDelegation<
   Name,
@@ -419,7 +492,8 @@ const define = <
   Success,
   Failure,
   PrepareRequirements,
-  ProjectRequirements
+  ProjectRequirements,
+  Mode
 > => {
   decodeDelegationToolName(name);
   for (const childToolName of Object.keys(options.target.toolkit.tools)) {
@@ -436,7 +510,31 @@ const define = <
       allowedToolNames: Object.keys(options.target.toolkit.tools),
       maxDepth: 1,
     });
-  const tool = Tool.make(name, {
+  // `Mode` defaults to `"error"` exactly when `failureMode` is absent, so the
+  // resolved literal always inhabits `Mode`; the assertion bridges only that
+  // inference gap and crosses no schema boundary.
+  const failureMode = (options.failureMode ?? "error") as Mode;
+  const returnModeTool = Tool.make(name, {
+    description: options.description,
+    parameters: options.parameters,
+    // Containment (SUB-033): the contained failure family is model-visible
+    // RESULT data, so it lives in the success union; only the engine-signal
+    // members remain raisable. The underlying Effect AI failureMode stays
+    // "error" so the waiting signal is never encoded as a result.
+    success: Schema.Union([
+      options.success,
+      Schema.Union([
+        options.failure,
+        SubagentPrestartDenied,
+        SubagentBudgetExhausted,
+        SubagentProjectionFailure,
+        SubagentExecutionFailure,
+      ]),
+    ]),
+    failure: Schema.Union([ToolCallWaiting, SubagentDurabilityError]),
+    needsApproval: options.needsApproval,
+  });
+  const errorModeTool = Tool.make(name, {
     description: options.description,
     parameters: options.parameters,
     success: options.success,
@@ -450,16 +548,28 @@ const define = <
       SubagentDurabilityError,
     ]),
     needsApproval: options.needsApproval,
-  })
+  });
+  // Each branch is exactly `SubagentTool<..., Mode>` at its concrete `Mode`;
+  // TypeScript cannot relate a runtime branch to the conditional generic, so
+  // this assertion bridges only that limitation and crosses no schema
+  // boundary (the schemas above are constructed per mode, never reinterpreted).
+  const tool = (failureMode === "return" ? returnModeTool : errorModeTool)
     .addDependency(AgentSpawner)
     .addDependency(RunEventSink)
     .addDependency(SubagentDurability)
-    .addDependency(IdGenerator);
+    .addDependency(IdGenerator) as unknown as SubagentTool<
+    Name,
+    Parameters,
+    Success,
+    Failure,
+    Mode
+  >;
   return Object.freeze({
     ...options,
     name,
     delegationId,
     grant,
+    failureMode,
     tool,
   });
 };
@@ -813,13 +923,16 @@ type SubagentHandler<
   Parameters extends Schema.Top,
   Success extends Schema.Top,
   Failure extends Schema.Top,
+  Mode extends SubagentFailureMode = "error",
 > = (
   parameters: Parameters["Type"],
-  context: Toolkit.HandlerContext<SubagentTool<Name, Parameters, Success, Failure>>,
+  context: Toolkit.HandlerContext<SubagentTool<Name, Parameters, Success, Failure, Mode>>,
 ) => Effect.Effect<
-  Success["Type"],
-  SubagentToolFailure<Failure>["Type"],
-  Tool.HandlerServices<SubagentTool<Name, Parameters, Success, Failure>>
+  Mode extends "return"
+    ? Success["Type"] | SubagentContainedFailure<Failure>["Type"]
+    : Success["Type"],
+  Mode extends "return" ? SubagentReturnModeFailure["Type"] : SubagentToolFailure<Failure>["Type"],
+  Tool.HandlerServices<SubagentTool<Name, Parameters, Success, Failure, Mode>>
 >;
 
 /**
@@ -861,6 +974,7 @@ const layer = <
   ModelProvides,
   ModelRequires,
   HookRequirements = never,
+  Mode extends SubagentFailureMode = "error",
   InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
 >(
@@ -874,7 +988,8 @@ const layer = <
     Success,
     Failure,
     PrepareRequirements,
-    ProjectRequirements
+    ProjectRequirements,
+    Mode
   >,
   childBinding: RuntimeBinding<
     TargetInput,
@@ -903,7 +1018,7 @@ const layer = <
     HookRequirements
   >,
 ): Layer.Layer<
-  Tool.HandlersFor<SubagentTools<Name, Parameters, Success, Failure>>,
+  Tool.HandlersFor<SubagentTools<Name, Parameters, Success, Failure, Mode>>,
   never,
   SubagentLayerRequirements<
     TargetInput,
@@ -926,9 +1041,15 @@ const layer = <
   // generic (it degrades to a string index signature); at every concrete
   // `Name` the two records are identical, so this assertion bridges only that
   // compiler limitation and crosses no schema boundary.
-  const toolkit = Toolkit.make(delegation.tool) as unknown as Toolkit.Toolkit<
-    SubagentTools<Name, Parameters, Success, Failure>
+  const toolkit = Toolkit.make(delegation.tool as Tool.Any) as unknown as Toolkit.Toolkit<
+    SubagentTools<Name, Parameters, Success, Failure, Mode>
   >;
+  // Containment (SUB-033): under `failureMode: "return"` every expected
+  // delegation failure becomes the handler's SUCCESS value (the Tool success
+  // Schema is the union of the declared success and the contained family);
+  // exactly the engine signals stay raisable, so the durable waiting
+  // suspension and coordinator-seam errors keep their semantics.
+  const contained = delegation.failureMode === "return";
   const encodeChildInput = Schema.encodeEffect(delegation.target.input);
   const encodeSuccess = Schema.encodeEffect(delegation.success);
   const decodeChildOutput = Schema.decodeUnknownEffect(delegation.target.output);
@@ -1017,7 +1138,9 @@ const layer = <
 
     const invoke = Effect.fn(`SubagentRuntime.${delegation.name}`)(function* (
       parameters: Parameters["Type"],
-      handlerContext: Toolkit.HandlerContext<SubagentTool<Name, Parameters, Success, Failure>>,
+      handlerContext: Toolkit.HandlerContext<
+        SubagentTool<Name, Parameters, Success, Failure, Mode>
+      >,
     ) {
       const spawner = yield* AgentSpawner;
       const sink = yield* RunEventSink;
@@ -1269,7 +1392,9 @@ const layer = <
      */
     const invokeDurable = Effect.fn(`SubagentRuntime.${delegation.name}.durable`)(function* (
       parameters: Parameters["Type"],
-      handlerContext: Toolkit.HandlerContext<SubagentTool<Name, Parameters, Success, Failure>>,
+      handlerContext: Toolkit.HandlerContext<
+        SubagentTool<Name, Parameters, Success, Failure, Mode>
+      >,
       durability: SubagentDurabilityDurable,
     ) {
       const spawner = yield* AgentSpawner;
@@ -1398,7 +1523,14 @@ const layer = <
                 durability.join({
                   toolCallId,
                   encodedResult: encodedFailure,
-                  isFailure: true,
+                  // Canonical history must record exactly what the live batch
+                  // continues with (SUB-019): under containment the failure is
+                  // the call's model-visible RESULT (the dispatch wrapper
+                  // converts the fail below into a success), so the joined
+                  // settlement records it as a non-failure result; the child's
+                  // own failed Settlement and the `SubagentFailed` event stay
+                  // the honest failure record.
+                  isFailure: !contained,
                   encodedAccounting: conservativeAccounting,
                 }),
               ),
@@ -1487,9 +1619,25 @@ const layer = <
       }
     });
 
-    const handler: SubagentHandler<Name, Parameters, Success, Failure> = (
-      parameters,
-      handlerContext,
+    // Containment boundary (SUB-033): under `"return"`, every expected
+    // delegation failure becomes the handler's success value; exactly the
+    // engine signals re-fail. `instanceof` against the exact engine classes is
+    // identity-safe — an author-declared failure can never alias them.
+    const containSignals = (
+      failure: SubagentToolFailure<Failure>["Type"],
+    ): Effect.Effect<
+      SubagentContainedFailure<Failure>["Type"],
+      ToolCallWaiting | SubagentDurabilityError
+    > =>
+      failure instanceof ToolCallWaiting || failure instanceof SubagentDurabilityError
+        ? Effect.fail(failure)
+        : Effect.succeed(failure);
+
+    const handlerImpl = (
+      parameters: Parameters["Type"],
+      handlerContext: Toolkit.HandlerContext<
+        SubagentTool<Name, Parameters, Success, Failure, Mode>
+      >,
     ) =>
       Effect.gen(function* () {
         // Resolve the engine-provided per-call services before providing the
@@ -1505,29 +1653,39 @@ const layer = <
         // mode explicitly when no durable coordinator supplied the hook, so
         // absence keeps the S1 in-process spawn semantics honestly.
         if (durability.mode === "durable") {
-          return yield* invokeDurable(parameters, handlerContext, durability).pipe(
+          const durable = invokeDurable(parameters, handlerContext, durability).pipe(
             Effect.scoped,
             Effect.provideService(AgentSpawner, spawner),
             Effect.provideService(RunEventSink, sink),
             Effect.provideService(SubagentDurability, durability),
             Effect.provide(captured),
           );
+          return yield* contained ? durable.pipe(Effect.catch(containSignals)) : durable;
         }
-        return yield* invoke(parameters, handlerContext).pipe(
+        const ephemeral = invoke(parameters, handlerContext).pipe(
           Effect.scoped,
           Effect.provideService(AgentSpawner, spawner),
           Effect.provideService(RunEventSink, sink),
           Effect.provideService(SubagentDurability, durability),
           Effect.provide(captured),
         );
+        return yield* contained ? ephemeral.pipe(Effect.catch(containSignals)) : ephemeral;
       });
+
+    // `handlerImpl`'s channels are the UNION of both modes because
+    // `contained` is a runtime branch TypeScript cannot relate to the
+    // conditional generic `Mode`; at every concrete `Mode` the branch taken
+    // matches `SubagentHandler`'s channels exactly (proven by the mode type
+    // tests), so this assertion bridges only that limitation and crosses no
+    // schema boundary.
+    const handler = handlerImpl as SubagentHandler<Name, Parameters, Success, Failure, Mode>;
 
     // TypeScript cannot relate a computed single-key object literal to the
     // generic mapped key `Name`; `handler` is fully checked against the
     // Tool's declared handler signature above, so this assertion bridges only
     // that compiler limitation and crosses no schema boundary.
     return { [delegation.name]: handler } as Toolkit.HandlersFrom<
-      SubagentTools<Name, Parameters, Success, Failure>
+      SubagentTools<Name, Parameters, Success, Failure, Mode>
     >;
   });
 

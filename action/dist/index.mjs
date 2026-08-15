@@ -37431,7 +37431,24 @@ var define = (name, options) => {
     allowedToolNames: Object.keys(options.target.toolkit.tools),
     maxDepth: 1
   });
-  const tool = exports_Tool.make(name, {
+  const failureMode = options.failureMode ?? "error";
+  const returnModeTool = exports_Tool.make(name, {
+    description: options.description,
+    parameters: options.parameters,
+    success: exports_Schema.Union([
+      options.success,
+      exports_Schema.Union([
+        options.failure,
+        SubagentPrestartDenied,
+        SubagentBudgetExhausted,
+        SubagentProjectionFailure,
+        SubagentExecutionFailure
+      ])
+    ]),
+    failure: exports_Schema.Union([ToolCallWaiting, SubagentDurabilityError]),
+    needsApproval: options.needsApproval
+  });
+  const errorModeTool = exports_Tool.make(name, {
     description: options.description,
     parameters: options.parameters,
     success: options.success,
@@ -37445,12 +37462,14 @@ var define = (name, options) => {
       SubagentDurabilityError
     ]),
     needsApproval: options.needsApproval
-  }).addDependency(AgentSpawner).addDependency(RunEventSink).addDependency(SubagentDurability).addDependency(IdGenerator);
+  });
+  const tool = (failureMode === "return" ? returnModeTool : errorModeTool).addDependency(AgentSpawner).addDependency(RunEventSink).addDependency(SubagentDurability).addDependency(IdGenerator);
   return Object.freeze({
     ...options,
     name,
     delegationId,
     grant,
+    failureMode,
     tool
   });
 };
@@ -37565,6 +37584,7 @@ var layer14 = (delegation, childBinding, options) => {
   const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
   const allocation = delegationAllocationFromPolicy(delegation.policy);
   const toolkit = exports_Toolkit.make(delegation.tool);
+  const contained = delegation.failureMode === "return";
   const encodeChildInput = exports_Schema.encodeEffect(delegation.target.input);
   const encodeSuccess = exports_Schema.encodeEffect(delegation.success);
   const decodeChildOutput = exports_Schema.decodeUnknownEffect(delegation.target.output);
@@ -37798,7 +37818,7 @@ var layer14 = (delegation, childBinding, options) => {
           }).pipe(exports_Effect.andThen(durability.join({
             toolCallId,
             encodedResult: encodedFailure,
-            isFailure: true,
+            isFailure: !contained,
             encodedAccounting: conservativeAccounting
           })), exports_Effect.andThen(exports_Effect.fail(failure)));
           if (status.outcome !== "completed") {
@@ -37846,15 +37866,19 @@ var layer14 = (delegation, childBinding, options) => {
         }
       }
     });
-    const handler = (parameters, handlerContext) => exports_Effect.gen(function* () {
+    const containSignals = (failure) => failure instanceof ToolCallWaiting || failure instanceof SubagentDurabilityError ? exports_Effect.fail(failure) : exports_Effect.succeed(failure);
+    const handlerImpl = (parameters, handlerContext) => exports_Effect.gen(function* () {
       const spawner = yield* AgentSpawner;
       const sink = yield* RunEventSink;
       const durability = yield* SubagentDurability;
       if (durability.mode === "durable") {
-        return yield* invokeDurable(parameters, handlerContext, durability).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
+        const durable = invokeDurable(parameters, handlerContext, durability).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
+        return yield* contained ? durable.pipe(exports_Effect.catch(containSignals)) : durable;
       }
-      return yield* invoke(parameters, handlerContext).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
+      const ephemeral = invoke(parameters, handlerContext).pipe(exports_Effect.scoped, exports_Effect.provideService(AgentSpawner, spawner), exports_Effect.provideService(RunEventSink, sink), exports_Effect.provideService(SubagentDurability, durability), exports_Effect.provide(captured));
+      return yield* contained ? ephemeral.pipe(exports_Effect.catch(containSignals)) : ephemeral;
     });
+    const handler = handlerImpl;
     return { [delegation.name]: handler };
   });
   return toolkit.toLayer(build2);
@@ -38279,7 +38303,7 @@ var defaultReviewPolicy = AgentPolicy.make({
   maxDuration: "8 minutes",
   toolConcurrency: 2,
   tokenBudget: 300000,
-  onExhaustion: "fail"
+  onExhaustion: "final-answer"
 });
 var PullRequestReviewer = Agent.define("pr-reviewer", {
   input: ReviewMission,
@@ -38429,7 +38453,7 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200000,
-  onExhaustion: "fail"
+  onExhaustion: "final-answer"
 });
 
 class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
@@ -38467,17 +38491,8 @@ var FileReviewDelegationFailure = exports_Schema.Union([
   SubagentPrestartDenied,
   SubagentBudgetExhausted,
   SubagentProjectionFailure,
-  SubagentExecutionFailure,
-  ToolCallWaiting,
-  SubagentDurabilityError
+  SubagentExecutionFailure
 ]);
-var DelegateFileReview = exports_Tool.make("delegate_file_review", {
-  description: delegationDescription,
-  parameters: FileReviewRequest,
-  success: FileReviewUnitResult,
-  failure: FileReviewDelegationFailure,
-  failureMode: "return"
-}).addDependency(AgentSpawner).addDependency(RunEventSink).addDependency(SubagentDurability).addDependency(IdGenerator).annotate(ToolExecutionClass, "readonly");
 
 class ListReviewUnitsQuery extends exports_Schema.Class("@effect-agent/pr-review/ListReviewUnitsQuery")({
   scope: exports_Schema.Literal("all")
@@ -38500,7 +38515,6 @@ var FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
     return planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
   })
 });
-var FanOutReviewToolkit = exports_Toolkit.make(ListReviewUnits, DelegateFileReview);
 var makeFanOutReviewInstructions = (options = {}) => (mission) => {
   const maxFindings = clampMaxFindings(options.maxFindings);
   return [
@@ -38525,9 +38539,9 @@ var defaultFanOutPolicy = AgentPolicy.make({
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
   maxDuration: "15 minutes",
   toolConcurrency: 3,
-  repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
+  repeatedFailureLimit: 3,
   tokenBudget: 300000,
-  onExhaustion: "fail"
+  onExhaustion: "final-answer"
 });
 var makeFileReviewerDefinition = (options = {}) => Agent.define("pr-file-reviewer", {
   input: FileReviewBrief,
@@ -38538,21 +38552,13 @@ var makeFileReviewerDefinition = (options = {}) => Agent.define("pr-file-reviewe
   description: "Review one bounded unit of a pull request's changeset read-only and return line-anchored findings for exactly those files.",
   metadata: { deploymentClass: "E", surface: "read-only" }
 });
-var makeFanOutReviewerDefinition = (options = {}) => Agent.define("pr-fanout-reviewer", {
-  input: ReviewMission,
-  output: CodeReview,
-  instructions: makeFanOutReviewInstructions(options),
-  toolkit: FanOutReviewToolkit,
-  policy: defaultFanOutPolicy,
-  description: "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
-  metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" }
-});
 var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review", {
   description: delegationDescription,
   target: child,
   parameters: FileReviewRequest,
   success: FileReviewUnitResult,
   failure: FileReviewUnitFailed,
+  failureMode: "return",
   prepareInput: (request3) => exports_Effect.succeed(FileReviewBrief.make({
     unitId: request3.unitId,
     paths: request3.paths,
@@ -38565,18 +38571,31 @@ var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review"
   })),
   policy: fileReviewPolicy
 });
+var delegationToolFor = (delegation) => delegation.tool.annotate(ToolExecutionClass, "readonly");
+var makeFanOutReviewerDefinition = (options, delegation) => Agent.define("pr-fanout-reviewer", {
+  input: ReviewMission,
+  output: CodeReview,
+  instructions: makeFanOutReviewInstructions(options),
+  toolkit: exports_Toolkit.make(ListReviewUnits, delegationToolFor(delegation)),
+  policy: defaultFanOutPolicy,
+  description: "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
+  metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" }
+});
 var makeFanOutReviewSuite = (options = {}) => {
   const child = makeFileReviewerDefinition({ guidance: options.guidance });
+  const delegation = makeFileReviewDelegation(child);
   return {
     child,
-    parent: makeFanOutReviewerDefinition(options),
-    delegation: makeFileReviewDelegation(child)
+    parent: makeFanOutReviewerDefinition(options, delegation),
+    delegation
   };
 };
 var defaultSuite = makeFanOutReviewSuite();
 var FileReviewer = defaultSuite.child;
 var FanOutReviewer = defaultSuite.parent;
 var fileReviewDelegation = defaultSuite.delegation;
+var DelegateFileReview = delegationToolFor(fileReviewDelegation);
+var FanOutReviewToolkit = FanOutReviewer.toolkit;
 var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.layer(delegation, childBinding, {
   mapChildFailure: mapFileReviewChildFailure
 });
