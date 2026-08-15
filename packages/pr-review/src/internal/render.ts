@@ -137,7 +137,7 @@ const renderReviewMetadata = (options: {
   readonly headSha: string;
   readonly baseRef?: string | undefined;
   readonly headRef?: string | undefined;
-  readonly filesReviewed: number;
+  readonly filesVisible: number;
   readonly totalChangedFiles: number;
 }): string =>
   [
@@ -146,7 +146,10 @@ const renderReviewMetadata = (options: {
     ...(options.baseRef !== undefined && options.headRef !== undefined
       ? [`base-ref: ${commentSafe(options.baseRef)}`, `head-ref: ${commentSafe(options.headRef)}`]
       : []),
-    `files-reviewed: ${options.filesReviewed} of ${options.totalChangedFiles}`,
+    // The observation surface, not a coverage claim: the host cannot know
+    // which visible files the model actually examined, and the summary is
+    // where unreviewed units are named.
+    `files-visible: ${options.filesVisible} of ${options.totalChangedFiles}`,
     "Findings were written against the head commit above; if commits have landed",
     "since, treat file and line callouts as potentially stale and re-diff first.",
     "-->",
@@ -275,22 +278,22 @@ export const planPublication = (
     return parts.join("\n");
   };
 
-  // The model's verdict may not contradict the validated severities (model
-  // output is untrusted input): any blocking item forces REQUEST_CHANGES, and
-  // an approval is honored only when nothing important or blocking survived —
-  // so the event can never say APPROVE while the callout says do-not-merge.
+  // The model's verdict may not contradict the reported severities (model
+  // output is untrusted input): any blocking item forces REQUEST_CHANGES, a
+  // review with no blocking item can never REQUEST_CHANGES, and an approval
+  // is honored only when nothing blocking or important was reported — the
+  // event always agrees with the callout tier. Demoted findings and concerns
+  // count like anchored findings: anchor validation validates LOCATIONS, not
+  // truth, so severity is equally model-claimed for all three, and counting
+  // them only ever moves the event toward the closed direction.
   const counts = severityCounts(review);
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
     : counts.blocking > 0
       ? "REQUEST_CHANGES"
-      : review.verdict === "approve"
-        ? counts.important > 0
-          ? "COMMENT"
-          : "APPROVE"
-        : review.verdict === "request-changes"
-          ? "REQUEST_CHANGES"
-          : "COMMENT";
+      : review.verdict === "approve" && counts.important === 0
+        ? "APPROVE"
+        : "COMMENT";
 
   // The invisible tail (metadata + fingerprint marker) must survive the body
   // cap, so the cap reserves exactly the room it needs.
@@ -299,7 +302,7 @@ export const planPublication = (
       headSha: options.headSha,
       baseRef: options.baseRef,
       headRef: options.headRef,
-      filesReviewed: files.length,
+      filesVisible: files.length,
       totalChangedFiles: options.totalChangedFiles,
     }),
     ...(options.fingerprint === undefined ? [] : [renderFingerprintMarker(options.fingerprint)]),

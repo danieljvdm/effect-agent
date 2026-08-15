@@ -276,7 +276,7 @@ describe("publication planning", () => {
     const blocking = CodeReview.make({
       summary: "Blocked.",
       verdict: "request-changes",
-      findings: [],
+      findings: [ReviewFinding.make({ ...validFinding, severity: "blocking" })],
     });
     expect(
       planPublication(blocking, files, {
@@ -495,6 +495,18 @@ describe("verdict callout", () => {
         CodeReview.make({ summary: "s", verdict: "approve", findings: [finding("nit")] }),
       ).event,
     ).toBe("APPROVE");
+    // The symmetric clamp: without a blocking item, a model-claimed
+    // request-changes cannot block the merge — the event stays COMMENT and
+    // agrees with the callout tier.
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "request-changes",
+          findings: [finding("nit")],
+        }),
+      ).event,
+    ).toBe("COMMENT");
   });
 });
 
@@ -539,7 +551,7 @@ describe("concerns, metadata, and footer", () => {
     expect(plan.body).toContain(`reviewed-head: ${FIXTURE_SHA}`);
     expect(plan.body).toContain("base-ref: main");
     expect(plan.body).toContain("head-ref: fix/sum");
-    expect(plan.body).toContain("files-reviewed: 2 of 2");
+    expect(plan.body).toContain("files-visible: 2 of 2");
     expect(plan.body).toContain("potentially stale");
   });
 
@@ -562,7 +574,7 @@ describe("concerns, metadata, and footer", () => {
     const metadataEnd = plan.body.indexOf("-->", metadataStart);
     const block = plan.body.slice(metadataStart, metadataEnd);
     expect(block).toContain("head-ref: feat/x- ->y");
-    expect(block).toContain("files-reviewed: 2 of 2");
+    expect(block).toContain("files-visible: 2 of 2");
     expect(block).toContain("potentially stale");
   });
 

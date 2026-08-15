@@ -39005,7 +39005,7 @@ var renderReviewMetadata = (options3) => [
   "<!-- effect-agent-pr-review metadata",
   `reviewed-head: ${commentSafe(options3.headSha)}`,
   ...options3.baseRef !== undefined && options3.headRef !== undefined ? [`base-ref: ${commentSafe(options3.baseRef)}`, `head-ref: ${commentSafe(options3.headRef)}`] : [],
-  `files-reviewed: ${options3.filesReviewed} of ${options3.totalChangedFiles}`,
+  `files-visible: ${options3.filesVisible} of ${options3.totalChangedFiles}`,
   "Findings were written against the head commit above; if commits have landed",
   "since, treat file and line callouts as potentially stale and re-diff first.",
   "-->"
@@ -39076,13 +39076,13 @@ var planPublication = (review, files, options3) => {
 `);
   };
   const counts = severityCounts(review);
-  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" ? counts.important > 0 ? "COMMENT" : "APPROVE" : review.verdict === "request-changes" ? "REQUEST_CHANGES" : "COMMENT";
+  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
   const tail = [
     renderReviewMetadata({
       headSha: options3.headSha,
       baseRef: options3.baseRef,
       headRef: options3.headRef,
-      filesReviewed: files.length,
+      filesVisible: files.length,
       totalChangedFiles: options3.totalChangedFiles
     }),
     ...options3.fingerprint === undefined ? [] : [renderFingerprintMarker(options3.fingerprint)]
