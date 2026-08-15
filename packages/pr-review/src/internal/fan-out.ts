@@ -138,6 +138,9 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: "4 minutes",
   toolConcurrency: 2,
   tokenBudget: 200_000,
+  // Bound one live prompt independently from cumulative usage. The engine
+  // prunes old diff/file results before paying for a summary.
+  contextTokenLimit: 150_000,
   // Typed exhaustion, deliberately NOT the final-answer soft landing: a
   // review is a coverage claim, and a child whose reads were rejected could
   // still emit schema-valid findings — laundering budget exhaustion into
@@ -299,6 +302,9 @@ export const defaultFanOutPolicy = AgentPolicy.make({
   // bound suffices.
   repeatedFailureLimit: 3,
   tokenBudget: 300_000,
+  // Child reports can amplify the merge prompt; compact before the provider's
+  // 200k-class window becomes the failure boundary.
+  contextTokenLimit: 150_000,
   // Budget soft landing (RUN-018): an exhausted coordinator merges what it
   // has into one best-effort review instead of discarding every child report.
   onExhaustion: "final-answer",
