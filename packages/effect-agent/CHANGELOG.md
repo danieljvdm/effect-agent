@@ -1,5 +1,22 @@
 # effect-agent
 
+## 0.1.0-beta.6
+
+### Patch Changes
+
+- [#30](https://github.com/danieljvdm/effect-agent/pull/30) [`94c169a`](https://github.com/danieljvdm/effect-agent/commit/94c169a44a248972158ca955e33fb02dd5e55463) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Export privacy-safe canonical Tool spans and bounded terminal logs from the engine, including
+  model-declared and programmatic broker calls, value-level failures, and delayed terminal event/
+  trace commit, while isolating complete span-lifecycle defects through Effect's error reporter.
+  Build Cloudflare Conversation Objects on `effect-cf`'s native `DurableObject.make` boundary so it
+  owns the cached runtime, event-scoped Layers, native RPC methods, `waitUntil`, and post-RPC OTLP
+  flush isolation. Upgrade to `effect-cf` 0.25.3 so the same upstream boundary flushes alarm
+  telemetry. Remove Effect Agent's duplicate telemetry service, flush coordinator, timeout
+  configuration, and lifecycle fixture matrix.
+- Updated dependencies [[`e13ee6e`](https://github.com/danieljvdm/effect-agent/commit/e13ee6e7817549e99837d06e86caf2dea8656aa8), [`94c169a`](https://github.com/danieljvdm/effect-agent/commit/94c169a44a248972158ca955e33fb02dd5e55463)]:
+  - @effect-agent/core@0.1.0-beta.6
+  - @effect-agent/engine@0.1.0-beta.6
+  - @effect-agent/capabilities@0.1.0-beta.6
+
 ## 0.0.1-beta.5
 
 ### Patch Changes
