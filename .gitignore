@@ -22,3 +22,7 @@ docs/.vitepress/dist
 .wrangler
 .dev-kit
 .repos
+# Generated declarations that leak into package src when a build follows a
+# cross-package relative source import (e.g. the C4 conformance worker). No
+# .d.ts under src is hand-written; source is always .ts.
+packages/*/src/**/*.d.ts
