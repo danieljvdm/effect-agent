@@ -38,3 +38,47 @@ Exit-gate evidence:
 
 Unclaimed: any isolation guarantee (the substitute shares the host JavaScript engine), CPU
 enforcement, network enforcement, and everything in slices C2–C4.
+
+## C2 — Ephemeral native Tool broker and Code Mode Tool
+
+Delivered:
+
+- the engine-owned `ToolBroker` seam (`packages/engine/src/tool-broker.ts` plus the live factory
+  in `packages/engine/src/index.ts`), provided in the `AgentSpawner`/`DurableStep` pattern: a
+  fail-closed Run default shadowed per outer Tool Call. Passes are strictly sequential with
+  broker-owned zero-based indices allocated exactly when a handler starts (RUN-016); a concurrent
+  call fails typed without consuming an identity; every started call consumes the Run's Tool-call
+  budgets before its handler is invoked and the Turn-seam `maxToolCalls` checks include the
+  Run-wide programmatic count (RUN-017). Outcomes are total data — success, the Tool's declared
+  Schema-encoded typed failure, or the bounded `{ errorTag, message }` projection the direct
+  path's `ToolCallFailed` events use — so defects stay defects. Broker-owned result byte bounds
+  and an optional redaction hook govern the sandbox boundary. Inner calls emit no Run events and
+  no Canonical Records in class `E`.
+- `CodeMode.make` in `@effect-agent/capabilities` (`packages/capabilities/src/code-mode.ts`,
+  CAP-014): the Delegation-pattern builder over an explicit namespace record, returning an
+  ordinary Tool (annotated `readonly`, `failureMode: "return"` so a model can correct a failing
+  program) and a handler Layer whose `R` surfaces `CodeExecutor` and the selected handlers.
+  Construction fails closed on non-`readonly` Tools, approval-requiring Tools, invalid
+  identifiers, name collisions, and any Schema the declaration renderer cannot express; the
+  TypeScript declarations derive from `Tool.getJsonSchema` — the encoded wire types.
+- the aggregate model-visible egress policy (CAP-016): the final result, captured logs, and any
+  thrown value share one byte budget with an optional redaction hook; an oversized result is a
+  typed `CodeModeEgressExceeded` failure and log truncation always carries an explicit marker.
+- the first manifest use of the ADR-0017 `capabilities -> sandbox` edge.
+
+Exit-gate evidence:
+
+- direct and programmatic invocation of the same Tool are observably equivalent —
+  `packages/engine/test/tool-broker.test.ts` (RUN-016 titles, 10 cases: equivalence, identity
+  determinism, concurrency rejection, unknown Tool, invalid parameters, approval preflight,
+  typed handler failure, non-JSON success encoding, result bounds and redaction, mid-pass and
+  Turn-seam budget accounting);
+- programmatic calls cannot reach a non-allowlisted Tool, the model sees only the Code Mode Tool
+  unless originals are exposed, and generated declarations present encoded wire types failing
+  construction closed — `packages/capabilities/test/code-mode.test.ts` (12 cases including
+  compile-time E/R proofs);
+- a real generated JavaScript program composes allowlisted Tools through the substitute executor,
+  the broker, and real handlers inside one Run, and observes mid-pass budget exhaustion as a
+  catchable envelope — `packages/testing/test/code-mode-e2e.test.ts`.
+
+Unclaimed: everything in C3–C4, isolation, and durable Code Mode.

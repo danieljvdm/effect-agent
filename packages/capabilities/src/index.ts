@@ -1,5 +1,6 @@
 export * from "./approval.ts";
 export * from "./budget.ts";
+export * from "./code-mode.ts";
 export * from "./commands.ts";
 export * from "./conversation.ts";
 export * from "./context.ts";

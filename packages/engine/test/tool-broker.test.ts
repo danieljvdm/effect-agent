@@ -131,7 +131,9 @@ const runOrchestrated = <InnerTools extends Record<string, Tool.Any>>(options: {
             orchestrate: () =>
               Effect.gen(function* () {
                 const broker = yield* ToolBroker;
-                const pass = yield* broker.openPass(inner, options.passOptions);
+                // Inside a live Tool batch the broker is always bound; an
+                // unavailable broker here is a harness defect, not a test case.
+                const pass = yield* broker.openPass(inner, options.passOptions).pipe(Effect.orDie);
                 return yield* options.program(pass);
               }),
           };
@@ -180,14 +182,12 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
           ],
           '{"answer":"direct"}',
         );
-        const directEvents: Array<unknown> = [];
         const direct = yield* AgentRuntime.run(
           Agent.withModel(directDefinition, directModel),
           { question: "go" },
-          { observer: undefined },
+          {},
         ).pipe(Effect.provide(innerToolkit.toLayer(handler)), Effect.scoped);
         expect(direct.output).toEqual({ answer: "direct" });
-        expect(directEvents).toEqual([]);
 
         // Programmatic: the same Tool, same encoded arguments, through the broker.
         const result = yield* runOrchestrated({
@@ -539,7 +539,7 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
               orchestrate: () =>
                 Effect.gen(function* () {
                   const broker = yield* ToolBroker;
-                  const pass = yield* broker.openPass(inner);
+                  const pass = yield* broker.openPass(inner).pipe(Effect.orDie);
                   yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "a" } });
                   yield* pass.invoke({ toolName: "query", encodedArguments: { sql: "b" } });
                   return null;
