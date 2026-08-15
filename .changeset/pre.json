@@ -19,13 +19,20 @@
     "@effect-agent/storage-memory": "0.0.0",
     "@effect-agent/storage-sqlite": "0.0.0",
     "@effect-agent/testing": "0.0.0",
-    "effect-agent": "0.0.1-beta.3"
+    "effect-agent": "0.0.1-beta.3",
+    "@effect-agent/example-code-mode-cloudflare": "0.0.0"
   },
   "changesets": [
     "beta107-runtime-fixes",
+    "budget-soft-landing",
     "effect-agent-umbrella",
     "initial-live-test-release",
     "mit-cloudflare-and-review-fixes",
-    "pin-internal-dependency-versions"
+    "native-tool-observability",
+    "pin-internal-dependency-versions",
+    "pr-review-guidance-file",
+    "pr-review-incremental-continuity",
+    "pr-review-package",
+    "pr-review-skip-unchanged"
   ]
 }
