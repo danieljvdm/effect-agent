@@ -242,7 +242,11 @@ const outcomeSummary = (
   ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
   ...(outcome.usage === undefined
     ? []
-    : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`]),
+    : [
+        `- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out${
+          outcome.usageScope === "coordinator" ? " (coordinator)" : ""
+        }`,
+      ]),
   ...(outcome.published === undefined
     ? ["- Dry run: nothing posted"]
     : [`- Posted: ${outcome.published.url}`]),

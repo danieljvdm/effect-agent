@@ -87,6 +87,19 @@ const renderDemoted = (finding: ReviewFinding, reason: string): string => {
 const countNoun = (count: number, noun: string): string =>
   `${count} ${noun}${count === 1 ? "" : "s"}`;
 
+/** The validated finding + concern severities, tallied for callout and event. */
+const severityCounts = (review: CodeReview) => {
+  const severities = [
+    ...review.findings.map((finding) => finding.severity),
+    ...(review.concerns ?? []).map((concern) => concern.severity),
+  ];
+  return {
+    blocking: severities.filter((severity) => severity === "blocking").length,
+    important: severities.filter((severity) => severity === "important").length,
+    total: severities.length,
+  };
+};
+
 /**
  * The opening callout: the review's overall tier, derived HOST-SIDE from the
  * validated severities (never from model prose), described by what GitHub
@@ -94,19 +107,14 @@ const countNoun = (count: number, noun: string): string =>
  * the blockquote tiers read as informational.
  */
 const renderVerdictCallout = (review: CodeReview): string => {
-  const severities = [
-    ...review.findings.map((finding) => finding.severity),
-    ...(review.concerns ?? []).map((concern) => concern.severity),
-  ];
-  const blocking = severities.filter((severity) => severity === "blocking").length;
-  if (blocking > 0) {
-    return `> [!CAUTION]\n> ${countNoun(blocking, "blocking finding")} — do not merge before addressing ${blocking === 1 ? "it" : "them"}.`;
+  const counts = severityCounts(review);
+  if (counts.blocking > 0) {
+    return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
   }
-  const important = severities.filter((severity) => severity === "important").length;
-  if (important > 0) {
-    return `> [!IMPORTANT]\n> ${countNoun(important, "important finding")} to address before merging.`;
+  if (counts.important > 0) {
+    return `> [!IMPORTANT]\n> ${countNoun(counts.important, "important finding")} to address before merging.`;
   }
-  if (severities.length > 0) {
+  if (counts.total > 0) {
     return "> ℹ️ Minor suggestions only — mergeable as-is.";
   }
   return review.verdict === "approve"
@@ -224,7 +232,10 @@ export const planPublication = (
 
   const footerParts = ["Automated review by @effect-agent/pr-review"];
   if (options.modelLabel !== undefined) footerParts.push(options.modelLabel);
-  if (options.usage !== undefined) {
+  // Usage renders only under an EXPLICIT scope: this planner cannot know
+  // whether a budget snapshot observed the whole run or only a fan-out
+  // coordinator, and omitting the number is honest where mislabeling is not.
+  if (options.usage !== undefined && options.usageScope !== undefined) {
     const scope = options.usageScope === "coordinator" ? " (coordinator)" : "";
     footerParts.push(
       `${options.usage.inputTokens} in / ${options.usage.outputTokens} out tokens${scope}`,
@@ -264,13 +275,22 @@ export const planPublication = (
     return parts.join("\n");
   };
 
-  const event: ReviewEvent = options.applyVerdict
-    ? review.verdict === "approve"
-      ? "APPROVE"
-      : review.verdict === "request-changes"
-        ? "REQUEST_CHANGES"
-        : "COMMENT"
-    : "COMMENT";
+  // The model's verdict may not contradict the validated severities (model
+  // output is untrusted input): any blocking item forces REQUEST_CHANGES, and
+  // an approval is honored only when nothing important or blocking survived —
+  // so the event can never say APPROVE while the callout says do-not-merge.
+  const counts = severityCounts(review);
+  const event: ReviewEvent = !options.applyVerdict
+    ? "COMMENT"
+    : counts.blocking > 0
+      ? "REQUEST_CHANGES"
+      : review.verdict === "approve"
+        ? counts.important > 0
+          ? "COMMENT"
+          : "APPROVE"
+        : review.verdict === "request-changes"
+          ? "REQUEST_CHANGES"
+          : "COMMENT";
 
   // The invisible tail (metadata + fingerprint marker) must survive the body
   // cap, so the cap reserves exactly the room it needs.

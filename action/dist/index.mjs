@@ -38972,22 +38972,28 @@ var renderDemoted = (finding, reason) => {
   return `- ${location2} **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body} _(demoted: ${reason})_`;
 };
 var countNoun = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
-var renderVerdictCallout = (review) => {
+var severityCounts = (review) => {
   const severities = [
     ...review.findings.map((finding) => finding.severity),
     ...(review.concerns ?? []).map((concern) => concern.severity)
   ];
-  const blocking = severities.filter((severity) => severity === "blocking").length;
-  if (blocking > 0) {
+  return {
+    blocking: severities.filter((severity) => severity === "blocking").length,
+    important: severities.filter((severity) => severity === "important").length,
+    total: severities.length
+  };
+};
+var renderVerdictCallout = (review) => {
+  const counts = severityCounts(review);
+  if (counts.blocking > 0) {
     return `> [!CAUTION]
-> ${countNoun(blocking, "blocking finding")} — do not merge before addressing ${blocking === 1 ? "it" : "them"}.`;
+> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
   }
-  const important = severities.filter((severity) => severity === "important").length;
-  if (important > 0) {
+  if (counts.important > 0) {
     return `> [!IMPORTANT]
-> ${countNoun(important, "important finding")} to address before merging.`;
+> ${countNoun(counts.important, "important finding")} to address before merging.`;
   }
-  if (severities.length > 0) {
+  if (counts.total > 0) {
     return "> ℹ️ Minor suggestions only — mergeable as-is.";
   }
   return review.verdict === "approve" ? "> ✅ No issues found." : "> ℹ️ No findings — see the summary.";
@@ -39043,7 +39049,7 @@ var planPublication = (review, files, options3) => {
   const footerParts = ["Automated review by @effect-agent/pr-review"];
   if (options3.modelLabel !== undefined)
     footerParts.push(options3.modelLabel);
-  if (options3.usage !== undefined) {
+  if (options3.usage !== undefined && options3.usageScope !== undefined) {
     const scope3 = options3.usageScope === "coordinator" ? " (coordinator)" : "";
     footerParts.push(`${options3.usage.inputTokens} in / ${options3.usage.outputTokens} out tokens${scope3}`);
   }
@@ -39069,7 +39075,8 @@ var planPublication = (review, files, options3) => {
     return parts2.join(`
 `);
   };
-  const event = options3.applyVerdict ? review.verdict === "approve" ? "APPROVE" : review.verdict === "request-changes" ? "REQUEST_CHANGES" : "COMMENT" : "COMMENT";
+  const counts = severityCounts(review);
+  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" ? counts.important > 0 ? "COMMENT" : "APPROVE" : review.verdict === "request-changes" ? "REQUEST_CHANGES" : "COMMENT";
   const tail = [
     renderReviewMetadata({
       headSha: options3.headSha,
@@ -39126,7 +39133,8 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   plan: ReviewPublicationPlan,
   published: exports_Schema.optionalKey(PublishedReview),
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  usage: exports_Schema.optionalKey(UsageTotals)
+  usage: exports_Schema.optionalKey(UsageTotals),
+  usageScope: exports_Schema.optionalKey(exports_Schema.Literals(["run", "coordinator"]))
 }) {
 }
 var buildReviewMission = (metadata, files) => ReviewMission.make({
@@ -39170,12 +39178,20 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     usageScope: options3.usageScope,
     fingerprint
   });
+  const scope3 = options3.usageScope === undefined ? {} : { usageScope: options3.usageScope };
   if (!options3.post) {
-    return ReviewRunOutcome.make({ review, plan, turns: result4.turns, usage });
+    return ReviewRunOutcome.make({ review, plan, turns: result4.turns, usage, ...scope3 });
   }
   const publisher = yield* ReviewPublisher;
   const published = yield* publisher.publish(plan);
-  return ReviewRunOutcome.make({ review, plan, published, turns: result4.turns, usage });
+  return ReviewRunOutcome.make({
+    review,
+    plan,
+    published,
+    turns: result4.turns,
+    usage,
+    ...scope3
+  });
 });
 
 // packages/pr-review/src/internal/factory.ts
@@ -50097,7 +50113,9 @@ var outcomeSummary = (outcome, modelLabel) => [
   `- Verdict: **${outcome.review.verdict}**`,
   `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
   ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
-  ...outcome.usage === undefined ? [] : [`- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out`],
+  ...outcome.usage === undefined ? [] : [
+    `- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out${outcome.usageScope === "coordinator" ? " (coordinator)" : ""}`
+  ],
   ...outcome.published === undefined ? ["- Dry run: nothing posted"] : [`- Posted: ${outcome.published.url}`]
 ];
 var skip = (reason) => exports_Effect.gen(function* () {

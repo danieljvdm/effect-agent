@@ -67,6 +67,12 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
    * separately by their reservations.
    */
   usage: Schema.optionalKey(UsageTotals),
+  /**
+   * What `usage` observed: the whole run, or a fan-out coordinator only.
+   * Absent when the caller declared no scope — consumers must not present
+   * unscoped usage as whole-run totals.
+   */
+  usageScope: Schema.optionalKey(Schema.Literals(["run", "coordinator"])),
 }) {}
 
 export interface ExecuteReviewOptions {
@@ -92,7 +98,12 @@ export interface ExecuteReviewOptions {
   readonly modelLabel?: string | undefined;
   /** Workflow-run URL rendered into the review footer. */
   readonly runUrl?: string | undefined;
-  /** What the run budget observes: the whole run (default) or the coordinator only. */
+  /**
+   * What the run budget observes: the whole run, or a fan-out coordinator
+   * only. Without a declared scope the footer omits usage entirely — this
+   * generic path cannot know what a caller's binding shape observes, and an
+   * unlabeled number would read as whole-run totals.
+   */
   readonly usageScope?: "run" | "coordinator" | undefined;
 }
 
@@ -182,10 +193,19 @@ export const executeReview = <
       fingerprint,
     });
 
+    const scope =
+      options.usageScope === undefined ? {} : ({ usageScope: options.usageScope } as const);
     if (!options.post) {
-      return ReviewRunOutcome.make({ review, plan, turns: result.turns, usage });
+      return ReviewRunOutcome.make({ review, plan, turns: result.turns, usage, ...scope });
     }
     const publisher = yield* ReviewPublisher;
     const published = yield* publisher.publish(plan);
-    return ReviewRunOutcome.make({ review, plan, published, turns: result.turns, usage });
+    return ReviewRunOutcome.make({
+      review,
+      plan,
+      published,
+      turns: result.turns,
+      usage,
+      ...scope,
+    });
   });
