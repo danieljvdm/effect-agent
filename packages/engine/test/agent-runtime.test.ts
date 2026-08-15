@@ -5882,6 +5882,47 @@ layer(identifiers)("RUN-018 budget soft landing", (it) => {
     }),
   );
 
+  it.effect(
+    "RUN-021 a non-finite allowance is ignored fail-closed and the policy bound holds",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const turns = yield* Ref.make(0);
+        const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+        const definition = softLandingDefinition(
+          AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            onExhaustion: "fail",
+          }),
+        );
+        const model = turnScriptedModel("allowance-nan", turns, toolChoices, prompts, () => [
+          searchCall("search-1"),
+          searchCall("search-2"),
+          { type: "finish", reason: "tool-calls", usage },
+        ]);
+        const toolLayer = softLandingTools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+
+        // NaN would poison every `>` comparison (always false) and silently
+        // erase the bound; the engine must keep the policy limit instead.
+        const exit = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "research" },
+          { toolCallAllowance: Number.NaN },
+        ).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.exit);
+        const failure = failureFrom(exit);
+
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect(failure).toMatchObject({ limit: "tool-calls" });
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+      }),
+  );
+
   it.effect("RUN-021 a per-Run Turn allowance tightens maxTurns with the same grace", () =>
     Effect.gen(function* () {
       const handlerStarts = yield* Ref.make(0);

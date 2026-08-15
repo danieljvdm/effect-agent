@@ -23,9 +23,11 @@
   `ChildEstablishSettled.finishReason`). One scope delta from decision item 7: the allowance
   reaches only EPHEMERAL children — a durable child's lane owns no per-run options channel, and
   making the reservation slice binding on the child would contradict §7's never-clipped overrun
-  model, so durable allowance threading is deferred to its own proposal. The extension flow
-  (fresh re-delegation with a raised allowance and partial findings forwarded through
-  `prepareInput`) works on both paths today because the exhausted marker travels durably.
+  model, so durable allowance threading is deferred to its own proposal. On the durable path the
+  exhausted marker still travels (via `ChildEstablishSettled.finishReason`) and re-delegation
+  remains possible, but an allowance has no effect there — a durable child always runs at its
+  Definition policy — so allowance-based extension is meaningful only for ephemeral children
+  until the deferred proposal lands.
 - Status note (2026-08-15, hardening after #50's autoreviewer): `define` is overloaded so the
   resolved Tool channels follow the `failureMode` VALUE (return mode cannot be claimed through a
   type argument while the runtime builds the error-mode Tool); containment classifies genuine

@@ -33080,9 +33080,10 @@ var decodeResumedToolCallParameters = (tool, toolName, encodedParams) => {
     message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`
   })));
 };
+var boundedAllowance = (policyBound, allowance) => allowance === undefined || !Number.isFinite(allowance) ? policyBound : Math.min(policyBound, Math.max(1, Math.floor(allowance)));
 var effectiveRunBounds = (policy2, options) => ({
-  maxTurns: options.turnAllowance === undefined ? policy2.maxTurns : Math.min(policy2.maxTurns, Math.max(1, Math.floor(options.turnAllowance))),
-  maxToolCalls: options.toolCallAllowance === undefined ? policy2.maxToolCalls : Math.min(policy2.maxToolCalls, Math.max(1, Math.floor(options.toolCallAllowance)))
+  maxTurns: boundedAllowance(policy2.maxTurns, options.turnAllowance),
+  maxToolCalls: boundedAllowance(policy2.maxToolCalls, options.toolCallAllowance)
 });
 var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2) {
   const toolCallId = yield* decodeToolCallId(call.id);
@@ -37685,7 +37686,8 @@ var layer14 = (delegation, childBinding, options) => {
         consume: (delta) => reservations.observe(reservationId, observedUsageFromDelta(delta)).pipe(exports_Effect.orDie, exports_Effect.andThen(seededBudget === undefined ? exports_Effect.void : seededBudget.consume(delta)))
       };
       const allowanceOption = delegation.toolCallAllowance;
-      const requestedAllowance = allowanceOption === undefined ? undefined : allowanceOption.fromParameters?.(parameters) ?? allowanceOption.default;
+      const extracted = allowanceOption?.fromParameters?.(parameters);
+      const requestedAllowance = extracted !== undefined && Number.isFinite(extracted) ? extracted : allowanceOption !== undefined && Number.isFinite(allowanceOption.default) ? allowanceOption.default : undefined;
       const toolCallAllowance = requestedAllowance === undefined ? undefined : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
       const childOptions = {
         ...seededChild,
