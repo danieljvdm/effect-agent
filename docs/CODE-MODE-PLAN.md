@@ -9,8 +9,9 @@ Governance registration: this work is registered as **D-035 (Accepted, owner-dir
 2026-08-14)** in `docs/DECISIONS.md` and its normative architecture content lives in
 [ADR-0017](adr/0017-code-mode-executor-and-broker.md) (Accepted). This file remains working
 material; the specifications under `docs/spec/` carry the normative Code Mode requirements
-(CAP-014…016, RUN-016…017, DEPLOY-011, SEC-014…015, TEST-015). The section 17 design decisions
-were resolved by the owner on 2026-08-14.
+(CAP-014…016, RUN-016…017, DEPLOY-011, SEC-014…015, TEST-015), and per-slice evidence grows in
+[CODE-MODE-EVIDENCE.md](CODE-MODE-EVIDENCE.md). The section 17 design decisions were resolved by
+the owner on 2026-08-14.
 
 ## 1. Objective
 
