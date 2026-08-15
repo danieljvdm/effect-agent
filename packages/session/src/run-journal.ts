@@ -1,4 +1,5 @@
 import { ConversationId, RunId, ToolCallId, TurnId, type SubmissionId } from "@effect-agent/core";
+import { CLEARED_TOOL_RESULT, COMPACTION_SUMMARY_PREFIX } from "@effect-agent/engine";
 import { Crypto, Effect, Schema, type DateTime } from "effect";
 import { Prompt } from "effect/unstable/ai";
 
@@ -78,6 +79,26 @@ export const toolCallResultBatchId = (
 /** Deterministic batch identity of one Turn's `ToolCallPrepared` commit (plan §2.1 commit 3). */
 export const turnPreparedBatchId = (runId: RunId, turn: number): BatchId =>
   decodeBatchId(`turn-prepared:${runId}:${turn}`);
+
+/**
+ * Deterministic identity of one pre-Turn compaction record (RUN-026,
+ * RUN-026). Keyed by Run, Turn, and kind — the engine performs at most one
+ * threshold compaction per Turn plus at most one overflow-forced summarize,
+ * so a superseding Attempt that re-decides the same compaction replays the
+ * batch identity instead of duplicating the record.
+ */
+export const compactionRecordId = (
+  runId: RunId,
+  turn: number,
+  kind: "clear-tool-results" | "summarize",
+): RecordId => decodeRecordId(`compaction:${runId}:${turn}:${kind}`);
+
+/** Deterministic batch identity of one compaction append (same string as its record id). */
+export const compactionBatchId = (
+  runId: RunId,
+  turn: number,
+  kind: "clear-tool-results" | "summarize",
+): BatchId => decodeBatchId(`compaction:${runId}:${turn}:${kind}`);
 
 /** Deterministic canonical record identity of one Turn's `ModelResponseRecorded` record. */
 export const modelResponseRecordId = (runId: RunId, turn: number): RecordId =>
@@ -259,16 +280,22 @@ const decodePromptMessages = Effect.fn("RunJournal.decodePromptMessages")(
     ),
 );
 
+interface PendingSettledTool {
+  readonly record: ToolCallSettled;
+  /** RUN-026: a `clear-tool-results` compaction covers this record's sequence. */
+  readonly cleared: boolean;
+}
+
 const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
-  (settled: ReadonlyArray<ToolCallSettled>): Effect.Effect<Prompt.Message, RunJournalError> =>
+  (settled: ReadonlyArray<PendingSettledTool>): Effect.Effect<Prompt.Message, RunJournalError> =>
     Effect.try({
       try: () =>
         Prompt.makeMessage("tool", {
-          content: settled.map((record) =>
+          content: settled.map(({ record, cleared }) =>
             Prompt.makePart("tool-result", {
               id: record.toolCallId,
               name: record.toolName,
-              result: record.result,
+              result: cleared ? CLEARED_TOOL_RESULT : record.result,
               isFailure: record.isFailure,
               providerExecuted: false,
             }),
@@ -293,6 +320,15 @@ const toolMessageFromSettled = Effect.fn("RunJournal.toolMessageFromSettled")(
  *   Prompt-visible form (instructions + user message) becomes canonical inside the owning Run's
  *   first `ModelResponseRecorded`. The projection consumes it only for Run correlation.
  */
+/** Cumulative committed usage of the projected Run (RUN-023 resume re-seed). */
+export interface RunJournalUsage {
+  readonly modelCalls: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly lastInputTokens: number;
+  readonly lastOutputTokens: number;
+}
+
 export interface RunJournalProjection {
   /** Canonical projection for the requested Run; may end at its resumable Tool declaration. */
   readonly prompt: Prompt.Prompt;
@@ -300,12 +336,14 @@ export interface RunJournalProjection {
   readonly historyBefore: Prompt.Prompt;
   /** Number of canonical Turns already committed for the projected Run. */
   readonly committedTurns: number;
+  /** Summed per-call usage of the projected Run's committed responses; zeros for records predating usage capture. */
+  readonly usage: RunJournalUsage;
 }
 
 interface FoldState {
   readonly all: Array<Prompt.Message>;
   readonly before: Array<Prompt.Message>;
-  readonly pendingTools: Array<ToolCallSettled>;
+  readonly pendingTools: Array<PendingSettledTool>;
   readonly pendingToolsForRun: boolean;
   readonly committedTurns: number;
 }
@@ -384,6 +422,94 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     committedTurns: 0,
   };
 
+  // RUN-026 pre-scan: the widest VALID compaction bounds govern the fold. A
+  // valid record covers strictly below its own sequence, never reaches into
+  // its owner Run's records, and never splits a response from its settled
+  // tool results; a summarize record must carry its summary. Invalid records
+  // are ignored fail-safe — the full history stays authoritative. Ties on
+  // coversThrough resolve to the record appended later (higher sequence),
+  // matching at-most-once replay intent.
+  // One span per settled record, paired with its declaring response the same
+  // way the fold pairs them: a settled belongs to the most recent
+  // ModelResponseRecorded of its Run. A bound inside (response, settled)
+  // would orphan the tool message from its declaring response. Orphaned
+  // settleds (filtered later by the fold) still contribute spans —
+  // over-invalidating is the fail-safe direction.
+  const firstSequenceByRun = new Map<string, number>();
+  const lastResponseSequenceByRun = new Map<string, number>();
+  const settledSpans: Array<{ readonly from: number; readonly to: number }> = [];
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag === "CompactionCreated") continue;
+    if ("runId" in payload && typeof payload.runId === "string") {
+      if (!firstSequenceByRun.has(payload.runId)) {
+        firstSequenceByRun.set(payload.runId, envelope.sequence);
+      }
+    }
+    if (payload._tag === "ModelResponseRecorded") {
+      lastResponseSequenceByRun.set(payload.runId, envelope.sequence);
+    } else if (payload._tag === "ToolCallSettled") {
+      const from = lastResponseSequenceByRun.get(payload.runId);
+      if (from !== undefined && from < envelope.sequence) {
+        settledSpans.push({ from, to: envelope.sequence });
+      }
+    }
+  }
+  const boundIsValid = (runId: string, coversThrough: number, ownSequence: number): boolean => {
+    if (coversThrough >= ownSequence) return false;
+    const ownerFirst = firstSequenceByRun.get(runId);
+    if (ownerFirst !== undefined && coversThrough >= ownerFirst) return false;
+    for (const span of settledSpans) {
+      if (span.from <= coversThrough && coversThrough < span.to) return false;
+    }
+    return true;
+  };
+  let summarizeBound = 0;
+  let summarizeSummary: string | undefined;
+  let summarizeSequence = -1;
+  let clearBound = 0;
+  for (const envelope of records) {
+    const payload = envelope.record.payload;
+    if (payload._tag !== "CompactionCreated") continue;
+    if (!boundIsValid(payload.runId, payload.coversThrough, envelope.sequence)) continue;
+    if (payload.kind === "summarize") {
+      if (payload.summary === undefined) continue;
+      if (
+        payload.coversThrough > summarizeBound ||
+        (payload.coversThrough === summarizeBound && envelope.sequence > summarizeSequence)
+      ) {
+        summarizeBound = payload.coversThrough;
+        summarizeSummary = payload.summary;
+        summarizeSequence = envelope.sequence;
+      }
+    } else if (payload.coversThrough > clearBound) {
+      clearBound = payload.coversThrough;
+    }
+  }
+  let summaryEmitted = false;
+  const emitSummary = () => {
+    if (summaryEmitted || summarizeSummary === undefined) return;
+    summaryEmitted = true;
+    const message = Prompt.makeMessage("user", {
+      content: [
+        Prompt.makePart("text", { text: `${COMPACTION_SUMMARY_PREFIX}${summarizeSummary}` }),
+      ],
+    });
+    // Covered records always precede the owner Run's records (the append
+    // side never covers the appending Run), so the summary belongs to both
+    // the full projection and the prior-Run history.
+    state = { ...state, all: [...state.all, message], before: [...state.before, message] };
+  };
+
+  const usage = {
+    modelCalls: 0,
+    inputTokens: 0,
+    outputTokens: 0,
+    lastInputTokens: 0,
+    lastOutputTokens: 0,
+  };
+  let usageTurn = 0;
+
   const settledToolCallRecordIds = new Set<string>();
   for (const envelope of records) {
     const payload = envelope.record.payload;
@@ -431,6 +557,27 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
   for (const envelope of records) {
     const payload = envelope.record.payload;
     if (PROMPT_TRANSPARENT_TAGS.has(payload._tag)) continue;
+    // The compaction record governs the fold (pre-scan) and contributes no
+    // message of its own; records at or below the summarize bound render as
+    // the one summary message emitted at the covered/kept transition.
+    if (payload._tag === "CompactionCreated") continue;
+    if (envelope.sequence <= summarizeBound) {
+      // Owner-Run usage still counts even when the message content is folded
+      // into the summary (the append side never covers the owner, but stay
+      // fail-safe if it ever did).
+      if (payload._tag === "ModelResponseRecorded" && payload.runId === ownerRunId) {
+        usage.modelCalls += 1;
+        usage.inputTokens += payload.inputTokens ?? 0;
+        usage.outputTokens += payload.outputTokens ?? 0;
+        if (payload.turn > usageTurn) {
+          usageTurn = payload.turn;
+          usage.lastInputTokens = payload.inputTokens ?? 0;
+          usage.lastOutputTokens = payload.outputTokens ?? 0;
+        }
+      }
+      continue;
+    }
+    emitSummary();
     if (payload._tag === "ToolCallSettled") {
       if (payload.runId !== ownerRunId && incompleteToolCalls.has(envelope.record.recordId)) {
         continue;
@@ -443,7 +590,10 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       }
       state = {
         ...state,
-        pendingTools: [...state.pendingTools, payload],
+        pendingTools: [
+          ...state.pendingTools,
+          { record: payload, cleared: envelope.sequence <= clearBound },
+        ],
         pendingToolsForRun: payload.runId === ownerRunId,
       };
       continue;
@@ -455,6 +605,16 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       return yield* journalError("A canonical ModelResponseRecorded was not decoded");
     }
     const forRun = payload.runId === ownerRunId;
+    if (forRun) {
+      usage.modelCalls += 1;
+      usage.inputTokens += payload.inputTokens ?? 0;
+      usage.outputTokens += payload.outputTokens ?? 0;
+      if (payload.turn > usageTurn) {
+        usageTurn = payload.turn;
+        usage.lastInputTokens = payload.inputTokens ?? 0;
+        usage.lastOutputTokens = payload.outputTokens ?? 0;
+      }
+    }
     const visibleMessages =
       !forRun && incompleteToolTurns.has(envelope.record.recordId)
         ? withoutApplicationToolCallMessages(messages)
@@ -466,12 +626,14 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       committedTurns: forRun ? Math.max(state.committedTurns, payload.turn) : state.committedTurns,
     };
   }
+  emitSummary();
   state = yield* flushTools(state);
 
   return {
     prompt: Prompt.fromMessages(state.all),
     historyBefore: Prompt.fromMessages(state.before),
     committedTurns: state.committedTurns,
+    usage,
   };
 });
 
@@ -513,6 +675,8 @@ export interface TurnCommitInput {
   readonly producerId: ProducerId;
   readonly deploymentId: DeploymentId;
   readonly createdAt: DateTime.Utc;
+  /** Per-call provider usage staged by the engine's `noteTurnUsage` (RUN-023). */
+  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
 }
 
 const decodePersistedJson = Schema.decodeUnknownEffect(PersistedJson);
@@ -572,6 +736,12 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
       turn: input.turn,
       messages,
       messagesDigest,
+      ...(input.usage === undefined
+        ? {}
+        : {
+            inputTokens: Math.max(0, Math.trunc(input.usage.inputTokens)),
+            outputTokens: Math.max(0, Math.trunc(input.usage.outputTokens)),
+          }),
     }),
   });
 });

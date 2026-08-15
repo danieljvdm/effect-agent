@@ -8,8 +8,17 @@ export type BudgetLevel = typeof BudgetLevel.Type;
 export class UsageTotals extends Schema.Class<UsageTotals>(
   "@effect-agent/capabilities/UsageTotals",
 )({
+  /** Total input tokens across every model call, INCLUDING cache reads and writes at par. */
   inputTokens: Natural,
   outputTokens: Natural,
+  /** Informational split of `inputTokens` served from the provider prompt cache; never separately limited. */
+  cacheReadInputTokens: Natural,
+  /** Informational split of `inputTokens` written to the provider prompt cache; never separately limited. */
+  cacheWriteInputTokens: Natural,
+  /** The most recent model call's input tokens — the live model-context estimate (CAP-017). */
+  lastInputTokens: Natural,
+  /** The most recent model call's output tokens. */
+  lastOutputTokens: Natural,
   toolCalls: Natural,
   costMicrousd: Natural,
   elapsedMillis: Natural,
@@ -17,8 +26,15 @@ export class UsageTotals extends Schema.Class<UsageTotals>(
 
 /** Increment recorded at one model/tool accounting boundary. */
 export class UsageDelta extends Schema.Class<UsageDelta>("@effect-agent/capabilities/UsageDelta")({
+  /** `1` for a model-response boundary, `0` for a mid-pass tool charge; gates last-call tracking. */
+  modelCalls: Natural,
+  /** Total input tokens of this boundary, INCLUDING cache reads and writes at par. */
   inputTokens: Natural,
   outputTokens: Natural,
+  /** Informational split of `inputTokens` served from the provider prompt cache; never separately limited. */
+  cacheReadInputTokens: Natural,
+  /** Informational split of `inputTokens` written to the provider prompt cache; never separately limited. */
+  cacheWriteInputTokens: Natural,
   toolCalls: Natural,
   costMicrousd: Natural,
 }) {}
@@ -125,17 +141,20 @@ const emptyTotals = (elapsedMillis = 0): UsageTotals =>
   UsageTotals.make({
     inputTokens: 0,
     outputTokens: 0,
+    cacheReadInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    lastInputTokens: 0,
+    lastOutputTokens: 0,
     toolCalls: 0,
     costMicrousd: 0,
     elapsedMillis,
   });
 
+// Spread-preserve every accumulated field so future additions cannot be
+// silently dropped by an elapsed-only snapshot.
 const withElapsed = (node: LedgerNode, now: number): UsageTotals =>
   UsageTotals.make({
-    inputTokens: node.totals.inputTokens,
-    outputTokens: node.totals.outputTokens,
-    toolCalls: node.totals.toolCalls,
-    costMicrousd: node.totals.costMicrousd,
+    ...node.totals,
     elapsedMillis: Math.max(0, now - node.startedAt),
   });
 
@@ -143,6 +162,10 @@ const addUsage = (node: LedgerNode, delta: UsageDelta, now: number): UsageTotals
   UsageTotals.make({
     inputTokens: node.totals.inputTokens + delta.inputTokens,
     outputTokens: node.totals.outputTokens + delta.outputTokens,
+    cacheReadInputTokens: node.totals.cacheReadInputTokens + delta.cacheReadInputTokens,
+    cacheWriteInputTokens: node.totals.cacheWriteInputTokens + delta.cacheWriteInputTokens,
+    lastInputTokens: delta.modelCalls > 0 ? delta.inputTokens : node.totals.lastInputTokens,
+    lastOutputTokens: delta.modelCalls > 0 ? delta.outputTokens : node.totals.lastOutputTokens,
     toolCalls: node.totals.toolCalls + delta.toolCalls,
     costMicrousd: node.totals.costMicrousd + delta.costMicrousd,
     elapsedMillis: Math.max(0, now - node.startedAt),

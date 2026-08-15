@@ -110,6 +110,9 @@ const markingDurability = (
         commits === undefined ? Effect.void : Ref.update(commits, (all) => [...all, commit]),
       ),
     ),
+  // Required by the durability protocol; this harness exercises neither seam.
+  commitCompaction: () => Effect.void,
+  noteTurnUsage: () => Effect.void,
   prepareToolCalls: (calls) =>
     Ref.update(marks, (all) => [
       ...all,
@@ -299,6 +302,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
             assertStagedEventsObserved("commit-response").pipe(
               Effect.andThen(Ref.update(marks, (all) => [...all, "commit-response"])),
             ),
+          // Required by the durability protocol; this harness exercises neither seam.
+          commitCompaction: () => Effect.void,
+          noteTurnUsage: () => Effect.void,
           prepareToolCalls: () =>
             assertStagedEventsObserved("prepare").pipe(
               Effect.andThen(Ref.update(marks, (all) => [...all, "prepare"])),
@@ -632,6 +638,8 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
           "ModelStarted",
           "TextDelta",
           "TurnCompleted",
+          "BudgetWarning",
+          "BudgetWarning",
           "RunCompleted",
         ]);
         // Only the open call executed; the settled call was injected.
@@ -792,6 +800,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       };
       const durability: RunDurabilityHook = {
         commitResponse: () => Effect.void,
+        // Required by the durability protocol; this harness exercises neither seam.
+        commitCompaction: () => Effect.void,
+        noteTurnUsage: () => Effect.void,
         prepareToolCalls: () => Effect.void,
         step: recordingStepHook,
       };
@@ -890,6 +901,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       );
       const durability: RunDurabilityHook = {
         commitResponse: () => Effect.void,
+        // Required by the durability protocol; this harness exercises neither seam.
+        commitCompaction: () => Effect.void,
+        noteTurnUsage: () => Effect.void,
         prepareToolCalls: () => Effect.void,
         step: inertStepHook,
       };
@@ -938,6 +952,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       };
       const durability: RunDurabilityHook = {
         commitResponse: () => Effect.void,
+        // Required by the durability protocol; this harness exercises neither seam.
+        commitCompaction: () => Effect.void,
+        noteTurnUsage: () => Effect.void,
         prepareToolCalls: () => Effect.void,
         step: recordingStepHook,
       };
@@ -1021,6 +1038,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       };
       const durability: RunDurabilityHook<HookFailure> = {
         commitResponse: () => Effect.void,
+        // Required by the durability protocol; this harness exercises neither seam.
+        commitCompaction: () => Effect.void,
+        noteTurnUsage: () => Effect.void,
         prepareToolCalls: () => Effect.void,
         step: failingStepHook,
       };
@@ -1093,6 +1113,9 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
           yield* TypedHookService;
           return yield* HookFailure.make({ message: "commit failed" });
         }),
+      // Required by the durability protocol; this harness exercises neither seam.
+      commitCompaction: () => Effect.void,
+      noteTurnUsage: () => Effect.void,
       prepareToolCalls: () => Effect.void,
       step: {
         lookup: () => Effect.andThen(TypedHookService, Effect.succeed(Option.none())),

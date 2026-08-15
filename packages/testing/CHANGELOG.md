@@ -1,5 +1,29 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.7
+
+### Minor Changes
+
+- [#54](https://github.com/danieljvdm/effect-agent/pull/54) [`afe755a`](https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Context economics ([#54](https://github.com/danieljvdm/effect-agent/issues/54), RUN-022–027/CAP-017): application tool results are bounded by default (50 KiB
+  `TruncatedToolResult` envelopes), budget accounting becomes cache-aware with last-call
+  live-context tracking, every request can carry a derived run-status message, the token
+  dimension joins the `onExhaustion` soft landing (RUN-018) with the `exhausted` dimension marker,
+  and the engine compacts natively at the pre-Turn seam (prune, then one metered summarize)
+  with a canonical `CompactionCreated` record that projections fold across Runs; provider
+  context-length rejections compact-and-retry once, then fail typed (`ContextOverflowError`).
+
+### Patch Changes
+
+- Updated dependencies [[`5c49b78`](https://github.com/danieljvdm/effect-agent/commit/5c49b786604b3e8389cdc2c54d4f5cb284eac2b7), [`afe755a`](https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a), [`b44ed77`](https://github.com/danieljvdm/effect-agent/commit/b44ed7771c3e1ace2516507b0b54d11e662f036c), [`3a44b5f`](https://github.com/danieljvdm/effect-agent/commit/3a44b5f6595f4070abb61c79d5b756a9f7ed20af)]:
+  - @effect-agent/engine@0.1.0-beta.7
+  - @effect-agent/capabilities@0.1.0-beta.7
+  - @effect-agent/session@0.1.0-beta.7
+  - @effect-agent/core@0.1.0-beta.7
+  - @effect-agent/platform-node@0.1.0-beta.7
+  - @effect-agent/storage-memory@0.1.0-beta.7
+  - @effect-agent/storage-sqlite@0.1.0-beta.7
+  - @effect-agent/sandbox@0.1.0-beta.7
+
 ## 0.1.0-beta.6
 
 ### Patch Changes

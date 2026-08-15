@@ -1497,6 +1497,10 @@ const layer = <
           ...payload,
           turns: result.turns,
           finishReason: result.finishReason,
+          // A child that settled through graceful budget exhaustion (RUN-025)
+          // stays a success; the marker keeps the degradation observable to
+          // the parent without leaking any child transcript.
+          ...(result.exhausted !== undefined ? { exhausted: result.exhausted } : {}),
         });
         const projected = yield* delegation.projectResult(result.output, {
           budgetExhausted: result.finishReason === "budget-exhausted",

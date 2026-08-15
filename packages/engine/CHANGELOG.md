@@ -1,5 +1,58 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.7
+
+### Minor Changes
+
+- [#56](https://github.com/danieljvdm/effect-agent/pull/56) [`5c49b78`](https://github.com/danieljvdm/effect-agent/commit/5c49b786604b3e8389cdc2c54d4f5cb284eac2b7) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Budget extension (D-037, ADR-0019 S3, RUN-021/SUB-034): `RunOptions` gains tightening-only
+  `toolCallAllowance` and `turnAllowance` — the effective limit is
+  `min(policy bound, max(1, floor(allowance)))`, never wider, and the `onExhaustion` soft landing
+  keys off the effective limits. `Subagent.define` gains
+  `toolCallAllowance: { default, fromParameters }`, clamped fail-closed to the delegation's
+  per-invocation `SubagentPolicy.maxToolCalls` slice and threaded into ephemeral child runs, so an
+  orchestrator model grants a scout more budget by re-delegating with a raised allowance (fresh
+  child; never a mid-flight top-up). `projectResult` now receives a bounded
+  `SubagentResultContext` whose `budgetExhausted` marker is honest on both paths — from the
+  ephemeral child result's `finishReason`, or from the child Settlement's durable marker carried
+  through the new optional `ChildEstablishSettled.finishReason` (threaded by the session
+  coordinator shared by the DN and DC assemblies; exercised in the DN-profile durable-subagent
+  suites) — so a budget-truncated partial can be surfaced in the declared success Schema. Existing one-argument `projectResult` functions keep
+  compiling unchanged. Also hardens S2 containment per its autoreviewer findings: `Subagent.define`
+  is overloaded so the Tool channels follow the `failureMode` value; genuine engine signals are
+  classified by unspoofable provenance instead of `instanceof` on exported classes; each delegation
+  exposes its canonical `containedFailure` schema (pr-review's coverage decoder now derives from
+  it); and the pr-review child reviewer deliberately returns to typed exhaustion — a review is a
+  coverage claim, so a budget-exhausted unit stays honestly unreviewed (contained as result data,
+  never run-fatal).
+
+- [#54](https://github.com/danieljvdm/effect-agent/pull/54) [`afe755a`](https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Context economics ([#54](https://github.com/danieljvdm/effect-agent/issues/54), RUN-022–027/CAP-017): application tool results are bounded by default (50 KiB
+  `TruncatedToolResult` envelopes), budget accounting becomes cache-aware with last-call
+  live-context tracking, every request can carry a derived run-status message, the token
+  dimension joins the `onExhaustion` soft landing (RUN-018) with the `exhausted` dimension marker,
+  and the engine compacts natively at the pre-Turn seam (prune, then one metered summarize)
+  with a canonical `CompactionCreated` record that projections fold across Runs; provider
+  context-length rejections compact-and-retry once, then fail typed (`ContextOverflowError`).
+
+- [#63](https://github.com/danieljvdm/effect-agent/pull/63) [`3a44b5f`](https://github.com/danieljvdm/effect-agent/commit/3a44b5f6595f4070abb61c79d5b756a9f7ed20af) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Model-visible output contract ([#41](https://github.com/danieljvdm/effect-agent/issues/41), [#55](https://github.com/danieljvdm/effect-agent/issues/55), RUN-028/TEST-016): every model request of a Run whose
+  Agent Definition declares an output Schema now carries a framework-owned system message stating
+  the final-output contract — a fixed directive plus the JSON Schema derived from the encoded side
+  of `agent.definition.output` via Effect AI's derivation, inserted immediately after the request's
+  last system message. The contract is a request-time projection applied after
+  `RunContextHook.prepare`: official history, canonical records, run events, and the DN/DC golden
+  are unchanged, and compaction cannot drop it. Context adapters receive the exact text through the
+  new additive optional `RunContextRequest.outputContract` field so a limit-targeting hook can
+  reserve its overhead; the field is absent entirely when the output Schema cannot render to JSON
+  Schema, in which case the Run behaves exactly as before with one Turn-1 diagnostic per Attempt.
+  `decodeFinalOutput` remains the conformance authority (AUTH-008). BEHAVIOR CHANGE ON UPGRADE:
+  model-visible prompts grow by the rendered Schema on every request, and tests asserting
+  request-message shapes will see one additional system message; hand-written JSON-shape prose in
+  `instructions` becomes redundant but stays harmless.
+
+### Patch Changes
+
+- Updated dependencies [[`afe755a`](https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a)]:
+  - @effect-agent/core@0.1.0-beta.7
+
 ## 0.1.0-beta.6
 
 ### Minor Changes

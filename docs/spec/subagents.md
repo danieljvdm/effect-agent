@@ -69,7 +69,12 @@ The normal Tool boundary remains authoritative:
 5. the child result is Schema-encoded;
 6. parent Tool results commit in original model Tool Call order (response-array order).
 
-The parent model never receives a partial child transcript as a Tool result.
+The parent model never receives a partial child transcript as a Tool result. A budget-exhausted
+child under the default `onExhaustion: "final-answer"` policy settles as success: its
+constrained grace Turn produces a real, Schema-decoded output that flows through
+`projectResult` and the normal Tool boundary like any other child output, with
+`SubagentCompleted.exhausted` making the degradation observable (RUN-025). The transcript
+invariant stands — a grace-Turn output is a declassified Output, not a transcript.
 
 ### 2.3 A child is a normal Agent
 

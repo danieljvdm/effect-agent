@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/storage-sqlite",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "description": "Node SQLite Conversation store and submission ledger adapters for the Effect Agent durable runtime.",
   "license": "MIT",
   "repository": {

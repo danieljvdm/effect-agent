@@ -130,7 +130,9 @@ non-pnpm repository changesets shells out to `npm publish`, which ships
 both at publish time. The release script also swaps each manifest's
 source-first export map (a private-development convention, see below) for the
 built `dist` entries during the publish, restores it afterwards, and skips
-versions already on the registry, so a partial publish can be re-run.
+versions already on the registry during manual publication. CI pack mode still
+builds those tarballs so the isolated publisher can compare their integrity and
+safely resume a partial release.
 
 Releases currently ship on the **beta channel**: the repository is in
 changesets pre mode (`.changeset/pre.json`, tag `beta`), so `changeset
@@ -151,12 +153,60 @@ Releases are automated: on every push to `main`, `.github/workflows/release.yml`
 maintains a "Version Packages (beta)" PR from the pending changesets, and
 merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
 identity is exchanged for short-lived credentials (no npm token, no OTP), with
-provenance attached. Each package on npmjs.com lists `release.yml` in
-`danieljvdm/effect-agent` as its trusted publisher (package Settings, a
-one-time registration; "Allow npm publish" only). In CI the publish script
-runs in `--ci` mode: `bun pm pack` resolves the `workspace:`/`catalog:`
-protocols into the tarball and the npm CLI uploads it, because only npm
-implements the OIDC exchange.
+provenance attached. The generated PR is release metadata over code that
+already passed the ordinary PR gates: its Static checks, Tests, Build, and
+agentic Review workflows use `paths-ignore` for the narrow generated surface.
+The trusted main-branch Release workflow independently resolves the PR returned
+by Changesets, validates its repository, branch, base, and commit identities,
+runs `changeset version` and lockfile generation in a temporary worktree, and
+requires the resulting complete Git tree to match the proposed head
+byte-for-byte. It posts the required `ready` check directly to that immutable
+head only after successful verification. GitHub suppresses `pull_request`
+workflow runs caused by `GITHUB_TOKEN`, so an unexpected path in an automated
+Changesets update is rejected by that exact-tree verification and receives a
+failing `ready`; path routing is not its security boundary. A later human
+mutation with an unexpected path invokes the ordinary PR workflows, while a
+generated-only mutation has a new head without a verified check and remains
+unmergeable. The exact-tree verifier runs in a fresh read-only job checked out from the triggering
+`main` SHA; the Changesets action's workspace never reaches it. Inside the detached trusted-base
+worktree, the verifier performs a script-suppressed frozen install before invoking that worktree's
+Changesets binary, then performs a second script-suppressed install only to regenerate the release
+lockfile. Cleanup attempts every Git and filesystem operation and reports any cleanup failure in
+the typed verification result instead of silently accepting a leaked worktree.
+
+The version job and every external action are pinned to full commit SHAs and have neither Checks
+API nor npm OIDC permission. The action-free reporting job alone has `checks: write`; immediately
+before publishing the check it re-reads the PR head, source, and base and confirms that the active
+`main` rules require `ready` with strict up-to-date enforcement. If lineage moved, verification did
+not complete, or that rule is absent, it posts a failing `ready` conclusion. Operators must preserve
+the ruleset's `strict_required_status_checks_policy` setting: it invalidates the head-bound success
+for merge purposes whenever `main` later advances, until Changesets regenerates from the new base.
+
+After a version PR merge, an unprivileged preparation job frozen-installs and rebuilds the exact
+versioned tree, packs every public workspace with Bun into a scope-owned staging directory, and
+atomically renames that directory into place only after every tarball and the manifest are
+complete. Failure or interruption removes the partial staging tree, so a retry never inherits an
+incomplete release artifact. The atomic rename itself is uninterruptible, and a failed preparation,
+commit, cleanup, or temporary manifest restoration remains a typed release failure with preceding
+causes preserved. The job then uploads one checksummed immutable artifact. A separate
+action-free job is the sole holder of `id-token: write`. It checks the artifact
+digests, requires the release manifest to contain the exact fourteen-package fixed set at one
+`X.Y.Z-beta.N` version and the policy-owned `beta` dist-tag, verifies a pinned npm CLI tarball, and
+publishes with provenance; it does not check out repository code, install dependencies, run a
+build, or invoke a repository script. If a same-version registry entry appears during a retry, the
+job skips it only when its SRI integrity matches the prepared tarball and the registry's `beta` tag
+already selects that version. A final action-free job has tag-write but no OIDC authority and
+creates only validated framework-package tags at the triggering `main` SHA; an existing lightweight
+or annotated tag must dereference to that exact commit.
+
+Each package on npmjs.com lists `release.yml` in `danieljvdm/effect-agent` as
+its trusted publisher (package Settings, a one-time registration; "Allow npm
+publish" only). In CI the release script runs in `--pack-directory` mode in
+the unprivileged preparation job: `bun pm pack` resolves the
+`workspace:`/`catalog:` protocols into the tarball without consulting the npm registry. The
+transferred manifest accepts only safe `packages/<basename>.tgz` relative paths. The isolated publisher
+then uploads that tarball with the pinned npm CLI, because only npm implements
+the OIDC exchange.
 
 The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
@@ -267,13 +317,28 @@ automation are deferred until open-source preparation.
 
 ## CI and hooks
 
-The CI workflow installs the exact Bun version with a frozen-lockfile install, then runs the
-`ready` gate as three parallel jobs — Static checks (`bun run check`), Tests (`bun run test`),
-and Build (`bun run build`) — with a fan-in job that keeps the required branch-protection check
-named `ready`. Each job restores and saves the Vite Task cache
-(`node_modules/.vite/task-cache`), so per-package gates whose fingerprinted inputs did not change
-replay instead of re-executing; runs on `main` publish the shared baseline that pull-request runs
-restore. It does not initialize any source submodule.
+The CI workflow runs on pull requests, not again after their merge to `main`. Ordinary PRs install
+the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
+jobs — Static checks (`bun run check`), Tests (`bun run test`), and Build (`bun run build`) — with
+a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
+Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
+Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
+the trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
+`main` commit, and creates the required `ready` check on the verified head through the Checks API.
+The check is success only after an exact-tree comparison in a fresh read-only job; unexpected files,
+setup failures, or any other incomplete verification post failure to the current PR head. An invalid
+or unresolvable PR identity produces no success. For later human updates, unexpected paths invoke
+the ordinary workflows, while a generated-path-only push receives no new `ready` check. Checks
+authority is isolated to an action-free job that revalidates the live source/head/base and the
+strict up-to-date branch rule before reporting. Both cases are fail-closed.
+
+Each ordinary-PR job restores and saves the Vite Task cache
+(`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay
+per-package gates whose fingerprinted inputs did not change. GitHub scopes those caches to the
+PR's merge ref; removing duplicate `main` CI intentionally trades the previous cross-PR
+default-branch baseline for lower post-merge compute, so a PR's first run may be cold. The CI
+workflow does not initialize any source submodule. On `main`, the Release workflow is the sole
+push-triggered package automation and owns version-PR maintenance and publishing.
 
 The Vite+ pre-commit hook runs the staged formatter. CI remains authoritative: hooks improve local
 feedback but are not a correctness boundary.

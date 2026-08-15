@@ -73,7 +73,7 @@ describe("TEST-004 STORE-010 adapter certification — storage-memory reference 
       Effect.gen(function* () {
         const report = yield* certified;
         // Full sweep: every location armed in every scenario shape.
-        expect(report.tier2).toHaveLength(28 * CERTIFICATION_SCENARIOS.length);
+        expect(report.tier2).toHaveLength(29 * CERTIFICATION_SCENARIOS.length);
         expect(report.tier2.filter((row) => row.status === "failed")).toEqual([]);
         // Every cell (fired or clean) verified with a FULLY recomputed digest chain.
         expect(report.tier2.every((row) => row.digestChainVerified)).toBe(true);
