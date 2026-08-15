@@ -32,6 +32,11 @@ jobs:
 No `actions/checkout` is required: the reviewer reads the pull request
 through the GitHub API and never checks out or executes untrusted PR code.
 
+Re-reviews of an unchanged changeset are skipped by default: each posted
+review embeds a changeset fingerprint, so base-branch auto-merges and
+equivalent rebases don't re-trigger the model (`skip-unchanged: "false"`
+disables this).
+
 Inputs, outputs, and defaults are documented in [`action.yml`](action.yml).
 Honest limits: deployment class E — one ephemeral run per event, no
 durability claim, and posting is never exactly-once; a failed or truncated

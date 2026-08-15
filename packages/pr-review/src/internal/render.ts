@@ -2,6 +2,7 @@ import { Schema } from "effect";
 
 import type { ChangedFile } from "./diff.ts";
 import { commentableLines } from "./diff.ts";
+import { FINGERPRINT_MARKER_LENGTH, renderFingerprintMarker } from "./fingerprint.ts";
 import type { CodeReview } from "./review-agent.ts";
 import { ReviewFinding } from "./review-agent.ts";
 
@@ -107,6 +108,11 @@ export const planPublication = (
     readonly headSha: string;
     /** GitHub's changed-file total, for honest truncation reporting. */
     readonly totalChangedFiles: number;
+    /**
+     * Changeset fingerprint embedded invisibly in the review body so a later
+     * run can skip re-reviewing an unchanged changeset.
+     */
+    readonly fingerprint?: string | undefined;
   },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
@@ -149,9 +155,15 @@ export const planPublication = (
         : "COMMENT"
     : "COMMENT";
 
+  // The marker must survive the body cap, so the cap reserves room for it.
+  const body =
+    options.fingerprint === undefined
+      ? bodyParts.join("\n").slice(0, 60_000)
+      : `${bodyParts.join("\n").slice(0, 60_000 - FINGERPRINT_MARKER_LENGTH - 1)}\n${renderFingerprintMarker(options.fingerprint)}`;
+
   return ReviewPublicationPlan.make({
     event,
-    body: bodyParts.join("\n").slice(0, 60_000),
+    body,
     comments,
     demoted,
     commitSha: options.headSha,

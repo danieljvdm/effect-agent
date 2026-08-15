@@ -4,6 +4,7 @@ import { BudgetExceeded } from "effect-agent";
 
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { readGitHubEvent, resolveReviewTarget, gitHubReviewLayers } from "./internal/github-env.ts";
+import { fingerprintUnchanged, PriorReviews } from "./internal/github.ts";
 import {
   anthropicClientLayer,
   DEFAULT_PROVIDER,
@@ -49,6 +50,7 @@ export interface ResolvedActionInputs {
   readonly ignore: ReadonlyArray<string>;
   readonly maxFindings: number | undefined;
   readonly failOn: FailOnPolicy;
+  readonly skipUnchanged: boolean;
 }
 
 /** Read the PR_REVIEW_* input surface (all optional, all defaulted). */
@@ -68,6 +70,9 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   const failOn = yield* Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(
     Config.withDefault<FailOnPolicy>("never"),
   );
+  const skipUnchanged = yield* Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(
+    Config.withDefault(true),
+  );
   return {
     provider,
     model: Option.getOrUndefined(model),
@@ -81,6 +86,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
       .filter((pattern) => pattern.length > 0),
     maxFindings: Option.getOrUndefined(maxFindings),
     failOn,
+    skipUnchanged,
   } satisfies ResolvedActionInputs;
 });
 
@@ -127,18 +133,31 @@ const skip = (reason: string) =>
     return { _tag: "Skipped", reason } satisfies ReviewActionResult;
   });
 
+/** The reviewer surface the action harness drives: a run, and optionally the
+ * changeset fingerprint enabling unchanged-changeset skips. `PrReview.make`
+ * and `PrReview.makeFanOut` return exactly this shape. */
+export interface HarnessedReviewer<E, R, FingerprintE, FingerprintR> {
+  readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
+  readonly fingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
+}
+
 /**
- * Harness one already-built reviewer run inside the Actions environment:
- * resolve the target from the event, provide the GitHub source and publisher,
- * write step outputs, and apply the verdict gate. Skips (draft, non-PR event)
- * are values, not failures. The reviewer's remaining requirements — its model
- * client, any extra tool handlers — stay visible in `R` for the caller.
+ * Harness one already-built reviewer inside the Actions environment: resolve
+ * the target from the event, provide the GitHub source/publisher/prior
+ * reviews, skip when the changeset fingerprint matches the last posted
+ * review, write step outputs, and apply the verdict gate. Skips (draft,
+ * non-PR event, unchanged changeset) are values, not failures. The reviewer's
+ * remaining requirements — its model client, any extra tool handlers — stay
+ * visible in `R` for the caller.
  */
-export const runReviewAction = <E, R>(
-  run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>,
+export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never>(
+  reviewer: HarnessedReviewer<E, R, FingerprintE, FingerprintR>,
   options: {
     readonly post?: boolean | undefined;
     readonly failOn?: FailOnPolicy | undefined;
+    /** Skip when the changeset fingerprint matches the last posted review;
+     * defaults to true when the reviewer carries a fingerprint. */
+    readonly skipUnchanged?: boolean | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -152,27 +171,54 @@ export const runReviewAction = <E, R>(
       }
     }
     const target = yield* resolveReviewTarget({});
-    yield* Console.log(
-      `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
-    );
-    const outcome = yield* run({ post: options.post ?? true }).pipe(
-      Effect.provide(gitHubReviewLayers(target)),
-    );
-    yield* Console.log(
-      `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
-        `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
-    );
-    if (outcome.published !== undefined) {
-      yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
-    }
-    yield* writeActionOutputs(outcomeOutputs(outcome));
-    if (options.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
-      return yield* ReviewGateFailed.make({
-        verdict: outcome.review.verdict,
-        failOn: "request-changes",
-      });
-    }
-    return { _tag: "Completed", outcome } satisfies ReviewActionResult;
+    // An ambient PriorReviews (a test fixture, a custom store) wins over the
+    // GitHub adapter the harness provides below.
+    const ambientPriorReviews = yield* Effect.serviceOption(PriorReviews);
+    // One layer build for the fingerprint check AND the run, so both observe
+    // the same cached pull-request snapshot.
+    return yield* Effect.gen(function* () {
+      if (options.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
+        const current = yield* reviewer.fingerprint;
+        const unchanged = yield* fingerprintUnchanged(current).pipe(
+          Option.isSome(ambientPriorReviews)
+            ? Effect.provideService(PriorReviews, ambientPriorReviews.value)
+            : (effect) => effect,
+        );
+        if (unchanged) {
+          yield* Console.log(
+            `Skipping review of ${target.repository}#${target.number}: changeset unchanged since the last review.`,
+          );
+          yield* writeActionOutputs([
+            ["skipped", "true"],
+            ["skip-reason", "changeset unchanged since the last review"],
+            ["fingerprint", current],
+          ]);
+          return {
+            _tag: "Skipped",
+            reason: "changeset unchanged since the last review",
+          } satisfies ReviewActionResult;
+        }
+      }
+      yield* Console.log(
+        `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
+      );
+      const outcome = yield* reviewer.run({ post: options.post ?? true });
+      yield* Console.log(
+        `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
+          `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
+      );
+      if (outcome.published !== undefined) {
+        yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
+      }
+      yield* writeActionOutputs(outcomeOutputs(outcome));
+      if (options.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
+        return yield* ReviewGateFailed.make({
+          verdict: outcome.review.verdict,
+          failOn: "request-changes",
+        });
+      }
+      return { _tag: "Completed", outcome } satisfies ReviewActionResult;
+    }).pipe(Effect.provide(gitHubReviewLayers(target)));
   });
 
 /**
@@ -188,19 +234,23 @@ export const reviewActionProgram = Effect.gen(function* () {
     maxFindings: inputs.maxFindings,
     applyVerdict: inputs.applyVerdict,
   };
-  const harness = { post: inputs.post, failOn: inputs.failOn };
+  const harness = {
+    post: inputs.post,
+    failOn: inputs.failOn,
+    skipUnchanged: inputs.skipUnchanged,
+  };
   if (inputs.provider === "anthropic") {
     const model = makeAnthropicReviewModel(inputs.model);
     const reviewer = inputs.fanOut
       ? PrReview.makeFanOut({ ...shared, model })
       : PrReview.make({ ...shared, model });
-    return yield* runReviewAction(reviewer.run, harness).pipe(Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(anthropicClientLayer));
   }
   const model = makeOpenAiReviewModel(inputs.model);
   const reviewer = inputs.fanOut
     ? PrReview.makeFanOut({ ...shared, model })
     : PrReview.make({ ...shared, model });
-  return yield* runReviewAction(reviewer.run, harness).pipe(Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(openAiClientLayer));
 });
 
 /** Run the packaged action program on Node; the bundled action entrypoint. */

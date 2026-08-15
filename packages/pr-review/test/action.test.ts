@@ -17,7 +17,15 @@ import {
   runReviewAction,
   type ReviewActionResult,
 } from "../src/action.ts";
-import { CodeReview, planPublication, ReviewRunOutcome, type ReviewVerdict } from "../src/index.ts";
+import {
+  CodeReview,
+  planPublication,
+  PriorReviewLookupFailure,
+  PriorReviews,
+  ReviewRunOutcome,
+  type ReviewVerdict,
+} from "../src/index.ts";
+import { staticPriorReviewsLayer } from "../src/testing.ts";
 
 const failureFrom = <E>(exit: Exit.Exit<unknown, E>): E => {
   expect(Exit.isFailure(exit)).toBe(true);
@@ -53,6 +61,7 @@ describe("resolveActionInputs", () => {
         ignore: [],
         maxFindings: undefined,
         failOn: "never",
+        skipUnchanged: true,
       });
     }),
   );
@@ -70,6 +79,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_IGNORE: " **/*.lock , dist/** ,",
           PR_REVIEW_MAX_FINDINGS: "7",
           PR_REVIEW_FAIL_ON: "request-changes",
+          PR_REVIEW_SKIP_UNCHANGED: "false",
         }),
       );
       expect(inputs).toEqual({
@@ -82,6 +92,7 @@ describe("resolveActionInputs", () => {
         ignore: ["**/*.lock", "dist/**"],
         maxFindings: 7,
         failOn: "request-changes",
+        skipUnchanged: false,
       });
     }),
   );
@@ -139,9 +150,10 @@ describe("runReviewAction", () => {
     Effect.gen(function* () {
       const harness = yield* actionHarness(JSON.stringify({}));
       const invoked = yield* Ref.make(0);
-      const result = yield* runReviewAction(() =>
-        Ref.update(invoked, (count) => count + 1).pipe(Effect.map(() => fakeOutcome("comment"))),
-      ).pipe(Effect.provide(harness.layer));
+      const result = yield* runReviewAction({
+        run: () =>
+          Ref.update(invoked, (count) => count + 1).pipe(Effect.map(() => fakeOutcome("comment"))),
+      }).pipe(Effect.provide(harness.layer));
       expect(result._tag).toBe("Skipped");
       expect(yield* Ref.get(invoked)).toBe(0);
       const outputs = yield* Ref.get(harness.written);
@@ -158,9 +170,9 @@ describe("runReviewAction", () => {
           repository: { full_name: "acme/widgets" },
         }),
       );
-      const result = yield* runReviewAction(() => Effect.succeed(fakeOutcome("comment"))).pipe(
-        Effect.provide(harness.layer),
-      );
+      const result = yield* runReviewAction({
+        run: () => Effect.succeed(fakeOutcome("comment")),
+      }).pipe(Effect.provide(harness.layer));
       expect(result._tag).toBe("Skipped");
       expect(yield* Ref.get(harness.written)).toContain("skip-reason=the pull request is a draft");
     }),
@@ -175,7 +187,7 @@ describe("runReviewAction", () => {
         }),
       );
       const result: ReviewActionResult = yield* runReviewAction(
-        () => Effect.succeed(fakeOutcome("comment")),
+        { run: () => Effect.succeed(fakeOutcome("comment")) },
         { post: false },
       ).pipe(Effect.provide(harness.layer));
       expect(result._tag).toBe("Completed");
@@ -194,14 +206,102 @@ describe("runReviewAction", () => {
           repository: { full_name: "acme/widgets" },
         }),
       );
-      const exit = yield* runReviewAction(() => Effect.succeed(fakeOutcome("request-changes")), {
-        post: false,
-        failOn: "request-changes",
-      }).pipe(Effect.provide(harness.layer), Effect.exit);
+      const exit = yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("request-changes")) },
+        { post: false, failOn: "request-changes" },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
       const failure = failureFrom(exit);
       expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
       const outputs = yield* Ref.get(harness.written);
       expect(outputs).toContain("verdict=request-changes");
+    }),
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Unchanged-changeset skipping: the fingerprint gate in front of the model.
+// ---------------------------------------------------------------------------
+
+describe("runReviewAction unchanged-changeset skip", () => {
+  const FP = "a".repeat(64);
+  const prEvent = JSON.stringify({
+    pull_request: { number: 5 },
+    repository: { full_name: "acme/widgets" },
+  });
+
+  const countingReviewer = (fingerprint: string) =>
+    Effect.gen(function* () {
+      const invoked = yield* Ref.make(0);
+      return {
+        invoked,
+        reviewer: {
+          run: () =>
+            Ref.update(invoked, (count) => count + 1).pipe(
+              Effect.map(() => fakeOutcome("comment")),
+            ),
+          fingerprint: Effect.succeed(fingerprint),
+        },
+      };
+    });
+
+  it.effect("skips without invoking the reviewer when the fingerprint matches", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(prEvent);
+      const { invoked, reviewer } = yield* countingReviewer(FP);
+      const result = yield* runReviewAction(reviewer, { post: false }).pipe(
+        Effect.provide(Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some(FP)))),
+      );
+      expect(result._tag).toBe("Skipped");
+      expect(yield* Ref.get(invoked)).toBe(0);
+      const outputs = yield* Ref.get(harness.written);
+      expect(outputs).toContain("skip-reason=changeset unchanged since the last review");
+      expect(outputs).toContain(`fingerprint=${FP}`);
+    }),
+  );
+
+  it.effect("reviews when the fingerprint differs from the last posted review", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(prEvent);
+      const { invoked, reviewer } = yield* countingReviewer(FP);
+      const result = yield* runReviewAction(reviewer, { post: false }).pipe(
+        Effect.provide(
+          Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some("b".repeat(64)))),
+        ),
+      );
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(invoked)).toBe(1);
+    }),
+  );
+
+  it.effect("fails open: a prior-review lookup fault reviews instead of skipping", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(prEvent);
+      const { invoked, reviewer } = yield* countingReviewer(FP);
+      const failingLookup = Layer.succeed(PriorReviews)(
+        PriorReviews.of({
+          latestFingerprint: Effect.fail(
+            PriorReviewLookupFailure.make({ reason: "api unavailable" }),
+          ),
+        }),
+      );
+      const result = yield* runReviewAction(reviewer, { post: false }).pipe(
+        Effect.provide(Layer.merge(harness.layer, failingLookup)),
+      );
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(invoked)).toBe(1);
+    }),
+  );
+
+  it.effect("skip-unchanged=false reviews even on a matching fingerprint", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(prEvent);
+      const { invoked, reviewer } = yield* countingReviewer(FP);
+      const result = yield* runReviewAction(reviewer, {
+        post: false,
+        skipUnchanged: false,
+      }).pipe(Effect.provide(Layer.merge(harness.layer, staticPriorReviewsLayer(Option.some(FP)))));
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(invoked)).toBe(1);
     }),
   );
 });

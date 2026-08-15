@@ -3,6 +3,7 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import { ChangedFile } from "./diff.ts";
+import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
 import {
   MAX_CHANGED_FILES,
@@ -333,3 +334,100 @@ export const gitHubReviewPublisherLayer: Layer.Layer<
     });
   }),
 );
+
+// --- Prior reviews (fingerprint deduplication) ---------------------------------
+
+/** Reading the pull request's previously posted reviews failed. */
+export class PriorReviewLookupFailure extends Schema.TaggedError<PriorReviewLookupFailure>()(
+  "PriorReviewLookupFailure",
+  {
+    reason: Schema.String,
+  },
+) {
+  override get message() {
+    return `Prior-review lookup failed: ${this.reason}`;
+  }
+}
+
+/**
+ * Read-only view of this package's previously posted reviews on the target
+ * pull request — the deduplication state for unchanged-changeset skipping.
+ */
+export class PriorReviews extends Context.Service<
+  PriorReviews,
+  {
+    /** The fingerprint embedded in the most recent marker-bearing review. */
+    readonly latestFingerprint: Effect.Effect<Option.Option<string>, PriorReviewLookupFailure>;
+  }
+>()("@effect-agent/pr-review/PriorReviews") {}
+
+const GitHubPriorReviewWire = Schema.Struct({
+  body: Schema.NullOr(Schema.String),
+});
+const GitHubPriorReviewsPageWire = Schema.Array(GitHubPriorReviewWire);
+
+/** Reviews are paged chronologically; scanning stays bounded. */
+const MAX_PRIOR_REVIEW_PAGES = 5;
+
+/** GitHub-backed PriorReviews over the pull-request reviews endpoint. */
+export const gitHubPriorReviewsLayer: Layer.Layer<
+  PriorReviews,
+  never,
+  GitHubReviewTarget | HttpClient.HttpClient
+> = Layer.effect(PriorReviews)(
+  Effect.gen(function* () {
+    const target = yield* GitHubReviewTarget;
+    const client = yield* HttpClient.HttpClient;
+    const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+    const decodePage = Schema.decodeUnknownEffect(GitHubPriorReviewsPageWire);
+    const asLookupFailure = (error: { readonly _tag: string; readonly message?: string }) =>
+      PriorReviewLookupFailure.make({
+        reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
+      });
+    const latestFingerprint = Effect.gen(function* () {
+      const perPage = 100;
+      let latest = Option.none<string>();
+      for (let page = 1; page <= MAX_PRIOR_REVIEW_PAGES; page += 1) {
+        const response = yield* HttpClient.execute(
+          withCommonHeaders(
+            HttpClientRequest.get(`${prefix}/reviews`).pipe(
+              HttpClientRequest.acceptJson,
+              HttpClientRequest.setUrlParams({
+                per_page: String(perPage),
+                page: String(page),
+              }),
+            ),
+            target.token,
+          ),
+        ).pipe(Effect.flatMap(HttpClientResponse.filterStatusOk), Effect.mapError(asLookupFailure));
+        const wires = yield* response.json.pipe(
+          Effect.mapError(asLookupFailure),
+          Effect.flatMap((body) => decodePage(body).pipe(Effect.mapError(asLookupFailure))),
+        );
+        for (const wire of wires) {
+          const fingerprint = extractFingerprint(wire.body ?? "");
+          if (fingerprint !== undefined) latest = Option.some(fingerprint);
+        }
+        if (wires.length < perPage) break;
+      }
+      return latest;
+    }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+    return PriorReviews.of({ latestFingerprint });
+  }),
+);
+
+/**
+ * Whether the current fingerprint matches the most recent posted review.
+ * Fails OPEN: a lookup fault means "not unchanged" — the review proceeds,
+ * which is the safe direction for a deduplication optimization.
+ */
+export const fingerprintUnchanged = (
+  current: string,
+): Effect.Effect<boolean, never, PriorReviews> =>
+  Effect.gen(function* () {
+    const priorReviews = yield* PriorReviews;
+    const latest = yield* priorReviews.latestFingerprint.pipe(
+      Effect.orElseSucceed(() => Option.none<string>()),
+    );
+    return Option.isSome(latest) && latest.value === current;
+  });

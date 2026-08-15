@@ -36781,6 +36781,29 @@ var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.l
 });
 var fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);
 
+// packages/pr-review/src/internal/fingerprint.ts
+var MARKER_PREFIX = "<!-- effect-agent-pr-review fingerprint=sha256:";
+var MARKER_SUFFIX = " -->";
+var MARKER_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:([0-9a-f]{64}) -->/g;
+var renderFingerprintMarker = (fingerprint) => `${MARKER_PREFIX}${fingerprint}${MARKER_SUFFIX}`;
+var FINGERPRINT_MARKER_LENGTH = renderFingerprintMarker("0".repeat(64)).length;
+var extractFingerprint = (body) => {
+  let last3;
+  for (const match9 of body.matchAll(MARKER_PATTERN)) {
+    last3 = match9[1];
+  }
+  return last3;
+};
+var sha256Hex = (text) => exports_Effect.promise(async () => {
+  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+});
+var FIELD = "\x00";
+var RECORD = "\x01";
+var SECTION = "\x02";
+var canonicalChangeset = (files) => files.map((file) => `${file.path}${FIELD}${file.status}${FIELD}${String(file.additions)}${FIELD}${String(file.deletions)}${FIELD}${file.patch ?? ""}`).sort().join(RECORD);
+var computeChangesetFingerprint = (files, signature) => sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
+
 // packages/pr-review/src/internal/ignore.ts
 var REGEX_SPECIALS = /[.+^${}()|[\]\\]/g;
 var CROSSING_SLASH = "\x00";
@@ -38782,6 +38805,56 @@ var gitHubReviewPublisherLayer = exports_Layer.effect(ReviewPublisher)(exports_E
   });
 }));
 
+class PriorReviewLookupFailure extends exports_Schema.TaggedError()("PriorReviewLookupFailure", {
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Prior-review lookup failed: ${this.reason}`;
+  }
+}
+
+class PriorReviews extends exports_Context.Service()("@effect-agent/pr-review/PriorReviews") {
+}
+var GitHubPriorReviewWire = exports_Schema.Struct({
+  body: exports_Schema.NullOr(exports_Schema.String)
+});
+var GitHubPriorReviewsPageWire = exports_Schema.Array(GitHubPriorReviewWire);
+var MAX_PRIOR_REVIEW_PAGES = 5;
+var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.gen(function* () {
+  const target = yield* GitHubReviewTarget;
+  const client = yield* exports_HttpClient.HttpClient;
+  const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+  const decodePage = exports_Schema.decodeUnknownEffect(GitHubPriorReviewsPageWire);
+  const asLookupFailure = (error2) => PriorReviewLookupFailure.make({
+    reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
+  });
+  const latestFingerprint = exports_Effect.gen(function* () {
+    const perPage = 100;
+    let latest = exports_Option.none();
+    for (let page = 1;page <= MAX_PRIOR_REVIEW_PAGES; page += 1) {
+      const response = yield* exports_HttpClient.execute(withCommonHeaders(exports_HttpClientRequest.get(`${prefix}/reviews`).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
+        per_page: String(perPage),
+        page: String(page)
+      })), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
+      const wires = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => decodePage(body).pipe(exports_Effect.mapError(asLookupFailure))));
+      for (const wire of wires) {
+        const fingerprint = extractFingerprint(wire.body ?? "");
+        if (fingerprint !== undefined)
+          latest = exports_Option.some(fingerprint);
+      }
+      if (wires.length < perPage)
+        break;
+    }
+    return latest;
+  }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  return PriorReviews.of({ latestFingerprint });
+}));
+var fingerprintUnchanged = (current) => exports_Effect.gen(function* () {
+  const priorReviews = yield* PriorReviews;
+  const latest = yield* priorReviews.latestFingerprint.pipe(exports_Effect.orElseSucceed(() => exports_Option.none()));
+  return exports_Option.isSome(latest) && latest.value === current;
+});
+
 // packages/pr-review/src/internal/render.ts
 var ReviewEvent = exports_Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]);
 
@@ -38869,10 +38942,13 @@ var planPublication = (review, files, options3) => {
   }
   bodyParts.push("", `_Automated review by @effect-agent/pr-review · reviewed at ${options3.headSha.slice(0, 7)}._`);
   const event = options3.applyVerdict ? review.verdict === "approve" ? "APPROVE" : review.verdict === "request-changes" ? "REQUEST_CHANGES" : "COMMENT" : "COMMENT";
+  const body = options3.fingerprint === undefined ? bodyParts.join(`
+`).slice(0, 60000) : `${bodyParts.join(`
+`).slice(0, 60000 - FINGERPRINT_MARKER_LENGTH - 1)}
+${renderFingerprintMarker(options3.fingerprint)}`;
   return ReviewPublicationPlan.make({
     event,
-    body: bodyParts.join(`
-`).slice(0, 60000),
+    body,
     comments,
     demoted,
     commitSha: options3.headSha
@@ -38902,6 +38978,15 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
 }) {
 }
+var buildReviewMission = (metadata, files) => ReviewMission.make({
+  repository: metadata.repository,
+  number: metadata.number,
+  title: metadata.title,
+  body: metadata.body,
+  baseRef: metadata.baseRef,
+  headRef: metadata.headRef,
+  changedFileCount: files.length
+});
 var enforceFindingsBound = (review, maxFindings) => review.findings.length <= maxFindings ? review : CodeReview.make({
   summary: review.summary,
   verdict: review.verdict,
@@ -38911,15 +38996,8 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
-  const mission = ReviewMission.make({
-    repository: metadata.repository,
-    number: metadata.number,
-    title: metadata.title,
-    body: metadata.body,
-    baseRef: metadata.baseRef,
-    headRef: metadata.headRef,
-    changedFileCount: files.length
-  });
+  const mission = buildReviewMission(metadata, files);
+  const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(files, options3.signature(mission));
   const budget2 = yield* makeUsageBudget(options3.limits ?? reviewBudgetLimits);
   const result4 = yield* AgentRuntime.run(binding, mission, {
     budget: toRunBudgetHook(budget2),
@@ -38930,7 +39008,8 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const plan = planPublication(review, files, {
     applyVerdict: options3.applyVerdict,
     headSha: metadata.headSha,
-    totalChangedFiles: metadata.totalChangedFiles
+    totalChangedFiles: metadata.totalChangedFiles,
+    fingerprint
   });
   if (!options3.post) {
     return ReviewRunOutcome.make({ review, plan, turns: result4.turns });
@@ -38951,6 +39030,12 @@ var requireReadonly = (tools) => {
   }
 };
 var provideIgnore = (effect2, ignore5) => ignore5 !== undefined && ignore5.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore5))) : effect2;
+var makeFingerprint = (signature, ignore5) => provideIgnore(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const metadata = yield* source.metadata;
+  const files = yield* source.changedFiles;
+  return yield* computeChangesetFingerprint(files, signature(buildReviewMission(metadata, files)));
+}), ignore5);
 var make56 = (options3) => {
   const extraTools = options3.extraTools ?? EMPTY_TOOLS;
   requireReadonly(extraTools);
@@ -38967,26 +39052,47 @@ var make56 = (options3) => {
     metadata: { deploymentClass: "E", surface: "read-only" }
   });
   const binding = Object.freeze({ definition, model: options3.model });
+  const signature = (mission) => `${definition.instructions(mission)}\x00applyVerdict=${String(options3.applyVerdict ?? false)}`;
   const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? reviewBudgetLimits,
-    maxFindings: clampMaxFindings(options3.maxFindings)
+    maxFindings: clampMaxFindings(options3.maxFindings),
+    signature
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
-  return { definition, binding, run: run5 };
+  return {
+    definition,
+    binding,
+    run: run5,
+    fingerprint: makeFingerprint(signature, options3.ignore)
+  };
 };
 var makeFanOut = (options3) => {
   const suite = makeFanOutReviewSuite({ guidance: options3.guidance });
   const binding = Object.freeze({ definition: suite.parent, model: options3.model });
   const childBinding = Object.freeze({ definition: suite.child, model: options3.model });
+  const guidanceLines = options3.guidance === undefined ? [] : typeof options3.guidance === "string" ? [options3.guidance] : options3.guidance;
+  const signature = (mission) => [
+    fanOutReviewInstructions(mission),
+    `childGuidance=${JSON.stringify(guidanceLines)}`,
+    `maxFindings=${String(clampMaxFindings(options3.maxFindings))}`,
+    `applyVerdict=${String(options3.applyVerdict ?? false)}`
+  ].join(" ");
   const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(exports_Layer.provide(exports_Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer)));
   const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? fanOutReviewBudgetLimits,
-    maxFindings: clampMaxFindings(options3.maxFindings)
+    maxFindings: clampMaxFindings(options3.maxFindings),
+    signature
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
-  return { definition: suite.parent, binding, childBinding, run: run5 };
+  return {
+    definition: suite.parent,
+    binding,
+    childBinding,
+    run: run5,
+    fingerprint: makeFingerprint(signature, options3.ignore)
+  };
 };
 var PrReview = { make: make56, makeFanOut };
 
@@ -39046,7 +39152,7 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
     token
   });
   const deps = exports_Layer.merge(targetLayer, exports_FetchHttpClient.layer);
-  return exports_Layer.merge(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(deps)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(deps)));
+  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(deps)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(deps)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(deps)));
 }));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
@@ -49697,6 +49803,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const ignoreRaw = yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""));
   const maxFindings = yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_FINDINGS"));
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
+  const skipUnchanged = yield* exports_Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(exports_Config.withDefault(true));
   return {
     provider,
     model: exports_Option.getOrUndefined(model3),
@@ -49706,7 +49813,8 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     guidance: exports_Option.getOrUndefined(guidance),
     ignore: ignoreRaw.split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0),
     maxFindings: exports_Option.getOrUndefined(maxFindings),
-    failOn
+    failOn,
+    skipUnchanged
   };
 });
 var outputLine = (name, value4) => `${name}=${value4.replaceAll(`
@@ -49736,7 +49844,7 @@ var skip = (reason) => exports_Effect.gen(function* () {
   ]);
   return { _tag: "Skipped", reason };
 });
-var runReviewAction = (run5, options3 = {}) => exports_Effect.gen(function* () {
+var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* () {
   const event = yield* readGitHubEvent();
   if (exports_Option.isSome(event)) {
     if (event.value.pull_request === undefined) {
@@ -49747,20 +49855,39 @@ var runReviewAction = (run5, options3 = {}) => exports_Effect.gen(function* () {
     }
   }
   const target = yield* resolveReviewTarget({});
-  yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
-  const outcome = yield* run5({ post: options3.post ?? true }).pipe(exports_Effect.provide(gitHubReviewLayers(target)));
-  yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
-  if (outcome.published !== undefined) {
-    yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
-  }
-  yield* writeActionOutputs(outcomeOutputs(outcome));
-  if (options3.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
-    return yield* ReviewGateFailed.make({
-      verdict: outcome.review.verdict,
-      failOn: "request-changes"
-    });
-  }
-  return { _tag: "Completed", outcome };
+  const ambientPriorReviews = yield* exports_Effect.serviceOption(PriorReviews);
+  return yield* exports_Effect.gen(function* () {
+    if (options3.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
+      const current = yield* reviewer.fingerprint;
+      const unchanged = yield* fingerprintUnchanged(current).pipe(exports_Option.isSome(ambientPriorReviews) ? exports_Effect.provideService(PriorReviews, ambientPriorReviews.value) : (effect2) => effect2);
+      if (unchanged) {
+        yield* exports_Console.log(`Skipping review of ${target.repository}#${target.number}: changeset unchanged since the last review.`);
+        yield* writeActionOutputs([
+          ["skipped", "true"],
+          ["skip-reason", "changeset unchanged since the last review"],
+          ["fingerprint", current]
+        ]);
+        return {
+          _tag: "Skipped",
+          reason: "changeset unchanged since the last review"
+        };
+      }
+    }
+    yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
+    const outcome = yield* reviewer.run({ post: options3.post ?? true });
+    yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
+    if (outcome.published !== undefined) {
+      yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
+    }
+    yield* writeActionOutputs(outcomeOutputs(outcome));
+    if (options3.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
+      return yield* ReviewGateFailed.make({
+        verdict: outcome.review.verdict,
+        failOn: "request-changes"
+      });
+    }
+    return { _tag: "Completed", outcome };
+  }).pipe(exports_Effect.provide(gitHubReviewLayers(target)));
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
@@ -49770,15 +49897,19 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     maxFindings: inputs.maxFindings,
     applyVerdict: inputs.applyVerdict
   };
-  const harness = { post: inputs.post, failOn: inputs.failOn };
+  const harness = {
+    post: inputs.post,
+    failOn: inputs.failOn,
+    skipUnchanged: inputs.skipUnchanged
+  };
   if (inputs.provider === "anthropic") {
     const model4 = makeAnthropicReviewModel(inputs.model);
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
-    return yield* runReviewAction(reviewer2.run, harness).pipe(exports_Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(anthropicClientLayer));
   }
   const model3 = makeOpenAiReviewModel(inputs.model);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
-  return yield* runReviewAction(reviewer.run, harness).pipe(exports_Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(openAiClientLayer));
 });
 var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_NodeServices.layer)), { disableErrorReporting: true });
 
@@ -49793,6 +49924,7 @@ var INPUT_TO_ENV = [
   ["INPUT_IGNORE", "PR_REVIEW_IGNORE"],
   ["INPUT_MAX-FINDINGS", "PR_REVIEW_MAX_FINDINGS"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
+  ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
   ["INPUT_ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY"],
   ["INPUT_GITHUB-TOKEN", "GITHUB_TOKEN"]
