@@ -13,6 +13,19 @@
   durable settlement join records the contained failure with the non-failure polarity the live
   batch continues with (SUB-019 coherence). SUB-033 pins the requirement; the pr-review
   shadow-Tool workaround is retired and both reviewer profiles adopt the S1 final-answer default.
+- Status note (2026-08-15, later): S3 implemented (RUN-021, SUB-034). `RunOptions` gains
+  tightening-only `toolCallAllowance`/`turnAllowance` (effective limit =
+  `min(policy, max(1, floor(allowance)))`, the `onExhaustion` resolution keys off the effective
+  limits); `Subagent.define` gains `toolCallAllowance: { default, fromParameters }` clamped
+  fail-closed to the delegation's per-invocation reservation slice; `projectResult` receives the
+  bounded `SubagentResultContext` with the honest `budgetExhausted` marker (from the ephemeral
+  child result, or the child Settlement's durable marker carried through
+  `ChildEstablishSettled.finishReason`). One scope delta from decision item 7: the allowance
+  reaches only EPHEMERAL children — a durable child's lane owns no per-run options channel, and
+  making the reservation slice binding on the child would contradict §7's never-clipped overrun
+  model, so durable allowance threading is deferred to its own proposal. The extension flow
+  (fresh re-delegation with a raised allowance and partial findings forwarded through
+  `prepareInput`) works on both paths today because the exhausted marker travels durably.
 - Related decisions: [D-007](../DECISIONS.md#d-007--tool-scheduling-default),
   [D-008](../DECISIONS.md#d-008--tool-failure-policy),
   [D-013](../DECISIONS.md#d-013--child-agent-budgets),

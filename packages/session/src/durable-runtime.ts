@@ -3576,6 +3576,12 @@ const make = Effect.gen(function* () {
               ...identity,
               outcome: verification.value.outcome,
               encodedResult: verification.value.encodedResult,
+              // The child Settlement's honest exhaustion marker (RUN-018)
+              // rides to the parent handler so the delegation can surface a
+              // budget-truncated partial to the orchestrator (SUB-034).
+              ...(verification.value.settlement.finishReason === undefined
+                ? {}
+                : { finishReason: verification.value.settlement.finishReason }),
             };
           }),
         );

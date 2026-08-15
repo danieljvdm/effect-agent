@@ -33080,6 +33080,10 @@ var decodeResumedToolCallParameters = (tool, toolName, encodedParams) => {
     message: `Recorded parameters for Tool ${toolName} failed validation on resume: ${cause.message}`
   })));
 };
+var effectiveRunBounds = (policy2, options) => ({
+  maxTurns: options.turnAllowance === undefined ? policy2.maxTurns : Math.min(policy2.maxTurns, Math.max(1, Math.floor(options.turnAllowance))),
+  maxToolCalls: options.toolCallAllowance === undefined ? policy2.maxToolCalls : Math.min(policy2.maxToolCalls, Math.max(1, Math.floor(options.toolCallAllowance)))
+});
 var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (context3, turnId, call, error2) {
   const toolCallId = yield* decodeToolCallId(call.id);
   return ToolCallFailed.make({
@@ -34198,7 +34202,8 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.model"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
   const policy2 = agent2.definition.policy;
-  const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > policy2.maxTurns || priorToolCalls + context3.programmaticToolCalls > policy2.maxToolCalls);
+  const bounds = effectiveRunBounds(policy2, options);
+  const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls);
   const response = guardBudgetStream(exports_LanguageModel.streamText({
     prompt: modelContext.prompt,
     toolkit: agent2.definition.toolkit,
@@ -34235,11 +34240,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       }));
     }
     const toolCalls = priorToolCalls + trace2.toolCalls.size;
-    const overToolBudget = toolCalls + context3.programmaticToolCalls > policy2.maxToolCalls;
+    const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
     if (overToolBudget && policy2.onExhaustion === "fail") {
       return failRunEventStream(AgentPolicyError.make({
         limit: "tool-calls",
-        message: `Agent exceeded its ${policy2.maxToolCalls} Tool Call limit`
+        message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
       }));
     }
     const stagedResponse = exports_Stream.fromIterable(trace2.providerResultPayloads).pipe(exports_Stream.mapEffect((payload) => stampProviderResultEvent(context3, turnId, payload)), exports_Stream.concat(turnCompletion === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => TurnCompleted.make({
@@ -34265,11 +34270,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       const steering = yield* drainInputs(context3, options);
       const queued = steering.length > 0 ? steering : takeFollowUps(context3, options.commandDrainPolicy ?? "one");
       if (queued.length > 0) {
-        const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= policy2.maxTurns : turn > policy2.maxTurns;
+        const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
         if (turnsBlocked) {
           return failRunEventStream(AgentPolicyError.make({
             limit: "turns",
-            message: `Agent exceeded its ${policy2.maxTurns} Turn limit`
+            message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
           }));
         }
         yield* applyRepeatedFailurePolicy(context3, trace2, agent2.definition.policy.repeatedFailureLimit);
@@ -34293,18 +34298,18 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
           message: `Model declared Tool Calls with incompatible finish reason ${trace2.finishReason}`
         }));
       }
-      const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= policy2.maxTurns : turn > policy2.maxTurns;
+      const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
       if (turnsBlocked) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
-          message: `Agent exceeded its ${policy2.maxTurns} Turn limit`
+          message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
         }));
       }
       if (overToolBudget && trace2.applicationToolCalls.length > 0) {
         return afterValidatedResponse(exports_Effect.gen(function* () {
           const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
             limit: "tool-calls",
-            message: `Tool Call budget exhausted: this Run's ${policy2.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
+            message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
           }));
           return exports_Stream.fromIterable(rejection).pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
         }));
@@ -34327,7 +34332,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
           });
         }
         const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
-          maxToolCalls: agent2.definition.policy.maxToolCalls,
+          maxToolCalls: bounds.maxToolCalls,
           declaredToolCalls: toolCalls
         }), options.budget);
         return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
@@ -34467,19 +34472,20 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     };
   }
   const policy2 = agent2.definition.policy;
+  const bounds = effectiveRunBounds(policy2, options);
   const toolCalls = trace2.toolCalls.size;
-  const overToolBudget = toolCalls + context3.programmaticToolCalls > policy2.maxToolCalls;
+  const overToolBudget = toolCalls + context3.programmaticToolCalls > bounds.maxToolCalls;
   if (overToolBudget && policy2.onExhaustion === "fail") {
     return failRunEventStream(AgentPolicyError.make({
       limit: "tool-calls",
-      message: `Agent exceeded its ${policy2.maxToolCalls} Tool Call limit`
+      message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`
     }));
   }
-  const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= policy2.maxTurns : turn > policy2.maxTurns;
+  const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
   if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
-      message: `Agent exceeded its ${policy2.maxTurns} Turn limit`
+      message: `Agent exceeded its ${bounds.maxTurns} Turn limit`
     }));
   }
   const toolkit = yield* agent2.definition.toolkit;
@@ -34512,12 +34518,12 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
   if (overToolBudget) {
     const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
       limit: "tool-calls",
-      message: `Tool Call budget exhausted: this Run's ${policy2.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
+      message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
     }), settledIds);
     return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
   }
   const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
-    maxToolCalls: agent2.definition.policy.maxToolCalls,
+    maxToolCalls: bounds.maxToolCalls,
     declaredToolCalls: toolCalls
   }, settledIds), options.budget);
   return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
@@ -37670,9 +37676,13 @@ var layer14 = (delegation, childBinding, options) => {
         guard: seededBudget === undefined ? (effect2) => effect2 : (effect2) => seededBudget.guard(effect2),
         consume: (delta) => reservations.observe(reservationId, observedUsageFromDelta(delta)).pipe(exports_Effect.orDie, exports_Effect.andThen(seededBudget === undefined ? exports_Effect.void : seededBudget.consume(delta)))
       };
+      const allowanceOption = delegation.toolCallAllowance;
+      const requestedAllowance = allowanceOption === undefined ? undefined : allowanceOption.fromParameters?.(parameters) ?? allowanceOption.default;
+      const toolCallAllowance = requestedAllowance === undefined ? undefined : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
       const childOptions = {
         ...seededChild,
-        budget
+        budget,
+        ...toolCallAllowance === undefined ? {} : { toolCallAllowance }
       };
       yield* exports_Ref.set(startedAt, yield* exports_Clock.currentTimeMillis);
       const child = yield* spawner.spawn(childBinding, encodedInput, { delegationId: delegation.delegationId, parentToolCallId: toolCallId }, childOptions);
@@ -37713,7 +37723,9 @@ var layer14 = (delegation, childBinding, options) => {
           turns: result4.turns,
           finishReason: result4.finishReason
         });
-        const projected = yield* delegation.projectResult(result4.output);
+        const projected = yield* delegation.projectResult(result4.output, {
+          budgetExhausted: result4.finishReason === "budget-exhausted"
+        });
         const encodedResult = yield* encodeSuccess(projected).pipe(exports_Effect.mapError(() => SubagentProjectionFailure.make({
           delegationId: delegation.delegationId,
           stage: "result",
@@ -37835,7 +37847,9 @@ var layer14 = (delegation, childBinding, options) => {
             });
             return encodeProjectionFailure(failure).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(failure, encodedFailure)));
           }));
-          const projected = yield* delegation.projectResult(decoded).pipe(exports_Effect.catch((declared) => encodeDeclaredFailure(declared).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)))));
+          const projected = yield* delegation.projectResult(decoded, {
+            budgetExhausted: status.finishReason === "budget-exhausted"
+          }).pipe(exports_Effect.catch((declared) => encodeDeclaredFailure(declared).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)))));
           const encodedResult = yield* encodeSuccess(projected).pipe(exports_Effect.catch(() => {
             const failure = SubagentProjectionFailure.make({
               delegationId: delegation.delegationId,

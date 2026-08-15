@@ -6,6 +6,7 @@ import {
   AgentOutputError,
   AgentPolicyError,
   type AgentId,
+  type AgentPolicy,
   ApprovalRequested,
   ConversationId,
   type Definition,
@@ -555,6 +556,32 @@ const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>
     ),
   );
 };
+
+/**
+ * Effective Run bounds (RUN-021): per-Run allowances tighten the Agent
+ * Policy's Turn and Tool Call ceilings but can never widen them — the
+ * effective limit is `min(policy bound, max(1, floor(allowance)))`. The
+ * `onExhaustion` resolution (RUN-018/RUN-019) keys off these effective
+ * limits, which is how an orchestrator grants a delegated child a budget
+ * extension by re-invoking with a larger allowance below the Definition's
+ * ceiling.
+ */
+const effectiveRunBounds = (
+  policy: AgentPolicy,
+  options: {
+    readonly toolCallAllowance?: number | undefined;
+    readonly turnAllowance?: number | undefined;
+  },
+): { readonly maxTurns: number; readonly maxToolCalls: number } => ({
+  maxTurns:
+    options.turnAllowance === undefined
+      ? policy.maxTurns
+      : Math.min(policy.maxTurns, Math.max(1, Math.floor(options.turnAllowance))),
+  maxToolCalls:
+    options.toolCallAllowance === undefined
+      ? policy.maxToolCalls
+      : Math.min(policy.maxToolCalls, Math.max(1, Math.floor(options.toolCallAllowance))),
+});
 
 const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (
   context: RunContext,
@@ -2484,10 +2511,11 @@ const makeTurn = <
       // replay reconstructs the same constraint. Strict `>` keeps an
       // exact-cap Run on today's unconstrained path byte-for-byte.
       const policy = agent.definition.policy;
+      const bounds = effectiveRunBounds(policy, options);
       const finalAnswerOnly =
         policy.onExhaustion !== "fail" &&
-        (turn > policy.maxTurns ||
-          priorToolCalls + context.programmaticToolCalls > policy.maxToolCalls);
+        (turn > bounds.maxTurns ||
+          priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls);
       const response = guardBudgetStream(
         LanguageModel.streamText({
           prompt: modelContext.prompt,
@@ -2553,12 +2581,12 @@ const makeTurn = <
             );
           }
           const toolCalls = priorToolCalls + trace.toolCalls.size;
-          const overToolBudget = toolCalls + context.programmaticToolCalls > policy.maxToolCalls;
+          const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
           if (overToolBudget && policy.onExhaustion === "fail") {
             return failRunEventStream(
               AgentPolicyError.make({
                 limit: "tool-calls",
-                message: `Agent exceeded its ${policy.maxToolCalls} Tool Call limit`,
+                message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`,
               }),
             );
           }
@@ -2639,12 +2667,12 @@ const makeTurn = <
                 // `maxTurns + 1`, so a second grace is structurally
                 // impossible.
                 const turnsBlocked =
-                  policy.onExhaustion === "fail" ? turn >= policy.maxTurns : turn > policy.maxTurns;
+                  policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
                 if (turnsBlocked) {
                   return failRunEventStream(
                     AgentPolicyError.make({
                       limit: "turns",
-                      message: `Agent exceeded its ${policy.maxTurns} Turn limit`,
+                      message: `Agent exceeded its ${bounds.maxTurns} Turn limit`,
                     }),
                   );
                 }
@@ -2685,12 +2713,12 @@ const makeTurn = <
               );
             }
             const turnsBlocked =
-              policy.onExhaustion === "fail" ? turn >= policy.maxTurns : turn > policy.maxTurns;
+              policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
             if (turnsBlocked) {
               return failRunEventStream(
                 AgentPolicyError.make({
                   limit: "turns",
-                  message: `Agent exceeded its ${policy.maxTurns} Turn limit`,
+                  message: `Agent exceeded its ${bounds.maxTurns} Turn limit`,
                 }),
               );
             }
@@ -2712,7 +2740,7 @@ const makeTurn = <
                     trace,
                     AgentPolicyError.make({
                       limit: "tool-calls",
-                      message: `Tool Call budget exhausted: this Run's ${policy.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
+                      message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
                     }),
                   );
                   return Stream.fromIterable(rejection).pipe(
@@ -2772,7 +2800,7 @@ const makeTurn = <
                     concurrency,
                     options,
                     {
-                      maxToolCalls: agent.definition.policy.maxToolCalls,
+                      maxToolCalls: bounds.maxToolCalls,
                       declaredToolCalls: toolCalls,
                     },
                   ),
@@ -3053,23 +3081,24 @@ const makeResumeTurn = <
         };
       }
       const policy = agent.definition.policy;
+      const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
-      const overToolBudget = toolCalls + context.programmaticToolCalls > policy.maxToolCalls;
+      const overToolBudget = toolCalls + context.programmaticToolCalls > bounds.maxToolCalls;
       if (overToolBudget && policy.onExhaustion === "fail") {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "tool-calls",
-            message: `Agent exceeded its ${policy.maxToolCalls} Tool Call limit`,
+            message: `Agent exceeded its ${bounds.maxToolCalls} Tool Call limit`,
           }),
         );
       }
       const turnsBlocked =
-        policy.onExhaustion === "fail" ? turn >= policy.maxTurns : turn > policy.maxTurns;
+        policy.onExhaustion === "fail" ? turn >= bounds.maxTurns : turn > bounds.maxTurns;
       if (turnsBlocked) {
         return failRunEventStream(
           AgentPolicyError.make({
             limit: "turns",
-            message: `Agent exceeded its ${policy.maxTurns} Turn limit`,
+            message: `Agent exceeded its ${bounds.maxTurns} Turn limit`,
           }),
         );
       }
@@ -3136,7 +3165,7 @@ const makeResumeTurn = <
           trace,
           AgentPolicyError.make({
             limit: "tool-calls",
-            message: `Tool Call budget exhausted: this Run's ${policy.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
+            message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`,
           }),
           settledIds,
         );
@@ -3157,7 +3186,7 @@ const makeResumeTurn = <
           concurrency,
           options,
           {
-            maxToolCalls: agent.definition.policy.maxToolCalls,
+            maxToolCalls: bounds.maxToolCalls,
             declaredToolCalls: toolCalls,
           },
           settledIds,

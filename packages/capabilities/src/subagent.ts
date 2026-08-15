@@ -221,6 +221,18 @@ export interface SubagentPrepareContext {
 }
 
 /**
+ * Bounded framework context handed to `projectResult` (SUB-034).
+ * `budgetExhausted` is true exactly when the child settled through the
+ * final-answer exhaustion resolution (RUN-018) — on the ephemeral path from
+ * the child result's `finishReason`, on the durable path from the child
+ * Settlement's honest marker — so the projection can surface a
+ * budget-truncated partial to the orchestrator.
+ */
+export interface SubagentResultContext {
+  readonly budgetExhausted: boolean;
+}
+
+/**
  * The delegation Tool failure Schema: the author's declared failure plus the
  * framework's preflight/budget/projection/durable-execution failure family
  * (spec/subagents.md §15). With the default `failureMode: "error"`, exactly
@@ -386,11 +398,36 @@ export interface SubagentDefineOptions<
   /**
    * Bounded result projection from the Schema-decoded child output to the
    * declared Tool success value (spec/subagents.md §4.2). This is the explicit
-   * declassification boundary for child output.
+   * declassification boundary for child output. The context carries the
+   * framework's honest exhaustion marker (SUB-034): when `budgetExhausted` is
+   * true the child settled through the final-answer resolution (RUN-018) and
+   * its output is a budget-truncated partial — surface it in the declared
+   * success Schema so the orchestrator can decide to re-delegate with a
+   * raised `toolCallAllowance`.
    */
   readonly projectResult: (
     output: TargetOutput["Type"],
+    context: SubagentResultContext,
   ) => Effect.Effect<Success["Type"], Failure["Type"], ProjectRequirements>;
+  /**
+   * Per-invocation child Tool Call allowance (SUB-034): a tightening-only
+   * bound below the child Definition's own `maxToolCalls`, additionally
+   * clamped to this delegation's `SubagentPolicy.maxToolCalls` (the
+   * per-invocation reservation slice). `fromParameters` lets the orchestrator
+   * model grant a larger allowance through an author-owned parameter field —
+   * the budget-extension flow is a fresh re-delegation with a raised
+   * allowance, never a mid-flight top-up. Ephemeral delegation only: a
+   * durable child keeps running at its Definition policy (its lane owns no
+   * per-run options channel; the reservation stays accounting-only per §7).
+   */
+  readonly toolCallAllowance?:
+    | {
+        /** Applied when `fromParameters` is absent or yields nothing. */
+        readonly default: number;
+        /** Extract the model-granted allowance from the decoded parameters. */
+        readonly fromParameters?: (parameters: Parameters["Type"]) => number | undefined;
+      }
+    | undefined;
   /** Finite delegation bounds reserved for every invocation (SUB-009). */
   readonly policy: SubagentPolicy;
   /**
@@ -1251,9 +1288,22 @@ const layer = <
               ),
             ),
       };
+      // Per-invocation allowance (SUB-034): tightening-only, clamped to the
+      // delegation's own per-invocation reservation slice; the child's
+      // Definition policy stays the engine-side ceiling (RUN-021).
+      const allowanceOption = delegation.toolCallAllowance;
+      const requestedAllowance =
+        allowanceOption === undefined
+          ? undefined
+          : (allowanceOption.fromParameters?.(parameters) ?? allowanceOption.default);
+      const toolCallAllowance =
+        requestedAllowance === undefined
+          ? undefined
+          : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
       const childOptions: SpawnRunOptions<never, HookRequirements> = {
         ...seededChild,
         budget,
+        ...(toolCallAllowance === undefined ? {} : { toolCallAllowance }),
       };
 
       yield* Ref.set(startedAt, yield* Clock.currentTimeMillis);
@@ -1330,7 +1380,9 @@ const layer = <
           turns: result.turns,
           finishReason: result.finishReason,
         });
-        const projected = yield* delegation.projectResult(result.output);
+        const projected = yield* delegation.projectResult(result.output, {
+          budgetExhausted: result.finishReason === "budget-exhausted",
+        });
         const encodedResult = yield* encodeSuccess(projected).pipe(
           Effect.mapError(() =>
             SubagentProjectionFailure.make({
@@ -1572,14 +1624,18 @@ const layer = <
               );
             }),
           );
-          const projected = yield* delegation.projectResult(decoded).pipe(
-            Effect.catch((declared) =>
-              encodeDeclaredFailure(declared).pipe(
-                Effect.orDie,
-                Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)),
+          const projected = yield* delegation
+            .projectResult(decoded, {
+              budgetExhausted: status.finishReason === "budget-exhausted",
+            })
+            .pipe(
+              Effect.catch((declared) =>
+                encodeDeclaredFailure(declared).pipe(
+                  Effect.orDie,
+                  Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)),
+                ),
               ),
-            ),
-          );
+            );
           const encodedResult = yield* encodeSuccess(projected).pipe(
             Effect.catch(() => {
               const failure = SubagentProjectionFailure.make({
