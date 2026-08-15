@@ -77,7 +77,7 @@ non-canonical request projections.
    remains the conformance authority on every model. It is a Turn-protocol
    change (terminal tool batches, mixed-batch rules, canonical response shape, event surface,
    steering/follow-up/resume seams, reserved-name collision, opt-in→default migration) and is
-   therefore not implemented under this ADR, in the pattern of ADR-0017's durable deferral.
+   therefore not implemented under this ADR, in the pattern of ADR-0017's DN/DC deferral.
 5. **`generateObject` repair is rejected as a default.** A post-failure repair call hides the
    contract miss as invisible cost and latency and creates output/history divergence. It may
    return later as an explicit bounded acceptance policy (`onInvalidOutput`), owner-gated.
