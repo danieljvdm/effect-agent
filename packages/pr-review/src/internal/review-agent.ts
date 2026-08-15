@@ -360,6 +360,9 @@ export const defaultReviewPolicy = AgentPolicy.make({
   maxDuration: "8 minutes",
   toolConcurrency: 2,
   tokenBudget: 300_000,
+  // Keep enough output/summary headroom for the 200k-class provider window;
+  // tool-heavy histories prune before the engine spends a summarization call.
+  contextTokenLimit: 150_000,
   // Budget soft landing (RUN-018): an exhausted reviewer returns its partial
   // review on one final tool-free turn instead of failing the whole run.
   onExhaustion: "final-answer",
