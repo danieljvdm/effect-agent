@@ -5,7 +5,11 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { ChangedFile } from "./diff.ts";
 import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
-import { extractReviewState, ReviewHeadComparison, type ReviewState } from "./review-state.ts";
+import {
+  ReviewHeadComparison,
+  ReviewStateAuthenticator,
+  type ReviewState,
+} from "./review-state.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
@@ -361,9 +365,11 @@ export class PriorReviews extends Context.Service<
     /** The fingerprint embedded in the most recent marker-bearing review. */
     readonly latestFingerprint: Effect.Effect<Option.Option<string>, PriorReviewLookupFailure>;
     /** The latest authenticated, successfully covered review state marker. */
-    readonly latestState: (
-      secret: Redacted.Redacted<string>,
-    ) => Effect.Effect<Option.Option<ReviewState>, PriorReviewLookupFailure>;
+    readonly latestState: Effect.Effect<
+      Option.Option<ReviewState>,
+      PriorReviewLookupFailure,
+      ReviewStateAuthenticator
+    >;
     /** Compare a previously reviewed head to the live current head. */
     readonly compareHeads: (
       baseSha: string,
@@ -411,7 +417,7 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
       PriorReviewLookupFailure.make({
         reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
       });
-    const readMarkers = (secret: Option.Option<Redacted.Redacted<string>>) =>
+    const readMarkers = (authenticator: Option.Option<ReviewStateAuthenticator["Service"]>) =>
       Effect.gen(function* () {
         const perPage = 100;
         let latest = Option.none<string>();
@@ -443,10 +449,16 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
             if (wire.user?.login !== "github-actions[bot]" || wire.user.type !== "Bot") continue;
             const fingerprint = extractFingerprint(wire.body ?? "");
             if (fingerprint !== undefined) latest = Option.some(fingerprint);
-            if (Option.isSome(secret)) {
-              const state = yield* extractReviewState(wire.body ?? "", secret.value);
-              if (state !== undefined && state.reviewedHeadSha === wire.commit_id) {
-                latestState = Option.some(state);
+            if (Option.isSome(authenticator)) {
+              const state = yield* authenticator.value.extract(wire.body ?? "").pipe(
+                Effect.mapError((error) =>
+                  PriorReviewLookupFailure.make({
+                    reason: `${error._tag}: ${error.reason}`.slice(0, 2_048),
+                  }),
+                ),
+              );
+              if (Option.isSome(state) && state.value.reviewedHeadSha === wire.commit_id) {
+                latestState = state;
               }
             }
           }
@@ -491,8 +503,12 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
       latestFingerprint: readMarkers(Option.none()).pipe(
         Effect.map((markers) => markers.latestFingerprint),
       ),
-      latestState: (secret) =>
-        readMarkers(Option.some(secret)).pipe(Effect.map((markers) => markers.latestState)),
+      latestState: Effect.gen(function* () {
+        const authenticator = yield* ReviewStateAuthenticator;
+        return yield* readMarkers(Option.some(authenticator)).pipe(
+          Effect.map((markers) => markers.latestState),
+        );
+      }),
       compareHeads,
     });
   }),

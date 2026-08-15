@@ -103,20 +103,67 @@ const STATE_MARKER_SUFFIX = " -->";
 const STATE_MARKER_PATTERN =
   /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
 const STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\u0000";
+export const MAX_REVIEW_STATE_MARKER_CHARS = 24_000;
+export const ReviewStateMarker = Schema.NonEmptyString.check(
+  Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS),
+  Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/),
+).pipe(Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+export type ReviewStateMarker = typeof ReviewStateMarker.Type;
 
-const encodeReviewState = (state: ReviewState): string => {
-  const encoded = Schema.encodeSync(ReviewState)(state);
-  return Encoding.encodeBase64(JSON.stringify(encoded));
-};
+export class ReviewStateAuthenticationFailure extends Schema.TaggedError<ReviewStateAuthenticationFailure>()(
+  "ReviewStateAuthenticationFailure",
+  {
+    operation: Schema.Literals(["sign", "verify"]),
+    reason: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
+  },
+) {}
 
-const hmacKey = (secret: Redacted.Redacted<string>) =>
-  globalThis.crypto.subtle.importKey(
-    "raw",
-    new TextEncoder().encode(Redacted.value(secret)),
-    { name: "HMAC", hash: "SHA-256" },
-    false,
-    ["sign", "verify"],
-  );
+export class ReviewStateMarkerTooLarge extends Schema.TaggedError<ReviewStateMarkerTooLarge>()(
+  "ReviewStateMarkerTooLarge",
+  {
+    observedChars: Schema.Int.check(Schema.isGreaterThan(0)),
+    maximumChars: Schema.Int.check(Schema.isGreaterThan(0)),
+  },
+) {}
+
+export class ReviewStateAuthenticator extends Context.Service<
+  ReviewStateAuthenticator,
+  {
+    readonly status: "available" | "unavailable";
+    readonly unavailableReason: string | undefined;
+    readonly render: (
+      state: ReviewState,
+    ) => Effect.Effect<
+      ReviewStateMarker,
+      ReviewStateAuthenticationFailure | ReviewStateMarkerTooLarge
+    >;
+    readonly extract: (
+      body: string,
+    ) => Effect.Effect<Option.Option<ReviewState>, ReviewStateAuthenticationFailure>;
+  }
+>()("@effect-agent/pr-review/ReviewStateAuthenticator") {}
+
+const authenticationFailure = (
+  operation: "sign" | "verify",
+  cause: unknown,
+): ReviewStateAuthenticationFailure =>
+  ReviewStateAuthenticationFailure.make({
+    operation,
+    reason: String(cause).slice(0, 2_048),
+  });
+
+const hmacKey = (secret: Redacted.Redacted<string>, operation: "sign" | "verify") =>
+  Effect.tryPromise({
+    try: () =>
+      globalThis.crypto.subtle.importKey(
+        "raw",
+        new TextEncoder().encode(Redacted.value(secret)),
+        { name: "HMAC", hash: "SHA-256" },
+        false,
+        ["sign", "verify"],
+      ),
+    catch: (cause) => authenticationFailure(operation, cause),
+  });
 
 const signatureBytes = (signature: string): ArrayBuffer => {
   const pairs = signature.match(/../g) ?? [];
@@ -128,48 +175,85 @@ const signatureBytes = (signature: string): ArrayBuffer => {
   return buffer;
 };
 
-/** Encode and HMAC-authenticate one schema-validated terminal state marker. */
-export const renderReviewStateMarker = (
-  state: ReviewState,
+/** Validated WebCrypto adapter selected at the Action composition root. */
+export const webCryptoReviewStateAuthenticatorLayer = (
   secret: Redacted.Redacted<string>,
-): Effect.Effect<string> => {
-  const payload = encodeReviewState(state);
-  const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-  return Effect.promise(async () => {
-    const signature = await globalThis.crypto.subtle.sign("HMAC", await hmacKey(secret), message);
-    const hex = Array.from(new Uint8Array(signature))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-    return `${STATE_MARKER_PREFIX}${payload}.${hex}${STATE_MARKER_SUFFIX}`;
-  });
-};
+): Layer.Layer<ReviewStateAuthenticator> =>
+  Layer.succeed(ReviewStateAuthenticator)(
+    ReviewStateAuthenticator.of({
+      status: "available",
+      unavailableReason: undefined,
+      render: (state) =>
+        Effect.gen(function* () {
+          const encoded = yield* Schema.encodeUnknownEffect(ReviewState)(state).pipe(
+            Effect.mapError((cause) => authenticationFailure("sign", cause)),
+          );
+          const payload = Encoding.encodeBase64(JSON.stringify(encoded));
+          const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+          const key = yield* hmacKey(secret, "sign");
+          const signature = yield* Effect.tryPromise({
+            try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
+            catch: (cause) => authenticationFailure("sign", cause),
+          });
+          const hex = Array.from(new Uint8Array(signature))
+            .map((byte) => byte.toString(16).padStart(2, "0"))
+            .join("");
+          const marker = `${STATE_MARKER_PREFIX}${payload}.${hex}${STATE_MARKER_SUFFIX}`;
+          if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
+            return yield* ReviewStateMarkerTooLarge.make({
+              observedChars: marker.length,
+              maximumChars: MAX_REVIEW_STATE_MARKER_CHARS,
+            });
+          }
+          return yield* Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(
+            Effect.mapError((cause) => authenticationFailure("sign", cause)),
+          );
+        }),
+      extract: (body) => {
+        if (body.length > 60_000) return Effect.succeed(Option.none());
+        const match = STATE_MARKER_PATTERN.exec(body);
+        const payload = match?.[1];
+        const signature = match?.[2];
+        if (payload === undefined || signature === undefined) return Effect.succeed(Option.none());
+        const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
+        if (!Schema.is(ReviewStateMarker)(marker)) return Effect.succeed(Option.none());
+        const json = Result.getOrUndefined(Encoding.decodeBase64String(payload));
+        if (json === undefined) return Effect.succeed(Option.none());
+        const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ReviewState))(json);
+        if (Option.isNone(decoded)) return Effect.succeed(Option.none());
+        const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+        return Effect.gen(function* () {
+          const key = yield* hmacKey(secret, "verify");
+          const valid = yield* Effect.tryPromise({
+            try: () =>
+              globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
+            catch: (cause) => authenticationFailure("verify", cause),
+          });
+          return valid ? Option.some(decoded.value) : Option.none();
+        });
+      },
+    }),
+  );
 
-/**
- * Verify and decode the terminal state marker. Invalid, injected, unsigned, or
- * differently keyed input is ignored so the caller safely performs a full review.
- */
-export const extractReviewState = (
-  body: string,
-  secret: Redacted.Redacted<string>,
-): Effect.Effect<ReviewState | undefined> => {
-  const match = STATE_MARKER_PATTERN.exec(body);
-  const payload = match?.[1];
-  const signature = match?.[2];
-  if (payload === undefined || signature === undefined) return Effect.succeed(undefined);
-  const json = Result.getOrUndefined(Encoding.decodeBase64String(payload));
-  if (json === undefined) return Effect.succeed(undefined);
-  const decoded = Schema.decodeUnknownOption(Schema.fromJsonString(ReviewState))(json);
-  if (Option.isNone(decoded)) return Effect.succeed(undefined);
-  const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-  return Effect.promise(async () => {
-    const valid = await globalThis.crypto.subtle.verify(
-      "HMAC",
-      await hmacKey(secret),
-      signatureBytes(signature),
-      message,
-    );
-    return valid ? decoded.value : undefined;
-  });
+/** Explicit no-state implementation for hosts without a stable authentication secret. */
+export const unavailableReviewStateAuthenticatorLayer = (
+  reason: string,
+): Layer.Layer<ReviewStateAuthenticator> => {
+  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
+  return Layer.succeed(ReviewStateAuthenticator)(
+    ReviewStateAuthenticator.of({
+      status: "unavailable",
+      unavailableReason: safeReason.slice(0, 1_000),
+      render: () =>
+        Effect.fail(
+          ReviewStateAuthenticationFailure.make({
+            operation: "sign",
+            reason: safeReason.slice(0, 2_048),
+          }),
+        ),
+      extract: () => Effect.succeed(Option.none()),
+    }),
+  );
 };
 
 /** The bounded result of GitHub's previous-head...current-head comparison. */
@@ -196,8 +280,8 @@ export interface ReviewSelection {
   readonly baselineSha: string | undefined;
   readonly priorState: ReviewState | undefined;
   readonly profileFingerprint: string;
-  /** Host-only key used to authenticate the next bounded continuity marker. */
-  readonly stateSecret?: Redacted.Redacted<string> | undefined;
+  /** Action-owned authentication capability, constructed at the composition root. */
+  readonly stateAuthenticator?: ReviewStateAuthenticator["Service"] | undefined;
 }
 
 const fullSelection = (input: {

@@ -122,6 +122,12 @@ context; a materially changed base lineage falls back to full. Re-running the
 same covered head skips model execution by default while preserving its
 stored blocking/success conclusion.
 
+Authentication is an explicit Effect service supplied by the Action host;
+WebCrypto import/sign/verify failures stay typed. The terminal marker is
+schema-branded and capped at 24,000 characters. If signing fails or state
+exceeds that bound, the completed review is posted without continuity state
+and with a bounded warning, so the next run safely performs a full review.
+
 `review-mode: final` is the explicit bounded merge-readiness audit. It reviews
 the full current PR diff and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.

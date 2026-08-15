@@ -160,7 +160,10 @@ cannot repair either host-boundary defect.
    cross-run workflow continuity, not a stronger runtime deployment class: execution remains E,
    GitHub is the external state carrier, and review posting remains non-exactly-once. The stable
    state secret is host-only; missing/rotated credentials and non-default review authors force a
-   full fallback rather than accepting unauthenticated scope authority.
+   full fallback rather than accepting unauthenticated scope authority. Authentication is an
+   explicit host-provided Effect service with typed WebCrypto failures. Markers are branded and
+   capped at 24,000 characters; signing or size failure visibly omits continuity state so the next
+   run falls back to a full review.
 2. **Normal synchronization is incremental.** After validating state, the host compares the last
    successfully covered head with the current head and exposes only newly affected paths still in
    the current PR diff. Findings in unchanged paths remain active; changed or reverted paths are

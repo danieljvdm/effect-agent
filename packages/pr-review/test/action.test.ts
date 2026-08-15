@@ -33,6 +33,7 @@ import {
   ReviewRunOutcome,
   ReviewState,
   StoredReviewFinding,
+  webCryptoReviewStateAuthenticatorLayer,
   type ReviewVerdict,
 } from "../src/index.ts";
 import { staticPriorReviews } from "../src/testing.ts";
@@ -214,9 +215,10 @@ const actionHarness = (eventJson: string | undefined) =>
       GITHUB_REPOSITORY: "acme/widgets",
       ...(eventJson !== undefined ? { GITHUB_EVENT_PATH: EVENT_PATH } : {}),
     };
-    const layer = Layer.merge(
+    const layer = Layer.mergeAll(
       Layer.succeed(FileSystem.FileSystem)(fs),
       ConfigProvider.layer(ConfigProvider.fromEnvRecord(env)),
+      webCryptoReviewStateAuthenticatorLayer(Redacted.make("test-review-state-secret")),
     );
     return { written, layer };
   });
@@ -410,7 +412,6 @@ describe("runReviewAction", () => {
         },
         {
           post: false,
-          stateSecret: Redacted.make("test-review-state-secret"),
           priorReviews: staticPriorReviews(Option.none(), { state: Option.some(state) }),
         },
       ).pipe(Effect.provide(harness.layer), Effect.exit);

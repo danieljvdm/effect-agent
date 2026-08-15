@@ -69,6 +69,9 @@ authenticated with the same stable `state-secret`, and pinned to the review's
 commit may narrow scope. Missing or rotated secrets, user-authored marker text,
 and custom-token review authors safely force a full review. Prefer a dedicated
 secret; do not expose it to the model or derive it from pull-request content.
+The authenticated marker itself is capped at 24,000 characters. Signing or
+size failures omit state, render a bounded warning, and force the next run to
+review fully instead of posting continuity data that cannot be recovered.
 
 ## Final merge-readiness audit
 

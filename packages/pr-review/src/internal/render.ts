@@ -4,7 +4,7 @@ import type { ReviewCoverage } from "./coverage.ts";
 import { commentableLines, type ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
 import { ReviewFinding, type CodeReview, type ReviewConcern } from "./review-agent.ts";
-import type { ReviewScopeMode } from "./review-state.ts";
+import type { ReviewScopeMode, ReviewStateMarker } from "./review-state.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is
@@ -244,7 +244,9 @@ export const planPublication = (
     readonly reviewFilesVisible?: number | undefined;
     readonly reviewTotalFiles?: number | undefined;
     /** Authenticated continuity state is emitted only after complete host-owned coverage. */
-    readonly stateMarker?: string | undefined;
+    readonly stateMarker?: ReviewStateMarker | undefined;
+    /** Visible reason continuity state was omitted; the next run will review fully. */
+    readonly stateNotice?: string | undefined;
   },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
@@ -304,6 +306,12 @@ export const planPublication = (
         options.reviewMode === "incremental"
           ? `**Incremental scope:** reviewed ${options.reviewFilesVisible ?? files.length} file(s) ${options.reviewReason}. Unchanged accepted scope was preserved and not reopened.`
           : `**Full-diff scope:** ${options.reviewReason}.`,
+      );
+    }
+    if (options.stateNotice !== undefined) {
+      parts.push(
+        "",
+        `⚠️ Continuity state was not stored (${options.stateNotice.slice(0, 1_000)}); the next run will safely review the full diff.`,
       );
     }
     parts.push("", review.summary);

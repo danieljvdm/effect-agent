@@ -109,7 +109,7 @@ export const staticPriorReviews = (
 ): PriorReviews["Service"] =>
   PriorReviews.of({
     latestFingerprint: Effect.succeed(fingerprint),
-    latestState: () => Effect.succeed(options.state ?? Option.none()),
+    latestState: Effect.succeed(options.state ?? Option.none()),
     compareHeads: () =>
       options.comparison === undefined
         ? Effect.fail(PriorReviewLookupFailure.make({ reason: "no fixture comparison" }))

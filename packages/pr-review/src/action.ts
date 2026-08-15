@@ -1,6 +1,5 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
-import type { Redacted } from "effect";
+import { Config, Console, Effect, FileSystem, Option, Redacted, Schema } from "effect";
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
@@ -19,10 +18,13 @@ import {
 import {
   ReviewExecutionContext,
   ReviewHeadComparison,
+  ReviewStateAuthenticator,
   type ReviewMode,
   type ReviewState,
   selectReviewRange,
   selectedPullRequestSourceLayer,
+  unavailableReviewStateAuthenticatorLayer,
+  webCryptoReviewStateAuthenticatorLayer,
 } from "./internal/review-state.ts";
 import { fanOutReviewBudgetLimits, reviewBudgetLimits } from "./internal/run.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
@@ -395,8 +397,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     readonly reviewMode?: ReviewMode | undefined;
     /** Model binding descriptor for the Actions step summary. */
     readonly modelLabel?: string | undefined;
-    /** Stable secret authenticating review-state markers; absence forces full reviews. */
-    readonly stateSecret?: Redacted.Redacted<string> | undefined;
     /** Explicit test/custom-host history override; GitHub owns the default adapter. */
     readonly priorReviews?: PriorReviews["Service"] | undefined;
   } = {},
@@ -424,13 +424,16 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         ]);
         const { metadata, files: fullFiles } = snapshot;
         const history = options.priorReviews ?? (yield* PriorReviews);
+        const stateAuthenticator = yield* ReviewStateAuthenticator;
         const recovered =
-          options.stateSecret === undefined
+          stateAuthenticator.status === "unavailable"
             ? {
                 state: undefined,
-                failure: "an authenticated review-state secret is not configured",
+                failure:
+                  stateAuthenticator.unavailableReason ??
+                  "an authenticated review-state secret is not configured",
               }
-            : yield* history.latestState(options.stateSecret).pipe(
+            : yield* history.latestState.pipe(
                 Effect.match({
                   onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
                   onSuccess: (state) => ({
@@ -488,7 +491,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             baseComparison,
             lookupFailure: recovered.failure,
           }),
-          stateSecret: options.stateSecret,
+          stateAuthenticator,
         };
         if (
           options.skipUnchanged !== false &&
@@ -583,9 +586,17 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
  */
 export const reviewActionProgram = Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
-  const stateSecret = Option.getOrUndefined(
-    yield* Config.option(Config.redacted("PR_REVIEW_STATE_SECRET")),
+  const stateSecret = Option.map(
+    yield* Config.option(Config.nonEmptyString("PR_REVIEW_STATE_SECRET")),
+    Redacted.make,
   );
+  const stateAuthenticatorLayer = Option.match(stateSecret, {
+    onNone: () =>
+      unavailableReviewStateAuthenticatorLayer(
+        "an authenticated review-state secret is not configured",
+      ),
+    onSome: webCryptoReviewStateAuthenticatorLayer,
+  });
   const guidance = yield* resolveGuidance(inputs);
   const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
@@ -610,20 +621,25 @@ export const reviewActionProgram = Effect.gen(function* () {
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
     modelLabel,
-    stateSecret,
   };
   if (inputs.provider === "anthropic") {
     const model = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer = inputs.fanOut
       ? PrReview.makeFanOut({ ...shared, model })
       : PrReview.make({ ...shared, model });
-    return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer, harness).pipe(
+      Effect.provide(stateAuthenticatorLayer),
+      Effect.provide(anthropicClientLayer),
+    );
   }
   const model = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut
     ? PrReview.makeFanOut({ ...shared, model })
     : PrReview.make({ ...shared, model });
-  return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(
+    Effect.provide(stateAuthenticatorLayer),
+    Effect.provide(openAiClientLayer),
+  );
 });
 
 /** Run the packaged action program on Node; the bundled action entrypoint. */

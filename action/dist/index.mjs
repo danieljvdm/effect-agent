@@ -38584,11 +38584,31 @@ var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
 var STATE_MARKER_SUFFIX = " -->";
 var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
 var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
-var encodeReviewState = (state) => {
-  const encoded = exports_Schema.encodeSync(ReviewState)(state);
-  return exports_Encoding.encodeBase64(JSON.stringify(encoded));
-};
-var hmacKey = (secret) => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+
+class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
+  operation: exports_Schema.Literals(["sign", "verify"]),
+  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
+}) {
+}
+
+class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
+  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
+}) {
+}
+
+class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
+}
+var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
+  operation,
+  reason: String(cause).slice(0, 2048)
+});
+var hmacKey = (secret, operation) => exports_Effect.tryPromise({
+  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
+  catch: (cause) => authenticationFailure(operation, cause)
+});
 var signatureBytes = (signature) => {
   const pairs = signature.match(/../g) ?? [];
   const buffer3 = new ArrayBuffer(pairs.length);
@@ -38598,32 +38618,67 @@ var signatureBytes = (signature) => {
   }
   return buffer3;
 };
-var renderReviewStateMarker = (state, secret) => {
-  const payload = encodeReviewState(state);
-  const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-  return exports_Effect.promise(async () => {
-    const signature = await globalThis.crypto.subtle.sign("HMAC", await hmacKey(secret), message);
+var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+  status: "available",
+  unavailableReason: undefined,
+  render: (state) => exports_Effect.gen(function* () {
+    const encoded = yield* exports_Schema.encodeUnknownEffect(ReviewState)(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+    const payload = exports_Encoding.encodeBase64(JSON.stringify(encoded));
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    const key = yield* hmacKey(secret, "sign");
+    const signature = yield* exports_Effect.tryPromise({
+      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
+      catch: (cause) => authenticationFailure("sign", cause)
+    });
     const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    return `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
-  });
-};
-var extractReviewState = (body, secret) => {
-  const match9 = STATE_MARKER_PATTERN.exec(body);
-  const payload = match9?.[1];
-  const signature = match9?.[2];
-  if (payload === undefined || signature === undefined)
-    return exports_Effect.succeed(undefined);
-  const json = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
-  if (json === undefined)
-    return exports_Effect.succeed(undefined);
-  const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json);
-  if (exports_Option.isNone(decoded))
-    return exports_Effect.succeed(undefined);
-  const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-  return exports_Effect.promise(async () => {
-    const valid = await globalThis.crypto.subtle.verify("HMAC", await hmacKey(secret), signatureBytes(signature), message);
-    return valid ? decoded.value : undefined;
-  });
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
+    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
+      return yield* ReviewStateMarkerTooLarge.make({
+        observedChars: marker.length,
+        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
+      });
+    }
+    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+  }),
+  extract: (body) => {
+    if (body.length > 60000)
+      return exports_Effect.succeed(exports_Option.none());
+    const match9 = STATE_MARKER_PATTERN.exec(body);
+    const payload = match9?.[1];
+    const signature = match9?.[2];
+    if (payload === undefined || signature === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
+    if (!exports_Schema.is(ReviewStateMarker)(marker))
+      return exports_Effect.succeed(exports_Option.none());
+    const json = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+    if (json === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json);
+    if (exports_Option.isNone(decoded))
+      return exports_Effect.succeed(exports_Option.none());
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    return exports_Effect.gen(function* () {
+      const key = yield* hmacKey(secret, "verify");
+      const valid = yield* exports_Effect.tryPromise({
+        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
+        catch: (cause) => authenticationFailure("verify", cause)
+      });
+      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
+    });
+  }
+}));
+var unavailableReviewStateAuthenticatorLayer = (reason) => {
+  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
+  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+    status: "unavailable",
+    unavailableReason: safeReason.slice(0, 1000),
+    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
+      operation: "sign",
+      reason: safeReason.slice(0, 2048)
+    })),
+    extract: () => exports_Effect.succeed(exports_Option.none())
+  }));
 };
 
 class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
@@ -40928,7 +40983,7 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
   const asLookupFailure = (error2) => PriorReviewLookupFailure.make({
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
   });
-  const readMarkers = (secret) => exports_Effect.gen(function* () {
+  const readMarkers = (authenticator) => exports_Effect.gen(function* () {
     const perPage = 100;
     let latest = exports_Option.none();
     let latestState = exports_Option.none();
@@ -40944,10 +40999,12 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
         const fingerprint = extractFingerprint(wire.body ?? "");
         if (fingerprint !== undefined)
           latest = exports_Option.some(fingerprint);
-        if (exports_Option.isSome(secret)) {
-          const state = yield* extractReviewState(wire.body ?? "", secret.value);
-          if (state !== undefined && state.reviewedHeadSha === wire.commit_id) {
-            latestState = exports_Option.some(state);
+        if (exports_Option.isSome(authenticator)) {
+          const state = yield* authenticator.value.extract(wire.body ?? "").pipe(exports_Effect.mapError((error2) => PriorReviewLookupFailure.make({
+            reason: `${error2._tag}: ${error2.reason}`.slice(0, 2048)
+          })));
+          if (exports_Option.isSome(state) && state.value.reviewedHeadSha === wire.commit_id) {
+            latestState = state;
           }
         }
       }
@@ -40976,7 +41033,10 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
   }).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
   return PriorReviews.of({
     latestFingerprint: readMarkers(exports_Option.none()).pipe(exports_Effect.map((markers) => markers.latestFingerprint)),
-    latestState: (secret) => readMarkers(exports_Option.some(secret)).pipe(exports_Effect.map((markers) => markers.latestState)),
+    latestState: exports_Effect.gen(function* () {
+      const authenticator = yield* ReviewStateAuthenticator;
+      return yield* readMarkers(exports_Option.some(authenticator)).pipe(exports_Effect.map((markers) => markers.latestState));
+    }),
     compareHeads
   });
 }));
@@ -41142,6 +41202,9 @@ var planPublication = (review, files, options3) => {
     ];
     if (options3.reviewMode !== undefined && options3.reviewReason !== undefined) {
       parts2.push("", options3.reviewMode === "incremental" ? `**Incremental scope:** reviewed ${options3.reviewFilesVisible ?? files.length} file(s) ${options3.reviewReason}. Unchanged accepted scope was preserved and not reopened.` : `**Full-diff scope:** ${options3.reviewReason}.`);
+    }
+    if (options3.stateNotice !== undefined) {
+      parts2.push("", `⚠️ Continuity state was not stored (${options3.stateNotice.slice(0, 1000)}); the next run will safely review the full diff.`);
     }
     parts2.push("", review.summary);
     if (options3.coverage?.status === "incomplete") {
@@ -41320,7 +41383,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     totalAnchorFiles: metadata.totalChangedFiles,
     events: events2
   });
-  const state = executionContext !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && executionContext.stateSecret !== undefined ? ReviewState.make({
+  const stateCandidate = executionContext !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
     version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
@@ -41335,7 +41398,18 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
     lastReviewMode: executionContext.mode
   }) : undefined;
-  const stateMarker = state === undefined || executionContext?.stateSecret === undefined ? undefined : yield* renderReviewStateMarker(state, executionContext.stateSecret);
+  const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
+    state: undefined,
+    marker: undefined,
+    notice: executionContext?.stateAuthenticator?.status === "unavailable" && coverage.status === "complete" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+  } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
+    onFailure: (error2) => ({
+      state: undefined,
+      marker: undefined,
+      notice: error2._tag === "ReviewStateMarkerTooLarge" ? `authenticated continuity state exceeded its ${error2.maximumChars}-character bound` : `authenticated continuity state could not be signed: ${error2.reason}`
+    }),
+    onSuccess: (marker) => ({ state: stateCandidate, marker, notice: undefined })
+  }));
   const plan = planPublication(review, anchorFiles, {
     applyVerdict: options3.applyVerdict,
     headSha: metadata.headSha,
@@ -41355,7 +41429,8 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     baselineSha: executionContext?.baselineSha,
     reviewFilesVisible: files.length,
     reviewTotalFiles,
-    stateMarker
+    stateMarker: continuity.marker,
+    stateNotice: continuity.notice
   });
   const scope3 = options3.usageScope === undefined ? {} : { usageScope: options3.usageScope };
   if (!options3.post) {
@@ -41369,7 +41444,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
       usage,
       ...scope3,
       ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
-      ...state === undefined ? {} : { state }
+      ...continuity.state === undefined ? {} : { state: continuity.state }
     });
   }
   const publisher = yield* ReviewPublisher;
@@ -41385,7 +41460,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     usage,
     ...scope3,
     ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
-    ...state === undefined ? {} : { state }
+    ...continuity.state === undefined ? {} : { state: continuity.state }
   });
 });
 
@@ -52426,10 +52501,11 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       ]);
       const { metadata, files: fullFiles } = snapshot2;
       const history = options3.priorReviews ?? (yield* PriorReviews);
-      const recovered = options3.stateSecret === undefined ? {
+      const stateAuthenticator = yield* ReviewStateAuthenticator;
+      const recovered = stateAuthenticator.status === "unavailable" ? {
         state: undefined,
-        failure: "an authenticated review-state secret is not configured"
-      } : yield* history.latestState(options3.stateSecret).pipe(exports_Effect.match({
+        failure: stateAuthenticator.unavailableReason ?? "an authenticated review-state secret is not configured"
+      } : yield* history.latestState.pipe(exports_Effect.match({
         onFailure: (failure) => ({ state: undefined, failure: failure.reason }),
         onSuccess: (state) => ({
           state: exports_Option.getOrUndefined(state),
@@ -52482,7 +52558,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           baseComparison,
           lookupFailure: recovered.failure
         }),
-        stateSecret: options3.stateSecret
+        stateAuthenticator
       };
       if (options3.skipUnchanged !== false && selection.mode === "incremental" && selection.files.length === 0 && selection.priorState !== undefined) {
         const result4 = concludeReviewState(selection.priorState);
@@ -52548,7 +52624,11 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
-  const stateSecret = exports_Option.getOrUndefined(yield* exports_Config.option(exports_Config.redacted("PR_REVIEW_STATE_SECRET")));
+  const stateSecret = exports_Option.map(yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_STATE_SECRET")), exports_Redacted.make);
+  const stateAuthenticatorLayer = exports_Option.match(stateSecret, {
+    onNone: () => unavailableReviewStateAuthenticatorLayer("an authenticated review-state secret is not configured"),
+    onSome: webCryptoReviewStateAuthenticatorLayer
+  });
   const guidance = yield* resolveGuidance2(inputs);
   const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
   const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
@@ -52569,17 +52649,16 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
-    modelLabel,
-    stateSecret
+    modelLabel
   };
   if (inputs.provider === "anthropic") {
     const model4 = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
-    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(anthropicClientLayer));
+    return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(stateAuthenticatorLayer), exports_Effect.provide(anthropicClientLayer));
   }
   const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
-  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(openAiClientLayer));
+  return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(stateAuthenticatorLayer), exports_Effect.provide(openAiClientLayer));
 });
 var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_NodeServices.layer)), { disableErrorReporting: true });
 
