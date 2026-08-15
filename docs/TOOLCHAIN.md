@@ -165,6 +165,15 @@ verified check and therefore remains unmergeable. After merge, the release
 workflow still performs a frozen install and rebuilds the exact versioned tree
 before any registry mutation.
 
+The version/publish job pins every external action to a full commit SHA and has no Checks API
+permission. It exports only the resolved release PR identity and verifier outcome to a separate,
+action-free reporting job. That job alone has `checks: write`; immediately before publishing the
+check it re-reads the PR head and base and confirms that the active `main` rules require `ready`
+with strict up-to-date enforcement. If the head or base moved, the verifier failed, or that rule is
+absent, it posts a failing `ready` conclusion. Operators must preserve the ruleset's
+`strict_required_status_checks_policy` setting: it invalidates the head-bound success for merge
+purposes whenever `main` later advances, until Changesets regenerates from the new base.
+
 Each package on npmjs.com lists `release.yml` in `danieljvdm/effect-agent` as
 its trusted publisher (package Settings, a one-time registration; "Allow npm
 publish" only). In CI the publish script runs in `--ci` mode: `bun pm pack`
@@ -291,7 +300,8 @@ the complete tree from its checked-out `main` commit, and creates the required `
 verified head through the Checks API. The check is success only after an exact-tree comparison; a
 verification failure posts failure, and a resolution failure posts nothing. Unexpected files route
 through the ordinary workflows, while a manual generated-path-only push receives no new `ready`
-check. Both cases are fail-closed.
+check. Checks authority is isolated to an action-free job that revalidates the live head/base and
+the strict up-to-date branch rule before reporting. Both cases are fail-closed.
 
 Each ordinary-PR job restores and saves the Vite Task cache
 (`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay

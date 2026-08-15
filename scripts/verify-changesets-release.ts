@@ -1,3 +1,6 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, FileSystem, Path, Schema, Stream } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
@@ -9,7 +12,7 @@ const CommitSha = Schema.String.pipe(
   }),
 );
 
-class InvalidCommitSha extends Schema.TaggedError<InvalidCommitSha>()("InvalidCommitSha", {
+export class InvalidCommitSha extends Schema.TaggedError<InvalidCommitSha>()("InvalidCommitSha", {
   label: Schema.String,
   value: Schema.String,
 }) {
@@ -18,7 +21,7 @@ class InvalidCommitSha extends Schema.TaggedError<InvalidCommitSha>()("InvalidCo
   }
 }
 
-class VerificationCommandError extends Schema.TaggedError<VerificationCommandError>()(
+export class VerificationCommandError extends Schema.TaggedError<VerificationCommandError>()(
   "VerificationCommandError",
   {
     command: Schema.String,
@@ -33,11 +36,14 @@ class VerificationCommandError extends Schema.TaggedError<VerificationCommandErr
   }
 }
 
-class ReleaseTreeMismatch extends Schema.TaggedError<ReleaseTreeMismatch>()("ReleaseTreeMismatch", {
-  expectedTree: Schema.String,
-  actualTree: Schema.String,
-  changedPaths: Schema.String,
-}) {
+export class ReleaseTreeMismatch extends Schema.TaggedError<ReleaseTreeMismatch>()(
+  "ReleaseTreeMismatch",
+  {
+    expectedTree: Schema.String,
+    actualTree: Schema.String,
+    changedPaths: Schema.String,
+  },
+) {
   override get message() {
     return [
       "The Changesets PR tree does not match a clean regeneration from its trusted base.",
@@ -85,7 +91,7 @@ const runCommand = Effect.fn("verifyChangesetsRelease.runCommand")(function* (
   return trimmed;
 });
 
-const repositoryRoot = Effect.fn("verifyChangesetsRelease.repositoryRoot")(function* () {
+const findRepositoryRoot = Effect.fn("verifyChangesetsRelease.findRepositoryRoot")(function* () {
   const path = yield* Path.Path;
   const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
   return path.resolve(path.dirname(scriptPath), "..");
@@ -139,23 +145,29 @@ const acquireExpectedWorktree = Effect.fn("verifyChangesetsRelease.acquireExpect
 export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(function* (options: {
   readonly baseSha: string;
   readonly headSha: string;
+  readonly repositoryRoot?: string;
+  readonly changesetBinary?: string;
 }) {
   const baseSha = yield* decodeCommitSha("--base-sha", options.baseSha);
   const headSha = yield* decodeCommitSha("--head-sha", options.headSha);
   const path = yield* Path.Path;
-  const root = yield* repositoryRoot();
+  const root = options.repositoryRoot ?? (yield* findRepositoryRoot());
 
   yield* runCommand(root, "git", ["cat-file", "-e", `${baseSha}^{commit}`]);
   yield* runCommand(root, "git", ["cat-file", "-e", `${headSha}^{commit}`]);
   const actualTree = yield* runCommand(root, "git", ["rev-parse", `${headSha}^{tree}`]);
 
-  const { worktree: expectedWorktree } = yield* acquireExpectedWorktree(root, baseSha);
-
-  const changesetBinary = path.join(root, "node_modules", ".bin", "changeset");
-  yield* runCommand(expectedWorktree, changesetBinary, ["version"]);
-  yield* runCommand(expectedWorktree, "bun", ["install", "--ignore-scripts"]);
-  yield* runCommand(expectedWorktree, "git", ["add", "--all"]);
-  const expectedTree = yield* runCommand(expectedWorktree, "git", ["write-tree"]);
+  const changesetBinary =
+    options.changesetBinary ?? path.join(root, "node_modules", ".bin", "changeset");
+  const expectedTree = yield* Effect.scoped(
+    Effect.gen(function* () {
+      const { worktree: expectedWorktree } = yield* acquireExpectedWorktree(root, baseSha);
+      yield* runCommand(expectedWorktree, changesetBinary, ["version"]);
+      yield* runCommand(expectedWorktree, "bun", ["install", "--ignore-scripts"]);
+      yield* runCommand(expectedWorktree, "git", ["add", "--all"]);
+      return yield* runCommand(expectedWorktree, "git", ["write-tree"]);
+    }),
+  );
 
   if (expectedTree !== actualTree) {
     const changedPaths = yield* runCommand(root, "git", [
@@ -197,4 +209,6 @@ const program = CliCommand.run(command, { version: "1.0.0" }).pipe(
   Effect.provide(NodeServices.layer),
 );
 
-NodeRuntime.runMain(program, { disableErrorReporting: true });
+if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  NodeRuntime.runMain(program, { disableErrorReporting: true });
+}

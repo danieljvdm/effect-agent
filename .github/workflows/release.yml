@@ -12,17 +12,18 @@
 # the npm CLI via the OIDC trusted-publisher exchange — no npm token or OTP
 # anywhere. Each package on npmjs.com must list this workflow file (release.yml)
 # as its trusted publisher for the exchange to succeed.
+#
+# Keep the `main` ruleset's required `ready` check in strict/up-to-date mode.
+# The generated check is attached to an immutable PR head; strict mode makes a
+# later base advance invalidate that success for merge purposes until the
+# Changesets branch is regenerated and checked again.
 name: Release
 
 on:
   push:
     branches: [main]
 
-permissions:
-  checks: write
-  contents: write
-  pull-requests: write
-  id-token: write
+permissions: {}
 
 concurrency:
   group: release
@@ -32,24 +33,32 @@ jobs:
   release:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      pull-requests: write
+    outputs:
+      release-head-sha: ${{ steps.release-pr.outputs.head-sha }}
+      release-pr-number: ${{ steps.changesets.outputs.pullRequestNumber }}
+      verification-outcome: ${{ steps.verify-release.outcome }}
     env:
       CI: "true"
       VITE_GIT_HOOKS: "0"
     steps:
       - name: Check out repository (full history for changesets)
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
       - name: Set up Bun
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.3.14
 
       # Trusted publishing lives in the npm CLI; the runner's default npm
       # predates the OIDC exchange, so pin a current one.
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - name: Update npm (OIDC trusted publishing needs a current CLI)
@@ -66,7 +75,7 @@ jobs:
 
       - name: Version or publish
         id: changesets
-        uses: changesets/action@v1
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1
         with:
           title: "chore: version packages (beta)"
           commit: "chore: version packages (beta)"
@@ -129,20 +138,50 @@ jobs:
           --base-sha ${{ github.sha }}
           --head-sha ${{ steps.release-pr.outputs.head-sha }}
 
+  report-release-check:
+    name: Report generated release check
+    needs: release
+    if: ${{ always() && needs.release.outputs.release-head-sha != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      checks: write
+      contents: read
+      pull-requests: read
+    steps:
+      # No third-party action or repository code runs in this job. It alone
+      # receives Checks authority, and revalidates mutable PR/base state before
+      # reporting the verifier result produced by the unprivileged job.
       - name: Report the generated release check
-        if: ${{ always() && steps.release-pr.outputs.head-sha != '' }}
         env:
+          EXPECTED_BASE_SHA: ${{ github.sha }}
           GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ steps.release-pr.outputs.head-sha }}
-          VERIFY_OUTCOME: ${{ steps.verify-release.outcome }}
+          HEAD_SHA: ${{ needs.release.outputs.release-head-sha }}
+          PR_NUMBER: ${{ needs.release.outputs.release-pr-number }}
+          VERIFY_OUTCOME: ${{ needs.release.outputs.verification-outcome }}
         run: |
           CONCLUSION="failure"
           TITLE="Generated release tree did not verify"
           SUMMARY="The proposed tree is not the exact Changesets output from its trusted main base."
-          if [ "$VERIFY_OUTCOME" = "success" ]; then
+          CURRENT_HEAD_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          CURRENT_BASE_SHA="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.base.sha')"
+          STRICT_READY="$(gh api "repos/${GITHUB_REPOSITORY}/rules/branches/main" --jq 'any(.[]; .type == "required_status_checks" and .parameters.strict_required_status_checks_policy == true and any(.parameters.required_status_checks[]; .context == "ready"))')"
+
+          if [ "$VERIFY_OUTCOME" != "success" ]; then
+            TITLE="Generated release tree did not verify"
+          elif [ "$CURRENT_HEAD_SHA" != "$HEAD_SHA" ]; then
+            TITLE="Generated release head changed during verification"
+            SUMMARY="The verified commit is no longer the pull request head; the current head must be regenerated."
+          elif [ "$CURRENT_BASE_SHA" != "$EXPECTED_BASE_SHA" ]; then
+            TITLE="Generated release base changed during verification"
+            SUMMARY="The pull request base advanced after generation; the release head must be regenerated from the new base."
+          elif [ "$STRICT_READY" != "true" ]; then
+            TITLE="Strict required-check policy is missing"
+            SUMMARY="The main branch must require the ready check and require branches to be up to date before merging."
+          else
             CONCLUSION="success"
             TITLE="Generated release tree verified"
-            SUMMARY="The complete proposed tree exactly matches a clean Changesets regeneration from its trusted main base."
+            SUMMARY="The complete proposed tree exactly matches a clean Changesets regeneration from its current trusted main base."
           fi
 
           gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs" \

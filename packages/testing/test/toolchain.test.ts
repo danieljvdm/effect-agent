@@ -1,8 +1,14 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Effect, FileSystem, Schema, Stream } from "effect";
+import { Effect, FileSystem, Path, Schema, Stream } from "effect";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
+
+import {
+  InvalidCommitSha,
+  ReleaseTreeMismatch,
+  verifyChangesetsRelease,
+} from "../../../scripts/verify-changesets-release.ts";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
 const PackageManifest = Schema.Struct({
@@ -38,6 +44,8 @@ const WorkflowJob = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   if: Schema.optionalKey(Schema.String),
   needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+  outputs: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
 });
 const WorkflowFile = Schema.Struct({
@@ -232,6 +240,28 @@ const exists = (path: string) =>
     return yield* fs.exists(path);
   });
 
+const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function* (
+  cwd: string,
+  command: string,
+  args: ReadonlyArray<string>,
+) {
+  const child = yield* ChildProcess.make(command, args, {
+    cwd,
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [output, exitCode] = yield* Effect.all([
+    Stream.mkString(Stream.decodeText(child.all)),
+    child.exitCode,
+  ]);
+  if (exitCode !== 0) {
+    return yield* Effect.die(
+      new Error(`${[command, ...args].join(" ")} exited with ${exitCode}:\n${output}`),
+    );
+  }
+  return output.trim();
+});
+
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
@@ -333,14 +363,25 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
 
       expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
-      expect(releaseWorkflow.permissions).toEqual({
-        checks: "write",
+      expect(releaseWorkflow.permissions).toEqual({});
+      expect(releaseWorkflow.jobs.release?.permissions).toEqual({
         contents: "write",
-        "pull-requests": "write",
         "id-token": "write",
+        "pull-requests": "write",
       });
+      expect(releaseWorkflow.jobs.release?.permissions?.checks).toBeUndefined();
+      const externalActionReferences = (releaseWorkflow.jobs.release?.steps ?? []).flatMap(
+        (step) => (step.uses === undefined ? [] : [step.uses]),
+      );
+      expect(externalActionReferences).not.toHaveLength(0);
+      expect(externalActionReferences.every((uses) => /^[^@]+@[0-9a-f]{40}$/.test(uses))).toBe(
+        true,
+      );
       const changesetsStep = workflowStep(releaseWorkflow, "release", "Version or publish");
       expect(changesetsStep?.id).toBe("changesets");
+      expect(changesetsStep?.uses).toBe(
+        "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
+      );
       expect(changesetsStep?.with).toMatchObject({ publish: "bun run ci:publish" });
 
       const resolveStep = workflowStep(
@@ -364,22 +405,187 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
       const reportStep = workflowStep(
         releaseWorkflow,
-        "release",
+        "report-release-check",
         "Report the generated release check",
       );
-      expect(reportStep?.if).toBe("${{ always() && steps.release-pr.outputs.head-sha != '' }}");
+      const reportJob = releaseWorkflow.jobs["report-release-check"];
+      expect(reportJob?.needs).toBe("release");
+      expect(reportJob?.if).toBe("${{ always() && needs.release.outputs.release-head-sha != '' }}");
+      expect(reportJob?.permissions).toEqual({
+        checks: "write",
+        contents: "read",
+        "pull-requests": "read",
+      });
+      expect(reportJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
       expect(reportStep?.run).toContain('CONCLUSION="failure"');
-      expect(reportStep?.run).toContain('if [ "$VERIFY_OUTCOME" = "success" ]');
+      expect(reportStep?.run).toContain('if [ "$VERIFY_OUTCOME" != "success" ]');
       expect(reportStep?.run).toContain('CONCLUSION="success"');
+      expect(reportStep?.run).toContain('CURRENT_HEAD_SHA="$(gh api');
+      expect(reportStep?.run).toContain('CURRENT_BASE_SHA="$(gh api');
+      expect(reportStep?.run).toContain("strict_required_status_checks_policy == true");
       expect(reportStep?.run).toContain(
         'gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs"',
       );
       expect(reportStep?.run).toContain('-f name="ready"');
+      expect(
+        Object.entries(releaseWorkflow.jobs)
+          .filter(([, job]) => job.permissions?.checks === "write")
+          .map(([jobName]) => jobName),
+      ).toEqual(["report-release-check"]);
 
       expect(rootManifest.scripts?.["verify:changesets-release"]).toBe(
         "bun scripts/verify-changesets-release.ts",
       );
     }),
+  );
+
+  it.effect(
+    "verifies generated release trees and cleans temporary worktrees",
+    () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const temporaryRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "effect-agent-release-verifier-test-",
+        });
+        const fixtureRoot = path.join(temporaryRoot, "repository");
+        const packageDirectory = path.join(fixtureRoot, "packages", "fixture");
+        const changesetDirectory = path.join(fixtureRoot, ".changeset");
+        const changesetBinary = path.resolve(repositoryRoot, "node_modules", ".bin", "changeset");
+
+        yield* fs.makeDirectory(packageDirectory, { recursive: true });
+        yield* fs.makeDirectory(changesetDirectory, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(fixtureRoot, "package.json"),
+          `{
+  "name": "release-verifier-fixture",
+  "private": true,
+  "workspaces": ["packages/*"]
+}\n`,
+        );
+        yield* fs.writeFileString(
+          path.join(packageDirectory, "package.json"),
+          `{
+  "name": "release-verifier-package",
+  "version": "1.0.0"
+}\n`,
+        );
+        yield* fs.writeFileString(
+          path.join(changesetDirectory, "config.json"),
+          `{
+  "changelog": false,
+  "commit": false,
+  "fixed": [],
+  "linked": [],
+  "access": "restricted",
+  "baseBranch": "main",
+  "updateInternalDependencies": "patch",
+  "ignore": []
+}\n`,
+        );
+        yield* fs.writeFileString(
+          path.join(changesetDirectory, "fixture.md"),
+          `---
+"release-verifier-package": patch
+---
+
+Exercise the generated release verifier.
+`,
+        );
+
+        yield* runFixtureCommand(temporaryRoot, "git", [
+          "init",
+          "--initial-branch=main",
+          fixtureRoot,
+        ]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["config", "user.name", "Verifier Test"]);
+        yield* runFixtureCommand(fixtureRoot, "git", [
+          "config",
+          "user.email",
+          "verifier@example.invalid",
+        ]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "fixture base"]);
+        const baseSha = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+
+        yield* runFixtureCommand(fixtureRoot, changesetBinary, ["version"]);
+        yield* runFixtureCommand(fixtureRoot, "bun", ["install", "--ignore-scripts"]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "generated release"]);
+        const generatedHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+
+        yield* verifyChangesetsRelease({
+          baseSha,
+          changesetBinary,
+          headSha: generatedHead,
+          repositoryRoot: fixtureRoot,
+        });
+        const worktreesAfterSuccess = yield* runFixtureCommand(fixtureRoot, "git", [
+          "worktree",
+          "list",
+          "--porcelain",
+        ]);
+        expect(worktreesAfterSuccess.match(/^worktree /gm)).toHaveLength(1);
+
+        yield* fs.writeFileString(
+          path.join(packageDirectory, "package.json"),
+          `{
+  "name": "release-verifier-package",
+  "version": "9.9.9"
+}\n`,
+        );
+        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "alter generated output"]);
+        const alteredHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+        const alteredFailure = yield* Effect.flip(
+          verifyChangesetsRelease({
+            baseSha,
+            changesetBinary,
+            headSha: alteredHead,
+            repositoryRoot: fixtureRoot,
+          }),
+        );
+        expect(
+          Schema.decodeUnknownSync(ReleaseTreeMismatch)(alteredFailure).changedPaths,
+        ).toContain("packages/fixture/package.json");
+
+        yield* runFixtureCommand(fixtureRoot, "git", ["checkout", "--detach", generatedHead]);
+        yield* fs.writeFileString(path.join(fixtureRoot, "unexpected.txt"), "unexpected\n");
+        yield* runFixtureCommand(fixtureRoot, "git", ["add", "--all"]);
+        yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "add unexpected file"]);
+        const unexpectedHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
+        const unexpectedFailure = yield* Effect.flip(
+          verifyChangesetsRelease({
+            baseSha,
+            changesetBinary,
+            headSha: unexpectedHead,
+            repositoryRoot: fixtureRoot,
+          }),
+        );
+        expect(
+          Schema.decodeUnknownSync(ReleaseTreeMismatch)(unexpectedFailure).changedPaths,
+        ).toContain("unexpected.txt");
+
+        const invalidShaFailure = yield* Effect.flip(
+          verifyChangesetsRelease({
+            baseSha: "not-a-commit",
+            changesetBinary,
+            headSha: generatedHead,
+            repositoryRoot: fixtureRoot,
+          }),
+        );
+        expect(Schema.decodeUnknownSync(InvalidCommitSha)(invalidShaFailure).label).toBe(
+          "--base-sha",
+        );
+
+        const worktreesAfterFailures = yield* runFixtureCommand(fixtureRoot, "git", [
+          "worktree",
+          "list",
+          "--porcelain",
+        ]);
+        expect(worktreesAfterFailures.match(/^worktree /gm)).toHaveLength(1);
+      }),
+    60_000,
   );
 
   it.effect("keeps browser and deployment scaffolds out of framework manifests", () =>
