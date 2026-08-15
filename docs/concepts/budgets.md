@@ -12,7 +12,9 @@ default. But _bounded_ does not mean _brittle_: a bound the model cannot see is 
 agent that falls off a cliff after ten productive tool calls delivers nothing. The budget model
 therefore separates two ideas that are often conflated:
 
-- **The bound** — work that would exceed a limit never starts. This is never negotiable.
+- **The bound** — countable work (Turns, Tool Calls) that would exceed a limit never starts, and
+  measured usage (tokens, cost, wall clock) stops the Run at the seam where the overage is
+  observed. Bounds are never negotiable.
 - **The resolution** — what happens to the Run once a bound binds. This is policy.
 
 ## The Stop Policy
@@ -54,14 +56,15 @@ A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming w
 
 1. An over-budget declared Tool batch **never executes** — every call settles as a synthetic
    failed result telling the model the budget is exhausted and to answer from what it already
-   has. No handler runs; nothing is durably declared.
+   has. No handler runs; in the DN and DC assemblies the batch is never durably declared.
 2. Every subsequent model request forbids tool use (Effect AI `toolChoice: "none"`).
 3. Turn exhaustion admits exactly **one grace Turn** past `maxTurns`, under the same constraint.
    A second grace is structurally impossible.
 4. The Run settles _completed_ — with the honest `finishReason: "budget-exhausted"`, never a
-   plain `"model-stop"` (RUN-011: budget exhaustion cannot masquerade as success). Durably, the
-   `SubmissionSettled` record carries the same marker, so a rebuilt projection can distinguish an
-   exhaustion-truncated answer from an ordinary one without the live event stream.
+   plain `"model-stop"` (RUN-011: budget exhaustion cannot masquerade as success). In the DN and
+   DC assemblies the canonical `SubmissionSettled` record carries the same marker, so a rebuilt
+   projection can distinguish an exhaustion-truncated answer from an ordinary one without the
+   live event stream.
 5. A model that declares a Tool Call under the constraint fails the Run typed
    (`ModelProtocolError`, RUN-020) — fail-closed, no rejection loops.
 
