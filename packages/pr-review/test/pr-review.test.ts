@@ -24,6 +24,7 @@ import {
   pullRequestReviewerProfile,
   ReadFile,
   ReadFileDiff,
+  ReviewConcern,
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewToolkitLayer,
@@ -350,6 +351,171 @@ describe("publication planning", () => {
     expect(comment?.startLine).toBe(2);
     expect(comment?.line).toBe(3);
   });
+
+  it("names why each demoted finding lost its anchor", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+    expect(plan.body).toContain("_(demoted: line 99 is not part of the diff)_");
+    expect(plan.body).toContain("_(demoted: file has no textual diff)_");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The opening callout: the review's overall tier, derived host-side from the
+// validated severities, never from model prose.
+// ---------------------------------------------------------------------------
+
+describe("verdict callout", () => {
+  const files = fixture.files.map((entry) => entry.file);
+  const planFor = (review: CodeReview) =>
+    planPublication(review, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+  const finding = (severity: ReviewFinding["severity"]) =>
+    ReviewFinding.make({
+      path: "src/hello.ts",
+      startLine: 2,
+      endLine: 2,
+      severity,
+      title: "A finding",
+      body: "Details.",
+    });
+
+  it("opens with CAUTION when any finding is blocking", () => {
+    const plan = planFor(
+      CodeReview.make({
+        summary: "s",
+        verdict: "request-changes",
+        findings: [finding("blocking"), finding("nit")],
+      }),
+    );
+    expect(plan.body.startsWith("> [!CAUTION]\n> 1 blocking finding")).toBe(true);
+  });
+
+  it("opens with IMPORTANT when the worst finding is important", () => {
+    const plan = planFor(
+      CodeReview.make({
+        summary: "s",
+        verdict: "comment",
+        findings: [finding("important"), finding("important"), finding("nit")],
+      }),
+    );
+    expect(plan.body.startsWith("> [!IMPORTANT]\n> 2 important findings")).toBe(true);
+  });
+
+  it("opens informational on nits only and green on a clean approval", () => {
+    expect(
+      planFor(
+        CodeReview.make({ summary: "s", verdict: "comment", findings: [finding("nit")] }),
+      ).body.startsWith("> ℹ️ Minor suggestions only"),
+    ).toBe(true);
+    expect(
+      planFor(CodeReview.make({ summary: "s", verdict: "approve", findings: [] })).body.startsWith(
+        "> ✅ No issues found.",
+      ),
+    ).toBe(true);
+    expect(
+      planFor(CodeReview.make({ summary: "s", verdict: "comment", findings: [] })).body.startsWith(
+        "> ℹ️ No findings",
+      ),
+    ).toBe(true);
+  });
+
+  it("counts concern severities toward the callout tier", () => {
+    const plan = planFor(
+      CodeReview.make({
+        summary: "s",
+        verdict: "request-changes",
+        findings: [],
+        concerns: [
+          ReviewConcern.make({
+            severity: "blocking",
+            title: "Legacy path never deleted",
+            body: "The replaced code path stays reachable.",
+          }),
+        ],
+      }),
+    );
+    expect(plan.body.startsWith("> [!CAUTION]")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-anchored concerns render as body sections; the invisible metadata tail
+// and the footer carry provenance for later readers.
+// ---------------------------------------------------------------------------
+
+describe("concerns, metadata, and footer", () => {
+  const files = fixture.files.map((entry) => entry.file);
+
+  it("renders each concern as a severity-tagged body section", () => {
+    const plan = planPublication(
+      CodeReview.make({
+        summary: "One concern, no findings.",
+        verdict: "comment",
+        findings: [],
+        concerns: [
+          ReviewConcern.make({
+            severity: "important",
+            title: "No rollout note for the schema change",
+            body: "In-flight records decode against the old shape during deploy.",
+          }),
+        ],
+      }),
+      files,
+      { applyVerdict: false, headSha: FIXTURE_SHA, totalChangedFiles: 2 },
+    );
+    expect(plan.body).toContain("### ⚠️ No rollout note for the schema change");
+    expect(plan.body).toContain("In-flight records decode against the old shape during deploy.");
+  });
+
+  it("embeds the staleness metadata comment with refs and coverage", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      baseRef: "main",
+      headRef: "fix/sum",
+    });
+    expect(plan.body).toContain("<!-- effect-agent-pr-review metadata");
+    expect(plan.body).toContain(`reviewed-head: ${FIXTURE_SHA}`);
+    expect(plan.body).toContain("base-ref: main");
+    expect(plan.body).toContain("head-ref: fix/sum");
+    expect(plan.body).toContain("files-reviewed: 2 of 2");
+    expect(plan.body).toContain("potentially stale");
+  });
+
+  it("renders model, usage, and run link into the footer in order", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      modelLabel: "openai/gpt-5.6-sol (effort high)",
+      usage: { inputTokens: 1234, outputTokens: 56 },
+      runUrl: "https://github.com/acme/widgets/actions/runs/42",
+    });
+    expect(plan.body).toContain(
+      "_Automated review by @effect-agent/pr-review · openai/gpt-5.6-sol (effort high) · " +
+        "1234 in / 56 out tokens · [run](https://github.com/acme/widgets/actions/runs/42) · " +
+        `reviewed at ${FIXTURE_SHA.slice(0, 7)}._`,
+    );
+  });
+
+  it("labels coordinator-scoped usage honestly", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      usage: { inputTokens: 10, outputTokens: 2 },
+      usageScope: "coordinator",
+    });
+    expect(plan.body).toContain("10 in / 2 out tokens (coordinator)");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -395,6 +561,11 @@ describe("offline review run", () => {
       // Anchor validation split the findings exactly as planned.
       expect(outcome.plan.comments).toHaveLength(1);
       expect(outcome.plan.demoted).toHaveLength(2);
+
+      // The run budget's observed usage is carried on the outcome.
+      expect(outcome.usage).toBeDefined();
+      expect(outcome.usage?.inputTokens).toBeGreaterThan(0);
+      expect(outcome.usage?.outputTokens).toBeGreaterThan(0);
 
       // Publication went through the collecting publisher exactly once.
       const plans = yield* Ref.get(published);

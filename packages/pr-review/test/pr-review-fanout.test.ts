@@ -30,14 +30,19 @@ import {
   FileReviewToolkit,
   FileReviewToolkitLayer,
   FileReviewUnitFailed,
+  FileReviewBrief,
   ListReviewUnits,
+  makeFanOutReviewInstructions,
+  makeFanOutReviewSuite,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
   planReviewUnits,
   PullRequestMetadata,
   PullRequestSource,
   rankAndDedupeFindings,
+  ReviewConcern,
   ReviewFinding,
+  ReviewMission,
   ReviewPublicationPlan,
 } from "../src/index.ts";
 import {
@@ -223,6 +228,45 @@ const runOfflineFanOut = (script: {
       childPrompts: yield* children.prompts,
     };
   });
+
+// ---------------------------------------------------------------------------
+// Coordinator instructions: the shared guidance and the configured findings
+// bound reach the coordinator, not only the children (the dogfooded gap).
+// ---------------------------------------------------------------------------
+
+describe("coordinator instructions", () => {
+  const mission = ReviewMission.make({
+    repository: "acme/widgets",
+    number: 202,
+    title: "Refactor",
+    body: "",
+    baseRef: "main",
+    headRef: "refactor/constants",
+    changedFileCount: 5,
+  });
+
+  it("carry the shared guidance and the configured findings bound", () => {
+    const instructions = makeFanOutReviewInstructions({
+      guidance: ["Review architecture first, correctness second."],
+      maxFindings: 7,
+    })(mission);
+    expect(instructions).toContain("Review architecture first, correctness second.");
+    expect(instructions).toContain("keep at most 7 findings");
+    expect(instructions).toContain('"concerns"');
+  });
+
+  it("reach both the coordinator and the children through the suite", () => {
+    const suite = makeFanOutReviewSuite({ guidance: "Architecture first.", maxFindings: 7 });
+    expect(suite.parent.instructions(mission)).toContain("Architecture first.");
+    expect(suite.parent.instructions(mission)).toContain("keep at most 7 findings");
+    const brief = FileReviewBrief.make({
+      unitId: "unit-001",
+      paths: ["src/api/alpha.ts"],
+      focus: "defects-first",
+    });
+    expect(suite.child.instructions(brief)).toContain("Architecture first.");
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Profile claim.
@@ -433,6 +477,51 @@ describe("offline fan-out review run", () => {
         expect(finalPrompt).toContain(alphaFinding.title);
         expect(finalPrompt).toContain(gammaFinding.title);
       }),
+  );
+
+  it.effect("projects child concerns to the coordinator and renders them as body sections", () =>
+    Effect.gen(function* () {
+      const gammaConcern = ReviewConcern.make({
+        severity: "important",
+        title: "Replaced gamma path is never deleted",
+        body: "The old constant path stays reachable after this refactor.",
+      });
+      const concernedChildren: ReadonlyArray<OfflineUnitScript> = [
+        happyChildren[0] as OfflineUnitScript,
+        {
+          unitId: "unit-002",
+          diffPath: "src/core/gamma.ts",
+          outcome: {
+            _tag: "findings",
+            report: FileReviewReport.make({
+              unitId: "unit-002",
+              findings: [gammaFinding],
+              concerns: [gammaConcern],
+            }),
+          },
+        },
+      ];
+      const concernedReview = CodeReview.make({
+        summary: "Merged 2 units; one non-anchored concern carried through.",
+        verdict: "comment",
+        findings: mergedFindings,
+        concerns: [gammaConcern],
+      });
+
+      const result = yield* runOfflineFanOut({
+        children: concernedChildren,
+        review: concernedReview,
+      });
+
+      // The projection carried the concern across the declassification
+      // boundary: the coordinator's merge turn saw it.
+      const finalPrompt = result.coordinatorPrompts[2] ?? "";
+      expect(finalPrompt).toContain(gammaConcern.title);
+
+      // The published body renders it as a severity-tagged section.
+      expect(result.outcome.plan.body).toContain(`### ⚠️ ${gammaConcern.title}`);
+      expect(result.outcome.plan.body).toContain(gammaConcern.body);
+    }),
   );
 
   it.effect("reports a failed unit honestly in the summary instead of failing the run", () =>

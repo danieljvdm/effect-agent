@@ -22,11 +22,14 @@ import { Tool, Toolkit } from "effect/unstable/ai";
 
 import { ChangedPath } from "./diff.ts";
 import {
+  clampMaxFindings,
   CodeReview,
+  MAX_CONCERNS,
   ReadFile,
   ReadFileDiff,
   readFileDiffHandler,
   readFileHandler,
+  ReviewConcern,
   ReviewFinding,
   ReviewMission,
 } from "./review-agent.ts";
@@ -52,6 +55,9 @@ import { PullRequestSource, PullRequestSourceFailure } from "./source.ts";
 
 /** One child returns at most this many findings; the merge caps the total. */
 export const MAX_CHILD_FINDINGS = 8;
+
+/** One child returns at most this many non-anchored concerns. */
+export const MAX_CHILD_CONCERNS = 3;
 
 // ---------------------------------------------------------------------------
 // The child: a file reviewer over one unit. Its toolkit is intentionally
@@ -80,12 +86,16 @@ export class FileReviewBrief extends Schema.Class<FileReviewBrief>(
   focus: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
 }) {}
 
-/** The child Agent output: the briefed unit's bounded findings. */
+/** The child Agent output: the briefed unit's bounded findings and concerns. */
 export class FileReviewReport extends Schema.Class<FileReviewReport>(
   "@effect-agent/pr-review/FileReviewReport",
 )({
   unitId: ReviewUnitId,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_CHILD_FINDINGS)),
+  /** Unit-scoped concerns with no diff line to anchor to. */
+  concerns: Schema.optionalKey(
+    Schema.Array(ReviewConcern).check(Schema.isMaxLength(MAX_CHILD_CONCERNS)),
+  ),
 }) {}
 
 /**
@@ -117,8 +127,10 @@ export const makeFileReviewerInstructions =
       "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
       "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
       "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-      `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.`,
-      `Report at most ${MAX_CHILD_FINDINGS} findings; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`,
+      "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
+      "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
+      `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for concerns about YOUR unit's files with no valid line anchor (a missing cleanup, a coverage gap the diff implies, sequencing the diff leaves open) — never duplicate a finding here>}.`,
+      `Report at most ${MAX_CHILD_FINDINGS} findings and at most ${MAX_CHILD_CONCERNS} concerns; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`,
     ].join("\n");
 
 export const fileReviewerInstructions = makeFileReviewerInstructions();
@@ -153,6 +165,10 @@ export class FileReviewUnitResult extends Schema.Class<FileReviewUnitResult>(
 )({
   unitId: ReviewUnitId,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_CHILD_FINDINGS)),
+  /** Unit-scoped concerns with no diff line to anchor to. */
+  concerns: Schema.optionalKey(
+    Schema.Array(ReviewConcern).check(Schema.isMaxLength(MAX_CHILD_CONCERNS)),
+  ),
 }) {}
 
 /**
@@ -279,20 +295,35 @@ export const FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
 
 export const FanOutReviewToolkit = Toolkit.make(ListReviewUnits, DelegateFileReview);
 
-export const fanOutReviewInstructions = (mission: ReviewMission): string =>
-  [
-    `You coordinate the review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
-    mission.body.length > 0
-      ? `Author description:\n${mission.body}`
-      : "The author provided no description.",
-    "Work in this order:",
-    "1. Call list_review_units once to get the planned review units.",
-    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
-    '3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan\'s undiffablePaths and unassignedPaths must also be named as not reviewed when present.',
-    "4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most 20 findings.",
-    '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}]}. Copy findings verbatim from the delegation results; never invent or edit anchors.',
-    'Use verdict "request-changes" only when at least one finding is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.',
-  ].join("\n");
+/**
+ * Build the coordinator's instructions. The same consumer guidance the
+ * children receive is injected between the mission framing and the procedure
+ * so the merged summary and verdict are shaped by the same review profile,
+ * and the configured findings bound reaches the merge step instead of only
+ * the host-side trim.
+ */
+export const makeFanOutReviewInstructions =
+  (options: FanOutInstructionOptions & { readonly maxFindings?: number | undefined } = {}) =>
+  (mission: ReviewMission): string => {
+    const maxFindings = clampMaxFindings(options.maxFindings);
+    return [
+      `You coordinate the review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
+      mission.body.length > 0
+        ? `Author description:\n${mission.body}`
+        : "The author provided no description.",
+      ...staticGuidanceLines(options.guidance),
+      "Work in this order:",
+      "1. Call list_review_units once to get the planned review units.",
+      "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
+      '3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan\'s undiffablePaths and unassignedPaths must also be named as not reviewed when present.',
+      `4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
+      `5. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
+      '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>}. Copy findings and concerns verbatim from the delegation results; never invent or edit anchors.',
+      'Use verdict "request-changes" only when at least one finding or concern is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.',
+    ].join("\n");
+  };
+
+export const fanOutReviewInstructions = makeFanOutReviewInstructions();
 
 /** The default fan-out coordinator execution bounds. */
 export const defaultFanOutPolicy = AgentPolicy.make({
@@ -327,11 +358,16 @@ const makeFileReviewerDefinition = (options: FanOutInstructionOptions = {}) =>
     metadata: { deploymentClass: "E", surface: "read-only" },
   });
 
-const makeFanOutReviewerDefinition = () =>
+/** Options for one coherent fan-out suite: shared guidance plus the merge bound. */
+export interface FanOutSuiteOptions extends FanOutInstructionOptions {
+  readonly maxFindings?: number | undefined;
+}
+
+const makeFanOutReviewerDefinition = (options: FanOutSuiteOptions = {}) =>
   Agent.define("pr-fanout-reviewer", {
     input: ReviewMission,
     output: CodeReview,
-    instructions: fanOutReviewInstructions,
+    instructions: makeFanOutReviewInstructions(options),
     toolkit: FanOutReviewToolkit,
     policy: defaultFanOutPolicy,
     description:
@@ -355,26 +391,25 @@ const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefin
         }),
       ),
     // The explicit declassification boundary (SUB-015): exactly the bounded
-    // findings cross to the parent. Whether they may anchor anywhere is
-    // decided host-side by planPublication against the real diff, not here.
+    // findings and concerns cross to the parent. Whether findings may anchor
+    // anywhere is decided host-side by planPublication against the real diff.
     projectResult: (report) =>
       Effect.succeed(
         FileReviewUnitResult.make({
           unitId: report.unitId,
           findings: report.findings,
+          ...(report.concerns !== undefined ? { concerns: report.concerns } : {}),
         }),
       ),
     policy: fileReviewPolicy,
   });
 
 /** Build one coherent fan-out suite: child, coordinator, and delegation. */
-export const makeFanOutReviewSuite = (
-  options: FanOutInstructionOptions = {},
-): FanOutReviewSuite => {
-  const child = makeFileReviewerDefinition(options);
+export const makeFanOutReviewSuite = (options: FanOutSuiteOptions = {}): FanOutReviewSuite => {
+  const child = makeFileReviewerDefinition({ guidance: options.guidance });
   return {
     child,
-    parent: makeFanOutReviewerDefinition(),
+    parent: makeFanOutReviewerDefinition(options),
     delegation: makeFileReviewDelegation(child),
   };
 };

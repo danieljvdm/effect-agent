@@ -2,6 +2,7 @@
 // live behind the "./action" and "./cli" subpaths, deterministic test helpers
 // behind "./testing".
 export * from "./internal/diff.ts";
+export * from "./internal/effort.ts";
 export * from "./internal/factory.ts";
 export * from "./internal/fan-out.ts";
 export * from "./internal/fingerprint.ts";

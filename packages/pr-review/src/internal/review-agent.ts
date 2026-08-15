@@ -21,6 +21,9 @@ import {
 /** The hard findings bound carried by the CodeReview schema. */
 export const MAX_FINDINGS = 20;
 
+/** The hard non-anchored-concerns bound carried by the CodeReview schema. */
+export const MAX_CONCERNS = 10;
+
 /** Annotated patches larger than this are truncated with an explicit marker. */
 const MAX_PATCH_CHARS = 60_000;
 
@@ -261,10 +264,27 @@ export class ReviewFinding extends Schema.Class<ReviewFinding>(
 export const ReviewVerdict = Schema.Literals(["approve", "comment", "request-changes"]);
 export type ReviewVerdict = typeof ReviewVerdict.Type;
 
+/**
+ * A concern with no diff line to anchor to: a missing deletion or cleanup,
+ * rollout or migration sequencing, a coverage gap the diff implies but does
+ * not add, or a scope question only the author can answer. Rendered as a
+ * review-body section — never as an inline comment, so it needs no anchor and
+ * is never demoted.
+ */
+export class ReviewConcern extends Schema.Class<ReviewConcern>(
+  "@effect-agent/pr-review/ReviewConcern",
+)({
+  severity: FindingSeverity,
+  title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
+  body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
+}) {}
+
 export class CodeReview extends Schema.Class<CodeReview>("@effect-agent/pr-review/CodeReview")({
   summary: Schema.NonEmptyString.check(Schema.isMaxLength(4_000)),
   verdict: ReviewVerdict,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_FINDINGS)),
+  /** Non-anchorable concerns; absent when the review raises none. */
+  concerns: Schema.optionalKey(Schema.Array(ReviewConcern).check(Schema.isMaxLength(MAX_CONCERNS))),
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -320,9 +340,13 @@ export const makeReviewInstructions =
       "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
       "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
       "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-      '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
-      `Report at most ${maxFindings} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
-      'Use verdict "request-changes" only when at least one finding is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',
+      "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
+      "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
+      "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
+      '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
+      '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>}.',
+      `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
+      'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',
     ].join("\n");
   };
 

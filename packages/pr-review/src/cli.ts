@@ -3,6 +3,7 @@ import { Console, Effect, Layer, Option, Schema } from "effect";
 import { BudgetExceeded } from "effect-agent";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 
+import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { gitHubReviewLayers, resolveReviewTarget } from "./internal/github-env.ts";
 import { fingerprintUnchanged } from "./internal/github.ts";
@@ -10,6 +11,7 @@ import {
   anthropicClientLayer,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
+  describeReviewModel,
   makeAnthropicReviewModel,
   makeOpenAiReviewModel,
   openAiClientLayer,
@@ -41,6 +43,12 @@ const modelFlag = Flag.string("model").pipe(
   Flag.optional,
   Flag.withDescription(
     `Model id (defaults: openai ${DEFAULT_MODEL.openai}, anthropic ${DEFAULT_MODEL.anthropic}).`,
+  ),
+);
+const effortFlag = Flag.string("effort").pipe(
+  Flag.optional,
+  Flag.withDescription(
+    'Reasoning effort: "low", "medium", "high", "xhigh", "max", or a number in [0, 1] resolved onto the provider\'s own ladder.',
   ),
 );
 const postFlag = Flag.boolean("post").pipe(
@@ -93,6 +101,7 @@ const command = CliCommand.make(
     pr: prFlag,
     provider: providerFlag,
     model: modelFlag,
+    effort: effortFlag,
     post: postFlag,
     applyVerdict: applyVerdictFlag,
     fanOut: fanOutFlag,
@@ -108,6 +117,14 @@ const command = CliCommand.make(
         number: Option.getOrUndefined(flags.pr),
       });
       const model = Option.getOrUndefined(flags.model);
+      const effortRaw = Option.getOrUndefined(flags.effort);
+      let effort: EffortPosition | undefined;
+      if (effortRaw !== undefined) {
+        effort = parseEffortPosition(effortRaw);
+        if (effort === undefined) {
+          return yield* InvalidEffortInput.make({ input: effortRaw });
+        }
+      }
       const shared = {
         applyVerdict: flags.applyVerdict,
         ignore: flags.ignore
@@ -115,6 +132,7 @@ const command = CliCommand.make(
           .map((pattern) => pattern.trim())
           .filter((pattern) => pattern.length > 0),
         maxFindings: Option.getOrUndefined(flags.maxFindings),
+        modelLabel: describeReviewModel(provider, model, effort),
       };
 
       yield* Console.log(
@@ -140,16 +158,18 @@ const command = CliCommand.make(
 
       let result: Option.Option<ReviewRunOutcome>;
       if (provider === "anthropic") {
+        const boundModel = makeAnthropicReviewModel(model, effort);
         const reviewer = flags.fanOut
-          ? PrReview.makeFanOut({ ...shared, model: makeAnthropicReviewModel(model) })
-          : PrReview.make({ ...shared, model: makeAnthropicReviewModel(model) });
+          ? PrReview.makeFanOut({ ...shared, model: boundModel })
+          : PrReview.make({ ...shared, model: boundModel });
         result = yield* runOrSkip(reviewer).pipe(
           Effect.provide(Layer.merge(githubLayers, anthropicClientLayer)),
         );
       } else {
+        const boundModel = makeOpenAiReviewModel(model, effort);
         const reviewer = flags.fanOut
-          ? PrReview.makeFanOut({ ...shared, model: makeOpenAiReviewModel(model) })
-          : PrReview.make({ ...shared, model: makeOpenAiReviewModel(model) });
+          ? PrReview.makeFanOut({ ...shared, model: boundModel })
+          : PrReview.make({ ...shared, model: boundModel });
         result = yield* runOrSkip(reviewer).pipe(
           Effect.provide(Layer.merge(githubLayers, openAiClientLayer)),
         );

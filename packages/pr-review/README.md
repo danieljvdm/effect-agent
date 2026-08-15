@@ -56,11 +56,25 @@ const reviewer = PrReview.make({
 Every knob widens what goes INTO the review. What leaves it is not
 configurable: model output is untrusted input, so finding anchors are
 re-validated against the parsed unified diff (invalid ones are demoted into
-the review body, never trusted), the findings bound is enforced host-side,
-and publication happens only through the `ReviewPublisher` port after the run
-settles. `PrReview.makeFanOut` builds the delegating variant — bounded
-per-unit child reviewers (S1 attached ephemeral delegation) merged under the
-same output contract and the same publication path.
+the review body with the reason named, never trusted), the findings bound is
+enforced host-side, and publication happens only through the
+`ReviewPublisher` port after the run settles. `PrReview.makeFanOut` builds
+the delegating variant — bounded per-unit child reviewers (S1 attached
+ephemeral delegation) merged under the same output contract and the same
+publication path; the shared `guidance` and `maxFindings` shape the
+coordinator's merge as well as the children.
+
+## What a posted review looks like
+
+The body opens with a host-derived callout tier — `[!CAUTION]` when any
+finding is blocking, `[!IMPORTANT]` for important findings, an ℹ️ blockquote
+for nits, `✅` for a clean approval — computed from the validated severities,
+never from model prose. Below the summary, non-anchored `concerns` (deletion
+plans, rollout sequencing, coverage gaps, scope questions — things with no
+diff line to point at) render as severity-tagged sections. The footer names
+the model binding, the observed token usage, and links to the workflow run;
+an invisible metadata comment pins the reviewed head commit so later readers
+know when line callouts have gone stale.
 
 ## Swap a port
 
@@ -117,6 +131,8 @@ variables inside Actions.
 ## Bounds, spelled out
 
 Finite `AgentPolicy` on every definition plus run-level `UsageBudgetLimits`
-(tokens, tool calls, cost, duration). Pull requests beyond 300 changed files
-or 200k-character files are refused typed, never silently truncated. Fan-out
+(tokens, tool calls, cost, duration). Reading a file head version beyond 200k
+characters is refused typed. The changeset surface is bounded at 300 files:
+files beyond the bound are not fetched, and the review body reports
+`Reviewed N of M changed files` instead of claiming completeness. Fan-out
 capacity overflow is reported in the review summary, never dropped.
