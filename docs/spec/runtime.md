@@ -320,6 +320,35 @@ the engine itself enforces no delegation policy.
 Both services are excluded from `AgentRuntimeRequirements` because the
 interpreter supplies them itself; an application Layer must not provide them.
 
+## 12.1 Code Mode programmatic invocation seam
+
+This section documents the engine surface for Code Mode programmatic Tool invocation
+([capability specification §9.1](./capabilities.md), ADR-0017). The engine owns a broker seam in
+the same pattern as `AgentSpawner` and `DurableStep`: provided locally by the interpreter, bound
+per outer Tool Call, and excluded from `AgentRuntimeRequirements`. The live native Toolkit
+handlers, engine policy context, and parent Tool Call identity are capabilities bound when the
+per-outer-call broker service is constructed; per-call input from generated code is data only —
+namespace, method, encoded arguments, and the deterministic sequence index. A caller inside
+business execution can never substitute handlers or policy.
+
+A programmatic call shares the existing per-call execution path — Tool lookup, parameter
+handling, approval preflight, scoped handler execution, typed failure handling, success and
+failure encoding, and per-call telemetry. It executes under the parent Tool Call's already-held
+scheduling permit and never acquires Tool Batch permits of its own: the batch semaphore is
+created per batch, so re-entrant acquisition would deadlock at `toolConcurrency: 1`, and a
+second batch path would let inner calls escape the declared concurrency bound. Calls are
+strictly sequential — a host call issued while another call from the same pass is unsettled
+fails with a typed concurrency error. Each call's identity derives from the outer `ToolCallId`
+plus a zero-based sequence index; the model cannot choose or forge it.
+
+Two behaviors are specific to the broker path. Tool-call and duration budgets are consumed and
+checked before every inner invocation, so budget exhaustion prevents the next call mid-pass;
+direct model-declared calls keep their Turn-boundary accounting unchanged. Result size bounds
+and redaction at the sandbox boundary are broker-owned; no such stage is added to the direct
+path. An inner call that would require approval fails with a typed policy failure and never
+suspends in the ephemeral slice. Per-Tool authorization remains application- and handler-owned;
+the engine contributes approval policy, scheduling, budgets, encoding, and telemetry only.
+
 ## 13. Runtime invariants
 
 - **RUN-001:** `run` and `stream` share one interpreter.
@@ -340,3 +369,9 @@ interpreter supplies them itself; an application Layer must not provide them.
 - **RUN-014:** Steering is delivered only before a model request and never mutates an in-flight
   response or Tool Batch.
 - **RUN-015:** Follow-up input is delivered only when the Agent would otherwise stop.
+- **RUN-016:** Programmatic Tool calls execute only through the engine-owned broker seam, under
+  the parent Tool Call's already-held permit, strictly sequentially, with identities derived
+  from the outer `ToolCallId` and a zero-based index; a concurrent host call fails typed.
+- **RUN-017:** Every programmatic Tool call consumes the Run's Tool-call and duration budgets
+  before its handler is invoked; exhaustion prevents the next call mid-pass while direct calls
+  keep their Turn-boundary accounting.

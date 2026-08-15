@@ -269,11 +269,31 @@ remain explicitly unclaimed — Phase 7 completed the roadmap without hosted-pla
 ([Phase 7 evidence](../PHASE-7-EVIDENCE.md)), and hosted-service operation stays outside the
 roadmap's claims until open-source preparation revisits it.
 
+### Dynamic Worker Code Mode executor
+
+The first isolated `CodeExecutor` adapter is a Cloudflare Dynamic Worker Layer in
+`@effect-agent/platform-cloudflare` (ADR-0017). Each pass creates one fresh Worker through the
+Worker Loader with `globalOutbound: null`, supplies only the scoped Tool-broker RPC stub and
+explicitly allowed structured values, applies the configured Dynamic Worker CPU and subrequest
+limits plus an executor-owned wall-clock deadline (an asynchronously suspended pass consumes no
+CPU and must not outlive its deadline), invokes one fixed entrypoint, validates the returned
+envelope through Effect Schema, and disposes the entrypoint and Worker handles in Scope
+finalizers. A synchronous runaway program is stopped by platform CPU limits, not only by a
+JavaScript timer.
+
+The adapter records no durable state and adds no deployment-class claim beyond `E`: Code Mode in
+the `DN` or `DC` assemblies requires its own accepted ADR. The tested harness is
+workerd/Miniflare; hosted-platform evidence remains unclaimed. No cost or performance claim is
+made before measurement — current Dynamic Workers billing counts no-ID `load()` use as a new
+Dynamic Worker per invocation, and any future stable-ID Worker caching must include tenant and
+binding context in cache identity.
+
 Current platform references:
 
 - [SQLite-backed Durable Object storage](https://developers.cloudflare.com/durable-objects/api/sqlite-storage-api/)
 - [Rules of Durable Objects](https://developers.cloudflare.com/durable-objects/best-practices/rules-of-durable-objects/)
 - [Durable Object alarms](https://developers.cloudflare.com/durable-objects/api/alarms/)
+- [Dynamic Worker Loader API](https://developers.cloudflare.com/dynamic-workers/api-reference/)
 
 ## 12. Packaging and release
 
@@ -303,3 +323,6 @@ Current platform references:
 - **DEPLOY-009**: Durable adapters publish and test backup/restore procedures.
 - **DEPLOY-010**: Cloudflare platform bindings are supplied as Effect services/Layers and remain
   experimental until they pass the shared durability suite.
+- **DEPLOY-011**: The Dynamic Worker Code Mode executor denies ambient egress, enforces platform
+  CPU and executor wall-clock limits, disposes Worker and RPC handles in Scope finalizers, and
+  claims deployment class `E` only.

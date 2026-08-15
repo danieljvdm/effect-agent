@@ -82,6 +82,7 @@ The package dependency direction is:
 ```text
 core <- engine <- capabilities
 core <- sandbox <- sandbox-local
+core <- sandbox <- capabilities
 core <- engine <- session <- storage adapters
 engine + session + selected adapters <- platform packages
 core + engine <- testing

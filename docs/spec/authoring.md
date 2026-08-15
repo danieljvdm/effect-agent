@@ -218,6 +218,30 @@ Tool availability may change only at a documented Turn boundary. Dynamic additio
 emit a semantic framework event so durable history can explain which Tools were
 available.
 
+## 8.1 Code Mode Tools
+
+Code Mode derives one native Effect AI Tool from an explicit record of selected Tools
+([capability specification §9.1](./capabilities.md), ADR-0017). Authoring follows the Delegation
+pattern: Tool selection and namespace mapping are fixed at construction, the builder returns an
+ordinary Tool plus a handler Layer, and no ambient registry exists (CAP-014).
+
+```ts
+const codeMode = CodeMode.make("run_javascript", {
+  description: "Run bounded JavaScript that may call the selected tools",
+  tools: { warehouse: { query: warehouseQuery } },
+  limits: codeModeLimits,
+});
+// codeMode.tool     — an ordinary Effect AI Tool, annotated readonly
+// codeMode.handlers — a handler Layer requiring the CodeExecutor and the selected handlers
+```
+
+The selected handlers' requirements and typed failures remain visible in the composed `R` and
+`E`. Construction fails closed on a Tool not annotated `readonly` (an unannotated Tool reads as
+`uncertain` under the fail-closed execution-class default), a Tool that requires approval, a
+sanitized-name collision, and any Schema the declaration deriver cannot render. Model-facing
+declarations present the encoded wire types as documentation only; runtime validation always
+uses the original Effect Schemas.
+
 ## 9. Agent policy
 
 Every Agent has finite defaults:

@@ -110,6 +110,46 @@ const forbiddenScaffoldDependencies = new Set([
   "wrangler",
 ]);
 const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"] as const;
+/**
+ * The documented inward-only package graph (ARCHITECTURE.md §11, AGENTS.md
+ * "Package dependency direction"): every `@effect-agent/*` edge a framework
+ * manifest may declare, in any dependency section. `capabilities -> sandbox`
+ * is the CodeExecutor port edge registered by ADR-0017 (declared here before
+ * C1 adds the manifest edge). The `-> testing` entries are the two documented
+ * dev-only exceptions asserted in the catalog-pin test below; every other
+ * package stays clean of `testing` in every section.
+ */
+const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
+  capabilities: ["core", "engine", "sandbox"],
+  core: [],
+  "effect-agent": ["capabilities", "core", "engine"],
+  engine: ["core"],
+  "platform-cloudflare": [
+    "capabilities",
+    "core",
+    "engine",
+    "session",
+    "storage-cloudflare",
+    "testing",
+  ],
+  "platform-node": ["capabilities", "core", "engine", "session", "storage-sqlite"],
+  "pr-review": ["effect-agent"],
+  sandbox: ["core"],
+  "sandbox-local": ["core", "sandbox"],
+  session: ["core", "engine"],
+  "storage-cloudflare": ["core", "session", "testing"],
+  "storage-memory": ["core", "session"],
+  "storage-sqlite": ["core", "session"],
+  testing: [
+    "capabilities",
+    "core",
+    "engine",
+    "platform-node",
+    "session",
+    "storage-memory",
+    "storage-sqlite",
+  ],
+};
 
 const readManifest = (path: string) =>
   Effect.gen(function* () {
@@ -229,6 +269,29 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
         expect(manifest.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      }
+    }),
+  );
+
+  it.effect("keeps workspace dependency edges on the documented inward-only graph", () =>
+    Effect.gen(function* () {
+      for (const packageName of packageNames) {
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
+        );
+        const workspaceEdges = manifestDependencies(manifest)
+          .filter(
+            (dependency) =>
+              dependency === "effect-agent" || dependency.startsWith("@effect-agent/"),
+          )
+          .map((dependency) =>
+            dependency === "effect-agent" ? dependency : dependency.slice("@effect-agent/".length),
+          );
+        const allowed = allowedWorkspaceEdges[packageName];
+        expect(
+          workspaceEdges.filter((edge) => !allowed.includes(edge)),
+          `${packageName} declares a workspace edge outside the documented dependency graph`,
+        ).toEqual([]);
       }
     }),
   );

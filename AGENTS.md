@@ -94,9 +94,11 @@ locally reversible.
 ```text
 core <- engine <- capabilities
 core <- sandbox <- sandbox-local
+core <- sandbox <- capabilities
 core <- engine <- session <- storage adapters
 engine + session + selected adapters <- platform packages
 core + engine <- testing
+core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 ```
 
 An inward package must not import an outward package. If a feature appears to require that, define

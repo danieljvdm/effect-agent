@@ -1,6 +1,7 @@
 # ADR-0017: Code Mode executor port and native Tool broker
 
-- Status: Proposed (design defaults resolved by owner 2026-08-14; implementation unassigned)
+- Status: Accepted (owner-directed, 2026-08-14; ephemeral slices C0–C4 assigned, durable Code
+  Mode deferred to its own future ADR)
 - Related decisions: [D-002](../DECISIONS.md#d-002--relationship-to-effect-ai),
   [D-003](../DECISIONS.md#d-003--tool-and-toolkit-ownership),
   [D-007](../DECISIONS.md#d-007--tool-scheduling-default),
@@ -82,8 +83,9 @@ constrains new packages.
 - `docs/ARCHITECTURE.md`'s dependency graph, `AGENTS.md`'s dependency-direction rules, and the CI
   package-graph check gain the `capabilities -> sandbox` edge.
 - The authoring, runtime, capabilities, deployment, security-operations, and testing
-  specifications gain Code Mode sections with stable requirement IDs (family choice pending; IDs
-  are coverage-gate-bearing only once defined in `docs/spec/*.md`).
+  specifications gain Code Mode sections with stable requirement IDs extending the existing
+  `CAP`/`RUN`/`DEPLOY`/`SEC`/`TEST` families (decided at C0; IDs are coverage-gate-bearing only
+  once defined in `docs/spec/*.md`).
 - Mid-pass budget consumption is new engine behavior; direct model-declared calls keep their
   current Turn-boundary accounting unchanged.
 - In class `E`, inner calls produce no Canonical Records: the Conversation Log carries only the

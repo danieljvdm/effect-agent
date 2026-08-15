@@ -145,16 +145,20 @@ Owns generic optional modules:
 - model-context compaction;
 - Skill activation;
 - Subagent spawning;
+- the Code Mode Tool builder over the sandbox `CodeExecutor` port (ADR-0017);
 - ephemeral multi-Run Conversation state;
 - approval, budget, context-compaction, safe-seam input, scheduling, and MCP adapters.
 
-The package depends on engine seams and must not become a grab-bag context object.
+The package depends on engine seams and, for Code Mode, on the inward `@effect-agent/sandbox`
+executor port; it must not become a grab-bag context object.
 The initial package remains consolidated so the project can validate the capability boundaries
 before splitting them.
 
 ### `@effect-agent/sandbox`
 
 Owns narrow filesystem, process, path, and network capability ports plus Effect AI Tool definitions.
+It also owns the callback-capable `CodeExecutor` port for Code Mode (ADR-0017), a sibling of the
+command-shaped `Sandbox` service.
 Implementations live in outward packages. `@effect-agent/sandbox-local` is the Phase 2 explicitly
 unisolated local-process implementation: it enforces its declared request/output/time bounds and
 rejects policy it cannot enforce.
@@ -452,8 +456,10 @@ capabilities session sandbox-local
        platform packages
 
 Effect AI Model Layers -> engine
+sandbox <- capabilities (the CodeExecutor port consumed by Code Mode, ADR-0017)
 engine + selected adapters <- platform package
 core + engine <- testing
+core + engine + capabilities <- effect-agent (umbrella) <- pr-review (ADR-0016)
 ```
 
 No cycle is permitted. Production packages never depend on `testing`. Package graph checks are part

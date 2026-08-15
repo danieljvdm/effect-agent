@@ -23,6 +23,7 @@ Treat all of these as distinct principals or trust zones:
 - MCP server;
 - skill package;
 - sandboxed workload;
+- generated Code Mode program;
 - runtime operator;
 - persistence administrator;
 - telemetry backend.
@@ -159,6 +160,22 @@ Untrusted code or commands require an actual isolation adapter. Policy defaults:
 
 Local unisolated runners are development-only and clearly labeled.
 
+Code Mode generated programs are model output and therefore untrusted input executing in an
+isolated executor (ADR-0017). The executor grants no ambient network, filesystem, environment,
+secrets, platform bindings, or host SDK; the only host authority is the narrow, Schema-validated
+Tool-broker RPC surface over the construction-time allowlist. Source inspection and AST
+normalization are usability checks, never the security boundary — genuine runtime isolation,
+least-authority bindings, and enforced limits are. No raw secret may be returned by a host Tool
+or included in an executor binding, and the deterministic test substitute identifies itself as
+`unisolated` rather than masquerading as a boundary.
+
+The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
+database identity without mutation, DDL, administrative, or extension privileges; host-owned
+tenant scoping; exactly one statement per call with bound parameters rather than interpolation;
+statement timeout and cancellation; and maximum row, column, cell, and encoded-byte bounds. A
+raw `SELECT` prefix check is never read-only enforcement. The adapter fails typed when it cannot
+prove or enforce the configured policy.
+
 ## 10. Supply chain
 
 - exact dependency versions for prerelease Effect packages;
@@ -281,6 +298,10 @@ Malformed provider or tool streams must not grow unbounded buffers.
 - **SEC-011**: Security-relevant operator actions are auditable and idempotent.
 - **SEC-012**: Resource and cost budgets are enforced hierarchically.
 - **SEC-013**: All untrusted input and stream buffers have explicit bounds.
+- **SEC-014**: Generated Code Mode programs execute only in an isolated executor with no ambient
+  authority; host Tools are reachable only through the brokered, Schema-validated RPC surface.
+- **SEC-015**: Read-only SQL exposure is enforced by database authority and host-owned tenant
+  scoping, never by source-text inspection.
 - **OPS-001**: Accepted work settlement age is measurable and alertable.
 - **OPS-002**: Unknown outcomes produce an immediate operational signal.
 - **OPS-003**: Durable deployments have incident, backup, restore, and

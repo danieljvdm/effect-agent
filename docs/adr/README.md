@@ -3,17 +3,19 @@
 ADRs explain durable architectural choices, their context, and their tradeoffs.
 The records below reflect explicit owner decisions.
 
-| ADR                                                            | Decision                                                            |
-| -------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [ADR-0001](0001-effect-native-core.md)                         | Build an Effect-native core                                         |
-| [ADR-0002](0002-use-effect-ai-primitives.md)                   | Use Effect AI primitives directly                                   |
-| [ADR-0003](0003-canonical-log-and-ledger.md)                   | Separate the canonical Conversation Log from the Submission Ledger  |
-| [ADR-0004](0004-uncertain-external-effects.md)                 | Represent uncertain external effects                                |
-| [ADR-0005](0005-bounded-parallel-tool-scheduling.md)           | Use bounded parallel Tool execution with deterministic result order |
-| [ADR-0006](0006-package-only-vite-plus-monorepo.md)            | Use a phase-gated, package-only Vite+ monorepo                      |
-| [ADR-0007](0007-slim-toolchain-and-canonical-effect-source.md) | Slim the toolchain and use the canonical Effect source              |
-| [ADR-0008](0008-turn-boundary-input-delivery.md)               | Deliver steering, follow-up, and joined input only at safe seams    |
-| [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces           |
+| ADR                                                            | Decision                                                                                                                                                                   |
+| -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ADR-0001](0001-effect-native-core.md)                         | Build an Effect-native core                                                                                                                                                |
+| [ADR-0002](0002-use-effect-ai-primitives.md)                   | Use Effect AI primitives directly                                                                                                                                          |
+| [ADR-0003](0003-canonical-log-and-ledger.md)                   | Separate the canonical Conversation Log from the Submission Ledger                                                                                                         |
+| [ADR-0004](0004-uncertain-external-effects.md)                 | Represent uncertain external effects                                                                                                                                       |
+| [ADR-0005](0005-bounded-parallel-tool-scheduling.md)           | Use bounded parallel Tool execution with deterministic result order                                                                                                        |
+| [ADR-0006](0006-package-only-vite-plus-monorepo.md)            | Use a phase-gated, package-only Vite+ monorepo                                                                                                                             |
+| [ADR-0007](0007-slim-toolchain-and-canonical-effect-source.md) | Slim the toolchain and use the canonical Effect source                                                                                                                     |
+| [ADR-0008](0008-turn-boundary-input-delivery.md)               | Deliver steering, follow-up, and joined input only at safe seams                                                                                                           |
+| [ADR-0009](0009-leaf-example-workspaces.md)                    | Keep runnable consumer benches in leaf example workspaces                                                                                                                  |
+| [ADR-0016](0016-pr-review-package.md)                          | Package the pull-request reviewer with a prebuilt GitHub Action (owner-directed, 2026-08-14)                                                                               |
+| [ADR-0017](0017-code-mode-executor-and-broker.md)              | Code Mode: `CodeExecutor` port in sandbox, engine-owned native Tool broker, one native Tool over an explicit allowlist (owner-directed, 2026-08-14; ephemeral slices only) |
 
 ## Accepted by default
 
@@ -27,10 +29,9 @@ The records below reflect explicit owner decisions.
 
 ## Proposed
 
-| ADR                                               | Recommendation                                                                                                                                                                                                                                                    |
-| ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [ADR-0010](0010-declared-attached-subagents.md)   | Model Subagents as declared attached delegation Tools — S1 and S2 implemented as proposed defaults ([S1 evidence](../S1-EVIDENCE.md), [S2 evidence](../S2-EVIDENCE.md))                                                                                           |
-| [ADR-0017](0017-code-mode-executor-and-broker.md) | Code Mode: a callback-capable `CodeExecutor` port in sandbox, an engine-owned native Tool broker, and one native Tool executing bounded generated JavaScript over an explicit allowlist — design defaults resolved by owner 2026-08-14; implementation unassigned |
+| ADR                                             | Recommendation                                                                                                                                                          |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [ADR-0010](0010-declared-attached-subagents.md) | Model Subagents as declared attached delegation Tools — S1 and S2 implemented as proposed defaults ([S1 evidence](../S1-EVIDENCE.md), [S2 evidence](../S2-EVIDENCE.md)) |
 
 ## Status transitions
 
