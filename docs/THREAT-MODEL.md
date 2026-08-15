@@ -25,7 +25,7 @@ repo-ops evidence auditor.
   `TenantContext`; it does not parse bearer tokens (SEC-001). Authentication of external callers is
   the host's responsibility;
 - **artifact classification laundering** — recorded **N/A**: no `AttachmentStore` / artifact port
-  exists in the framework as shipped (D-P6-8), so there is no artifact surface to launder. Revisit
+  exists in the framework as shipped, so there is no artifact surface to launder. Revisit
   when an attachment port is introduced during open-source preparation.
 
 ## Trust boundaries and principals
@@ -172,4 +172,4 @@ Evidence: `sandbox-local` tests, `examples/repo-ops` (evidence auditor), FINDING
 
 - P7 WP5: initial descriptive model covering the ten trust boundaries of security-operations §1,
   with the operator/admin surface (new in WP1) and the cross-DO transport (new in P6) added, and
-  artifact laundering recorded N/A per D-P6-8.
+  artifact laundering recorded N/A because no artifact port ships.

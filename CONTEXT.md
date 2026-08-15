@@ -202,5 +202,5 @@ platform implementation.
 
 **Reference Application**  
 A cumulative, package-local set of compiling fixtures and tests that exercises the public
-framework through successive roadmap phases. It is application-shaped evidence, not a deployable
+framework through successive build-out phases. It is application-shaped evidence, not a deployable
 workspace or a new product package.
