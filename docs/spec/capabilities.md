@@ -9,20 +9,20 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 
 ## 1. Capability matrix
 
-| Capability                 |    First target | Required for ephemeral core |     Required for DN/DC assembly |
-| -------------------------- | --------------: | --------------------------: | ------------------------------: |
-| Tools and toolkits         |              P1 |                         Yes |                             Yes |
-| Sessions and conversations |              P2 |                          No |                             Yes |
-| Steering and follow-up     |              P2 |                          No |                              No |
-| Approval                   |              P2 |                          No |          For configured actions |
-| Compaction                 |              P2 |                          No | Yes for unbounded conversations |
-| Skills                     |        Deferred |                          No |                              No |
-| MCP client                 |              P2 |                          No |                              No |
-| Sandbox                    |              P2 |                          No |     For untrusted commands/code |
-| Code Mode                  | Build-out C1–C4 |                          No |                              No |
-| Subagents                  |        Proposed |                          No |                              No |
-| Persistent agent state     |              P4 |                          No |                              No |
-| Durable steps              |              P5 |                          No |                              No |
+| Capability                 |      Status | Required for ephemeral core |     Required for DN/DC assembly |
+| -------------------------- | ----------: | --------------------------: | ------------------------------: |
+| Tools and toolkits         | Implemented |                         Yes |                             Yes |
+| Sessions and conversations | Implemented |                          No |                             Yes |
+| Steering and follow-up     | Implemented |                          No |                              No |
+| Approval                   | Implemented |                          No |          For configured actions |
+| Compaction                 | Implemented |                          No | Yes for unbounded conversations |
+| Skills                     |    Deferred |                          No |                              No |
+| MCP client                 | Implemented |                          No |                              No |
+| Sandbox                    | Implemented |                          No |     For untrusted commands/code |
+| Code Mode                  | Implemented |                          No |                              No |
+| Subagents                  | Implemented |                          No |                              No |
+| Persistent agent state     | Implemented |                          No |                              No |
+| Durable steps              | Implemented |                          No |                              No |
 
 “Required for DN/DC assembly” means the DN or DC host assembly must supply the
 service when the related behavior is enabled. It does not mean every deployment
@@ -123,13 +123,13 @@ An approval provider may be interactive, policy-based, remote, or test-controlle
 Approval decisions are canonical audit events. A timeout is a denial unless the
 configured policy explicitly says otherwise.
 
-On the durable runtime (Phase 5), an unresolved approval is a **durable suspension**: the
+On the durable runtime, an unresolved approval is a **durable suspension**: the
 canonical approval request record is the safe boundary (durability §8), ownership ends, and the
 lane consumes no worker permit — durable suspension itself has no implicit timeout. Suspension
 is operational ledger state with no canonical "suspended" record; the resuming
 Attempt appends the canonical decision before honoring it and replays the declared Tool batch
 without re-invoking the model. An immediate policy decision commits atomically with its request.
-Denial remains terminal per the P2 policy default.
+Denial remains terminal per the ephemeral policy default.
 
 ## 6. Compaction
 
@@ -294,8 +294,8 @@ single aggregate byte budget and redaction policy. Intermediate Tool results nev
 pass implicitly — not through telemetry, canonical records, or declarations. In deployment class
 `E`, inner calls produce no Canonical Records: the Conversation Log carries only the outer Tool
 Call and its bounded final result, with inner-call evidence in telemetry counts and host-Tool
-audit metadata. Code Mode claims deployment class `E` only; Code Mode in the `DN` or `DC`
-assemblies requires its own accepted ADR.
+audit metadata. Code Mode claims deployment class `E` only; the `DN` and `DC` assemblies make
+no Code Mode claim until this specification says otherwise.
 
 ## 10. Subagents
 

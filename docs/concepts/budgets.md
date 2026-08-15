@@ -5,8 +5,6 @@ description: Every bound an Agent runs under — Stop Policy limits, exhaustion 
 
 # Budgets & bounded autonomy
 
-<StatusCallout status="available" phase="P2 + budget arc" title="Finite bounds, the final-answer exhaustion resolution, per-Run allowances, hierarchical usage budgets, and delegation reservations are all implemented and tested." />
-
 Every Agent runs under finite, explicit bounds. Unlimited execution is an expert opt-in, never a
 default. But _bounded_ does not mean _brittle_: a bound the model cannot see is a cliff, and an
 agent that falls off a cliff after ten productive tool calls delivers nothing. The budget model

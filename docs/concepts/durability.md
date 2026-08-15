@@ -5,21 +5,20 @@ description: Why replayable history and accepted-work recovery are separate prod
 
 # Persistence and durability
 
-<StatusCallout status="available" phase="P3–P4" title="Persistent history and base durable execution exist today on Node/SQLite." />
-
 Persistence answers “can I rebuild what was recorded?” Durability answers “after I acknowledge
 work, who owes the terminal outcome?” The second promise requires substantially more machinery.
 
 ## Four deployment classes
 
-| Class | Meaning                                                  | Status                             |
-| ----- | -------------------------------------------------------- | ---------------------------------- |
-| `E`   | ephemeral execution; no process-loss recovery            | <StatusBadge status="available" /> |
-| `P`   | Conversation history survives restart; clients may retry | <StatusBadge status="available" /> |
-| `DN`  | durable admission and recovery on Node/SQLite            | <StatusBadge status="available" /> |
-| `DC`  | equivalent contract on Cloudflare Durable Objects        | <StatusBadge status="planned" />   |
+| Class | Meaning                                                  |
+| ----- | -------------------------------------------------------- |
+| `E`   | ephemeral execution; no process-loss recovery            |
+| `P`   | Conversation history survives restart; clients may retry |
+| `DN`  | durable admission and recovery on Node/SQLite            |
+| `DC`  | the equivalent contract on Cloudflare Durable Objects    |
 
-No package or example should use “durable” without naming the deployment class and tested adapter.
+All four classes are implemented. No package or example uses “durable” without naming the
+deployment class and tested adapter.
 
 ## Canonical history
 
@@ -57,9 +56,10 @@ Durable Steps narrow that ambiguity by exactly-once-recording a named result whi
 at-least-once execution. Applications still need external idempotency, reconciliation, or
 compensation.
 
-## Why this matters now
+## One authoring model
 
-The future target is already constraining today's interfaces:
+Durability never changes how an Agent is written, because the interfaces are constrained from the
+start:
 
 - Definitions are immutable and digestible;
 - Tool Call IDs are stable across scheduling and records;
@@ -68,7 +68,6 @@ The future target is already constraining today's interfaces:
 - stores implement fenced, idempotent canonical append;
 - provider SDK objects never become recovery truth.
 
-That is how durability can be added without replacing the authoring model.
-
-Continue to the [durability specification](../spec/durability) for the implemented `DN` surface and
-the planned Phase 5 durable Tool contracts.
+The [durability specification](../spec/durability) carries the normative admission, recovery, and
+Settlement contracts; [Implementation status](../reference/status) lists each claim's evidence and
+explicit non-claims.

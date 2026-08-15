@@ -11,15 +11,15 @@ pageClass: ea-index
 <main class="ea-home">
   <section class="ea-home__hero">
     <div class="ea-home__intro">
-      <p class="ea-home__eyebrow"><span>●</span> Full build-out (P0–P7) implemented · pre-1.0, specifications Draft</p>
+      <p class="ea-home__eyebrow"><span>●</span> An agent runtime for Effect applications</p>
       <h1 class="ea-home__title">Agents,<em>with cause.</em></h1>
       <p class="ea-home__lede">
         Build autonomous TypeScript agents without leaving Effect behind. Schemas stay canonical,
         failures stay typed, dependencies stay visible, and every resource stays inside a Scope.
       </p>
       <div class="ea-home__actions">
-        <a class="ea-button ea-button--primary" href="/guide/introduction#one-agent-end-to-end">See one complete Agent →</a>
-        <a class="ea-button" href="/guide/getting-started">Build it step by step</a>
+        <a class="ea-button ea-button--primary" href="/guide/getting-started">Get started →</a>
+        <a class="ea-button" href="/guide/introduction#one-agent-end-to-end">See one complete Agent</a>
       </div>
     </div>
     <div class="ea-home__contract">
@@ -35,93 +35,7 @@ pageClass: ea-index
     </div>
   </section>
 
-  <section class="ea-status-strip" aria-label="Implementation status">
-    <div class="ea-status-strip__item">
-      <StatusBadge status="available" />
-      <strong>Bounded interpreter</strong>
-      <p>Run, stream, tools, policy, and explicit model binding.</p>
-    </div>
-    <div class="ea-status-strip__item">
-      <StatusBadge status="available" />
-      <strong>Operational capabilities</strong>
-      <p>Safe-seam input, approval, budgets, context, MCP, sandbox.</p>
-    </div>
-    <div class="ea-status-strip__item">
-      <StatusBadge status="available" />
-      <strong>Persistent Conversations</strong>
-      <p>Replay, checkpoints, export, memory and SQLite stores.</p>
-    </div>
-    <div class="ea-status-strip__item">
-      <StatusBadge status="available" />
-      <strong>Durable accepted work</strong>
-      <p>Receipts, Attempts, fencing, recovery, and Settlement on Node/SQLite and Cloudflare.</p>
-    </div>
-  </section>
-
   <section class="ea-section">
-    <header class="ea-section__header">
-      <div>
-        <p class="ea-section__eyebrow">Two ways to read these docs</p>
-        <h2 class="ea-section__title">Use what exists. Pressure-test what comes next.</h2>
-      </div>
-      <p class="ea-section__summary">
-        Current guides are backed by code and phase evidence. Future guides present the intended
-        public interfaces before they exist, so the architecture can be judged from the outside.
-        Every page carries its implementation status.
-      </p>
-    </header>
-    <div class="ea-paths">
-      <a class="ea-path" href="/guide/introduction#one-agent-end-to-end">
-        <span class="ea-path__index">01 / ORIENT</span>
-        <h3>See the whole Agent</h3>
-        <p>Read one end-to-end file from Schema and Tool definition through Layers and execution.</p>
-        <span class="ea-path__arrow">Open the example →</span>
-      </a>
-      <a class="ea-path" href="/guide/run-agents">
-        <span class="ea-path__index">02 / EXECUTE</span>
-        <h3>Run or observe</h3>
-        <p>Use one interpreter as an Effect result, semantic Stream, or scoped detached Run.</p>
-        <span class="ea-path__arrow">See runtime APIs →</span>
-      </a>
-      <a class="ea-path" href="/guide/conversations">
-        <span class="ea-path__index">03 / REMEMBER</span>
-        <h3>Persist Conversations</h3>
-        <p>Append canonical records, rebuild projections, and resume observation without claiming durability.</p>
-        <span class="ea-path__arrow">Explore persistence →</span>
-      </a>
-      <a class="ea-path" href="/concepts/durability">
-        <span class="ea-path__index">04 / RECOVER</span>
-        <h3>Design for interruption</h3>
-        <p>Follow the implemented path from durable admission to one honest terminal Settlement.</p>
-        <span class="ea-path__arrow">Inspect the durable runtime →</span>
-      </a>
-      <a class="ea-path" href="/guide/testing">
-        <span class="ea-path__index">05 / PROVE</span>
-        <h3>Test without a provider</h3>
-        <p>Script model Turns, inject Layers, control time and IDs, and verify the semantic trace offline.</p>
-        <span class="ea-path__arrow">Open the test kit →</span>
-      </a>
-      <a class="ea-path" href="/reference/status">
-        <span class="ea-path__index">06 / VERIFY</span>
-        <h3>Check every claim</h3>
-        <p>See the package, phase, evidence, maturity label, and explicit non-claim behind each surface.</p>
-        <span class="ea-path__arrow">View status →</span>
-      </a>
-    </div>
-  </section>
-
-  <section class="ea-section">
-    <header class="ea-section__header">
-      <div>
-        <p class="ea-section__eyebrow">Architectural axioms</p>
-        <h2 class="ea-section__title">The framework does less so Effect can keep doing more.</h2>
-      </div>
-      <p class="ea-section__summary">
-        Effect Agent owns the multi-Turn loop, Conversation, and recovery model. It deliberately
-        does not duplicate Effect AI, invent another dependency container, or turn external side
-        effects into magical exactly-once claims.
-      </p>
-    </header>
     <div class="ea-axioms">
       <article class="ea-axiom">
         <code>01 / SCHEMA</code>
@@ -141,13 +55,66 @@ pageClass: ea-index
       <article class="ea-axiom">
         <code>04 / RECORD</code>
         <h3>Recovery stays honest</h3>
-        <p>Replay rebuilds state, never external effects. Ambiguous outcomes remain explicit rather than guessed.</p>
+        <p>Replay rebuilds state, never external effects. Ambiguous outcomes stay explicit rather than guessed.</p>
       </article>
     </div>
   </section>
 
+  <section class="ea-section ea-home__code">
+
+```ts
+const Definition = Agent.define("triage", {
+  input: Schema.Struct({ repo: Schema.String, issueNumber: Schema.Int }),
+  output: Schema.Struct({
+    severity: Schema.Literals(["low", "medium", "high", "critical"]),
+    explanation: Schema.String,
+  }),
+  instructions: ({ repo, issueNumber }) => `Triage ${repo}#${issueNumber}.`,
+  toolkit: TriageTools,
+  policy: AgentPolicy.make({ maxTurns: 12, maxToolCalls: 20, maxDuration: "10 minutes" }),
+});
+
+const Triage = Agent.withModel(Definition, AnthropicLanguageModel.model("claude-sonnet-5"));
+
+const result = AgentRuntime.run(Triage, { repo: "acme/api", issueNumber: 123 }).pipe(
+  Effect.provide(AppLive),
+  Effect.scoped,
+); // Effect<AgentResult<Output>, AgentFailure | DomainFailure, Requirements>
+```
+
+  </section>
+
+  <section class="ea-section">
+    <div class="ea-paths">
+      <a class="ea-path" href="/guide/agents">
+        <span class="ea-path__index">BUILD</span>
+        <h3>Define an Agent</h3>
+        <p>Schema input and output, native Effect AI Tools, a bounded policy, one explicit Model binding.</p>
+        <span class="ea-path__arrow">Agent definitions →</span>
+      </a>
+      <a class="ea-path" href="/guide/run-agents">
+        <span class="ea-path__index">RUN</span>
+        <h3>Run or observe</h3>
+        <p>One interpreter, three views: an Effect result, a semantic Stream, or a scoped detached Run.</p>
+        <span class="ea-path__arrow">Run &amp; stream →</span>
+      </a>
+      <a class="ea-path" href="/concepts/durability">
+        <span class="ea-path__index">RECOVER</span>
+        <h3>Survive interruption</h3>
+        <p>Durable admission, crash recovery, and one honest terminal Settlement — on Node/SQLite and Cloudflare.</p>
+        <span class="ea-path__arrow">Persistence &amp; durability →</span>
+      </a>
+      <a class="ea-path" href="/guide/testing">
+        <span class="ea-path__index">PROVE</span>
+        <h3>Test without a provider</h3>
+        <p>Script model Turns, inject Layers, control time and IDs, and verify the semantic trace offline.</p>
+        <span class="ea-path__arrow">Deterministic testing →</span>
+      </a>
+    </div>
+  </section>
+
   <footer class="ea-home__footer">
-    <strong>Start with the runtime that exists today.</strong>
+    <strong>Pre-1.0. Every documented surface is implemented and tested.</strong>
     <a class="ea-button" href="/guide/getting-started">Build an agent →</a>
   </footer>
 </main>

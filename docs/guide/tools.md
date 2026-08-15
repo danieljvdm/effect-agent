@@ -5,8 +5,6 @@ description: Native Effect AI Tools under bounded, deterministic runtime schedul
 
 # Tools and Layers
 
-<StatusCallout status="available" phase="P1–P2" title="Native Tools, handler Layers, bounded scheduling, approval seams, and overrides exist today." />
-
 Effect Agent does not define its own Tool abstraction. Define Tools and Toolkits with Effect AI;
 the engine supplies Agent-specific scheduling, policy, and Conversation boundaries around their
 native handlers.
@@ -82,12 +80,9 @@ preview, expiration, audit, and a deny/unresolved decision.
 Approval occurs after parameters decode and before the handler starts. Model prose cannot grant
 approval.
 
-## What is not durable yet
+## Durability
 
-<StatusCallout status="planned" phase="P5" title="Prepared calls, unknown outcomes, and durable Steps are target behavior.">
-
-Today, a process crash loses an active ephemeral Tool Call. The future runtime will persist a
-prepared boundary before ordinary external effects and refuse to replay an ambiguous unresolved
-call. See [Persistence & durability](../concepts/durability).
-
-</StatusCallout>
+An ephemeral Run loses an active Tool Call if the process dies. The durable assemblies persist a
+prepared boundary before ordinary external effects, refuse to replay an ambiguous unresolved
+call, and surface it as an explicit Unknown Outcome instead. See
+[Persistence & durability](../concepts/durability).

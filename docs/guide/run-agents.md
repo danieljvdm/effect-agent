@@ -5,8 +5,6 @@ description: Interpret one Agent Binding as a result, semantic event stream, or 
 
 # Run and stream
 
-<StatusCallout status="available" phase="P1–P2" title="All three execution views use the same implemented interpreter." />
-
 The runtime exposes one semantic loop through three views. Choose based on how the caller needs to
 observe work—not to change execution behavior.
 
@@ -89,7 +87,7 @@ reduction of the Stream trace.
 
 ## Operational hooks
 
-`RunOptions` is a dependency-neutral seam for the Phase 2 capability adapters:
+`RunOptions` is a dependency-neutral seam for the capability adapters:
 
 ```ts
 const options: RunOptions<AppError, AppRequirements> = {

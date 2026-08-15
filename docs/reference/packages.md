@@ -5,15 +5,11 @@ description: Current private workspace packages and their boundaries.
 
 # Package map
 
-<StatusCallout status="available" phase="Private workspace" title="Fourteen framework packages exist today.">
+Fourteen framework packages publish to npm on the opt-in `beta` dist-tag. Provider wrapper
+packages are deliberately absent: provider integration remains upstream Effect AI Models and
+Layers.
 
-All package names are working names with source export maps in the repository; the packages
-publish to npm on the opt-in `beta` dist-tag. New packages appear
-only for a genuinely new framework concern agreed with the repository owner.
-
-</StatusCallout>
-
-## Current packages
+## Packages
 
 ### `effect-agent` (umbrella)
 
@@ -61,7 +57,7 @@ Owns canonical Conversation record Schemas, batches, digests, replay/checkpoints
 `ConversationStore`, `SubmissionLedger`, and `WakeScheduler` ports, the pure recovery classifier,
 the run journal, and the `DurableAgentRuntime` coordinator (Receipt, Attempt, Settlement). It
 depends on `@effect-agent/engine` to drive the interpreter through its public seams.
-Since S2 it also owns the durable Subagent protocol: the requested/started/joined/lineage record
+It also owns the durable Subagent protocol: the requested/started/joined/lineage record
 Schemas, the child budget reservation and `waitingForChild` ledger operations, and the
 host-supplied `AgentBindingResolver` port for exact-digest Binding resolution.
 
@@ -116,7 +112,7 @@ is a Layer-assembly library, not an application entrypoint.
 
 The packaged GitHub pull-request reviewer: schema-first review contracts, the
 `PullRequestSource`/`ReviewPublisher` ports with GitHub REST adapters, fail-closed anchor
-validation and publication planning, flat and S1 fan-out reviewer shapes, and the `PrReview`
+validation and publication planning, flat and fan-out reviewer shapes, and the `PrReview`
 configuration factory. Subpath entries: `./testing` (fixture source, collecting publisher,
 prompt-keyed scripted models), `./action` and `./cli` (platform-node host entrypoints). Consumes
 the `effect-agent` umbrella — the first package-level consumer of that edge. Deployment class E
@@ -134,18 +130,12 @@ equivalence).
 `examples/demo` is a local browser test bench. `examples/providers` is a compile-only proof that the
 same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-review` is a
 consumer of `@effect-agent/pr-review` demonstrating the adaptation path (guidance, an extra
-read-only tool, ignore globs); `examples/repo-ops` is the P7 internal evidence auditor. None is a
+read-only tool, ignore globs); `examples/repo-ops` is an internal repository-operations auditor. None is a
 framework or deployment package. The repository root also carries `action/`, the prebuilt
 node-runtime GitHub Action over `@effect-agent/pr-review` with its committed bundle.
 Its normal synchronize path recovers authenticated review state and reviews only affected scope;
 explicit final mode audits the bounded full diff, and blocking or incomplete results fail the
 check host-side.
-
-## Future packages
-
-Every planned framework package now exists, plus the
-packaged `pr-review` application. Provider wrapper packages are deliberately absent. Provider
-integration remains upstream Effect AI Models and Layers.
 
 ## Dependency direction
 

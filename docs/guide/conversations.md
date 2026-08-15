@@ -5,13 +5,6 @@ description: Ephemeral interaction and persistent canonical history without a du
 
 # Conversations
 
-<StatusCallout status="available" phase="P2–P3" title="Ephemeral Conversations and persistent canonical records are implemented.">
-
-Current deployment maturity is **P — Persistent**. Conversation state may survive restart, but an
-active Run is not durably accepted and is not automatically recovered.
-
-</StatusCallout>
-
 A Conversation is the ordered history shared across Runs. It is not a mutable Agent object and it
 is not the same thing as a process Session, Submission, or model request.
 
@@ -70,24 +63,14 @@ tail, and fenced by producer epoch. Reads decode persisted values through Schema
 
 Two adapters implement the same current contract:
 
-| Package                        | Use                                       | Maturity       |
-| ------------------------------ | ----------------------------------------- | -------------- |
-| `@effect-agent/storage-memory` | deterministic tests and local development | process-local  |
-| `@effect-agent/storage-sqlite` | restart-surviving Conversation history    | persistent `P` |
+| Package                        | Use                                       |
+| ------------------------------ | ----------------------------------------- |
+| `@effect-agent/storage-memory` | deterministic tests and local development |
+| `@effect-agent/storage-sqlite` | restart-surviving Conversation history    |
 
-The SQLite adapter supports only the current private-development schema. Incompatible data fails
-clearly and may be reset; migrations are not yet promised.
+The SQLite adapter supports only the current pre-1.0 schema. Incompatible data fails clearly and
+may be reset; migrations are not yet promised.
 
-## The explicit non-claim
-
-The current `SubmissionStore` says exactly what it can do:
-
-```ts
-{
-  durability: "non-durable",
-  acceptsDurableWork: false,
-}
-```
-
-There is no Receipt, durable admission, Attempt ownership, recovery scheduler, or Settlement API in
-Phase 3. Those interfaces are described in [Persistence & durability](../concepts/durability).
+Persistence is not durability: a persistent Conversation survives restart, but an active Run does
+not, unless it was admitted through the durable runtime. Receipts, Attempt ownership, recovery,
+and Settlement are covered in [Persistence & durability](../concepts/durability).

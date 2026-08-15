@@ -5,10 +5,8 @@ description: Run the three-tier certification suite against a candidate Submissi
 
 # Certify storage adapters
 
-<StatusCallout status="available" phase="P7" title="The certification entry point, the three shipped adapter certificates, and this guide exist today." />
-
-A storage adapter cannot be called compatible because it type-checks (TEST-004, STORE-010).
-Certification is one entry point that runs three tiers against a candidate
+A storage adapter cannot be called compatible because it type-checks. Certification is one entry
+point that runs three tiers against a candidate
 `SubmissionLedger`/`ConversationStore` Layer pair and produces one Schema-encoded certificate:
 
 | Tier                            | Claim                                                                                 | How it is discharged                                                                                                                                                                                                                                                                                                                       |
@@ -39,7 +37,7 @@ Requirements on the calling environment:
   workerd) — the invariant checker recomputes real digests.
 - **A TestClock** must be active (`@effect/vitest`'s `it.effect`, or a manual
   `TestClock.layer()` root in workerd). Tier 1 drives lease expiry through virtual time, and
-  every Tier-2 re-drive round advances the clock past the D5 ownership lease — the
+  every Tier-2 re-drive round advances the clock past the ownership lease — the
   adapter-neutral reclaim lever after a mid-Attempt fault. If your ledger is configured with a
   non-default lease, pass `ownershipLeaseDuration`.
 - **One connection root for both ports** when your adapters must share one (the session
@@ -73,9 +71,9 @@ with one upgrade: the runner captures each batch's producer identity at append t
 
 Three locations never fire in these six shapes — `abort:after-intent`, `resolve:after-intent`,
 and `subagent:after-child-abort-intent` sit on operator/abort paths the shapes do not take.
-The runners assert the observed never-fired set equals exactly this documented list
-(`TIER2_UNREACHED_LOCATIONS`), so scoped coverage cannot silently grow; those locations are
-pinned by the P5/S2 in-process suites and the crash matrices.
+The runners assert the observed never-fired set equals exactly this documented list, so scoped
+coverage cannot silently grow; those locations are pinned by dedicated in-process suites and the
+crash matrices.
 
 ## Tier 3 honestly
 
@@ -92,34 +90,11 @@ pinned by the P5/S2 in-process suites and the crash matrices.
   designated row subset and reports per-row results) to earn `exercised` — or its certificate
   says `not-exercised`, visibly.
 
-## The shipped runners and committed certificates
+## The shipped certificates
 
-| Adapter                             | Runner                                                   | Certificate                                  |
-| ----------------------------------- | -------------------------------------------------------- | -------------------------------------------- |
-| storage-memory (reference)          | `packages/testing/test/certification-memory.test.ts`     | `docs/certification/storage-memory.json`     |
-| storage-sqlite (DN)                 | `packages/testing/test/certification-sqlite.test.ts`     | `docs/certification/storage-sqlite.json`     |
-| storage-cloudflare (DC, in-workerd) | `packages/storage-cloudflare/test/certification.test.ts` | `docs/certification/storage-cloudflare.json` |
-
-The memory and SQLite runners live in `packages/testing` (not beside their adapters) because
-vp's task graph rejects the dev-edge cycle `storage-* → testing → storage-*` — the same
-constraint that placed `durable-runtime.test.ts` there. The Cloudflare runner runs the
-identical entry point inside workerd against a real SQLite-backed Durable Object (STORE-013).
-
-The committed JSON certificates are evidence artifacts; the runner tests carry the semantic
-assertions (testing.md §12 — golden data never replaces assertions). To regenerate after an
-intentional protocol or adapter change:
-
-```sh
-# Node adapters: writes docs/certification/storage-{memory,sqlite}.json
-EFFECT_AGENT_CERTIFICATION_OUT="$PWD/docs/certification" \
-  bunx vitest run packages/testing/test/certification-memory.test.ts \
-                  packages/testing/test/certification-sqlite.test.ts
-
-# Cloudflare: workerd cannot write files — flip PRINT_REPORT to true in
-# packages/storage-cloudflare/test/certification.test.ts, run with
-# `bunx vitest run --disable-console-intercept test/certification.test.ts`,
-# copy the logged JSON to docs/certification/storage-cloudflare.json, flip it back.
-```
-
-Reports are deterministic (scripted model, virtual clock, fixed lane names), so a diff in a
-regenerated certificate is a real behavior change.
+The repository certifies its own three adapters — `storage-memory` (reference),
+`storage-sqlite` (`DN`), and `storage-cloudflare` (`DC`, run inside workerd against a real
+SQLite-backed Durable Object) — and commits the resulting JSON certificates under
+`docs/certification/`. Reports are deterministic (scripted model, virtual clock, fixed lane
+names), so a diff in a regenerated certificate is a real behavior change. Use those runners as
+worked examples when certifying your own adapter.

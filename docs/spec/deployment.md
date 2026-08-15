@@ -258,16 +258,15 @@ Durable Object storage is the only correctness-critical store for that Conversat
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
 
-The target left experimental status with Phase 6: the generic durability conformance suite —
+The target is no longer experimental: the generic durability conformance suite —
 the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the
 eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry (double-fire
 and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted storage), and
 fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
 are implemented and green (see the platform-cloudflare test suites). The tested harness is
 workerd/Miniflare; the hosted production service, its observability adapters, and live soak
-remain explicitly unclaimed — Phase 7 completed the roadmap without hosted-platform evidence
-(see the certification suites), and hosted-service operation stays outside the
-roadmap's claims until open-source preparation revisits it.
+remain explicitly unclaimed (see the certification suites), and hosted-service operation stays
+outside the claims until open-source preparation revisits it.
 
 ### Dynamic Worker Code Mode executor
 
@@ -281,8 +280,8 @@ envelope through Effect Schema, and disposes the entrypoint and Worker handles i
 finalizers. A synchronous runaway program is stopped by platform CPU limits, not only by a
 JavaScript timer.
 
-The adapter records no persistent state and adds no deployment-class claim beyond `E`: Code Mode
-in the `DN` or `DC` assemblies requires its own accepted ADR. The tested harness is
+The adapter records no persistent state and adds no deployment-class claim beyond `E`: the `DN`
+and `DC` assemblies make no Code Mode claim until this specification says otherwise. The tested harness is
 workerd/Miniflare; hosted-platform evidence remains unclaimed. No cost or performance claim is
 made before measurement — current Dynamic Workers billing counts no-ID `load()` use as a new
 Dynamic Worker per invocation, and any future stable-ID Worker caching must include tenant and

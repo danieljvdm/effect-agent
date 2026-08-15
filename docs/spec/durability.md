@@ -334,7 +334,7 @@ snapshot.
 | After canonical settlement append, before ledger finalization | Canonical terminal outcome                                        | Rebuild/finalize ledger from history              |
 | After ledger finalization, before client notification         | Terminal                                                          | Return recorded settlement                        |
 
-As of Phase 5 every row of this matrix — including the tool preparation, invocation, and
+Every row of this matrix — including the tool preparation, invocation, and
 result-commit rows — is realized by executable evidence: each row exists as a pure
 recovery-classifier case and as a deterministic failpoint or real process-kill test
 (see the durable-runtime and crash-matrix suites).

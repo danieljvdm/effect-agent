@@ -5,8 +5,6 @@ description: The dependency, failure, schema, and resource rules that define the
 
 # Effect-native by construction
 
-<StatusCallout status="available" phase="Architectural invariant" title="These constraints shape both the current runtime and every planned phase." />
-
 Effect Agent is not an agent framework wrapped in Effect. Its public contract is designed so an
 Effect application does not surrender the properties it already relies on.
 
@@ -44,7 +42,7 @@ Effect Schema defines:
 - Tool parameters, success, and declared failure;
 - commands and semantic events;
 - persisted record envelopes and batches;
-- transport values when those boundaries arrive.
+- transport values at every host boundary.
 
 Provider-facing JSON Schema and wire codecs are derived. Applications do not maintain parallel
 Zod, Valibot, or provider schema trees.
@@ -72,7 +70,7 @@ core domain records.
 ## Scope is ownership
 
 One ephemeral Run owns one parent Scope. Model streams, Tool fibers, queues, MCP clients, sandbox
-processes, event publication, and future attached children belong beneath it.
+processes, event publication, and attached Subagent children belong beneath it.
 
 There are no daemon fibers. Interrupting the owner prevents new work, interrupts children, closes
 resources, and cannot emit false success.
@@ -88,13 +86,8 @@ option is to contribute it upstream.
 
 ## The architectural test
 
-When evaluating a proposed feature, ask:
-
-1. Does expected failure stay typed in `E`?
-2. Do acquired capabilities stay visible in `R`?
-3. Is external input Schema-decoded?
-4. Does every resource have one Scope owner?
-5. Can the behavior be replaced with a Layer?
-6. Does it add an Agent concept, or duplicate an Effect AI concept?
-
-If the interface cannot answer those questions, the architecture is not ready.
+Every public surface answers the same six questions: expected failure stays typed in `E`,
+acquired capabilities stay visible in `R`, external input is Schema-decoded, every resource has
+one Scope owner, the behavior can be replaced with a Layer, and it adds an Agent concept rather
+than duplicating an Effect AI one. If a feature you are evaluating on top of the framework can
+answer those too, it composes cleanly.

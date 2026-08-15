@@ -129,9 +129,8 @@ Owns:
 - Receipt, reattachment, and Settlement interfaces;
 - stored-version compatibility checks.
 
-Phase 3 implemented the canonical Conversation records, pure replay/checkpoint projections,
-definition digests, and `ConversationStore`. Phase 4 replaced the interim non-durable
-`SubmissionStore` stub with the `SubmissionLedger` port and added the `WakeScheduler` port, the
+The session package owns the canonical Conversation records, pure replay/checkpoint projections,
+definition digests, `ConversationStore`, the `SubmissionLedger` and `WakeScheduler` ports, the
 pure recovery classifier, the run journal, and the `DurableAgentRuntime` coordinator (Receipt,
 Attempt, Settlement). The session package now depends on `@effect-agent/engine` to drive the
 interpreter through its public seams.
@@ -159,7 +158,7 @@ before splitting them.
 Owns narrow filesystem, process, path, and network capability ports plus Effect AI Tool definitions.
 It also owns the callback-capable `CodeExecutor` port for Code Mode, a sibling of the
 command-shaped `Sandbox` service.
-Implementations live in outward packages. `@effect-agent/sandbox-local` is the Phase 2 explicitly
+Implementations live in outward packages. `@effect-agent/sandbox-local` is the explicitly
 unisolated local-process implementation: it enforces its declared request/output/time bounds and
 rejects policy it cannot enforce.
 
@@ -178,9 +177,9 @@ Examples:
 - `@effect-agent/storage-cloudflare`
 - `@effect-agent/sandbox-local`
 
-The Phase 3 memory and SQLite adapters implement the same Conversation Store semantics: atomic
+The memory and SQLite adapters implement the same Conversation Store semantics: atomic
 fenced batch append, bounded forward read, resumable observation, portable export, and
-digest-bound disposable checkpoints. Neither adapter durably accepts work in this phase.
+digest-bound disposable checkpoints.
 
 Model providers come from Effect AI provider packages and are supplied as `Model`/`LanguageModel`
 Layers. The framework does not wrap them in its own provider packages.
