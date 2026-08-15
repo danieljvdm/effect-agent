@@ -9,6 +9,13 @@ name: PR Review
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, labeled]
+    # Pure generated Changesets updates are verified and checked by the trusted
+    # Release workflow. An unexpected path makes this workflow apply normally.
+    paths-ignore:
+      - ".changeset/**"
+      - "bun.lock"
+      - "packages/*/CHANGELOG.md"
+      - "packages/*/package.json"
 
 permissions:
   contents: read
@@ -24,11 +31,8 @@ jobs:
   review:
     name: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && 'pr-review-ignored' || 'review' }}
     # Drafts wait for ready_for_review (the action also skips drafts
-    # internally; this guard saves the runner spin-up). The exact internal
-    # Changesets branch carries generated version metadata already covered by
-    # constituent PR reviews, so it also gets a terminal skipped check. Match
-    # the head repository as well as the branch so a fork cannot opt out.
-    if: ${{ (github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'changeset-release/main') && !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
+    # internally; this guard saves the runner spin-up).
+    if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
     runs-on: ubuntu-latest
     # Above the fan-out run's 15-minute duration budget, so a run approaching
     # its own budget ends gracefully instead of being killed by the runner

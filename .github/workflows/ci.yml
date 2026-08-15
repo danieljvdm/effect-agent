@@ -16,7 +16,16 @@
 name: CI
 
 on:
+  # Changesets release PRs contain only these generated paths. They receive a
+  # `ready` check from the trusted main-branch Release workflow after exact
+  # regeneration. Any unexpected path stops matching this filter and routes
+  # the PR through ordinary CI (approval-required for GITHUB_TOKEN updates).
   pull_request:
+    paths-ignore:
+      - ".changeset/**"
+      - "bun.lock"
+      - "packages/*/CHANGELOG.md"
+      - "packages/*/package.json"
 
 permissions:
   contents: read
@@ -32,10 +41,6 @@ env:
 jobs:
   checks:
     name: Static checks
-    # The generated release PR contains only Changesets-owned version metadata.
-    # Match both the repository and branch so a fork cannot opt out by choosing
-    # the same head branch name.
-    if: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'changeset-release/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -80,7 +85,6 @@ jobs:
 
   test:
     name: Tests
-    if: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'changeset-release/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -133,7 +137,6 @@ jobs:
 
   build:
     name: Build
-    if: ${{ github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'changeset-release/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -176,8 +179,6 @@ jobs:
 
   # Fan-in for branch protection: the required status check is named `ready`.
   # It runs unconditionally and asserts every ordinary-PR gate succeeded.
-  # Only the exact internal Changesets PR may succeed with all three gates
-  # skipped; a partial skip or failed ordinary gate remains non-success.
   ready:
     name: ready
     needs: [checks, test, build]
@@ -185,19 +186,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Verify all gates passed or were deliberately skipped
+      - name: Verify all ordinary gates passed
         env:
           BUILD_RESULT: ${{ needs.build.result }}
           CHECKS_RESULT: ${{ needs.checks.result }}
-          IS_CHANGESETS_RELEASE: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'changeset-release/main' }}
           TEST_RESULT: ${{ needs.test.result }}
         run: |
-          if [ "$IS_CHANGESETS_RELEASE" = "true" ]; then
-            test "$CHECKS_RESULT" = "skipped"
-            test "$TEST_RESULT" = "skipped"
-            test "$BUILD_RESULT" = "skipped"
-          else
-            test "$CHECKS_RESULT" = "success"
-            test "$TEST_RESULT" = "success"
-            test "$BUILD_RESULT" = "success"
-          fi
+          test "$CHECKS_RESULT" = "success"
+          test "$TEST_RESULT" = "success"
+          test "$BUILD_RESULT" = "success"

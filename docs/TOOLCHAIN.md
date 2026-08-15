@@ -153,12 +153,17 @@ merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
 identity is exchanged for short-lived credentials (no npm token, no OTP), with
 provenance attached. The generated PR is release metadata over code that
 already passed the ordinary PR gates: its Static checks, Tests, Build, and
-agentic Review jobs deliberately skip, while the required `ready` fan-in
-verifies that all three code gates were skipped for the exact internal
-`changeset-release/main` branch before reporting success. A same-named fork
-does not match this exception. After merge, the release workflow still performs
-a frozen install and rebuilds the exact versioned tree before any registry
-mutation.
+agentic Review workflows use `paths-ignore` for the narrow generated surface.
+The trusted main-branch Release workflow independently resolves the PR returned
+by Changesets, validates its repository, branch, base, and commit identities,
+runs `changeset version` and lockfile generation in a temporary worktree, and
+requires the resulting complete Git tree to match the proposed head
+byte-for-byte. It posts the required `ready` check directly to that immutable
+head only after successful verification. An unexpected path invokes the
+ordinary PR workflows; a later human mutation has a new head without the
+verified check and therefore remains unmergeable. After merge, the release
+workflow still performs a frozen install and rebuilds the exact versioned tree
+before any registry mutation.
 
 Each package on npmjs.com lists `release.yml` in `danieljvdm/effect-agent` as
 its trusted publisher (package Settings, a one-time registration; "Allow npm
@@ -279,10 +284,14 @@ The CI workflow runs on pull requests, not again after their merge to `main`. Or
 the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
 jobs — Static checks (`bun run check`), Tests (`bun run test`), and Build (`bun run build`) — with
 a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
-Changesets release PR is the only exception: the three expensive jobs skip and `ready` succeeds
-only after observing all three `skipped` results. PR Review applies the same repository-and-branch
-identity check. Suppressing either workflow at the trigger level is deliberately avoided because
-a required check with no terminal job can remain pending.
+Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
+Changesets may generate. GitHub deliberately leaves `pull_request` workflows created through
+`GITHUB_TOKEN` approval-required, so the trusted Release run validates the PR lineage, regenerates
+the complete tree from its checked-out `main` commit, and creates the required `ready` check on the
+verified head through the Checks API. The check is success only after an exact-tree comparison; a
+verification failure posts failure, and a resolution failure posts nothing. Unexpected files route
+through the ordinary workflows, while a manual generated-path-only push receives no new `ready`
+check. Both cases are fail-closed.
 
 Each ordinary-PR job restores and saves the Vite Task cache
 (`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay

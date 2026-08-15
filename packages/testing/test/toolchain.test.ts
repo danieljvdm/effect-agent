@@ -1,6 +1,7 @@
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, FileSystem, Schema, Stream } from "effect";
+import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
 const Dependencies = Schema.Record(Schema.String, Schema.String);
@@ -9,6 +10,7 @@ const PackageManifest = Schema.Struct({
   version: Schema.optionalKey(Schema.String),
   private: Schema.optionalKey(Schema.Boolean),
   workspaces: Schema.optionalKey(Schema.Array(Schema.String)),
+  scripts: Schema.optionalKey(Dependencies),
   catalog: Schema.optionalKey(Dependencies),
   dependencies: Schema.optionalKey(Dependencies),
   devDependencies: Schema.optionalKey(Dependencies),
@@ -22,6 +24,28 @@ const ChangesetConfig = Schema.Struct({
   fixed: Schema.Array(Schema.Array(Schema.String)),
   linked: Schema.Array(Schema.Array(Schema.String)),
 });
+
+const WorkflowStep = Schema.Struct({
+  id: Schema.optionalKey(Schema.String),
+  name: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
+  with: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  run: Schema.optionalKey(Schema.String),
+});
+const WorkflowJob = Schema.Struct({
+  name: Schema.optionalKey(Schema.String),
+  if: Schema.optionalKey(Schema.String),
+  needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
+  steps: Schema.optionalKey(Schema.Array(WorkflowStep)),
+});
+const WorkflowFile = Schema.Struct({
+  on: Schema.Record(Schema.String, Schema.Unknown),
+  permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  jobs: Schema.Record(Schema.String, WorkflowJob),
+});
+type WorkflowFile = typeof WorkflowFile.Type;
 
 // Vite+ runs this package test from packages/testing; Bun is the pinned test runtime in CI and locally.
 const repositoryRoot = "../..";
@@ -184,6 +208,18 @@ const readRepositoryFile = (path: string) =>
     return yield* fs.readFileString(`${repositoryRoot}/${path}`);
   });
 
+const readWorkflow = (path: string) =>
+  Effect.gen(function* () {
+    const contents = yield* readRepositoryFile(path);
+    return yield* Schema.decodeUnknownEffect(WorkflowFile)(Yaml.parse(contents));
+  });
+
+const workflowStep = (workflow: WorkflowFile, jobName: string, stepName: string) => {
+  const step = workflow.jobs[jobName]?.steps?.find((candidate) => candidate.name === stepName);
+  expect(step, `${jobName} must contain the ${stepName} step`).toBeDefined();
+  return step;
+};
+
 const readDirectory = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -250,32 +286,99 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
-  it.effect("routes expensive gates only to code-bearing pull requests", () =>
+  it.effect("routes generated release PRs through a trusted integrity gate", () =>
     Effect.gen(function* () {
-      const [ciWorkflow, reviewWorkflow, releaseWorkflow] = yield* Effect.all([
-        readRepositoryFile(".github/workflows/ci.yml"),
-        readRepositoryFile(".github/workflows/pr-review.yml"),
-        readRepositoryFile(".github/workflows/release.yml"),
+      const [ciWorkflow, reviewWorkflow, releaseWorkflow, rootManifest] = yield* Effect.all([
+        readWorkflow(".github/workflows/ci.yml"),
+        readWorkflow(".github/workflows/pr-review.yml"),
+        readWorkflow(".github/workflows/release.yml"),
+        readManifest(`${repositoryRoot}/package.json`),
       ]);
-      const ordinaryPullRequestGuard =
-        "github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'changeset-release/main'";
-      const internalReleaseIdentity =
-        "github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'changeset-release/main'";
+      const generatedPaths = [
+        ".changeset/**",
+        "bun.lock",
+        "packages/*/CHANGELOG.md",
+        "packages/*/package.json",
+      ];
 
-      expect(ciWorkflow).toContain("on:\n  pull_request:");
-      expect(ciWorkflow).not.toContain("\n  push:");
-      expect(ciWorkflow.split(ordinaryPullRequestGuard)).toHaveLength(4);
-      expect(ciWorkflow).toContain(`IS_CHANGESETS_RELEASE: \${{ ${internalReleaseIdentity} }}`);
-      expect(ciWorkflow).toContain('test "$CHECKS_RESULT" = "skipped"');
-      expect(ciWorkflow).toContain('test "$TEST_RESULT" = "skipped"');
-      expect(ciWorkflow).toContain('test "$BUILD_RESULT" = "skipped"');
-      expect(ciWorkflow).toContain('test "$CHECKS_RESULT" = "success"');
-      expect(ciWorkflow).toContain('test "$TEST_RESULT" = "success"');
-      expect(ciWorkflow).toContain('test "$BUILD_RESULT" = "success"');
+      expect(ciWorkflow.on).toEqual({
+        pull_request: { "paths-ignore": generatedPaths },
+      });
+      expect(ciWorkflow.jobs.checks?.if).toBeUndefined();
+      expect(ciWorkflow.jobs.test?.if).toBeUndefined();
+      expect(ciWorkflow.jobs.build?.if).toBeUndefined();
+      expect(ciWorkflow.jobs["release-integrity"]).toBeUndefined();
 
-      expect(reviewWorkflow).toContain(ordinaryPullRequestGuard);
-      expect(releaseWorkflow).toContain("on:\n  push:\n    branches: [main]");
-      expect(releaseWorkflow).toContain("publish: bun run ci:publish");
+      const readyJob = ciWorkflow.jobs.ready;
+      expect(readyJob?.needs).toEqual(["checks", "test", "build"]);
+      expect(readyJob?.if).toBe("${{ always() }}");
+      const readyStep = workflowStep(ciWorkflow, "ready", "Verify all ordinary gates passed");
+      expect(readyStep?.env).toEqual({
+        BUILD_RESULT: "${{ needs.build.result }}",
+        CHECKS_RESULT: "${{ needs.checks.result }}",
+        TEST_RESULT: "${{ needs.test.result }}",
+      });
+      expect(readyStep?.run).toContain('test "$CHECKS_RESULT" = "success"');
+      expect(readyStep?.run).toContain('test "$TEST_RESULT" = "success"');
+      expect(readyStep?.run).toContain('test "$BUILD_RESULT" = "success"');
+
+      expect(reviewWorkflow.on).toEqual({
+        pull_request: {
+          types: ["opened", "reopened", "ready_for_review", "synchronize", "labeled"],
+          "paths-ignore": generatedPaths,
+        },
+      });
+      expect(reviewWorkflow.jobs.review?.if).toBe(
+        "${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}",
+      );
+
+      expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
+      expect(releaseWorkflow.permissions).toEqual({
+        checks: "write",
+        contents: "write",
+        "pull-requests": "write",
+        "id-token": "write",
+      });
+      const changesetsStep = workflowStep(releaseWorkflow, "release", "Version or publish");
+      expect(changesetsStep?.id).toBe("changesets");
+      expect(changesetsStep?.with).toMatchObject({ publish: "bun run ci:publish" });
+
+      const resolveStep = workflowStep(
+        releaseWorkflow,
+        "release",
+        "Resolve the generated release head",
+      );
+      expect(resolveStep?.if).toBe("${{ steps.changesets.outputs.pullRequestNumber != '' }}");
+      expect(resolveStep?.run).toContain('test "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"');
+      expect(resolveStep?.run).toContain('test "$HEAD_REF" = "changeset-release/main"');
+      expect(resolveStep?.run).toContain('test "$BASE_SHA" = "$GITHUB_SHA"');
+
+      const verifyStep = workflowStep(
+        releaseWorkflow,
+        "release",
+        "Regenerate and verify the release tree",
+      );
+      expect(verifyStep?.id).toBe("verify-release");
+      expect(verifyStep?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+      expect(verifyStep?.run).toContain("vp run verify:changesets-release");
+
+      const reportStep = workflowStep(
+        releaseWorkflow,
+        "release",
+        "Report the generated release check",
+      );
+      expect(reportStep?.if).toBe("${{ always() && steps.release-pr.outputs.head-sha != '' }}");
+      expect(reportStep?.run).toContain('CONCLUSION="failure"');
+      expect(reportStep?.run).toContain('if [ "$VERIFY_OUTCOME" = "success" ]');
+      expect(reportStep?.run).toContain('CONCLUSION="success"');
+      expect(reportStep?.run).toContain(
+        'gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs"',
+      );
+      expect(reportStep?.run).toContain('-f name="ready"');
+
+      expect(rootManifest.scripts?.["verify:changesets-release"]).toBe(
+        "bun scripts/verify-changesets-release.ts",
+      );
     }),
   );
 
