@@ -134,6 +134,8 @@ const runBound = (
     const successes = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
     let answer = "";
     let completed = false;
+    // Expected Run failures become defects at this HTTP boundary: `runPromise`
+    // rejects and the fetch handler answers 500 instead of fabricating a 200.
     yield* AgentRuntime.stream(agent, { question }).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
@@ -154,6 +156,7 @@ const runBound = (
       ),
       Effect.provide(layers),
       Effect.scoped,
+      Effect.orDie,
     );
     // A Run that ended without emitting RunCompleted (e.g. it hit a policy
     // limit) is NOT a success — surface it as a defect so `runPromise` rejects
@@ -183,7 +186,7 @@ const runBound = (
       },
       profile,
     };
-  }) as Effect.Effect<AskResult>;
+  });
 };
 
 const runAsk = (
