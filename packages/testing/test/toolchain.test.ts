@@ -4,6 +4,7 @@ import { Effect, FileSystem, Path, Schema, Stream } from "effect";
 import { Yaml } from "effect/unstable/encoding";
 import { ChildProcess } from "effect/unstable/process";
 
+import { acquireReleaseArtifactStagingDirectory } from "../../../scripts/release-artifact-directory.ts";
 import {
   InvalidCommitSha,
   ReleaseTreeMismatch,
@@ -43,6 +44,7 @@ const WorkflowStep = Schema.Struct({
 const WorkflowJob = Schema.Struct({
   name: Schema.optionalKey(Schema.String),
   if: Schema.optionalKey(Schema.String),
+  uses: Schema.optionalKey(Schema.String),
   needs: Schema.optionalKey(Schema.Union([Schema.String, Schema.Array(Schema.String)])),
   outputs: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
   permissions: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
@@ -262,6 +264,91 @@ const runFixtureCommand = Effect.fn("toolchainTest.runFixtureCommand")(function*
   return output.trim();
 });
 
+const runReleaseCheckReporter = Effect.fn("toolchainTest.runReleaseCheckReporter")(function* (
+  script: string,
+  options: {
+    readonly currentBaseSha: string;
+    readonly currentHeadSha: string;
+    readonly expectedBaseSha: string;
+    readonly strictReady?: string;
+    readonly verifiedHeadSha: string;
+    readonly verifyOutcome: string;
+  },
+) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const temporaryRoot = yield* fs.makeTempDirectoryScoped({
+    prefix: "effect-agent-release-check-test-",
+  });
+  const binDirectory = path.join(temporaryRoot, "bin");
+  const capturePath = path.join(temporaryRoot, "check-run-arguments");
+  const ghPath = path.join(binDirectory, "gh");
+  yield* fs.makeDirectory(binDirectory, { recursive: true });
+  yield* fs.writeFileString(
+    ghPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+
+test "\${1:-}" = "api"
+shift
+if [ "\${1:-}" = "--method" ]; then
+  printf '%s\\n' "$@" > "$GH_STUB_CAPTURE"
+  exit 0
+fi
+
+QUERY=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--jq" ]; then
+    shift
+    QUERY="\${1:-}"
+    break
+  fi
+  shift
+done
+
+case "$QUERY" in
+  ".head.sha") printf '%s\\n' "$GH_STUB_HEAD_SHA" ;;
+  ".head.repo.full_name") printf '%s\\n' "$GITHUB_REPOSITORY" ;;
+  ".head.ref") printf '%s\\n' "changeset-release/main" ;;
+  ".base.sha") printf '%s\\n' "$GH_STUB_BASE_SHA" ;;
+  ".base.ref") printf '%s\\n' "main" ;;
+  *"strict_required_status_checks_policy"*) printf '%s\\n' "$GH_STUB_STRICT_READY" ;;
+  *) echo "Unexpected gh query: $QUERY" >&2; exit 64 ;;
+esac
+`,
+  );
+  yield* fs.chmod(ghPath, 0o755);
+
+  const child = yield* ChildProcess.make("bash", ["-euo", "pipefail", "-c", script], {
+    cwd: temporaryRoot,
+    env: {
+      EXPECTED_BASE_SHA: options.expectedBaseSha,
+      GH_STUB_BASE_SHA: options.currentBaseSha,
+      GH_STUB_CAPTURE: capturePath,
+      GH_STUB_HEAD_SHA: options.currentHeadSha,
+      GH_STUB_STRICT_READY: options.strictReady ?? "true",
+      GH_TOKEN: "test-token",
+      GITHUB_REPOSITORY: "effect-agent/release-check-fixture",
+      GITHUB_RUN_ATTEMPT: "1",
+      GITHUB_RUN_ID: "1234",
+      GITHUB_SERVER_URL: "https://github.example.invalid",
+      PATH: `${binDirectory}:${globalThis.process.env["PATH"] ?? ""}`,
+      PR_NUMBER: "22",
+      VERIFIED_HEAD_SHA: options.verifiedHeadSha,
+      VERIFY_OUTCOME: options.verifyOutcome,
+    },
+    extendEnv: true,
+    stderr: "pipe",
+    stdout: "pipe",
+  });
+  const [output, exitCode] = yield* Effect.all([
+    Stream.mkString(Stream.decodeText(child.all)),
+    child.exitCode,
+  ]);
+  const invocation = (yield* fs.exists(capturePath)) ? yield* fs.readFileString(capturePath) : "";
+  return { exitCode, invocation, output } as const;
+});
+
 const manifestDependencies = (manifest: PackageManifest): ReadonlyArray<string> =>
   dependencySections.flatMap((section) => Object.keys(manifest[section] ?? {}));
 
@@ -371,9 +458,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       });
       expect(versionJob?.permissions?.checks).toBeUndefined();
       expect(versionJob?.permissions?.["id-token"]).toBeUndefined();
-      const externalActionReferences = Object.values(releaseWorkflow.jobs).flatMap((job) =>
-        (job.steps ?? []).flatMap((step) => (step.uses === undefined ? [] : [step.uses])),
-      );
+      const externalActionReferences = Object.values(releaseWorkflow.jobs).flatMap((job) => [
+        ...(job.uses === undefined ? [] : [job.uses]),
+        ...(job.steps ?? []).flatMap((step) => (step.uses === undefined ? [] : [step.uses])),
+      ]);
       expect(externalActionReferences).not.toHaveLength(0);
       expect(externalActionReferences.every((uses) => /^[^@]+@[0-9a-f]{40}$/.test(uses))).toBe(
         true,
@@ -439,17 +527,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "pull-requests": "read",
       });
       expect(reportJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
-      expect(reportStep?.run).toContain('CONCLUSION="failure"');
-      expect(reportStep?.run).toContain('if [ "$VERIFY_OUTCOME" != "success" ]');
-      expect(reportStep?.run).toContain('CONCLUSION="success"');
-      expect(reportStep?.run).toContain('CURRENT_HEAD_SHA="$(gh api');
-      expect(reportStep?.run).toContain('CURRENT_BASE_SHA="$(gh api');
-      expect(reportStep?.run).toContain('CURRENT_HEAD_SHA" != "$VERIFIED_HEAD_SHA');
-      expect(reportStep?.run).toContain("strict_required_status_checks_policy == true");
-      expect(reportStep?.run).toContain(
-        'gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs"',
-      );
-      expect(reportStep?.run).toContain('-f name="ready"');
+      expect(reportStep?.run).toBeDefined();
 
       const prepareJob = releaseWorkflow.jobs["prepare-publish"];
       expect(prepareJob?.needs).toBe("version-release");
@@ -507,6 +585,113 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       );
       expect(rootManifest.scripts?.["release:prepare"]).toBe("bun scripts/release-publish.ts");
       expect(rootManifest.scripts?.["ci:publish"]).toBeUndefined();
+    }),
+  );
+
+  it.effect("executes the generated release check reporter fail-closed", () =>
+    Effect.gen(function* () {
+      const releaseWorkflow = yield* readWorkflow(".github/workflows/release.yml");
+      const reportScript = workflowStep(
+        releaseWorkflow,
+        "report-release-check",
+        "Report the generated release check",
+      )?.run;
+      if (reportScript === undefined) {
+        return yield* Effect.die(new Error("Release check reporter must have an executable body."));
+      }
+
+      const expectedBaseSha = "1111111111111111111111111111111111111111";
+      const verifiedHeadSha = "2222222222222222222222222222222222222222";
+      const changedHeadSha = "3333333333333333333333333333333333333333";
+      const changedBaseSha = "4444444444444444444444444444444444444444";
+      const run = (overrides: {
+        readonly currentBaseSha?: string;
+        readonly currentHeadSha?: string;
+        readonly verifyOutcome?: string;
+      }) =>
+        runReleaseCheckReporter(reportScript, {
+          currentBaseSha: overrides.currentBaseSha ?? expectedBaseSha,
+          currentHeadSha: overrides.currentHeadSha ?? verifiedHeadSha,
+          expectedBaseSha,
+          verifiedHeadSha,
+          verifyOutcome: overrides.verifyOutcome ?? "success",
+        });
+
+      const success = yield* run({});
+      expect({ exitCode: success.exitCode, output: success.output }).toMatchObject({ exitCode: 0 });
+      expect(success.invocation).toContain("conclusion=success\n");
+      expect(success.invocation).toContain(`head_sha=${verifiedHeadSha}\n`);
+      expect(success.invocation).toContain("output[title]=Generated release tree verified\n");
+
+      const verificationFailure = yield* run({ verifyOutcome: "failure" });
+      expect({
+        exitCode: verificationFailure.exitCode,
+        output: verificationFailure.output,
+      }).toMatchObject({ exitCode: 0 });
+      expect(verificationFailure.invocation).toContain("conclusion=failure\n");
+      expect(verificationFailure.invocation).toContain(
+        "output[title]=Generated release tree did not verify\n",
+      );
+
+      const changedHead = yield* run({ currentHeadSha: changedHeadSha });
+      expect({ exitCode: changedHead.exitCode, output: changedHead.output }).toMatchObject({
+        exitCode: 0,
+      });
+      expect(changedHead.invocation).toContain("conclusion=failure\n");
+      expect(changedHead.invocation).toContain(`head_sha=${changedHeadSha}\n`);
+      expect(changedHead.invocation).toContain(
+        "output[title]=Generated release head changed during verification\n",
+      );
+
+      const changedBase = yield* run({ currentBaseSha: changedBaseSha });
+      expect({ exitCode: changedBase.exitCode, output: changedBase.output }).toMatchObject({
+        exitCode: 0,
+      });
+      expect(changedBase.invocation).toContain("conclusion=failure\n");
+      expect(changedBase.invocation).toContain(
+        "output[title]=Generated release base changed during verification\n",
+      );
+    }),
+  );
+
+  it.effect("publishes prepared release directories atomically and cleans failed staging", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryRoot = yield* fs.makeTempDirectoryScoped({
+        prefix: "effect-agent-release-artifact-test-",
+      });
+      const destination = path.join(temporaryRoot, "release-artifacts");
+      let failedStaging = "";
+
+      const failure = yield* Effect.flip(
+        Effect.scoped(
+          Effect.gen(function* () {
+            failedStaging = yield* acquireReleaseArtifactStagingDirectory(destination);
+            yield* fs.writeFileString(path.join(failedStaging, "partial"), "incomplete\n");
+            return yield* Effect.fail("fixture-failure" as const);
+          }),
+        ),
+      );
+      expect(failure).toBe("fixture-failure");
+      expect(yield* fs.exists(failedStaging)).toBe(false);
+      expect(yield* fs.exists(destination)).toBe(false);
+
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const staging = yield* acquireReleaseArtifactStagingDirectory(destination);
+          yield* fs.writeFileString(path.join(staging, "release-manifest.json"), "{}\n");
+          yield* fs.rename(staging, destination);
+        }),
+      );
+      expect(yield* fs.readFileString(path.join(destination, "release-manifest.json"))).toBe(
+        "{}\n",
+      );
+      expect(
+        (yield* fs.readDirectory(temporaryRoot)).filter((entry) =>
+          entry.startsWith(".effect-agent-release-staging-"),
+        ),
+      ).toEqual([]);
     }),
   );
 

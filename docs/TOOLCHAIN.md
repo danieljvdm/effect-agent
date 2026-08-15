@@ -177,8 +177,11 @@ the ruleset's `strict_required_status_checks_policy` setting: it invalidates the
 for merge purposes whenever `main` later advances, until Changesets regenerates from the new base.
 
 After a version PR merge, an unprivileged preparation job frozen-installs and rebuilds the exact
-versioned tree, packs unpublished workspaces with Bun, and uploads one checksummed immutable
-artifact. A separate action-free job is the sole holder of `id-token: write`. It checks the artifact
+versioned tree, packs unpublished workspaces with Bun into a scope-owned staging directory, and
+atomically renames that directory into place only after every tarball and the manifest are
+complete. Failure or interruption removes the partial staging tree, so a retry never inherits an
+incomplete release artifact. The job then uploads one checksummed immutable artifact. A separate
+action-free job is the sole holder of `id-token: write`. It checks the artifact
 digests, validates the release manifest, verifies a pinned npm CLI tarball, and publishes with
 provenance; it does not check out repository code, install dependencies, run a build, or invoke a
 repository script. A final action-free job has tag-write but no OIDC authority and creates only
