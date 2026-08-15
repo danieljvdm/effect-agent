@@ -88,13 +88,18 @@ export class FileDiffView extends Schema.Class<FileDiffView>(
   truncated: Schema.Boolean,
 }) {}
 
+// Read failures stay model-visible results ("return"), never run-killers:
+// a model asking for an out-of-changeset path is expected untrusted-input
+// behavior, and the fail-closed answer is a typed refusal it can correct —
+// aborting the whole review on one bad path guess would be fragility, not
+// security (the run stays bounded by AgentPolicy regardless).
 export const ReadFileDiff = Tool.make("read_file_diff", {
   description:
     "Read the annotated unified diff of one changed file. Lines marked R<number> exist in the new version and are the only valid finding anchors.",
   parameters: FileDiffQuery,
   success: FileDiffView,
   failure: Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "error",
+  failureMode: "return",
   dependencies: [PullRequestSource],
 }).annotate(ToolExecutionClass, "readonly");
 
@@ -125,7 +130,7 @@ export const ReadFile = Tool.make("read_file", {
   parameters: FileSliceQuery,
   success: FileSlice,
   failure: Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "error",
+  failureMode: "return",
   dependencies: [PullRequestSource],
 }).annotate(ToolExecutionClass, "readonly");
 
@@ -313,7 +318,7 @@ export const makeReviewInstructions =
       "Work in this order:",
       "1. Call list_changed_files once to see the changeset.",
       "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-      "3. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+      "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
       "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
       '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
       `Report at most ${maxFindings} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,

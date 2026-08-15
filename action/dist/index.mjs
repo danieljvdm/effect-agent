@@ -36335,7 +36335,7 @@ var ReadFileDiff = exports_Tool.make("read_file_diff", {
   parameters: FileDiffQuery,
   success: FileDiffView,
   failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "error",
+  failureMode: "return",
   dependencies: [PullRequestSource]
 }).annotate(ToolExecutionClass, "readonly");
 
@@ -36359,7 +36359,7 @@ var ReadFile = exports_Tool.make("read_file", {
   parameters: FileSliceQuery,
   success: FileSlice,
   failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "error",
+  failureMode: "return",
   dependencies: [PullRequestSource]
 }).annotate(ToolExecutionClass, "readonly");
 var ReviewToolkit = exports_Toolkit.make(ListChangedFiles, ReadFileDiff, ReadFile);
@@ -36479,7 +36479,7 @@ ${mission.body}` : "The author provided no description.",
     "Work in this order:",
     "1. Call list_changed_files once to see the changeset.",
     "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-    "3. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+    "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
     "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
     '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
     `Report at most ${maxFindings} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
@@ -36625,7 +36625,7 @@ var makeFileReviewerInstructions = (options = {}) => (brief) => [
   ...staticGuidanceLines(options.guidance),
   "Work in this order:",
   "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-  "2. Call read_file when you need surrounding context the diff does not show. Only changed files are readable.",
+  "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
   "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
   `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.`,
   `Report at most ${MAX_CHILD_FINDINGS} findings; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`
