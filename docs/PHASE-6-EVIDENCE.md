@@ -119,8 +119,7 @@ outside the repository); CI runs them through the ordinary `bun run test` gate.
     facets, `BrowserCrypto.layer`, per-Object producer identity
     (`{prefix}:{conversationId}`), and `AgentBindingResolver`
     (`packages/platform-cloudflare/src/layers.ts`);
-  - `makeConversationObjectClass(options, observability?)` — the `effect-cf`-backed class
-    applications export from their Worker (one cached runtime and native RPC boundary):
+  - `makeConversationObjectClass(options)` — the class applications export from their Worker:
     a **local-only** constructor gate (`blockConcurrencyWhile`: migration + exact-version
     check, config decode, defensive ensure-alarm; never a recovery pass, so two Objects can
     never deadlock in constructor gates), entry points (`submitEncoded`,

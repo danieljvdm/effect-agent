@@ -63,7 +63,6 @@ export default defineConfig({
           { text: "Agent definitions", link: "/guide/agents" },
           { text: "Tools & Layers", link: "/guide/tools" },
           { text: "Run & stream", link: "/guide/run-agents" },
-          { text: "Observability", link: "/guide/observability" },
           { text: "Conversations", link: "/guide/conversations" },
           { text: "Deterministic testing", link: "/guide/testing" },
         ],

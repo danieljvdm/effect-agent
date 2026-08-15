@@ -110,11 +110,8 @@ committed alarm), the alarm/RPC wake scheduler, the Durable Object RPC port tran
 `CloudflareDurableRuntime.layer`, `makeConversationObjectClass` (local-only constructor gates
 and the typed admission-limits gate before `submit`), and the Worker-side
 `CloudflareConversationClient`. `CloudflareBindingSource` may capture registered worker Bindings
-from `CloudflareBindingSourceContext` once per Object incarnation, after identity derivation.
-`makeConversationObjectClass` uses `effect-cf` for its cached runtime, native RPC methods,
-event-scoped Layers, and optional post-RPC `OtlpExporter.Flusher` scheduling through
-`DurableObjectState.waitUntil`. Effect Agent exposes no competing Cloudflare telemetry service or
-flush coordinator. It is a Layer-assembly library, not an application entrypoint.
+from `CloudflareBindingSourceContext` once per Object incarnation, after identity derivation. It
+is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
 

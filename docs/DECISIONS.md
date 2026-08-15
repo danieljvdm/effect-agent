@@ -501,38 +501,3 @@ This is the first package created outside a numbered roadmap phase; D-025's phas
 otherwise unchanged.
 
 Record: [ADR-0016](adr/0016-pr-review-package.md)
-
-### D-036 — Native Tool observability and Cloudflare lifecycle ownership
-
-**Status:** Accepted (owner-directed, 2026-08-14; Cloudflare ownership amended 2026-08-15)
-
-**Decision:** Make the engine's logical application-handler lifecycle the canonical content-free
-OpenTelemetry `execute_tool` span, deriving terminal status from the actual Tool result so
-value-level failures export as failed spans. The complete in-memory handler-attempt lifecycle set
-is success, failure, interruption, and nonterminal waiting. Success, failure, and interruption end
-that attempt; waiting may remain unresolved indefinitely. Denial and provider execution remain
-call-level classifications only. Emit one bounded terminal log for success/failure attempts and
-none for interruption. Logs carry identity, execution class, and outcome fields; never include Tool
-parameters/results, prompts, commands, source code, conversation content, or failure messages by
-default. Recovery may start another attempt and makes no exactly-once telemetry claim.
-Report terminal Logger/Tracer defects through Effect's owned `ErrorReporter` boundary, isolating a
-defective reporter so observability never changes Tool settlement. Early-close cleanup reports
-typed failures and defects rather than silently discarding them; the canonical span restores its
-bounded outcome attribute from authenticated private terminal state before export.
-
-Use `effect-cf` as the single Cloudflare native lifecycle owner. `makeConversationObjectClass`
-adapts the existing Effect Agent storage, routing, alarm, and coordinator Layers into
-`effect-cf`'s `DurableObject.make`; `effect-cf` owns the cached `ManagedRuntime`, native RPC method
-execution, per-event Layer scope, `DurableObjectState.waitUntil`, optional
-`OtlpExporter.Flusher`, and content-free post-RPC flush-failure isolation on success and failure.
-The Worker may pass an event-scoped observability Layer as the factory's second argument; omitting
-it installs no framework no-op service because no Effect Agent telemetry service exists.
-
-Effect Agent does not implement a parallel flush coordinator, reservation queue, exporter timeout,
-or `waitUntil` diagnostic boundary. `effect-cf@0.25.2` does not yet schedule the same post-exit
-flush for its raw alarm hook; that gap remains owned upstream and must not be filled by a private
-Effect Agent lifecycle implementation. Alarm rejection and retry semantics remain unchanged. No
-canonical record, wire Schema, settlement, or replay behavior changes.
-
-Records: [ADR-0018](adr/0018-native-tool-observability.md), superseded for Cloudflare lifecycle by
-[ADR-0019](adr/0019-effect-cf-cloudflare-lifecycle.md)

@@ -128,13 +128,6 @@ Configuration families include:
 - retention;
 - feature flags and compatibility gates.
 
-`makeConversationObjectClass(options, observability?)` accepts an optional event-scoped Effect
-Layer at the Worker factory boundary. The Layer may install Logger, Tracer, Metric, and
-`OtlpExporter.Flusher` services; require effect-cf's Durable Object state/environment services or
-Effect Agent's Object context/namespace services; and fail acquisition typed. Omitting it installs
-no framework telemetry service. Runtime options select no telemetry vendor and carry no exporter
-callback or flush timeout.
-
 Secrets are resolved through a secret provider and wrapped as redacted values.
 Startup diagnostics may list missing secret names but never values.
 
@@ -251,9 +244,8 @@ Cloudflare is a first-class target alongside Node. The mapping is:
 - platform-native observability adapters.
 
 Cloudflare platform APIs are wrapped as Effect services and supplied through Layers. A
-Conversation runtime requires storage, scheduling/alarm, clock, and attachment services rather
-than importing bindings in the engine. Hosts may add observability through the optional event
-Layer; the runtime does not require a framework telemetry service.
+Conversation runtime requires storage, scheduling/alarm, clock, attachment, and observability
+services rather than importing bindings in the engine.
 
 `CloudflareDurableRuntimeOptions.bindings` accepts a resolved array, a closed Effect, or a
 per-incarnation callback. The callback runs after the Object's Conversation and producer
@@ -261,20 +253,6 @@ identities are derived and receives the live `DurableObjectState`, raw Worker en
 `conversationId`, and `producerId`. This is the host boundary for capturing environment-backed
 resources such as Worker service bindings; database clients and other request-scoped resources
 remain outside the cached Durable Object runtime.
-
-`makeConversationObjectClass` uses `effect-cf`'s `DurableObject.make` as the single native
-lifecycle owner. effect-cf caches one `ManagedRuntime` for the Object incarnation, installs the
-native RPC methods, builds event Layers inside each event Scope, and schedules an optional
-`OtlpExporter.Flusher` through `DurableObjectState.waitUntil` after every native RPC on success or
-failure. Cross-Object port calls and wake are native RPC methods on that boundary. Export is
-derivative and never replaces the RPC result. effect-cf owns content-free flush and scheduling
-failure diagnostics; Effect Agent has no competing telemetry service, coordinator, timeout, or
-`waitUntil` bridge.
-
-The raw alarm hook in `effect-cf@0.25.2` runs in the same event-scoped runtime but does not yet
-receive automatic post-exit flush scheduling. That limitation is upstream-owned. Effect Agent does
-not add an alarm-only lifecycle implementation; alarm failure continues to reject the native
-delivery so workerd can retry it, and durable correctness never depends on telemetry export.
 
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
@@ -286,9 +264,8 @@ eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry 
 and throw-retry), runtime-restart (Miniflare dispose/reopen over persisted storage), and
 fault-injection (failpoints on every durable mutation plus routed-transport faults) scenarios
 are implemented and green ([Phase 6 evidence](../PHASE-6-EVIDENCE.md)). The tested harness is
-workerd/Miniflare; the hosted production service and live soak remain explicitly unclaimed. The
-effect-cf native RPC integration is covered in workerd, but no hosted exporter certification is
-claimed — Phase 7 completed the roadmap without hosted-platform evidence
+workerd/Miniflare; the hosted production service, its observability adapters, and live soak
+remain explicitly unclaimed — Phase 7 completed the roadmap without hosted-platform evidence
 ([Phase 7 evidence](../PHASE-7-EVIDENCE.md)), and hosted-service operation stays outside the
 roadmap's claims until open-source preparation revisits it.
 
