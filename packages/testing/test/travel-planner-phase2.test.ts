@@ -215,7 +215,9 @@ describe("TEST-014 P2 Travel Planner operational capabilities (E)", () => {
       const turns: ReadonlyArray<ScriptedTurnInput> = phase1HappyPathTurns.map((turn) => ({
         ...turn,
         assertRequest: (request) => {
-          expect(request.prompt.content.map((message) => message.role)).toEqual(["user"]);
+          // The compacted request keeps the model-visible output contract
+          // (ADR-0020 proposed default) ahead of the compacted view.
+          expect(request.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
           receivedPrompts.push(JSON.stringify(request.prompt.content));
         },
       }));

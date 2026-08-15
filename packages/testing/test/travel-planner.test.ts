@@ -69,7 +69,13 @@ describe("TEST-014 P1 Travel Planner reference application (E)", () => {
             "search_lodging",
             "search_activities",
           ]);
-          expect(request.prompt.content.map((message) => message.role)).toEqual(["system", "user"]);
+          // Guidance system message plus the ADR-0020 model-visible output
+          // contract, then the encoded trip input.
+          expect(request.prompt.content.map((message) => message.role)).toEqual([
+            "system",
+            "system",
+            "user",
+          ]);
         },
       },
       {

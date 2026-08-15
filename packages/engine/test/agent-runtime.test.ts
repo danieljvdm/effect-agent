@@ -4338,8 +4338,11 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const receivedPrompts = yield* Ref.get(received);
       expect(receivedPrompts).toHaveLength(2);
       for (const receivedPrompt of receivedPrompts) {
-        expect(receivedPrompt.content.map((message) => message.role)).toEqual(["user"]);
+        // The model-visible output contract (ADR-0020 proposed default) is
+        // applied after context preparation, so compaction cannot drop it.
+        expect(receivedPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
         const encoded = JSON.stringify(receivedPrompt.content);
+        expect(encoded).toContain("Final output contract:");
         expect(encoded).toContain("compacted model context");
         expect(encoded).not.toContain("Search.");
         expect(encoded).not.toContain("found");

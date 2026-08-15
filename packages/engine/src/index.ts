@@ -74,6 +74,7 @@ import {
   type Toolkit,
 } from "effect/unstable/ai";
 
+import { insertOutputContract, outputSchemaContract } from "./output-contract-internal.ts";
 import {
   boundedJsonSnapshot,
   type BoundedJsonSnapshot,
@@ -2518,9 +2519,32 @@ const makeTurn = <
         policy.onExhaustion !== "fail" &&
         (turn > bounds.maxTurns ||
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls);
+
+      // Model-visible final-output contract (ADR-0020 / D-038, Proposed):
+      // applied to the request after context preparation, never to official
+      // history, so compaction cannot drop it and canonical records are
+      // unchanged. An unrenderable output Schema falls back to the prior
+      // behavior with one Turn-1 diagnostic.
+      const outputContract = outputSchemaContract(agent.definition);
+      if (outputContract._tag === "unrenderable" && turn === 1) {
+        yield* Effect.logWarning(
+          "Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted (ADR-0020)",
+        ).pipe(
+          Effect.annotateLogs({
+            agentId: context.agentId,
+            runId: context.runId,
+            reason: outputContract.reason,
+          }),
+        );
+      }
+      const requestPrompt =
+        outputContract._tag === "rendered"
+          ? insertOutputContract(modelContext.prompt, outputContract.message)
+          : modelContext.prompt;
+
       const response = guardBudgetStream(
         LanguageModel.streamText({
-          prompt: modelContext.prompt,
+          prompt: requestPrompt,
           toolkit: agent.definition.toolkit,
           disableToolCallResolution: true,
           ...(finalAnswerOnly ? { toolChoice: "none" as const } : {}),
