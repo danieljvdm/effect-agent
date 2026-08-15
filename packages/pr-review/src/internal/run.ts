@@ -3,6 +3,7 @@ import {
   makeUsageBudget,
   toRunBudgetHook,
   UsageBudgetLimits,
+  UsageTotals,
   AgentRuntime,
   type RuntimeBinding,
 } from "effect-agent";
@@ -60,6 +61,18 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   plan: ReviewPublicationPlan,
   published: Schema.optionalKey(PublishedReview),
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
+  /**
+   * The run budget's observed usage. For the fan-out reviewer this observes
+   * the COORDINATOR only — delegated children are bounded and accounted
+   * separately by their reservations.
+   */
+  usage: Schema.optionalKey(UsageTotals),
+  /**
+   * What `usage` observed: the whole run, or a fan-out coordinator only.
+   * Absent when the caller declared no scope — consumers must not present
+   * unscoped usage as whole-run totals.
+   */
+  usageScope: Schema.optionalKey(Schema.Literals(["run", "coordinator"])),
 }) {}
 
 export interface ExecuteReviewOptions {
@@ -81,6 +94,17 @@ export interface ExecuteReviewOptions {
    * body so later runs can skip an unchanged changeset.
    */
   readonly signature?: ((mission: ReviewMission) => string) | undefined;
+  /** Provider binding descriptor rendered into the review footer. */
+  readonly modelLabel?: string | undefined;
+  /** Workflow-run URL rendered into the review footer. */
+  readonly runUrl?: string | undefined;
+  /**
+   * What the run budget observes: the whole run, or a fan-out coordinator
+   * only. Without a declared scope the footer omits usage entirely — this
+   * generic path cannot know what a caller's binding shape observes, and an
+   * unlabeled number would read as whole-run totals.
+   */
+  readonly usageScope?: "run" | "coordinator" | undefined;
 }
 
 /** Build the mission one review run frames from the source's snapshot. */
@@ -106,6 +130,7 @@ export const enforceFindingsBound = (review: CodeReview, maxFindings: number): C
         summary: review.summary,
         verdict: review.verdict,
         findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings),
+        ...(review.concerns !== undefined ? { concerns: review.concerns } : {}),
       });
 
 /**
@@ -154,17 +179,33 @@ export const executeReview = <
     // decode recovers the typed value on this side of the generic boundary.
     const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
     const review = enforceFindingsBound(decoded, clampMaxFindings(options.maxFindings));
+    const usage = yield* budget.snapshot;
     const plan = planPublication(review, files, {
       applyVerdict: options.applyVerdict,
       headSha: metadata.headSha,
       totalChangedFiles: metadata.totalChangedFiles,
+      baseRef: metadata.baseRef,
+      headRef: metadata.headRef,
+      modelLabel: options.modelLabel,
+      runUrl: options.runUrl,
+      usage,
+      usageScope: options.usageScope,
       fingerprint,
     });
 
+    const scope =
+      options.usageScope === undefined ? {} : ({ usageScope: options.usageScope } as const);
     if (!options.post) {
-      return ReviewRunOutcome.make({ review, plan, turns: result.turns });
+      return ReviewRunOutcome.make({ review, plan, turns: result.turns, usage, ...scope });
     }
     const publisher = yield* ReviewPublisher;
     const published = yield* publisher.publish(plan);
-    return ReviewRunOutcome.make({ review, plan, published, turns: result.turns });
+    return ReviewRunOutcome.make({
+      review,
+      plan,
+      published,
+      turns: result.turns,
+      usage,
+      ...scope,
+    });
   });

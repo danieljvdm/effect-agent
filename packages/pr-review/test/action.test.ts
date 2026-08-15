@@ -14,6 +14,7 @@ import { PlatformError, SystemError } from "effect/PlatformError";
 
 import {
   GuidanceFileUnreadable,
+  InvalidMaxDurationInput,
   MAX_GUIDANCE_FILE_CHARS,
   resolveActionInputs,
   resolveGuidance,
@@ -23,6 +24,7 @@ import {
 } from "../src/action.ts";
 import {
   CodeReview,
+  InvalidEffortInput,
   planPublication,
   PriorReviewLookupFailure,
   PriorReviews,
@@ -58,6 +60,7 @@ describe("resolveActionInputs", () => {
       expect(inputs).toEqual({
         provider: "openai",
         model: undefined,
+        effort: undefined,
         post: true,
         applyVerdict: false,
         fanOut: false,
@@ -65,6 +68,7 @@ describe("resolveActionInputs", () => {
         guidanceFile: undefined,
         ignore: [],
         maxFindings: undefined,
+        maxDurationMinutes: undefined,
         failOn: "never",
         skipUnchanged: true,
       });
@@ -77,6 +81,7 @@ describe("resolveActionInputs", () => {
         withEnv({
           PR_REVIEW_PROVIDER: "anthropic",
           PR_REVIEW_MODEL: "claude-sonnet-5",
+          PR_REVIEW_EFFORT: "xhigh",
           PR_REVIEW_POST: "false",
           PR_REVIEW_APPLY_VERDICT: "true",
           PR_REVIEW_FAN_OUT: "true",
@@ -84,6 +89,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_GUIDANCE_FILE: ".github/review-guidance.md",
           PR_REVIEW_IGNORE: " **/*.lock , dist/** ,",
           PR_REVIEW_MAX_FINDINGS: "7",
+          PR_REVIEW_MAX_DURATION_MINUTES: "12",
           PR_REVIEW_FAIL_ON: "request-changes",
           PR_REVIEW_SKIP_UNCHANGED: "false",
         }),
@@ -91,6 +97,7 @@ describe("resolveActionInputs", () => {
       expect(inputs).toEqual({
         provider: "anthropic",
         model: "claude-sonnet-5",
+        effort: 0.75,
         post: false,
         applyVerdict: true,
         fanOut: true,
@@ -98,9 +105,39 @@ describe("resolveActionInputs", () => {
         guidanceFile: ".github/review-guidance.md",
         ignore: ["**/*.lock", "dist/**"],
         maxFindings: 7,
+        maxDurationMinutes: 12,
         failOn: "request-changes",
         skipUnchanged: false,
       });
+    }),
+  );
+
+  it.effect("accepts a numeric effort position", () =>
+    Effect.gen(function* () {
+      const inputs = yield* resolveActionInputs().pipe(withEnv({ PR_REVIEW_EFFORT: "0.6" }));
+      expect(inputs.effort).toBe(0.6);
+    }),
+  );
+
+  it.effect("fails typed on an effort that is neither a name nor a position", () =>
+    Effect.gen(function* () {
+      const exit = yield* resolveActionInputs().pipe(
+        withEnv({ PR_REVIEW_EFFORT: "extreme" }),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      expect(Schema.is(InvalidEffortInput)(failure)).toBe(true);
+    }),
+  );
+
+  it.effect("fails typed on a non-positive max duration", () =>
+    Effect.gen(function* () {
+      const exit = yield* resolveActionInputs().pipe(
+        withEnv({ PR_REVIEW_MAX_DURATION_MINUTES: "0" }),
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+      expect(Schema.is(InvalidMaxDurationInput)(failure)).toBe(true);
     }),
   );
 });

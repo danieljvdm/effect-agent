@@ -13,6 +13,8 @@ import { main } from "../action.ts";
 const INPUT_TO_ENV: ReadonlyArray<readonly [input: string, env: string]> = [
   ["INPUT_PROVIDER", "PR_REVIEW_PROVIDER"],
   ["INPUT_MODEL", "PR_REVIEW_MODEL"],
+  ["INPUT_EFFORT", "PR_REVIEW_EFFORT"],
+  ["INPUT_MAX-DURATION-MINUTES", "PR_REVIEW_MAX_DURATION_MINUTES"],
   ["INPUT_POST", "PR_REVIEW_POST"],
   ["INPUT_APPLY-VERDICT", "PR_REVIEW_APPLY_VERDICT"],
   ["INPUT_FAN-OUT", "PR_REVIEW_FAN_OUT"],

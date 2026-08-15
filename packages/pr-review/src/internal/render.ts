@@ -2,9 +2,9 @@ import { Schema } from "effect";
 
 import type { ChangedFile } from "./diff.ts";
 import { commentableLines } from "./diff.ts";
-import { FINGERPRINT_MARKER_LENGTH, renderFingerprintMarker } from "./fingerprint.ts";
+import { renderFingerprintMarker } from "./fingerprint.ts";
 import type { CodeReview } from "./review-agent.ts";
-import { ReviewFinding } from "./review-agent.ts";
+import { ReviewFinding, type ReviewConcern } from "./review-agent.ts";
 
 // ---------------------------------------------------------------------------
 // Publication planning: pure, deterministic, and fail-closed. Model output is
@@ -43,10 +43,22 @@ export class ReviewPublicationPlan extends Schema.Class<ReviewPublicationPlan>(
   commitSha: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
 }) {}
 
+const severityEmoji: Record<ReviewFinding["severity"], string> = {
+  blocking: "🛑",
+  important: "⚠️",
+  nit: "💅",
+};
+
+const severityRank: Record<ReviewFinding["severity"], number> = {
+  blocking: 0,
+  important: 1,
+  nit: 2,
+};
+
 const severityLabel: Record<ReviewFinding["severity"], string> = {
-  blocking: "🛑 blocking",
-  important: "⚠️ important",
-  nit: "💅 nit",
+  blocking: `${severityEmoji.blocking} blocking`,
+  important: `${severityEmoji.important} important`,
+  nit: `${severityEmoji.nit} nit`,
 };
 
 /** A fence long enough that the suggestion content can never close it early. */
@@ -65,14 +77,83 @@ const renderCommentBody = (finding: ReviewFinding): string => {
   return parts.join("\n");
 };
 
-const renderDemoted = (finding: ReviewFinding): string => {
+const renderDemoted = (finding: ReviewFinding, reason: string): string => {
   const location = `\`${finding.path}:${finding.startLine}${
     finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""
   }\``;
-  return [
-    `- ${location} **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body}`,
-  ].join("\n");
+  return `- ${location} **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body} _(demoted: ${reason})_`;
 };
+
+const countNoun = (count: number, noun: string): string =>
+  `${count} ${noun}${count === 1 ? "" : "s"}`;
+
+/** The validated finding + concern severities, tallied for callout and event. */
+const severityCounts = (review: CodeReview) => {
+  const severities = [
+    ...review.findings.map((finding) => finding.severity),
+    ...(review.concerns ?? []).map((concern) => concern.severity),
+  ];
+  return {
+    blocking: severities.filter((severity) => severity === "blocking").length,
+    important: severities.filter((severity) => severity === "important").length,
+    total: severities.length,
+  };
+};
+
+/**
+ * The opening callout: the review's overall tier, derived HOST-SIDE from the
+ * validated severities (never from model prose), described by what GitHub
+ * renders it as. `[!CAUTION]` is a red banner, `[!IMPORTANT]` a purple one;
+ * the blockquote tiers read as informational.
+ */
+const renderVerdictCallout = (review: CodeReview): string => {
+  const counts = severityCounts(review);
+  if (counts.blocking > 0) {
+    return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+  }
+  if (counts.important > 0) {
+    return `> [!IMPORTANT]\n> ${countNoun(counts.important, "important finding")} to address before merging.`;
+  }
+  if (counts.total > 0) {
+    return "> ℹ️ Minor suggestions only — mergeable as-is.";
+  }
+  return review.verdict === "approve"
+    ? "> ✅ No issues found."
+    : "> ℹ️ No findings — see the summary.";
+};
+
+const renderConcern = (concern: ReviewConcern): string =>
+  [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join("\n");
+
+/** HTML comments must not contain `--`; interpolated values are sanitized. */
+const commentSafe = (value: string): string => value.replaceAll("--", "- -");
+
+/**
+ * The invisible staleness note addressed to whoever reads the review later —
+ * a human or a downstream agent: which commit the findings were written
+ * against, and that line callouts age the moment new commits land.
+ */
+const renderReviewMetadata = (options: {
+  readonly headSha: string;
+  readonly baseRef?: string | undefined;
+  readonly headRef?: string | undefined;
+  readonly filesVisible: number;
+  readonly totalChangedFiles: number;
+}): string =>
+  [
+    "<!-- effect-agent-pr-review metadata",
+    `reviewed-head: ${commentSafe(options.headSha)}`,
+    ...(options.baseRef !== undefined && options.headRef !== undefined
+      ? [`base-ref: ${commentSafe(options.baseRef)}`, `head-ref: ${commentSafe(options.headRef)}`]
+      : []),
+    // The observation surface, not a coverage claim: the host cannot know
+    // which visible files the model actually examined, and the summary is
+    // where unreviewed units are named.
+    `files-visible: ${options.filesVisible} of ${options.totalChangedFiles}`,
+    "Findings were written against the head commit above; if commits have landed",
+    "since, treat file and line callouts as potentially stale and re-diff first.",
+    "-->",
+  ].join("\n");
 
 /**
  * Why one finding cannot become an inline comment, or undefined when it can.
@@ -108,6 +189,17 @@ export const planPublication = (
     readonly headSha: string;
     /** GitHub's changed-file total, for honest truncation reporting. */
     readonly totalChangedFiles: number;
+    /** Base/head refs for the staleness metadata comment. */
+    readonly baseRef?: string | undefined;
+    readonly headRef?: string | undefined;
+    /** Provider binding descriptor rendered into the footer. */
+    readonly modelLabel?: string | undefined;
+    /** Workflow-run URL rendered into the footer. */
+    readonly runUrl?: string | undefined;
+    /** Observed run usage rendered into the footer. */
+    readonly usage?: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
+    /** What the usage observed: the whole run, or the coordinator only. */
+    readonly usageScope?: "run" | "coordinator" | undefined;
     /**
      * Changeset fingerprint embedded invisibly in the review body so a later
      * run can skip re-reviewing an unchanged changeset.
@@ -116,9 +208,10 @@ export const planPublication = (
   },
 ): ReviewPublicationPlan => {
   const comments: Array<ReviewCommentDraft> = [];
-  const demoted: Array<ReviewFinding> = [];
+  const demoted: Array<{ readonly finding: ReviewFinding; readonly reason: string }> = [];
   for (const finding of review.findings) {
-    if (anchorViolation(finding, files) === undefined) {
+    const violation = anchorViolation(finding, files);
+    if (violation === undefined) {
       comments.push(
         ReviewCommentDraft.make({
           path: finding.path,
@@ -128,44 +221,116 @@ export const planPublication = (
         }),
       );
     } else {
-      demoted.push(finding);
+      demoted.push({ finding, reason: violation });
     }
   }
 
-  const bodyParts = [review.summary];
-  if (files.length < options.totalChangedFiles) {
-    bodyParts.push(
-      "",
-      `⚠️ Reviewed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
-    );
-  }
-  if (demoted.length > 0) {
-    bodyParts.push("", "### Findings without a valid diff anchor", ...demoted.map(renderDemoted));
-  }
-  bodyParts.push(
-    "",
-    `_Automated review by @effect-agent/pr-review · reviewed at ${options.headSha.slice(0, 7)}._`,
+  // Rendered most-severe first so the size cap below sheds the least severe.
+  const sortedConcerns = [...(review.concerns ?? [])].sort(
+    (a, b) => severityRank[a.severity] - severityRank[b.severity],
+  );
+  const sortedDemoted = [...demoted].sort(
+    (a, b) => severityRank[a.finding.severity] - severityRank[b.finding.severity],
   );
 
-  const event: ReviewEvent = options.applyVerdict
-    ? review.verdict === "approve"
-      ? "APPROVE"
-      : review.verdict === "request-changes"
-        ? "REQUEST_CHANGES"
-        : "COMMENT"
-    : "COMMENT";
+  const footerParts = ["Automated review by @effect-agent/pr-review"];
+  if (options.modelLabel !== undefined) footerParts.push(options.modelLabel);
+  // Usage renders only under an EXPLICIT scope: this planner cannot know
+  // whether a budget snapshot observed the whole run or only a fan-out
+  // coordinator, and omitting the number is honest where mislabeling is not.
+  if (options.usage !== undefined && options.usageScope !== undefined) {
+    const scope = options.usageScope === "coordinator" ? " (coordinator)" : "";
+    footerParts.push(
+      `${options.usage.inputTokens} in / ${options.usage.outputTokens} out tokens${scope}`,
+    );
+  }
+  if (options.runUrl !== undefined) footerParts.push(`[run](${options.runUrl})`);
+  footerParts.push(`reviewed at ${options.headSha.slice(0, 7)}`);
+  const footer = `_${footerParts.join(" · ")}._`;
 
-  // The marker must survive the body cap, so the cap reserves room for it.
-  const body =
-    options.fingerprint === undefined
-      ? bodyParts.join("\n").slice(0, 60_000)
-      : `${bodyParts.join("\n").slice(0, 60_000 - FINGERPRINT_MARKER_LENGTH - 1)}\n${renderFingerprintMarker(options.fingerprint)}`;
+  const renderHead = (concernsKept: number, demotedKept: number, omitted: number): string => {
+    const parts = [renderVerdictCallout(review), "", review.summary];
+    for (const concern of sortedConcerns.slice(0, concernsKept)) {
+      parts.push("", renderConcern(concern));
+    }
+    if (files.length < options.totalChangedFiles) {
+      parts.push(
+        "",
+        `⚠️ Reviewed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
+      );
+    }
+    if (demotedKept > 0) {
+      parts.push(
+        "",
+        "### Findings without a valid diff anchor",
+        ...sortedDemoted
+          .slice(0, demotedKept)
+          .map(({ finding, reason }) => renderDemoted(finding, reason)),
+      );
+    }
+    if (omitted > 0) {
+      parts.push(
+        "",
+        `⚠️ ${countNoun(omitted, "review item")} omitted — the body exceeded GitHub's review size cap.`,
+      );
+    }
+    parts.push("", footer);
+    return parts.join("\n");
+  };
+
+  // The model's verdict may not contradict the reported severities (model
+  // output is untrusted input): any blocking item forces REQUEST_CHANGES, a
+  // review with no blocking item can never REQUEST_CHANGES, and an approval
+  // is honored only when nothing blocking or important was reported — the
+  // event always agrees with the callout tier. Demoted findings and concerns
+  // count like anchored findings: anchor validation validates LOCATIONS, not
+  // truth, so severity is equally model-claimed for all three, and counting
+  // them only ever moves the event toward the closed direction.
+  const counts = severityCounts(review);
+  const event: ReviewEvent = !options.applyVerdict
+    ? "COMMENT"
+    : counts.blocking > 0
+      ? "REQUEST_CHANGES"
+      : review.verdict === "approve" && counts.important === 0
+        ? "APPROVE"
+        : "COMMENT";
+
+  // The invisible tail (metadata + fingerprint marker) must survive the body
+  // cap, so the cap reserves exactly the room it needs.
+  const tail = [
+    renderReviewMetadata({
+      headSha: options.headSha,
+      baseRef: options.baseRef,
+      headRef: options.headRef,
+      filesVisible: files.length,
+      totalChangedFiles: options.totalChangedFiles,
+    }),
+    ...(options.fingerprint === undefined ? [] : [renderFingerprintMarker(options.fingerprint)]),
+  ].join("\n");
+  const headBudget = 60_000 - tail.length - 1;
+
+  // Shed whole trailing items — demoted bullets first (they already failed
+  // validation), then concerns — instead of slicing markdown mid-block. Every
+  // omission is announced, and `plan.demoted` keeps the full data regardless.
+  let concernsKept = sortedConcerns.length;
+  let demotedKept = sortedDemoted.length;
+  let omitted = 0;
+  let head = renderHead(concernsKept, demotedKept, omitted);
+  while (head.length > headBudget && (demotedKept > 0 || concernsKept > 0)) {
+    if (demotedKept > 0) demotedKept -= 1;
+    else concernsKept -= 1;
+    omitted += 1;
+    head = renderHead(concernsKept, demotedKept, omitted);
+  }
+  // Last resort for a pathological summary; unreachable while the CodeReview
+  // schema caps the summary well below the budget.
+  const body = `${head.slice(0, headBudget)}\n${tail}`;
 
   return ReviewPublicationPlan.make({
     event,
     body,
     comments,
-    demoted,
+    demoted: demoted.map(({ finding }) => finding),
     commitSha: options.headSha,
   });
 };

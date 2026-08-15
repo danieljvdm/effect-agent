@@ -26,6 +26,7 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           # or: provider: anthropic + anthropic-api-key
+          effort: high # low..max or a number in [0,1], per-provider ladder
           guidance-file: .github/review-guidance.md # committed review profile
           guidance: |
             This is an Effect codebase. Flag naked Promises in public APIs.
@@ -44,7 +45,17 @@ must not combine `guidance-file` with `pull_request_target`.)
 Re-reviews of an unchanged changeset are skipped by default: each posted
 review embeds a changeset fingerprint, so base-branch auto-merges and
 equivalent rebases don't re-trigger the model (`skip-unchanged: "false"`
-disables this).
+disables this). Model, effort, and guidance changes invalidate the
+fingerprint and review again.
+
+Posted reviews open with a severity callout derived host-side from the
+validated findings, carry non-anchored concerns as body sections, and end
+with a footer naming the model, token usage, and workflow run. The run also
+writes a step summary (verdict, counts, tokens) to the Actions job page.
+
+If you set `max-duration-minutes` (or rely on the defaults: 8 flat / 15
+fan-out), keep the job's `timeout-minutes` above it — a runner-killed job
+posts nothing, while a budget-ended run fails typed with its forensics.
 
 Inputs, outputs, and defaults are documented in [`action.yml`](action.yml).
 Honest limits: deployment class E — one ephemeral run per event, no

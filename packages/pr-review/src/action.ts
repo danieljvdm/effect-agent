@@ -1,18 +1,21 @@
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Option, Schema } from "effect";
-import { BudgetExceeded } from "effect-agent";
+import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 
+import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { readGitHubEvent, resolveReviewTarget, gitHubReviewLayers } from "./internal/github-env.ts";
 import { fingerprintUnchanged, PriorReviews } from "./internal/github.ts";
 import {
   anthropicClientLayer,
   DEFAULT_PROVIDER,
+  describeReviewModel,
   makeAnthropicReviewModel,
   makeOpenAiReviewModel,
   openAiClientLayer,
   type ReviewProvider,
 } from "./internal/providers.ts";
+import { fanOutReviewBudgetLimits, reviewBudgetLimits } from "./internal/run.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
 import { normalizeRepoRelativePath } from "./internal/source.ts";
 
@@ -40,10 +43,23 @@ export class ReviewGateFailed extends Schema.TaggedError<ReviewGateFailed>()("Re
   }
 }
 
+/** A configured max-duration that cannot bound a run; configuration faults fail loudly. */
+export class InvalidMaxDurationInput extends Schema.TaggedError<InvalidMaxDurationInput>()(
+  "InvalidMaxDurationInput",
+  {
+    minutes: Schema.Int,
+  },
+) {
+  override get message() {
+    return `Invalid max-duration-minutes '${this.minutes}': expected a positive number of minutes.`;
+  }
+}
+
 /** Everything the packaged action reads from its environment. */
 export interface ResolvedActionInputs {
   readonly provider: ReviewProvider;
   readonly model: string | undefined;
+  readonly effort: EffortPosition | undefined;
   readonly post: boolean;
   readonly applyVerdict: boolean;
   readonly fanOut: boolean;
@@ -51,6 +67,7 @@ export interface ResolvedActionInputs {
   readonly guidanceFile: string | undefined;
   readonly ignore: ReadonlyArray<string>;
   readonly maxFindings: number | undefined;
+  readonly maxDurationMinutes: number | undefined;
   readonly failOn: FailOnPolicy;
   readonly skipUnchanged: boolean;
 }
@@ -61,6 +78,20 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     Config.withDefault<ReviewProvider>(DEFAULT_PROVIDER),
   );
   const model = yield* Config.option(Config.nonEmptyString("PR_REVIEW_MODEL"));
+  const effortRaw = yield* Config.option(Config.nonEmptyString("PR_REVIEW_EFFORT"));
+  let effort: EffortPosition | undefined;
+  if (Option.isSome(effortRaw)) {
+    effort = parseEffortPosition(effortRaw.value);
+    if (effort === undefined) {
+      return yield* InvalidEffortInput.make({ input: effortRaw.value });
+    }
+  }
+  const maxDurationMinutes = Option.getOrUndefined(
+    yield* Config.option(Config.int("PR_REVIEW_MAX_DURATION_MINUTES")),
+  );
+  if (maxDurationMinutes !== undefined && maxDurationMinutes <= 0) {
+    return yield* InvalidMaxDurationInput.make({ minutes: maxDurationMinutes });
+  }
   const post = yield* Config.boolean("PR_REVIEW_POST").pipe(Config.withDefault(true));
   const applyVerdict = yield* Config.boolean("PR_REVIEW_APPLY_VERDICT").pipe(
     Config.withDefault(false),
@@ -79,6 +110,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   return {
     provider,
     model: Option.getOrUndefined(model),
+    effort,
     post,
     applyVerdict,
     fanOut,
@@ -89,6 +121,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
       .map((pattern) => pattern.trim())
       .filter((pattern) => pattern.length > 0),
     maxFindings: Option.getOrUndefined(maxFindings),
+    maxDurationMinutes,
     failOn,
     skipUnchanged,
   } satisfies ResolvedActionInputs;
@@ -174,12 +207,49 @@ export const writeActionOutputs = Effect.fn("writeActionOutputs")(function* (
   );
 });
 
+/** Append markdown to the GITHUB_STEP_SUMMARY report when present (no-op locally). */
+export const writeStepSummary = Effect.fn("writeStepSummary")(function* (
+  lines: ReadonlyArray<string>,
+) {
+  const summaryPath = yield* Config.string("GITHUB_STEP_SUMMARY").pipe(Config.withDefault(""));
+  if (summaryPath === "") return;
+  const fs = yield* FileSystem.FileSystem;
+  yield* fs.writeFileString(summaryPath, `${lines.join("\n")}\n`, { flag: "a" });
+});
+
 const outcomeOutputs = (outcome: ReviewRunOutcome): ReadonlyArray<readonly [string, string]> => [
   ["skipped", "false"],
   ["verdict", outcome.review.verdict],
   ["inline-comments", String(outcome.plan.comments.length)],
   ["demoted-findings", String(outcome.plan.demoted.length)],
+  ["concerns", String(outcome.review.concerns?.length ?? 0)],
+  ...(outcome.usage === undefined
+    ? []
+    : ([
+        ["input-tokens", String(outcome.usage.inputTokens)],
+        ["output-tokens", String(outcome.usage.outputTokens)],
+      ] as const)),
   ["review-url", outcome.published?.url ?? ""],
+];
+
+const outcomeSummary = (
+  outcome: ReviewRunOutcome,
+  modelLabel: string | undefined,
+): ReadonlyArray<string> => [
+  "### Pull-request review",
+  `- Verdict: **${outcome.review.verdict}**`,
+  `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
+  ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
+  ...(outcome.usage === undefined
+    ? []
+    : [
+        `- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out${
+          outcome.usageScope === "coordinator" ? " (coordinator)" : ""
+        }`,
+      ]),
+  ...(outcome.published === undefined
+    ? ["- Dry run: nothing posted"]
+    : [`- Posted: ${outcome.published.url}`]),
 ];
 
 /** The result of one action invocation: a typed skip or a settled review. */
@@ -194,8 +264,20 @@ const skip = (reason: string) =>
       ["skipped", "true"],
       ["skip-reason", reason],
     ]);
+    yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
     return { _tag: "Skipped", reason } satisfies ReviewActionResult;
   });
+
+/** The Actions run URL for the review footer, or undefined outside Actions. */
+const resolveRunUrl = Effect.fn("resolveRunUrl")(function* () {
+  const runId = yield* Config.string("GITHUB_RUN_ID").pipe(Config.withDefault(""));
+  const repository = yield* Config.string("GITHUB_REPOSITORY").pipe(Config.withDefault(""));
+  if (runId === "" || repository === "") return undefined;
+  const server = yield* Config.string("GITHUB_SERVER_URL").pipe(
+    Config.withDefault("https://github.com"),
+  );
+  return `${server}/${repository}/actions/runs/${runId}`;
+});
 
 /** The reviewer surface the action harness drives: a run, and optionally the
  * changeset fingerprint enabling unchanged-changeset skips. `PrReview.make`
@@ -222,6 +304,8 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     /** Skip when the changeset fingerprint matches the last posted review;
      * defaults to true when the reviewer carries a fingerprint. */
     readonly skipUnchanged?: boolean | undefined;
+    /** Model binding descriptor for the Actions step summary. */
+    readonly modelLabel?: string | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -257,6 +341,10 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ["skip-reason", "changeset unchanged since the last review"],
             ["fingerprint", current],
           ]);
+          yield* writeStepSummary([
+            "### Pull-request review skipped",
+            "- Reason: changeset unchanged since the last review",
+          ]);
           return {
             _tag: "Skipped",
             reason: "changeset unchanged since the last review",
@@ -266,7 +354,8 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       yield* Console.log(
         `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
       );
-      const outcome = yield* reviewer.run({ post: options.post ?? true });
+      const runUrl = yield* resolveRunUrl();
+      const outcome = yield* reviewer.run({ post: options.post ?? true, runUrl });
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
@@ -275,6 +364,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
       }
       yield* writeActionOutputs(outcomeOutputs(outcome));
+      yield* writeStepSummary(outcomeSummary(outcome, options.modelLabel));
       if (options.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
         return yield* ReviewGateFailed.make({
           verdict: outcome.review.verdict,
@@ -293,25 +383,37 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
 export const reviewActionProgram = Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
   const guidance = yield* resolveGuidance(inputs);
+  const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
+  const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
+  const budget =
+    inputs.maxDurationMinutes === undefined
+      ? defaults
+      : UsageBudgetLimits.make({
+          ...defaults,
+          maxDurationMillis: inputs.maxDurationMinutes * 60_000,
+        });
   const shared = {
     guidance,
     ignore: inputs.ignore,
     maxFindings: inputs.maxFindings,
     applyVerdict: inputs.applyVerdict,
+    modelLabel,
+    budget,
   };
   const harness = {
     post: inputs.post,
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
+    modelLabel,
   };
   if (inputs.provider === "anthropic") {
-    const model = makeAnthropicReviewModel(inputs.model);
+    const model = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer = inputs.fanOut
       ? PrReview.makeFanOut({ ...shared, model })
       : PrReview.make({ ...shared, model });
     return yield* runReviewAction(reviewer, harness).pipe(Effect.provide(anthropicClientLayer));
   }
-  const model = makeOpenAiReviewModel(inputs.model);
+  const model = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut
     ? PrReview.makeFanOut({ ...shared, model })
     : PrReview.make({ ...shared, model });

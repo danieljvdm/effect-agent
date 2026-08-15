@@ -36783,6 +36783,44 @@ var layer13 = (delegation, childBinding, options) => {
   return toolkit.toLayer(build2);
 };
 var SubagentRuntime = { layer: layer13 };
+// packages/pr-review/src/internal/effort.ts
+var EFFORT_ALIASES = {
+  low: 0,
+  medium: 0.25,
+  high: 0.5,
+  xhigh: 0.75,
+  max: 1
+};
+var aliasPosition = EFFORT_ALIASES;
+
+class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
+  input: exports_Schema.String
+}) {
+  get message() {
+    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
+  }
+}
+var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
+var parseEffortPosition = (raw) => {
+  const normalized = raw.trim().toLowerCase();
+  const named = aliasPosition[normalized];
+  if (named !== undefined)
+    return named;
+  if (normalized === "")
+    return;
+  const numeric = Number(normalized);
+  return isEffortPosition(numeric) ? numeric : undefined;
+};
+var resolveEffortRung = (position, rungs) => {
+  const clamped = Math.min(1, Math.max(0, position));
+  let selected = rungs[0];
+  for (const rung of rungs) {
+    if (EFFORT_ALIASES[rung] <= clamped)
+      selected = rung;
+  }
+  return selected;
+};
+
 // packages/pr-review/src/internal/diff.ts
 var ChangedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512));
 var ChangedFileStatus = exports_Schema.Literals([
@@ -36941,6 +36979,7 @@ class PullRequestSource extends exports_Context.Service()("@effect-agent/pr-revi
 
 // packages/pr-review/src/internal/review-agent.ts
 var MAX_FINDINGS = 20;
+var MAX_CONCERNS = 10;
 var MAX_PATCH_CHARS = 60000;
 var MAX_SLICE_LINES = 1000;
 var DEFAULT_SLICE_LINES = 400;
@@ -37111,10 +37150,18 @@ class ReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/Review
 }
 var ReviewVerdict = exports_Schema.Literals(["approve", "comment", "request-changes"]);
 
+class ReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/ReviewConcern")({
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000))
+}) {
+}
+
 class CodeReview extends exports_Schema.Class("@effect-agent/pr-review/CodeReview")({
   summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4000)),
   verdict: ReviewVerdict,
-  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_FINDINGS))
+  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_FINDINGS)),
+  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CONCERNS)))
 }) {
 }
 var resolveGuidance = (guidance, mission) => {
@@ -37137,9 +37184,13 @@ ${mission.body}` : "The author provided no description.",
     "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
     "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
     "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-    '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.',
-    `Report at most ${maxFindings} findings; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
-    'Use verdict "request-changes" only when at least one finding is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.'
+    "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
+    "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
+    "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
+    '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
+    '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>}.',
+    `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
+    'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.'
   ].join(`
 `);
 };
@@ -37251,6 +37302,7 @@ var rankAndDedupeFindings = (findings) => {
 
 // packages/pr-review/src/internal/fan-out.ts
 var MAX_CHILD_FINDINGS = 8;
+var MAX_CHILD_CONCERNS = 3;
 var FileReviewToolkit = exports_Toolkit.make(ReadFileDiff, ReadFile);
 var FileReviewToolkitLayer = FileReviewToolkit.toLayer({
   read_file_diff: readFileDiffHandler,
@@ -37267,7 +37319,8 @@ class FileReviewBrief extends exports_Schema.Class("@effect-agent/pr-review/File
 
 class FileReviewReport extends exports_Schema.Class("@effect-agent/pr-review/FileReviewReport")({
   unitId: ReviewUnitId,
-  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS))
+  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS)),
+  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CHILD_CONCERNS)))
 }) {
 }
 var staticGuidanceLines = (guidance) => {
@@ -37283,8 +37336,10 @@ var makeFileReviewerInstructions = (options = {}) => (brief) => [
   "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
   "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
   "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-  `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}]}.`,
-  `Report at most ${MAX_CHILD_FINDINGS} findings; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`
+  "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
+  "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
+  `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for concerns about YOUR unit's files with no valid line anchor (a missing cleanup, a coverage gap the diff implies, sequencing the diff leaves open) — never duplicate a finding here>}.`,
+  `Report at most ${MAX_CHILD_FINDINGS} findings and at most ${MAX_CHILD_CONCERNS} concerns; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`
 ].join(`
 `);
 var fileReviewerInstructions = makeFileReviewerInstructions();
@@ -37304,7 +37359,8 @@ class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/Fi
 
 class FileReviewUnitResult extends exports_Schema.Class("@effect-agent/pr-review/FileReviewUnitResult")({
   unitId: ReviewUnitId,
-  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS))
+  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS)),
+  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CHILD_CONCERNS)))
 }) {
 }
 
@@ -37364,19 +37420,25 @@ var FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
   })
 });
 var FanOutReviewToolkit = exports_Toolkit.make(ListReviewUnits, DelegateFileReview);
-var fanOutReviewInstructions = (mission) => [
-  `You coordinate the review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
-  mission.body.length > 0 ? `Author description:
+var makeFanOutReviewInstructions = (options = {}) => (mission) => {
+  const maxFindings = clampMaxFindings(options.maxFindings);
+  return [
+    `You coordinate the review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
+    mission.body.length > 0 ? `Author description:
 ${mission.body}` : "The author provided no description.",
-  "Work in this order:",
-  "1. Call list_review_units once to get the planned review units.",
-  "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
-  `3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan's undiffablePaths and unassignedPaths must also be named as not reviewed when present.`,
-  "4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most 20 findings.",
-  '5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}]}. Copy findings verbatim from the delegation results; never invent or edit anchors.',
-  'Use verdict "request-changes" only when at least one finding is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.'
-].join(`
+    ...staticGuidanceLines(options.guidance),
+    "Work in this order:",
+    "1. Call list_review_units once to get the planned review units.",
+    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
+    `3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan's undiffablePaths and unassignedPaths must also be named as not reviewed when present.`,
+    `4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
+    `5. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
+    '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>}. Copy findings and concerns verbatim from the delegation results; never invent or edit anchors.',
+    'Use verdict "request-changes" only when at least one finding or concern is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.'
+  ].join(`
 `);
+};
+var fanOutReviewInstructions = makeFanOutReviewInstructions();
 var defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
@@ -37394,10 +37456,10 @@ var makeFileReviewerDefinition = (options = {}) => Agent.define("pr-file-reviewe
   description: "Review one bounded unit of a pull request's changeset read-only and return line-anchored findings for exactly those files.",
   metadata: { deploymentClass: "E", surface: "read-only" }
 });
-var makeFanOutReviewerDefinition = () => Agent.define("pr-fanout-reviewer", {
+var makeFanOutReviewerDefinition = (options = {}) => Agent.define("pr-fanout-reviewer", {
   input: ReviewMission,
   output: CodeReview,
-  instructions: fanOutReviewInstructions,
+  instructions: makeFanOutReviewInstructions(options),
   toolkit: FanOutReviewToolkit,
   policy: defaultFanOutPolicy,
   description: "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
@@ -37416,15 +37478,16 @@ var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review"
   })),
   projectResult: (report) => exports_Effect.succeed(FileReviewUnitResult.make({
     unitId: report.unitId,
-    findings: report.findings
+    findings: report.findings,
+    ...report.concerns !== undefined ? { concerns: report.concerns } : {}
   })),
   policy: fileReviewPolicy
 });
 var makeFanOutReviewSuite = (options = {}) => {
-  const child = makeFileReviewerDefinition(options);
+  const child = makeFileReviewerDefinition({ guidance: options.guidance });
   return {
     child,
-    parent: makeFanOutReviewerDefinition(),
+    parent: makeFanOutReviewerDefinition(options),
     delegation: makeFileReviewDelegation(child)
   };
 };
@@ -39530,10 +39593,20 @@ class ReviewPublicationPlan extends exports_Schema.Class("@effect-agent/pr-revie
   commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))
 }) {
 }
+var severityEmoji = {
+  blocking: "\uD83D\uDED1",
+  important: "⚠️",
+  nit: "\uD83D\uDC85"
+};
+var severityRank2 = {
+  blocking: 0,
+  important: 1,
+  nit: 2
+};
 var severityLabel = {
-  blocking: "\uD83D\uDED1 blocking",
-  important: "⚠️ important",
-  nit: "\uD83D\uDC85 nit"
+  blocking: `${severityEmoji.blocking} blocking`,
+  important: `${severityEmoji.important} important`,
+  nit: `${severityEmoji.nit} nit`
 };
 var suggestionFence = (suggestion) => {
   let fence = "```";
@@ -39550,13 +39623,50 @@ var renderCommentBody = (finding) => {
   return parts2.join(`
 `);
 };
-var renderDemoted = (finding) => {
+var renderDemoted = (finding, reason) => {
   const location2 = `\`${finding.path}:${finding.startLine}${finding.endLine !== finding.startLine ? `-${finding.endLine}` : ""}\``;
-  return [
-    `- ${location2} **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body}`
-  ].join(`
-`);
+  return `- ${location2} **[${severityLabel[finding.severity]}] ${finding.title}** — ${finding.body} _(demoted: ${reason})_`;
 };
+var countNoun = (count2, noun) => `${count2} ${noun}${count2 === 1 ? "" : "s"}`;
+var severityCounts = (review) => {
+  const severities = [
+    ...review.findings.map((finding) => finding.severity),
+    ...(review.concerns ?? []).map((concern) => concern.severity)
+  ];
+  return {
+    blocking: severities.filter((severity) => severity === "blocking").length,
+    important: severities.filter((severity) => severity === "important").length,
+    total: severities.length
+  };
+};
+var renderVerdictCallout = (review) => {
+  const counts = severityCounts(review);
+  if (counts.blocking > 0) {
+    return `> [!CAUTION]
+> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
+  }
+  if (counts.important > 0) {
+    return `> [!IMPORTANT]
+> ${countNoun(counts.important, "important finding")} to address before merging.`;
+  }
+  if (counts.total > 0) {
+    return "> ℹ️ Minor suggestions only — mergeable as-is.";
+  }
+  return review.verdict === "approve" ? "> ✅ No issues found." : "> ℹ️ No findings — see the summary.";
+};
+var renderConcern = (concern) => [`### ${severityEmoji[concern.severity]} ${concern.title}`, "", concern.body].join(`
+`);
+var commentSafe = (value4) => value4.replaceAll("--", "- -");
+var renderReviewMetadata = (options3) => [
+  "<!-- effect-agent-pr-review metadata",
+  `reviewed-head: ${commentSafe(options3.headSha)}`,
+  ...options3.baseRef !== undefined && options3.headRef !== undefined ? [`base-ref: ${commentSafe(options3.baseRef)}`, `head-ref: ${commentSafe(options3.headRef)}`] : [],
+  `files-visible: ${options3.filesVisible} of ${options3.totalChangedFiles}`,
+  "Findings were written against the head commit above; if commits have landed",
+  "since, treat file and line callouts as potentially stale and re-diff first.",
+  "-->"
+].join(`
+`);
 var anchorViolation = (finding, files) => {
   const file2 = files.find((candidate) => candidate.path === finding.path);
   if (file2 === undefined)
@@ -39578,7 +39688,8 @@ var planPublication = (review, files, options3) => {
   const comments = [];
   const demoted = [];
   for (const finding of review.findings) {
-    if (anchorViolation(finding, files) === undefined) {
+    const violation = anchorViolation(finding, files);
+    if (violation === undefined) {
       comments.push(ReviewCommentDraft.make({
         path: finding.path,
         line: finding.endLine,
@@ -39586,27 +39697,73 @@ var planPublication = (review, files, options3) => {
         body: renderCommentBody(finding)
       }));
     } else {
-      demoted.push(finding);
+      demoted.push({ finding, reason: violation });
     }
   }
-  const bodyParts = [review.summary];
-  if (files.length < options3.totalChangedFiles) {
-    bodyParts.push("", `⚠️ Reviewed ${files.length} of ${options3.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`);
+  const sortedConcerns = [...review.concerns ?? []].sort((a, b) => severityRank2[a.severity] - severityRank2[b.severity]);
+  const sortedDemoted = [...demoted].sort((a, b) => severityRank2[a.finding.severity] - severityRank2[b.finding.severity]);
+  const footerParts = ["Automated review by @effect-agent/pr-review"];
+  if (options3.modelLabel !== undefined)
+    footerParts.push(options3.modelLabel);
+  if (options3.usage !== undefined && options3.usageScope !== undefined) {
+    const scope3 = options3.usageScope === "coordinator" ? " (coordinator)" : "";
+    footerParts.push(`${options3.usage.inputTokens} in / ${options3.usage.outputTokens} out tokens${scope3}`);
   }
-  if (demoted.length > 0) {
-    bodyParts.push("", "### Findings without a valid diff anchor", ...demoted.map(renderDemoted));
+  if (options3.runUrl !== undefined)
+    footerParts.push(`[run](${options3.runUrl})`);
+  footerParts.push(`reviewed at ${options3.headSha.slice(0, 7)}`);
+  const footer = `_${footerParts.join(" · ")}._`;
+  const renderHead = (concernsKept2, demotedKept2, omitted2) => {
+    const parts2 = [renderVerdictCallout(review), "", review.summary];
+    for (const concern of sortedConcerns.slice(0, concernsKept2)) {
+      parts2.push("", renderConcern(concern));
+    }
+    if (files.length < options3.totalChangedFiles) {
+      parts2.push("", `⚠️ Reviewed ${files.length} of ${options3.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`);
+    }
+    if (demotedKept2 > 0) {
+      parts2.push("", "### Findings without a valid diff anchor", ...sortedDemoted.slice(0, demotedKept2).map(({ finding, reason }) => renderDemoted(finding, reason)));
+    }
+    if (omitted2 > 0) {
+      parts2.push("", `⚠️ ${countNoun(omitted2, "review item")} omitted — the body exceeded GitHub's review size cap.`);
+    }
+    parts2.push("", footer);
+    return parts2.join(`
+`);
+  };
+  const counts = severityCounts(review);
+  const event = !options3.applyVerdict ? "COMMENT" : counts.blocking > 0 ? "REQUEST_CHANGES" : review.verdict === "approve" && counts.important === 0 ? "APPROVE" : "COMMENT";
+  const tail = [
+    renderReviewMetadata({
+      headSha: options3.headSha,
+      baseRef: options3.baseRef,
+      headRef: options3.headRef,
+      filesVisible: files.length,
+      totalChangedFiles: options3.totalChangedFiles
+    }),
+    ...options3.fingerprint === undefined ? [] : [renderFingerprintMarker(options3.fingerprint)]
+  ].join(`
+`);
+  const headBudget = 60000 - tail.length - 1;
+  let concernsKept = sortedConcerns.length;
+  let demotedKept = sortedDemoted.length;
+  let omitted = 0;
+  let head3 = renderHead(concernsKept, demotedKept, omitted);
+  while (head3.length > headBudget && (demotedKept > 0 || concernsKept > 0)) {
+    if (demotedKept > 0)
+      demotedKept -= 1;
+    else
+      concernsKept -= 1;
+    omitted += 1;
+    head3 = renderHead(concernsKept, demotedKept, omitted);
   }
-  bodyParts.push("", `_Automated review by @effect-agent/pr-review · reviewed at ${options3.headSha.slice(0, 7)}._`);
-  const event = options3.applyVerdict ? review.verdict === "approve" ? "APPROVE" : review.verdict === "request-changes" ? "REQUEST_CHANGES" : "COMMENT" : "COMMENT";
-  const body = options3.fingerprint === undefined ? bodyParts.join(`
-`).slice(0, 60000) : `${bodyParts.join(`
-`).slice(0, 60000 - FINGERPRINT_MARKER_LENGTH - 1)}
-${renderFingerprintMarker(options3.fingerprint)}`;
+  const body = `${head3.slice(0, headBudget)}
+${tail}`;
   return ReviewPublicationPlan.make({
     event,
     body,
     comments,
-    demoted,
+    demoted: demoted.map(({ finding }) => finding),
     commitSha: options3.headSha
   });
 };
@@ -39631,7 +39788,9 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   review: CodeReview,
   plan: ReviewPublicationPlan,
   published: exports_Schema.optionalKey(PublishedReview),
-  turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
+  turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  usage: exports_Schema.optionalKey(UsageTotals),
+  usageScope: exports_Schema.optionalKey(exports_Schema.Literals(["run", "coordinator"]))
 }) {
 }
 var buildReviewMission = (metadata, files) => ReviewMission.make({
@@ -39646,7 +39805,8 @@ var buildReviewMission = (metadata, files) => ReviewMission.make({
 var enforceFindingsBound = (review, maxFindings) => review.findings.length <= maxFindings ? review : CodeReview.make({
   summary: review.summary,
   verdict: review.verdict,
-  findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings)
+  findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings),
+  ...review.concerns !== undefined ? { concerns: review.concerns } : {}
 });
 var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
@@ -39661,18 +39821,33 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   });
   const decoded = yield* exports_Schema.decodeUnknownEffect(CodeReview)(result4.output);
   const review = enforceFindingsBound(decoded, clampMaxFindings(options3.maxFindings));
+  const usage = yield* budget2.snapshot;
   const plan = planPublication(review, files, {
     applyVerdict: options3.applyVerdict,
     headSha: metadata.headSha,
     totalChangedFiles: metadata.totalChangedFiles,
+    baseRef: metadata.baseRef,
+    headRef: metadata.headRef,
+    modelLabel: options3.modelLabel,
+    runUrl: options3.runUrl,
+    usage,
+    usageScope: options3.usageScope,
     fingerprint
   });
+  const scope3 = options3.usageScope === undefined ? {} : { usageScope: options3.usageScope };
   if (!options3.post) {
-    return ReviewRunOutcome.make({ review, plan, turns: result4.turns });
+    return ReviewRunOutcome.make({ review, plan, turns: result4.turns, usage, ...scope3 });
   }
   const publisher = yield* ReviewPublisher;
   const published = yield* publisher.publish(plan);
-  return ReviewRunOutcome.make({ review, plan, published, turns: result4.turns });
+  return ReviewRunOutcome.make({
+    review,
+    plan,
+    published,
+    turns: result4.turns,
+    usage,
+    ...scope3
+  });
 });
 
 // packages/pr-review/src/internal/factory.ts
@@ -39708,13 +39883,20 @@ var make56 = (options3) => {
     metadata: { deploymentClass: "E", surface: "read-only" }
   });
   const binding = Object.freeze({ definition, model: options3.model });
-  const signature = (mission) => `${definition.instructions(mission)}\x00applyVerdict=${String(options3.applyVerdict ?? false)}`;
+  const signature = (mission) => [
+    definition.instructions(mission),
+    `applyVerdict=${String(options3.applyVerdict ?? false)}`,
+    ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
+  ].join("\x00");
   const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? reviewBudgetLimits,
     maxFindings: clampMaxFindings(options3.maxFindings),
-    signature
+    signature,
+    modelLabel: options3.modelLabel,
+    runUrl: runOptions.runUrl,
+    usageScope: "run"
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition,
@@ -39724,15 +39906,18 @@ var make56 = (options3) => {
   };
 };
 var makeFanOut = (options3) => {
-  const suite = makeFanOutReviewSuite({ guidance: options3.guidance });
+  const suite = makeFanOutReviewSuite({
+    guidance: options3.guidance,
+    maxFindings: options3.maxFindings
+  });
   const binding = Object.freeze({ definition: suite.parent, model: options3.model });
   const childBinding = Object.freeze({ definition: suite.child, model: options3.model });
   const guidanceLines = options3.guidance === undefined ? [] : typeof options3.guidance === "string" ? [options3.guidance] : options3.guidance;
   const signature = (mission) => [
-    fanOutReviewInstructions(mission),
+    suite.parent.instructions(mission),
     `childGuidance=${JSON.stringify(guidanceLines)}`,
-    `maxFindings=${String(clampMaxFindings(options3.maxFindings))}`,
-    `applyVerdict=${String(options3.applyVerdict ?? false)}`
+    `applyVerdict=${String(options3.applyVerdict ?? false)}`,
+    ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join(" ");
   const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(exports_Layer.provide(exports_Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer)));
   const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
@@ -39740,7 +39925,10 @@ var makeFanOut = (options3) => {
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? fanOutReviewBudgetLimits,
     maxFindings: clampMaxFindings(options3.maxFindings),
-    signature
+    signature,
+    modelLabel: options3.modelLabel,
+    runUrl: runOptions.runUrl,
+    usageScope: "coordinator"
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition: suite.parent,
@@ -50423,14 +50611,24 @@ var PROVIDER_CREDENTIAL_ENV = {
   openai: "OPENAI_API_KEY",
   anthropic: "ANTHROPIC_API_KEY"
 };
-var makeOpenAiReviewModel = (model3) => exports_OpenAiLanguageModel.model(model3 ?? DEFAULT_MODEL.openai, {
+var PROVIDER_EFFORT_RUNGS = {
+  openai: ["low", "medium", "high", "xhigh"],
+  anthropic: ["low", "medium", "high"]
+};
+var makeOpenAiReviewModel = (model3, effort) => exports_OpenAiLanguageModel.model(model3 ?? DEFAULT_MODEL.openai, {
   max_output_tokens: 8000,
   store: false,
-  strictJsonSchema: true
+  strictJsonSchema: true,
+  ...effort === undefined ? {} : { reasoning: { effort: resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS.openai) } }
 });
-var makeAnthropicReviewModel = (model3) => exports_AnthropicLanguageModel.model(model3 ?? DEFAULT_MODEL.anthropic, {
-  max_tokens: 8000
+var makeAnthropicReviewModel = (model3, effort) => exports_AnthropicLanguageModel.model(model3 ?? DEFAULT_MODEL.anthropic, {
+  max_tokens: 8000,
+  ...effort === undefined ? {} : { output_config: { effort: resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS.anthropic) } }
 });
+var describeReviewModel = (provider, model3, effort) => {
+  const base2 = `${provider}/${model3 ?? DEFAULT_MODEL[provider]}`;
+  return effort === undefined ? base2 : `${base2} (effort ${resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS[provider])})`;
+};
 var openAiClientLayer = exports_OpenAiClient.layerConfig({
   apiKey: exports_Config.redacted(PROVIDER_CREDENTIAL_ENV.openai)
 }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer));
@@ -50449,9 +50647,29 @@ class ReviewGateFailed extends exports_Schema.TaggedError()("ReviewGateFailed", 
     return `Review verdict '${this.verdict}' fails the configured '${this.failOn}' gate.`;
   }
 }
+
+class InvalidMaxDurationInput extends exports_Schema.TaggedError()("InvalidMaxDurationInput", {
+  minutes: exports_Schema.Int
+}) {
+  get message() {
+    return `Invalid max-duration-minutes '${this.minutes}': expected a positive number of minutes.`;
+  }
+}
 var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () {
   const provider = yield* exports_Config.literals(["openai", "anthropic"], "PR_REVIEW_PROVIDER").pipe(exports_Config.withDefault(DEFAULT_PROVIDER));
   const model3 = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_MODEL"));
+  const effortRaw = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_EFFORT"));
+  let effort;
+  if (exports_Option.isSome(effortRaw)) {
+    effort = parseEffortPosition(effortRaw.value);
+    if (effort === undefined) {
+      return yield* InvalidEffortInput.make({ input: effortRaw.value });
+    }
+  }
+  const maxDurationMinutes = exports_Option.getOrUndefined(yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_DURATION_MINUTES")));
+  if (maxDurationMinutes !== undefined && maxDurationMinutes <= 0) {
+    return yield* InvalidMaxDurationInput.make({ minutes: maxDurationMinutes });
+  }
   const post3 = yield* exports_Config.boolean("PR_REVIEW_POST").pipe(exports_Config.withDefault(true));
   const applyVerdict = yield* exports_Config.boolean("PR_REVIEW_APPLY_VERDICT").pipe(exports_Config.withDefault(false));
   const fanOut = yield* exports_Config.boolean("PR_REVIEW_FAN_OUT").pipe(exports_Config.withDefault(false));
@@ -50464,6 +50682,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   return {
     provider,
     model: exports_Option.getOrUndefined(model3),
+    effort,
     post: post3,
     applyVerdict,
     fanOut,
@@ -50471,6 +50690,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     guidanceFile: exports_Option.getOrUndefined(guidanceFile),
     ignore: ignoreRaw.split(",").map((pattern) => pattern.trim()).filter((pattern) => pattern.length > 0),
     maxFindings: exports_Option.getOrUndefined(maxFindings),
+    maxDurationMinutes,
     failOn,
     skipUnchanged
   };
@@ -50523,12 +50743,36 @@ var writeActionOutputs = exports_Effect.fn("writeActionOutputs")(function* (entr
     flag: "a"
   });
 });
+var writeStepSummary = exports_Effect.fn("writeStepSummary")(function* (lines) {
+  const summaryPath = yield* exports_Config.string("GITHUB_STEP_SUMMARY").pipe(exports_Config.withDefault(""));
+  if (summaryPath === "")
+    return;
+  const fs = yield* exports_FileSystem.FileSystem;
+  yield* fs.writeFileString(summaryPath, `${lines.join(`
+`)}
+`, { flag: "a" });
+});
 var outcomeOutputs = (outcome) => [
   ["skipped", "false"],
   ["verdict", outcome.review.verdict],
   ["inline-comments", String(outcome.plan.comments.length)],
   ["demoted-findings", String(outcome.plan.demoted.length)],
+  ["concerns", String(outcome.review.concerns?.length ?? 0)],
+  ...outcome.usage === undefined ? [] : [
+    ["input-tokens", String(outcome.usage.inputTokens)],
+    ["output-tokens", String(outcome.usage.outputTokens)]
+  ],
   ["review-url", outcome.published?.url ?? ""]
+];
+var outcomeSummary = (outcome, modelLabel) => [
+  "### Pull-request review",
+  `- Verdict: **${outcome.review.verdict}**`,
+  `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
+  ...modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``],
+  ...outcome.usage === undefined ? [] : [
+    `- Tokens: ${outcome.usage.inputTokens} in / ${outcome.usage.outputTokens} out${outcome.usageScope === "coordinator" ? " (coordinator)" : ""}`
+  ],
+  ...outcome.published === undefined ? ["- Dry run: nothing posted"] : [`- Posted: ${outcome.published.url}`]
 ];
 var skip = (reason) => exports_Effect.gen(function* () {
   yield* exports_Console.log(`Skipping review: ${reason}`);
@@ -50536,7 +50780,16 @@ var skip = (reason) => exports_Effect.gen(function* () {
     ["skipped", "true"],
     ["skip-reason", reason]
   ]);
+  yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
   return { _tag: "Skipped", reason };
+});
+var resolveRunUrl = exports_Effect.fn("resolveRunUrl")(function* () {
+  const runId = yield* exports_Config.string("GITHUB_RUN_ID").pipe(exports_Config.withDefault(""));
+  const repository = yield* exports_Config.string("GITHUB_REPOSITORY").pipe(exports_Config.withDefault(""));
+  if (runId === "" || repository === "")
+    return;
+  const server = yield* exports_Config.string("GITHUB_SERVER_URL").pipe(exports_Config.withDefault("https://github.com"));
+  return `${server}/${repository}/actions/runs/${runId}`;
 });
 var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* () {
   const event = yield* readGitHubEvent();
@@ -50561,6 +50814,10 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           ["skip-reason", "changeset unchanged since the last review"],
           ["fingerprint", current]
         ]);
+        yield* writeStepSummary([
+          "### Pull-request review skipped",
+          "- Reason: changeset unchanged since the last review"
+        ]);
         return {
           _tag: "Skipped",
           reason: "changeset unchanged since the last review"
@@ -50568,12 +50825,14 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       }
     }
     yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
-    const outcome = yield* reviewer.run({ post: options3.post ?? true });
+    const runUrl = yield* resolveRunUrl();
+    const outcome = yield* reviewer.run({ post: options3.post ?? true, runUrl });
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
     }
     yield* writeActionOutputs(outcomeOutputs(outcome));
+    yield* writeStepSummary(outcomeSummary(outcome, options3.modelLabel));
     if (options3.failOn === "request-changes" && outcome.review.verdict === "request-changes") {
       return yield* ReviewGateFailed.make({
         verdict: outcome.review.verdict,
@@ -50586,23 +50845,32 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
   const guidance = yield* resolveGuidance2(inputs);
+  const modelLabel = describeReviewModel(inputs.provider, inputs.model, inputs.effort);
+  const defaults = inputs.fanOut ? fanOutReviewBudgetLimits : reviewBudgetLimits;
+  const budget2 = inputs.maxDurationMinutes === undefined ? defaults : UsageBudgetLimits.make({
+    ...defaults,
+    maxDurationMillis: inputs.maxDurationMinutes * 60000
+  });
   const shared = {
     guidance,
     ignore: inputs.ignore,
     maxFindings: inputs.maxFindings,
-    applyVerdict: inputs.applyVerdict
+    applyVerdict: inputs.applyVerdict,
+    modelLabel,
+    budget: budget2
   };
   const harness = {
     post: inputs.post,
     failOn: inputs.failOn,
-    skipUnchanged: inputs.skipUnchanged
+    skipUnchanged: inputs.skipUnchanged,
+    modelLabel
   };
   if (inputs.provider === "anthropic") {
-    const model4 = makeAnthropicReviewModel(inputs.model);
+    const model4 = makeAnthropicReviewModel(inputs.model, inputs.effort);
     const reviewer2 = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model4 }) : PrReview.make({ ...shared, model: model4 });
     return yield* runReviewAction(reviewer2, harness).pipe(exports_Effect.provide(anthropicClientLayer));
   }
-  const model3 = makeOpenAiReviewModel(inputs.model);
+  const model3 = makeOpenAiReviewModel(inputs.model, inputs.effort);
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
   return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(openAiClientLayer));
 });
@@ -50612,6 +50880,8 @@ var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Ef
 var INPUT_TO_ENV = [
   ["INPUT_PROVIDER", "PR_REVIEW_PROVIDER"],
   ["INPUT_MODEL", "PR_REVIEW_MODEL"],
+  ["INPUT_EFFORT", "PR_REVIEW_EFFORT"],
+  ["INPUT_MAX-DURATION-MINUTES", "PR_REVIEW_MAX_DURATION_MINUTES"],
   ["INPUT_POST", "PR_REVIEW_POST"],
   ["INPUT_APPLY-VERDICT", "PR_REVIEW_APPLY_VERDICT"],
   ["INPUT_FAN-OUT", "PR_REVIEW_FAN_OUT"],

@@ -14,7 +14,13 @@ export const OFFLINE_LIST_CALL_ID = "list-1";
 export const OFFLINE_DIFF_CALL_ID = "diff-1";
 export const OFFLINE_READ_CALL_ID = "read-1";
 
-const scriptedUsage = { inputTokens: { total: 64 }, outputTokens: { total: 48 } };
+/** Usage attached to EVERY scripted model turn; tests pin exact aggregates. */
+export const SCRIPTED_TURN_USAGE = { inputTokens: 64, outputTokens: 48 } as const;
+
+const scriptedUsage = {
+  inputTokens: { total: SCRIPTED_TURN_USAGE.inputTokens },
+  outputTokens: { total: SCRIPTED_TURN_USAGE.outputTokens },
+};
 
 export const scriptedToolTurn = (
   ...calls: ReadonlyArray<Response.StreamPartEncoded>

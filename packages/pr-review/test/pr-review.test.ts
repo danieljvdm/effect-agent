@@ -24,6 +24,7 @@ import {
   pullRequestReviewerProfile,
   ReadFile,
   ReadFileDiff,
+  ReviewConcern,
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewToolkitLayer,
@@ -34,6 +35,7 @@ import {
   FixturePullRequest,
   fixturePullRequestSourceLayer,
   makeOfflineReviewerModel,
+  SCRIPTED_TURN_USAGE,
 } from "../src/testing.ts";
 
 describe("OpenAI tool schema compatibility", () => {
@@ -102,10 +104,19 @@ const fixture = FixturePullRequest.make({
   ],
 });
 
-/** The review the offline script returns: one valid anchor, two invalid. */
+/** The review the offline script returns: one valid anchor, two invalid,
+ * plus one non-anchored concern so the structured-output decode boundary is
+ * exercised end-to-end, not only the planner. */
+const scriptedConcern = ReviewConcern.make({
+  severity: "important",
+  title: "No test pins the new export",
+  body: "The diff exports `three` but adds no coverage for it.",
+});
+
 const scriptedReview = CodeReview.make({
   summary: "The constant fix is correct; two notes could not be anchored.",
   verdict: "comment",
+  concerns: [scriptedConcern],
   findings: [
     ReviewFinding.make({
       path: "src/hello.ts",
@@ -265,7 +276,7 @@ describe("publication planning", () => {
     const blocking = CodeReview.make({
       summary: "Blocked.",
       verdict: "request-changes",
-      findings: [],
+      findings: [ReviewFinding.make({ ...validFinding, severity: "blocking" })],
     });
     expect(
       planPublication(blocking, files, {
@@ -350,6 +361,352 @@ describe("publication planning", () => {
     expect(comment?.startLine).toBe(2);
     expect(comment?.line).toBe(3);
   });
+
+  it("names why each demoted finding lost its anchor", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+    expect(plan.body).toContain("_(demoted: line 99 is not part of the diff)_");
+    expect(plan.body).toContain("_(demoted: file has no textual diff)_");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The opening callout: the review's overall tier, derived host-side from the
+// validated severities, never from model prose.
+// ---------------------------------------------------------------------------
+
+describe("verdict callout", () => {
+  const files = fixture.files.map((entry) => entry.file);
+  const planFor = (review: CodeReview) =>
+    planPublication(review, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+  const finding = (severity: ReviewFinding["severity"]) =>
+    ReviewFinding.make({
+      path: "src/hello.ts",
+      startLine: 2,
+      endLine: 2,
+      severity,
+      title: "A finding",
+      body: "Details.",
+    });
+
+  it("opens with CAUTION when any finding is blocking", () => {
+    // Verdict deliberately says "comment": the tier must derive from the
+    // validated severities, never from the model-supplied verdict.
+    const plan = planFor(
+      CodeReview.make({
+        summary: "s",
+        verdict: "comment",
+        findings: [finding("blocking"), finding("nit")],
+      }),
+    );
+    expect(plan.body.startsWith("> [!CAUTION]\n> 1 blocking finding")).toBe(true);
+  });
+
+  it("opens with IMPORTANT when the worst finding is important", () => {
+    const plan = planFor(
+      CodeReview.make({
+        summary: "s",
+        verdict: "comment",
+        findings: [finding("important"), finding("important"), finding("nit")],
+      }),
+    );
+    expect(plan.body.startsWith("> [!IMPORTANT]\n> 2 important findings")).toBe(true);
+  });
+
+  it("opens informational on nits only and green on a clean approval", () => {
+    expect(
+      planFor(
+        CodeReview.make({ summary: "s", verdict: "comment", findings: [finding("nit")] }),
+      ).body.startsWith("> ℹ️ Minor suggestions only"),
+    ).toBe(true);
+    expect(
+      planFor(CodeReview.make({ summary: "s", verdict: "approve", findings: [] })).body.startsWith(
+        "> ✅ No issues found.",
+      ),
+    ).toBe(true);
+    expect(
+      planFor(CodeReview.make({ summary: "s", verdict: "comment", findings: [] })).body.startsWith(
+        "> ℹ️ No findings",
+      ),
+    ).toBe(true);
+  });
+
+  it("counts concern severities toward the callout tier", () => {
+    // Verdict says "comment" here too — only the concern severity can be
+    // the source of the CAUTION tier and its count.
+    const plan = planFor(
+      CodeReview.make({
+        summary: "s",
+        verdict: "comment",
+        findings: [],
+        concerns: [
+          ReviewConcern.make({
+            severity: "blocking",
+            title: "Legacy path never deleted",
+            body: "The replaced code path stays reachable.",
+          }),
+        ],
+      }),
+    );
+    expect(plan.body.startsWith("> [!CAUTION]\n> 1 blocking finding")).toBe(true);
+  });
+
+  it("clamps the mapped event fail-closed against the validated severities", () => {
+    const planWithVerdict = (review: CodeReview) =>
+      planPublication(review, files, {
+        applyVerdict: true,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+      });
+    // A model claiming "approve" past a blocking item can never publish an
+    // APPROVE that contradicts the CAUTION callout.
+    expect(
+      planWithVerdict(
+        CodeReview.make({ summary: "s", verdict: "approve", findings: [finding("blocking")] }),
+      ).event,
+    ).toBe("REQUEST_CHANGES");
+    // A lower-severity finding rides along so an implementation that
+    // consults concerns only when findings are empty cannot pass.
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "approve",
+          findings: [finding("nit")],
+          concerns: [
+            ReviewConcern.make({ severity: "blocking", title: "Blocking concern", body: "b" }),
+          ],
+        }),
+      ).event,
+    ).toBe("REQUEST_CHANGES");
+    // Important findings block an approval; nits alone do not.
+    expect(
+      planWithVerdict(
+        CodeReview.make({ summary: "s", verdict: "approve", findings: [finding("important")] }),
+      ).event,
+    ).toBe("COMMENT");
+    expect(
+      planWithVerdict(
+        CodeReview.make({ summary: "s", verdict: "approve", findings: [finding("nit")] }),
+      ).event,
+    ).toBe("APPROVE");
+    // Concerns clamp the approval band exactly like findings do.
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "approve",
+          findings: [],
+          concerns: [
+            ReviewConcern.make({ severity: "important", title: "Important concern", body: "b" }),
+          ],
+        }),
+      ).event,
+    ).toBe("COMMENT");
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "approve",
+          findings: [],
+          concerns: [ReviewConcern.make({ severity: "nit", title: "Nit concern", body: "b" })],
+        }),
+      ).event,
+    ).toBe("APPROVE");
+    // The symmetric clamp: without a blocking item, a model-claimed
+    // request-changes cannot block the merge — the event stays COMMENT and
+    // agrees with the callout tier.
+    expect(
+      planWithVerdict(
+        CodeReview.make({
+          summary: "s",
+          verdict: "request-changes",
+          findings: [finding("nit")],
+        }),
+      ).event,
+    ).toBe("COMMENT");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Non-anchored concerns render as body sections; the invisible metadata tail
+// and the footer carry provenance for later readers.
+// ---------------------------------------------------------------------------
+
+describe("concerns, metadata, and footer", () => {
+  const files = fixture.files.map((entry) => entry.file);
+
+  it("renders each concern as a severity-tagged body section", () => {
+    const plan = planPublication(
+      CodeReview.make({
+        summary: "One concern, no findings.",
+        verdict: "comment",
+        findings: [],
+        concerns: [
+          ReviewConcern.make({
+            severity: "important",
+            title: "No rollout note for the schema change",
+            body: "In-flight records decode against the old shape during deploy.",
+          }),
+        ],
+      }),
+      files,
+      { applyVerdict: false, headSha: FIXTURE_SHA, totalChangedFiles: 2 },
+    );
+    expect(plan.body).toContain("### ⚠️ No rollout note for the schema change");
+    expect(plan.body).toContain("In-flight records decode against the old shape during deploy.");
+  });
+
+  it("embeds the staleness metadata comment with refs and coverage", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      baseRef: "main",
+      headRef: "fix/sum",
+    });
+    expect(plan.body).toContain("<!-- effect-agent-pr-review metadata");
+    expect(plan.body).toContain(`reviewed-head: ${FIXTURE_SHA}`);
+    expect(plan.body).toContain("base-ref: main");
+    expect(plan.body).toContain("head-ref: fix/sum");
+    expect(plan.body).toContain("files-visible: 2 of 2");
+    expect(plan.body).toContain("potentially stale");
+  });
+
+  it("neutralizes a ref that would terminate the metadata comment", () => {
+    // Refs are external data; a `-->` inside EITHER ref must not close the
+    // HTML comment early and leak or spoof the provenance block.
+    const hostile = "feat/x-->y";
+    const cases = [
+      { baseRef: hostile, headRef: "fix/sum", label: "base-ref" },
+      { baseRef: "main", headRef: hostile, label: "head-ref" },
+    ] as const;
+    for (const { baseRef, headRef, label } of cases) {
+      const plan = planPublication(scriptedReview, files, {
+        applyVerdict: false,
+        headSha: FIXTURE_SHA,
+        totalChangedFiles: 2,
+        baseRef,
+        headRef,
+        fingerprint: "c".repeat(64),
+      });
+      expect(plan.body).not.toContain(hostile);
+      expect(plan.body).toContain(`${label}: feat/x- ->y`);
+      // The block stayed intact: its later lines are still inside the
+      // comment, and the only terminator is the host-generated one.
+      const metadataStart = plan.body.indexOf("<!-- effect-agent-pr-review metadata");
+      const metadataEnd = plan.body.indexOf("-->", metadataStart);
+      // An unterminated comment must fail here, not slip through slice(-1).
+      expect(metadataStart).toBeGreaterThanOrEqual(0);
+      expect(metadataEnd).toBeGreaterThan(metadataStart);
+      const block = plan.body.slice(metadataStart, metadataEnd);
+      expect(block).toContain(`${label}: feat/x- ->y`);
+      expect(block).toContain("files-visible: 2 of 2");
+      expect(block).toContain("potentially stale");
+    }
+  });
+
+  it("renders model, usage, and run link into the footer in order", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      modelLabel: "openai/gpt-5.6-sol (effort high)",
+      usage: { inputTokens: 1234, outputTokens: 56 },
+      usageScope: "run",
+      runUrl: "https://github.com/acme/widgets/actions/runs/42",
+    });
+    expect(plan.body).toContain(
+      "_Automated review by @effect-agent/pr-review · openai/gpt-5.6-sol (effort high) · " +
+        "1234 in / 56 out tokens · [run](https://github.com/acme/widgets/actions/runs/42) · " +
+        `reviewed at ${FIXTURE_SHA.slice(0, 7)}._`,
+    );
+  });
+
+  it("sheds whole low-severity items under the size cap instead of slicing markdown", () => {
+    // Every item's body ends in a distinct sentinel so a mid-item slice —
+    // which would keep a title while cutting its body — cannot pass.
+    const ghostBody = (index: number) =>
+      `${"x".repeat(1_960)} GHOST-END-${String(index).padStart(2, "0")}`;
+    const concernBody = (name: string) => `${"x".repeat(1_960)} CONCERN-END-${name}`;
+    const oversized = CodeReview.make({
+      summary: "Oversized body test.",
+      verdict: "comment",
+      // 20 unanchorable findings (~40k chars demoted) + 10 concerns (~20k
+      // chars) exceed the 60k cap; demoted bullets shed first.
+      findings: Array.from({ length: 20 }, (_, index) =>
+        ReviewFinding.make({
+          path: "src/hello.ts",
+          startLine: 99,
+          endLine: 99,
+          severity: "important",
+          title: `Ghost ${String(index).padStart(2, "0")}`,
+          body: ghostBody(index),
+        }),
+      ),
+      concerns: [
+        ReviewConcern.make({
+          severity: "blocking",
+          title: "Keep me first",
+          body: concernBody("keep"),
+        }),
+        ...Array.from({ length: 8 }, (_, index) =>
+          ReviewConcern.make({
+            severity: "important",
+            title: `Concern ${index}`,
+            body: concernBody(String(index)),
+          }),
+        ),
+        ReviewConcern.make({ severity: "nit", title: "Nit concern", body: concernBody("nit") }),
+      ],
+    });
+    const plan = planPublication(oversized, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      fingerprint: "a".repeat(64),
+    });
+    expect(plan.body.length).toBeLessThanOrEqual(60_000);
+    // Whole items were shed and announced; demoted bullets go first (they
+    // already failed validation), so EVERY concern survives complete.
+    expect(plan.body).toContain("omitted — the body exceeded GitHub's review size cap");
+    expect(plan.body).toContain("### 🛑 Keep me first");
+    for (const name of ["keep", "0", "1", "2", "3", "4", "5", "6", "7", "nit"]) {
+      expect(plan.body).toContain(`CONCERN-END-${name}`);
+    }
+    // Every demoted item is either present in full or wholly absent — a
+    // title without its end sentinel would mean a mid-item slice.
+    let kept = 0;
+    for (let index = 0; index < 20; index += 1) {
+      const hasTitle = plan.body.includes(`Ghost ${String(index).padStart(2, "0")}`);
+      expect(plan.body.includes(`GHOST-END-${String(index).padStart(2, "0")}`)).toBe(hasTitle);
+      if (hasTitle) kept += 1;
+    }
+    expect(kept).toBeGreaterThan(0);
+    expect(kept).toBeLessThan(20);
+    expect(plan.body).toContain("_Automated review by @effect-agent/pr-review");
+    expect(plan.body).toContain(`<!-- effect-agent-pr-review fingerprint=sha256:${"a".repeat(64)}`);
+    // The plan's data is complete regardless of what the body could hold.
+    expect(plan.demoted).toHaveLength(20);
+  });
+
+  it("labels coordinator-scoped usage honestly", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      usage: { inputTokens: 10, outputTokens: 2 },
+      usageScope: "coordinator",
+    });
+    expect(plan.body).toContain("10 in / 2 out tokens (coordinator)");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -381,8 +738,12 @@ describe("offline review run", () => {
       );
       const outcome = yield* requiresNothing(program);
 
-      // The terminal JSON decoded into the scripted review exactly.
+      // The terminal JSON decoded into the scripted review exactly — the
+      // concern survived the engine's structured-output boundary, not just
+      // the planner's trusted input.
       expect(outcome.review).toEqual(scriptedReview);
+      expect(outcome.review.concerns).toEqual([scriptedConcern]);
+      expect(outcome.plan.body).toContain(`### ⚠️ ${scriptedConcern.title}`);
       // list -> diff -> read -> final: four model turns, four prompts.
       expect(outcome.turns).toBe(4);
       expect(yield* scripted.calls).toBe(4);
@@ -395,6 +756,11 @@ describe("offline review run", () => {
       // Anchor validation split the findings exactly as planned.
       expect(outcome.plan.comments).toHaveLength(1);
       expect(outcome.plan.demoted).toHaveLength(2);
+
+      // The run budget's observed usage aggregates EVERY turn exactly: the
+      // scripted model attaches a fixed usage to each of its four turns.
+      expect(outcome.usage?.inputTokens).toBe(4 * SCRIPTED_TURN_USAGE.inputTokens);
+      expect(outcome.usage?.outputTokens).toBe(4 * SCRIPTED_TURN_USAGE.outputTokens);
 
       // Publication went through the collecting publisher exactly once.
       const plans = yield* Ref.get(published);
