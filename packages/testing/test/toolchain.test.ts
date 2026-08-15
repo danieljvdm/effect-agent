@@ -116,8 +116,8 @@ const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"
  * manifest may declare, in any dependency section. `capabilities -> sandbox`
  * is the CodeExecutor port edge registered by ADR-0017 (declared here before
  * C1 adds the manifest edge). The `-> testing` entries are the two documented
- * dev-only exceptions asserted in the catalog-pin test below; every other
- * package stays clean of `testing` in every section.
+ * dev-only exceptions; the graph test itself pins them to `devDependencies`,
+ * and every other package stays clean of `testing` in every section.
  */
 const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
   capabilities: ["core", "engine", "sandbox"],
@@ -292,6 +292,22 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           workspaceEdges.filter((edge) => !allowed.includes(edge)),
           `${packageName} declares a workspace edge outside the documented dependency graph`,
         ).toEqual([]);
+
+        // The two permitted `-> testing` edges are dev-only: they must not
+        // reappear in dependencies, peerDependencies, or optionalDependencies,
+        // where they would ship or leak into consumer resolution.
+        if (allowed.includes("testing")) {
+          for (const section of [
+            "dependencies",
+            "peerDependencies",
+            "optionalDependencies",
+          ] as const) {
+            expect(
+              Object.keys(manifest[section] ?? {}),
+              `${packageName} may consume @effect-agent/testing only as a devDependency`,
+            ).not.toContain("@effect-agent/testing");
+          }
+        }
       }
     }),
   );

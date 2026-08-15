@@ -281,8 +281,8 @@ envelope through Effect Schema, and disposes the entrypoint and Worker handles i
 finalizers. A synchronous runaway program is stopped by platform CPU limits, not only by a
 JavaScript timer.
 
-The adapter records no durable state and adds no deployment-class claim beyond `E`: Code Mode in
-the `DN` or `DC` assemblies requires its own accepted ADR. The tested harness is
+The adapter records no persistent state and adds no deployment-class claim beyond `E`: Code Mode
+in the `DN` or `DC` assemblies requires its own accepted ADR. The tested harness is
 workerd/Miniflare; hosted-platform evidence remains unclaimed. No cost or performance claim is
 made before measurement — current Dynamic Workers billing counts no-ID `load()` use as a new
 Dynamic Worker per invocation, and any future stable-ID Worker caching must include tenant and

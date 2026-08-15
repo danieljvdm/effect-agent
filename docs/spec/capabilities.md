@@ -9,7 +9,7 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 
 ## 1. Capability matrix
 
-| Capability                 |       First target | Required for ephemeral core |    Required for durable runtime |
+| Capability                 |       First target | Required for ephemeral core |     Required for DN/DC assembly |
 | -------------------------- | -----------------: | --------------------------: | ------------------------------: |
 | Tools and toolkits         |                 P1 |                         Yes |                             Yes |
 | Sessions and conversations |                 P2 |                          No |                             Yes |
@@ -24,9 +24,9 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 | Persistent agent state     |                 P4 |                          No |                              No |
 | Durable steps              |                 P5 |                          No |                              No |
 
-“Required for durable runtime” means the durable host must supply the service when
-the related behavior is enabled. It does not mean every deployment enables every
-capability.
+“Required for DN/DC assembly” means the DN or DC host assembly must supply the
+service when the related behavior is enabled. It does not mean every deployment
+enables every capability.
 
 ## 2. Tool execution
 
