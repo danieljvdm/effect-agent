@@ -23,8 +23,9 @@ import { acquireReleaseArtifactStagingDirectory } from "./release-artifact-direc
 // `release:publish`, then create and push Changesets tags. CI instead uses
 // `--pack-directory` without OIDC authority, transfers the resulting manifest
 // and tarballs as an immutable artifact, and lets an action-free publisher
-// upload them. Both paths skip versions already on the registry, so a partial
-// publish can be re-run.
+// upload them. Manual publishing skips existing versions. Pack mode still
+// produces their tarballs so the isolated publisher can validate an exact
+// registry match and safely resume a partial release.
 // ---------------------------------------------------------------------------
 
 const REGISTRY = "https://registry.npmjs.org";
@@ -173,7 +174,8 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
     return { _tag: "Private" as const };
   }
   const distTag = distTagFor(manifest.version);
-  if (yield* alreadyPublished(manifest.name, manifest.version)) {
+  const versionAlreadyPublished = yield* alreadyPublished(manifest.name, manifest.version);
+  if (versionAlreadyPublished && options.packDirectory === undefined) {
     yield* Console.log(`- ${manifest.name}@${manifest.version}: already on the registry, skipped`);
     return {
       _tag: "Skipped" as const,
@@ -184,6 +186,11 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
         tarball: null,
       }),
     };
+  }
+  if (versionAlreadyPublished) {
+    yield* Console.log(
+      `- ${manifest.name}@${manifest.version}: already on the registry; packing for retry verification`,
+    );
   }
 
   // Rewrite every source export to its dist entry, fail-closed on both an
@@ -340,7 +347,7 @@ const otpFlag = Flag.string("otp").pipe(
 const packDirectoryFlag = Flag.string("pack-directory").pipe(
   Flag.optional,
   Flag.withDescription(
-    "Prepare unpublished package tarballs and a release-manifest.json in a new directory without publishing.",
+    "Prepare public package tarballs and a release-manifest.json in a new directory without publishing.",
   ),
 );
 

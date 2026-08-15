@@ -303,12 +303,14 @@ jobs:
     timeout-minutes: 15
     permissions:
       actions: read
+      contents: read
       id-token: write
     steps:
       # This is deliberately one action-free step. No checkout, third-party
       # action, dependency install, build, or repository script can access the
-      # OIDC request token. The only downloaded executable is npm's pinned and
-      # checksum-verified CLI tarball from the unprivileged preparation job.
+      # OIDC request token. Trusted package manifests are read as immutable
+      # policy data from github.sha; the only downloaded executable is npm's
+      # pinned and checksum-verified CLI tarball from the preparation job.
       - name: Verify and publish prepared tarballs
         env:
           GH_TOKEN: ${{ github.token }}
@@ -344,13 +346,62 @@ jobs:
           tar -xzf "npm-${NPM_CLI_VERSION}.tgz" -C .npm-cli
           NPM_CLI="$ARTIFACT_ROOT/.npm-cli/package/bin/npm-cli.js"
 
-          jq --exit-status '
+          EXPECTED_VERSION=""
+          while IFS=$'\t' read -r PACKAGE_DIRECTORY EXPECTED_PACKAGE; do
+            TRUSTED_MANIFEST="$(gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}")"
+            test "$(jq --raw-output '.name' <<< "$TRUSTED_MANIFEST")" = "$EXPECTED_PACKAGE"
+            PACKAGE_VERSION="$(jq --raw-output '.version' <<< "$TRUSTED_MANIFEST")"
+            if [ -z "$EXPECTED_VERSION" ]; then
+              EXPECTED_VERSION="$PACKAGE_VERSION"
+            else
+              test "$PACKAGE_VERSION" = "$EXPECTED_VERSION"
+            fi
+          done <<'PACKAGES'
+          capabilities	@effect-agent/capabilities
+          core	@effect-agent/core
+          effect-agent	effect-agent
+          engine	@effect-agent/engine
+          platform-cloudflare	@effect-agent/platform-cloudflare
+          platform-node	@effect-agent/platform-node
+          pr-review	@effect-agent/pr-review
+          sandbox	@effect-agent/sandbox
+          sandbox-local	@effect-agent/sandbox-local
+          session	@effect-agent/session
+          storage-cloudflare	@effect-agent/storage-cloudflare
+          storage-memory	@effect-agent/storage-memory
+          storage-sqlite	@effect-agent/storage-sqlite
+          testing	@effect-agent/testing
+          PACKAGES
+          if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$ ]]; then
+            echo "Trusted release commit is not on the beta prerelease train." >&2
+            exit 1
+          fi
+
+          jq --exit-status --arg expectedVersion "$EXPECTED_VERSION" '
             .version == 1 and
             (.packages | type == "array") and
+            ([.packages[].name] | sort) == ([
+              "@effect-agent/capabilities",
+              "@effect-agent/core",
+              "@effect-agent/engine",
+              "@effect-agent/platform-cloudflare",
+              "@effect-agent/platform-node",
+              "@effect-agent/pr-review",
+              "@effect-agent/sandbox",
+              "@effect-agent/sandbox-local",
+              "@effect-agent/session",
+              "@effect-agent/storage-cloudflare",
+              "@effect-agent/storage-memory",
+              "@effect-agent/storage-sqlite",
+              "@effect-agent/testing",
+              "effect-agent"
+            ] | sort) and
+            ([.packages[].name] | unique | length) == 14 and
+            ([.packages[].version] | unique) == [$expectedVersion] and
             all(.packages[];
-              (.name | test("^(@effect-agent/[a-z0-9-]+|effect-agent)$")) and
-              (.version | test("^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?$")) and
-              (.distTag | test("^[a-z0-9][a-z0-9._-]*$")) and
+              .distTag == "beta" and
               (.tarball == null or (.tarball | test("^packages/[A-Za-z0-9._-]+[.]tgz$")))
             )
           ' release-manifest.json > /dev/null
@@ -366,6 +417,19 @@ jobs:
             REGISTRY_PACKAGE="${PACKAGE/\//%2f}"
             STATUS="$(curl --silent --output /dev/null --write-out '%{http_code}' "https://registry.npmjs.org/${REGISTRY_PACKAGE}/${VERSION}")"
             if [ "$STATUS" = "200" ]; then
+              VERSION_METADATA="$(curl --fail --show-error --silent "https://registry.npmjs.org/${REGISTRY_PACKAGE}/${VERSION}")"
+              PACKAGE_METADATA="$(curl --fail --show-error --silent "https://registry.npmjs.org/${REGISTRY_PACKAGE}")"
+              LOCAL_INTEGRITY="sha512-$(openssl dgst -sha512 -binary "$TARBALL" | base64 --wrap=0)"
+              REMOTE_INTEGRITY="$(jq --raw-output '.dist.integrity // empty' <<< "$VERSION_METADATA")"
+              REMOTE_BETA_VERSION="$(jq --raw-output '.["dist-tags"].beta // empty' <<< "$PACKAGE_METADATA")"
+              if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]; then
+                echo "Published artifact integrity mismatch for ${PACKAGE}@${VERSION}." >&2
+                exit 1
+              fi
+              if [ "$REMOTE_BETA_VERSION" != "$VERSION" ]; then
+                echo "The beta dist-tag does not identify ${PACKAGE}@${VERSION}; refusing to alter or accept it." >&2
+                exit 1
+              fi
               echo "- ${PACKAGE}@${VERSION}: already published, skipped"
             elif [ "$STATUS" = "404" ]; then
               node "$NPM_CLI" publish "$TARBALL" \
@@ -397,6 +461,7 @@ jobs:
       - name: Verify manifest and create package tags
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH_RESULT: ${{ needs.publish-packages.result }}
         run: |
           ARTIFACT_ID="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" --jq '.artifacts | map(select(.name == "release-packages" and (.expired | not))) | if length == 1 then .[0].id else empty end')"
           if [[ ! "$ARTIFACT_ID" =~ ^[0-9]+$ ]]; then
@@ -411,19 +476,90 @@ jobs:
           cd "$ARTIFACT_ROOT"
           sha256sum --check --strict SHA256SUMS
 
-          jq --exit-status '
+          EXPECTED_VERSION=""
+          while IFS=$'\t' read -r PACKAGE_DIRECTORY EXPECTED_PACKAGE; do
+            TRUSTED_MANIFEST="$(gh api \
+              -H "Accept: application/vnd.github.raw+json" \
+              "repos/${GITHUB_REPOSITORY}/contents/packages/${PACKAGE_DIRECTORY}/package.json?ref=${GITHUB_SHA}")"
+            test "$(jq --raw-output '.name' <<< "$TRUSTED_MANIFEST")" = "$EXPECTED_PACKAGE"
+            PACKAGE_VERSION="$(jq --raw-output '.version' <<< "$TRUSTED_MANIFEST")"
+            if [ -z "$EXPECTED_VERSION" ]; then
+              EXPECTED_VERSION="$PACKAGE_VERSION"
+            else
+              test "$PACKAGE_VERSION" = "$EXPECTED_VERSION"
+            fi
+          done <<'PACKAGES'
+          capabilities	@effect-agent/capabilities
+          core	@effect-agent/core
+          effect-agent	effect-agent
+          engine	@effect-agent/engine
+          platform-cloudflare	@effect-agent/platform-cloudflare
+          platform-node	@effect-agent/platform-node
+          pr-review	@effect-agent/pr-review
+          sandbox	@effect-agent/sandbox
+          sandbox-local	@effect-agent/sandbox-local
+          session	@effect-agent/session
+          storage-cloudflare	@effect-agent/storage-cloudflare
+          storage-memory	@effect-agent/storage-memory
+          storage-sqlite	@effect-agent/storage-sqlite
+          testing	@effect-agent/testing
+          PACKAGES
+          if [[ ! "$EXPECTED_VERSION" =~ ^[0-9]+[.][0-9]+[.][0-9]+-beta[.][0-9]+$ ]]; then
+            echo "Trusted release commit is not on the beta prerelease train." >&2
+            exit 1
+          fi
+
+          jq --exit-status --arg expectedVersion "$EXPECTED_VERSION" '
             .version == 1 and
             (.packages | type == "array") and
+            ([.packages[].name] | sort) == ([
+              "@effect-agent/capabilities",
+              "@effect-agent/core",
+              "@effect-agent/engine",
+              "@effect-agent/platform-cloudflare",
+              "@effect-agent/platform-node",
+              "@effect-agent/pr-review",
+              "@effect-agent/sandbox",
+              "@effect-agent/sandbox-local",
+              "@effect-agent/session",
+              "@effect-agent/storage-cloudflare",
+              "@effect-agent/storage-memory",
+              "@effect-agent/storage-sqlite",
+              "@effect-agent/testing",
+              "effect-agent"
+            ] | sort) and
+            ([.packages[].name] | unique | length) == 14 and
+            ([.packages[].version] | unique) == [$expectedVersion] and
             all(.packages[];
-              (.name | test("^(@effect-agent/[a-z0-9-]+|effect-agent)$")) and
-              (.version | test("^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z.-]+)?$"))
+              .distTag == "beta" and
+              (.tarball == null or (.tarball | test("^packages/[A-Za-z0-9._-]+[.]tgz$")))
             )
           ' release-manifest.json > /dev/null
+          TARBALL_COUNT="$(jq '[.packages[] | select(.tarball != null)] | length' release-manifest.json)"
+          if [ "$PUBLISH_RESULT" = "skipped" ] && [ "$TARBALL_COUNT" != "0" ]; then
+            echo "Publishing was skipped even though the prepared release contains tarballs." >&2
+            exit 1
+          fi
 
           while IFS=$'\t' read -r PACKAGE VERSION TARBALL; do
             TAG="${PACKAGE}@${VERSION}"
             if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" --silent 2>/dev/null; then
-              echo "- ${TAG}: already exists"
+              REF_OBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}")"
+              REF_TYPE="$(jq --raw-output '.object.type' <<< "$REF_OBJECT")"
+              REF_SHA="$(jq --raw-output '.object.sha' <<< "$REF_OBJECT")"
+              for _ in 1 2 3 4; do
+                if [ "$REF_TYPE" != "tag" ]; then
+                  break
+                fi
+                TAG_OBJECT="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${REF_SHA}")"
+                REF_TYPE="$(jq --raw-output '.object.type' <<< "$TAG_OBJECT")"
+                REF_SHA="$(jq --raw-output '.object.sha' <<< "$TAG_OBJECT")"
+              done
+              if [ "$REF_TYPE" != "commit" ] || [ "$REF_SHA" != "$GITHUB_SHA" ]; then
+                echo "Existing tag ${TAG} does not resolve to this release commit ${GITHUB_SHA}." >&2
+                exit 1
+              fi
+              echo "- ${TAG}: already exists at ${GITHUB_SHA}"
             elif [ "$TARBALL" = "null" ]; then
               echo "Published package ${TAG} has no existing tag, but this run did not build its tarball; refusing to guess an older source commit." >&2
               exit 1
