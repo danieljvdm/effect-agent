@@ -120,3 +120,54 @@ Exit-gate evidence (`packages/testing/test/warehouse-sql.test.ts`, SEC-015 title
 
 Unclaimed: everything in C4, isolation, statement-level cancellation on the synchronous driver,
 and Code Mode durability in both the DN and DC assemblies.
+
+## C4 — Cloudflare Dynamic Worker adapter
+
+Delivered:
+
+- the Worker Loader-backed `CodeExecutor` Layer in `@effect-agent/platform-cloudflare`
+  (`packages/platform-cloudflare/src/code-mode-executor.ts`, DEPLOY-011). Each pass loads one
+  fresh Worker through the `worker_loaders` binding with `globalOutbound: null`, so generated
+  code has no ambient network, filesystem, environment, secrets, or platform bindings; its only
+  authority is the pass-scoped `CodeModeHostEntrypoint` RPC stub, which routes into the pass's
+  `CodeExecutionHost` service through a module-global registry keyed by an unforgeable pass id.
+  The generated source becomes a real module (`program.js`), never `eval`; a fixed harness
+  installs the namespace globals and a bounded console, invokes the one async function once, and
+  returns one envelope validated through Effect Schema. CPU and subrequest limits are passed to
+  the loaded Worker; the executor-owned wall-clock deadline plus workerd's own hang detection
+  bound a non-completing pass; the Worker handle and host-serving fiber finalize in Scope
+  finalizers. Expected worker-level failures map into the typed union with bounded diagnostics —
+  a module-compile error in the generated program is a `CodeSourceError`, not an infrastructure
+  failure — and unexpected terminations stay `CodeExecutorTerminatedError` without fabricating a
+  result.
+- the first manifest use of the ADR-0017 `platform-cloudflare -> sandbox` edge; all
+  Cloudflare-specific types (`WorkerLoader`, `WorkerEntrypoint`) stay inside this outward
+  package.
+
+Exit-gate evidence (`packages/platform-cloudflare/test/code-mode/code-mode-executor.test.ts`,
+DEPLOY-011, running the real adapter inside a bundled worker under programmatic Miniflare):
+
+- generated code cannot access ambient network, host bindings, or secrets — the network-denial
+  case proves `fetch` fails under `globalOutbound: null`, and an unenforceable network allowlist
+  is rejected typed;
+- a non-completing pass is terminated typed (either the executor wall-clock deadline or workerd
+  hang detection), never a fabricated result;
+- Worker and RPC resources finalize on all exits (Scope finalizers);
+- the real adapter passes a representative subset of the shared executor conformance suite —
+  bounded JSON computation, honest isolated posture, host-call routing and ordering over the real
+  Worker Loader RPC, caught and uncaught host-call failures, invalid and non-function source,
+  result and host-call limits, program throws with log capture, and non-JSON results — plus an
+  end-to-end host composition; the full 17-case kit runs against the deterministic substitute in
+  the testing package;
+- the feature still claims deployment class `E` only.
+
+Unclaimed: a live synchronous-CPU-runaway kill is asserted only through the config-level CPU
+limit and the wall-clock/hang backstop — a genuine `while(true)` in the Miniflare harness spins a
+loaded isolate whose disposal is environment-dependent, so it is deliberately not exercised (the
+same honesty posture as the repository's workerd/Miniflare-only Cloudflare evidence). Hosted
+Cloudflare execution, cost/performance claims, and Code Mode durability in the DN and DC
+assemblies remain unclaimed.
+
+The Code Mode ephemeral slices C0–C4 are complete: the `CodeExecutor` port and deterministic
+substitute (C1), the engine broker and `CodeMode.make` builder (C2), the read-only SQL reference
+integration (C3), and the Cloudflare Dynamic Worker adapter (C4), all at deployment class `E`.
