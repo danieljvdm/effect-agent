@@ -72,6 +72,7 @@ export default defineConfig({
         items: [
           { text: "Effect-native by construction", link: "/concepts/effect-native" },
           { text: "The runtime model", link: "/concepts/runtime-model" },
+          { text: "Budgets & bounded autonomy", link: "/concepts/budgets" },
           { text: "Persistence & durability", link: "/concepts/durability" },
         ],
       },
