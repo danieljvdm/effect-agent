@@ -2,6 +2,17 @@
 
 - Status: Accepted (owner-directed, 2026-08-15; S1 engine soft landing assigned and implemented,
   S2 delegation containment and S3 budget extension assigned as follow-on slices)
+- Status note (2026-08-15): S2 implemented. Mechanics delta from decision item 6: Effect AI's
+  native `failureMode: "return"` converts EVERY handler failure into a result (`Toolkit.handle`'s
+  `Stream.catch` has no passthrough), which would encode the engine-owned `ToolCallWaiting`
+  suspension signal as data and silently orphan a durable child. The implemented containment
+  therefore keeps the underlying Tool on Effect AI `failureMode: "error"`, widens the Tool
+  success Schema to the union of the declared success and the contained failure family, and
+  catches exactly that family in the delegation handler — the contract of item 6 (contained
+  members model-visible, engine signals stay in the error channel) holds unchanged, and the
+  durable settlement join records the contained failure with the non-failure polarity the live
+  batch continues with (SUB-019 coherence). SUB-033 pins the requirement; the pr-review
+  shadow-Tool workaround is retired and both reviewer profiles adopt the S1 final-answer default.
 - Related decisions: [D-007](../DECISIONS.md#d-007--tool-scheduling-default),
   [D-008](../DECISIONS.md#d-008--tool-failure-policy),
   [D-013](../DECISIONS.md#d-013--child-agent-budgets),

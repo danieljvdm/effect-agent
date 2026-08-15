@@ -7,11 +7,13 @@ import {
   RunEventSink,
   SubagentBudgetExhausted,
   SubagentDurability,
+  SubagentDurabilityError,
   SubagentExecutionFailure,
   SubagentReservations,
   SubagentReservationsMemoryLive,
+  ToolCallWaiting,
 } from "effect-agent";
-import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
@@ -581,9 +583,11 @@ describe("offline fan-out review run", () => {
         "src/api/alpha.ts",
       ]);
       expect(result.outcome.coverage.status).toBe("incomplete");
+      // The contained failure carries the child error tag through the
+      // coverage classification (first-party return mode, SUB-033).
       expect(result.outcome.coverage.failedUnits).toContainEqual({
         unitId: "unit-002",
-        errorTag: "FileReviewUnitFailed",
+        errorTag: "FileReviewUnitFailed:AgentOutputError",
       });
     }),
   );
@@ -633,47 +637,52 @@ describe("offline fan-out review run", () => {
     }),
   );
 
-  it.effect("bounds a runaway child by its policy: typed failure, reported, never retried", () =>
-    Effect.gen(function* () {
-      const runawayChildren: ReadonlyArray<OfflineUnitScript> = [
-        happyChildren[0] as OfflineUnitScript,
-        {
-          unitId: "unit-002",
-          diffPath: "src/core/gamma.ts",
-          // One more declared call than the child AgentPolicy allows.
-          outcome: {
-            _tag: "budget-runaway",
-            declaredCalls: MAX_FILE_REVIEW_TOOL_CALLS + 1,
+  it.effect(
+    "RUN-018 a runaway child soft-lands: none of the over-budget calls execute and the unit completes with its partial report",
+    () =>
+      Effect.gen(function* () {
+        const runawayChildren: ReadonlyArray<OfflineUnitScript> = [
+          happyChildren[0] as OfflineUnitScript,
+          {
+            unitId: "unit-002",
+            diffPath: "src/core/gamma.ts",
+            // One more declared call than the child AgentPolicy allows: the
+            // whole batch is rejected without executing, and the child returns
+            // its partial report on the final tool-free turn.
+            outcome: {
+              _tag: "budget-runaway",
+              declaredCalls: MAX_FILE_REVIEW_TOOL_CALLS + 1,
+              report: unitTwoReport,
+            },
           },
-        },
-      ];
-      const honestReview = CodeReview.make({
-        summary: "unit-002 unreviewed: AgentPolicyError (exceeded its Tool Call budget).",
-        verdict: "comment",
-        findings: rankAndDedupeFindings([...unitOneReport.findings]),
-      });
+        ];
+        const mergedReview = CodeReview.make({
+          summary: "Reviewed unit-001 and unit-002 (unit-002 on a partial, budget-exhausted pass).",
+          verdict: "comment",
+          findings: rankAndDedupeFindings([...unitOneReport.findings, ...unitTwoReport.findings]),
+        });
 
-      const result = yield* runOfflineFanOut({ children: runawayChildren, review: honestReview });
+        const result = yield* runOfflineFanOut({ children: runawayChildren, review: mergedReview });
 
-      // The child failed typed on its Tool Call bound BEFORE any of the
-      // runaway calls executed: one model call, no second chance.
-      expect(result.childCalls).toBe(3);
-      expect(result.coordinatorCalls).toBe(3);
+        // Two child model calls: the rejected over-budget turn and the final
+        // answer — no third chance, and no handler ran for any runaway call.
+        expect(result.childCalls).toBe(4);
+        expect(result.coordinatorCalls).toBe(3);
 
-      // The typed policy failure crossed the delegation boundary bounded and
-      // was reported, not retried.
-      const finalPrompt = result.coordinatorPrompts[2] ?? "";
-      expect(finalPrompt).toContain("FileReviewUnitFailed");
-      expect(finalPrompt).toContain("AgentPolicyError");
-      expect(finalPrompt).toContain(`${MAX_FILE_REVIEW_TOOL_CALLS} Tool Call limit`);
-      expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
-      expect(result.published).toHaveLength(1);
-      expect(result.outcome.coverage.status).toBe("incomplete");
-      expect(result.outcome.coverage.failedUnits).toContainEqual({
-        unitId: "unit-002",
-        errorTag: "FileReviewUnitFailed",
-      });
-    }),
+        // The child saw the synthetic policy rejection as failed tool results
+        // and answered from what it had.
+        const runawayPrompt =
+          result.childPrompts.find((prompt) => prompt.includes("runaway-unit-002-1")) ?? "";
+        expect(runawayPrompt).toContain("Tool Call budget exhausted");
+
+        // The unit COMPLETED: findings from both units, no failed units, and
+        // nothing retried. (Coverage stays "incomplete" only for the fixture's
+        // undiffable binary, exactly like the fully-happy run.)
+        expect(result.outcome.review).toEqual(mergedReview);
+        expect(result.published).toHaveLength(1);
+        expect(result.outcome.coverage.failedUnits).toEqual([]);
+        expect(result.outcome.coverage.unreviewedPaths).toEqual(["assets/logo.png"]);
+      }),
   );
 });
 
@@ -711,10 +720,14 @@ type FanOutProgramFailure = EffectError<typeof typedFanOutProgram>;
 type FanOutProgramServices = Effect.Services<typeof typedFanOutProgram>;
 type DelegateHandlerError = Tool.HandlerError<typeof DelegateFileReview>;
 
-// The parent-facing Tool contains failures: nothing reaches the Run's `E`
-// through it (failureMode "return"), so one failed unit cannot abort the
+// The first-party contained delegation Tool (SUB-033): every expected unit
+// failure is result data, so only the engine signals — the durable waiting
+// suspension and coordinator-seam error, neither of which can occur on this
+// class-E path — remain in the Run's `E`; one failed unit cannot abort the
 // fan-out review.
-type ContainedHandlerErrorProof = Assert<Equal<DelegateHandlerError, never>>;
+type ContainedHandlerErrorProof = Assert<
+  Equal<DelegateHandlerError, AiError.AiError | ToolCallWaiting | SubagentDurabilityError>
+>;
 type ContainedUnitFailureProof = Assert<
   Equal<Extract<FanOutProgramFailure, FileReviewUnitFailed>, never>
 >;

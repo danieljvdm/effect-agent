@@ -360,9 +360,9 @@ export const defaultReviewPolicy = AgentPolicy.make({
   maxDuration: "8 minutes",
   toolConcurrency: 2,
   tokenBudget: 300_000,
-  // Soft-landing adoption for the reviewer is the budget arc's S2/S3 rework;
-  // until then the reviewer keeps its typed exhaustion failure.
-  onExhaustion: "fail",
+  // Budget soft landing (RUN-018): an exhausted reviewer returns its partial
+  // review on one final tool-free turn instead of failing the whole run.
+  onExhaustion: "final-answer",
 });
 
 // ---------------------------------------------------------------------------
