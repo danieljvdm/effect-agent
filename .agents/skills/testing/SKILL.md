@@ -21,3 +21,8 @@ Write a test only when every condition holds:
 If any condition fails, skip the test and use the cheapest sufficient verification instead. Moving MVP behavior often warrants no committed tests.
 
 Test capabilities, not files. Use the fewest tests that protect the risk, and ignore coverage targets unless the user explicitly asks for them.
+
+Never commit an intentionally failing or red-only suite. Keep time-driven tests
+deterministic instead of stabilizing them with wall-clock sleeps. A shared fake
+or in-memory implementation must fully provide the behavior its name promises;
+keep partial substitutes local to the tests that need them.

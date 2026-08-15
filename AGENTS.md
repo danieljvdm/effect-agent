@@ -6,6 +6,24 @@ This project uses `@danieljvdm/dev-kit` to manage portable agent skills and repr
 
 For dev-kit operations, use the `dev-kit` skill and read `.agents/skills/dev-kit/SKILL.md` before changing managed outputs.
 
+# Learning more about the Effect
+
+This repository uses the Effect Typescript library.
+
+Before writing any Effect code, first read `node_modules/effect/AGENTS.md`
+**completely**, and follow the links in the file when required.
+
+If you need to learn more about particular Effect apis and concepts that the
+guide doesn't cover, search through the source code in `node_modules/effect/src`.
+
+# Effect Atom client boundary
+
+This repository consumes APIs through Effect Atom clients (`@effect/atom-react`).
+Keep business logic in Effect: compose multi-step client workflows as atoms,
+declare cross-query invalidation as reactivity keys on mutations, and keep
+promise-mode dispatches at the React boundary logic-free — no `.then` chains
+in components or routes.
+
 ## Project command policy
 
 Vite+ is the unified toolchain and command authority for this repository. It wraps Vite, Rolldown, Vitest, tsdown, Oxlint, Oxfmt, and Vite Task behind the `vp` CLI; Vite+ is distinct from Vite.
@@ -42,8 +60,9 @@ Before editing code:
 4. Read `docs/TOOLCHAIN.md`.
 5. Read the specification documents for the modules in scope.
 6. Read every ADR referenced by those documents.
-7. Read `.agents/skills/effect-ts/SKILL.md` before writing Effect code.
-8. Read `.agents/skills/effect-ts/references/guide-cli.md` before creating or changing repository
+7. Read `node_modules/effect/AGENTS.md` before writing Effect code (the canonical Effect
+   guidance; `.agents/skills` carries the focused task skills).
+8. Read `.agents/skills/build-effect-clis/SKILL.md` before creating or changing repository
    scripts.
 9. Inspect neighboring package tests before introducing a new pattern.
 
