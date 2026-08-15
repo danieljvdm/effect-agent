@@ -1,0 +1,2 @@
+# Optional: set to run the live OpenAI profile instead of the scripted one.
+OPENAI_API_KEY=

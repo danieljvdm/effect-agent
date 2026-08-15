@@ -43,7 +43,13 @@ const packageNames = [
  * provider WRAPPER packages remain deliberately absent.
  */
 const providerConsumingPackages = new Set<string>(["pr-review"]);
-const exampleNames = ["demo", "pr-review", "providers", "repo-ops"] as const;
+const exampleNames = [
+  "code-mode-cloudflare",
+  "demo",
+  "pr-review",
+  "providers",
+  "repo-ops",
+] as const;
 const effectTestPackageNames = [
   "capabilities",
   "engine",
@@ -385,6 +391,35 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         false,
       );
 
+      // The Code Mode Cloudflare demo is the one example that legitimately
+      // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic
+      // Worker executor from @effect-agent/platform-cloudflare and queries a
+      // SQLite Durable Object, so it carries the Durable Object SqlClient and
+      // the types-only Cloudflare package. wrangler is NOT a dependency — the
+      // deploy/dev scripts invoke it through bunx, and the test lane uses
+      // programmatic Miniflare.
+      const codeModeCloudflare = yield* readManifest(
+        `${repositoryRoot}/examples/code-mode-cloudflare/package.json`,
+      );
+      const codeModeCloudflareDependencies = manifestDependencies(codeModeCloudflare);
+      expect(codeModeCloudflare.name).toBe("@effect-agent/example-code-mode-cloudflare");
+      expect(codeModeCloudflare.dependencies?.["@effect-agent/platform-cloudflare"]).toBe(
+        "workspace:*",
+      );
+      expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
+      expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
+      expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");
+      expect(codeModeCloudflareDependencies).not.toContain("wrangler");
+      // The only allowed @cloudflare/* dependency is the types-only package.
+      expect(
+        codeModeCloudflareDependencies.filter(
+          (dependency) =>
+            dependency.startsWith("@cloudflare/") && dependency !== "@cloudflare/workers-types",
+        ),
+      ).toEqual([]);
+
       // The packaged reviewer pins its provider adapters through the catalog
       // like every other shared dependency (D-034, ADR-0016).
       const prReviewPackage = yield* readManifest(
@@ -402,6 +437,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(manifestDependencies(manifest)).not.toContain(providers.name);
         expect(manifestDependencies(manifest)).not.toContain(repoOps.name);
         expect(manifestDependencies(manifest)).not.toContain(prReview.name);
+        expect(manifestDependencies(manifest)).not.toContain(codeModeCloudflare.name);
         if (providerConsumingPackages.has(packageName)) continue;
         for (const adapter of providerAdapterDependencies) {
           expect(manifestDependencies(manifest)).not.toContain(adapter);

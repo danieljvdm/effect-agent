@@ -1,0 +1,30 @@
+{
+  "name": "@effect-agent/example-code-mode-cloudflare",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "deploy": "bunx wrangler deploy",
+    "dev": "bunx wrangler dev"
+  },
+  "dependencies": {
+    "@effect-agent/capabilities": "workspace:*",
+    "@effect-agent/core": "workspace:*",
+    "@effect-agent/engine": "workspace:*",
+    "@effect-agent/platform-cloudflare": "workspace:*",
+    "@effect-agent/sandbox": "workspace:*",
+    "@effect/ai-openai": "catalog:",
+    "@effect/sql-sqlite-do": "catalog:",
+    "effect": "catalog:"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:",
+    "esbuild": "catalog:",
+    "miniflare": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "vitest": "catalog:"
+  }
+}
