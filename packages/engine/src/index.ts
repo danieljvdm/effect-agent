@@ -221,7 +221,7 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     runId: RunId,
     turns: Schema.Int.check(Schema.isGreaterThan(0)),
     finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-    /** Dimension that bound when the Run settled budget-exhausted (RUN-025; the ADR-0019 S3 marker). */
+    /** Dimension that bound when the Run settled budget-exhausted (RUN-025; the grant-flow marker). */
     exhausted: Schema.optionalKey(Schema.Literals(["tokens", "tool-calls", "turns"])),
   });
 
@@ -1889,7 +1889,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
         limit: "tokens",
         message: `Agent exceeded its ${tokenBudget} token budget`,
       });
-      // Fail-fast token breaches keep the pre-ADR-0018 contract exactly: no
+      // Fail-fast token breaches keep the pre-soft-landing contract exactly: no
       // budget-hook charge and no warning event on the failing response.
       if (policy.onExhaustion === "fail") {
         return yield* breach;
@@ -2882,7 +2882,7 @@ const makeTurn = <
       ).pipe(Stream.flatMap(Stream.fromIterable));
 
       // Final-answer mode (RUN-018/RUN-019, extended to the token dimension
-      // by ADR-0018, RUN-025): once the Turn, Tool Call, or token budget is
+      // by RUN-025 to the token dimension): once the Turn, Tool Call, or token budget is
       // exhausted, the model keeps its toolkit declaration but may not call
       // it. Turn and Tool Call conditions are pure derivations of committed
       // state (`turn`, `priorToolCalls`, `programmaticToolCalls`); the token
@@ -2899,7 +2899,7 @@ const makeTurn = <
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls ||
           context.tokenExhausted);
       if (finalAnswerOnly && context.exhaustedDimension === undefined) {
-        // First-cause dimension marker (the ADR-0019 S3 exhausted marker).
+        // First-cause dimension marker (the RUN-021 grant-flow marker).
         context.exhaustedDimension =
           turn > bounds.maxTurns
             ? "turns"

@@ -1464,7 +1464,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   });
 });
 
-layer(testLayer)("ADR-0018 durable compaction and usage re-seed", (it) => {
+layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
   const usageOf = (input: number, output: number) => ({
     inputTokens: { total: input },
     outputTokens: { total: output },

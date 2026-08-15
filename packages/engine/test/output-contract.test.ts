@@ -218,13 +218,21 @@ layer(identifiers)("RUN-028 model-visible output contract", (it) => {
 
         expect(requests).toHaveLength(2);
         const [first, second] = requests;
-        expect(first?.content.map((message) => message.role)).toEqual(["system", "system", "user"]);
+        // Trailing user message on each request: the derived run-status line
+        // (RUN-024), another non-canonical request projection.
+        expect(first?.content.map((message) => message.role)).toEqual([
+          "system",
+          "system",
+          "user",
+          "user",
+        ]);
         expect(second?.content.map((message) => message.role)).toEqual([
           "system",
           "system",
           "user",
           "assistant",
           "tool",
+          "user",
         ]);
         for (const request of requests) {
           expect(request === undefined ? [] : contractMessages(request)).toHaveLength(1);
@@ -290,7 +298,11 @@ layer(identifiers)("RUN-028 model-visible output contract", (it) => {
         expect(failure).toBeInstanceOf(AgentOutputError);
         expect((failure as AgentOutputError).message).toContain("not valid JSON");
         expect(captured).toHaveLength(1);
-        expect(captured[0]?.content.map((message) => message.role)).toEqual(["system", "user"]);
+        expect(captured[0]?.content.map((message) => message.role)).toEqual([
+          "system",
+          "user",
+          "user",
+        ]);
         expect(contractMessages(captured[0]!)).toHaveLength(0);
       });
     },

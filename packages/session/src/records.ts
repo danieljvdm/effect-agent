@@ -202,7 +202,7 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
   messagesDigest: Digest,
   /**
    * Per-call provider usage (RUN-023), present for records committed after
-   * ADR-0018. Totals are what budget re-seeding needs; cache splits are
+   * the context-economics arc. Totals are what budget re-seeding needs; cache splits are
    * deliberately not persisted — snapshot fidelity is host-side, and the
    * canonical log stays minimal. Absent fields re-seed as zero (dev-data
    * policy: old records under-count rather than fail).
@@ -337,7 +337,7 @@ export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseIn
 }) {}
 
 /**
- * One engine-native compaction applied at the pre-Turn seam (ADR-0018,
+ * One engine-native compaction applied at the pre-Turn seam (RUN-026,
  * RUN-026). `coversThrough` is a Conversation record sequence: the projection
  * renders records at or below it as the summary (kind `summarize`) or with
  * cleared tool results (kind `clear-tool-results`), never erasing source

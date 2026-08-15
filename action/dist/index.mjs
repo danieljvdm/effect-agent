@@ -32651,6 +32651,39 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
+// packages/engine/src/output-contract-internal.ts
+var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
+var outputSchemaContract = (definition) => {
+  try {
+    const jsonSchema = exports_Tool.getJsonSchemaFromSchema(definition.output);
+    return {
+      _tag: "rendered",
+      message: `${contractDirective}
+
+${JSON.stringify(jsonSchema, undefined, 2)}`
+    };
+  } catch (cause) {
+    return {
+      _tag: "unrenderable",
+      reason: cause instanceof Error ? cause.message : String(cause)
+    };
+  }
+};
+var insertOutputContract = (prompt, message) => {
+  const content = prompt.content;
+  let insertAt = 0;
+  for (let index2 = 0;index2 < content.length; index2 += 1) {
+    if (content[index2]?.role === "system") {
+      insertAt = index2 + 1;
+    }
+  }
+  return exports_Prompt.fromMessages([
+    ...content.slice(0, insertAt),
+    exports_Prompt.makeMessage("system", { content: message }),
+    ...content.slice(insertAt)
+  ]);
+};
+
 // packages/engine/src/provider-result-staging-internal.ts
 var MAX_JSON_DEPTH = 128;
 var FailedSnapshot = Symbol("@effect-agent/engine/FailedProviderResultSnapshot");
@@ -34739,12 +34772,15 @@ var decodeFinalOutput = exports_Effect.fn("AgentRuntime.decodeFinalOutput")(func
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const ids = yield* IdGenerator;
   const turnId = yield* ids.nextTurnId;
+  const outputContract = outputSchemaContract(agent2.definition);
+  const outputContractMessage = outputContract._tag === "rendered" ? outputContract.message : undefined;
   const modelContext = options.context === undefined ? { prompt } : yield* options.context.prepare({
     conversationId: context3.conversationId,
     runId: context3.runId,
     turnId,
     turn,
-    source: prompt
+    source: prompt,
+    ...outputContractMessage === undefined ? {} : { outputContract: outputContractMessage }
   });
   const trace2 = {
     parts: [],
@@ -34790,11 +34826,21 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
   if (finalAnswerOnly && context3.exhaustedDimension === undefined) {
     context3.exhaustedDimension = turn > bounds.maxTurns ? "turns" : priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls ? "tool-calls" : "tokens";
   }
+  if (outputContract._tag === "unrenderable" && turn === 1) {
+    yield* exports_Effect.logWarning("Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted").pipe(exports_Effect.annotateLogs({
+      agentId: context3.agentId,
+      runId: context3.runId,
+      reason: outputContract.reason
+    }));
+  }
+  const outputContractTokens = outputContractMessage === undefined ? 0 : estimatePromptTokens([
+    exports_Prompt.makeMessage("system", { content: outputContractMessage })
+  ]);
   let preEvents = [];
   if (policy2.contextTokenLimit !== undefined && !context3.finalizing) {
     const view = buildCompactedView(modelContext.prompt.content, context3.compaction);
     const estimate = nextContextEstimate(context3, view);
-    if (estimate > policy2.contextTokenLimit && context3.compaction.lastCompactionTurn !== turn) {
+    if (estimate + outputContractTokens > policy2.contextTokenLimit && context3.compaction.lastCompactionTurn !== turn) {
       context3.compaction.lastCompactionTurn = turn;
       const outcome = yield* compactContext(agent2, context3, modelContext.prompt, turn, options, false);
       preEvents = outcome.events;
@@ -34806,7 +34852,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     return exports_Prompt.fromMessages([...view]);
   };
   const attempt = (basis) => exports_Stream.unwrap(outgoingModelPrompt(policy2, context3, basis, turn, priorToolCalls).pipe(exports_Effect.map((outgoing) => guardBudgetStream(exports_LanguageModel.streamText({
-    prompt: outgoing,
+    prompt: outputContractMessage === undefined ? outgoing : insertOutputContract(outgoing, outputContractMessage),
     toolkit: agent2.definition.toolkit,
     disableToolCallResolution: true,
     ...finalAnswerOnly ? { toolChoice: "none" } : {}

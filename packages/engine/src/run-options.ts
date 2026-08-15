@@ -168,7 +168,7 @@ export interface RunTurnResponseCommit {
 
 /**
  * One compaction decision the engine applied to its model-visible view
- * (ADR-0018 decision 7, RUN-026). The durable coordinator owns the canonical
+ * (RUN-026). The durable coordinator owns the canonical
  * `coversThrough` selection — the engine reports only what it decided and the
  * summary it produced, because in-memory message indices do not map to
  * canonical record sequences at this seam.
@@ -476,7 +476,8 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * RUN-023: cumulative usage of the Run's PRIOR Attempts, projected from the
    * canonical response records, seeding the fresh Attempt's counters so token
    * budgets and the compaction trigger keep accounting across ownership
-   * changes. Absent for fresh Runs and for pre-ADR-0018 records (seeds zero).
+   * changes. Absent for fresh Runs and for records written before usage
+   * re-seeding existed (seeds zero).
    */
   /**
    * Per-Run Tool Call allowance (RUN-021): a TIGHTENING-ONLY bound below the

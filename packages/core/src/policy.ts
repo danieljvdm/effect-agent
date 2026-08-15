@@ -41,8 +41,8 @@ const FinitePositiveDuration = Schema.Duration.pipe(
  * `"final-answer"` gives the model one constrained opportunity to settle with
  * output (the Run completes with `finishReason: "budget-exhausted"` and the
  * exhausted-dimension marker), while `"fail"` fails the Run typed. Turn and
- * Tool Call bounds resolve per ADR-0019; the token dimension participates per
- * ADR-0018's dated extension with a one-shot bound (at most one grace call).
+ * Tool Call bounds resolve per RUN-018/RUN-019; the token dimension
+ * participates per RUN-025 with a one-shot bound (at most one grace call).
  * Duration, cost, and repeated-failure bounds are hard rails regardless of
  * this setting.
  */

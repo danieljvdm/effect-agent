@@ -136,8 +136,8 @@ export class CompactionPerformed extends Schema.TaggedClass<CompactionPerformed>
 
 /**
  * Dimension that bound when a Run settled through the final-answer resolution
- * (ADR-0019; the token dimension per ADR-0018). This is the exhausted marker
- * ADR-0019 S3's re-delegation grant flow consumes.
+ * (RUN-018; the token dimension per RUN-025). This is the exhausted marker
+ * the re-delegation grant flow (RUN-021) consumes.
  */
 const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"]);
 

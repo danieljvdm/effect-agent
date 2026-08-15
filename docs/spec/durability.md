@@ -180,7 +180,7 @@ The scheduler may safely resume automatically at these boundaries:
 - claimed but Attempt not started;
 - immediately after a committed model response containing no tool requests;
 - after every requested tool has a canonical result;
-- after a committed `CompactionCreated` record (ADR-0018) or compaction artifact;
+- after a committed `CompactionCreated` record (RUN-026) or compaction artifact;
 - after a committed durable step result;
 - after a committed model response whose declared tool batch has no prepared records yet — the
   batch resumes from the canonical declaration without re-invoking the model;

@@ -85,8 +85,8 @@ delegation with a larger allowance below the child Definition's policy.
 
 Duration, cost, and hierarchical budget-hook bounds are hard rails regardless of
 `onExhaustion`. The token dimension originally shipped as a hard rail and now participates in
-the `onExhaustion` resolution with a one-shot bound (ADR-0018's dated amendment to ADR-0019;
-RUN-025). Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
+the `onExhaustion` resolution with a one-shot bound (RUN-025; at most one grace call).
+Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
 Call outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool
 Call success resets it, and reaching `repeatedFailureLimit` fails the Run with the typed policy
 failure (`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.

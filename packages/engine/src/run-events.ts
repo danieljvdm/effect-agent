@@ -47,7 +47,7 @@ export interface SubagentCompletedPayload extends SubagentEventBasePayload {
   readonly _tag: "SubagentCompleted";
   readonly turns: number;
   readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
-  /** Dimension that bound when the child settled budget-exhausted (RUN-024; ADR-0019 S3 marker). */
+  /** Dimension that bound when the child settled budget-exhausted (the RUN-021 grant-flow marker). */
   readonly exhausted?: "tokens" | "tool-calls" | "turns" | undefined;
 }
 

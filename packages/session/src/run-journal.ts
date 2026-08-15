@@ -81,7 +81,7 @@ export const turnPreparedBatchId = (runId: RunId, turn: number): BatchId =>
   decodeBatchId(`turn-prepared:${runId}:${turn}`);
 
 /**
- * Deterministic identity of one pre-Turn compaction record (ADR-0018,
+ * Deterministic identity of one pre-Turn compaction record (RUN-026,
  * RUN-026). Keyed by Run, Turn, and kind — the engine performs at most one
  * threshold compaction per Turn plus at most one overflow-forced summarize,
  * so a superseding Attempt that re-decides the same compaction replays the
@@ -336,7 +336,7 @@ export interface RunJournalProjection {
   readonly historyBefore: Prompt.Prompt;
   /** Number of canonical Turns already committed for the projected Run. */
   readonly committedTurns: number;
-  /** Summed per-call usage of the projected Run's committed responses; zeros pre-ADR-0018. */
+  /** Summed per-call usage of the projected Run's committed responses; zeros for records predating usage capture. */
   readonly usage: RunJournalUsage;
 }
 

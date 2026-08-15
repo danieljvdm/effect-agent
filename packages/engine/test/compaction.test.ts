@@ -163,12 +163,13 @@ const basePolicy = {
   toolConcurrency: 1,
 } as const;
 
-/** Drive one scripted run and capture requests, events, and the exit. */
-const driveRun = ({ policy, script, results, commitCompaction }: RunSetup) =>
+/** Drive one scripted run under an explicit output Schema (RUN-028 reservation cases). */
+const driveRunWith = <Output extends Schema.Top>(output: Output, setup: RunSetup) =>
   Effect.gen(function* () {
+    const { policy, script, results, commitCompaction } = setup;
     const definition = Agent.define("compaction-agent", {
       input: Schema.Struct({ question: Schema.String }),
-      output: answerOutput,
+      output,
       instructions: "Research the question with the search tool, then answer.",
       toolkit: searchToolkit,
       policy,
@@ -208,6 +209,9 @@ const driveRun = ({ policy, script, results, commitCompaction }: RunSetup) =>
     );
     return { exit, requests, events: yield* Ref.get(events) };
   });
+
+/** Drive one scripted run and capture requests, events, and the exit. */
+const driveRun = (setup: RunSetup) => driveRunWith(answerOutput, setup);
 
 layer(identifiers)("engine compaction and overflow recovery", (it) => {
   // ------------------------------------------------------------ pure helpers
@@ -433,6 +437,63 @@ layer(identifiers)("engine compaction and overflow recovery", (it) => {
       expect(toolResultValues(second.prompt)).toEqual(["small"]);
       expect(compactionEvents(events)).toHaveLength(0);
     }),
+  );
+
+  it.effect(
+    "RUN-028: the window reserves the output contract's size — the same view compacts with a large contract and stays whole without one",
+    () =>
+      Effect.gen(function* () {
+        // The contract is appended to every outgoing request AFTER the window
+        // check, so the estimate must reserve its size: a view comfortably
+        // under the limit still compacts when view + contract crosses it.
+        const paddedOutput = Schema.Struct({ answer: Schema.String }).annotate({
+          description: "p".repeat(32_000),
+        });
+        const policy = AgentPolicy.make({
+          ...basePolicy,
+          contextTokenLimit: 5_000,
+          compaction: CompactionPolicy.make({ keepRecentTokens: 200, mode: "prune" }),
+        });
+        const bigResult = "r".repeat(6_000);
+
+        const reserved = yield* driveRunWith(paddedOutput, {
+          policy,
+          script: [
+            toolCallParts("s1", "search", {}, usageOf(100, 5)),
+            toolCallParts("s2", "search", {}, usageOf(200, 5)),
+            finalParts('{"answer":"done"}', usageOf(300, 5)),
+          ],
+          results: [bigResult, "small"],
+        });
+        expect(Exit.isSuccess(reserved.exit)).toBe(true);
+        // The big first-turn result was cleared before the final request even
+        // though the view alone (~2k tokens) is far below the 5k limit.
+        expect(compactionEvents(reserved.events).length).toBeGreaterThanOrEqual(1);
+        const finalRequest = reserved.requests.at(-1);
+        if (finalRequest === undefined) throw new Error("expected a final model request");
+        expect(toolResultValues(finalRequest.prompt)).toContain(CLEARED_TOOL_RESULT);
+        expect(toolResultValues(finalRequest.prompt)).not.toContain(bigResult);
+
+        // Control: an unrenderable output Schema produces no contract, so the
+        // identical view under the identical limit never compacts.
+        const control = yield* driveRunWith(
+          Schema.TupleWithRest(Schema.Tuple([Schema.String]), [Schema.Int, Schema.String]),
+          {
+            policy,
+            script: [
+              toolCallParts("s1", "search", {}, usageOf(100, 5)),
+              toolCallParts("s2", "search", {}, usageOf(200, 5)),
+              finalParts('["first",1,"last"]', usageOf(300, 5)),
+            ],
+            results: [bigResult, "small"],
+          },
+        );
+        expect(Exit.isSuccess(control.exit)).toBe(true);
+        expect(compactionEvents(control.events)).toHaveLength(0);
+        const controlFinal = control.requests.at(-1);
+        if (controlFinal === undefined) throw new Error("expected a final control request");
+        expect(toolResultValues(controlFinal.prompt)).toContain(bigResult);
+      }),
   );
 
   it.effect("RUN-026: never compacts without a contextTokenLimit", () =>

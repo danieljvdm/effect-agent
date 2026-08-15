@@ -1,8 +1,7 @@
 import { Prompt } from "effect/unstable/ai";
 
 /**
- * Pure helpers for engine-native context compaction (ADR-0018 decision 6,
- * RUN-026/RUN-027). Everything here is deterministic and side-effect free:
+ * Pure helpers for engine-native context compaction (RUN-026/RUN-027). Everything here is deterministic and side-effect free:
  * the engine's turn loop owns the state transitions, the durable coordinator
  * owns the canonical record, and this module owns the arithmetic.
  *

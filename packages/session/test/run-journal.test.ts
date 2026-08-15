@@ -642,7 +642,7 @@ describe("S2 subagent deterministic identities (plan §3.1)", () => {
   });
 });
 
-describe("engine compaction records and projection (ADR-0018)", () => {
+describe("engine compaction records and projection (RUN-026)", () => {
   const messageText = (message: Prompt.Message): string =>
     typeof message.content === "string"
       ? message.content

@@ -135,7 +135,7 @@ Denial remains terminal per the P2 policy default.
 
 Compaction converts a prefix of conversation history into a smaller context
 representation. It does not rewrite or delete the canonical log. Two forms exist
-(ADR-0018).
+(RUN-026).
 
 **Engine-native compaction** is the operational path ([runtime §9](./runtime.md)): when the
 estimated next model-call context exceeds `AgentPolicy.contextTokenLimit`, the engine prunes old

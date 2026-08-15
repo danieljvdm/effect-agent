@@ -2775,7 +2775,7 @@ const make = Effect.gen(function* () {
       // the appending Run's own records — so the owner's instruction/input
       // messages survive every projection and the resume-splice arithmetic
       // stays untouched. The in-memory view may cover more; the record is
-      // canonical (ADR-0018).
+      // canonical (RUN-026).
       let ownerFirstSequence: CanonicalSequence | undefined;
       for (const envelope of records) {
         const payload = envelope.record.payload;
