@@ -74,8 +74,14 @@ bunx wrangler secret put DEMO_AUTH_TOKEN
 bun run --filter @effect-agent/example-code-mode-cloudflare deploy
 curl -X POST https://<your-worker>/ask \
   -H 'content-type: application/json' \
+  -H 'authorization: Bearer <your DEMO_AUTH_TOKEN>' \
   -d '{"question":"Which customers have more than $10,000 in revenue?"}'
 ```
+
+When `OPENAI_API_KEY` is set the Worker **requires** `DEMO_AUTH_TOKEN` and
+rejects requests without a matching bearer token, so the paid path never
+serves anonymous callers. The offline scripted default (no `OPENAI_API_KEY`)
+needs no token.
 
 `wrangler.jsonc` wires the `WAREHOUSE` Durable Object, the `LOADER`
 (`worker_loaders`) binding the Dynamic Worker executor loads generated programs

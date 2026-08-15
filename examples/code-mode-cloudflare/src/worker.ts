@@ -141,12 +141,21 @@ export default {
     if (request.method !== "POST") {
       return Response.json({ error: "POST required" }, { status: 405 });
     }
-    // When a shared secret is configured, require it — this gates the paid
-    // live model path. The offline scripted default needs no secret.
-    if (env.DEMO_AUTH_TOKEN !== undefined && env.DEMO_AUTH_TOKEN.length > 0) {
-      if (request.headers.get("authorization") !== `Bearer ${env.DEMO_AUTH_TOKEN}`) {
-        return Response.json({ error: "unauthorized" }, { status: 401 });
-      }
+    const liveMode = env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0;
+    const authToken = env.DEMO_AUTH_TOKEN;
+    const hasAuthToken = authToken !== undefined && authToken.length > 0;
+    // Fail CLOSED on the paid path: if the live model is enabled but no shared
+    // secret is configured, refuse rather than serve paid inference to
+    // anonymous callers. The offline scripted default needs no secret.
+    if (liveMode && !hasAuthToken) {
+      return Response.json(
+        { error: "server misconfigured: DEMO_AUTH_TOKEN must be set when OPENAI_API_KEY is" },
+        { status: 503 },
+      );
+    }
+    // When a shared secret is configured, require a matching bearer token.
+    if (hasAuthToken && request.headers.get("authorization") !== `Bearer ${authToken}`) {
+      return Response.json({ error: "unauthorized" }, { status: 401 });
     }
     let question = "Which customers have more than $10,000 in revenue?";
     try {
