@@ -1,5 +1,17 @@
 # @effect-agent/core
 
+## 0.1.0-beta.7
+
+### Minor Changes
+
+- [#54](https://github.com/danieljvdm/effect-agent/pull/54) [`afe755a`](https://github.com/danieljvdm/effect-agent/commit/afe755a331172ffca9ceee7dd82bb452c6ccbb8a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Context economics ([#54](https://github.com/danieljvdm/effect-agent/issues/54), RUN-022–027/CAP-017): application tool results are bounded by default (50 KiB
+  `TruncatedToolResult` envelopes), budget accounting becomes cache-aware with last-call
+  live-context tracking, every request can carry a derived run-status message, the token
+  dimension joins the `onExhaustion` soft landing (RUN-018) with the `exhausted` dimension marker,
+  and the engine compacts natively at the pre-Turn seam (prune, then one metered summarize)
+  with a canonical `CompactionCreated` record that projections fold across Runs; provider
+  context-length rejections compact-and-retry once, then fail typed (`ContextOverflowError`).
+
 ## 0.1.0-beta.6
 
 ### Minor Changes
