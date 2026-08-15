@@ -1710,6 +1710,77 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       }),
   );
 
+  it.effect("RUN-023: the compaction summarizer's usage joins the Turn's canonical record", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const conversation = "conversation-summarizer-usage";
+
+      // Submission 1 leaves prior-Run records for the compactor to cover.
+      const first = yield* makeScriptedModel((call) =>
+        call === 0 ? toolCallParts : finalParts('{"answer":"Found the sea."}'),
+      );
+      yield* runtime.submit(
+        Agent.withModel(searchDefinition, first.model),
+        { question: "Is a flight available?" },
+        submitOptions(conversation, "summarizer-usage-1"),
+      );
+      const firstSettled = yield* runtime
+        .processConversation(
+          Agent.withModel(searchDefinition, first.model),
+          decodeConversationId(conversation),
+        )
+        .pipe(Effect.provide(searchToolLayer));
+      expect(firstSettled[0]?.outcome).toBe("completed");
+
+      const compactingDefinition = Agent.define("durable-usage-compactor", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer from what is known.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          contextTokenLimit: 50,
+          compaction: CompactionPolicy.make({ keepRecentTokens: 10, mode: "summarize" }),
+        }),
+      });
+      // Call 0 is the pre-Turn summarizer, call 1 the Turn's real response;
+      // the Turn's canonical record must carry BOTH calls' usage so a later
+      // Attempt re-seeds the summarizer's spend too.
+      const second = yield* makeScriptedModel((call) =>
+        call === 0
+          ? finalPartsWithUsage("Goal: metered summary", usageOf(30, 10))
+          : finalPartsWithUsage('{"answer":"metered"}', usageOf(20, 5)),
+      );
+      const compactor = Agent.withModel(compactingDefinition, second.model);
+      yield* runtime.submit(
+        compactor,
+        { question: "what happened?" },
+        submitOptions(conversation, "summarizer-usage-2"),
+      );
+      const settled = yield* runtime.processConversation(
+        compactor,
+        decodeConversationId(conversation),
+      );
+      expect(settled).toHaveLength(1);
+      expect(settled[0]?.outcome).toBe("completed");
+
+      const records = yield* readLog(conversation);
+      // The compactor's Turn is the newest response record in the log.
+      const response = [...records]
+        .reverse()
+        .find((envelope) => envelope.record.payload._tag === "ModelResponseRecorded");
+      const payload = response?.record.payload;
+      if (payload === undefined || payload._tag !== "ModelResponseRecorded") {
+        throw new Error("expected the compactor Turn's response record");
+      }
+      expect(payload.inputTokens).toBe(50);
+      expect(payload.outputTokens).toBe(15);
+    }),
+  );
+
   it.effect("RUN-023: a resumed Attempt re-seeds committed usage into the token budget", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

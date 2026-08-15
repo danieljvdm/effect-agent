@@ -22,6 +22,7 @@ import {
   AgentPolicy,
   AgentPolicyError,
   applyToolResultBounds,
+  unserializableToolResult,
   CompactionPolicy,
   ContextOverflowError,
   ConversationId,
@@ -495,6 +496,35 @@ describe("tool result bounds", () => {
     expect(envelope.originalBytes).toBe(utf8Bytes(encoded));
     expect(encoded.startsWith(envelope.head)).toBe(true);
     expect(encoded.endsWith(envelope.tail)).toBe(true);
+  });
+
+  it("RUN-022: the unserializable sentinel is total under hostile causes", () => {
+    const hostileToString = {
+      toString() {
+        throw new Error("toString trap");
+      },
+    };
+    class HostileMessage extends Error {
+      override get message(): string {
+        throw new Error("message trap");
+      }
+    }
+    for (const cause of [hostileToString, new HostileMessage()]) {
+      const sentinel = unserializableToolResult(cause);
+      expect(sentinel.unserializableToolResult).toBe(true);
+      expect(typeof sentinel.reason).toBe("string");
+    }
+  });
+
+  it("RUN-022: the encoded sentinel never exceeds the 256-byte policy floor", () => {
+    for (const cause of [
+      new Error("💩".repeat(300)),
+      "🜁".repeat(400),
+      new Error('\\"'.repeat(400)),
+    ]) {
+      const sentinel = unserializableToolResult(cause);
+      expect(utf8Bytes(JSON.stringify(sentinel))).toBeLessThanOrEqual(256);
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import {
   ApprovalRequested,
   applyToolResultBounds,
   BudgetWarning,
+  unserializableToolResult,
   CompactionPerformed,
   ContextOverflowError,
   ConversationId,
@@ -306,6 +307,8 @@ interface RunContext {
   lastInputTokens: number;
   lastOutputTokens: number;
   costMicrousd: number;
+  /** The most recent model call's estimated spend, staged for the Turn's canonical record. */
+  lastCostMicrousd: number;
   /** Budget dimensions whose one-shot `BudgetWarning` already fired (RUN-025). */
   readonly warnedLimits: Set<"tokens" | "tool-calls" | "turns">;
   /** Held during the compaction summarizer's accounting so it cannot breach or recurse (RUN-026). */
@@ -1748,14 +1751,25 @@ const boundEncodedToolResult = (encodedResult: unknown, bounds: ToolResultBounds
   let text: string | undefined;
   try {
     text = JSON.stringify(encodedResult);
-  } catch {
-    return encodedResult;
+  } catch (cause) {
+    // Fail closed (runtime spec §9): an unserializable result is unbounded by
+    // construction, so the sentinel replaces it before history or records.
+    return unserializableToolResult(cause);
   }
   if (text === undefined) {
-    return encodedResult;
+    return unserializableToolResult("the encoded result is not a JSON value");
   }
   const bounded = applyToolResultBounds(text, bounds);
-  return bounded === text ? encodedResult : (JSON.parse(bounded) as unknown);
+  // The measured JSON representation is the ONLY value retained, in both the
+  // truncated and unmodified cases: returning the original object would let a
+  // stateful `toJSON` pass the byte check small and expand or throw on later
+  // canonical serialization, carrying unchecked state past the boundary.
+  try {
+    return Schema.decodeSync(Schema.fromJsonString(Schema.Unknown))(bounded);
+  } catch (cause) {
+    // Defensive only: `applyToolResultBounds` always emits valid JSON.
+    return unserializableToolResult(cause);
+  }
 };
 
 /** Deterministic inputs of one run-status message (RUN-024). */
@@ -1874,6 +1888,7 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
     context.lastInputTokens = inputTokens;
     context.lastOutputTokens = outputTokens;
     context.costMicrousd += costMicrousd;
+    context.lastCostMicrousd = costMicrousd;
 
     const policy = agent.definition.policy;
     const consumedTokens = context.inputTokens + context.outputTokens;
@@ -1898,22 +1913,24 @@ const consumeUsage = <AgentValue extends Agent.Any, HookError, HookRequirements>
       // grace Turn's own usage accumulates and charges without re-breaching.
       context.tokenExhausted = true;
       context.exhaustedDimension ??= "tokens";
-    } else {
-      const costBudget = policy.costBudgetMicrousd;
-      if (costBudget !== undefined) {
-        if (options.estimateCostMicrousd === undefined) {
-          return yield* AgentPolicyError.make({
-            limit: "cost",
-            message: "Agent cost budget requires a model cost estimator",
-          });
-        }
-        if (context.costMicrousd > costBudget) {
-          // Cost is spend, not context: it never earns a grace Turn.
-          return yield* AgentPolicyError.make({
-            limit: "cost",
-            message: `Agent exceeded its ${costBudget} microdollar cost budget`,
-          });
-        }
+    }
+    // Cost is an unconditional hard rail (runtime spec §3): it is enforced on
+    // every response, including one that just soft-breached the token budget —
+    // a simultaneous breach fails typed instead of soft-landing on overspend.
+    const costBudget = policy.costBudgetMicrousd;
+    if (costBudget !== undefined) {
+      if (options.estimateCostMicrousd === undefined) {
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: "Agent cost budget requires a model cost estimator",
+        });
+      }
+      if (context.costMicrousd > costBudget) {
+        // Cost is spend, not context: it never earns a grace Turn.
+        return yield* AgentPolicyError.make({
+          limit: "cost",
+          message: `Agent exceeded its ${costBudget} microdollar cost budget`,
+        });
       }
     }
     if (options.budget !== undefined) {
@@ -2213,6 +2230,17 @@ const compactContext = <AgentValue extends Agent.Any, HookError, HookRequirement
         }),
       ),
     );
+    if (options.durability !== undefined) {
+      // The summarizer's spend must survive ownership changes: it stages into
+      // the same canonical Turn as the Turn's own response, and the session
+      // accumulates both (RUN-023).
+      yield* options.durability.noteTurnUsage({
+        turn,
+        inputTokens: context.lastInputTokens,
+        outputTokens: context.lastOutputTokens,
+        costMicrousd: context.lastCostMicrousd,
+      });
+    }
     events.push(...consumed.warnings);
     const summaryText = pieces.join("").trim();
     const summary = summaryText.length === 0 ? "(no summary produced)" : summaryText;
@@ -3190,6 +3218,7 @@ const makeTurn = <
                         turn,
                         inputTokens: context.lastInputTokens,
                         outputTokens: context.lastOutputTokens,
+                        costMicrousd: context.lastCostMicrousd,
                       });
                     }
                     const pre: Array<RunEvent> = [...consumed.warnings];
@@ -3225,7 +3254,13 @@ const makeTurn = <
                         ? nextStream
                         : Stream.fromIterable(pre).pipe(Stream.concat(nextStream));
                     if (consumed.breach !== undefined) {
-                      if (trace.toolCalls.size === 0 && trace.finishReason === "stop") {
+                      // Provider-executed calls already ran provider-side: a
+                      // stop response with no APPLICATION calls is final and
+                      // settles the breach directly (RUN-025).
+                      if (
+                        trace.applicationToolCalls.length === 0 &&
+                        trace.finishReason === "stop"
+                      ) {
                         const output = yield* decodeFinalOutput(agent, trace.text.join("")).pipe(
                           Effect.map(Option.some),
                           Effect.catch(() => Effect.succeed(Option.none())),
@@ -3932,7 +3967,8 @@ const stream = <
         outputTokens: options.resumeUsage?.outputTokens ?? 0,
         lastInputTokens: options.resumeUsage?.lastInputTokens ?? 0,
         lastOutputTokens: options.resumeUsage?.lastOutputTokens ?? 0,
-        costMicrousd: 0,
+        costMicrousd: options.resumeUsage?.costMicrousd ?? 0,
+        lastCostMicrousd: 0,
         warnedLimits: new Set(),
         finalizing: false,
         tokenExhausted: false,
@@ -3941,6 +3977,41 @@ const stream = <
         sequence: 0,
         programmaticToolCalls: 0,
       };
+      // Restored totals can already breach the token budget (runtime spec §9):
+      // the resumed Attempt must never issue an unconstrained external call.
+      // "fail" rejects before any model call or resumed handler runs;
+      // "final-answer" starts already constrained via the one-shot flag.
+      if (options.resumeUsage !== undefined) {
+        // Cost is an unconditional hard rail with no grace call in either
+        // exhaustion mode (runtime spec §3): a resume whose seeded spend
+        // already breaches the budget rejects before input, resumed
+        // handlers, or any external model execution.
+        const seededCostBudget = agent.definition.policy.costBudgetMicrousd;
+        if (seededCostBudget !== undefined && context.costMicrousd > seededCostBudget) {
+          return failRunEventStream(
+            AgentPolicyError.make({
+              limit: "cost",
+              message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`,
+            }),
+          );
+        }
+        const seededBudget = agent.definition.policy.tokenBudget;
+        if (
+          seededBudget !== undefined &&
+          context.inputTokens + context.outputTokens > seededBudget
+        ) {
+          if (agent.definition.policy.onExhaustion === "fail") {
+            return failRunEventStream(
+              AgentPolicyError.make({
+                limit: "tokens",
+                message: `Agent exceeded its ${seededBudget} token budget`,
+              }),
+            );
+          }
+          context.tokenExhausted = true;
+          context.exhaustedDimension ??= "tokens";
+        }
+      }
       if (options.input?.start !== undefined) {
         yield* options.input.start();
       }

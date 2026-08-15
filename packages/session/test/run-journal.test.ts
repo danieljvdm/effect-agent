@@ -943,7 +943,34 @@ describe("engine compaction records and projection (RUN-026)", () => {
           outputTokens: 30,
           lastInputTokens: 250,
           lastOutputTokens: 20,
+          costMicrousd: 0,
         });
+      }),
+    );
+
+    it.effect("RUN-023: invalid staged usage fails typed instead of being repaired", () =>
+      Effect.gen(function* () {
+        // Staged usage is validated at the canonical boundary: repairing it
+        // (clamping negatives, truncating fractions) would under-record
+        // canonical usage, and NaN/Infinity must never escape as a defect.
+        const nan = yield* Effect.flip(
+          turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: Number.NaN, outputTokens: 5 }),
+          ),
+        );
+        expect(nan._tag).toBe("RunJournalError");
+        const negative = yield* Effect.flip(
+          turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: -5, outputTokens: 5 }),
+          ),
+        );
+        expect(negative._tag).toBe("RunJournalError");
+        const fractional = yield* Effect.flip(
+          turnCanonicalBatch(
+            turnInput(toolTurnAppended, 1, RUN_ID, { inputTokens: 10.5, outputTokens: 5 }),
+          ),
+        );
+        expect(fractional._tag).toBe("RunJournalError");
       }),
     );
   });

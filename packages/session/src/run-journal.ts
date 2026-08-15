@@ -327,6 +327,8 @@ export interface RunJournalUsage {
   readonly outputTokens: number;
   readonly lastInputTokens: number;
   readonly lastOutputTokens: number;
+  /** Cumulative persisted spend of the projected Run's committed calls (RUN-023). */
+  readonly costMicrousd: number;
 }
 
 export interface RunJournalProjection {
@@ -507,6 +509,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
     outputTokens: 0,
     lastInputTokens: 0,
     lastOutputTokens: 0,
+    costMicrousd: 0,
   };
   let usageTurn = 0;
 
@@ -569,6 +572,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
         usage.modelCalls += 1;
         usage.inputTokens += payload.inputTokens ?? 0;
         usage.outputTokens += payload.outputTokens ?? 0;
+        usage.costMicrousd += payload.costMicrousd ?? 0;
         if (payload.turn > usageTurn) {
           usageTurn = payload.turn;
           usage.lastInputTokens = payload.inputTokens ?? 0;
@@ -609,6 +613,7 @@ const projectRunJournalForOwner = Effect.fn("RunJournal.projectRunJournalForOwne
       usage.modelCalls += 1;
       usage.inputTokens += payload.inputTokens ?? 0;
       usage.outputTokens += payload.outputTokens ?? 0;
+      usage.costMicrousd += payload.costMicrousd ?? 0;
       if (payload.turn > usageTurn) {
         usageTurn = payload.turn;
         usage.lastInputTokens = payload.inputTokens ?? 0;
@@ -661,6 +666,18 @@ export const promptFromCanonicalRecords = Effect.fn("RunJournal.promptFromCanoni
 );
 
 /** Everything one committed Turn contributes to its canonical batch. */
+/**
+ * Staged usage is validated, never repaired: clamping negatives or truncating
+ * fractions would under-record canonical usage, and NaN/Infinity must fail
+ * typed instead of escaping as a record-construction defect (RUN-023).
+ */
+const validStagedUsage = (label: string, value: number): Effect.Effect<number, RunJournalError> =>
+  Number.isSafeInteger(value) && value >= 0
+    ? Effect.succeed(value)
+    : Effect.fail(
+        journalError(`Staged ${label} must be a non-negative safe integer, got ${String(value)}`),
+      );
+
 export interface TurnCommitInput {
   readonly runId: RunId;
   /** Canonical (Run-relative, Attempt-independent) Turn number; must be positive. */
@@ -676,7 +693,13 @@ export interface TurnCommitInput {
   readonly deploymentId: DeploymentId;
   readonly createdAt: DateTime.Utc;
   /** Per-call provider usage staged by the engine's `noteTurnUsage` (RUN-023). */
-  readonly usage?: { readonly inputTokens: number; readonly outputTokens: number } | undefined;
+  readonly usage?:
+    | {
+        readonly inputTokens: number;
+        readonly outputTokens: number;
+        readonly costMicrousd?: number | undefined;
+      }
+    | undefined;
 }
 
 const decodePersistedJson = Schema.decodeUnknownEffect(PersistedJson);
@@ -739,8 +762,15 @@ const modelResponseRecord = Effect.fn("RunJournal.modelResponseRecord")(function
       ...(input.usage === undefined
         ? {}
         : {
-            inputTokens: Math.max(0, Math.trunc(input.usage.inputTokens)),
-            outputTokens: Math.max(0, Math.trunc(input.usage.outputTokens)),
+            inputTokens: yield* validStagedUsage("inputTokens", input.usage.inputTokens),
+            outputTokens: yield* validStagedUsage("outputTokens", input.usage.outputTokens),
+            // Written only when non-zero: absent re-seeds as zero, so the
+            // no-estimator case stays byte-identical to pre-cost histories.
+            ...(input.usage.costMicrousd === undefined || input.usage.costMicrousd === 0
+              ? {}
+              : {
+                  costMicrousd: yield* validStagedUsage("costMicrousd", input.usage.costMicrousd),
+                }),
           }),
     }),
   });
