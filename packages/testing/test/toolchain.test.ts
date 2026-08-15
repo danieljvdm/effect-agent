@@ -364,39 +364,59 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
       expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
       expect(releaseWorkflow.permissions).toEqual({});
-      expect(releaseWorkflow.jobs.release?.permissions).toEqual({
+      const versionJob = releaseWorkflow.jobs["version-release"];
+      expect(versionJob?.permissions).toEqual({
         contents: "write",
-        "id-token": "write",
         "pull-requests": "write",
       });
-      expect(releaseWorkflow.jobs.release?.permissions?.checks).toBeUndefined();
-      const externalActionReferences = (releaseWorkflow.jobs.release?.steps ?? []).flatMap(
-        (step) => (step.uses === undefined ? [] : [step.uses]),
+      expect(versionJob?.permissions?.checks).toBeUndefined();
+      expect(versionJob?.permissions?.["id-token"]).toBeUndefined();
+      const externalActionReferences = Object.values(releaseWorkflow.jobs).flatMap((job) =>
+        (job.steps ?? []).flatMap((step) => (step.uses === undefined ? [] : [step.uses])),
       );
       expect(externalActionReferences).not.toHaveLength(0);
       expect(externalActionReferences.every((uses) => /^[^@]+@[0-9a-f]{40}$/.test(uses))).toBe(
         true,
       );
-      const changesetsStep = workflowStep(releaseWorkflow, "release", "Version or publish");
+      const changesetsStep = workflowStep(
+        releaseWorkflow,
+        "version-release",
+        "Create or update the version PR",
+      );
       expect(changesetsStep?.id).toBe("changesets");
       expect(changesetsStep?.uses).toBe(
         "changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d",
       );
-      expect(changesetsStep?.with).toMatchObject({ publish: "bun run ci:publish" });
+      expect(changesetsStep?.with).toMatchObject({
+        publish: "true",
+        version: "./node_modules/.bin/vp run ci:version",
+      });
+
+      const verifyJob = releaseWorkflow.jobs["verify-release"];
+      expect(verifyJob?.needs).toBe("version-release");
+      expect(verifyJob?.permissions).toEqual({
+        contents: "read",
+        "pull-requests": "read",
+      });
+      const trustedCheckout = workflowStep(
+        releaseWorkflow,
+        "verify-release",
+        "Check out trusted base",
+      );
+      expect(trustedCheckout?.with).toMatchObject({ ref: "${{ github.sha }}" });
 
       const resolveStep = workflowStep(
         releaseWorkflow,
-        "release",
+        "verify-release",
         "Resolve the generated release head",
       );
-      expect(resolveStep?.if).toBe("${{ steps.changesets.outputs.pullRequestNumber != '' }}");
       expect(resolveStep?.run).toContain('test "$HEAD_REPOSITORY" = "$GITHUB_REPOSITORY"');
       expect(resolveStep?.run).toContain('test "$HEAD_REF" = "changeset-release/main"');
       expect(resolveStep?.run).toContain('test "$BASE_SHA" = "$GITHUB_SHA"');
 
       const verifyStep = workflowStep(
         releaseWorkflow,
-        "release",
+        "verify-release",
         "Regenerate and verify the release tree",
       );
       expect(verifyStep?.id).toBe("verify-release");
@@ -409,8 +429,10 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         "Report the generated release check",
       );
       const reportJob = releaseWorkflow.jobs["report-release-check"];
-      expect(reportJob?.needs).toBe("release");
-      expect(reportJob?.if).toBe("${{ always() && needs.release.outputs.release-head-sha != '' }}");
+      expect(reportJob?.needs).toEqual(["version-release", "verify-release"]);
+      expect(reportJob?.if).toBe(
+        "${{ always() && needs.version-release.outputs.release-pr-number != '' }}",
+      );
       expect(reportJob?.permissions).toEqual({
         checks: "write",
         contents: "read",
@@ -422,11 +444,58 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(reportStep?.run).toContain('CONCLUSION="success"');
       expect(reportStep?.run).toContain('CURRENT_HEAD_SHA="$(gh api');
       expect(reportStep?.run).toContain('CURRENT_BASE_SHA="$(gh api');
+      expect(reportStep?.run).toContain('CURRENT_HEAD_SHA" != "$VERIFIED_HEAD_SHA');
       expect(reportStep?.run).toContain("strict_required_status_checks_policy == true");
       expect(reportStep?.run).toContain(
         'gh api --method POST "repos/${GITHUB_REPOSITORY}/check-runs"',
       );
       expect(reportStep?.run).toContain('-f name="ready"');
+
+      const prepareJob = releaseWorkflow.jobs["prepare-publish"];
+      expect(prepareJob?.needs).toBe("version-release");
+      expect(prepareJob?.if).toBe("${{ needs.version-release.outputs.has-changesets == 'false' }}");
+      expect(prepareJob?.permissions).toEqual({ contents: "read" });
+      const prepareStep = workflowStep(
+        releaseWorkflow,
+        "prepare-publish",
+        "Prepare package and npm CLI artifacts",
+      );
+      expect(prepareStep?.run).toContain("vp run release:prepare");
+      expect(prepareStep?.run).toContain("sha256sum --check --strict");
+
+      const publishJob = releaseWorkflow.jobs["publish-packages"];
+      expect(publishJob?.permissions).toEqual({ actions: "read", "id-token": "write" });
+      expect(publishJob?.steps).toHaveLength(1);
+      expect(publishJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
+      const publishStep = workflowStep(
+        releaseWorkflow,
+        "publish-packages",
+        "Verify and publish prepared tarballs",
+      );
+      expect(publishStep?.run).toContain("sha256sum --check --strict SHA256SUMS");
+      expect(publishStep?.run).toContain('tar -xOf "$TARBALL" package/package.json');
+      expect(publishStep?.run).toContain('node "$NPM_CLI" publish "$TARBALL"');
+      expect(publishStep?.run).toContain("--ignore-scripts");
+      expect(publishStep?.run).toContain("--registry https://registry.npmjs.org");
+      expect(publishStep?.run).not.toContain("node_modules");
+      expect(publishStep?.run).not.toContain("vp run");
+
+      const tagJob = releaseWorkflow.jobs["tag-release"];
+      expect(tagJob?.permissions).toEqual({ actions: "read", contents: "write" });
+      expect(tagJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
+      const tagStep = workflowStep(
+        releaseWorkflow,
+        "tag-release",
+        "Verify manifest and create package tags",
+      );
+      expect(tagStep?.run).toContain('-f "ref=refs/tags/${TAG}"');
+      expect(tagStep?.run).toContain('-f "sha=${GITHUB_SHA}"');
+
+      expect(
+        Object.entries(releaseWorkflow.jobs)
+          .filter(([, job]) => job.permissions?.["id-token"] === "write")
+          .map(([jobName]) => jobName),
+      ).toEqual(["publish-packages"]);
       expect(
         Object.entries(releaseWorkflow.jobs)
           .filter(([, job]) => job.permissions?.checks === "write")
@@ -436,6 +505,8 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(rootManifest.scripts?.["verify:changesets-release"]).toBe(
         "bun scripts/verify-changesets-release.ts",
       );
+      expect(rootManifest.scripts?.["release:prepare"]).toBe("bun scripts/release-publish.ts");
+      expect(rootManifest.scripts?.["ci:publish"]).toBeUndefined();
     }),
   );
 

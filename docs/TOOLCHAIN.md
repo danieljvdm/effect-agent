@@ -165,23 +165,32 @@ Changesets update is rejected by that exact-tree verification and receives a
 failing `ready`; path routing is not its security boundary. A later human
 mutation with an unexpected path invokes the ordinary PR workflows, while a
 generated-only mutation has a new head without a verified check and remains
-unmergeable. After merge, the release workflow still performs a frozen install
-and rebuilds the exact versioned tree before any registry mutation.
+unmergeable. The exact-tree verifier runs in a fresh read-only job checked out from the triggering
+`main` SHA; the Changesets action's workspace never reaches it.
 
-The version/publish job pins every external action to a full commit SHA and has no Checks API
-permission. It exports only the resolved release PR identity and verifier outcome to a separate,
-action-free reporting job. That job alone has `checks: write`; immediately before publishing the
-check it re-reads the PR head and base and confirms that the active `main` rules require `ready`
-with strict up-to-date enforcement. If the head or base moved, the verifier failed, or that rule is
-absent, it posts a failing `ready` conclusion. Operators must preserve the ruleset's
-`strict_required_status_checks_policy` setting: it invalidates the head-bound success for merge
-purposes whenever `main` later advances, until Changesets regenerates from the new base.
+The version job and every external action are pinned to full commit SHAs and have neither Checks
+API nor npm OIDC permission. The action-free reporting job alone has `checks: write`; immediately
+before publishing the check it re-reads the PR head, source, and base and confirms that the active
+`main` rules require `ready` with strict up-to-date enforcement. If lineage moved, verification did
+not complete, or that rule is absent, it posts a failing `ready` conclusion. Operators must preserve
+the ruleset's `strict_required_status_checks_policy` setting: it invalidates the head-bound success
+for merge purposes whenever `main` later advances, until Changesets regenerates from the new base.
+
+After a version PR merge, an unprivileged preparation job frozen-installs and rebuilds the exact
+versioned tree, packs unpublished workspaces with Bun, and uploads one checksummed immutable
+artifact. A separate action-free job is the sole holder of `id-token: write`. It checks the artifact
+digests, validates the release manifest, verifies a pinned npm CLI tarball, and publishes with
+provenance; it does not check out repository code, install dependencies, run a build, or invoke a
+repository script. A final action-free job has tag-write but no OIDC authority and creates only
+validated framework-package tags at the triggering `main` SHA.
 
 Each package on npmjs.com lists `release.yml` in `danieljvdm/effect-agent` as
 its trusted publisher (package Settings, a one-time registration; "Allow npm
-publish" only). In CI the publish script runs in `--ci` mode: `bun pm pack`
-resolves the `workspace:`/`catalog:` protocols into the tarball and the npm CLI
-uploads it, because only npm implements the OIDC exchange.
+publish" only). In CI the release script runs in `--pack-directory` mode in
+the unprivileged preparation job: `bun pm pack` resolves the
+`workspace:`/`catalog:` protocols into the tarball. The isolated publisher
+then uploads that tarball with the pinned npm CLI, because only npm implements
+the OIDC exchange.
 
 The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
@@ -300,11 +309,12 @@ Changesets release PR is the only exception: CI and PR Review path-filter the ex
 Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
 the trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
 `main` commit, and creates the required `ready` check on the verified head through the Checks API.
-The check is success only after an exact-tree comparison; unexpected files or any other tree
-mismatch post failure, and a resolution failure posts nothing. For later human updates, unexpected
-paths invoke the ordinary workflows, while a generated-path-only push receives no new `ready`
-check. Checks authority is isolated to an action-free job that revalidates the live head/base and
-the strict up-to-date branch rule before reporting. Both cases are fail-closed.
+The check is success only after an exact-tree comparison in a fresh read-only job; unexpected files,
+setup failures, or any other incomplete verification post failure to the current PR head. An invalid
+or unresolvable PR identity produces no success. For later human updates, unexpected paths invoke
+the ordinary workflows, while a generated-path-only push receives no new `ready` check. Checks
+authority is isolated to an action-free job that revalidates the live source/head/base and the
+strict up-to-date branch rule before reporting. Both cases are fail-closed.
 
 Each ordinary-PR job restores and saves the Vite Task cache
 (`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay
