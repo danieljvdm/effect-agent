@@ -19,16 +19,21 @@ concurrency:
 
 jobs:
   review:
+    name: review
+    # Drafts wait for ready_for_review (the action also skips drafts
+    # internally; this guard saves the runner spin-up).
     if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
       HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
-      - if: env.HAS_OPENAI_KEY == 'true'
+      - name: Check out repository
+        if: env.HAS_OPENAI_KEY == 'true'
         uses: actions/checkout@v4
 
-      - if: env.HAS_OPENAI_KEY == 'true'
+      - name: Review the pull request and post the validated result
+        if: env.HAS_OPENAI_KEY == 'true'
         uses: ./action
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
