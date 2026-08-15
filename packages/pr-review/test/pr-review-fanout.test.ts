@@ -34,6 +34,7 @@ import {
   ListReviewUnits,
   makeFanOutReviewInstructions,
   makeFanOutReviewSuite,
+  MAX_FILE_REVIEW_TOOL_CALLS,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
   planReviewUnits,
@@ -44,6 +45,8 @@ import {
   ReviewFinding,
   ReviewMission,
   ReviewPublicationPlan,
+  defaultFileReviewerPolicy,
+  fileReviewPolicy,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -266,6 +269,14 @@ describe("coordinator instructions", () => {
       focus: "defects-first",
     });
     expect(suite.child.instructions(brief)).toContain("Architecture first.");
+  });
+});
+
+describe("file-reviewer policy", () => {
+  it("budgets one diff and one context read for every path in a maximum-size unit", () => {
+    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 2);
+    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
+    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
   });
 });
 
@@ -630,7 +641,10 @@ describe("offline fan-out review run", () => {
           unitId: "unit-002",
           diffPath: "src/core/gamma.ts",
           // One more declared call than the child AgentPolicy allows.
-          outcome: { _tag: "budget-runaway", declaredCalls: 17 },
+          outcome: {
+            _tag: "budget-runaway",
+            declaredCalls: MAX_FILE_REVIEW_TOOL_CALLS + 1,
+          },
         },
       ];
       const honestReview = CodeReview.make({
@@ -651,7 +665,7 @@ describe("offline fan-out review run", () => {
       const finalPrompt = result.coordinatorPrompts[2] ?? "";
       expect(finalPrompt).toContain("FileReviewUnitFailed");
       expect(finalPrompt).toContain("AgentPolicyError");
-      expect(finalPrompt).toContain("16 Tool Call limit");
+      expect(finalPrompt).toContain(`${MAX_FILE_REVIEW_TOOL_CALLS} Tool Call limit`);
       expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
       expect(result.published).toHaveLength(1);
       expect(result.outcome.coverage.status).toBe("incomplete");
