@@ -1,7 +1,6 @@
 # Authoring model
 
-Status: **Draft**  
-Related decisions: D-002, D-003, D-007, D-008, D-019
+Status: **Draft**
 
 ## 1. Goals
 
@@ -221,7 +220,7 @@ available.
 ## 8.1 Code Mode Tools
 
 Code Mode derives one native Effect AI Tool from an explicit record of selected Tools
-([capability specification §9.1](./capabilities.md), ADR-0017). Authoring follows the Delegation
+([capability specification §9.1](./capabilities.md)). Authoring follows the Delegation
 pattern: Tool selection and namespace mapping are fixed at construction, the builder returns an
 ordinary Tool plus a handler Layer, and no ambient registry exists (CAP-014).
 
@@ -277,7 +276,7 @@ before the exceeding work starts. Duration, token, cost, and repeated-failure bo
 rails regardless: their exhaustion is always the typed non-success failure.
 
 Subagent policy, hierarchical reservation, and ancestor accounting are specified as a proposal in
-[the Subagent specification](./subagents.md). Until ADR-0010 is accepted, they are not an
+[the Subagent specification](./subagents.md); they are not yet an
 implemented Agent Policy surface.
 
 ## 10. Turn Plans

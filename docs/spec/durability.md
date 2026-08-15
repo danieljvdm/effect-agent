@@ -188,7 +188,7 @@ The scheduler may safely resume automatically at these boundaries:
 
 The canonical approval request record is the suspension's entire canonical footprint: suspension
 itself is operational ledger state, rebuildable from history, and no canonical "suspended" record
-exists (ADR-0012). The resumed Attempt appends the canonical approval decision before honoring
+exists. The resumed Attempt appends the canonical approval decision before honoring
 it.
 
 The scheduler must classify recovery rather than blindly retry when failure occurs:
@@ -254,7 +254,7 @@ canonical.
 Only **success** is ever recorded. A failing step body fails the call into the handler's error
 channel and re-entry re-executes it; recording failures would replay a transient failure forever.
 Steps carry no prepared records: under an at-least-once body contract, "may have executed" is the
-normal case and a prepared marker adds no recovery information (ADR-0012). Step results persist
+normal case and a prepared marker adds no recovery information. Step results persist
 as canonical records in the Conversation Log under stable step identity — the Step Store of
 persistence §2.5 is a logical record family, not a separate physical store.
 
@@ -337,7 +337,7 @@ snapshot.
 As of Phase 5 every row of this matrix — including the tool preparation, invocation, and
 result-commit rows — is realized by executable evidence: each row exists as a pure
 recovery-classifier case and as a deterministic failpoint or real process-kill test
-([Phase 4](../PHASE-4-EVIDENCE.md) and [Phase 5](../PHASE-5-EVIDENCE.md) evidence).
+(see the durable-runtime and crash-matrix suites).
 
 ## 16. Liveness and poison work
 

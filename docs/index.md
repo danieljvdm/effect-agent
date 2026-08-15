@@ -89,7 +89,7 @@ pageClass: ea-index
         <p>Append canonical records, rebuild projections, and resume observation without claiming durability.</p>
         <span class="ea-path__arrow">Explore persistence →</span>
       </a>
-      <a class="ea-path" href="/future/durable-execution">
+      <a class="ea-path" href="/concepts/durability">
         <span class="ea-path__index">04 / RECOVER</span>
         <h3>Design for interruption</h3>
         <p>Follow the implemented path from durable admission to one honest terminal Settlement.</p>

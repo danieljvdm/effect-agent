@@ -1,7 +1,6 @@
 # Effect AI and model providers
 
-Status: **Draft**  
-Related decisions: D-002, D-003, D-012, D-019, D-022
+Status: **Draft**
 
 ## 1. Direct Effect AI integration
 

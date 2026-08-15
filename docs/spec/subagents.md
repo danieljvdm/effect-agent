@@ -1,15 +1,9 @@
 # Subagent Specification
 
 Status: **Proposed**
-Related decisions: D-002, D-004, D-006, D-007, D-008, D-013, D-020
-Proposed record: [ADR-0010](../adr/0010-declared-attached-subagents.md)
-Research basis: [REFERENCE-ANALYSIS.md](../REFERENCE-ANALYSIS.md#subagent-research-addendum)
 
-Status note (2026-08-13): both §17 slices are implemented as roadmap-assigned proposed defaults —
-S1 attached ephemeral Subagents ([S1 evidence](../S1-EVIDENCE.md)) and S2 durable attached
-Subagents ([S2 evidence](../S2-EVIDENCE.md); `DN` only, `DC` remains P6 scope; shape-level
-defaults recorded in [ADR-0013](../adr/0013-durable-subagent-establishment.md)). This document
-remains **Proposed** pending owner resolution of ADR-0010.
+Status note (2026-08-13): both §17 slices are implemented — S1 attached ephemeral Subagents
+and S2 durable attached Subagents (proven by the capabilities and testing suites).
 
 This document specifies how one Agent delegates bounded work to another Agent while preserving
 Effect typing, structured concurrency, least authority, deterministic parent history, and the

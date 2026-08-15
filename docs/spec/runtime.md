@@ -1,7 +1,6 @@
 # Runtime engine
 
-Status: **Draft**  
-Related decisions: D-004, D-006, D-007, D-008, D-011, D-012
+Status: **Draft**
 
 ## 1. One interpreter
 
@@ -366,7 +365,7 @@ interpreter supplies them itself; an application Layer must not provide them.
 ## 12.1 Code Mode programmatic invocation seam
 
 This section documents the engine surface for Code Mode programmatic Tool invocation
-([capability specification §9.1](./capabilities.md), ADR-0017). The engine owns a broker seam in
+([capability specification §9.1](./capabilities.md)). The engine owns a broker seam in
 the same pattern as `AgentSpawner` and `DurableStep`: provided locally by the interpreter, bound
 per outer Tool Call, and excluded from `AgentRuntimeRequirements`. The live native Toolkit
 handlers, engine policy context, and parent Tool Call identity are capabilities bound when the

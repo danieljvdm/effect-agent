@@ -90,4 +90,4 @@ The current `SubmissionStore` says exactly what it can do:
 ```
 
 There is no Receipt, durable admission, Attempt ownership, recovery scheduler, or Settlement API in
-Phase 3. Those interfaces begin in [Durable execution](../future/durable-execution).
+Phase 3. Those interfaces are described in [Persistence & durability](../concepts/durability).

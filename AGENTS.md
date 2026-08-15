@@ -56,19 +56,18 @@ Before editing code:
 
 1. Read `README.md`.
 2. Read `CONTEXT.md`.
-3. Read `docs/DECISIONS.md`.
-4. Read `docs/TOOLCHAIN.md`.
-5. Read the specification documents for the modules in scope.
-6. Read every ADR referenced by those documents.
-7. Read `node_modules/effect/AGENTS.md` before writing Effect code (the canonical Effect
+3. Read `docs/TOOLCHAIN.md`.
+4. Read the specification documents for the modules in scope (`docs/spec/`).
+5. Read `node_modules/effect/AGENTS.md` before writing Effect code (the canonical Effect
    guidance; `.agents/skills` carries the focused task skills).
-8. Read `.agents/skills/build-effect-clis/SKILL.md` before creating or changing repository
+6. Read `.agents/skills/build-effect-clis/SKILL.md` before creating or changing repository
    scripts.
-9. Inspect neighboring package tests before introducing a new pattern.
+7. Inspect neighboring package tests before introducing a new pattern.
 
-Do not infer that a **Proposed** decision is owner-approved. Implementation may proceed against a
-proposed default only when the roadmap assigns that work before owner resolution and the choice is
-locally reversible.
+Architecture is encoded in the docs site (`docs/spec/`, `docs/concepts/`, `docs/ARCHITECTURE.md`)
+and enforced by tests; there is no separate decision register or ADR log. Do not create planning
+documents, decision registers, ADRs, roadmaps, or evidence logs — record semantics in the
+specification pages and rationale in the pull request.
 
 ## Non-negotiable architecture rules
 
@@ -130,8 +129,9 @@ packages.
 - Add type tests for inferred `E` and `R` whenever Agent or Effect AI composition changes.
 - Add deterministic tests for every new state transition.
 - Add failpoints before and after every new durable mutation.
-- Update the requirement's specification and ADR when semantics change.
-- Record rejected alternatives when a future agent could reasonably re-propose them.
+- Update the requirement's specification (`docs/spec/`) when semantics change.
+- Record rejected alternatives in the relevant specification section or the pull request when a
+  future agent could reasonably re-propose them.
 - Do not silently widen errors to `unknown`, `Error`, or `any`.
 - Do not use type assertions to cross a schema boundary.
 - Do not build persistence migration tooling during private development. Incompatible development

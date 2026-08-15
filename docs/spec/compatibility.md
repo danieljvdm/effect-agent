@@ -59,7 +59,7 @@ accepted-work concerns, not model-provider abstractions.
 ## 4. Source material
 
 The exact inspected commits and findings live in
-[REFERENCE-ANALYSIS.md](../REFERENCE-ANALYSIS.md). That document is the only place that interprets
+the pull requests that introduced them. Specification text never interprets
 upstream internals in detail. The matching source snapshots are checked into this repository as
 shallow Git submodules: Flue at `repos/flue` and Pi at `repos/pi`. These paths provide local
 reference material only; product packages and CI do not depend on them.

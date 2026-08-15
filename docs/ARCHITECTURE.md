@@ -134,7 +134,7 @@ definition digests, and `ConversationStore`. Phase 4 replaced the interim non-du
 `SubmissionStore` stub with the `SubmissionLedger` port and added the `WakeScheduler` port, the
 pure recovery classifier, the run journal, and the `DurableAgentRuntime` coordinator (Receipt,
 Attempt, Settlement). The session package now depends on `@effect-agent/engine` to drive the
-interpreter through its public seams (ADR-0011).
+interpreter through its public seams.
 
 ### `@effect-agent/capabilities`
 
@@ -145,7 +145,7 @@ Owns generic optional modules:
 - model-context compaction;
 - Skill activation;
 - Subagent spawning;
-- the Code Mode Tool builder over the sandbox `CodeExecutor` port (ADR-0017);
+- the Code Mode Tool builder over the sandbox `CodeExecutor` port;
 - ephemeral multi-Run Conversation state;
 - approval, budget, context-compaction, safe-seam input, scheduling, and MCP adapters.
 
@@ -157,7 +157,7 @@ before splitting them.
 ### `@effect-agent/sandbox`
 
 Owns narrow filesystem, process, path, and network capability ports plus Effect AI Tool definitions.
-It also owns the callback-capable `CodeExecutor` port for Code Mode (ADR-0017), a sibling of the
+It also owns the callback-capable `CodeExecutor` port for Code Mode, a sibling of the
 command-shaped `Sandbox` service.
 Implementations live in outward packages. `@effect-agent/sandbox-local` is the Phase 2 explicitly
 unisolated local-process implementation: it enforces its declared request/output/time bounds and
@@ -456,11 +456,11 @@ capabilities session sandbox-local
        platform packages
 
 Effect AI Model Layers -> engine
-sandbox <- capabilities (the CodeExecutor port consumed by Code Mode, ADR-0017)
-sandbox <- platform packages (isolated CodeExecutor adapters, ADR-0017)
+sandbox <- capabilities (the CodeExecutor port consumed by Code Mode)
+sandbox <- platform packages (isolated CodeExecutor adapters)
 engine + selected adapters <- platform package
 core + engine <- testing
-core + engine + capabilities <- effect-agent (umbrella) <- pr-review (ADR-0016)
+core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 ```
 
 No cycle is permitted. Production packages never depend on `testing`. Package graph checks are part
