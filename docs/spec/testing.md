@@ -190,17 +190,23 @@ Tool helpers and remote adapters are tested for:
 ## 8.1 Code Mode conformance
 
 Every `CodeExecutor` adapter — the deterministic `unisolated` substitute and each isolated
-adapter — runs one shared conformance suite:
+adapter — runs the shared contract cases:
 
 - successful bounded JSON computation;
 - invalid and oversized source;
-- CPU and wall-clock exhaustion;
+- wall-clock exhaustion;
 - excessive captured output and final result;
 - unknown host method and host-call limit exhaustion;
 - malformed adapter result;
 - interruption running every pass finalizer;
-- network denied by default;
-- honest `isolated` versus `unisolated` posture reporting.
+- honest `isolated` versus `unisolated` posture reporting;
+- typed rejection of every limit or network policy the adapter cannot enforce.
+
+Enforcement cases run only against `isolated` adapters, because the `unisolated` substitute
+cannot honestly prove them and must not pass them by simulation:
+
+- ambient network denied by default;
+- a synchronous runaway program terminated by an enforced platform CPU limit.
 
 Broker semantics are asserted once against the engine seam: direct and programmatic invocation
 of the same Tool preserve parameter, handler, success, failure, requirement, and interruption

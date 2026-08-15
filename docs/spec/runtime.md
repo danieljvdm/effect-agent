@@ -328,8 +328,10 @@ the same pattern as `AgentSpawner` and `DurableStep`: provided locally by the in
 per outer Tool Call, and excluded from `AgentRuntimeRequirements`. The live native Toolkit
 handlers, engine policy context, and parent Tool Call identity are capabilities bound when the
 per-outer-call broker service is constructed; per-call input from generated code is data only —
-namespace, method, encoded arguments, and the deterministic sequence index. A caller inside
-business execution can never substitute handlers or policy.
+namespace, method, and encoded arguments. The broker allocates each call's sequence index from
+its own monotonic per-pass state: generated code never supplies the authoritative index, and a
+transport-carried index is validated against the broker's state, failing typed on mismatch. A
+caller inside business execution can never substitute handlers or policy.
 
 A programmatic call shares the existing per-call execution path — Tool lookup, parameter
 handling, approval preflight, scoped handler execution, typed failure handling, success and
@@ -339,7 +341,8 @@ created per batch, so re-entrant acquisition would deadlock at `toolConcurrency:
 second batch path would let inner calls escape the declared concurrency bound. Calls are
 strictly sequential — a host call issued while another call from the same pass is unsettled
 fails with a typed concurrency error. Each call's identity derives from the outer `ToolCallId`
-plus a zero-based sequence index; the model cannot choose or forge it.
+plus the broker-owned zero-based sequence index; neither the model nor generated code can choose
+or forge it.
 
 Two behaviors are specific to the broker path. Tool-call and duration budgets are consumed and
 checked before every inner invocation, so budget exhaustion prevents the next call mid-pass;
@@ -371,7 +374,8 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-015:** Follow-up input is delivered only when the Agent would otherwise stop.
 - **RUN-016:** Programmatic Tool calls execute only through the engine-owned broker seam, under
   the parent Tool Call's already-held permit, strictly sequentially, with identities derived
-  from the outer `ToolCallId` and a zero-based index; a concurrent host call fails typed.
+  from the outer `ToolCallId` and a broker-owned zero-based index that generated code cannot
+  supply; a concurrent host call fails typed.
 - **RUN-017:** Every programmatic Tool call consumes the Run's Tool-call and duration budgets
   before its handler is invoked; exhaustion prevents the next call mid-pass while direct calls
   keep their Turn-boundary accounting.

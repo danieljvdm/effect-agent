@@ -300,8 +300,11 @@ enters canonical state.
 Per-call broker input is data only:
 
 - the selected namespace and method;
-- the encoded arguments;
-- the deterministic sequence index.
+- the encoded arguments.
+
+The deterministic sequence index is broker-owned: the broker allocates it from its own monotonic
+per-pass state, and a transport-carried index is validated against that state, failing typed on
+mismatch, so generated code can never replay, skip, or duplicate an identity.
 
 The live native Toolkit handlers, engine policy context, and parent Tool Call identity are
 capabilities, not invocation data: they are bound once when the per-outer-call broker service is

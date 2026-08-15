@@ -170,11 +170,15 @@ or included in an executor binding, and the deterministic test substitute identi
 `unisolated` rather than masquerading as a boundary.
 
 The read-only SQL reference Tool's guarantee is database authority, not SQL text inspection: a
-database identity without mutation, DDL, administrative, or extension privileges; host-owned
-tenant scoping; exactly one statement per call with bound parameters rather than interpolation;
-statement timeout and cancellation; and maximum row, column, cell, and encoded-byte bounds. A
-raw `SELECT` prefix check is never read-only enforcement. The adapter fails typed when it cannot
-prove or enforce the configured policy.
+database identity without mutation, DDL, administrative, or extension privileges; denial of
+side-effecting functions reachable from a `SELECT` — installed extensions and user-defined
+functions included — through an explicit execution allowlist or revocation evaluated under the
+effective database identity (a restricted search path where the database has one); denial of
+cross-database, filesystem, and network access; host-owned tenant scoping; exactly one statement
+per call with bound parameters rather than interpolation; statement timeout and cancellation;
+and maximum row, column, cell, and encoded-byte bounds. A raw `SELECT` prefix check is never
+read-only enforcement. The adapter fails typed when it cannot prove or enforce the configured
+policy.
 
 ## 10. Supply chain
 
