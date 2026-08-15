@@ -94,6 +94,17 @@ export class ToolBrokerUnavailableError extends Schema.TaggedError<ToolBrokerUna
 ) {}
 
 /**
+ * The pass options are invalid — for example a `maxResultBytes` that is not
+ * a positive safe integer, which would make the size comparison fail open.
+ */
+export class ToolBrokerConfigurationError extends Schema.TaggedError<ToolBrokerConfigurationError>()(
+  "ToolBrokerConfigurationError",
+  {
+    message: Schema.String,
+  },
+) {}
+
+/**
  * The engine-owned broker service. `openPass` fixes the capability-supplied
  * Toolkit and per-pass result policy once for the whole pass and captures the
  * handler services present at the call site, so nothing inside business
@@ -106,7 +117,7 @@ export interface ToolBrokerService {
     options?: ToolBrokerPassOptions,
   ) => Effect.Effect<
     ToolBrokerPass,
-    ToolBrokerUnavailableError,
+    ToolBrokerUnavailableError | ToolBrokerConfigurationError,
     Tool.HandlerServices<Tools[keyof Tools]>
   >;
 }

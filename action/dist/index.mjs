@@ -32271,6 +32271,11 @@ class ToolBrokerUnavailableError extends exports_Schema.TaggedError()("ToolBroke
 }) {
 }
 
+class ToolBrokerConfigurationError extends exports_Schema.TaggedError()("ToolBrokerConfigurationError", {
+  message: exports_Schema.String
+}) {
+}
+
 class ToolBroker extends exports_Context.Service()("@effect-agent/engine/ToolBroker") {
 }
 // packages/engine/src/index.ts
@@ -33661,6 +33666,11 @@ var brokerEncodedByteLength = (value4) => {
 var emptyProgrammaticUsage = exports_Response.Usage.make({ inputTokens: {}, outputTokens: {} });
 var makeToolBrokerService = (binding) => ({
   openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
+    if (passOptions?.maxResultBytes !== undefined && (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)) {
+      return yield* ToolBrokerConfigurationError.make({
+        message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`
+      });
+    }
     const handlerServices = yield* exports_Effect.context();
     const state = { nextIndex: 0, inFlight: false };
     const body = (input) => exports_Effect.gen(function* () {

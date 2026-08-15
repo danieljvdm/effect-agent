@@ -182,7 +182,14 @@ const encodedJsonByteLength = (value: Schema.Json): number | undefined => {
   }
 };
 
-const decodeHostOutcome = Schema.decodeUnknownOption(CodeHostCallResult);
+/** Host outcomes are protocol input; a hostile value must not defect mid-decode. */
+const decodeHostOutcome = (value: unknown): Option.Option<CodeHostCallResult> => {
+  try {
+    return Schema.decodeUnknownOption(CodeHostCallResult)(value);
+  } catch {
+    return Option.none();
+  }
+};
 
 const validateRequest = (
   request: CodeExecutionRequest,

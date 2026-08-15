@@ -81,4 +81,5 @@ Exit-gate evidence:
   the broker, and real handlers inside one Run, and observes mid-pass budget exhaustion as a
   catchable envelope — `packages/testing/test/code-mode-e2e.test.ts`.
 
-Unclaimed: everything in C3–C4, isolation, and durable Code Mode.
+Unclaimed: everything in C3–C4, isolation, and Code Mode durability in both the DN and DC
+assemblies.

@@ -162,6 +162,7 @@ import {
 } from "./run-events.ts";
 import {
   ToolBroker,
+  ToolBrokerConfigurationError,
   ToolBrokerUnavailableError,
   type ProgrammaticCallOutcome,
   type ProgrammaticToolInput,
@@ -2939,6 +2940,16 @@ const makeToolBrokerService = <HookError, HookRequirements>(
 ): ToolBrokerService => ({
   openPass: (toolkit, passOptions) =>
     Effect.gen(function* () {
+      // A malformed result bound would fail open (`NaN` defeats every
+      // comparison), so it is rejected typed before the pass opens.
+      if (
+        passOptions?.maxResultBytes !== undefined &&
+        (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)
+      ) {
+        return yield* ToolBrokerConfigurationError.make({
+          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`,
+        });
+      }
       // Capture the handler services present at the pass edge once; nothing
       // inside business execution can substitute them per invocation. The
       // same private-assertion contract as `provideHookServices` applies.

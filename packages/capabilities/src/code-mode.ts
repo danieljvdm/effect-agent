@@ -1,5 +1,6 @@
 import {
   ToolBroker,
+  ToolBrokerConfigurationError,
   ToolBrokerUnavailableError,
   getToolExecutionClass,
   type ProgrammaticCallOutcome,
@@ -224,7 +225,9 @@ const renderJsonSchemaType = (
   const reference = schema.$ref;
   if (typeof reference === "string") {
     const match = /^#\/\$defs\/(.+)$/.exec(reference);
-    const resolved = match === null ? undefined : defs[match[1]];
+    // JSON-pointer tokens escape `/` as `~1` and `~` as `~0`.
+    const key = match === null ? undefined : match[1].replaceAll("~1", "/").replaceAll("~0", "~");
+    const resolved = key === undefined ? undefined : defs[key];
     if (resolved === undefined) {
       throw new Error(`Code Mode cannot resolve the JSON schema reference ${reference}`);
     }
@@ -273,7 +276,9 @@ const renderJsonSchemaType = (
         const inner = `${indent}  `;
         const fields = Object.entries(schema.properties).map(([key, property]) => {
           const optional = required.includes(key) ? "" : "?";
-          return `${inner}readonly ${key}${optional}: ${renderJsonSchemaType(property, defs, depth + 1, inner)};`;
+          // A JSON property name need not be a TypeScript identifier.
+          const rendered = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
+          return `${inner}readonly ${rendered}${optional}: ${renderJsonSchemaType(property, defs, depth + 1, inner)};`;
         });
         return fields.length === 0 ? "{}" : `{\n${fields.join("\n")}\n${indent}}`;
       }
@@ -318,8 +323,12 @@ const renderDeclarations = (methods: ReadonlyArray<ResolvedMethod>): string => {
     const lines = members.map((member) => {
       const parameters = renderTopLevel(Tool.getJsonSchema(member.tool), "  ");
       const success = renderTopLevel(Tool.getJsonSchemaFromSchema(member.tool.successSchema), "  ");
-      const description =
-        member.tool.description === undefined ? "" : `  /** ${member.tool.description} */\n`;
+      // A description is arbitrary text: newlines and comment terminators
+      // must not be able to break out of the documentation comment.
+      const safeDescription = member.tool.description
+        ?.replaceAll("*/", "*\\/")
+        .replaceAll(/\s*\n\s*/g, " ");
+      const description = safeDescription === undefined ? "" : `  /** ${safeDescription} */\n`;
       return `${description}  ${member.method}(input: ${parameters}): Promise<${success}>;`;
     });
     return `declare const ${namespace}: {\n${lines.join("\n")}\n};`;
@@ -335,6 +344,20 @@ const renderDeclarations = (methods: ReadonlyArray<ResolvedMethod>): string => {
 // ---------------------------------------------------------------------------
 
 const truncationMarker = "… logs truncated by the egress budget";
+const MAX_EGRESS_LOG_LINE_CHARACTERS = 16_000;
+
+/**
+ * Budget charge of one log line as it actually crosses to the model: the
+ * JSON-encoded string (quotes, escapes) plus one array separator. Charging
+ * raw UTF-8 would undercount model-visible bytes for escape-heavy content.
+ */
+const encodedLogLineBytes = (line: string): number => {
+  try {
+    return utf8ByteLength(JSON.stringify(line)) + 1;
+  } catch {
+    return Number.MAX_SAFE_INTEGER;
+  }
+};
 
 const budgetedLogs = (
   logs: ReadonlyArray<string>,
@@ -343,8 +366,13 @@ const budgetedLogs = (
   const kept: Array<string> = [];
   let used = 0;
   let truncated = false;
-  for (const line of logs) {
-    const bytes = utf8ByteLength(line);
+  for (const raw of logs) {
+    // Per-line cap keeps every kept line inside the BoundedLogLine schema.
+    const line =
+      raw.length > MAX_EGRESS_LOG_LINE_CHARACTERS
+        ? `${raw.slice(0, MAX_EGRESS_LOG_LINE_CHARACTERS - 1)}…`
+        : raw;
+    const bytes = encodedLogLineBytes(line);
     if (kept.length >= 4_096 || used + bytes > remainingBytes) {
       truncated = true;
       break;
@@ -355,9 +383,9 @@ const budgetedLogs = (
   if (truncated) {
     // Truncation is never silent: drop kept lines from the end until the
     // marker itself fits inside the budget.
-    const markerBytes = utf8ByteLength(truncationMarker);
+    const markerBytes = encodedLogLineBytes(truncationMarker);
     while (kept.length > 0 && used + markerBytes > remainingBytes) {
-      used -= utf8ByteLength(kept.pop() ?? "");
+      used -= encodedLogLineBytes(kept.pop() ?? "");
     }
     if (markerBytes <= remainingBytes) {
       kept.push(truncationMarker);
@@ -386,10 +414,13 @@ const executionFailureMessage = (error: CodeExecutionError): string => {
 };
 
 const failureFromExecution = (
-  error: CodeExecutionError | ToolBrokerUnavailableError,
+  error: CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError,
   maxEgressBytes: number,
 ): CodeModeFailure => {
-  if (error._tag === "ToolBrokerUnavailableError") {
+  if (
+    error._tag === "ToolBrokerUnavailableError" ||
+    error._tag === "ToolBrokerConfigurationError"
+  ) {
     return CodeModeFailure.make({
       errorTag: error._tag,
       message: boundedMessage(error.message),
@@ -398,14 +429,26 @@ const failureFromExecution = (
   }
   const message = boundedMessage(executionFailureMessage(error));
   const logs = "logs" in error ? error.logs : [];
-  const thrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
-  const thrownBytes = thrown === undefined ? 0 : (encodedJsonByteLength(thrown) ?? 0);
-  const remaining = Math.max(0, maxEgressBytes - utf8ByteLength(message) - thrownBytes);
+  const messageBytes = utf8ByteLength(message);
+  // `thrown` is included only when it fits TOGETHER with the message inside
+  // the aggregate budget, and it reduces the log allowance only when it is
+  // actually included.
+  const candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
+  const candidateBytes =
+    candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
+  const includeThrown =
+    candidateThrown !== undefined &&
+    candidateBytes !== undefined &&
+    messageBytes + candidateBytes <= maxEgressBytes;
+  const remaining = Math.max(
+    0,
+    maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
+  );
   return CodeModeFailure.make({
     errorTag: error._tag,
     message,
     logs: budgetedLogs(logs, remaining),
-    ...(thrown !== undefined && thrownBytes <= maxEgressBytes ? { thrown } : {}),
+    ...(includeThrown ? { thrown: candidateThrown } : {}),
   });
 };
 
@@ -419,6 +462,17 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
 ): CodeModeDefinition<Name, Namespaces> => {
   const limits = options.limits ?? defaultLimits;
   const maxEgressBytes = options.maxEgressBytes ?? defaultMaxEgressBytes;
+  // Fail closed on an invalid egress bound: NaN would make every size
+  // comparison false and Infinity would remove the bound entirely.
+  if (
+    !Number.isSafeInteger(maxEgressBytes) ||
+    maxEgressBytes < 1_024 ||
+    maxEgressBytes > 4 * 1024 * 1024
+  ) {
+    throw new Error(
+      `Code Mode maxEgressBytes must be an integer between 1024 and ${4 * 1024 * 1024}; received ${String(maxEgressBytes)}`,
+    );
+  }
 
   // Construction-time fail-closed validation (CAP-014).
   const methods: Array<ResolvedMethod> = [];
@@ -542,10 +596,17 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
       });
       switch (outcome._tag) {
         case "ProgrammaticCallSuccess": {
-          return { _tag: "CodeHostCallSuccess", value: asJson(outcome.encodedResult) } as const;
+          const value = decodeBrokerJson(outcome.encodedResult);
+          return Option.isSome(value)
+            ? ({ _tag: "CodeHostCallSuccess", value: value.value } as const)
+            : ({ _tag: "CodeHostCallFailure", error: brokerProtocolEnvelope } as const);
         }
         case "ProgrammaticCallFailure": {
-          return { _tag: "CodeHostCallFailure", error: asJson(outcome.encodedResult) } as const;
+          const value = decodeBrokerJson(outcome.encodedResult);
+          return {
+            _tag: "CodeHostCallFailure",
+            error: Option.isSome(value) ? value.value : brokerProtocolEnvelope,
+          } as const;
         }
         case "ProgrammaticCallError": {
           return {
@@ -610,7 +671,10 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
         // never bypasses validation.
         Effect.provideService(ToolBroker, broker),
         Effect.provideContext(captured),
-      ) as Effect.Effect<CodeExecutionResult, CodeExecutionError | ToolBrokerUnavailableError>;
+      ) as Effect.Effect<
+        CodeExecutionResult,
+        CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError
+      >;
       const result = yield* execution.pipe(
         Effect.catch((error) => Effect.fail(failureFromExecution(error, maxEgressBytes))),
       );
@@ -651,12 +715,22 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
   });
 };
 
-const asJson = (value: unknown): Schema.Json => {
-  const decoded = Schema.decodeUnknownOption(Schema.Json)(value);
-  if (Option.isSome(decoded)) {
-    return decoded.value;
+/**
+ * Fail-closed JSON boundary for broker outcomes: hostile values can throw
+ * from trap getters during decode, and a value outside the JSON surface must
+ * become a typed failure envelope — never a fabricated success.
+ */
+const decodeBrokerJson = (value: unknown): Option.Option<Schema.Json> => {
+  try {
+    return Schema.decodeUnknownOption(Schema.Json)(value);
+  } catch {
+    return Option.none();
   }
-  return { _tag: "NonJsonValue", preview: String(value).slice(0, 256) };
+};
+
+const brokerProtocolEnvelope: Schema.Json = {
+  _tag: "CodeModeProtocolError",
+  message: "The broker returned a value outside the JSON surface",
 };
 
 // The engine annotation is imported under a local alias to keep the builder

@@ -1,6 +1,6 @@
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
-import { Deferred, Effect, Fiber, Layer, Ref, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import {
@@ -190,14 +190,26 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         expect(direct.output).toEqual({ answer: "direct" });
 
         // Programmatic: the same Tool, same encoded arguments, through the broker.
+        const programmatic = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
         const result = yield* runOrchestrated({
           innerToolkit,
           innerHandlers: innerToolkit.toLayer(handler),
           program: (pass) =>
-            pass.invoke({ toolName: "query", encodedArguments: { sql: "select 1" } }),
+            pass
+              .invoke({ toolName: "query", encodedArguments: { sql: "select 1" } })
+              .pipe(Effect.tap((outcome) => Ref.set(programmatic, [outcome]))),
         });
         expect(result.output).toEqual({ answer: "done" });
         expect(yield* Ref.get(seen)).toEqual(["select 1", "select 1"]);
+        // The broker's encoded success is the same value the direct path
+        // records for the model — equivalence of the observable result, not
+        // only of the handler inputs.
+        const [outcome] = yield* Ref.get(programmatic);
+        expect(outcome).toMatchObject({
+          _tag: "ProgrammaticCallSuccess",
+          index: 0,
+          encodedResult: { rows: [1, 2, 3] },
+        });
       }),
   );
 
@@ -554,10 +566,19 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         { question: "go" },
         {},
       ).pipe(Effect.provide(toolLayer), Effect.scoped, Effect.exit);
-      expect(exit._tag).toBe("Failure");
-      const rendered = JSON.stringify(exit);
-      expect(rendered).toContain("AgentPolicyError");
-      expect(rendered).toContain("Tool Call limit");
+      expect(Exit.isFailure(exit)).toBe(true);
+      if (Exit.isSuccess(exit)) {
+        throw new Error("Expected the Run to fail at the Turn seam");
+      }
+      const failure = Cause.findErrorOption(exit.cause);
+      expect(Option.isSome(failure)).toBe(true);
+      if (Option.isNone(failure)) {
+        throw new Error("Expected a typed failure in the Cause");
+      }
+      expect(failure.value).toMatchObject({
+        _tag: "AgentPolicyError",
+        limit: "tool-calls",
+      });
     }),
   );
 });
