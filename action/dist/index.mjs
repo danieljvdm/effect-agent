@@ -32611,6 +32611,24 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
     return descriptors.length === 0 ? exports_Effect.void : durability.prepareToolCalls(descriptors);
   })).pipe(exports_Stream.drain);
   const stepServiceFor = (call) => durability === undefined ? passthroughDurableStep() : makeDurableStepService(call.toolCallId, durability.step, hookServices);
+  const liveBrokers = new Map;
+  const brokerFor = (call) => {
+    const existing = liveBrokers.get(call.call.id);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const created = makeToolBrokerService({
+      context: context3,
+      turnId,
+      outerToolCallId: call.toolCallId,
+      maxToolCalls: brokerAccounting.maxToolCalls,
+      declaredToolCalls: brokerAccounting.declaredToolCalls,
+      budget: options.budget,
+      hookServices
+    });
+    liveBrokers.set(call.call.id, created);
+    return created;
+  };
   const subagentHook = options.subagent;
   const batchSubagentDurability = subagentHook === undefined ? ephemeralSubagentDurability : makeSubagentDurabilityService(subagentHook, hookServices);
   const waitingByDeclaration = new Map;
@@ -32634,15 +32652,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
   const handlers = groups.reduce((stream, group2) => {
     const next2 = exports_Stream.mergeAll(group2.map((call) => withSemaphorePermit(semaphore, executePreparedToolCall(context3, turnId, toolkit, call, trace2, (waiting) => {
       waitingByDeclaration.set(call.declarationIndex, waiting);
-    }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call)), exports_Stream.provideService(ToolBroker, makeToolBrokerService({
-      context: context3,
-      turnId,
-      outerToolCallId: call.toolCallId,
-      maxToolCalls: brokerAccounting.maxToolCalls,
-      declaredToolCalls: brokerAccounting.declaredToolCalls,
-      budget: options.budget,
-      hookServices
-    }))))), { concurrency: "unbounded" });
+    }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call)), exports_Stream.provideService(ToolBroker, brokerFor(call).service), exports_Stream.ensuring(exports_Effect.sync(() => brokerFor(call).close()))))), { concurrency: "unbounded" });
     return stream.pipe(exports_Stream.concat(next2));
   }, exports_Stream.empty);
   const sinkQueue = yield* exports_Queue.unbounded();
@@ -33664,124 +33674,161 @@ var brokerEncodedByteLength = (value4) => {
   }
 };
 var emptyProgrammaticUsage = exports_Response.Usage.make({ inputTokens: {}, outputTokens: {} });
-var makeToolBrokerService = (binding) => ({
-  openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
-    if (passOptions?.maxResultBytes !== undefined && (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)) {
-      return yield* ToolBrokerConfigurationError.make({
-        message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`
-      });
-    }
-    const handlerServices = yield* exports_Effect.context();
-    const state = { nextIndex: 0, inFlight: false };
-    const body = (input) => exports_Effect.gen(function* () {
-      const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
-      if (used + 1 > binding.maxToolCalls) {
-        return programmaticOutcomeError(undefined, "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
+var brokerDecodeJson = (value4) => {
+  try {
+    return exports_Schema.decodeUnknownOption(exports_Schema.Json)(value4);
+  } catch {
+    return exports_Option.none();
+  }
+};
+var makeToolBrokerService = (binding) => {
+  const lifecycle = { closed: false };
+  const service4 = {
+    openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
+      if (lifecycle.closed) {
+        return yield* ToolBrokerUnavailableError.make({
+          message: "The outer Tool Call for this broker has already settled"
+        });
       }
-      if (!hasTool(toolkit.tools, input.toolName)) {
-        return programmaticOutcomeError(undefined, "ProgrammaticToolUnknownError", `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`);
+      if (passOptions?.maxResultBytes !== undefined && (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)) {
+        return yield* ToolBrokerConfigurationError.make({
+          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`
+        });
       }
-      const tool = toolkit.tools[input.toolName];
-      const approval = tool.needsApproval;
-      if (approval !== undefined && approval !== false) {
-        return programmaticOutcomeError(undefined, "ProgrammaticApprovalUnsupportedError", `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`);
-      }
-      const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
-      const invalidParameters = yield* decodeParameters(input.encodedArguments).pipe(exports_Effect.map(() => {
-        return;
-      }), exports_Effect.catch((cause) => exports_Effect.succeed(programmaticOutcomeError(undefined, "ModelProtocolError", `Invalid parameters for Tool ${input.toolName}: ${cause.message}`))));
-      if (invalidParameters !== undefined) {
-        return invalidParameters;
-      }
-      binding.context.programmaticToolCalls += 1;
-      if (binding.budget !== undefined) {
-        const exhausted = yield* provideHookServices(binding.budget.consume({
-          modelCalls: 0,
-          inputTokens: 0,
-          outputTokens: 0,
-          totalTokens: 0,
-          toolCalls: 1,
-          costMicrousd: 0,
-          usage: emptyProgrammaticUsage
-        }), binding.hookServices).pipe(exports_Effect.map(() => {
-          return;
-        }), exports_Effect.catch((error2) => exports_Effect.succeed(programmaticOutcomeError(undefined, errorTag(error2), errorMessage(error2)))));
-        if (exhausted !== undefined) {
-          return exhausted;
+      const handlerServices = yield* exports_Effect.context();
+      const state = { nextIndex: 0, inFlight: false };
+      const body = (input) => exports_Effect.gen(function* () {
+        if (!hasTool(toolkit.tools, input.toolName)) {
+          return programmaticOutcomeError(undefined, "ProgrammaticToolUnknownError", `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`);
         }
-      }
-      const index2 = state.nextIndex++;
-      const handleId = `${binding.outerToolCallId}#${index2}`;
-      yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
-        agentId: binding.context.agentId,
-        runId: binding.context.runId,
-        turnId: binding.turnId,
-        toolCallId: binding.outerToolCallId,
-        toolName: input.toolName,
-        sequenceIndex: index2
-      }));
-      yield* exports_Metric.update(toolCounter, 1);
-      let terminal;
-      const handlerFailed = yield* exports_Stream.unwrap(toolkit.handle(input.toolName, input.encodedArguments, handleId).pipe(exports_Effect.withSpan("AgentRuntime.toolkit.handle"))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
-        if (!result4.preliminary) {
-          terminal = {
-            encodedResult: result4.encodedResult,
-            isFailure: result4.isFailure
+        const tool = toolkit.tools[input.toolName];
+        const approval = tool.needsApproval;
+        if (approval !== undefined && approval !== false) {
+          return programmaticOutcomeError(undefined, "ProgrammaticApprovalUnsupportedError", `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`);
+        }
+        const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
+        const invalidParameters = yield* decodeParameters(input.encodedArguments).pipe(exports_Effect.map(() => {
+          return;
+        }), exports_Effect.catch((cause) => exports_Effect.succeed(programmaticOutcomeError(undefined, "ModelProtocolError", `Invalid parameters for Tool ${input.toolName}: ${cause.message}`))));
+        if (invalidParameters !== undefined) {
+          return invalidParameters;
+        }
+        const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
+        if (used + 1 > binding.maxToolCalls) {
+          return programmaticOutcomeError(undefined, "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
+        }
+        binding.context.programmaticToolCalls += 1;
+        if (binding.budget !== undefined) {
+          const exhausted = yield* provideHookServices(binding.budget.consume({
+            modelCalls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            toolCalls: 1,
+            costMicrousd: 0,
+            usage: emptyProgrammaticUsage
+          }), binding.hookServices).pipe(exports_Effect.map(() => {
+            return;
+          }), exports_Effect.catch((error2) => exports_Effect.succeed(programmaticOutcomeError(undefined, errorTag(error2), errorMessage(error2)))));
+          if (exhausted !== undefined) {
+            binding.context.programmaticToolCalls -= 1;
+            return exhausted;
+          }
+        }
+        const index2 = state.nextIndex++;
+        const handleId = `${binding.outerToolCallId}#${index2}`;
+        yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
+          agentId: binding.context.agentId,
+          runId: binding.context.runId,
+          turnId: binding.turnId,
+          toolCallId: binding.outerToolCallId,
+          toolName: input.toolName,
+          sequenceIndex: index2
+        }));
+        yield* exports_Metric.update(toolCounter, 1);
+        let terminal;
+        let resultAfterTerminal = false;
+        const handlerFailed = yield* exports_Stream.unwrap(toolkit.handle(input.toolName, input.encodedArguments, handleId).pipe(exports_Effect.withSpan("AgentRuntime.toolkit.handle"))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
+          if (terminal !== undefined) {
+            resultAfterTerminal = true;
+            return;
+          }
+          if (!result4.preliminary) {
+            terminal = {
+              encodedResult: result4.encodedResult,
+              isFailure: result4.isFailure
+            };
+          }
+        })), exports_Effect.map(() => {
+          return;
+        }), exports_Effect.catch((error2) => exports_Effect.succeed(new BrokerHandlerFailure(error2))));
+        if (handlerFailed instanceof BrokerHandlerFailure) {
+          return programmaticOutcomeError(index2, errorTag(handlerFailed.error), errorMessage(handlerFailed.error));
+        }
+        if (resultAfterTerminal) {
+          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);
+        }
+        if (terminal === undefined) {
+          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
+        }
+        if (terminal.isFailure) {
+          return {
+            _tag: "ProgrammaticCallFailure",
+            index: index2,
+            encodedResult: terminal.encodedResult
           };
         }
-      })), exports_Effect.map(() => {
-        return;
-      }), exports_Effect.catch((error2) => exports_Effect.succeed(new BrokerHandlerFailure(error2))));
-      if (handlerFailed instanceof BrokerHandlerFailure) {
-        return programmaticOutcomeError(index2, errorTag(handlerFailed.error), errorMessage(handlerFailed.error));
-      }
-      if (terminal === undefined) {
-        return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
-      }
-      if (terminal.isFailure) {
-        return {
-          _tag: "ProgrammaticCallFailure",
-          index: index2,
-          encodedResult: terminal.encodedResult
-        };
-      }
-      if (exports_Option.isNone(exports_Schema.decodeUnknownOption(exports_Schema.Json)(terminal.encodedResult))) {
-        return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
-      }
-      let encodedResult = terminal.encodedResult;
-      if (passOptions?.redactResult !== undefined) {
-        encodedResult = yield* passOptions.redactResult(encodedResult);
-      }
-      if (passOptions?.maxResultBytes !== undefined) {
-        const bytes = brokerEncodedByteLength(encodedResult);
-        if (bytes === undefined || bytes > passOptions.maxResultBytes) {
-          return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
+        if (exports_Option.isNone(exports_Schema.decodeUnknownOption(exports_Schema.Json)(terminal.encodedResult))) {
+          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
         }
-      }
-      return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
-    }).pipe(exports_Effect.provideContext(handlerServices), exports_Effect.withSpan("AgentRuntime.programmaticTool", {
-      attributes: {
-        agentId: binding.context.agentId,
-        runId: binding.context.runId,
-        turnId: binding.turnId,
-        toolCallId: binding.outerToolCallId,
-        toolName: input.toolName
-      }
-    }));
-    const pass = {
-      invoke: (input) => exports_Effect.suspend(() => {
-        if (state.inFlight) {
-          return exports_Effect.succeed(programmaticOutcomeError(undefined, "ProgrammaticCallConcurrencyError", `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`));
+        let encodedResult = terminal.encodedResult;
+        if (passOptions?.redactResult !== undefined) {
+          const redacted2 = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
+          if (exports_Option.isNone(redacted2)) {
+            return programmaticOutcomeError(index2, "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
+          }
+          encodedResult = redacted2.value;
         }
-        state.inFlight = true;
-        return body(input).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
-          state.inFlight = false;
-        })));
-      })
-    };
-    return pass;
-  })
-});
+        if (passOptions?.maxResultBytes !== undefined) {
+          const bytes = brokerEncodedByteLength(encodedResult);
+          if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+            return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
+          }
+        }
+        return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
+      }).pipe(exports_Effect.provideContext(handlerServices), exports_Effect.withSpan("AgentRuntime.programmaticTool", {
+        attributes: {
+          agentId: binding.context.agentId,
+          runId: binding.context.runId,
+          turnId: binding.turnId,
+          toolCallId: binding.outerToolCallId,
+          toolName: input.toolName
+        }
+      }));
+      const pass = {
+        invoke: (input) => exports_Effect.suspend(() => {
+          if (lifecycle.closed) {
+            return exports_Effect.succeed(programmaticOutcomeError(undefined, "ToolBrokerUnavailableError", "The outer Tool Call for this pass has already settled"));
+          }
+          if (state.inFlight) {
+            return exports_Effect.succeed(programmaticOutcomeError(undefined, "ProgrammaticCallConcurrencyError", `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`));
+          }
+          state.inFlight = true;
+          return body(input).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
+            state.inFlight = false;
+          })));
+        })
+      };
+      return pass;
+    })
+  };
+  return {
+    service: service4,
+    close: () => {
+      lifecycle.closed = true;
+    }
+  };
+};
 var passthroughDurableStep = () => {
   const usedNames = new Set;
   return {

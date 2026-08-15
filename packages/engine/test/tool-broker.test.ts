@@ -161,7 +161,9 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         };
         const innerToolkit = Toolkit.make(Query);
 
-        // Direct: the model declares the call itself.
+        // Direct: the model declares the call itself, and the second model
+        // request captures the recorded tool-result exactly as the model
+        // sees it.
         const directDefinition = Agent.define("direct-host", {
           input: Schema.Struct({ question: Schema.String }),
           output: Schema.Struct({ answer: Schema.String }),
@@ -169,18 +171,50 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
           toolkit: innerToolkit,
           policy: policy(),
         });
-        const directModel = scriptedModel(
-          [
-            {
-              type: "tool-call",
-              id: "query-1",
-              name: "query",
-              params: { sql: "select 1" },
-              providerExecuted: false,
-            },
-            { type: "finish", reason: "tool-calls", usage },
-          ],
-          '{"answer":"direct"}',
+        const directResults = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const directModel = Model.make(
+          "scripted",
+          "direct-capture",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            Effect.gen(function* () {
+              const turn = yield* Ref.make(0);
+              return yield* LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: ({ prompt }) =>
+                  Stream.unwrap(
+                    Ref.getAndUpdate(turn, (value) => value + 1).pipe(
+                      Effect.tap(() =>
+                        Ref.update(directResults, (all) => [
+                          ...all,
+                          ...prompt.content
+                            .filter((message) => message.role === "tool")
+                            .flatMap((message) => message.content)
+                            .filter((part) => part.type === "tool-result")
+                            .map((part) => part.result),
+                        ]),
+                      ),
+                      Effect.map((value) =>
+                        Stream.fromIterable<Response.StreamPartEncoded>(
+                          value === 0
+                            ? [
+                                {
+                                  type: "tool-call",
+                                  id: "query-1",
+                                  name: "query",
+                                  params: { sql: "select 1" },
+                                  providerExecuted: false,
+                                },
+                                { type: "finish", reason: "tool-calls", usage },
+                              ]
+                            : finalParts('{"answer":"direct"}'),
+                        ),
+                      ),
+                    ),
+                  ),
+              });
+            }),
+          ),
         );
         const direct = yield* AgentRuntime.run(
           Agent.withModel(directDefinition, directModel),
@@ -188,6 +222,8 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
           {},
         ).pipe(Effect.provide(innerToolkit.toLayer(handler)), Effect.scoped);
         expect(direct.output).toEqual({ answer: "direct" });
+        const [directRecorded] = yield* Ref.get(directResults);
+        expect(directRecorded).toEqual({ rows: [1, 2, 3] });
 
         // Programmatic: the same Tool, same encoded arguments, through the broker.
         const programmatic = yield* Ref.make<ReadonlyArray<ProgrammaticCallOutcome>>([]);
@@ -208,8 +244,11 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
         expect(outcome).toMatchObject({
           _tag: "ProgrammaticCallSuccess",
           index: 0,
-          encodedResult: { rows: [1, 2, 3] },
         });
+        if (outcome._tag !== "ProgrammaticCallSuccess") {
+          throw new Error("Expected the programmatic call to succeed");
+        }
+        expect(outcome.encodedResult).toEqual(directRecorded);
       }),
   );
 

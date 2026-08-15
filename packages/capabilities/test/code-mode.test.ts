@@ -148,20 +148,34 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
               resultBytes: 0,
             },
           });
+        // The scripted source stands in for untrusted model output: a parse
+        // failure must stay inside the typed executor channel.
+        const parseJson = (text: string) =>
+          Effect.try({
+            try: () => JSON.parse(text) as Schema.Json,
+            catch: () =>
+              CodeProgramFailedError.make({
+                implementation: scriptedExecutorImplementation,
+                reason: "threw",
+                thrown: "SyntaxError: invalid scripted JSON",
+                message: "SyntaxError: invalid scripted JSON",
+                logs: [],
+              }),
+          });
         if (source.startsWith("CALL ")) {
           const [, target, ...rest] = source.split(" ");
           const [namespace, method] = target.split(".");
           const outcome = yield* host.call({
             namespace,
             method,
-            argument: JSON.parse(rest.join(" ")),
+            argument: yield* parseJson(rest.join(" ")),
           });
           return outcome._tag === "CodeHostCallSuccess"
             ? finish({ ok: outcome.value }, ["called host"])
             : finish({ caught: outcome.error }, ["caught envelope"]);
         }
         if (source.startsWith("RESULT ")) {
-          return finish(JSON.parse(source.slice("RESULT ".length)), []);
+          return finish(yield* parseJson(source.slice("RESULT ".length)), []);
         }
         if (source.startsWith("LOGS ")) {
           const count = Number(source.slice("LOGS ".length));
@@ -392,6 +406,27 @@ type HandlerFailureIsEnvelope = Equal<
 type LayerContext<L> = L extends Layer.Layer<infer _Out, infer _Error, infer R> ? R : never;
 type LayerRequirements = LayerContext<typeof typedDefinition.handlers>;
 type RequiresExecutor = Equal<Extract<LayerRequirements, CodeExecutor>, CodeExecutor>;
+
+// Disjoint namespaces must not erase Tools from the Layer requirements: the
+// selected-tool union is computed per namespace, never by intersecting method
+// keys across namespaces.
+const Second = Tool.make("second_tool", {
+  parameters: Schema.Struct({ key: Schema.String }),
+  success: Schema.Struct({ ok: Schema.Boolean }),
+}).annotate(ToolExecutionClass, "readonly");
+const disjointDefinition = CodeMode.make("disjoint_code_mode", {
+  description: "disjoint",
+  tools: { warehouse: { query: Query }, other: { second: Second } },
+});
+type DisjointRequirements = LayerContext<typeof disjointDefinition.handlers>;
+type DisjointKeepsFirstHandler = Equal<
+  Extract<DisjointRequirements, Tool.Handler<"query_warehouse">>,
+  Tool.Handler<"query_warehouse">
+>;
+type DisjointKeepsSecondHandler = Equal<
+  Extract<DisjointRequirements, Tool.Handler<"second_tool">>,
+  Tool.Handler<"second_tool">
+>;
 type SuccessIsBudgeted =
   Tool.Success<typeof typedDefinition.tool> extends CodeModeSuccess ? true : false;
 
@@ -401,5 +436,11 @@ describe("Code Mode type proofs", () => {
     const executorProof: RequiresExecutor = true;
     const successProof: SuccessIsBudgeted = true;
     expect(failureProof && executorProof && successProof).toBe(true);
+  });
+
+  it("keeps every selected handler visible in R across disjoint namespaces", () => {
+    const firstProof: DisjointKeepsFirstHandler = true;
+    const secondProof: DisjointKeepsSecondHandler = true;
+    expect(firstProof && secondProof).toBe(true);
   });
 });

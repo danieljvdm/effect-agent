@@ -978,6 +978,27 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? passthroughDurableStep()
           : makeDurableStepService(call.toolCallId, durability.step, hookServices);
 
+      // One live broker per outer call: provision and the settling closer
+      // must share one lifecycle.
+      const liveBrokers = new Map<string, LiveToolBroker>();
+      const brokerFor = (call: PreparedToolCall<Tools>): LiveToolBroker => {
+        const existing = liveBrokers.get(call.call.id);
+        if (existing !== undefined) {
+          return existing;
+        }
+        const created = makeToolBrokerService({
+          context,
+          turnId,
+          outerToolCallId: call.toolCallId,
+          maxToolCalls: brokerAccounting.maxToolCalls,
+          declaredToolCalls: brokerAccounting.declaredToolCalls,
+          budget: options.budget,
+          hookServices,
+        });
+        liveBrokers.set(call.call.id, created);
+        return created;
+      };
+
       // This batch's live `SubagentDurability` service: durable over the
       // coordinator's subagent hook, the explicit ephemeral-mode default
       // otherwise. Absence of the hook means the Run is not under a durable
@@ -1033,19 +1054,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                 Stream.provideService(DurableStep, stepServiceFor(call)),
                 // The live broker executes under this call's already-held
                 // permit: invocations run inside the handler's own fiber and
-                // never touch the batch semaphore (RUN-016).
-                Stream.provideService(
-                  ToolBroker,
-                  makeToolBrokerService({
-                    context,
-                    turnId,
-                    outerToolCallId: call.toolCallId,
-                    maxToolCalls: brokerAccounting.maxToolCalls,
-                    declaredToolCalls: brokerAccounting.declaredToolCalls,
-                    budget: options.budget,
-                    hookServices,
-                  }),
-                ),
+                // never touch the batch semaphore (RUN-016). Its lifecycle
+                // closes with this call's stream so no retained pass can
+                // outlive the batch's scheduling authority.
+                Stream.provideService(ToolBroker, brokerFor(call).service),
+                Stream.ensuring(Effect.sync(() => brokerFor(call).close())),
               ),
             ),
           ),
@@ -2925,6 +2938,26 @@ const brokerEncodedByteLength = (value: unknown): number | undefined => {
 
 const emptyProgrammaticUsage = Response.Usage.make({ inputTokens: {}, outputTokens: {} });
 
+/** Hostile values can throw from trap getters mid-decode; stay fail-closed. */
+const brokerDecodeJson = (value: unknown): Option.Option<Schema.Json> => {
+  try {
+    return Schema.decodeUnknownOption(Schema.Json)(value);
+  } catch {
+    return Option.none();
+  }
+};
+
+/** One live broker bound to one outer Tool Call, plus its lifecycle closer. */
+interface LiveToolBroker {
+  readonly service: ToolBrokerService;
+  /**
+   * Marks every pass opened under this outer Tool Call closed. The batch
+   * executor runs it when the call's stream settles, so a retained pass
+   * cannot execute Tools outside the batch's scheduling authority.
+   */
+  readonly close: () => void;
+}
+
 /**
  * Live per-outer-call `ToolBroker` (runtime spec §12.1; RUN-016, RUN-017).
  * The pass executes under the outer Tool Call's already-held scheduling
@@ -2937,233 +2970,289 @@ const emptyProgrammaticUsage = Response.Usage.make({ inputTokens: {}, outputToke
  */
 const makeToolBrokerService = <HookError, HookRequirements>(
   binding: ToolBrokerBinding<HookError, HookRequirements>,
-): ToolBrokerService => ({
-  openPass: (toolkit, passOptions) =>
-    Effect.gen(function* () {
-      // A malformed result bound would fail open (`NaN` defeats every
-      // comparison), so it is rejected typed before the pass opens.
-      if (
-        passOptions?.maxResultBytes !== undefined &&
-        (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)
-      ) {
-        return yield* ToolBrokerConfigurationError.make({
-          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`,
-        });
-      }
-      // Capture the handler services present at the pass edge once; nothing
-      // inside business execution can substitute them per invocation. The
-      // same private-assertion contract as `provideHookServices` applies.
-      const handlerServices = (yield* Effect.context<never>()) as Context.Context<unknown>;
-      const state = { nextIndex: 0, inFlight: false };
+): LiveToolBroker => {
+  const lifecycle = { closed: false };
+  const service: ToolBrokerService = {
+    openPass: (toolkit, passOptions) =>
+      Effect.gen(function* () {
+        if (lifecycle.closed) {
+          return yield* ToolBrokerUnavailableError.make({
+            message: "The outer Tool Call for this broker has already settled",
+          });
+        }
+        // A malformed result bound would fail open (`NaN` defeats every
+        // comparison), so it is rejected typed before the pass opens.
+        if (
+          passOptions?.maxResultBytes !== undefined &&
+          (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)
+        ) {
+          return yield* ToolBrokerConfigurationError.make({
+            message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`,
+          });
+        }
+        // Capture the handler services present at the pass edge once; nothing
+        // inside business execution can substitute them per invocation. The
+        // same private-assertion contract as `provideHookServices` applies.
+        const handlerServices = (yield* Effect.context<never>()) as Context.Context<unknown>;
+        const state = { nextIndex: 0, inFlight: false };
 
-      const body = (input: ProgrammaticToolInput): Effect.Effect<ProgrammaticCallOutcome> =>
-        Effect.gen(function* () {
-          const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
-          if (used + 1 > binding.maxToolCalls) {
-            return programmaticOutcomeError(
-              undefined,
-              "AgentPolicyError",
-              `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`,
-            );
-          }
-          if (!hasTool(toolkit.tools, input.toolName)) {
-            return programmaticOutcomeError(
-              undefined,
-              "ProgrammaticToolUnknownError",
-              `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`,
-            );
-          }
-          const tool = toolkit.tools[input.toolName] as Tool.Any;
-          const approval = tool.needsApproval;
-          if (approval !== undefined && approval !== false) {
-            return programmaticOutcomeError(
-              undefined,
-              "ProgrammaticApprovalUnsupportedError",
-              `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`,
-            );
-          }
-          // Validate the encoded arguments against the owning parameter
-          // Schema before the handler can start; the pinned `Toolkit.handle`
-          // decodes internally, so the validated encoded form passes through
-          // (the same inversion as `prepareToolCall`).
-          const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
-            value: unknown,
-          ) => Effect.Effect<unknown, Schema.SchemaError>;
-          const invalidParameters = yield* decodeParameters(input.encodedArguments).pipe(
-            Effect.map(() => undefined),
-            Effect.catch((cause) =>
-              Effect.succeed(
-                programmaticOutcomeError(
-                  undefined,
-                  "ModelProtocolError",
-                  `Invalid parameters for Tool ${input.toolName}: ${cause.message}`,
-                ),
-              ),
-            ),
-          );
-          if (invalidParameters !== undefined) {
-            return invalidParameters;
-          }
-
-          // Mid-pass budget consumption (RUN-017): the Run-wide counter and
-          // the budget hook are both consumed before the handler starts, so
-          // exhaustion prevents the next call rather than the next Turn.
-          binding.context.programmaticToolCalls += 1;
-          if (binding.budget !== undefined) {
-            const exhausted = yield* provideHookServices(
-              binding.budget.consume({
-                modelCalls: 0,
-                inputTokens: 0,
-                outputTokens: 0,
-                totalTokens: 0,
-                toolCalls: 1,
-                costMicrousd: 0,
-                usage: emptyProgrammaticUsage,
-              }),
-              binding.hookServices,
-            ).pipe(
-              Effect.map(() => undefined),
-              Effect.catch((error) =>
-                Effect.succeed(
-                  programmaticOutcomeError(undefined, errorTag(error), errorMessage(error)),
-                ),
-              ),
-            );
-            if (exhausted !== undefined) {
-              return exhausted;
-            }
-          }
-
-          const index = state.nextIndex++;
-          const handleId = `${binding.outerToolCallId}#${index}`;
-          yield* Effect.logDebug("agent programmatic tool handler started").pipe(
-            Effect.annotateLogs({
-              agentId: binding.context.agentId,
-              runId: binding.context.runId,
-              turnId: binding.turnId,
-              toolCallId: binding.outerToolCallId,
-              toolName: input.toolName,
-              sequenceIndex: index,
-            }),
-          );
-          yield* Metric.update(toolCounter, 1);
-
-          let terminal:
-            | { readonly encodedResult: unknown; readonly isFailure: boolean }
-            | undefined;
-          const handlerFailed = yield* Stream.unwrap(
-            (
-              toolkit.handle as (
-                name: string,
-                params: unknown,
-                id: string,
-              ) => Effect.Effect<
-                Stream.Stream<Tool.HandlerResult<Tool.Any>, unknown, unknown>,
-                unknown,
-                unknown
-              >
-            )(input.toolName, input.encodedArguments, handleId).pipe(
-              Effect.withSpan("AgentRuntime.toolkit.handle"),
-            ),
-          ).pipe(
-            Stream.runForEach((result) =>
-              Effect.sync(() => {
-                if (!result.preliminary) {
-                  terminal = {
-                    encodedResult: result.encodedResult,
-                    isFailure: result.isFailure,
-                  };
-                }
-              }),
-            ),
-            Effect.map(() => undefined),
-            Effect.catch((error) => Effect.succeed(new BrokerHandlerFailure(error))),
-          );
-          if (handlerFailed instanceof BrokerHandlerFailure) {
-            return programmaticOutcomeError(
-              index,
-              errorTag(handlerFailed.error),
-              errorMessage(handlerFailed.error),
-            );
-          }
-          if (terminal === undefined) {
-            return programmaticOutcomeError(
-              index,
-              "ModelProtocolError",
-              `Tool Call ${handleId} completed without a terminal result`,
-            );
-          }
-          if (terminal.isFailure) {
-            return {
-              _tag: "ProgrammaticCallFailure",
-              index,
-              encodedResult: terminal.encodedResult,
-            } as const;
-          }
-          if (Option.isNone(Schema.decodeUnknownOption(Schema.Json)(terminal.encodedResult))) {
-            return programmaticOutcomeError(
-              index,
-              "ModelProtocolError",
-              `Tool ${input.toolName} produced a success encoding outside JSON`,
-            );
-          }
-          let encodedResult = terminal.encodedResult;
-          if (passOptions?.redactResult !== undefined) {
-            encodedResult = yield* passOptions.redactResult(encodedResult);
-          }
-          if (passOptions?.maxResultBytes !== undefined) {
-            const bytes = brokerEncodedByteLength(encodedResult);
-            if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+        const body = (input: ProgrammaticToolInput): Effect.Effect<ProgrammaticCallOutcome> =>
+          Effect.gen(function* () {
+            if (!hasTool(toolkit.tools, input.toolName)) {
               return programmaticOutcomeError(
-                index,
-                "ProgrammaticResultLimitError",
-                `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                undefined,
+                "ProgrammaticToolUnknownError",
+                `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`,
               );
             }
-          }
-          return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
-        }).pipe(
-          Effect.provideContext(handlerServices),
-          Effect.withSpan("AgentRuntime.programmaticTool", {
-            attributes: {
-              agentId: binding.context.agentId,
-              runId: binding.context.runId,
-              turnId: binding.turnId,
-              toolCallId: binding.outerToolCallId,
-              toolName: input.toolName,
-            },
-          }),
-        ) as Effect.Effect<ProgrammaticCallOutcome>;
+            const tool = toolkit.tools[input.toolName] as Tool.Any;
+            const approval = tool.needsApproval;
+            if (approval !== undefined && approval !== false) {
+              return programmaticOutcomeError(
+                undefined,
+                "ProgrammaticApprovalUnsupportedError",
+                `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`,
+              );
+            }
+            // Validate the encoded arguments against the owning parameter
+            // Schema before the handler can start; the pinned `Toolkit.handle`
+            // decodes internally, so the validated encoded form passes through
+            // (the same inversion as `prepareToolCall`).
+            const decodeParameters = Schema.decodeUnknownEffect(tool.parametersSchema) as (
+              value: unknown,
+            ) => Effect.Effect<unknown, Schema.SchemaError>;
+            const invalidParameters = yield* decodeParameters(input.encodedArguments).pipe(
+              Effect.map(() => undefined),
+              Effect.catch((cause) =>
+                Effect.succeed(
+                  programmaticOutcomeError(
+                    undefined,
+                    "ModelProtocolError",
+                    `Invalid parameters for Tool ${input.toolName}: ${cause.message}`,
+                  ),
+                ),
+              ),
+            );
+            if (invalidParameters !== undefined) {
+              return invalidParameters;
+            }
 
-      const pass: ToolBrokerPass = {
-        invoke: (input) =>
-          Effect.suspend(() => {
-            // Strict sequentiality (RUN-016): a call issued while another
-            // from this pass is unsettled fails typed without acquiring an
-            // identity or consuming budget; the rejection does not release
-            // the in-flight owner's claim.
-            if (state.inFlight) {
-              return Effect.succeed(
-                programmaticOutcomeError(
-                  undefined,
-                  "ProgrammaticCallConcurrencyError",
-                  `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`,
+            // Mid-pass budget consumption (RUN-017). The policy check and the
+            // Run-wide reservation are adjacent with no interleaving point, so
+            // parallel outer handlers cannot both observe the last remaining
+            // slot; a rejection after the reservation rolls it back so the
+            // counter always equals the handlers that actually started. A
+            // budget-hook failure becomes a call outcome rather than failing
+            // the Run mid-pass: exhaustion is re-enforced at the next Turn
+            // seam, where `consumeUsage` and the stream guards stop the Run.
+            const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
+            if (used + 1 > binding.maxToolCalls) {
+              return programmaticOutcomeError(
+                undefined,
+                "AgentPolicyError",
+                `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`,
+              );
+            }
+            binding.context.programmaticToolCalls += 1;
+            if (binding.budget !== undefined) {
+              const exhausted = yield* provideHookServices(
+                binding.budget.consume({
+                  modelCalls: 0,
+                  inputTokens: 0,
+                  outputTokens: 0,
+                  totalTokens: 0,
+                  toolCalls: 1,
+                  costMicrousd: 0,
+                  usage: emptyProgrammaticUsage,
+                }),
+                binding.hookServices,
+              ).pipe(
+                Effect.map(() => undefined),
+                Effect.catch((error) =>
+                  Effect.succeed(
+                    programmaticOutcomeError(undefined, errorTag(error), errorMessage(error)),
+                  ),
                 ),
               );
+              if (exhausted !== undefined) {
+                binding.context.programmaticToolCalls -= 1;
+                return exhausted;
+              }
             }
-            state.inFlight = true;
-            return body(input).pipe(
-              Effect.ensuring(
+
+            const index = state.nextIndex++;
+            const handleId = `${binding.outerToolCallId}#${index}`;
+            yield* Effect.logDebug("agent programmatic tool handler started").pipe(
+              Effect.annotateLogs({
+                agentId: binding.context.agentId,
+                runId: binding.context.runId,
+                turnId: binding.turnId,
+                toolCallId: binding.outerToolCallId,
+                toolName: input.toolName,
+                sequenceIndex: index,
+              }),
+            );
+            yield* Metric.update(toolCounter, 1);
+
+            let terminal:
+              | { readonly encodedResult: unknown; readonly isFailure: boolean }
+              | undefined;
+            let resultAfterTerminal = false;
+            const handlerFailed = yield* Stream.unwrap(
+              (
+                toolkit.handle as (
+                  name: string,
+                  params: unknown,
+                  id: string,
+                ) => Effect.Effect<
+                  Stream.Stream<Tool.HandlerResult<Tool.Any>, unknown, unknown>,
+                  unknown,
+                  unknown
+                >
+              )(input.toolName, input.encodedArguments, handleId).pipe(
+                Effect.withSpan("AgentRuntime.toolkit.handle"),
+              ),
+            ).pipe(
+              Stream.runForEach((result) =>
                 Effect.sync(() => {
-                  state.inFlight = false;
+                  // The direct path rejects a second result after the terminal
+                  // one; the broker preserves that protocol violation instead
+                  // of silently keeping the last value.
+                  if (terminal !== undefined) {
+                    resultAfterTerminal = true;
+                    return;
+                  }
+                  if (!result.preliminary) {
+                    terminal = {
+                      encodedResult: result.encodedResult,
+                      isFailure: result.isFailure,
+                    };
+                  }
                 }),
               ),
+              Effect.map(() => undefined),
+              Effect.catch((error) => Effect.succeed(new BrokerHandlerFailure(error))),
             );
-          }),
-      };
-      return pass;
-    }),
-});
+            if (handlerFailed instanceof BrokerHandlerFailure) {
+              return programmaticOutcomeError(
+                index,
+                errorTag(handlerFailed.error),
+                errorMessage(handlerFailed.error),
+              );
+            }
+            if (resultAfterTerminal) {
+              return programmaticOutcomeError(
+                index,
+                "ModelProtocolError",
+                `Tool Call ${handleId} produced more than one terminal result`,
+              );
+            }
+            if (terminal === undefined) {
+              return programmaticOutcomeError(
+                index,
+                "ModelProtocolError",
+                `Tool Call ${handleId} completed without a terminal result`,
+              );
+            }
+            if (terminal.isFailure) {
+              return {
+                _tag: "ProgrammaticCallFailure",
+                index,
+                encodedResult: terminal.encodedResult,
+              } as const;
+            }
+            if (Option.isNone(Schema.decodeUnknownOption(Schema.Json)(terminal.encodedResult))) {
+              return programmaticOutcomeError(
+                index,
+                "ModelProtocolError",
+                `Tool ${input.toolName} produced a success encoding outside JSON`,
+              );
+            }
+            let encodedResult = terminal.encodedResult;
+            if (passOptions?.redactResult !== undefined) {
+              // A redactor is a substitution point: its replacement re-crosses
+              // the JSON boundary or the call fails closed.
+              const redacted = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
+              if (Option.isNone(redacted)) {
+                return programmaticOutcomeError(
+                  index,
+                  "ModelProtocolError",
+                  `The redacted result for Tool ${input.toolName} is outside the JSON surface`,
+                );
+              }
+              encodedResult = redacted.value;
+            }
+            if (passOptions?.maxResultBytes !== undefined) {
+              const bytes = brokerEncodedByteLength(encodedResult);
+              if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+                return programmaticOutcomeError(
+                  index,
+                  "ProgrammaticResultLimitError",
+                  `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`,
+                );
+              }
+            }
+            return { _tag: "ProgrammaticCallSuccess", index, encodedResult } as const;
+          }).pipe(
+            Effect.provideContext(handlerServices),
+            Effect.withSpan("AgentRuntime.programmaticTool", {
+              attributes: {
+                agentId: binding.context.agentId,
+                runId: binding.context.runId,
+                turnId: binding.turnId,
+                toolCallId: binding.outerToolCallId,
+                toolName: input.toolName,
+              },
+            }),
+          ) as Effect.Effect<ProgrammaticCallOutcome>;
+
+        const pass: ToolBrokerPass = {
+          invoke: (input) =>
+            Effect.suspend(() => {
+              // A pass retained past its outer Tool Call cannot execute
+              // Tools outside the batch's scheduling authority.
+              if (lifecycle.closed) {
+                return Effect.succeed(
+                  programmaticOutcomeError(
+                    undefined,
+                    "ToolBrokerUnavailableError",
+                    "The outer Tool Call for this pass has already settled",
+                  ),
+                );
+              }
+              // Strict sequentiality (RUN-016): a call issued while another
+              // from this pass is unsettled fails typed without acquiring an
+              // identity or consuming budget; the rejection does not release
+              // the in-flight owner's claim.
+              if (state.inFlight) {
+                return Effect.succeed(
+                  programmaticOutcomeError(
+                    undefined,
+                    "ProgrammaticCallConcurrencyError",
+                    `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`,
+                  ),
+                );
+              }
+              state.inFlight = true;
+              return body(input).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    state.inFlight = false;
+                  }),
+                ),
+              );
+            }),
+        };
+        return pass;
+      }),
+  };
+  return {
+    service,
+    close: () => {
+      lifecycle.closed = true;
+    },
+  };
+};
 
 /**
  * Ephemeral pass-through `DurableStep` provided when `RunOptions.durability`

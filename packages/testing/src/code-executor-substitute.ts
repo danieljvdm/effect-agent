@@ -430,6 +430,18 @@ const executeInProcess: CodeExecutorExecute = Effect.fn("InProcessCodeExecutor.e
     );
     const finishedAt = yield* Clock.currentTimeMillis;
 
+    // An unawaited burst can outrun the server: the program may return before
+    // the over-limit entry is dequeued, so the admission counter is the
+    // authority — a pass that ISSUED more calls than the cap fails even when
+    // its promise settled first.
+    if (issuedHostCalls > request.limits.maxHostCalls) {
+      return yield* CodeHostCallLimitError.make({
+        implementation: inProcessCodeExecutorImplementation,
+        limit: request.limits.maxHostCalls,
+        logs: [...capture.lines],
+      });
+    }
+
     const value = yield* Schema.decodeUnknownEffect(Schema.Json)(returned).pipe(
       Effect.mapError(() =>
         CodeProgramFailedError.make({

@@ -110,7 +110,14 @@ export interface RunUsageDelta {
   readonly usage: Response.Usage;
 }
 
-/** Dependency-neutral hierarchical budget hook. A typed failure stops the Run. */
+/**
+ * Dependency-neutral hierarchical budget hook. A typed failure at a Turn-seam
+ * consumption or a stream-guard pull stops the Run. A mid-pass programmatic
+ * consumption failure instead becomes that call's outcome (RUN-017 —
+ * exhaustion prevents the call): the Run still stops at the next Turn seam,
+ * because the following model call's `consume` and the guarded stream pulls
+ * re-enforce the same budget.
+ */
 export interface RunBudgetHook<Error = never, Requirements = never> {
   /**
    * Guard one active model or Tool stream pull. Hierarchical budget adapters

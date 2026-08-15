@@ -91,9 +91,14 @@ export class CodeModeFailure extends Schema.TaggedError<CodeModeFailure>()("Code
 /** The namespace-record shape accepted by `CodeMode.make`. */
 export type CodeModeNamespaces = Record<string, Record<string, Tool.Any>>;
 
-/** Union of every Tool selected across all namespaces. */
-export type CodeModeSelectedTool<Namespaces extends CodeModeNamespaces> =
-  Namespaces[keyof Namespaces][keyof Namespaces[keyof Namespaces]];
+/**
+ * Union of every Tool selected across all namespaces, computed distributively
+ * per namespace: indexing the namespace union with the INTERSECTION of method
+ * keys would erase every Tool once two namespaces have disjoint methods.
+ */
+export type CodeModeSelectedTool<Namespaces extends CodeModeNamespaces> = {
+  [Namespace in keyof Namespaces]: Namespaces[Namespace][keyof Namespaces[Namespace]];
+}[keyof Namespaces];
 
 /** The selected Tools re-keyed by their own Tool names. */
 export type CodeModeSelectedRecord<Namespaces extends CodeModeNamespaces> = {
@@ -419,44 +424,80 @@ const executionFailureMessage = (error: CodeExecutionError): string => {
   }
 };
 
-const failureFromExecution = (
+/** UTF-8-aware truncation so a message can never exceed the aggregate budget. */
+const truncateToUtf8Bytes = (value: string, maxBytes: number): string => {
+  if (utf8ByteLength(value) <= maxBytes) {
+    return value;
+  }
+  let output = "";
+  let used = 0;
+  for (const character of value) {
+    const bytes = utf8ByteLength(character);
+    if (used + bytes + 3 > maxBytes) {
+      break;
+    }
+    output += character;
+    used += bytes;
+  }
+  return `${output}…`;
+};
+
+type EgressRedactor = NonNullable<CodeModeOptions<CodeModeNamespaces>["redactEgress"]>;
+
+/**
+ * The failure half of the aggregate egress policy (CAP-016): the configured
+ * redaction pass covers failure logs and thrown values exactly like success
+ * egress — a program cannot leak by logging and then throwing — and the
+ * message itself is bounded by the budget, not only by its own schema cap.
+ */
+const failureEgress = (
   error: CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError,
   maxEgressBytes: number,
-): CodeModeFailure => {
-  if (
-    error._tag === "ToolBrokerUnavailableError" ||
-    error._tag === "ToolBrokerConfigurationError"
-  ) {
+  redact: EgressRedactor | undefined,
+): Effect.Effect<CodeModeFailure> =>
+  Effect.gen(function* () {
+    if (
+      error._tag === "ToolBrokerUnavailableError" ||
+      error._tag === "ToolBrokerConfigurationError"
+    ) {
+      return CodeModeFailure.make({
+        errorTag: error._tag,
+        message: truncateToUtf8Bytes(boundedMessage(error.message), maxEgressBytes),
+        logs: [],
+      });
+    }
+    let logs: ReadonlyArray<string> = "logs" in error ? error.logs : [];
+    let candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
+    if (redact !== undefined) {
+      const redacted = yield* redact({ result: candidateThrown ?? null, logs });
+      logs = redacted.logs;
+      candidateThrown = candidateThrown === undefined ? undefined : redacted.result;
+    }
+    const message = truncateToUtf8Bytes(
+      boundedMessage(executionFailureMessage(error)),
+      maxEgressBytes,
+    );
+    const messageBytes = utf8ByteLength(message);
+    // `thrown` is included only when it fits TOGETHER with the message inside
+    // the aggregate budget, and it reduces the log allowance only when it is
+    // actually included.
+    const candidateBytes =
+      candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
+    const includeThrown =
+      candidateThrown !== undefined &&
+      candidateBytes !== undefined &&
+      messageBytes + candidateBytes <= maxEgressBytes;
+    const remaining = Math.max(
+      0,
+      maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
+    );
     return CodeModeFailure.make({
       errorTag: error._tag,
-      message: boundedMessage(error.message),
-      logs: [],
+      message,
+      logs: budgetedLogs(logs, remaining),
+      ...(includeThrown ? { thrown: candidateThrown } : {}),
     });
-  }
-  const message = boundedMessage(executionFailureMessage(error));
-  const logs = "logs" in error ? error.logs : [];
-  const messageBytes = utf8ByteLength(message);
-  // `thrown` is included only when it fits TOGETHER with the message inside
-  // the aggregate budget, and it reduces the log allowance only when it is
-  // actually included.
-  const candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
-  const candidateBytes =
-    candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
-  const includeThrown =
-    candidateThrown !== undefined &&
-    candidateBytes !== undefined &&
-    messageBytes + candidateBytes <= maxEgressBytes;
-  const remaining = Math.max(
-    0,
-    maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
-  );
-  return CodeModeFailure.make({
-    errorTag: error._tag,
-    message,
-    logs: budgetedLogs(logs, remaining),
-    ...(includeThrown ? { thrown: candidateThrown } : {}),
   });
-};
 
 // ---------------------------------------------------------------------------
 // Builder
@@ -682,7 +723,11 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
         CodeExecutionError | ToolBrokerUnavailableError | ToolBrokerConfigurationError
       >;
       const result = yield* execution.pipe(
-        Effect.catch((error) => Effect.fail(failureFromExecution(error, maxEgressBytes))),
+        Effect.catch((error) =>
+          failureEgress(error, maxEgressBytes, options.redactEgress).pipe(
+            Effect.flatMap((failure) => Effect.fail(failure)),
+          ),
+        ),
       );
       return yield* successEgress(result);
     });
