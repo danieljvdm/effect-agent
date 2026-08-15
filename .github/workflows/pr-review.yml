@@ -19,8 +19,10 @@ concurrency:
 
 jobs:
   review:
-    if: ${{ !github.event.pull_request.draft }}
     name: review
+    # Drafts wait for ready_for_review (the action also skips drafts
+    # internally; this guard saves the runner spin-up).
+    if: ${{ !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

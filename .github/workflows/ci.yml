@@ -152,13 +152,19 @@ jobs:
           path: node_modules/.vite/task-cache
           key: ${{ steps.task-cache.outputs.cache-primary-key }}
 
-  # Fan-in for branch protection: the required status check is named `ready`,
-  # and it succeeds only when every parallel gate succeeded.
+  # Fan-in for branch protection: the required status check is named `ready`.
+  # It runs unconditionally and asserts every gate's result, because GitHub
+  # treats a SKIPPED required check as satisfied — a fan-in that merely gets
+  # skipped when a dependency fails would let the failure merge.
   ready:
     name: ready
     needs: [checks, test, build]
+    if: ${{ always() }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: All gates green
-        run: echo "Static checks, tests, and build all passed."
+      - name: Verify all gates passed
+        run: |
+          test "${{ needs.checks.result }}" = "success"
+          test "${{ needs.test.result }}" = "success"
+          test "${{ needs.build.result }}" = "success"
