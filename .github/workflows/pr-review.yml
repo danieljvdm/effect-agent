@@ -10,7 +10,9 @@ on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize, labeled]
     # Pure generated Changesets updates are verified and checked by the trusted
-    # Release workflow. An unexpected path makes this workflow apply normally.
+    # Release workflow. GITHUB_TOKEN updates cannot trigger this workflow, so
+    # their exact-tree verifier rejects unexpected paths. An unexpected path
+    # added by a later human update makes this workflow apply normally.
     paths-ignore:
       - ".changeset/**"
       - "bun.lock"

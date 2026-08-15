@@ -159,11 +159,14 @@ by Changesets, validates its repository, branch, base, and commit identities,
 runs `changeset version` and lockfile generation in a temporary worktree, and
 requires the resulting complete Git tree to match the proposed head
 byte-for-byte. It posts the required `ready` check directly to that immutable
-head only after successful verification. An unexpected path invokes the
-ordinary PR workflows; a later human mutation has a new head without the
-verified check and therefore remains unmergeable. After merge, the release
-workflow still performs a frozen install and rebuilds the exact versioned tree
-before any registry mutation.
+head only after successful verification. GitHub suppresses `pull_request`
+workflow runs caused by `GITHUB_TOKEN`, so an unexpected path in an automated
+Changesets update is rejected by that exact-tree verification and receives a
+failing `ready`; path routing is not its security boundary. A later human
+mutation with an unexpected path invokes the ordinary PR workflows, while a
+generated-only mutation has a new head without a verified check and remains
+unmergeable. After merge, the release workflow still performs a frozen install
+and rebuilds the exact versioned tree before any registry mutation.
 
 The version/publish job pins every external action to a full commit SHA and has no Checks API
 permission. It exports only the resolved release PR identity and verifier outcome to a separate,
@@ -294,12 +297,12 @@ the exact Bun version with a frozen-lockfile install, then run the `ready` gate 
 jobs — Static checks (`bun run check`), Tests (`bun run test`), and Build (`bun run build`) — with
 a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
 Changesets release PR is the only exception: CI and PR Review path-filter the exact set of files
-Changesets may generate. GitHub deliberately leaves `pull_request` workflows created through
-`GITHUB_TOKEN` approval-required, so the trusted Release run validates the PR lineage, regenerates
-the complete tree from its checked-out `main` commit, and creates the required `ready` check on the
-verified head through the Checks API. The check is success only after an exact-tree comparison; a
-verification failure posts failure, and a resolution failure posts nothing. Unexpected files route
-through the ordinary workflows, while a manual generated-path-only push receives no new `ready`
+Changesets may generate. GitHub suppresses `pull_request` workflows caused by `GITHUB_TOKEN`, so
+the trusted Release run validates the PR lineage, regenerates the complete tree from its checked-out
+`main` commit, and creates the required `ready` check on the verified head through the Checks API.
+The check is success only after an exact-tree comparison; unexpected files or any other tree
+mismatch post failure, and a resolution failure posts nothing. For later human updates, unexpected
+paths invoke the ordinary workflows, while a generated-path-only push receives no new `ready`
 check. Checks authority is isolated to an action-free job that revalidates the live head/base and
 the strict up-to-date branch rule before reporting. Both cases are fail-closed.
 

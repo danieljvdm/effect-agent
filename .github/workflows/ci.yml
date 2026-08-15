@@ -18,8 +18,9 @@ name: CI
 on:
   # Changesets release PRs contain only these generated paths. They receive a
   # `ready` check from the trusted main-branch Release workflow after exact
-  # regeneration. Any unexpected path stops matching this filter and routes
-  # the PR through ordinary CI (approval-required for GITHUB_TOKEN updates).
+  # regeneration. GITHUB_TOKEN updates cannot trigger this workflow, so the
+  # verifier itself rejects any unexpected path. A later human update with an
+  # unexpected path stops matching this filter and runs ordinary CI.
   pull_request:
     paths-ignore:
       - ".changeset/**"

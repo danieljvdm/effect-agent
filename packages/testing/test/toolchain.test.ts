@@ -316,7 +316,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
     }),
   );
 
-  it.effect("routes generated release PRs through a trusted integrity gate", () =>
+  it.effect("keeps generated release PRs behind a trusted integrity gate", () =>
     Effect.gen(function* () {
       const [ciWorkflow, reviewWorkflow, releaseWorkflow, rootManifest] = yield* Effect.all([
         readWorkflow(".github/workflows/ci.yml"),
