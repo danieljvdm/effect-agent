@@ -37687,7 +37687,7 @@ var layer14 = (delegation, childBinding, options) => {
       };
       const allowanceOption = delegation.toolCallAllowance;
       const extracted = allowanceOption?.fromParameters?.(parameters);
-      const requestedAllowance = extracted !== undefined && Number.isFinite(extracted) ? extracted : allowanceOption !== undefined && Number.isFinite(allowanceOption.default) ? allowanceOption.default : undefined;
+      const requestedAllowance = allowanceOption === undefined ? undefined : extracted !== undefined && Number.isFinite(extracted) ? extracted : Number.isFinite(allowanceOption.default) ? allowanceOption.default : delegation.policy.maxToolCalls;
       const toolCallAllowance = requestedAllowance === undefined ? undefined : Math.min(Math.max(1, Math.floor(requestedAllowance)), delegation.policy.maxToolCalls);
       const childOptions = {
         ...seededChild,

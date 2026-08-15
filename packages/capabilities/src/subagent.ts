@@ -1402,15 +1402,18 @@ const layer = <
       // Definition policy stays the engine-side ceiling (RUN-021).
       const allowanceOption = delegation.toolCallAllowance;
       // Fail closed on non-finite values (SUB-034): a model-derived NaN falls
-      // back to the author default, and a non-finite default yields no
-      // allowance at all — the child Definition policy stays the bound.
+      // back to the author default, and a non-finite default falls back to
+      // the delegation's own reservation slice — a CONFIGURED allowance never
+      // silently widens to the child Definition policy.
       const extracted = allowanceOption?.fromParameters?.(parameters);
       const requestedAllowance =
-        extracted !== undefined && Number.isFinite(extracted)
-          ? extracted
-          : allowanceOption !== undefined && Number.isFinite(allowanceOption.default)
-            ? allowanceOption.default
-            : undefined;
+        allowanceOption === undefined
+          ? undefined
+          : extracted !== undefined && Number.isFinite(extracted)
+            ? extracted
+            : Number.isFinite(allowanceOption.default)
+              ? allowanceOption.default
+              : delegation.policy.maxToolCalls;
       const toolCallAllowance =
         requestedAllowance === undefined
           ? undefined

@@ -2531,6 +2531,74 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
   );
 
   it.effect(
+    "SUB-034 a configured allowance with a non-finite default clamps to the reservation slice, never the Definition policy",
+    () =>
+      Effect.gen(function* () {
+        const brokenDefaultDelegation = Subagent.define("delegate_allowance_broken", {
+          description: "Allowance configured with a broken default.",
+          target: probingChildDefinition,
+          parameters: ResearchParams,
+          success: ResearchFindings,
+          failure: ResearchDelegationFailed,
+          prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+          projectResult: (output, context) =>
+            Effect.succeed({
+              summary: `${context.budgetExhausted ? "partial:" : "finding:"}${output.answer}`,
+            }),
+          policy: allowancePolicy,
+          toolCallAllowance: { default: Number.NaN },
+        });
+        const brokenCoordinator = Agent.define("allowance-broken-coordinator", {
+          input: Schema.Struct({ mission: Schema.String }),
+          output: Schema.Struct({ report: Schema.String }),
+          instructions: "Delegate, then answer as JSON.",
+          toolkit: Toolkit.make(brokenDefaultDelegation.tool),
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 3,
+            maxDuration: "30 seconds",
+            toolConcurrency: 2,
+          }),
+        });
+        const probeStarts = yield* Ref.make(0);
+        const childBinding = Agent.withModel(
+          probingChildDefinition,
+          // Declares 5: above the slice ceiling of 4, below the Definition's 8.
+          probingChildModel([{ topic: "small", declares: 5, answer: '{"answer":"sliced"}' }]),
+        );
+        const parent = Agent.withModel(
+          brokenCoordinator,
+          delegatingModel(
+            "parent-allowance-broken",
+            "delegate_allowance_broken",
+            [{ id: "call-1", params: { topic: "small" } }],
+            '{"report":"done"}',
+          ),
+        );
+        const probeLayer = probeToolkit.toLayer({
+          probe_doc: ({ ref }) =>
+            Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
+        });
+        const runtimeLayer = SubagentRuntime.layer(brokenDefaultDelegation, childBinding, {
+          mapChildFailure,
+        }).pipe(Layer.provide(probeLayer));
+
+        const detached = yield* AgentRuntime.start(
+          parent,
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-allowance-broken") },
+        ).pipe(Effect.provide(runtimeLayer));
+        const result = yield* detached.await;
+
+        // A broken default clamps to the SLICE (4): the batch of 5 is
+        // rejected. Dropping the allowance entirely would have run all five
+        // probes under the Definition's ceiling of 8.
+        expect(result.output).toEqual({ report: "done" });
+        expect(yield* Ref.get(probeStarts)).toBe(0);
+      }),
+  );
+
+  it.effect(
     "SUB-034 a non-finite model-granted allowance falls back fail-closed to the default",
     () =>
       Effect.gen(function* () {
