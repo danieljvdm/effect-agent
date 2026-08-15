@@ -2,7 +2,7 @@ import type { Agent } from "@effect-agent/core";
 import { Prompt, Tool } from "effect/unstable/ai";
 
 /**
- * Model-visible final-output contract (proposed default).
+ * Model-visible final-output contract (RUN-028).
  *
  * The interpreter's only output-conformance point is `decodeFinalOutput`,
  * which validates the final text after the model has already finished; the
@@ -17,9 +17,9 @@ import { Prompt, Tool } from "effect/unstable/ai";
  * into official history, so canonical records, run events, and the committed
  * DN/DC golden are unchanged.
  *
- * Proposed default under owner review: deleting this module, its single
- * `makeTurn` call site, and its test file restores the prior behavior
- * exactly.
+ * Reversal: deleting this module, its single `makeTurn` call site, the
+ * `RunContextRequest.outputContract` field, and its test file restores the
+ * prior behavior exactly.
  */
 
 /** Rendering outcome for one definition's output Schema. */

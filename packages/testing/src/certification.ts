@@ -166,6 +166,11 @@ export const CERTIFICATION_SCENARIOS: ReadonlyArray<CertificationScenario> = [
  */
 export const TIER2_UNREACHED_LOCATIONS: ReadonlyArray<DurableRuntimeFailpointLocation> = [
   "abort:after-intent",
+  // Compaction requires a `contextTokenLimit` policy plus prior-Run history
+  // none of the six scenario shapes carries; pinned in-process by the
+  // RUN-026 rows in `packages/testing/test/durable-runtime.test.ts`
+  // (compaction failpoint idempotence across re-drive).
+  "compaction:after-canonical-append",
   "resolve:after-intent",
   "subagent:after-child-abort-intent",
 ];

@@ -717,6 +717,8 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
         runId: "run:{submissionId}",
         turnId: "turn:run:{submissionId}:1",
         turn: 1,
+        inputTokens: 128,
+        outputTokens: 96,
         messages: {
           content: [
             {
@@ -864,6 +866,8 @@ export const phase6TravelPlannerGoldenEvidence: Schema.Json = [
         runId: "run:{submissionId}",
         turnId: "turn:run:{submissionId}:2",
         turn: 2,
+        inputTokens: 128,
+        outputTokens: 96,
         messages: {
           content: [
             {

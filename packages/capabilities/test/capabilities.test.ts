@@ -673,8 +673,11 @@ describe("capability contracts", () => {
       );
       yield* tenantBudget.consume(
         UsageDelta.make({
+          modelCalls: 1,
           inputTokens: 3,
           outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
           toolCalls: 0,
           costMicrousd: 0,
         }),
@@ -682,8 +685,11 @@ describe("capability contracts", () => {
       const exit = yield* tenantBudget
         .consume(
           UsageDelta.make({
+            modelCalls: 1,
             inputTokens: 2,
             outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheWriteInputTokens: 0,
             toolCalls: 0,
             costMicrousd: 0,
           }),
@@ -713,7 +719,15 @@ describe("capability contracts", () => {
         }),
       );
       yield* first.consume(
-        UsageDelta.make({ inputTokens: 0, outputTokens: 0, toolCalls: 1, costMicrousd: 0 }),
+        UsageDelta.make({
+          modelCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+          toolCalls: 1,
+          costMicrousd: 0,
+        }),
       );
       const reattached = yield* globalBudget.child(
         UsageBudgetNodeConfig.make({
@@ -725,7 +739,15 @@ describe("capability contracts", () => {
       expect((yield* reattached.snapshot).toolCalls).toBe(1);
       const exceeded = yield* reattached
         .consume(
-          UsageDelta.make({ inputTokens: 0, outputTokens: 0, toolCalls: 1, costMicrousd: 0 }),
+          UsageDelta.make({
+            modelCalls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheWriteInputTokens: 0,
+            toolCalls: 1,
+            costMicrousd: 0,
+          }),
         )
         .pipe(Effect.flip);
       const conflict = yield* globalBudget
@@ -807,6 +829,120 @@ describe("capability contracts", () => {
       const fiber = yield* hook.guard(Effect.never).pipe(Effect.forkChild);
       yield* TestClock.adjust("1 second");
       expect(Exit.isFailure(yield* Fiber.await(fiber))).toBe(true);
+    }),
+  );
+
+  it.effect("CAP-017: accumulates cache splits and exposes last-call usage in snapshots", () =>
+    Effect.gen(function* () {
+      const budget = yield* makeUsageBudgetRoot(
+        UsageBudgetNodeConfig.make({
+          level: "run",
+          id: "run-cache",
+          limits: UsageBudgetLimits.make({}),
+        }),
+      );
+      yield* budget.consume(
+        UsageDelta.make({
+          modelCalls: 1,
+          inputTokens: 100,
+          outputTokens: 10,
+          toolCalls: 0,
+          costMicrousd: 0,
+          cacheReadInputTokens: 60,
+          cacheWriteInputTokens: 30,
+        }),
+      );
+      yield* budget.consume(
+        UsageDelta.make({
+          modelCalls: 1,
+          inputTokens: 150,
+          outputTokens: 5,
+          toolCalls: 1,
+          costMicrousd: 0,
+          cacheReadInputTokens: 120,
+          cacheWriteInputTokens: 0,
+        }),
+      );
+      yield* budget.consume(
+        UsageDelta.make({
+          modelCalls: 0,
+          inputTokens: 0,
+          outputTokens: 0,
+          toolCalls: 1,
+          costMicrousd: 0,
+          cacheReadInputTokens: 0,
+          cacheWriteInputTokens: 0,
+        }),
+      );
+
+      expect(yield* budget.snapshot).toMatchObject({
+        inputTokens: 250,
+        outputTokens: 15,
+        cacheReadInputTokens: 180,
+        cacheWriteInputTokens: 30,
+        lastInputTokens: 150,
+        lastOutputTokens: 5,
+        toolCalls: 2,
+      });
+      yield* TestClock.adjust("1 second");
+      expect(yield* budget.snapshot).toMatchObject({
+        cacheReadInputTokens: 180,
+        cacheWriteInputTokens: 30,
+        lastInputTokens: 150,
+        lastOutputTokens: 5,
+        elapsedMillis: 1_000,
+      });
+    }),
+  );
+
+  it.effect("CAP-017: propagates cache splits through the hierarchy and the engine adapter", () =>
+    Effect.gen(function* () {
+      const globalBudget = yield* makeUsageBudgetRoot(
+        UsageBudgetNodeConfig.make({
+          level: "global",
+          id: "all",
+          limits: UsageBudgetLimits.make({}),
+        }),
+      );
+      const runBudget = yield* globalBudget.child(
+        UsageBudgetNodeConfig.make({
+          level: "run",
+          id: "run-1",
+          limits: UsageBudgetLimits.make({}),
+        }),
+      );
+      const hook = toRunBudgetHook(runBudget);
+      yield* hook.consume({
+        modelCalls: 1,
+        inputTokens: 9,
+        outputTokens: 3,
+        totalTokens: 12,
+        toolCalls: 0,
+        costMicrousd: 0,
+        usage: Response.Usage.make({
+          inputTokens: { total: 9, cacheRead: 4, cacheWrite: 2 },
+          outputTokens: { total: 3 },
+        }),
+      });
+      yield* hook.consume({
+        modelCalls: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+        toolCalls: 1,
+        costMicrousd: 0,
+        usage: Response.Usage.make({ inputTokens: {}, outputTokens: {} }),
+      });
+
+      for (const node of [globalBudget, runBudget]) {
+        expect(yield* node.snapshot).toMatchObject({
+          inputTokens: 9,
+          cacheReadInputTokens: 4,
+          cacheWriteInputTokens: 2,
+          lastInputTokens: 9,
+          lastOutputTokens: 3,
+        });
+      }
     }),
   );
 

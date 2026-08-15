@@ -82,7 +82,7 @@ export interface RunContextRequest {
   readonly source: Prompt.Prompt;
   /**
    * The exact model-visible final-output contract the engine appends to the
-   * prepared prompt after this hook returns (proposed default), or
+   * prepared prompt after this hook returns (RUN-028), or
    * undefined when the definition's output Schema cannot render to JSON
    * Schema. Exposed so a limit-targeting adapter can reserve the contract's
    * overhead in its own window calculation; the hook can size for the
@@ -167,6 +167,29 @@ export interface RunTurnResponseCommit {
 }
 
 /**
+ * One compaction decision the engine applied to its model-visible view
+ * (RUN-026). The durable coordinator owns the canonical
+ * `coversThrough` selection — the engine reports only what it decided and the
+ * summary it produced, because in-memory message indices do not map to
+ * canonical record sequences at this seam.
+ */
+export interface RunCompactionCommit {
+  readonly turn: number;
+  readonly kind: "clear-tool-results" | "summarize";
+  /** Present exactly when `kind` is `"summarize"`. */
+  readonly summary?: string | undefined;
+  readonly tokensBeforeEstimate: number;
+  readonly tokensAfterEstimate: number;
+}
+
+/** One completed model call's provider-reported usage, staged for the Turn's canonical commit. */
+export interface RunTurnUsage {
+  readonly turn: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+}
+
+/**
  * Dependency-neutral durability seam implemented by a durable coordinator.
  *
  * Invocation ordering inside one Tool-declaring Turn is normative:
@@ -189,6 +212,26 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
     calls: ReadonlyArray<RunToolCallDescriptor>,
   ) => Effect.Effect<void, Error, Requirements>;
   readonly step: RunStepHook<Error, Requirements>;
+  /**
+   * RUN-026: called at the pre-Turn seam right after the engine applied a
+   * compaction to its model-visible view and BEFORE the model call whose
+   * prompt reflects it, so a crash between the two resumes onto the compacted
+   * projection. Required by the durability protocol: a coordinator that
+   * silently dropped the record would let the engine use a compacted prompt
+   * that recovery cannot reproduce.
+   */
+  readonly commitCompaction: (
+    commit: RunCompactionCommit,
+  ) => Effect.Effect<void, Error, Requirements>;
+  /**
+   * RUN-023: stage one completed model call's usage for the Turn's canonical
+   * commit (the response record carries it for resume re-seeding). Staging is
+   * not itself a durable mutation, but the member is required by the
+   * durability protocol: dropping it writes response records without the
+   * usage a later Attempt needs, so ownership changes would silently reset
+   * token budgets instead of failing closed.
+   */
+  readonly noteTurnUsage: (usage: RunTurnUsage) => Effect.Effect<void, Error, Requirements>;
 }
 
 /**
@@ -430,6 +473,13 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    */
   readonly resume?: RunTurnResume | undefined;
   /**
+   * RUN-023: cumulative usage of the Run's PRIOR Attempts, projected from the
+   * canonical response records, seeding the fresh Attempt's counters so token
+   * budgets and the compaction trigger keep accounting across ownership
+   * changes. Absent for fresh Runs and for records written before usage
+   * re-seeding existed (seeds zero).
+   */
+  /**
    * Per-Run Tool Call allowance (RUN-021): a TIGHTENING-ONLY bound below the
    * Agent Policy's `maxToolCalls` — the effective limit is
    * `min(policy.maxToolCalls, max(1, floor(toolCallAllowance)))`, so an
@@ -445,6 +495,15 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
    * `onExhaustion` resolution (RUN-019 grace) at the effective limit.
    */
   readonly turnAllowance?: number | undefined;
+  readonly resumeUsage?:
+    | {
+        readonly modelCalls: number;
+        readonly inputTokens: number;
+        readonly outputTokens: number;
+        readonly lastInputTokens: number;
+        readonly lastOutputTokens: number;
+      }
+    | undefined;
   /** Required when the core policy declares `costBudgetMicrousd`. */
   readonly estimateCostMicrousd?:
     | ((usage: Response.Usage) => Effect.Effect<number, HookError, HookRequirements>)

@@ -301,7 +301,10 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(encodedObserved.content.slice(0, encodedPrior.content.length)).toEqual(
         encodedPrior.content,
       );
-      expect(encodedObserved.content.at(-2)?.role).toBe("system");
+      // The outgoing tail is instructions, decoded input, then the derived
+      // run-status message (RUN-020) — official history keeps only the first two.
+      expect(encodedObserved.content.at(-3)?.role).toBe("system");
+      expect(encodedObserved.content.at(-2)?.role).toBe("user");
       expect(encodedObserved.content.at(-1)?.role).toBe("user");
     });
   });
@@ -403,12 +406,14 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "ModelStarted",
         "ToolCallDeclared",
         "TurnCompleted",
+        "BudgetWarning",
         "ToolCallStarted",
         "ToolCallSucceeded",
         "TurnStarted",
         "ModelStarted",
         "TextDelta",
         "TurnCompleted",
+        "BudgetWarning",
         "RunCompleted",
       ]);
       const declared = result.find((event) => event._tag === "ToolCallDeclared");
@@ -497,10 +502,12 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "ToolCallDeclared",
         "ToolCallSucceeded",
         "TurnCompleted",
+        "BudgetWarning",
         "TurnStarted",
         "ModelStarted",
         "TextDelta",
         "TurnCompleted",
+        "BudgetWarning",
         "RunCompleted",
       ]);
       expect(result.find((event) => event._tag === "ToolCallDeclared")).toMatchObject({
@@ -3198,6 +3205,9 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
         "ToolProgress",
         "ToolCallSucceeded",
         "TurnCompleted",
+        // The single-Turn policy sits at 100% of maxTurns, so the one-shot
+        // RUN-025 advisory fires before settlement.
+        "BudgetWarning",
         "RunCompleted",
       ]);
     }),
@@ -3852,7 +3862,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
-  it.effect("fails token exhaustion before accepting a successful model stop", () =>
+  it.effect('fails token exhaustion before a successful stop with onExhaustion "fail"', () =>
     Effect.gen(function* () {
       const definition = Agent.define("token-budget", {
         input: Schema.Struct({ question: Schema.String }),
@@ -3865,6 +3875,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
           maxDuration: "30 seconds",
           toolConcurrency: 1,
           tokenBudget: 3,
+          onExhaustion: "fail",
         }),
       });
       const parts: ReadonlyArray<Response.StreamPartEncoded> = [
@@ -4316,6 +4327,9 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
           maxToolCalls: 1,
           maxDuration: "30 seconds",
           toolConcurrency: 1,
+          // This test pins the context hook's exact outgoing shape (RUN-020
+          // status coverage lives in context-economics.test.ts).
+          runStatus: "off",
         }),
       });
 
@@ -4338,7 +4352,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const receivedPrompts = yield* Ref.get(received);
       expect(receivedPrompts).toHaveLength(2);
       for (const receivedPrompt of receivedPrompts) {
-        // The model-visible output contract (proposed default) is
+        // The model-visible output contract (RUN-028) is
         // applied after context preparation, so compaction cannot drop it.
         expect(receivedPrompt.content.map((message) => message.role)).toEqual(["system", "user"]);
         const encoded = JSON.stringify(receivedPrompt.content);
@@ -5032,12 +5046,14 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
           "ModelStarted",
           "ToolCallDeclared",
           "TurnCompleted",
+          "BudgetWarning",
           "ToolCallStarted",
           "ToolCallSucceeded",
           "TurnStarted",
           "ModelStarted",
           "TextDelta",
           "TurnCompleted",
+          "BudgetWarning",
           "RunCompleted",
         ];
         expect(result.output).toEqual({ answer: "observed live" });
