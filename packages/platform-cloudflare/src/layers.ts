@@ -31,8 +31,8 @@ import { Context, Duration, Effect, Layer, Schema } from "effect";
 import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
 import {
   ConversationObjectIdentity,
-  ConversationObjectNamespace,
   DurableObjectContext,
+  type ConversationObjectNamespace,
 } from "./bindings.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
@@ -40,6 +40,7 @@ import {
   CloudflareDurableRuntimeConfigValue,
   CloudflarePlatformConfigError,
 } from "./config.ts";
+import { CloudflareRuntimeTelemetry } from "./telemetry.ts";
 import { conversationPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
@@ -69,6 +70,11 @@ export interface CloudflareDurableRuntimeOptions {
   readonly abortPollInterval?: number | undefined;
   /** Milliseconds; default 25. */
   readonly observationPollInterval?: number | undefined;
+  /**
+   * Milliseconds; default 2000. Cooperative budget for the background exporter flush registered
+   * after each native RPC, wake, or alarm span. Delivery never awaits the flush.
+   */
+  readonly telemetryFlushTimeout?: number | undefined;
   /** Bytes; default just under the 2 MB platform value limit. */
   readonly maxStoredValueBytes?: number | undefined;
   /** Default false. */
@@ -143,7 +149,8 @@ export type CloudflareDurableRuntimeServices =
   | ConversationObjectIdentity
   | DurableAlarmService
   | ConversationMaintenance
-  | ConversationObjectPorts;
+  | ConversationObjectPorts
+  | CloudflareRuntimeTelemetry;
 
 /**
  * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
@@ -180,6 +187,8 @@ const configFromOptions = (
     abortPollInterval: options.abortPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.abortPollInterval,
     observationPollInterval:
       options.observationPollInterval ?? CLOUDFLARE_RUNTIME_DEFAULTS.observationPollInterval,
+    telemetryFlushTimeout:
+      options.telemetryFlushTimeout ?? CLOUDFLARE_RUNTIME_DEFAULTS.telemetryFlushTimeout,
     maxStoredValueBytes:
       options.maxStoredValueBytes ?? CLOUDFLARE_RUNTIME_DEFAULTS.maxStoredValueBytes,
     verifyOnOpen: options.verifyOnOpen ?? CLOUDFLARE_RUNTIME_DEFAULTS.verifyOnOpen,
@@ -254,9 +263,10 @@ const resolveBindings = (
  * Storage compatibility is verified during construction: an incompatible database fails the
  * Layer typed (`DoStorageCompatibilityError`) before anything is mutated (DEPLOY-008).
  *
- * Requires only the two binding services (`DurableObjectContext`,
- * `ConversationObjectNamespace`) — platform values enter exclusively through Layers
- * (DEPLOY-010).
+ * Requires the two binding services (`DurableObjectContext`, `ConversationObjectNamespace`) plus
+ * the host-owned `CloudflareRuntimeTelemetry` capability. Platform values and observability enter
+ * exclusively through Layers (DEPLOY-010); the Worker composition edge chooses the telemetry
+ * implementation and its acquisition error/dependencies remain visible there.
  */
 export class CloudflareDurableRuntime {
   static layer(
@@ -264,7 +274,7 @@ export class CloudflareDurableRuntime {
   ): Layer.Layer<
     CloudflareDurableRuntimeServices,
     CloudflareDurableRuntimeInitializationError,
-    DurableObjectContext | ConversationObjectNamespace
+    DurableObjectContext | ConversationObjectNamespace | CloudflareRuntimeTelemetry
   > {
     return Layer.unwrap(
       Effect.gen(function* () {
@@ -365,11 +375,19 @@ export class CloudflareDurableRuntime {
           Layer.provideMerge(base),
         );
 
-        return Layer.mergeAll(
+        const application = Layer.mergeAll(
           runtimeStack,
           ConversationMaintenance.layer.pipe(Layer.provide(runtimeStack)),
           portsEndpointLayer,
         );
+
+        // Re-export the required host capability into the runtime used by native endpoint effects.
+        // The Worker composition edge supplies its concrete Layer outermost, preserving that
+        // Layer's acquisition error and platform requirements.
+        const telemetryRequirement = Layer.effect(CloudflareRuntimeTelemetry)(
+          CloudflareRuntimeTelemetry,
+        );
+        return application.pipe(Layer.provideMerge(telemetryRequirement));
       }),
     );
   }

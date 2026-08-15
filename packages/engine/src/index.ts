@@ -73,6 +73,20 @@ import {
   type Toolkit,
 } from "effect/unstable/ai";
 
+import {
+  boundedJsonSnapshot,
+  type BoundedJsonSnapshot,
+} from "./provider-result-staging-internal.ts";
+import {
+  annotateToolSpanTerminalOutcome,
+  emitThenAfter,
+  isolateToolTerminalTelemetry,
+  restoreToolSpanFailureCause,
+  stripToolSpanFailures,
+  ToolSpanFailure,
+  ToolSpanTelemetry,
+} from "./tool-telemetry-internal.ts";
+
 /**
  * Structural shape of an Agent Binding accepted by the interpreter and by
  * `AgentSpawner.spawn`: a model-agnostic Definition paired with an explicit
@@ -203,8 +217,9 @@ export type AgentRuntimeFailure<
 /**
  * Services the engine itself provides locally to every Run: `AgentSpawner`
  * bound to the Run's immutable identity and delegation depth, `RunEventSink`
- * and `SubagentDurability` bound to the active Tool batch, and `DurableStep`
- * bound to the active Tool Call. They are excluded from the runtime's public
+ * and `SubagentDurability` bound to the active Tool batch, `DurableStep`
+ * bound to the active Tool Call, and `ToolSpanTelemetry` bound at the Run
+ * composition edge. They are excluded from the runtime's public
  * requirements and MUST NOT be satisfied from an application Layer.
  */
 export type EngineProvidedToolServices =
@@ -212,7 +227,8 @@ export type EngineProvidedToolServices =
   | RunEventSink
   | DurableStep
   | SubagentDurability
-  | ToolBroker;
+  | ToolBroker
+  | ToolSpanTelemetry;
 
 /**
  * Inferred agent services plus the runtime's identity-generation authority.
@@ -303,6 +319,12 @@ interface TurnTrace {
     }
   >;
   readonly finalToolResultIds: Set<string>;
+  /** Provider result payloads held until the complete model response validates. */
+  readonly providerResultPayloads: Array<ProviderResultEventPayload>;
+  /** Exact retained JSON bytes across every staged provider event, including Turn completion. */
+  providerStagedPayloadBytes: number;
+  /** Turn completion held with provider results so malformed trailing parts append neither. */
+  turnCompletion: { readonly finishReason: Response.FinishReason } | undefined;
   readonly applicationToolCalls: Array<Response.ToolCallPart<string, unknown>>;
   /** Durable-hook view of the application calls, in declaration order (encoded parameters). */
   readonly applicationCallDescriptors: Array<RunToolCallDescriptor>;
@@ -316,6 +338,35 @@ interface TurnTrace {
   finishReason: Response.FinishReason | undefined;
   usage: Response.Usage | undefined;
 }
+
+type ProviderResultEventPayload =
+  | {
+      readonly _tag: "ToolProgress";
+      readonly toolCallId: ToolCallId;
+      readonly toolName: string;
+      readonly result: Schema.Json;
+      readonly providerExecuted: true;
+    }
+  | {
+      readonly _tag: "ToolCallSucceeded";
+      readonly toolCallId: ToolCallId;
+      readonly toolName: string;
+      readonly result: Schema.Json;
+      readonly providerExecuted: true;
+    }
+  | {
+      readonly _tag: "ToolCallFailed";
+      readonly toolCallId: ToolCallId;
+      readonly toolName: string;
+      readonly errorTag: string;
+      readonly message: string;
+      readonly providerExecuted: true;
+    };
+
+// Provider output is untrusted. Holding terminal facts until whole-response validation is
+// fail-closed only while the additional staging allocation itself is deterministic and bounded.
+const MAX_STAGED_PROVIDER_EVENTS = 256;
+const MAX_STAGED_PROVIDER_BYTES = 1024 * 1024;
 
 type PartLifecycle = "open" | "closed";
 
@@ -718,6 +769,12 @@ const preflightApproval = <Tools extends Record<string, Tool.Any>, HookError, Ho
     ),
   );
 
+const ProviderToolCallId = ToolCallId.check(
+  Schema.isMaxLength(128),
+  Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
+);
+const isTelemetryToolCallId = Schema.is(ProviderToolCallId);
+
 const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
   context: RunContext,
   turnId: TurnId,
@@ -735,10 +792,89 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
 ): Stream.Stream<
   RunEvent,
   ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>,
-  Tool.HandlerServices<ToolUnion<Tools>>
+  ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
 > => {
+  type ToolExecutionError =
+    | ModelProtocolError
+    | AiError.AiError
+    | Tool.HandlerError<ToolUnion<Tools>>;
+
   const call = prepared.call;
+  const telemetryToolCallId = isTelemetryToolCallId(call.id) ? call.id : undefined;
+  const executionClass = getToolExecutionClass(prepared.tool);
+  const toolSpanFailure = ToolSpanFailure.marker();
   let terminal = false;
+  let terminalResultCommitted = false;
+  let terminalOutcome: "success" | "failure" | undefined;
+  let terminalResult:
+    | {
+        readonly encodedResult: unknown;
+        readonly isFailure: boolean;
+        readonly result: unknown;
+      }
+    | undefined;
+  let propagatedFailure: Cause.Cause<ToolExecutionError> | undefined;
+
+  const terminalTelemetry = (outcome: "success" | "failure") =>
+    annotateToolSpanTerminalOutcome(
+      outcome,
+      outcome === "failure" ? toolSpanFailure : undefined,
+    ).pipe(
+      Effect.andThen(
+        (outcome === "success"
+          ? Effect.logInfo("agent tool execution completed")
+          : Effect.logWarning("agent tool execution failed")
+        ).pipe(
+          Effect.annotateLogs({
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": call.name,
+            "gen_ai.tool.type": "function",
+            ...(telemetryToolCallId === undefined
+              ? {}
+              : {
+                  "gen_ai.tool.call.id": telemetryToolCallId,
+                  toolCallId: telemetryToolCallId,
+                }),
+            "gen_ai.agent.name": context.agentId,
+            "gen_ai.conversation.id": context.conversationId,
+            "effect_agent.tool.execution_class": executionClass,
+            "effect_agent.tool.outcome": outcome,
+            agentId: context.agentId,
+            conversationId: context.conversationId,
+            runId: context.runId,
+            turnId,
+            toolName: call.name,
+            toolExecutionClass: executionClass,
+            toolOutcome: outcome,
+          }),
+        ),
+      ),
+    );
+
+  const isolatedTerminalTelemetry = (outcome: "success" | "failure") =>
+    // Measurement is derivative: a broken Logger/Tracer must never change the Tool event or make
+    // an already-completed external side effect eligible for recovery. Non-interrupt Causes reach
+    // Effect's owned reporter boundary; external interruption remains interruption.
+    isolateToolTerminalTelemetry(terminalTelemetry(outcome));
+
+  /**
+   * Preserve an actual emission boundary between canonical state and derivative telemetry. The
+   * singleton event chunk reaches the downstream Run stream before telemetry can start. The next
+   * pull normally owns telemetry; structured finalization owns it when downstream closes after the
+   * event. Their shared phase gate permits one attempt, while a returned Tool failure still fails a
+   * normal second pull with the private span marker.
+   */
+  const terminalEventThenTelemetry = <EventError>(
+    event: Effect.Effect<RunEvent, EventError>,
+    outcome: "success" | "failure",
+    failSpan: boolean,
+  ): Stream.Stream<RunEvent, EventError | ToolSpanFailure> =>
+    emitThenAfter(
+      event,
+      isolatedTerminalTelemetry(outcome).pipe(
+        Effect.andThen(failSpan ? Effect.fail(toolSpanFailure) : Effect.void),
+      ),
+    );
 
   const started = Stream.fromEffect(
     Effect.gen(function* () {
@@ -748,7 +884,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
           agentId: context.agentId,
           runId: context.runId,
           turnId,
-          toolCallId,
+          ...(telemetryToolCallId === undefined ? {} : { toolCallId: telemetryToolCallId }),
           toolName: call.name,
         }),
       );
@@ -762,31 +898,82 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
     }).pipe(Effect.withLogSpan("AgentRuntime.tool")),
   );
 
-  const results = Stream.unwrap(
-    toolkit
-      .handle(prepared.name, prepared.nativeHandlerParams, call.id)
-      .pipe(Effect.withSpan("AgentRuntime.toolkit.handle")),
+  const results: Stream.Stream<
+    RunEvent,
+    ToolExecutionError,
+    ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
+  > = Stream.unwrap(
+    Effect.flatMap(ToolSpanTelemetry, ({ isolateToolkitHandle }) =>
+      isolateToolkitHandle(toolkit.handle(prepared.name, prepared.nativeHandlerParams, call.id)),
+    ),
   ).pipe(
-    Stream.mapEffect((result) =>
-      Effect.gen(function* () {
-        if (terminal || trace.finalToolResultIds.has(call.id)) {
-          return yield* ModelProtocolError.make({
-            message: `Tool Call ${call.id} produced more than one terminal result`,
-          });
-        }
-        const toolCallId = yield* decodeToolCallId(call.id);
-        if (result.preliminary) {
-          return ToolProgress.make({
-            ...(yield* eventBase(context)),
-            turnId,
-            toolCallId,
-            toolName: call.name,
-            result: yield* decodeEventJson(result.encodedResult, "Tool result"),
-            providerExecuted: false,
-          });
-        }
+    Stream.mapEffect(
+      (result): Effect.Effect<RunEvent | undefined, ModelProtocolError> =>
+        Effect.gen(function* () {
+          if (terminal || trace.finalToolResultIds.has(call.id)) {
+            return yield* ModelProtocolError.make({
+              message: `Tool Call ${call.id} produced more than one terminal result`,
+            });
+          }
+          const toolCallId = yield* decodeToolCallId(call.id);
+          if (result.preliminary) {
+            const event: RunEvent = ToolProgress.make({
+              ...(yield* eventBase(context)),
+              turnId,
+              toolCallId,
+              toolName: call.name,
+              result: yield* decodeEventJson(result.encodedResult, "Tool result"),
+              providerExecuted: false,
+            });
+            return event;
+          }
 
-        terminal = true;
+          terminal = true;
+          terminalOutcome = result.isFailure ? "failure" : "success";
+          terminalResult = {
+            encodedResult: result.encodedResult,
+            isFailure: result.isFailure,
+            result: result.result,
+          };
+          // A terminal Toolkit value is provisional until its handler stream closes. Emitting the
+          // append-only event or committing the Turn trace here would leave contradictory Run state
+          // if that stream later fails or produces another terminal value.
+          return undefined;
+        }),
+    ),
+    Stream.filter((event): event is RunEvent => event !== undefined),
+  );
+
+  const commitTerminalResult: Effect.Effect<RunEvent, ModelProtocolError> = Effect.suspend(
+    (): Effect.Effect<RunEvent, ModelProtocolError> => {
+      if (!terminal || terminalOutcome === undefined || terminalResult === undefined) {
+        return Effect.fail(
+          ModelProtocolError.make({
+            message: `Tool Call ${call.id} completed without a terminal result`,
+          }),
+        );
+      }
+      const result = terminalResult;
+      return Effect.gen(function* () {
+        const toolCallId = yield* decodeToolCallId(call.id);
+        const event: RunEvent = result.isFailure
+          ? ToolCallFailed.make({
+              ...(yield* eventBase(context)),
+              turnId,
+              toolCallId,
+              toolName: call.name,
+              errorTag: errorTag(result.result),
+              message: errorMessage(result.result),
+              providerExecuted: false,
+            })
+          : ToolCallSucceeded.make({
+              ...(yield* eventBase(context)),
+              turnId,
+              toolCallId,
+              toolName: call.name,
+              result: yield* decodeEventJson(result.encodedResult, "Tool result"),
+              providerExecuted: false,
+            });
         trace.finalToolResultIds.add(call.id);
         trace.applicationToolResults[prepared.declarationIndex] = {
           id: call.id,
@@ -794,54 +981,77 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
           encodedResult: result.encodedResult,
           isFailure: result.isFailure,
         };
-        if (result.isFailure) {
-          return ToolCallFailed.make({
-            ...(yield* eventBase(context)),
-            turnId,
-            toolCallId,
-            toolName: call.name,
-            errorTag: errorTag(result.result),
-            message: errorMessage(result.result),
-            providerExecuted: false,
-          });
-        }
-        return ToolCallSucceeded.make({
-          ...(yield* eventBase(context)),
-          turnId,
-          toolCallId,
-          toolName: call.name,
-          result: yield* decodeEventJson(result.encodedResult, "Tool result"),
-          providerExecuted: false,
-        });
-      }),
-    ),
+        terminalResultCommitted = true;
+        return event;
+      });
+    },
   );
 
-  const requireTerminal = Stream.fromEffect(
-    Effect.suspend(() =>
-      terminal
-        ? Effect.void
-        : Effect.fail(
-            ModelProtocolError.make({
-              message: `Tool Call ${call.id} completed without a terminal result`,
-            }),
-          ),
-    ),
-  ).pipe(Stream.drain);
+  const finalizeTerminalResult: Stream.Stream<RunEvent, ModelProtocolError | ToolSpanFailure> =
+    Stream.unwrap(
+      Effect.sync(() =>
+        terminalEventThenTelemetry(
+          commitTerminalResult,
+          terminalOutcome ?? "failure",
+          terminalOutcome === "failure",
+        ),
+      ),
+    );
 
-  return started.pipe(
+  const failTerminalResult = (
+    cause: Cause.Cause<ToolExecutionError>,
+  ): Stream.Stream<RunEvent, ModelProtocolError | ToolSpanFailure> => {
+    terminal = true;
+    terminalOutcome = "failure";
+    terminalResult = undefined;
+    propagatedFailure = cause;
+    return terminalEventThenTelemetry(
+      makeToolFailedEvent(context, turnId, call, Cause.squash(cause)).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            trace.finalToolResultIds.add(call.id);
+            terminalResultCommitted = true;
+          }),
+        ),
+      ),
+      "failure",
+      true,
+    );
+  };
+
+  const measured = started.pipe(
     Stream.concat(results),
-    Stream.concat(requireTerminal),
+    Stream.concat(finalizeTerminalResult),
     Stream.catchCause((cause) => {
-      const waiting = waitingFromCause(cause);
+      // A value-level failure already has its terminal event and bounded span-facing
+      // signal. Let only the outer recovery consume it.
+      const { found: hasToolSpanFailure, residual: toolCause } = stripToolSpanFailures(
+        cause,
+        toolSpanFailure,
+      );
+      if (hasToolSpanFailure) {
+        return Stream.failCause(cause);
+      }
+      if (terminalResultCommitted) {
+        return Stream.failCause(toolCause);
+      }
+      if (toolCause.reasons.length > 0 && toolCause.reasons.every(Cause.isInterruptReason)) {
+        // Interruption terminates only this in-memory handler attempt. It emits no append-only Tool
+        // terminal event and no success/failure terminal log; the canonical span observes and
+        // preserves the exact interruption Cause from its enclosing stream Exit.
+        return Stream.failCause(toolCause);
+      }
+      const waiting = waitingFromCause(toolCause);
       if (waiting !== undefined) {
         if (terminal || trace.finalToolResultIds.has(call.id)) {
           // A handler that produced a terminal result cannot also wait: the
           // anomaly fails loud and typed instead of suspending a settled call.
-          return Stream.fail(
-            ModelProtocolError.make({
-              message: `Tool Call ${call.id} raised the waiting signal after its terminal result`,
-            }),
+          return failTerminalResult(
+            Cause.fail(
+              ModelProtocolError.make({
+                message: `Tool Call ${call.id} raised the waiting signal after its terminal result`,
+              }),
+            ),
           );
         }
         // The waiting call stays open: no terminal result is recorded, no
@@ -852,22 +1062,47 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
         return Stream.empty;
       }
       if (terminal) {
-        return Stream.failCause(cause);
+        // The provisional value never became append-only state. Replace it with one failed
+        // terminal event, then preserve the handler Cause outside the span-facing marker.
+        return failTerminalResult(toolCause);
       }
-      terminal = true;
-      trace.finalToolResultIds.add(call.id);
-      return Stream.fromEffect(
-        makeToolFailedEvent(context, turnId, call, Cause.squash(cause)),
-      ).pipe(Stream.concat(Stream.failCause(cause)));
+      return failTerminalResult(toolCause);
     }),
-    Stream.withSpan("AgentRuntime.tool", {
+    Stream.withSpan(`execute_tool ${call.name}`, {
+      kind: "internal",
       attributes: {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": call.name,
+        "gen_ai.tool.type": "function",
+        ...(telemetryToolCallId === undefined
+          ? {}
+          : {
+              "gen_ai.tool.call.id": telemetryToolCallId,
+              toolCallId: telemetryToolCallId,
+            }),
+        "gen_ai.agent.name": context.agentId,
+        "gen_ai.conversation.id": context.conversationId,
+        "effect_agent.tool.execution_class": executionClass,
         agentId: context.agentId,
+        conversationId: context.conversationId,
         runId: context.runId,
         turnId,
-        toolCallId: call.id,
         toolName: call.name,
       },
+    }),
+  );
+
+  return Stream.unwrap(
+    Effect.map(ToolSpanTelemetry, ({ isolateSpanLifecycle }) => isolateSpanLifecycle(measured)),
+  ).pipe(
+    Stream.catchCause((cause) => {
+      const { found, restored } = restoreToolSpanFailureCause(
+        cause,
+        toolSpanFailure,
+        propagatedFailure,
+      );
+      if (!found) return Stream.failCause(restored);
+      return restored.reasons.length === 0 ? Stream.empty : Stream.failCause(restored);
     }),
   );
 };
@@ -913,7 +1148,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   | AgentChildPending
   | AiError.AiError
   | Tool.HandlerError<ToolUnion<Tools>>,
-  HookRequirements | Tool.HandlerServices<ToolUnion<Tools>>
+  HookRequirements | ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
@@ -1041,7 +1276,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         Stream.Stream<
           RunEvent,
           ModelProtocolError | AiError.AiError | Tool.HandlerError<ToolUnion<Tools>>,
-          Tool.HandlerServices<ToolUnion<Tools>>
+          ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
         >
       >((stream, group) => {
         const next = Stream.mergeAll(
@@ -1101,7 +1336,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
       const settling: Stream.Stream<
         RunEvent,
         never,
-        Tool.HandlerServices<ToolUnion<Tools>>
+        ToolSpanTelemetry | Tool.HandlerServices<ToolUnion<Tools>>
       > = handlers.pipe(
         Stream.provideService(RunEventSink, batchSink),
         Stream.provideService(SubagentDurability, batchSubagentDurability),
@@ -1421,6 +1656,85 @@ const eventBase = Effect.fnUntraced(function* (context: RunContext) {
   };
 });
 
+const snapshotStagedProviderEvent = (
+  trace: TurnTrace,
+  payload: unknown,
+): Effect.Effect<BoundedJsonSnapshot, ModelProtocolError> =>
+  Effect.suspend(() => {
+    const stagedEventCount =
+      trace.providerResultPayloads.length + (trace.turnCompletion === undefined ? 0 : 1);
+    if (stagedEventCount >= MAX_STAGED_PROVIDER_EVENTS) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message: `Model response exceeded the ${MAX_STAGED_PROVIDER_EVENTS}-event staged provider event limit`,
+        }),
+      );
+    }
+    const snapshot = boundedJsonSnapshot(
+      payload,
+      MAX_STAGED_PROVIDER_BYTES - trace.providerStagedPayloadBytes,
+    );
+    if (snapshot === undefined) {
+      return Effect.fail(
+        ModelProtocolError.make({
+          message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`,
+        }),
+      );
+    }
+    return Effect.succeed(snapshot);
+  });
+
+const stageProviderResultPayload = (
+  trace: TurnTrace,
+  payload: ProviderResultEventPayload,
+): Effect.Effect<void, ModelProtocolError> =>
+  Effect.gen(function* () {
+    const snapshot = yield* snapshotStagedProviderEvent(trace, payload);
+    const snapshotObject = snapshot.value;
+    if (
+      snapshotObject === null ||
+      typeof snapshotObject !== "object" ||
+      Array.isArray(snapshotObject) ||
+      Object.getPrototypeOf(snapshotObject) !== null
+    ) {
+      return yield* ModelProtocolError.make({
+        message: "Provider Tool result could not be normalized as JSON",
+      });
+    }
+    const resultDescriptor = Object.getOwnPropertyDescriptor(snapshotObject, "result");
+    const normalizedResult =
+      resultDescriptor !== undefined && "value" in resultDescriptor
+        ? Schema.decodeUnknownOption(Schema.Json)(resultDescriptor.value)
+        : Option.none<Schema.Json>();
+    if (payload._tag !== "ToolCallFailed" && Option.isNone(normalizedResult)) {
+      return yield* ModelProtocolError.make({
+        message: "Provider Tool result could not be normalized as JSON",
+      });
+    }
+    const normalized: ProviderResultEventPayload =
+      payload._tag === "ToolCallFailed"
+        ? Object.freeze({ ...payload })
+        : Object.freeze({ ...payload, result: Option.getOrThrow(normalizedResult) });
+    trace.providerResultPayloads.push(normalized);
+    trace.providerStagedPayloadBytes += snapshot.bytes;
+  });
+
+const stampProviderResultEvent = (
+  context: RunContext,
+  turnId: TurnId,
+  payload: ProviderResultEventPayload,
+): Effect.Effect<RunEvent> =>
+  Effect.map(eventBase(context), (base) => {
+    switch (payload._tag) {
+      case "ToolProgress":
+        return ToolProgress.make({ ...base, turnId, ...payload });
+      case "ToolCallSucceeded":
+        return ToolCallSucceeded.make({ ...base, turnId, ...payload });
+      case "ToolCallFailed":
+        return ToolCallFailed.make({ ...base, turnId, ...payload });
+    }
+  });
+
 const decodeInput = Effect.fn("AgentRuntime.decodeInput")(
   <AgentValue extends Agent.Any>(
     agent: AgentValue,
@@ -1513,6 +1827,17 @@ const decodeToolCallId = Effect.fn("AgentRuntime.decodeToolCallId")((id: string)
   ),
 );
 
+const decodeProviderToolCallId = Effect.fn("AgentRuntime.decodeProviderToolCallId")((id: string) =>
+  Schema.decodeEffect(ProviderToolCallId)(id).pipe(
+    Effect.mapError(() =>
+      ModelProtocolError.make({
+        message:
+          "Model supplied an invalid Tool Call ID; expected 1-128 ASCII letters, digits, dots, underscores, colons, or hyphens",
+      }),
+    ),
+  ),
+);
+
 const decodeEventJson = Effect.fn("AgentRuntime.decodeEventJson")(
   (value: unknown, label: string): Effect.Effect<Schema.Json, ModelProtocolError> =>
     Schema.decodeUnknownEffect(Schema.Json)(value).pipe(
@@ -1594,6 +1919,17 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
     return yield* ModelProtocolError.make({
       message: "Model response emitted content after its finish part",
     });
+  }
+  if (
+    part.type === "tool-params-start" ||
+    part.type === "tool-params-delta" ||
+    part.type === "tool-params-end" ||
+    part.type === "tool-call" ||
+    part.type === "tool-result"
+  ) {
+    // Provider/model Tool Call IDs are untrusted correlation keys. Reject them before they enter
+    // the Turn trace maps, canonical event stream, or application handler scheduling boundary.
+    yield* decodeProviderToolCallId(part.id);
   }
   trace.parts.push(part);
   switch (part.type) {
@@ -1759,16 +2095,14 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       const toolCallId = yield* decodeToolCallId(part.id);
       const result = yield* decodeEventJson(part.encodedResult, "Tool result");
       if (part.preliminary === true) {
-        return [
-          ToolProgress.make({
-            ...(yield* eventBase(context)),
-            turnId,
-            toolCallId,
-            toolName: part.name,
-            result,
-            providerExecuted: part.providerExecuted,
-          }),
-        ];
+        yield* stageProviderResultPayload(trace, {
+          _tag: "ToolProgress",
+          toolCallId,
+          toolName: part.name,
+          result,
+          providerExecuted: true,
+        });
+        return [];
       }
       if (trace.finalToolResultIds.has(part.id)) {
         return yield* ModelProtocolError.make({
@@ -1777,28 +2111,24 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       }
       trace.finalToolResultIds.add(part.id);
       if (part.isFailure) {
-        return [
-          ToolCallFailed.make({
-            ...(yield* eventBase(context)),
-            turnId,
-            toolCallId,
-            toolName: part.name,
-            errorTag: errorTag(part.result),
-            message: errorMessage(part.result),
-            providerExecuted: part.providerExecuted,
-          }),
-        ];
-      }
-      return [
-        ToolCallSucceeded.make({
-          ...(yield* eventBase(context)),
-          turnId,
+        yield* stageProviderResultPayload(trace, {
+          _tag: "ToolCallFailed",
           toolCallId,
           toolName: part.name,
-          result,
-          providerExecuted: part.providerExecuted,
-        }),
-      ];
+          errorTag: errorTag(part.result),
+          message: errorMessage(part.result),
+          providerExecuted: true,
+        });
+        return [];
+      }
+      yield* stageProviderResultPayload(trace, {
+        _tag: "ToolCallSucceeded",
+        toolCallId,
+        toolName: part.name,
+        result,
+        providerExecuted: true,
+      });
+      return [];
     }
     case "finish": {
       const openPart = firstOpenPart(trace);
@@ -1810,6 +2140,16 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
       trace.finished = true;
       trace.finishReason = part.reason;
       trace.usage = part.usage;
+      if (Array.from(trace.toolCalls.values()).some(({ providerExecuted }) => providerExecuted)) {
+        const turnCompletion = { finishReason: part.reason };
+        const snapshot = yield* snapshotStagedProviderEvent(trace, {
+          _tag: "TurnCompleted",
+          ...turnCompletion,
+        });
+        trace.turnCompletion = turnCompletion;
+        trace.providerStagedPayloadBytes += snapshot.bytes;
+        return [];
+      }
       return [
         TurnCompleted.make({
           ...(yield* eventBase(context)),
@@ -1824,7 +2164,12 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
         message: `Model response failed: ${errorMessage(part.error)}`,
       });
     }
-    default: {
+    case "file":
+    case "reasoning":
+    case "response-metadata":
+    case "source":
+    case "text":
+    case "tool-approval-request": {
       return [];
     }
   }
@@ -1916,6 +2261,9 @@ const makeTurn = <
         toolParameterParts: new Map(),
         toolCalls: new Map(),
         finalToolResultIds: new Set(),
+        providerResultPayloads: [],
+        providerStagedPayloadBytes: 0,
+        turnCompletion: undefined,
         applicationToolCalls: [],
         applicationCallDescriptors: [],
         applicationToolResults: [],
@@ -1971,7 +2319,7 @@ const makeTurn = <
       );
 
       const continuation = Stream.unwrap(
-        Effect.gen(function* () {
+        Effect.sync(() => {
           if (!trace.finished) {
             return failRunEventStream(
               ModelProtocolError.make({
@@ -1979,14 +2327,13 @@ const makeTurn = <
               }),
             );
           }
-          yield* consumeUsage(agent, context, trace, options);
-          const toolCalls = priorToolCalls + trace.toolCalls.size;
-          if (toolCalls + context.programmaticToolCalls > agent.definition.policy.maxToolCalls) {
+          const hasProviderCalls = Array.from(trace.toolCalls.values()).some(
+            ({ providerExecuted }) => providerExecuted,
+          );
+          const turnCompletion = trace.turnCompletion;
+          if (hasProviderCalls && turnCompletion === undefined) {
             return failRunEventStream(
-              AgentPolicyError.make({
-                limit: "tool-calls",
-                message: `Agent exceeded its ${agent.definition.policy.maxToolCalls} Tool Call limit`,
-              }),
+              ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }),
             );
           }
           const providerOnly =
@@ -2002,6 +2349,50 @@ const makeTurn = <
               }),
             );
           }
+          const toolCalls = priorToolCalls + trace.toolCalls.size;
+          if (toolCalls + context.programmaticToolCalls > agent.definition.policy.maxToolCalls) {
+            return failRunEventStream(
+              AgentPolicyError.make({
+                limit: "tool-calls",
+                message: `Agent exceeded its ${agent.definition.policy.maxToolCalls} Tool Call limit`,
+              }),
+            );
+          }
+
+          const stagedResponse = Stream.fromIterable(trace.providerResultPayloads).pipe(
+            Stream.mapEffect((payload) => stampProviderResultEvent(context, turnId, payload)),
+            Stream.concat(
+              turnCompletion === undefined
+                ? Stream.empty
+                : Stream.fromEffect(
+                    Effect.map(eventBase(context), (base) =>
+                      TurnCompleted.make({
+                        ...base,
+                        turnId,
+                        turn,
+                        finishReason: turnCompletion.finishReason,
+                      }),
+                    ),
+                  ),
+            ),
+          );
+          const afterValidatedResponse = <
+            EventError,
+            EventRequirements,
+            SetupError,
+            SetupRequirements,
+          >(
+            next: Effect.Effect<
+              Stream.Stream<RunEvent, EventError, EventRequirements>,
+              SetupError,
+              SetupRequirements
+            >,
+          ) =>
+            stagedResponse.pipe(
+              Stream.concat(
+                Stream.unwrap(Effect.andThen(consumeUsage(agent, context, trace, options), next)),
+              ),
+            );
 
           /** Official history advanced through this Turn's response, plus any Tool message. */
           const historyWithResponse = (...additions: ReadonlyArray<Prompt.Message>) =>
@@ -2056,17 +2447,20 @@ const makeTurn = <
                 return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
               }
               const output = yield* decodeFinalOutput(agent, trace.text.join(""));
-              const completed = RunCompleted.make({
-                ...(yield* eventBase(context)),
-                output,
-                turns: turn,
-                finishReason: "model-stop",
-              });
-              return Stream.succeed<RunEvent>(completed);
+              return Stream.fromEffect(
+                Effect.map(eventBase(context), (base) =>
+                  RunCompleted.make({
+                    ...base,
+                    output,
+                    turns: turn,
+                    finishReason: "model-stop",
+                  }),
+                ),
+              );
             });
 
           if (providerOnly && trace.finishReason === "stop") {
-            return yield* settleOrFollowUp(historyWithResponse());
+            return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
           }
 
           if (trace.toolCalls.size > 0) {
@@ -2086,53 +2480,58 @@ const makeTurn = <
               );
             }
             if (trace.applicationToolCalls.length === 0) {
-              yield* applyRepeatedFailurePolicy(
-                context,
-                trace,
-                agent.definition.policy.repeatedFailureLimit,
+              return afterValidatedResponse(
+                Effect.gen(function* () {
+                  yield* applyRepeatedFailurePolicy(
+                    context,
+                    trace,
+                    agent.definition.policy.repeatedFailureLimit,
+                  );
+                  return yield* continueTurn(historyWithResponse());
+                }),
               );
-              return yield* continueTurn(historyWithResponse());
             }
-            const toolkit = yield* agent.definition.toolkit;
-            const concurrency = yield* schedulingConcurrency(
-              agent.definition.policy.toolConcurrency,
-              options.scheduling,
-            );
-            if (options.durability !== undefined) {
-              // Durable turn-commit seam: the response becomes canonical
-              // after the finish-part validations and before approval
-              // preflight or preparation, creating the provably-safe window
-              // of durability §15 ("after model item commit, before tool
-              // preparation" resumes the declared batch without model
-              // re-invocation). No-tool Turns never reach this branch and
-              // keep their late single-batch commit.
-              yield* options.durability.commitResponse({
-                turn,
-                turnId,
-                responseMessages: promptFromTurnParts(trace),
-                calls: trace.applicationCallDescriptors,
-              });
-            }
-            const toolResults = guardBudgetStream(
-              executeToolBatch(
-                context,
-                turnId,
-                toolkit,
-                trace.applicationToolCalls,
-                trace,
-                concurrency,
-                options,
-                {
-                  maxToolCalls: agent.definition.policy.maxToolCalls,
-                  declaredToolCalls: toolCalls,
-                },
-              ),
-              options.budget,
-            );
-            return toolResults.pipe(
-              Stream.concat(
-                toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
-              ),
+            return afterValidatedResponse(
+              Effect.gen(function* () {
+                const toolkit = yield* agent.definition.toolkit;
+                const concurrency = yield* schedulingConcurrency(
+                  agent.definition.policy.toolConcurrency,
+                  options.scheduling,
+                );
+                if (options.durability !== undefined) {
+                  // Turn-response commit seam: staged canonical response events are emitted before
+                  // this persistence mutation, while approval preflight and preparation still run
+                  // afterward. This retains durability §15's provably-safe resume window without
+                  // allowing eager continuation work to overtake the append-only event stream.
+                  yield* options.durability.commitResponse({
+                    turn,
+                    turnId,
+                    responseMessages: promptFromTurnParts(trace),
+                    calls: trace.applicationCallDescriptors,
+                  });
+                }
+                const toolResults = guardBudgetStream(
+                  executeToolBatch(
+                    context,
+                    turnId,
+                    toolkit,
+                    trace.applicationToolCalls,
+                    trace,
+                    concurrency,
+                    options,
+                    {
+                      maxToolCalls: agent.definition.policy.maxToolCalls,
+                      declaredToolCalls: toolCalls,
+                    },
+                  ),
+                  options.budget,
+                );
+                return toolResults.pipe(
+                  Stream.concat(
+                    toolBatchContinuation(agent, context, trace, prompt, turn, toolCalls, options),
+                  ),
+                );
+              }),
             );
           }
 
@@ -2143,7 +2542,7 @@ const makeTurn = <
               }),
             );
           }
-          return yield* settleOrFollowUp(historyWithResponse());
+          return afterValidatedResponse(settleOrFollowUp(historyWithResponse()));
         }),
       );
 
@@ -2314,6 +2713,9 @@ const makeResumeTurn = <
         toolParameterParts: new Map(),
         toolCalls: new Map(),
         finalToolResultIds: new Set(),
+        providerResultPayloads: [],
+        providerStagedPayloadBytes: 0,
+        turnCompletion: undefined,
         applicationToolCalls: [],
         applicationCallDescriptors: [],
         applicationToolResults: [],
@@ -2671,7 +3073,12 @@ const stream = <
     options.input?.end === undefined
       ? interpreted
       : interpreted.pipe(Stream.ensuring(options.input.end()));
-  return finalized.pipe(Stream.provide(agent.model, { local: true }));
+  return finalized.pipe(
+    Stream.provide(agent.model, { local: true }),
+    // The engine composition boundary owns span-lifecycle isolation while preserving the host's
+    // ambient Tracer/Logger configuration. Individual Tool executions consume this capability.
+    Stream.provide(ToolSpanTelemetry.layer),
+  );
 };
 
 interface RunReduction {

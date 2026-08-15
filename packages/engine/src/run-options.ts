@@ -161,9 +161,9 @@ export interface RunTurnResponseCommit {
  * Dependency-neutral durability seam implemented by a durable coordinator.
  *
  * Invocation ordering inside one Tool-declaring Turn is normative:
- * `commitResponse` fires after the finish part's continuation validations and
- * before approval preflight (making the response canonical before any Tool
- * work — the provably-safe resume window); `prepareToolCalls` fires after
+ * `commitResponse` fires after the finish part's continuation validations and staged canonical
+ * provider/Turn events have been emitted, but before approval preflight (making the response
+ * canonical before any Tool work — the provably-safe resume window); `prepareToolCalls` fires after
  * every approval resolved approved and before any handler acquires a
  * scheduler permit, with the non-`readonly` calls of the batch (it is skipped
  * entirely when no call needs preparation); `step` persists Durable Step
@@ -171,7 +171,7 @@ export interface RunTurnResponseCommit {
  * the ephemeral runtime always has.
  */
 export interface RunDurabilityHook<Error = never, Requirements = never> {
-  /** After the finish part's validations, before approval preflight. */
+  /** After validated staged response events are emitted, before approval preflight. */
   readonly commitResponse: (
     commit: RunTurnResponseCommit,
   ) => Effect.Effect<void, Error, Requirements>;

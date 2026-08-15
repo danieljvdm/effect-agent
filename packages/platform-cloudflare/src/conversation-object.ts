@@ -38,6 +38,7 @@ import {
   DurableObjectContext,
   conversationNamespaceLayer,
   type CloudflareBindingError,
+  type ConversationObjectNamespace,
 } from "./bindings.ts";
 import {
   AbortRecorded,
@@ -67,9 +68,17 @@ import {
   type CloudflareDurableRuntimeOptions,
   type CloudflareDurableRuntimeServices,
 } from "./layers.ts";
+import {
+  flushCloudflareRuntimeTelemetry,
+  makeCloudflareTelemetryFlushCoordinator,
+  registerCloudflareTelemetryAfterNativeSettlement,
+  withCloudflareNativeSpanFailure,
+  type CloudflareTelemetryFlushCoordinator,
+} from "./telemetry-internal.ts";
+import { CloudflareRuntimeTelemetry } from "./telemetry.ts";
 
 /**
- * `makeConversationObjectClass(options)` — the Conversation Durable Object (plan §1.4,
+ * `makeConversationObjectClass(options, telemetry?)` — the Conversation Durable Object (plan §1.4,
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Conversation is the serialized owner (durability §6); the
  * Object never runs `runResolvedWorker`'s infinite loop — each ingress event or alarm runs
@@ -95,7 +104,10 @@ export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptio
   readonly namespaceBinding: string;
 }
 
-type ConversationObjectError = CloudflareDurableRuntimeInitializationError | CloudflareBindingError;
+type ConversationObjectError<TelemetryError> =
+  | CloudflareDurableRuntimeInitializationError
+  | CloudflareBindingError
+  | TelemetryError;
 
 type EndpointServices = CloudflareDurableRuntimeServices | DurableObjectContext;
 
@@ -608,6 +620,54 @@ const gateEndpoint: Effect.Effect<void, unknown, EndpointServices> = Effect.gen(
   yield* maintenance.ensureAlarm;
 });
 
+const NATIVE_ENTRYPOINTS = [
+  "submit",
+  "await_settlement",
+  "observe",
+  "abort",
+  "resolve_approval",
+  "resolve_unknown",
+  "explain",
+  "verify",
+  "retry",
+  "obligations",
+  "port_call",
+  "wake",
+  "alarm",
+] as const;
+
+type NativeEntrypoint = (typeof NATIVE_ENTRYPOINTS)[number];
+
+/**
+ * Owner-side delivery measurement. The exact endpoint Cause is hidden behind a bounded typed
+ * marker while the span closes, then restored together with any newly composed real reasons.
+ */
+const observeNativeEntrypoint = <A, E>(
+  entrypoint: NativeEntrypoint,
+  effect: Effect.Effect<A, E, EndpointServices>,
+): Effect.Effect<A, E, EndpointServices> =>
+  Effect.gen(function* () {
+    const identity = yield* ConversationObjectIdentity;
+    const config = yield* CloudflareDurableRuntimeConfig;
+    return yield* withCloudflareNativeSpanFailure(effect, (masked) =>
+      masked.pipe(
+        Effect.withSpan(`effect_agent.cloudflare.conversation_object.${entrypoint}`, {
+          kind: "server",
+          attributes: {
+            "effect_agent.cloudflare.entrypoint": entrypoint,
+            "effect_agent.deployment.id": config.deploymentId,
+            conversationId: identity.conversationId,
+            producerId: identity.producerId,
+          },
+        }),
+      ),
+    );
+  });
+
+const flushNativeEntrypointTelemetry = Effect.flatMap(CloudflareDurableRuntimeConfig, (config) =>
+  flushCloudflareRuntimeTelemetry(config.telemetryFlushTimeout),
+);
+
 /** The public endpoint surface of one Conversation Object instance. */
 export interface ConversationObjectInstance extends DurableObject {
   submitEncoded(encoded: unknown): Promise<unknown>;
@@ -631,84 +691,156 @@ export interface ConversationObjectClass {
 }
 
 /**
- * Build the application's Conversation Object class (export it from the
- * Worker entry). The explicit return type is what makes declaration emit
- * possible: the class body carries a private runtime field, and TS4094
- * rejects inferring an exported anonymous class type around it.
+ * Build the application's Conversation Object class (export it from the Worker entry).
+ * `telemetry` is the host composition boundary: it may require the Object context/namespace and
+ * retain a typed acquisition error, while any additional output services remain available to the
+ * cached runtime. `TelemetryError` stays the first explicit generic for source compatibility;
+ * additional outputs infer from the Layer. Omitting it installs the content-free no-op service.
+ * The explicit return type is what makes declaration emit possible: the class body carries a
+ * private runtime field, and TS4094 rejects inferring an exported anonymous class type around it.
  */
-export const makeConversationObjectClass = (
+export const makeConversationObjectClass = <
+  TelemetryError = never,
+  AdditionalTelemetryOutputs = never,
+>(
   options: ConversationObjectOptions,
+  telemetry?: Layer.Layer<
+    CloudflareRuntimeTelemetry | AdditionalTelemetryOutputs,
+    TelemetryError,
+    DurableObjectContext | ConversationObjectNamespace
+  >,
 ): ConversationObjectClass => {
   class ConversationObject extends DurableObject {
-    readonly #runtime: ManagedRuntime.ManagedRuntime<EndpointServices, ConversationObjectError>;
+    readonly #runtime: ManagedRuntime.ManagedRuntime<
+      EndpointServices,
+      ConversationObjectError<TelemetryError>
+    >;
+    readonly #ctx: DurableObjectState;
+    readonly #telemetryFlush: CloudflareTelemetryFlushCoordinator;
 
     constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
       super(ctx, env);
+      this.#ctx = ctx;
+      const platform = Layer.mergeAll(
+        DurableObjectContext.layer(ctx, env),
+        conversationNamespaceLayer(env, options.namespaceBinding),
+      );
+      // Host observability is composed at the Worker edge, not hidden in runtime options. Its
+      // typed acquisition failure remains in the ManagedRuntime error, while the Object context
+      // and namespace are available to Layers that derive exporter configuration from `env`.
+      const hostTelemetry = (telemetry ?? CloudflareRuntimeTelemetry.layerNoop).pipe(
+        Layer.provideMerge(platform),
+      );
       this.#runtime = ManagedRuntime.make(
         CloudflareDurableRuntime.layer(options).pipe(
-          Layer.provideMerge(
-            Layer.mergeAll(
-              DurableObjectContext.layer(ctx, env),
-              conversationNamespaceLayer(env, options.namespaceBinding),
-            ),
-          ),
+          // Supplying the host Layer outermost makes its Logger/Tracer/Metric runtime
+          // configuration observe application Layer acquisition and every native endpoint.
+          Layer.provideMerge(hostTelemetry),
         ),
+      );
+      this.#telemetryFlush = makeCloudflareTelemetryFlushCoordinator(
+        () => this.#runtime.runPromise(flushNativeEntrypointTelemetry),
+        {
+          onReservationDropped: () => {
+            void this.#runtime.runSyncExit(
+              Effect.logWarning(
+                "Cloudflare telemetry delivery coalesced at the batch reservation limit",
+              ).pipe(
+                Effect.annotateLogs({
+                  "effect_agent.cloudflare.telemetry.failure_kind": "reservation_limit",
+                }),
+              ),
+            );
+          },
+        },
       );
       // The constructor gate: local-only checks; never the recovery pass (deadlock argument,
       // plan §1.4). A failure here fails every delivery with the typed construction error.
       ctx.blockConcurrencyWhile(() => this.#runtime.runPromise(gateEndpoint));
     }
 
+    #runNative<A, E>(
+      entrypoint: NativeEntrypoint,
+      effect: Effect.Effect<A, E, EndpointServices>,
+    ): Promise<A> {
+      const delivery = this.#runtime.runPromise(observeNativeEntrypoint(entrypoint, effect));
+      // Reserve synchronously with the current native delivery, but do not await export from the
+      // RPC/alarm Promise. Each pending/trailing/queued batch waits for its assigned deliveries to
+      // settle and only its first owner registers the shared background Promise. Even an
+      // uninterruptible exporter therefore cannot delay a caller, suppress alarm retry, accumulate
+      // concurrent exporter work, an unbounded waitUntil registration queue, or unbounded retained
+      // delivery Promises. Excess arrivals are diagnosed and lossy-coalesced at the batch cap.
+      // Registration failure and every asynchronous flush failure remain isolated from delivery.
+      return registerCloudflareTelemetryAfterNativeSettlement(
+        (background) => this.#ctx.waitUntil(background),
+        delivery,
+        this.#telemetryFlush.reserve,
+        () => {
+          // Native entrypoints run only after blockConcurrencyWhile has built the cached runtime.
+          // Effect Logger invocation is synchronous; runSyncExit captures a broken logger without
+          // starting an unscoped fiber or changing the delivery Promise. The caught platform Cause
+          // is intentionally unavailable here: only a framework-owned classification is logged.
+          void this.#runtime.runSyncExit(
+            Effect.logError("Cloudflare telemetry waitUntil registration failed").pipe(
+              Effect.annotateLogs({
+                "effect_agent.cloudflare.telemetry.failure_kind": "wait_until_registration",
+              }),
+            ),
+          );
+        },
+      );
+    }
+
     async submitEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(submitEndpoint(encoded));
+      return this.#runNative("submit", submitEndpoint(encoded));
     }
 
     async awaitSettlementEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(awaitSettlementEndpoint(encoded));
+      return this.#runNative("await_settlement", awaitSettlementEndpoint(encoded));
     }
 
     async observePage(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(observePageEndpoint(encoded));
+      return this.#runNative("observe", observePageEndpoint(encoded));
     }
 
     async abortEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(abortEndpoint(encoded));
+      return this.#runNative("abort", abortEndpoint(encoded));
     }
 
     async resolveApprovalEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(resolveApprovalEndpoint(encoded));
+      return this.#runNative("resolve_approval", resolveApprovalEndpoint(encoded));
     }
 
     async resolveUnknownEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(resolveUnknownEndpoint(encoded));
+      return this.#runNative("resolve_unknown", resolveUnknownEndpoint(encoded));
     }
 
     async explainEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(explainEndpoint(encoded));
+      return this.#runNative("explain", explainEndpoint(encoded));
     }
 
     async verifyEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(verifyEndpoint(encoded));
+      return this.#runNative("verify", verifyEndpoint(encoded));
     }
 
     async retryEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(retryEndpoint(encoded));
+      return this.#runNative("retry", retryEndpoint(encoded));
     }
 
     async obligationsEncoded(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(obligationsEndpoint(encoded));
+      return this.#runNative("obligations", obligationsEndpoint(encoded));
     }
 
     async portCall(encoded: unknown): Promise<unknown> {
-      return this.#runtime.runPromise(portCallEndpoint(encoded));
+      return this.#runNative("port_call", portCallEndpoint(encoded));
     }
 
     async wake(): Promise<void> {
-      await this.#runtime.runPromise(wakeEndpoint);
+      await this.#runNative("wake", wakeEndpoint);
     }
 
     override async alarm(): Promise<void> {
-      await this.#runtime.runPromise(alarmEndpoint);
+      await this.#runNative("alarm", alarmEndpoint);
     }
   }
 
