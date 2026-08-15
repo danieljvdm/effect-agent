@@ -202,6 +202,33 @@ reuse remain rejected (D-013, ADR-0010).
 
 Record: [ADR-0019](adr/0019-budget-soft-landing-and-extension.md)
 
+### D-038 — Output schema conformance
+
+**Status:** Proposed
+
+**Recommendation:** Close the gap of issue #41 (the engine never tells the model the Agent's
+`output` Schema; conformance is post-hoc decode only) in two gated steps. Immediately, as a
+proposed default: at model-request materialization — after context preparation, never into
+official history — the engine appends one framework-owned system message carrying the
+final-output contract, the JSON Schema derived from `agent.definition.output` by Effect AI's
+derivation, inserted after the request's last system message (extending the last contiguous
+system block); non-renderable output Schemas fall
+back to today's behavior with a diagnostic, and `decodeFinalOutput` (AUTH-008) remains the
+enforcement authority. Long term, as the enforced mechanism: a synthetic engine-owned
+final-answer Tool whose parameters Schema is the output Schema — engine-Schema-decoded
+everywhere, strictly provider-validated where the provider guarantees strict tool schemas, and
+uniform with the streamed tool loop — which is a Turn-protocol change
+requiring its own accepted ADR before implementation. A `generateObject` repair call is rejected
+as a default and reserved as a possible future explicit acceptance policy; an upstream Effect AI
+proposal for `responseFormat` on `streamText` is filed in parallel per D-002. Canonical records,
+run events, the committed DN/DC golden, and public types are unchanged by the immediate step; on
+acceptance the runtime and testing specifications gain RUN-027 and TEST-016 (provisional IDs,
+assigned as next-free at acceptance; a live-shaped
+deterministic model substitute closing the offline/live divergence class).
+
+Proposed record: [ADR-0020](adr/0020-model-visible-output-contract.md)
+Plan: [Output schema conformance plan](OUTPUT-CONFORMANCE-PLAN.md)
+
 ## Platforms, persistence, and operations
 
 ### D-014 — Initial platforms

@@ -74,6 +74,7 @@ import {
   type Toolkit,
 } from "effect/unstable/ai";
 
+import { insertOutputContract, outputSchemaContract } from "./output-contract-internal.ts";
 import {
   boundedJsonSnapshot,
   type BoundedJsonSnapshot,
@@ -2452,6 +2453,16 @@ const makeTurn = <
     Effect.gen(function* () {
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
+      // Model-visible final-output contract (ADR-0020 / D-038, Proposed):
+      // derived before context preparation so a limit-targeting adapter can
+      // reserve the contract's overhead in its window calculation, applied to
+      // the request after preparation so compaction cannot drop it, and never
+      // entered into official history, so canonical records are unchanged.
+      // An unrenderable output Schema falls back to the prior behavior with
+      // one Turn-1 diagnostic.
+      const outputContract = outputSchemaContract(agent.definition);
+      const outputContractMessage =
+        outputContract._tag === "rendered" ? outputContract.message : undefined;
       const modelContext =
         options.context === undefined
           ? { prompt }
@@ -2461,6 +2472,11 @@ const makeTurn = <
               turnId,
               turn,
               source: prompt,
+              // Omit the key entirely when no contract renders so the
+              // fallback request is byte-identical to the prior behavior.
+              ...(outputContractMessage === undefined
+                ? {}
+                : { outputContract: outputContractMessage }),
             });
       const trace: TurnTrace = {
         parts: [],
@@ -2518,9 +2534,26 @@ const makeTurn = <
         policy.onExhaustion !== "fail" &&
         (turn > bounds.maxTurns ||
           priorToolCalls + context.programmaticToolCalls > bounds.maxToolCalls);
+
+      if (outputContract._tag === "unrenderable" && turn === 1) {
+        yield* Effect.logWarning(
+          "Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted (ADR-0020)",
+        ).pipe(
+          Effect.annotateLogs({
+            agentId: context.agentId,
+            runId: context.runId,
+            reason: outputContract.reason,
+          }),
+        );
+      }
+      const requestPrompt =
+        outputContractMessage === undefined
+          ? modelContext.prompt
+          : insertOutputContract(modelContext.prompt, outputContractMessage);
+
       const response = guardBudgetStream(
         LanguageModel.streamText({
-          prompt: modelContext.prompt,
+          prompt: requestPrompt,
           toolkit: agent.definition.toolkit,
           disableToolCallResolution: true,
           ...(finalAnswerOnly ? { toolChoice: "none" as const } : {}),

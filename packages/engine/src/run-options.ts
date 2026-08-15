@@ -80,6 +80,15 @@ export interface RunContextRequest {
   readonly turn: number;
   /** Official ephemeral history. The engine never replaces or mutates this value. */
   readonly source: Prompt.Prompt;
+  /**
+   * The exact model-visible final-output contract the engine appends to the
+   * prepared prompt after this hook returns (ADR-0020 proposed default), or
+   * undefined when the definition's output Schema cannot render to JSON
+   * Schema. Exposed so a limit-targeting adapter can reserve the contract's
+   * overhead in its own window calculation; the hook can size for the
+   * contract but cannot remove or alter it.
+   */
+  readonly outputContract?: string | undefined;
 }
 
 /** Prepared model-only context returned by a context adapter. */
