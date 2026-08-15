@@ -36135,6 +36135,7 @@ var EFFORT_ALIASES = {
   xhigh: 0.75,
   max: 1
 };
+var aliasPosition = EFFORT_ALIASES;
 
 class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
   input: exports_Schema.String
@@ -36146,7 +36147,7 @@ class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInpu
 var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
 var parseEffortPosition = (raw) => {
   const normalized = raw.trim().toLowerCase();
-  const named = EFFORT_ALIASES[normalized];
+  const named = aliasPosition[normalized];
   if (named !== undefined)
     return named;
   if (normalized === "")
@@ -36156,8 +36157,12 @@ var parseEffortPosition = (raw) => {
 };
 var resolveEffortRung = (position, rungs) => {
   const clamped = Math.min(1, Math.max(0, position));
-  const index2 = Math.floor(clamped * (rungs.length - 1));
-  return rungs[index2] ?? rungs[0];
+  let selected = rungs[0];
+  for (const rung of rungs) {
+    if (EFFORT_ALIASES[rung] <= clamped)
+      selected = rung;
+  }
+  return selected;
 };
 
 // packages/pr-review/src/internal/diff.ts
@@ -38937,6 +38942,11 @@ var severityEmoji = {
   important: "⚠️",
   nit: "\uD83D\uDC85"
 };
+var severityRank2 = {
+  blocking: 0,
+  important: 1,
+  nit: 2
+};
 var severityLabel = {
   blocking: `${severityEmoji.blocking} blocking`,
   important: `${severityEmoji.important} important`,
@@ -39028,16 +39038,8 @@ var planPublication = (review, files, options3) => {
       demoted.push({ finding, reason: violation });
     }
   }
-  const bodyParts = [renderVerdictCallout(review), "", review.summary];
-  for (const concern of review.concerns ?? []) {
-    bodyParts.push("", renderConcern(concern));
-  }
-  if (files.length < options3.totalChangedFiles) {
-    bodyParts.push("", `⚠️ Reviewed ${files.length} of ${options3.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`);
-  }
-  if (demoted.length > 0) {
-    bodyParts.push("", "### Findings without a valid diff anchor", ...demoted.map(({ finding, reason }) => renderDemoted(finding, reason)));
-  }
+  const sortedConcerns = [...review.concerns ?? []].sort((a, b) => severityRank2[a.severity] - severityRank2[b.severity]);
+  const sortedDemoted = [...demoted].sort((a, b) => severityRank2[a.finding.severity] - severityRank2[b.finding.severity]);
   const footerParts = ["Automated review by @effect-agent/pr-review"];
   if (options3.modelLabel !== undefined)
     footerParts.push(options3.modelLabel);
@@ -39048,7 +39050,25 @@ var planPublication = (review, files, options3) => {
   if (options3.runUrl !== undefined)
     footerParts.push(`[run](${options3.runUrl})`);
   footerParts.push(`reviewed at ${options3.headSha.slice(0, 7)}`);
-  bodyParts.push("", `_${footerParts.join(" · ")}._`);
+  const footer = `_${footerParts.join(" · ")}._`;
+  const renderHead = (concernsKept2, demotedKept2, omitted2) => {
+    const parts2 = [renderVerdictCallout(review), "", review.summary];
+    for (const concern of sortedConcerns.slice(0, concernsKept2)) {
+      parts2.push("", renderConcern(concern));
+    }
+    if (files.length < options3.totalChangedFiles) {
+      parts2.push("", `⚠️ Reviewed ${files.length} of ${options3.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`);
+    }
+    if (demotedKept2 > 0) {
+      parts2.push("", "### Findings without a valid diff anchor", ...sortedDemoted.slice(0, demotedKept2).map(({ finding, reason }) => renderDemoted(finding, reason)));
+    }
+    if (omitted2 > 0) {
+      parts2.push("", `⚠️ ${countNoun(omitted2, "review item")} omitted — the body exceeded GitHub's review size cap.`);
+    }
+    parts2.push("", footer);
+    return parts2.join(`
+`);
+  };
   const event = options3.applyVerdict ? review.verdict === "approve" ? "APPROVE" : review.verdict === "request-changes" ? "REQUEST_CHANGES" : "COMMENT" : "COMMENT";
   const tail = [
     renderReviewMetadata({
@@ -39061,8 +39081,20 @@ var planPublication = (review, files, options3) => {
     ...options3.fingerprint === undefined ? [] : [renderFingerprintMarker(options3.fingerprint)]
   ].join(`
 `);
-  const body = `${bodyParts.join(`
-`).slice(0, 60000 - tail.length - 1)}
+  const headBudget = 60000 - tail.length - 1;
+  let concernsKept = sortedConcerns.length;
+  let demotedKept = sortedDemoted.length;
+  let omitted = 0;
+  let head3 = renderHead(concernsKept, demotedKept, omitted);
+  while (head3.length > headBudget && (demotedKept > 0 || concernsKept > 0)) {
+    if (demotedKept > 0)
+      demotedKept -= 1;
+    else
+      concernsKept -= 1;
+    omitted += 1;
+    head3 = renderHead(concernsKept, demotedKept, omitted);
+  }
+  const body = `${head3.slice(0, headBudget)}
 ${tail}`;
   return ReviewPublicationPlan.make({
     event,

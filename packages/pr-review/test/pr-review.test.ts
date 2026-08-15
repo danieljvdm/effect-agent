@@ -35,6 +35,7 @@ import {
   FixturePullRequest,
   fixturePullRequestSourceLayer,
   makeOfflineReviewerModel,
+  SCRIPTED_TURN_USAGE,
 } from "../src/testing.ts";
 
 describe("OpenAI tool schema compatibility", () => {
@@ -506,6 +507,52 @@ describe("concerns, metadata, and footer", () => {
     );
   });
 
+  it("sheds whole low-severity items under the size cap instead of slicing markdown", () => {
+    const filler = "x".repeat(1_990);
+    const oversized = CodeReview.make({
+      summary: "Oversized body test.",
+      verdict: "comment",
+      // 20 unanchorable findings (~40k chars demoted) + 10 concerns (~20k
+      // chars) exceed the 60k cap; the nit concern is the shedding victim.
+      findings: Array.from({ length: 20 }, (_, index) =>
+        ReviewFinding.make({
+          path: "src/hello.ts",
+          startLine: 99,
+          endLine: 99,
+          severity: "important",
+          title: `Ghost ${index}`,
+          body: filler,
+        }),
+      ),
+      concerns: [
+        ReviewConcern.make({ severity: "blocking", title: "Keep me first", body: filler }),
+        ...Array.from({ length: 8 }, (_, index) =>
+          ReviewConcern.make({ severity: "important", title: `Concern ${index}`, body: filler }),
+        ),
+        ReviewConcern.make({ severity: "nit", title: "Shed me first", body: filler }),
+      ],
+    });
+    const plan = planPublication(oversized, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      fingerprint: "a".repeat(64),
+    });
+    expect(plan.body.length).toBeLessThanOrEqual(60_000);
+    // Whole items were shed, announced, and nothing was sliced mid-block:
+    // demoted bullets go first (they already failed validation), concerns
+    // survive, and the footer and invisible tail stay intact at the end.
+    expect(plan.body).toContain("omitted — the body exceeded GitHub's review size cap");
+    expect(plan.body).toContain("### 🛑 Keep me first");
+    expect(plan.body).toContain("Shed me first");
+    expect(plan.body).toContain("Ghost 0");
+    expect(plan.body).not.toContain("Ghost 19");
+    expect(plan.body).toContain("_Automated review by @effect-agent/pr-review");
+    expect(plan.body).toContain(`<!-- effect-agent-pr-review fingerprint=sha256:${"a".repeat(64)}`);
+    // The plan's data is complete regardless of what the body could hold.
+    expect(plan.demoted).toHaveLength(20);
+  });
+
   it("labels coordinator-scoped usage honestly", () => {
     const plan = planPublication(scriptedReview, files, {
       applyVerdict: false,
@@ -562,10 +609,10 @@ describe("offline review run", () => {
       expect(outcome.plan.comments).toHaveLength(1);
       expect(outcome.plan.demoted).toHaveLength(2);
 
-      // The run budget's observed usage is carried on the outcome.
-      expect(outcome.usage).toBeDefined();
-      expect(outcome.usage?.inputTokens).toBeGreaterThan(0);
-      expect(outcome.usage?.outputTokens).toBeGreaterThan(0);
+      // The run budget's observed usage aggregates EVERY turn exactly: the
+      // scripted model attaches a fixed usage to each of its four turns.
+      expect(outcome.usage?.inputTokens).toBe(4 * SCRIPTED_TURN_USAGE.inputTokens);
+      expect(outcome.usage?.outputTokens).toBe(4 * SCRIPTED_TURN_USAGE.outputTokens);
 
       // Publication went through the collecting publisher exactly once.
       const plans = yield* Ref.get(published);

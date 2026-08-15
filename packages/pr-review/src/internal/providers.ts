@@ -3,7 +3,7 @@ import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
 import { Config, Layer } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 
-import { resolveEffortRung, type EffortPosition } from "./effort.ts";
+import { resolveEffortRung, type EffortAliasName, type EffortPosition } from "./effort.ts";
 
 // ---------------------------------------------------------------------------
 // Built-in provider bindings for the two host entrypoints (CLI and Action).
@@ -38,7 +38,10 @@ export const PROVIDER_CREDENTIAL_ENV: Record<ReviewProvider, string> = {
 export const PROVIDER_EFFORT_RUNGS = {
   openai: ["low", "medium", "high", "xhigh"],
   anthropic: ["low", "medium", "high"],
-} as const satisfies Record<ReviewProvider, readonly [string, ...ReadonlyArray<string>]>;
+} as const satisfies Record<
+  ReviewProvider,
+  readonly [EffortAliasName, ...ReadonlyArray<EffortAliasName>]
+>;
 
 /** One OpenAI review model binding with the package's structured-output settings. */
 export const makeOpenAiReviewModel = (model?: string, effort?: EffortPosition) =>

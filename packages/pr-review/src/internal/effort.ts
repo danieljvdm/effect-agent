@@ -15,18 +15,23 @@ export type EffortPosition = number;
 
 /**
  * Names accepted on user-facing surfaces (the action input, the CLI flag),
- * mapped to fixed points on the axis. A typing convenience, not an ordering
- * authority: the provider's ladder decides what each point resolves to, and a
- * ladder shorter than five rungs folds neighbors together rather than
- * inventing a rung.
+ * mapped to fixed points on the axis. These same names anchor every offered
+ * rung during resolution, so a named input always lands on its same-named
+ * rung when the provider offers it — `high` never resolves to `medium` just
+ * because a ladder is short.
  */
-export const EFFORT_ALIASES: Readonly<Record<string, EffortPosition>> = {
+export const EFFORT_ALIASES = {
   low: 0,
   medium: 0.25,
   high: 0.5,
   xhigh: 0.75,
   max: 1,
-};
+} as const satisfies Readonly<Record<string, EffortPosition>>;
+
+/** A rung name every provider ladder must draw from. */
+export type EffortAliasName = keyof typeof EFFORT_ALIASES;
+
+const aliasPosition: Readonly<Record<string, EffortPosition | undefined>> = EFFORT_ALIASES;
 
 /** An effort input that is neither a known name nor a number on [0, 1]. */
 export class InvalidEffortInput extends Schema.TaggedError<InvalidEffortInput>()(
@@ -53,7 +58,7 @@ export const isEffortPosition = (value: number): boolean =>
  */
 export const parseEffortPosition = (raw: string): EffortPosition | undefined => {
   const normalized = raw.trim().toLowerCase();
-  const named = EFFORT_ALIASES[normalized];
+  const named = aliasPosition[normalized];
   if (named !== undefined) return named;
   if (normalized === "") return undefined;
   const numeric = Number(normalized);
@@ -61,15 +66,21 @@ export const parseEffortPosition = (raw: string): EffortPosition | undefined => 
 };
 
 /**
- * Land a position on one provider's offered ladder. A position between two
- * rungs rounds DOWN, so resolution never costs more than was asked for, and a
- * rung's own exact position lands back on itself.
+ * Land a position on one provider's offered ladder: the highest offered rung
+ * whose canonical alias position is at or below the requested position.
+ * Anchoring on the alias positions (instead of scaling by ladder index) keeps
+ * two properties at once: a named input lands on its same-named rung whenever
+ * the provider offers it, and anything between rungs rounds DOWN so
+ * resolution never costs more than was asked for.
  */
-export const resolveEffortRung = <const Rung extends string>(
+export const resolveEffortRung = <const Rung extends EffortAliasName>(
   position: EffortPosition,
   rungs: readonly [Rung, ...ReadonlyArray<Rung>],
 ): Rung => {
   const clamped = Math.min(1, Math.max(0, position));
-  const index = Math.floor(clamped * (rungs.length - 1));
-  return rungs[index] ?? rungs[0];
+  let selected = rungs[0];
+  for (const rung of rungs) {
+    if (EFFORT_ALIASES[rung] <= clamped) selected = rung;
+  }
+  return selected;
 };

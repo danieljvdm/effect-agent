@@ -29,13 +29,25 @@ describe("parseEffortPosition", () => {
 });
 
 describe("resolveEffortRung", () => {
+  it("lands a named input on its same-named rung whenever the provider offers it", () => {
+    // The live regression this pins: `effort: high` once resolved to
+    // `medium` on OpenAI's four-rung ladder under index scaling.
+    expect(resolveEffortRung(EFFORT_ALIASES.high, PROVIDER_EFFORT_RUNGS.openai)).toBe("high");
+    expect(resolveEffortRung(EFFORT_ALIASES.high, PROVIDER_EFFORT_RUNGS.anthropic)).toBe("high");
+    expect(resolveEffortRung(EFFORT_ALIASES.xhigh, PROVIDER_EFFORT_RUNGS.openai)).toBe("xhigh");
+    expect(resolveEffortRung(EFFORT_ALIASES.medium, PROVIDER_EFFORT_RUNGS.anthropic)).toBe(
+      "medium",
+    );
+  });
+
   it("rounds down between rungs so resolution never costs more than asked", () => {
     expect(resolveEffortRung(0, PROVIDER_EFFORT_RUNGS.openai)).toBe("low");
-    expect(resolveEffortRung(0.5, PROVIDER_EFFORT_RUNGS.openai)).toBe("medium");
-    expect(resolveEffortRung(0.75, PROVIDER_EFFORT_RUNGS.openai)).toBe("high");
+    expect(resolveEffortRung(0.2, PROVIDER_EFFORT_RUNGS.openai)).toBe("low");
+    expect(resolveEffortRung(0.6, PROVIDER_EFFORT_RUNGS.openai)).toBe("high");
     expect(resolveEffortRung(1, PROVIDER_EFFORT_RUNGS.openai)).toBe("xhigh");
-    expect(resolveEffortRung(1, PROVIDER_EFFORT_RUNGS.anthropic)).toBe("high");
-    expect(resolveEffortRung(0.5, PROVIDER_EFFORT_RUNGS.anthropic)).toBe("medium");
+    // A rung the provider does not offer falls to the next one below it.
+    expect(resolveEffortRung(EFFORT_ALIASES.xhigh, PROVIDER_EFFORT_RUNGS.anthropic)).toBe("high");
+    expect(resolveEffortRung(EFFORT_ALIASES.max, PROVIDER_EFFORT_RUNGS.anthropic)).toBe("high");
   });
 
   it("clamps out-of-range positions instead of inventing rungs", () => {
@@ -43,10 +55,14 @@ describe("resolveEffortRung", () => {
     expect(resolveEffortRung(2, PROVIDER_EFFORT_RUNGS.openai)).toBe("xhigh");
   });
 
-  it("lands every alias on a rung each provider actually offers", () => {
-    for (const position of Object.values(EFFORT_ALIASES)) {
-      for (const rungs of [PROVIDER_EFFORT_RUNGS.openai, PROVIDER_EFFORT_RUNGS.anthropic]) {
-        expect(rungs).toContain(resolveEffortRung(position, rungs));
+  it("stays monotonic across every alias on both ladders", () => {
+    for (const rungs of [PROVIDER_EFFORT_RUNGS.openai, PROVIDER_EFFORT_RUNGS.anthropic] as const) {
+      const ladder: ReadonlyArray<string> = rungs;
+      let previousIndex = -1;
+      for (const position of Object.values(EFFORT_ALIASES)) {
+        const index = ladder.indexOf(resolveEffortRung(position, rungs));
+        expect(index).toBeGreaterThanOrEqual(previousIndex);
+        previousIndex = index;
       }
     }
   });

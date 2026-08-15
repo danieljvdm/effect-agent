@@ -49,6 +49,12 @@ const severityEmoji: Record<ReviewFinding["severity"], string> = {
   nit: "💅",
 };
 
+const severityRank: Record<ReviewFinding["severity"], number> = {
+  blocking: 0,
+  important: 1,
+  nit: 2,
+};
+
 const severityLabel: Record<ReviewFinding["severity"], string> = {
   blocking: `${severityEmoji.blocking} blocking`,
   important: `${severityEmoji.important} important`,
@@ -208,23 +214,14 @@ export const planPublication = (
     }
   }
 
-  const bodyParts = [renderVerdictCallout(review), "", review.summary];
-  for (const concern of review.concerns ?? []) {
-    bodyParts.push("", renderConcern(concern));
-  }
-  if (files.length < options.totalChangedFiles) {
-    bodyParts.push(
-      "",
-      `⚠️ Reviewed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
-    );
-  }
-  if (demoted.length > 0) {
-    bodyParts.push(
-      "",
-      "### Findings without a valid diff anchor",
-      ...demoted.map(({ finding, reason }) => renderDemoted(finding, reason)),
-    );
-  }
+  // Rendered most-severe first so the size cap below sheds the least severe.
+  const sortedConcerns = [...(review.concerns ?? [])].sort(
+    (a, b) => severityRank[a.severity] - severityRank[b.severity],
+  );
+  const sortedDemoted = [...demoted].sort(
+    (a, b) => severityRank[a.finding.severity] - severityRank[b.finding.severity],
+  );
+
   const footerParts = ["Automated review by @effect-agent/pr-review"];
   if (options.modelLabel !== undefined) footerParts.push(options.modelLabel);
   if (options.usage !== undefined) {
@@ -235,7 +232,37 @@ export const planPublication = (
   }
   if (options.runUrl !== undefined) footerParts.push(`[run](${options.runUrl})`);
   footerParts.push(`reviewed at ${options.headSha.slice(0, 7)}`);
-  bodyParts.push("", `_${footerParts.join(" · ")}._`);
+  const footer = `_${footerParts.join(" · ")}._`;
+
+  const renderHead = (concernsKept: number, demotedKept: number, omitted: number): string => {
+    const parts = [renderVerdictCallout(review), "", review.summary];
+    for (const concern of sortedConcerns.slice(0, concernsKept)) {
+      parts.push("", renderConcern(concern));
+    }
+    if (files.length < options.totalChangedFiles) {
+      parts.push(
+        "",
+        `⚠️ Reviewed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
+      );
+    }
+    if (demotedKept > 0) {
+      parts.push(
+        "",
+        "### Findings without a valid diff anchor",
+        ...sortedDemoted
+          .slice(0, demotedKept)
+          .map(({ finding, reason }) => renderDemoted(finding, reason)),
+      );
+    }
+    if (omitted > 0) {
+      parts.push(
+        "",
+        `⚠️ ${countNoun(omitted, "review item")} omitted — the body exceeded GitHub's review size cap.`,
+      );
+    }
+    parts.push("", footer);
+    return parts.join("\n");
+  };
 
   const event: ReviewEvent = options.applyVerdict
     ? review.verdict === "approve"
@@ -257,7 +284,24 @@ export const planPublication = (
     }),
     ...(options.fingerprint === undefined ? [] : [renderFingerprintMarker(options.fingerprint)]),
   ].join("\n");
-  const body = `${bodyParts.join("\n").slice(0, 60_000 - tail.length - 1)}\n${tail}`;
+  const headBudget = 60_000 - tail.length - 1;
+
+  // Shed whole trailing items — demoted bullets first (they already failed
+  // validation), then concerns — instead of slicing markdown mid-block. Every
+  // omission is announced, and `plan.demoted` keeps the full data regardless.
+  let concernsKept = sortedConcerns.length;
+  let demotedKept = sortedDemoted.length;
+  let omitted = 0;
+  let head = renderHead(concernsKept, demotedKept, omitted);
+  while (head.length > headBudget && (demotedKept > 0 || concernsKept > 0)) {
+    if (demotedKept > 0) demotedKept -= 1;
+    else concernsKept -= 1;
+    omitted += 1;
+    head = renderHead(concernsKept, demotedKept, omitted);
+  }
+  // Last resort for a pathological summary; unreachable while the CodeReview
+  // schema caps the summary well below the budget.
+  const body = `${head.slice(0, headBudget)}\n${tail}`;
 
   return ReviewPublicationPlan.make({
     event,
