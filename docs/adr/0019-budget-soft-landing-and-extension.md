@@ -21,13 +21,14 @@
   bounded `SubagentResultContext` with the honest `budgetExhausted` marker (from the ephemeral
   child result, or the child Settlement's durable marker carried through
   `ChildEstablishSettled.finishReason`). One scope delta from decision item 7: the allowance
-  reaches only EPHEMERAL children — a durable child's lane owns no per-run options channel, and
-  making the reservation slice binding on the child would contradict §7's never-clipped overrun
-  model, so durable allowance threading is deferred to its own proposal. On the durable path the
-  exhausted marker still travels (via `ChildEstablishSettled.finishReason`) and re-delegation
-  remains possible, but an allowance has no effect there — a durable child always runs at its
-  Definition policy — so allowance-based extension is meaningful only for ephemeral children
-  until the deferred proposal lands.
+  reaches only EPHEMERAL children — in the DN and DC assemblies a child's lane owns no per-run
+  options channel, and making the reservation slice binding on the child would contradict §7's
+  never-clipped overrun model, so DN/DC allowance threading is deferred to its own proposal. In
+  DN and DC the exhausted marker still travels (via `ChildEstablishSettled.finishReason`, session
+  coordinator, exercised in the DN-profile suites) and re-delegation remains possible, but an
+  allowance has no effect there — a DN/DC child always runs at its Definition policy — so
+  allowance-based extension is meaningful only for ephemeral children until the deferred
+  proposal lands.
 - Status note (2026-08-15, hardening after #50's autoreviewer): `define` is overloaded so the
   resolved Tool channels follow the `failureMode` VALUE (return mode cannot be claimed through a
   type argument while the runtime builds the error-mode Tool); containment classifies genuine
