@@ -2,7 +2,15 @@ import { Context, Effect, Layer, Schema, Stream } from "effect";
 import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import { Agent, AgentInputError, AgentOutputError, AgentPolicy } from "../src/index.ts";
+import {
+  Agent,
+  type AgentError,
+  type AgentInputError,
+  type AgentOutputError,
+  AgentPolicy,
+  type CompactionPolicy,
+  type ContextOverflowError,
+} from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -110,6 +118,20 @@ type InputProjectionProof = Assert<
 type OutputProjectionProof = Assert<
   Equal<Agent.Output<typeof agent>, { readonly summary: string }>
 >;
+type PolicyExhaustionModeProof = Assert<
+  Equal<AgentPolicy["onExhaustion"], "final-answer" | "fail">
+>;
+type PolicyRunStatusProof = Assert<Equal<AgentPolicy["runStatus"], "appended" | "off">>;
+type PolicyContextLimitOptionalityProof = Assert<
+  Equal<AgentPolicy["contextTokenLimit"], AgentPolicy["tokenBudget"]>
+>;
+type PolicyCompactionProof = Assert<Equal<AgentPolicy["compaction"], CompactionPolicy>>;
+type ContextOverflowTagProof = Assert<Equal<ContextOverflowError["_tag"], "ContextOverflowError">>;
+// Union MEMBERSHIP, not just the tag: extracting the member by tag from the
+// framework error union must yield exactly the class type (F5, PR #54 review).
+type ContextOverflowInAgentErrorProof = Assert<
+  Equal<Extract<AgentError, { _tag: "ContextOverflowError" }>, ContextOverflowError>
+>;
 
 describe("Agent type inference", () => {
   it("separates immutable definition from model binding", () => {
@@ -120,7 +142,19 @@ describe("Agent type inference", () => {
     const bindingRetainsNativeModelProof: BindingRetainsNativeModelProof = true;
     const inputProjectionProof: InputProjectionProof = true;
     const outputProjectionProof: OutputProjectionProof = true;
+    const policyExhaustionModeProof: PolicyExhaustionModeProof = true;
+    const policyRunStatusProof: PolicyRunStatusProof = true;
+    const policyContextLimitOptionalityProof: PolicyContextLimitOptionalityProof = true;
+    const policyCompactionProof: PolicyCompactionProof = true;
+    const contextOverflowTagProof: ContextOverflowTagProof = true;
+    const contextOverflowInAgentErrorProof: ContextOverflowInAgentErrorProof = true;
 
+    expect(policyExhaustionModeProof).toBe(true);
+    expect(policyRunStatusProof).toBe(true);
+    expect(policyContextLimitOptionalityProof).toBe(true);
+    expect(policyCompactionProof).toBe(true);
+    expect(contextOverflowTagProof).toBe(true);
+    expect(contextOverflowInAgentErrorProof).toBe(true);
     expect(requirementsProof).toBe(true);
     expect(definitionRequirementsProof).toBe(true);
     expect(failureProof).toBe(true);

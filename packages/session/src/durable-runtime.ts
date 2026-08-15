@@ -157,6 +157,7 @@ import {
   CanonicalBatch,
   CanonicalRecordEnvelope,
   CanonicalSequence,
+  CompactionCreated,
   ConversationCreated,
   DefinitionDigests,
   DeploymentId,
@@ -203,6 +204,8 @@ import {
   approvalDecisionBatchId,
   childConversationIdFor,
   childIdempotencyKeyFor,
+  compactionBatchId,
+  compactionRecordId,
   markUnknownBatchId,
   modelResponseInterruptedBatchId,
   modelResponseInterruptedRecordId,
@@ -2762,6 +2765,35 @@ const make = Effect.gen(function* () {
           }
         }
       }
+      // RUN-023: per-Turn usage staged by the engine's `noteTurnUsage` for the
+      // Turn's canonical response record (keyed by CANONICAL turn number).
+      const stagedUsage = new Map<
+        number,
+        { readonly inputTokens: number; readonly outputTokens: number }
+      >();
+      // RUN-026: durable compaction covers only records of PRIOR Runs — never
+      // the appending Run's own records — so the owner's instruction/input
+      // messages survive every projection and the resume-splice arithmetic
+      // stays untouched. The in-memory view may cover more; the record is
+      // canonical (RUN-026).
+      let ownerFirstSequence: CanonicalSequence | undefined;
+      for (const envelope of records) {
+        const payload = envelope.record.payload;
+        if ("runId" in payload && payload.runId === runId) {
+          ownerFirstSequence = envelope.sequence;
+          break;
+        }
+      }
+      /** Rough chars/4 estimate of one record's prompt contribution (selection only). */
+      const estimateRecordTokens = (envelope: CanonicalRecordEnvelope): number => {
+        let text: string | undefined;
+        try {
+          text = JSON.stringify(envelope.record.payload);
+        } catch {
+          text = undefined;
+        }
+        return text === undefined ? 0 : Math.ceil(text.length / 4);
+      };
       /** Pre-existing joins of this host Run, loaded lazily at the first drain seam. */
       let joinBacklog: ReadonlyArray<JoinSnapshot> | undefined;
       /** Joined inputs already handed to the engine during THIS Attempt (never re-deliver). */
@@ -2925,6 +2957,7 @@ const make = Effect.gen(function* () {
                   producerId: config.producerId,
                   deploymentId: config.deploymentId,
                   createdAt,
+                  usage: stagedUsage.get(canonicalTurn),
                 }),
               );
               yield* appendBatch(ctx, batch);
@@ -3034,6 +3067,92 @@ const make = Effect.gen(function* () {
               }),
             ),
         },
+        noteTurnUsage: (usage) =>
+          Effect.sync(() => {
+            stagedUsage.set(turnOffset + usage.turn, {
+              inputTokens: usage.inputTokens,
+              outputTokens: usage.outputTokens,
+            });
+          }),
+        commitCompaction: (commit) =>
+          recordHalt(
+            Effect.gen(function* () {
+              const canonicalTurn = turnOffset + commit.turn;
+              const recordId = compactionRecordId(runId, canonicalTurn, commit.kind);
+              if (knownIds.has(recordId)) return;
+              // Coverage selection walks the attempt-start snapshot: records
+              // appended by THIS Attempt are all owner-Run and excluded by the
+              // prior-Runs-only rule regardless.
+              const coverable: Array<CanonicalRecordEnvelope> = [];
+              for (const envelope of records) {
+                if (ownerFirstSequence !== undefined && envelope.sequence >= ownerFirstSequence) {
+                  break;
+                }
+                const tag = envelope.record.payload._tag;
+                if (tag === "ModelResponseRecorded" || tag === "ToolCallSettled") {
+                  coverable.push(envelope);
+                }
+              }
+              if (coverable.length === 0) return;
+              // Keep the newest ~keepRecentTokens of prompt-visible records;
+              // the cut lands only immediately before a ModelResponseRecorded
+              // so a Turn is always covered atomically (pairing preserved).
+              const keepRecentTokens = agent.definition.policy.compaction.keepRecentTokens;
+              let kept = 0;
+              let cutIndex = -1;
+              for (let index = coverable.length - 1; index >= 0; index -= 1) {
+                const envelope = coverable[index];
+                if (envelope === undefined) continue;
+                kept += estimateRecordTokens(envelope);
+                if (kept >= keepRecentTokens) {
+                  cutIndex = index;
+                  break;
+                }
+              }
+              if (cutIndex === -1) return;
+              // The threshold-crossing record's tokens were counted as kept,
+              // so its WHOLE Turn stays retained: walk BACK to that Turn's
+              // ModelResponseRecorded and end the covered prefix just before
+              // it. Walking forward instead would fold the counted Turn — and
+              // for a newest-Turn threshold could cover all prior history.
+              while (
+                cutIndex >= 0 &&
+                coverable[cutIndex]?.record.payload._tag !== "ModelResponseRecorded"
+              ) {
+                cutIndex -= 1;
+              }
+              if (cutIndex < 0) return;
+              const lastCovered = cutIndex > 0 ? coverable[cutIndex - 1] : undefined;
+              if (lastCovered === undefined) return;
+              if (commit.kind === "summarize" && (commit.summary ?? "").length === 0) {
+                return yield* RunJournalError.make({
+                  message: "A summarize compaction commit carried no summary",
+                });
+              }
+              const envelope = yield* makeEnvelope(
+                recordId,
+                CompactionCreated.make({
+                  runId,
+                  turn: canonicalTurn,
+                  kind: commit.kind,
+                  coversThrough: lastCovered.sequence,
+                  ...(commit.kind === "summarize"
+                    ? { summary: (commit.summary ?? "").slice(0, 64 * 1024) }
+                    : {}),
+                }),
+              );
+              yield* appendBatch(
+                ctx,
+                CanonicalBatch.make({
+                  batchId: compactionBatchId(runId, canonicalTurn, commit.kind),
+                  producerId: config.producerId,
+                  records: [envelope],
+                }),
+              );
+              knownIds.add(recordId);
+              yield* hit("compaction:after-canonical-append");
+            }),
+          ),
       };
 
       /** Digest of one declared call's canonical encoded parameters (same family as prepared). */
@@ -3727,7 +3846,9 @@ const make = Effect.gen(function* () {
                   : { leadingMessages: resumeLeadingMessages }),
               },
             }),
-        ...(journal.committedTurns === 0 ? {} : { context: resumeContext }),
+        ...(journal.committedTurns === 0
+          ? {}
+          : { context: resumeContext, resumeUsage: journal.usage }),
       };
 
       const commitPendingTurn: Effect.Effect<void, DurableWorkerFailure> = Effect.gen(function* () {
@@ -3795,6 +3916,7 @@ const make = Effect.gen(function* () {
               producerId: config.producerId,
               deploymentId: config.deploymentId,
               createdAt,
+              usage: stagedUsage.get(canonicalTurn),
             }),
           );
           yield* appendBatch(ctx, batch);

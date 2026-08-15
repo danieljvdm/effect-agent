@@ -144,7 +144,35 @@ and acceptable final output.
 
 **Compaction**  
 Creation of a model-context summary or branch that reduces future prompt size without erasing
-canonical evidence. Physical record deletion is a separate retention operation.
+canonical evidence. Physical record deletion is a separate retention operation. The engine
+compacts natively at the pre-Turn seam when the estimated next context exceeds the Context Token
+Limit — pruning old Tool results, then summarizing through one metered model call — recording
+each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
+projections fold
+(RUN-026). Host-supplied, digest-bound compaction artifacts remain a separate capability.
+
+**Context Token Limit**  
+The optional `AgentPolicy.contextTokenLimit` bound on one model call's live context, supplied by
+the host from its model choice. Distinct from `tokenBudget` (the cumulative runaway stop) and
+`costBudgetMicrousd` (spend).
+
+**Tool Result Bounds**  
+The `AgentPolicy.toolResultBounds` byte bound (default 50 KiB) applied once to every application
+Tool result's encoded form at the settle seam. An oversized result becomes the canonical
+`TruncatedToolResult` envelope preserving head, tail, and original size, so records and prompts
+carry the same bounded value.
+
+**Run Status Message**  
+A derived message appended to each outgoing model request (policy `runStatus: "appended"`)
+reflecting turns, Tool calls, tokens against budget, last-call context, and elapsed time. It is
+projection-time output, never persisted as canonical history.
+
+**Token Soft Landing**  
+The token dimension's participation in the `onExhaustion: "final-answer"` resolution
+(RUN-025): a token-breaching response with decodable output settles the
+Run directly, and otherwise the Run takes at most one constrained grace Turn
+(`toolChoice: "none"`), completing with `finishReason: "budget-exhausted"` and the
+`exhausted` dimension marker instead of failing silently.
 
 ## Persistence concepts
 

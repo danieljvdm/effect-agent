@@ -1047,6 +1047,241 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       expect(view?.released).toEqual(view?.allocated);
     }),
   );
+  it.effect(
+    "RUN-025: budget-exhausted child finalizes and the parent joins the projected partial result",
+    () =>
+      Effect.gen(function* () {
+        const Probe = Tool.make("probe_docs", {
+          parameters: Schema.Struct({}),
+          success: Schema.String,
+        });
+        const probeTools = Toolkit.make(Probe);
+        const probeToolLayer = probeTools.toLayer({
+          probe_docs: () => Effect.succeed("probed"),
+        });
+        // maxTurns 1 with a Tool-declaring first response breaches the Turn
+        // limit; the default onExhaustion "final-answer" grants one tool-less
+        // grace call that answers with the partial output (RUN-025).
+        const exhaustedChildDefinition = Agent.define("exhausted-child", {
+          input: ChildInput,
+          output: ChildOutput,
+          instructions: "Probe, then answer as JSON.",
+          toolkit: probeTools,
+          policy: AgentPolicy.make({
+            maxTurns: 1,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        });
+        const childPrompts = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const scripts: ReadonlyArray<ReadonlyArray<Response.StreamPartEncoded>> = [
+          [
+            {
+              type: "tool-call",
+              id: "probe-1",
+              name: "probe_docs",
+              params: {},
+              providerExecuted: false,
+            },
+            { type: "finish", reason: "tool-calls", usage },
+          ],
+          finalParts('{"answer":"partial"}'),
+        ];
+        const childModel = Model.make(
+          "scripted",
+          "exhausted-child-model",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            Effect.gen(function* () {
+              const request = yield* Ref.make(0);
+              return yield* LanguageModel.make({
+                generateText: () => Effect.succeed([]),
+                streamText: (options) =>
+                  Stream.unwrap(
+                    Ref.update(childPrompts, (all) => [...all, options.prompt]).pipe(
+                      Effect.andThen(Ref.getAndUpdate(request, (value) => value + 1)),
+                      Effect.map((index) =>
+                        Stream.fromIterable(scripts[Math.min(index, scripts.length - 1)] ?? []),
+                      ),
+                    ),
+                  ),
+              });
+            }),
+          ),
+        );
+        const projectedOutputs = yield* Ref.make<ReadonlyArray<{ readonly answer: string }>>([]);
+        const partialDelegation = Subagent.define("delegate_partial", {
+          description: "Delegation whose child exhausts its Turn budget.",
+          target: exhaustedChildDefinition,
+          parameters: ResearchParams,
+          success: ResearchFindings,
+          failure: ResearchDelegationFailed,
+          prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+          projectResult: (output) =>
+            Ref.update(projectedOutputs, (all) => [...all, output]).pipe(
+              Effect.as({ summary: `finding:${output.answer}` }),
+            ),
+          policy: researchPolicy,
+        });
+        const partialParentDefinition = Agent.define("coordinator-partial", {
+          input: Schema.Struct({ mission: Schema.String }),
+          output: Schema.Struct({ report: Schema.String }),
+          instructions: "Delegate, then answer as JSON.",
+          toolkit: Toolkit.make(partialDelegation.tool),
+          policy: parentPolicy,
+        });
+        const childBinding = Agent.withModel(exhaustedChildDefinition, childModel);
+        const parent = Agent.withModel(
+          partialParentDefinition,
+          delegatingModel(
+            "parent-partial",
+            "delegate_partial",
+            [{ id: "call-1", params: { topic: "paris" } }],
+            '{"report":"done"}',
+          ),
+        );
+        const runId = decodeRunId("parent-run-partial");
+
+        const detached = yield* AgentRuntime.start(
+          parent,
+          { mission: "parent-secret-mission" },
+          { runId },
+        ).pipe(
+          Effect.provide(
+            Layer.provide(
+              SubagentRuntime.layer(partialDelegation, childBinding, { mapChildFailure }),
+              probeToolLayer,
+            ),
+          ),
+        );
+        const result = yield* detached.await;
+        const events = yield* detached.events;
+
+        // The parent Run itself completes normally on the projected result.
+        expect(result.output).toEqual({ report: "done" });
+        expect(subagentTags(events)).toEqual([
+          "SubagentRequested",
+          "SubagentStarted",
+          "SubagentCompleted",
+          "SubagentJoined",
+        ]);
+
+        // The child settled through graceful exhaustion and the event says so.
+        expect(findEvent(events, "SubagentCompleted")).toMatchObject({
+          finishReason: "budget-exhausted",
+          exhausted: "turns",
+          turns: 2,
+        });
+
+        // projectResult ran on the finalize output — the declassification
+        // boundary is unchanged — and the parent Tool result is the
+        // projected partial, not a failure.
+        expect(yield* Ref.get(projectedOutputs)).toEqual([{ answer: "partial" }]);
+        expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
+          result: { summary: "finding:partial" },
+        });
+
+        // The grace Turn reached the child (one Turn past maxTurns, warned by
+        // the run-status message), and child isolation held for the
+        // exhausted path too.
+        const prompts = yield* Ref.get(childPrompts);
+        expect(prompts).toHaveLength(2);
+        const gracePrompt = JSON.stringify(prompts[1]);
+        expect(gracePrompt).toContain("<run-status>turn 2/1");
+        expect(gracePrompt).not.toContain("parent-secret-mission");
+
+        const reservations = yield* SubagentReservations;
+        const snapshot = yield* reservations.parentSnapshot(runId);
+        expectSettledOnce(snapshot.reservations[0]);
+      }),
+  );
+
+  it.effect("RUN-025: a child pinned to onExhaustion 'fail' keeps the typed failure path", () =>
+    Effect.gen(function* () {
+      const Probe = Tool.make("probe_docs", {
+        parameters: Schema.Struct({}),
+        success: Schema.String,
+      });
+      const probeTools = Toolkit.make(Probe);
+      const probeToolLayer = probeTools.toLayer({
+        probe_docs: () => Effect.succeed("probed"),
+      });
+      const failingChildDefinition = Agent.define("fail-fast-child", {
+        input: ChildInput,
+        output: ChildOutput,
+        instructions: "Probe, then answer as JSON.",
+        toolkit: probeTools,
+        policy: AgentPolicy.make({
+          maxTurns: 1,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          onExhaustion: "fail",
+        }),
+      });
+      const failFastDelegation = Subagent.define("delegate_fail_fast", {
+        description: "Delegation whose child keeps the legacy fail-fast contract.",
+        target: failingChildDefinition,
+        parameters: ResearchParams,
+        success: ResearchFindings,
+        failure: ResearchDelegationFailed,
+        prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+        projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
+        policy: researchPolicy,
+      });
+      const failFastParentDefinition = Agent.define("coordinator-fail-fast", {
+        input: Schema.Struct({ mission: Schema.String }),
+        output: Schema.Struct({ report: Schema.String }),
+        instructions: "Delegate, then answer as JSON.",
+        toolkit: Toolkit.make(failFastDelegation.tool),
+        policy: parentPolicy,
+      });
+      const childBinding = Agent.withModel(
+        failingChildDefinition,
+        delegatingModel(
+          "fail-fast-child-model",
+          "probe_docs",
+          [{ id: "probe-1", params: {} }],
+          '{"answer":"unreached"}',
+        ),
+      );
+      const parent = Agent.withModel(
+        failFastParentDefinition,
+        delegatingModel(
+          "parent-fail-fast",
+          "delegate_fail_fast",
+          [{ id: "call-1", params: { topic: "berlin" } }],
+          '{"report":"unreached"}',
+        ),
+      );
+      const runId = decodeRunId("parent-run-fail-fast");
+
+      const detached = yield* AgentRuntime.start(parent, { mission: "m" }, { runId }).pipe(
+        Effect.provide(
+          Layer.provide(
+            SubagentRuntime.layer(failFastDelegation, childBinding, { mapChildFailure }),
+            probeToolLayer,
+          ),
+        ),
+      );
+      const exit = yield* Effect.exit(detached.await);
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(ResearchDelegationFailed);
+      expect(failure).toMatchObject({ childErrorTag: "AgentPolicyError" });
+
+      const events = yield* detached.events;
+      expect(findEvent(events, "SubagentFailed")).toMatchObject({
+        errorTag: "AgentPolicyError",
+      });
+      expect(findEvent(events, "SubagentCompleted")).toBeUndefined();
+      expect(findEvent(events, "SubagentJoined")).toBeUndefined();
+
+      const reservations = yield* SubagentReservations;
+      const snapshot = yield* reservations.parentSnapshot(runId);
+      expectSettledOnce(snapshot.reservations[0]);
+    }),
+  );
 });
 
 // ---------------------------------------------------------------------------

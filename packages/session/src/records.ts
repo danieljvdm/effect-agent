@@ -200,6 +200,15 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
   turn: TurnNumber,
   messages: PersistedJson,
   messagesDigest: Digest,
+  /**
+   * Per-call provider usage (RUN-023), present for records committed after
+   * the context-economics arc. Totals are what budget re-seeding needs; cache splits are
+   * deliberately not persisted — snapshot fidelity is host-side, and the
+   * canonical log stays minimal. Absent fields re-seed as zero (dev-data
+   * policy: old records under-count rather than fail).
+   */
+  inputTokens: Schema.optionalKey(Schema.Natural),
+  outputTokens: Schema.optionalKey(Schema.Natural),
 }) {}
 
 /**
@@ -327,12 +336,27 @@ export class ModelResponseInterrupted extends Schema.TaggedClass<ModelResponseIn
   reason: BoundedText,
 }) {}
 
+/**
+ * One engine-native compaction applied at the pre-Turn seam (RUN-026,
+ * RUN-026). `coversThrough` is a Conversation record sequence: the projection
+ * renders records at or below it as the summary (kind `summarize`) or with
+ * cleared tool results (kind `clear-tool-results`), never erasing source
+ * history. The record carries no digest by decision: it is appended by the
+ * fenced owner into the very log it covers, and re-verifying a digest would
+ * re-read the covered range on every wake — the O(history) work compaction
+ * exists to remove. Digest-bound artifacts remain the contract for
+ * host-supplied compaction (`@effect-agent/capabilities` `context.ts`).
+ * `summary` is present exactly for `summarize` records; the projection
+ * treats a summarize record without one as invalid and ignores it fail-safe.
+ */
 export class CompactionCreated extends Schema.TaggedClass<CompactionCreated>(
   "@effect-agent/session/CompactionCreated",
 )("CompactionCreated", {
   runId: RunId,
-  sourceDigest: Digest,
-  summary: BoundedText,
+  turn: TurnNumber,
+  kind: Schema.Literals(["clear-tool-results", "summarize"]),
+  coversThrough: CanonicalSequence,
+  summary: Schema.optionalKey(BoundedText),
 }) {}
 
 export class RunFailed extends Schema.TaggedClass<RunFailed>("@effect-agent/session/RunFailed")(
