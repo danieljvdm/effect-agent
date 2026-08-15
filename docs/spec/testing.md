@@ -342,7 +342,7 @@ No durability milestone is complete while its crash tests are skipped.
 - **TEST-013**: CI rejects lockfile drift, multiple workspace Effect versions, and an Effect source
   tag that disagrees with the root catalog.
 - **TEST-014**: The Travel Planner Reference Application remains a cumulative compiling and
-  executable fixture for every active roadmap phase; its ordinary suite is deterministic and
+  executable fixture for the full framework surface; its ordinary suite is deterministic and
   offline, while live provider profiles are opt-in.
 - **TEST-015**: Every `CodeExecutor` adapter passes the shared executor conformance suite, and
   direct versus programmatic invocation of the same Tool is observably equivalent.

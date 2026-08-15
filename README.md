@@ -41,8 +41,8 @@ and a browser test bench under `examples/demo`.
   `platform-cloudflare`, `pr-review` (packaged pull-request reviewer with a prebuilt GitHub
   Action at `action/`), and `testing`
 - Current implementation milestone: the full build-out is complete — the ephemeral interpreter,
-  the durable Node/SQLite runtime, durable Tools and joined input, the Cloudflare Durable Object
-  runtime, internal hardening (certification, formal models, chaos), and both Subagent slices,
+  the durable Node/SQLite runtime (`DN`), durable Tools and joined input, the Cloudflare Durable
+  Object runtime (`DC`), internal hardening (certification, formal models, chaos), and both Subagent slices,
   each proven by named test suites in the tree
 - Stated plainly: completion is an engineering claim, not a stability one — no hosted-Cloudflare
   evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in live-model suites are
@@ -110,14 +110,14 @@ interfaces. The specifications below remain the normative design source.
 
 ## Architecture decisions
 
-The [architecture decision records](docs/adr/README.md) explain the highest-impact
-choices, rationale, and invariants:
+The architecture rests on a small set of high-impact choices whose rationale and invariants
+are recorded in the specifications and concept pages:
 
 - build an Effect-native core;
 - use Effect AI Tool, Toolkit, LanguageModel, Prompt, Response, and Model directly;
 - separate the canonical Conversation Log from the operational Submission Ledger;
 - represent uncertain external effects instead of blindly replaying them;
-- keep framework packages phase-gated and runnable consumer benches in leaf `examples/*`
+- keep framework packages deliberately scoped and runnable consumer benches in leaf `examples/*`
   workspaces;
 - use bounded-parallel Tool execution with deterministic result order;
 - deliver steering, follow-up, and joined input only at safe Turn seams.
@@ -143,8 +143,9 @@ The engine uses Effect AI directly. It owns only the additional agent-loop, Conv
 Submission, recovery, and durability concepts. Provider SDK internals, database drivers,
 transports, and platform types must not become canonical domain records.
 
-The filesystem reflects the active roadmap phase rather than every possible future package. New
-packages are added only when their phase begins.
+The filesystem contains only the packages the framework needs today, not every possible future
+package. New packages are added only for a genuinely new framework concern agreed with the
+repository owner.
 
 ## Repository commands
 

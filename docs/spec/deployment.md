@@ -297,7 +297,7 @@ Current platform references:
 
 ## 12. Packaging and release
 
-- framework and platform code live in phase-gated `packages/*`; private runnable benches may live
+- framework and platform code live in owner-gated `packages/*`; private runnable benches may live
   in leaf `examples/*`, and there is no deployable `apps/` workspace;
 - the root Bun catalog pins the exact Effect v4 version before 1.0;
 - workspace manifests consume that version through `catalog:` and may not introduce another copy;

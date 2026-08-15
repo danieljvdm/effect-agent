@@ -1,6 +1,6 @@
 ---
 title: Package map
-description: Current private workspace packages and future phase-gated boundaries.
+description: Current private workspace packages and their boundaries.
 ---
 
 # Package map
@@ -9,8 +9,7 @@ description: Current private workspace packages and future phase-gated boundarie
 
 All package names are working names with source export maps in the repository; the packages
 publish to npm on the opt-in `beta` dist-tag. New packages appear
-only when their roadmap phase begins — `pr-review` is the one owner-directed post-roadmap
-exception.
+only for a genuinely new framework concern agreed with the repository owner.
 
 </StatusCallout>
 
@@ -144,7 +143,7 @@ check host-side.
 
 ## Future packages
 
-Every phase-gated framework package through the active roadmap now exists, plus the
+Every planned framework package now exists, plus the
 packaged `pr-review` application. Provider wrapper packages are deliberately absent. Provider
 integration remains upstream Effect AI Models and Layers.
 
