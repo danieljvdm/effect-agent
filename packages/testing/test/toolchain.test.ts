@@ -876,7 +876,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(publishStep?.run).toContain('REMOTE_BETA_VERSION="$(jq');
       expect(publishStep?.run).toContain('if [ "$REMOTE_INTEGRITY" != "$LOCAL_INTEGRITY" ]');
       expect(publishStep?.run).toContain('if [ "$REMOTE_BETA_VERSION" != "$VERSION" ]');
-      expect(publishStep?.run).toContain('node "$NPM_CLI" publish "$TARBALL"');
+      expect(publishStep?.run).toContain('node "$NPM_CLI" publish "./$TARBALL"');
       expect(publishStep?.run).toContain("--ignore-scripts");
       expect(publishStep?.run).toContain("--registry https://registry.npmjs.org");
       expect(publishStep?.run).not.toContain("node_modules");
@@ -1112,7 +1112,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         );
         expect(unpublishedVersion.publishInvocation.slice(1)).toEqual([
           "publish",
-          "packages/capabilities.tgz",
+          // The ./ prefix is load-bearing: npm 12 parses a bare
+          // "packages/….tgz" as a hosted-git shorthand and refuses it.
+          "./packages/capabilities.tgz",
           "--access",
           "public",
           "--ignore-scripts",
