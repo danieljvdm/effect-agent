@@ -45,6 +45,7 @@
     "@fontsource-variable/ibm-plex-sans": "catalog:",
     "@fontsource/ibm-plex-mono": "catalog:",
     "@types/node": "catalog:",
+    "alchemy": "2.0.0-beta.72",
     "effect": "catalog:",
     "oxfmt": "0.60.0",
     "oxlint": "1.75.0",
