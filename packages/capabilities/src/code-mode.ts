@@ -472,11 +472,11 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
   // comparison false and Infinity would remove the bound entirely.
   if (
     !Number.isSafeInteger(maxEgressBytes) ||
-    maxEgressBytes < 1_024 ||
+    maxEgressBytes < 256 ||
     maxEgressBytes > 4 * 1024 * 1024
   ) {
     throw new Error(
-      `Code Mode maxEgressBytes must be an integer between 1024 and ${4 * 1024 * 1024}; received ${String(maxEgressBytes)}`,
+      `Code Mode maxEgressBytes must be an integer between 256 and ${4 * 1024 * 1024}; received ${String(maxEgressBytes)}`,
     );
   }
 
