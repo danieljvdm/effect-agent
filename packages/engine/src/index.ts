@@ -3981,6 +3981,19 @@ const stream = <
       // "fail" rejects before any model call or resumed handler runs;
       // "final-answer" starts already constrained via the one-shot flag.
       if (options.resumeUsage !== undefined) {
+        // Cost is an unconditional hard rail with no grace call in either
+        // exhaustion mode (runtime spec §3): a resume whose seeded spend
+        // already breaches the budget rejects before input, resumed
+        // handlers, or any external model execution.
+        const seededCostBudget = agent.definition.policy.costBudgetMicrousd;
+        if (seededCostBudget !== undefined && context.costMicrousd > seededCostBudget) {
+          return failRunEventStream(
+            AgentPolicyError.make({
+              limit: "cost",
+              message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`,
+            }),
+          );
+        }
         const seededBudget = agent.definition.policy.tokenBudget;
         if (
           seededBudget !== undefined &&

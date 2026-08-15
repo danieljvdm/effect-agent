@@ -1163,6 +1163,54 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
   );
 
   it.effect(
+    "RUN-023: an already-over-cost resume rejects before any model call in both exhaustion modes",
+    () =>
+      Effect.gen(function* () {
+        // Cost is an unconditional hard rail: unlike tokens, no mode grants a
+        // grace call, so the seeded breach must reject before any external
+        // model execution.
+        for (const onExhaustion of ["final-answer", "fail"] as const) {
+          const definition = Agent.define(`resume-over-cost-${onExhaustion}`, {
+            input: Schema.Struct({ question: Schema.String }),
+            output: answerOutput,
+            instructions: "Answer.",
+            toolkit: Toolkit.empty,
+            policy: AgentPolicy.make({
+              maxTurns: 3,
+              maxToolCalls: 2,
+              maxDuration: "30 seconds",
+              toolConcurrency: 1,
+              costBudgetMicrousd: 1_000,
+              onExhaustion,
+            }),
+          });
+          const { model, requests } = scriptedModel([
+            finalParts('{"answer":"never"}', usageOf(10, 5)),
+          ]);
+          const exit = yield* AgentRuntime.run(
+            Agent.withModel(definition, model),
+            { question: "q" },
+            {
+              estimateCostMicrousd: () => Effect.succeed(200),
+              resumeUsage: {
+                modelCalls: 1,
+                inputTokens: 10,
+                outputTokens: 5,
+                lastInputTokens: 10,
+                lastOutputTokens: 5,
+                costMicrousd: 1_100,
+              },
+            },
+          ).pipe(Effect.exit);
+          const failure = failureFrom(exit);
+          expect(failure).toBeInstanceOf(AgentPolicyError);
+          expect((failure as AgentPolicyError).limit).toBe("cost");
+          expect(requests).toHaveLength(0);
+        }
+      }),
+  );
+
+  it.effect(
     "RUN-025: a token-breaching stop response with only provider-executed calls completes budget-exhausted",
     () =>
       Effect.gen(function* () {

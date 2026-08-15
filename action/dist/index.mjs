@@ -29230,11 +29230,25 @@ class UnserializableToolResult extends exports_Schema.Class("UnserializableToolR
 }) {
 }
 var unserializableToolResult = (cause) => {
-  const reason = cause instanceof Error ? cause.message : String(cause);
-  return exports_Schema.encodeSync(UnserializableToolResult)(UnserializableToolResult.make({
+  let reason;
+  try {
+    const message = cause instanceof Error ? cause.message : cause;
+    reason = typeof message === "string" ? message : String(message);
+  } catch {
+    reason = "unserializable value";
+  }
+  const build2 = (clipped2) => exports_Schema.encodeSync(UnserializableToolResult)(UnserializableToolResult.make({
     unserializableToolResult: true,
-    reason: reason.length > 256 ? reason.slice(0, 256) : reason
+    reason: clipped2
   }));
+  let clipped = takePrefixWithinBytes(reason, 128);
+  let sentinel = build2(clipped);
+  while (clipped.length > 0 && utf8ByteLength(JSON.stringify(sentinel)) > 256) {
+    const last3 = clipped.codePointAt(clipped.length - 1);
+    clipped = clipped.slice(0, clipped.length - (last3 !== undefined && last3 > 65535 ? 2 : 1));
+    sentinel = build2(clipped);
+  }
+  return sentinel;
 };
 var codePointUtf8Length = (codePoint) => {
   if (codePoint < 128)
@@ -35315,6 +35329,13 @@ var stream = (agent2, input, options = {}) => {
       programmaticToolCalls: 0
     };
     if (options.resumeUsage !== undefined) {
+      const seededCostBudget = agent2.definition.policy.costBudgetMicrousd;
+      if (seededCostBudget !== undefined && context3.costMicrousd > seededCostBudget) {
+        return failRunEventStream(AgentPolicyError.make({
+          limit: "cost",
+          message: `Agent exceeded its ${seededCostBudget} microdollar cost budget`
+        }));
+      }
       const seededBudget = agent2.definition.policy.tokenBudget;
       if (seededBudget !== undefined && context3.inputTokens + context3.outputTokens > seededBudget) {
         if (agent2.definition.policy.onExhaustion === "fail") {

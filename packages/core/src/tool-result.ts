@@ -39,17 +39,41 @@ export class UnserializableToolResult extends Schema.Class<UnserializableToolRes
   reason: Schema.String.check(Schema.isMaxLength(256)),
 }) {}
 
-/** Build the encoded sentinel for a serialization failure, clipping the reason. */
+/**
+ * Build the encoded sentinel for a serialization failure. Total by
+ * construction — the cause is untrusted (a hostile `toString` or an
+ * accessor-backed `Error.message` can itself throw on this last-resort
+ * path) — and byte-bound: the complete encoded sentinel stays within the
+ * 256-byte `ToolResultBounds` schema floor, so it fits every accepted
+ * policy without the caller re-applying bounds.
+ */
 export const unserializableToolResult = (
   cause: unknown,
 ): typeof UnserializableToolResult.Encoded => {
-  const reason = cause instanceof Error ? cause.message : String(cause);
-  return Schema.encodeSync(UnserializableToolResult)(
-    UnserializableToolResult.make({
-      unserializableToolResult: true,
-      reason: reason.length > 256 ? reason.slice(0, 256) : reason,
-    }),
-  );
+  let reason: string;
+  try {
+    const message = cause instanceof Error ? cause.message : cause;
+    reason = typeof message === "string" ? message : String(message);
+  } catch {
+    reason = "unserializable value";
+  }
+  const build = (clipped: string): typeof UnserializableToolResult.Encoded =>
+    Schema.encodeSync(UnserializableToolResult)(
+      UnserializableToolResult.make({
+        unserializableToolResult: true,
+        reason: clipped,
+      }),
+    );
+  // JSON escaping inflates bytes, so shrink by whole code points until the
+  // encoded sentinel fits the floor; the empty reason always fits.
+  let clipped = takePrefixWithinBytes(reason, 128);
+  let sentinel = build(clipped);
+  while (clipped.length > 0 && utf8ByteLength(JSON.stringify(sentinel)) > 256) {
+    const last = clipped.codePointAt(clipped.length - 1);
+    clipped = clipped.slice(0, clipped.length - (last !== undefined && last > 0xffff ? 2 : 1));
+    sentinel = build(clipped);
+  }
+  return sentinel;
 };
 
 const codePointUtf8Length = (codePoint: number): number => {
