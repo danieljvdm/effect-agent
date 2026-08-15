@@ -44,7 +44,7 @@ Dependencies point inward. Inner packages define interfaces; outer packages prov
 ## 3. Modules
 
 The architecture describes the intended package boundaries, but the repository creates a package
-only when its roadmap phase begins. The current tree (through Phase 6) is:
+only when a genuinely new framework concern requires it. The current tree is:
 
 ```text
 packages/

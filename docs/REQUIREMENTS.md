@@ -8,26 +8,26 @@ release evidence reference those IDs.
 
 ## Families
 
-| Prefix       | Area                                       | Normative source                                       | First roadmap phase |
-| ------------ | ------------------------------------------ | ------------------------------------------------------ | ------------------: |
-| `AUTH`       | Agent and Tool authoring                   | [Authoring](spec/authoring.md)                         |               P0–P1 |
-| `RUN`        | Interpreter and event runtime              | [Runtime](spec/runtime.md)                             |               P0–P2 |
-| `MODEL`      | Model drivers and routing                  | [Providers](spec/providers.md)                         |               P0–P2 |
-| `CAP`        | Optional capabilities                      | [Capabilities](spec/capabilities.md)                   |               P1–P5 |
-| `SUB`        | Subagent delegation and child lifecycle    | [Subagents](spec/subagents.md)                         |               S1–S2 |
-| `STORE`      | Persistence and adapters                   | [Persistence](spec/persistence.md)                     |               P3–P7 |
-| `DUR`        | Accepted work and recovery                 | [Durability](spec/durability.md)                       |               P4–P7 |
-| `DEPLOY`     | Hosts and deployment classes               | [Deployment](spec/deployment.md)                       |               P1–P7 |
-| `SEC`, `OPS` | Security and operations                    | [Security and operations](spec/security-operations.md) |               P1–P7 |
-| `TEST`       | Verification                               | [Testing](spec/testing.md)                             |         Every phase |
-| `COMPAT`     | Interoperability, boundaries, and versions | [Compatibility](spec/compatibility.md)                 |               P0–P7 |
+| Prefix       | Area                                       | Normative source                                       |
+| ------------ | ------------------------------------------ | ------------------------------------------------------ |
+| `AUTH`       | Agent and Tool authoring                   | [Authoring](spec/authoring.md)                         |
+| `RUN`        | Interpreter and event runtime              | [Runtime](spec/runtime.md)                             |
+| `MODEL`      | Model drivers and routing                  | [Providers](spec/providers.md)                         |
+| `CAP`        | Optional capabilities                      | [Capabilities](spec/capabilities.md)                   |
+| `SUB`        | Subagent delegation and child lifecycle    | [Subagents](spec/subagents.md)                         |
+| `STORE`      | Persistence and adapters                   | [Persistence](spec/persistence.md)                     |
+| `DUR`        | Accepted work and recovery                 | [Durability](spec/durability.md)                       |
+| `DEPLOY`     | Hosts and deployment classes               | [Deployment](spec/deployment.md)                       |
+| `SEC`, `OPS` | Security and operations                    | [Security and operations](spec/security-operations.md) |
+| `TEST`       | Verification                               | [Testing](spec/testing.md)                             |
+| `COMPAT`     | Interoperability, boundaries, and versions | [Compatibility](spec/compatibility.md)                 |
 
 ## Requirement lifecycle
 
 A requirement is:
 
 - **specified** when its normative source defines behavior and failure semantics;
-- **planned** when a roadmap phase owns it;
+- **planned** when it is accepted for implementation but not yet built;
 - **implemented** when code and public documentation exist;
 - **verified** when automated evidence covers it;
 - **released** when a compatibility manifest names the package/adapter version.
@@ -145,7 +145,7 @@ Exception statuses are honest dispositions, not waivers:
 | SUB-024    | evidence | `packages/core/test/core.test.ts` — bounded lifecycle summaries; `packages/testing/test/security/redteam-idor-sweep.test.ts` — observe denies foreign lanes; `packages/testing/test/security/redteam-child-exfiltration.test.ts` — child payload redaction                                                 | —                                                                               |
 | SUB-025    | process  | the per-class suites exist (S1/S2/DN/DC); release gating is a process rule, not a runtime behavior                                                                                                                                                                                                         | release checklist at open-source prep                                           |
 | SUB-026    | deferred | no adversarial test yet pins non-transitive parent approval against child actions, siblings, retries, or descendants; the P7 review found the approval path sound via conformance idempotency (`docs/security/FINDINGS.md`)                                                                                | open-source preparation security pass                                           |
-| SUB-027    | deferred | no artifact port exists (D-P6-8), so artifact reference semantics cannot be exercised                                                                                                                                                                                                                      | future artifact capability phase; the P7 threat model records the explicit N/A  |
+| SUB-027    | deferred | no artifact port exists, so artifact reference semantics cannot be exercised                                                                                                                                                                                                                               | future artifact capability phase; the P7 threat model records the explicit N/A  |
 | SUB-028    | evidence | `packages/capabilities/test/subagent.test.ts` — expected child failures total-map to the declared Tool failure; defects stay defects                                                                                                                                                                       | —                                                                               |
 | SUB-032    | evidence | `packages/capabilities/test/subagent.test.ts` — aborted children and compatibility failures classify distinctly; `packages/testing/test/durable-subagents.test.ts` — no newer-code substitution                                                                                                            | —                                                                               |
 | STORE-001  | evidence | `packages/session/src/conformance.ts`, `packages/session/src/ledger-conformance.ts` — two distinct port suites run against every adapter pairing                                                                                                                                                           | —                                                                               |
@@ -156,7 +156,7 @@ Exception statuses are honest dispositions, not waivers:
 | STORE-006  | evidence | `packages/storage-sqlite/test/sqlite-storage.test.ts` — fails clearly on corrupt current-version rows without mutating the log                                                                                                                                                                             | —                                                                               |
 | STORE-007  | evidence | `packages/session/src/conformance.ts` — checkpoint digest binding and corruption cases; `packages/session/test/session.test.ts` — checkpoint replay equivalence                                                                                                                                            | —                                                                               |
 | STORE-008  | evidence | `packages/session/test/session.test.ts` — phase-N checkpoint rejection rows force rebuild from canonical records                                                                                                                                                                                           | —                                                                               |
-| STORE-009  | deferred | no digest-addressed artifact store exists (D-P6-8 keeps `AttachmentStore` deferred); oversized DC payloads are refused typed (`packages/platform-cloudflare/test/limits.test.ts`)                                                                                                                          | future artifact capability phase                                                |
+| STORE-009  | deferred | no digest-addressed artifact store exists (`AttachmentStore` is deferred); oversized DC payloads are refused typed (`packages/platform-cloudflare/test/limits.test.ts`)                                                                                                                                    | future artifact capability phase                                                |
 | STORE-011  | evidence | `packages/storage-sqlite/test/sqlite-ledger.test.ts` — typed v1/v2 reset guidance; `packages/platform-node/test/layers.test.ts` — startup refusal without mutation                                                                                                                                         | —                                                                               |
 | STORE-012  | process  | no deletion or retention path exists by design during private development; nothing to exercise                                                                                                                                                                                                             | open-source preparation retention/deletion design                               |
 | DUR-003    | evidence | `packages/platform-node/test/crash/crash.test.ts` — honest at-least-once re-execution; `packages/testing/test/travel-planner-phase5.test.ts` — duplicate supplier calls asserted, never hidden                                                                                                             | —                                                                               |

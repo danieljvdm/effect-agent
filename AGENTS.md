@@ -105,8 +105,8 @@ or deepen an inward port and implement an outward adapter.
 
 Framework code lives only in `packages/*`; do not create an `apps/` workspace. Runnable consumer
 benches live in `examples/*`, remain leaf workspaces, and may depend inward on public framework
-packages and `@effect-agent/testing`. Create a future framework package only when its roadmap
-phase begins. Provider integrations remain upstream Effect AI Layers, not framework provider
+packages and `@effect-agent/testing`. Create a new framework package only for a
+genuinely new framework concern agreed with the repository owner. Provider integrations remain upstream Effect AI Layers, not framework provider
 packages.
 
 ## Toolchain rules

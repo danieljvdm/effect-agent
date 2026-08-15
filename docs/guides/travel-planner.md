@@ -29,7 +29,7 @@ Travel Planner must:
 It is not:
 
 - an `apps/` workspace, hosted service, or deployable product shell;
-- a reason to create a package before its roadmap phase;
+- a reason to create a new framework package;
 - a wrapper around Effect AI provider Models;
 - a promise that airline, hotel, payment, or booking APIs execute exactly once;
 - a substitute for focused unit, generated, conformance, fault, or security tests.

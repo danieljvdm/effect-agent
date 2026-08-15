@@ -45,11 +45,11 @@ therefore install one Effect runtime. The Vitest override matches the version bu
 Vitest remains supplied by Vite+ rather than becoming a separate workspace dependency, with one
 probed exception: `vp test` cannot drive the Cloudflare Workers pool runner, so
 `storage-cloudflare` and `platform-cloudflare` declare the catalog-pinned `vitest` directly and
-run `vitest run` as their `test` scripts (P6 WP0 probe, decision D-P6-7).
+run `vitest run` as their `test` scripts.
 
 ## Current workspace
 
-Only packages required by the active roadmap phase exist:
+Only the packages the framework needs today exist:
 
 ```text
 packages/
@@ -90,8 +90,9 @@ core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 ```
 
 `testing` is an outward test kit used by tests and examples. Production packages must never depend
-on it. Additional framework package directories are created only when their roadmap phase starts
-(`pr-review` is the one packaged application exception). There is no `apps/`
+on it. Additional framework package directories are created only for a genuinely new framework concern
+agreed with the repository owner in the pull request that introduces them (`pr-review` is the one
+packaged application). There is no `apps/`
 workspace. `examples/*` are runnable, private leaf consumers: framework packages never import
 them, and they add no deployment or durability claim.
 
@@ -243,7 +244,8 @@ product specification and must not be imported by a framework package.
 
 ## Adding a package
 
-Create a package only for a genuinely new framework concern:
+Create a package only for a genuinely new framework concern, agreed with the repository owner in
+the pull request that introduces it:
 
 1. add `packages/<name>/package.json`, `src/index.ts`, and `tsconfig.json`;
 2. use the working `@effect-agent/<name>` scope with the sibling manifest shape (MIT,

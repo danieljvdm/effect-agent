@@ -7,7 +7,7 @@ sections remain design targets. The Effect AI APIs shown here must not be wrappe
 
 These focused API examples complement the
 [progressive Travel Planner Reference Application](travel-planner.md), which carries one
-application-shaped scenario through every roadmap phase.
+application-shaped scenario through the full framework build-out.
 
 ## 1. An Effect-native triage Agent
 

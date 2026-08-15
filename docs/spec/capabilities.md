@@ -9,20 +9,20 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 
 ## 1. Capability matrix
 
-| Capability                 |       First target | Required for ephemeral core |     Required for DN/DC assembly |
-| -------------------------- | -----------------: | --------------------------: | ------------------------------: |
-| Tools and toolkits         |                 P1 |                         Yes |                             Yes |
-| Sessions and conversations |                 P2 |                          No |                             Yes |
-| Steering and follow-up     |                 P2 |                          No |                              No |
-| Approval                   |                 P2 |                          No |          For configured actions |
-| Compaction                 |                 P2 |                          No | Yes for unbounded conversations |
-| Skills                     |           Deferred |                          No |                              No |
-| MCP client                 |                 P2 |                          No |                              No |
-| Sandbox                    |                 P2 |                          No |     For untrusted commands/code |
-| Code Mode                  | Post-roadmap C1–C4 |                          No |                              No |
-| Subagents                  |           Proposed |                          No |                              No |
-| Persistent agent state     |                 P4 |                          No |                              No |
-| Durable steps              |                 P5 |                          No |                              No |
+| Capability                 |    First target | Required for ephemeral core |     Required for DN/DC assembly |
+| -------------------------- | --------------: | --------------------------: | ------------------------------: |
+| Tools and toolkits         |              P1 |                         Yes |                             Yes |
+| Sessions and conversations |              P2 |                          No |                             Yes |
+| Steering and follow-up     |              P2 |                          No |                              No |
+| Approval                   |              P2 |                          No |          For configured actions |
+| Compaction                 |              P2 |                          No | Yes for unbounded conversations |
+| Skills                     |        Deferred |                          No |                              No |
+| MCP client                 |              P2 |                          No |                              No |
+| Sandbox                    |              P2 |                          No |     For untrusted commands/code |
+| Code Mode                  | Build-out C1–C4 |                          No |                              No |
+| Subagents                  |        Proposed |                          No |                              No |
+| Persistent agent state     |              P4 |                          No |                              No |
+| Durable steps              |              P5 |                          No |                              No |
 
 “Required for DN/DC assembly” means the DN or DC host assembly must supply the
 service when the related behavior is enabled. It does not mean every deployment
