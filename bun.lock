@@ -187,6 +187,7 @@
       "version": "0.0.1-beta.5",
       "dependencies": {
         "@effect-agent/core": "workspace:*",
+        "@effect-agent/sandbox": "workspace:*",
         "@effect-agent/session": "workspace:*",
         "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/platform-browser": "catalog:",

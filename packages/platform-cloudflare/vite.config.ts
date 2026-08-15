@@ -57,7 +57,7 @@ export default defineConfig({
         test: {
           name: "workerd",
           include: ["test/**/*.test.ts"],
-          exclude: ["test/restart/**", "test/travel-planner-dc.test.ts"],
+          exclude: ["test/restart/**", "test/code-mode/**", "test/travel-planner-dc.test.ts"],
         },
       },
       {
@@ -80,6 +80,17 @@ export default defineConfig({
         test: {
           name: "travel-planner",
           include: ["test/travel-planner-dc.test.ts"],
+        },
+      },
+      {
+        // The Code Mode Dynamic Worker executor lane runs the real adapter
+        // inside a bundled worker under programmatic Miniflare (like the
+        // restart lane): pool-workers wraps the user worker, so a
+        // `kCurrentWorker` self-binding to the host entrypoint is only
+        // reachable when the worker under test IS the top-level worker.
+        test: {
+          name: "code-mode",
+          include: ["test/code-mode/**/*.test.ts"],
         },
       },
       {
