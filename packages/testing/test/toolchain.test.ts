@@ -110,6 +110,47 @@ const forbiddenScaffoldDependencies = new Set([
   "wrangler",
 ]);
 const providerAdapterDependencies = ["@effect/ai-openai", "@effect/ai-anthropic"] as const;
+/**
+ * The documented inward-only package graph (ARCHITECTURE.md §11, AGENTS.md
+ * "Package dependency direction"): every `@effect-agent/*` edge a framework
+ * manifest may declare, in any dependency section. `capabilities -> sandbox`
+ * is the CodeExecutor port edge registered by ADR-0017 (declared here before
+ * C1 adds the manifest edge). The `-> testing` entries are the two documented
+ * dev-only exceptions; the graph test itself pins them to `devDependencies`,
+ * and every other package stays clean of `testing` in every section.
+ */
+const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray<string>> = {
+  capabilities: ["core", "engine", "sandbox"],
+  core: [],
+  "effect-agent": ["capabilities", "core", "engine"],
+  engine: ["core"],
+  "platform-cloudflare": [
+    "capabilities",
+    "core",
+    "engine",
+    "sandbox",
+    "session",
+    "storage-cloudflare",
+    "testing",
+  ],
+  "platform-node": ["capabilities", "core", "engine", "session", "storage-sqlite"],
+  "pr-review": ["effect-agent"],
+  sandbox: ["core"],
+  "sandbox-local": ["core", "sandbox"],
+  session: ["core", "engine"],
+  "storage-cloudflare": ["core", "session", "testing"],
+  "storage-memory": ["core", "session"],
+  "storage-sqlite": ["core", "session"],
+  testing: [
+    "capabilities",
+    "core",
+    "engine",
+    "platform-node",
+    "session",
+    "storage-memory",
+    "storage-sqlite",
+  ],
+};
 
 const readManifest = (path: string) =>
   Effect.gen(function* () {
@@ -229,6 +270,56 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           `${repositoryRoot}/packages/${packageName}/package.json`,
         );
         expect(manifest.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      }
+    }),
+  );
+
+  it.effect("keeps workspace dependency edges on the documented inward-only graph", () =>
+    Effect.gen(function* () {
+      // A dependency's effective target is the aliased package for an
+      // `npm:` specifier, otherwise the key itself — so a forbidden edge
+      // cannot hide behind an innocuous dependency key.
+      const npmAliasTarget = (specifier: string): string | undefined => {
+        if (!specifier.startsWith("npm:")) {
+          return undefined;
+        }
+        const aliased = specifier.slice("npm:".length);
+        const versionSeparator = aliased.indexOf("@", aliased.startsWith("@") ? 1 : 0);
+        return versionSeparator === -1 ? aliased : aliased.slice(0, versionSeparator);
+      };
+      const workspaceTarget = (name: string, specifier: string): string | undefined => {
+        const target = npmAliasTarget(specifier) ?? name;
+        if (target === "effect-agent") {
+          return target;
+        }
+        return target.startsWith("@effect-agent/")
+          ? target.slice("@effect-agent/".length)
+          : undefined;
+      };
+
+      for (const packageName of packageNames) {
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
+        );
+        const allowed = allowedWorkspaceEdges[packageName];
+        for (const section of dependencySections) {
+          const edges = Object.entries(manifest[section] ?? {})
+            .map(([name, specifier]) => workspaceTarget(name, specifier))
+            .filter((edge): edge is string => edge !== undefined);
+          expect(
+            edges.filter((edge) => !allowed.includes(edge)),
+            `${packageName} ${section} declares a workspace edge outside the documented dependency graph`,
+          ).toEqual([]);
+          // The two permitted `-> testing` edges are dev-only: they must not
+          // reappear in dependencies, peerDependencies, or optionalDependencies,
+          // where they would ship or leak into consumer resolution.
+          if (section !== "devDependencies") {
+            expect(
+              edges,
+              `${packageName} may consume @effect-agent/testing only as a devDependency`,
+            ).not.toContain("testing");
+          }
+        }
       }
     }),
   );

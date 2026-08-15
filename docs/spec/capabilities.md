@@ -9,23 +9,24 @@ must detect absence explicitly; it must not silently substitute weaker behavior.
 
 ## 1. Capability matrix
 
-| Capability                 | First target | Required for ephemeral core |    Required for durable runtime |
-| -------------------------- | -----------: | --------------------------: | ------------------------------: |
-| Tools and toolkits         |           P1 |                         Yes |                             Yes |
-| Sessions and conversations |           P2 |                          No |                             Yes |
-| Steering and follow-up     |           P2 |                          No |                              No |
-| Approval                   |           P2 |                          No |          For configured actions |
-| Compaction                 |           P2 |                          No | Yes for unbounded conversations |
-| Skills                     |     Deferred |                          No |                              No |
-| MCP client                 |           P2 |                          No |                              No |
-| Sandbox                    |           P2 |                          No |     For untrusted commands/code |
-| Subagents                  |     Proposed |                          No |                              No |
-| Persistent agent state     |           P4 |                          No |                              No |
-| Durable steps              |           P5 |                          No |                              No |
+| Capability                 |       First target | Required for ephemeral core |     Required for DN/DC assembly |
+| -------------------------- | -----------------: | --------------------------: | ------------------------------: |
+| Tools and toolkits         |                 P1 |                         Yes |                             Yes |
+| Sessions and conversations |                 P2 |                          No |                             Yes |
+| Steering and follow-up     |                 P2 |                          No |                              No |
+| Approval                   |                 P2 |                          No |          For configured actions |
+| Compaction                 |                 P2 |                          No | Yes for unbounded conversations |
+| Skills                     |           Deferred |                          No |                              No |
+| MCP client                 |                 P2 |                          No |                              No |
+| Sandbox                    |                 P2 |                          No |     For untrusted commands/code |
+| Code Mode                  | Post-roadmap C1–C4 |                          No |                              No |
+| Subagents                  |           Proposed |                          No |                              No |
+| Persistent agent state     |                 P4 |                          No |                              No |
+| Durable steps              |                 P5 |                          No |                              No |
 
-“Required for durable runtime” means the durable host must supply the service when
-the related behavior is enabled. It does not mean every deployment enables every
-capability.
+“Required for DN/DC assembly” means the DN or DC host assembly must supply the
+service when the related behavior is enabled. It does not mean every deployment
+enables every capability.
 
 ## 2. Tool execution
 
@@ -233,6 +234,57 @@ sandbox implementation identity. A local process runner may satisfy the interfac
 for trusted development, but it must identify itself as `unisolated`; it is not a
 security sandbox.
 
+## 9.1 Code Mode and the CodeExecutor port
+
+Code Mode is distinct from a general code interpreter: one native Effect AI Tool accepts bounded
+JavaScript source written by the model, executes it in one isolated pass, and lets the program
+call an explicit allowlist of existing Effect AI Tools through typed sandbox globals
+([ADR-0017](../adr/0017-code-mode-executor-and-broker.md), D-035). The generated program is one
+async function expression invoked by a fixed harness entrypoint. The handler never invokes a
+second model.
+
+The builder lives in `@effect-agent/capabilities` and follows the Delegation pattern: an explicit
+record of selected Tools plus namespace mapping at construction, returning an ordinary Effect AI
+Tool and a handler Layer, with no ambient registry. Construction fails closed on a non-`readonly`
+Tool, an approval-requiring Tool, a sanitized-name collision, and any parameter or success Schema
+the declaration deriver cannot render. The outer Tool is annotated `readonly`; unless the author
+separately adds them to the model-facing Toolkit, the model sees only the Code Mode Tool.
+
+Model-facing TypeScript declarations are documentation derived from the encoded side of the
+selected Tools' Effect Schemas — the JSON that actually crosses the sandbox boundary. Runtime
+validation always uses the original Schemas, before the original handler starts and again when
+its result crosses back. A failed inner call rejects inside the program with a Schema-encoded
+envelope carrying the existing framework error tags; raw Effects, Layers, services, database
+clients, credentials, and Causes never cross into the sandbox.
+
+The `CodeExecutor` port is a sibling of the command-shaped `Sandbox` service in
+`@effect-agent/sandbox` (the documented `capabilities -> sandbox` edge):
+
+```ts
+interface CodeExecutor {
+  readonly execute: (
+    request: CodeExecutionRequest,
+  ) => Effect.Effect<CodeExecutionResult, CodeExecutionError, Scope.Scope | CodeExecutionHost>;
+}
+```
+
+`CodeExecutionHost` is an Effect service in the requirement channel, provided per pass at the
+pass edge; its live host-call bindings are scoped resources and are never persisted. Requests,
+results, limits, and expected errors are Effect Schemas. The request bounds source bytes, CPU
+and wall-clock time, captured output, the final result, and host calls (a maximum call count
+plus per-call argument and result byte bounds). Implementations reuse the
+`SandboxImplementation` posture idiom (CAP-010) and reject limits or policies they cannot
+enforce; an `unisolated` executor is never a security boundary. Interruption closes the workload
+and every transport or resource owned by the pass.
+
+The final result, captured logs, and thrown values form one model-visible egress surface under a
+single aggregate byte budget and redaction policy. Intermediate Tool results never leave the
+pass implicitly — not through telemetry, canonical records, or declarations. In deployment class
+`E`, inner calls produce no Canonical Records: the Conversation Log carries only the outer Tool
+Call and its bounded final result, with inner-call evidence in telemetry counts and host-Tool
+audit metadata. Code Mode claims deployment class `E` only; Code Mode in the `DN` or `DC`
+assemblies requires its own accepted ADR.
+
 ## 10. Subagents
 
 The proposed Subagent capability is specified in [subagents.md](./subagents.md). It uses declared
@@ -293,3 +345,12 @@ default and are excluded from ordinary span attributes.
   children use structured concurrency and belong to the parent Scope.
 - **CAP-012**: Persistent agent state is distinct from conversation history.
 - **CAP-013**: Capability telemetry is bounded and redacted by default.
+- **CAP-014**: A Code Mode Tool is an ordinary Effect AI Tool over an explicit construction-time
+  allowlist; construction fails closed on non-`readonly` Tools, approval-requiring Tools, name
+  collisions, and non-renderable declaration Schemas.
+- **CAP-015**: The `CodeExecutor` port is Schema-first and scoped: adapters report their
+  isolation posture honestly, reject limits they cannot enforce, and release every pass-owned
+  resource on success, failure, timeout, and interruption.
+- **CAP-016**: Code Mode's model-visible egress — the final result, captured logs, and thrown
+  values — passes one aggregate byte budget and redaction policy; intermediate results never
+  leave a pass implicitly.

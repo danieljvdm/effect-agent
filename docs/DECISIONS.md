@@ -153,8 +153,9 @@ Specification: [Subagents](spec/subagents.md)
 
 ### D-035 — Code Mode capability
 
-**Status:** Proposed
-**Recommendation:** Add a platform-neutral Code Mode capability: one native Effect AI Tool whose
+**Status:** Accepted (owner-directed, 2026-08-14)
+
+**Decision:** Add a platform-neutral Code Mode capability: one native Effect AI Tool whose
 input is bounded JavaScript source, executed in one isolated pass that may call an explicit
 allowlist of existing Tools through typed sandbox globals and an engine-owned broker. The
 capability lives in `@effect-agent/capabilities`; the callback-capable `CodeExecutor` port is a
@@ -170,10 +171,12 @@ default, the budget model (one model-visible outer call plus per-inner-call budg
 mid-pass), a new canonical record family for `DN`/`DC` inner calls, reads recorded by default for
 replay, a content-addressed
 execution digest, and the one-async-function-expression calling convention — were resolved by
-owner decision on 2026-08-14. Owner approval and roadmap placement for implementation remain
-required.
+owner decision on 2026-08-14. Implementation of the ephemeral slices (C0–C4 plus a leaf
+Cloudflare demo example) was owner-assigned on 2026-08-14; the Code Mode requirements extend the
+existing `CAP`/`RUN`/`DEPLOY`/`SEC`/`TEST` families rather than opening a new prefix family.
+Durable (`DN`/`DC`) Code Mode remains unassigned and requires its own accepted ADR.
 
-Proposed record: [ADR-0017](adr/0017-code-mode-executor-and-broker.md)
+Record: [ADR-0017](adr/0017-code-mode-executor-and-broker.md)
 Plan: [Code Mode implementation plan](CODE-MODE-PLAN.md)
 
 ## Platforms, persistence, and operations

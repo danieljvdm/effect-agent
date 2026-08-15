@@ -315,6 +315,14 @@ replacing it with an unrelated demo.
   promoted into a publishable package with a configuration factory; the example remains as its
   consumer. Created outside the numbered phases by owner direction — the D-025 phase gate is
   otherwise unchanged.
+- **Code Mode, ephemeral slices** (owner decision
+  [D-035](DECISIONS.md#d-035--code-mode-capability),
+  [ADR-0017](adr/0017-code-mode-executor-and-broker.md), 2026-08-14): the `CodeExecutor` port in
+  `sandbox`, the engine-owned programmatic Tool broker, the Code Mode Tool builder in
+  `capabilities`, the read-only SQL reference integration, the Cloudflare Dynamic Worker
+  executor adapter, and a leaf demo example — slices C0–C4 of
+  [CODE-MODE-PLAN.md](CODE-MODE-PLAN.md), deployment class `E` only. Durable (`DN`/`DC`) Code
+  Mode remains unassigned and requires its own accepted ADR.
 
 ## Deferred until open-source preparation
 

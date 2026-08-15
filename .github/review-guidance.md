@@ -14,7 +14,7 @@ Framework invariants — violations are blocking:
 
 - No code, comment, or document may claim exactly-once external side-effect execution; recovery is at-least-once. The word "durable" must name the DN or DC assembly.
 - The canonical log is append-only; projections and checkpoints are disposable derivatives.
-- Dependency direction is inward-only: core <- engine <- capabilities; core <- sandbox <- sandbox-local; core <- engine <- session <- storage adapters; platform packages outermost; core + engine + capabilities <- effect-agent (umbrella) <- pr-review. An inward package importing an outward one is blocking.
+- Dependency direction is inward-only: core <- engine <- capabilities; core <- sandbox <- sandbox-local; core <- sandbox <- capabilities (the CodeExecutor port, ADR-0017); core <- engine <- session <- storage adapters; platform packages outermost; core + engine + capabilities <- effect-agent (umbrella) <- pr-review. An inward package importing an outward one is blocking.
 - Effect AI primitives are used directly — no framework-owned copies of Tool, Toolkit, LanguageModel, Prompt, Response, or Model; provider SDK values never become canonical records.
 - Model output and delegated child results are untrusted input: flag any trust of model-supplied paths, ids, ranges, or anchors without fail-closed validation, and any automatic replay of an unresolved ordinary tool call.
 - Node platform assumptions must not enter core domain modules.
