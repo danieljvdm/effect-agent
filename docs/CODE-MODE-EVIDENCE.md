@@ -83,3 +83,40 @@ Exit-gate evidence:
 
 Unclaimed: everything in C3–C4, isolation, and Code Mode durability in both the DN and DC
 assemblies.
+
+## C3 — Read-only SQL reference integration
+
+Delivered:
+
+- the reference warehouse fixture (`packages/testing/src/fixtures/warehouse/index.ts`, SEC-015):
+  a native `Tool.make` Tool (`query_warehouse`, annotated `readonly`) over an application-owned
+  query service. The guarantee is database authority and topology, not SQL text inspection: the
+  Layer materializes a curated, tenant-scoped copy into a private in-memory SQLite database
+  (cross-tenant rows are physically absent) and locks the connection with
+  `PRAGMA query_only = ON`; write denial is detected structurally by SQLite result code 8. The
+  keyword scanner (PRAGMA/ATTACH/DETACH/VACUUM/load_extension, single-statement) is defense in
+  depth for the escape hatches the authority cannot police — deliberately NOT for writes and
+  DDL, so the tests prove the database denies those itself;
+- host-owned tenant context fixed at Layer construction, never from model-controlled arguments;
+- bounded results with honest `truncated: true` (D-035 default) under row and byte caps;
+- structural audit metadata only (FNV-1a query digest, parameter count, row count, truncation)
+  — never SQL text, parameter values, or rows;
+- fail-closed posture for unenforceable policy: the synchronous driver cannot cancel a running
+  statement, so a `statementTimeout` request fails Layer construction typed instead of being
+  silently unenforced.
+
+Exit-gate evidence (`packages/testing/test/warehouse-sql.test.ts`, SEC-015 titles):
+
+- the executor receives no database client, credentials, address, or network authority — the
+  composition scenario in `packages/testing/test/code-mode-e2e.test.ts` runs a real generated
+  program against the real SQLite fixture through namespace methods only, filters a broad
+  result into a bounded answer, and proves the write denial end to end by catching the typed
+  envelope inside the program;
+- mutation and DDL fail closed at the database authority; multi-statement, PRAGMA, ATTACH, and
+  `load_extension` attempts fail closed at the scanner; cross-tenant reads return nothing
+  because the data is physically absent;
+- over-limit output truncates honestly; the same final result is deterministic under the fixture
+  seed.
+
+Unclaimed: everything in C4, isolation, statement-level cancellation on the synchronous driver,
+and Code Mode durability in both the DN and DC assemblies.
