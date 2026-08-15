@@ -7,10 +7,6 @@ const flushes = new Map<string, number>();
 
 export const flushCount = (conversationId: string): number => flushes.get(conversationId) ?? 0;
 
-export const resetFlushCount = (conversationId: string): void => {
-  flushes.delete(conversationId);
-};
-
 /** One event-scoped OTLP flusher proving the effect-cf native RPC integration. */
 export const observabilityProbeLayer = Layer.effectDiscard(
   Effect.gen(function* () {

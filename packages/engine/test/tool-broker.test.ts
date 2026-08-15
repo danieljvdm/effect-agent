@@ -274,6 +274,7 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
       const logs: Array<{
         readonly message: string;
         readonly annotations: Readonly<Record<string, unknown>>;
+        readonly cause: string;
       }> = [];
       const tracer = Tracer.make({
         span(options) {
@@ -282,10 +283,11 @@ layer(identifiers)("RUN-016 programmatic Tool broker", (it) => {
           return span;
         },
       });
-      const logger = Logger.make<unknown, void>(({ fiber, message }) => {
+      const logger = Logger.make<unknown, void>(({ cause, fiber, message }) => {
         logs.push({
           message: Array.isArray(message) ? message.join(" ") : String(message),
           annotations: { ...fiber.getRef(References.CurrentLogAnnotations) },
+          cause: Cause.pretty(cause),
         });
       });
       const argumentSecret = "select private_token from tenant_secrets";

@@ -128,6 +128,7 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
   {
     ...baseOptions,
     namespaceBinding: "TELEMETRY",
+    wakeScanInterval: 60_000,
   },
   observabilityProbeLayer,
 ) {
