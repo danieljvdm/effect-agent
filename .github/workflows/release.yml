@@ -3,12 +3,13 @@
 # On every push to main: with unreleased changesets present, the changesets
 # action opens/updates a "Version Packages (beta)" PR (running `changeset
 # version` in the repository's pre mode, so versions mint as 0.0.1-beta.N).
-# Merging that PR is the release: the action then runs the publish command,
-# which gates on `bun run ready`, packs each workspace with bun (resolving
-# workspace:/catalog: protocols), and uploads with the npm CLI via the OIDC
-# trusted-publisher exchange — no npm token or OTP anywhere. Each package on
-# npmjs.com must list this workflow file (release.yml) as its trusted
-# publisher for the exchange to succeed.
+# Merging that PR is the release: constituent code PRs have already passed the
+# full required gate, and the publish path frozen-installs and rebuilds the
+# exact versioned tree before any registry mutation. It then packs each
+# workspace with bun (resolving workspace:/catalog: protocols) and uploads with
+# the npm CLI via the OIDC trusted-publisher exchange — no npm token or OTP
+# anywhere. Each package on npmjs.com must list this workflow file (release.yml)
+# as its trusted publisher for the exchange to succeed.
 name: Release
 
 on:
@@ -69,10 +70,11 @@ jobs:
           # strings ('&&' arrives as a literal argument), so both commands
           # live in package.json scripts, which bun runs through a shell.
           version: bun run ci:version
-          # Branch protection already requires the full `ready` gate on the
-          # exact merged tree, so the publish path re-verifies only what it
-          # consumes (the build), then publishes, tags, and pushes tags —
-          # all inside one package.json script for real shell chaining.
+          # Ordinary constituent PRs already passed the full `ready` gate; the
+          # generated version PR deliberately skips those duplicate code gates.
+          # The publish path still rebuilds the exact versioned tree before it
+          # publishes, tags, and pushes tags — all inside one package.json
+          # script for real shell chaining.
           publish: bun run ci:publish
           createGithubReleases: false
         env:

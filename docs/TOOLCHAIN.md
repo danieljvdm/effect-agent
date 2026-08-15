@@ -151,12 +151,20 @@ Releases are automated: on every push to `main`, `.github/workflows/release.yml`
 maintains a "Version Packages (beta)" PR from the pending changesets, and
 merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
 identity is exchanged for short-lived credentials (no npm token, no OTP), with
-provenance attached. Each package on npmjs.com lists `release.yml` in
-`danieljvdm/effect-agent` as its trusted publisher (package Settings, a
-one-time registration; "Allow npm publish" only). In CI the publish script
-runs in `--ci` mode: `bun pm pack` resolves the `workspace:`/`catalog:`
-protocols into the tarball and the npm CLI uploads it, because only npm
-implements the OIDC exchange.
+provenance attached. The generated PR is release metadata over code that
+already passed the ordinary PR gates: its Static checks, Tests, Build, and
+agentic Review jobs deliberately skip, while the required `ready` fan-in
+verifies that all three code gates were skipped for the exact internal
+`changeset-release/main` branch before reporting success. A same-named fork
+does not match this exception. After merge, the release workflow still performs
+a frozen install and rebuilds the exact versioned tree before any registry
+mutation.
+
+Each package on npmjs.com lists `release.yml` in `danieljvdm/effect-agent` as
+its trusted publisher (package Settings, a one-time registration; "Allow npm
+publish" only). In CI the publish script runs in `--ci` mode: `bun pm pack`
+resolves the `workspace:`/`catalog:` protocols into the tarball and the npm CLI
+uploads it, because only npm implements the OIDC exchange.
 
 The manual fallback from an authenticated npm session (`bunx npm login`, an
 owner of the `@effect-agent` scope):
@@ -267,13 +275,22 @@ automation are deferred until open-source preparation.
 
 ## CI and hooks
 
-The CI workflow installs the exact Bun version with a frozen-lockfile install, then runs the
-`ready` gate as three parallel jobs — Static checks (`bun run check`), Tests (`bun run test`),
-and Build (`bun run build`) — with a fan-in job that keeps the required branch-protection check
-named `ready`. Each job restores and saves the Vite Task cache
-(`node_modules/.vite/task-cache`), so per-package gates whose fingerprinted inputs did not change
-replay instead of re-executing; runs on `main` publish the shared baseline that pull-request runs
-restore. It does not initialize any source submodule.
+The CI workflow runs on pull requests, not again after their merge to `main`. Ordinary PRs install
+the exact Bun version with a frozen-lockfile install, then run the `ready` gate as three parallel
+jobs — Static checks (`bun run check`), Tests (`bun run test`), and Build (`bun run build`) — with
+a fan-in job that keeps the required branch-protection check named `ready`. The exact internal
+Changesets release PR is the only exception: the three expensive jobs skip and `ready` succeeds
+only after observing all three `skipped` results. PR Review applies the same repository-and-branch
+identity check. Suppressing either workflow at the trigger level is deliberately avoided because
+a required check with no terminal job can remain pending.
+
+Each ordinary-PR job restores and saves the Vite Task cache
+(`node_modules/.vite/task-cache`), so later synchronize events on the same PR can replay
+per-package gates whose fingerprinted inputs did not change. GitHub scopes those caches to the
+PR's merge ref; removing duplicate `main` CI intentionally trades the previous cross-PR
+default-branch baseline for lower post-merge compute, so a PR's first run may be cold. The CI
+workflow does not initialize any source submodule. On `main`, the Release workflow is the sole
+push-triggered package automation and owns version-PR maintenance and publishing.
 
 The Vite+ pre-commit hook runs the staged formatter. CI remains authoritative: hooks improve local
 feedback but are not a correctness boundary.

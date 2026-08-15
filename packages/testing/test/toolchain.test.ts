@@ -178,6 +178,12 @@ const readChangesetConfig = Effect.gen(function* () {
   return yield* Schema.decodeEffect(Schema.fromJsonString(ChangesetConfig))(contents);
 });
 
+const readRepositoryFile = (path: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    return yield* fs.readFileString(`${repositoryRoot}/${path}`);
+  });
+
 const readDirectory = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -241,6 +247,35 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(config.fixed).toHaveLength(1);
       expect([...(config.fixed[0] ?? [])].sort()).toEqual(publicPackageNames.sort());
       expect(config.linked).toEqual([]);
+    }),
+  );
+
+  it.effect("routes expensive gates only to code-bearing pull requests", () =>
+    Effect.gen(function* () {
+      const [ciWorkflow, reviewWorkflow, releaseWorkflow] = yield* Effect.all([
+        readRepositoryFile(".github/workflows/ci.yml"),
+        readRepositoryFile(".github/workflows/pr-review.yml"),
+        readRepositoryFile(".github/workflows/release.yml"),
+      ]);
+      const ordinaryPullRequestGuard =
+        "github.event.pull_request.head.repo.full_name != github.repository || github.head_ref != 'changeset-release/main'";
+      const internalReleaseIdentity =
+        "github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'changeset-release/main'";
+
+      expect(ciWorkflow).toContain("on:\n  pull_request:");
+      expect(ciWorkflow).not.toContain("\n  push:");
+      expect(ciWorkflow.split(ordinaryPullRequestGuard)).toHaveLength(4);
+      expect(ciWorkflow).toContain(`IS_CHANGESETS_RELEASE: \${{ ${internalReleaseIdentity} }}`);
+      expect(ciWorkflow).toContain('test "$CHECKS_RESULT" = "skipped"');
+      expect(ciWorkflow).toContain('test "$TEST_RESULT" = "skipped"');
+      expect(ciWorkflow).toContain('test "$BUILD_RESULT" = "skipped"');
+      expect(ciWorkflow).toContain('test "$CHECKS_RESULT" = "success"');
+      expect(ciWorkflow).toContain('test "$TEST_RESULT" = "success"');
+      expect(ciWorkflow).toContain('test "$BUILD_RESULT" = "success"');
+
+      expect(reviewWorkflow).toContain(ordinaryPullRequestGuard);
+      expect(releaseWorkflow).toContain("on:\n  push:\n    branches: [main]");
+      expect(releaseWorkflow).toContain("publish: bun run ci:publish");
     }),
   );
 
