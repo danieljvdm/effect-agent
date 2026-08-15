@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.8
+
+### Patch Changes
+
+- [#68](https://github.com/danieljvdm/effect-agent/pull/68) [`fd16e63`](https://github.com/danieljvdm/effect-agent/commit/fd16e63f34df0653afdf7ef167bc1ddd324676b6) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Activate native context compaction for the packaged flat, file-unit, and fan-out coordinator
+  reviewers with a 150k-token live-context ceiling. This keeps output and summary headroom while
+  preserving the existing cumulative token budgets; tool-heavy review histories prune old results
+  before paying for a summarization call.
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.8
+
 ## 0.1.0-beta.7
 
 ### Minor Changes
