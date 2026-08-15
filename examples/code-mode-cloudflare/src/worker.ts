@@ -3,6 +3,7 @@ import { AgentRuntime } from "@effect-agent/engine";
 import {
   CodeModeHostEntrypoint,
   dynamicWorkerCodeExecutorLayer,
+  dynamicWorkerImplementation,
   type CodeModeHostStub,
 } from "@effect-agent/platform-cloudflare";
 import { Effect, Layer, Stream } from "effect";
@@ -43,8 +44,20 @@ interface WorkerEnv {
 
 interface AskResult {
   readonly answer: string;
-  /** The JSON value the generated program returned, with its captured logs. */
-  readonly program?: unknown;
+  /**
+   * Evidence that the answer came from Code Mode: the tool the model called,
+   * how many times, the JavaScript program it actually wrote, and the isolated
+   * executor that ran it — plus the program's returned value and console logs.
+   */
+  readonly codeMode: {
+    readonly used: boolean;
+    readonly tool: string;
+    readonly executor: string;
+    readonly calls: number;
+    readonly program?: string;
+    readonly result?: unknown;
+    readonly logs?: ReadonlyArray<unknown>;
+  };
   readonly profile: "scripted" | "openai";
 }
 
@@ -55,6 +68,40 @@ interface AskResult {
  * avoid threading two Model types through one function (a known type trap).
  */
 type DemoBinding = typeof scriptedAgent;
+
+/**
+ * A `run_javascript` tool call's parameters are UNTRUSTED model output
+ * (`Schema.Json` — possibly `null`, a primitive, or an array), so extract the
+ * program source defensively rather than dereferencing a cast. Returning
+ * `undefined` on anything unexpected keeps the observer from turning a
+ * malformed declaration into a defect that aborts the request; the engine
+ * still handles the actual (in)valid tool call through its typed channel.
+ *
+ * This reads the raw declared parameters for a display-only evidence field. No
+ * engine event currently carries the DECODED tool input (`ToolCallStarted`
+ * has none; `ToolCallDeclared` is raw), and the Code Mode input schema applies
+ * no transform (raw `code` === executed source), so the raw value is faithful
+ * here. A fully general "executed program" would need the engine to surface
+ * the decoded input as an event.
+ */
+const programSourceOf = (parameters: unknown): string | undefined => {
+  if (typeof parameters === "object" && parameters !== null && "code" in parameters) {
+    const code = (parameters as Record<string, unknown>).code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
+};
+
+/** The `run_javascript` success value is `{ result, logs }` — read it safely. */
+const successOutcomeOf = (
+  value: unknown,
+): { readonly result: unknown; readonly logs: ReadonlyArray<unknown> } => {
+  if (typeof value === "object" && value !== null) {
+    const record = value as Record<string, unknown>;
+    return { result: record.result, logs: Array.isArray(record.logs) ? record.logs : [] };
+  }
+  return { result: undefined, logs: [] };
+};
 
 /** Run one bound agent to an `AskResult`. */
 const runBound = (
@@ -77,16 +124,24 @@ const runBound = (
     IdGenerator.layer,
   );
   return Effect.gen(function* () {
-    // Stream the Run so the Code Mode Tool result (the program's output) is
-    // observable evidence that the isolated program queried the real DO.
-    let programResult: unknown;
+    // Stream the Run and correlate each `run_javascript` call's declared
+    // program with the SAME call's success BY tool-call id, so the reported
+    // program always matches the execution that produced the reported result
+    // (a multi-call model can otherwise interleave a failed declaration with an
+    // earlier call's result). `used` reflects a real successful execution, not
+    // merely a declaration.
+    const declaredPrograms = new Map<string, string | undefined>();
+    const successes = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
     let answer = "";
     let completed = false;
     yield* AgentRuntime.stream(agent, { question }).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
+          if (event._tag === "ToolCallDeclared" && event.toolName === "run_javascript") {
+            declaredPrograms.set(event.toolCallId, programSourceOf(event.parameters));
+          }
           if (event._tag === "ToolCallSucceeded" && event.toolName === "run_javascript") {
-            programResult = event.result;
+            successes.set(event.toolCallId, successOutcomeOf(event.result));
           }
           if (event._tag === "RunCompleted") {
             completed = true;
@@ -106,7 +161,28 @@ const runBound = (
     if (!completed) {
       return yield* Effect.die(new Error("the agent run did not complete"));
     }
-    return { answer, program: programResult, profile };
+    // Claim a single program/result ONLY when exactly one run_javascript call
+    // succeeded (with a matching declaration) — never arbitrarily pick among
+    // several, and never assert provenance for a run that used zero or multiple
+    // calls. `used` and `calls` stay honest either way; ambiguous runs simply
+    // do not attach a single program/result to the answer.
+    const successIds = [...successes.keys()];
+    const soleId =
+      successIds.length === 1 && declaredPrograms.has(successIds[0]) ? successIds[0] : undefined;
+    const executed = soleId === undefined ? undefined : successes.get(soleId);
+    return {
+      answer,
+      codeMode: {
+        used: successes.size > 0,
+        tool: "run_javascript",
+        executor: dynamicWorkerImplementation.identity,
+        calls: declaredPrograms.size,
+        program: soleId === undefined ? undefined : declaredPrograms.get(soleId),
+        result: executed?.result,
+        logs: executed?.logs,
+      },
+      profile,
+    };
   }) as Effect.Effect<AskResult>;
 };
 
