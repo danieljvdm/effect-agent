@@ -187,6 +187,33 @@ Tool helpers and remote adapters are tested for:
 - idempotency key propagation;
 - unknown-outcome classification.
 
+## 8.1 Code Mode conformance
+
+Every `CodeExecutor` adapter — the deterministic `unisolated` substitute and each isolated
+adapter — runs the shared contract cases:
+
+- successful bounded JSON computation;
+- invalid and oversized source;
+- wall-clock exhaustion;
+- excessive captured output and final result;
+- unknown host method and host-call limit exhaustion;
+- malformed adapter result;
+- interruption running every pass finalizer;
+- honest `isolated` versus `unisolated` posture reporting;
+- typed rejection of every limit or network policy the adapter cannot enforce.
+
+Enforcement cases run only against `isolated` adapters, because the `unisolated` substitute
+cannot honestly prove them and must not pass them by simulation:
+
+- ambient network denied by default;
+- a synchronous runaway program terminated by an enforced platform CPU limit.
+
+Broker semantics are asserted once against the engine seam: direct and programmatic invocation
+of the same Tool preserve parameter, handler, success, failure, requirement, and interruption
+behavior; typed handler failures stay typed; approval or policy denial prevents handler start;
+budget exhaustion prevents the next call; sequential identities are deterministic; and
+non-allowlisted or sanitized-name collision cases fail closed.
+
 ## 9. Compatibility tests
 
 The suite tests:
@@ -221,7 +248,12 @@ inference.
 - parent/child/Receipt IDOR across observer reconnects and paginated reads;
 - cross-tenant artifact digest substitution, deduplication leakage, and classification laundering;
 - child failure, progress, and provenance payloads containing secret-bearing values;
-- hierarchical reservation races, accounting replay, and recursive fan-out attempts.
+- hierarchical reservation races, accounting replay, and recursive fan-out attempts;
+- generated Code Mode programs probing ambient network, bindings, secrets, or non-allowlisted
+  Tools;
+- SQL mutation, DDL, multi-statement, dangerous-function, and cross-tenant attempts against the
+  read-only reference Tool;
+- executor egress of credentials or raw intermediate rows through results, logs, or telemetry.
 
 High-risk parsers and protocol adapters receive fuzz tests.
 
@@ -307,3 +339,5 @@ No durability milestone is complete while its crash tests are skipped.
 - **TEST-014**: The Travel Planner Reference Application remains a cumulative compiling and
   executable fixture for every active roadmap phase; its ordinary suite is deterministic and
   offline, while live provider profiles are opt-in.
+- **TEST-015**: Every `CodeExecutor` adapter passes the shared executor conformance suite, and
+  direct versus programmatic invocation of the same Tool is observably equivalent.

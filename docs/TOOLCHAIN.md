@@ -82,8 +82,9 @@ The package dependency direction is:
 ```text
 core <- engine <- capabilities
 core <- sandbox <- sandbox-local
+core <- sandbox <- capabilities
 core <- engine <- session <- storage adapters
-engine + session + selected adapters <- platform packages
+engine + session + sandbox + selected adapters <- platform packages
 core + engine <- testing
 core + engine + capabilities <- effect-agent (umbrella) <- pr-review
 ```

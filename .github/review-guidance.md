@@ -14,13 +14,13 @@ Framework invariants — violations are blocking:
 
 - No code, comment, or document may claim exactly-once external side-effect execution; recovery is at-least-once. The word "durable" must name the DN or DC assembly.
 - The canonical log is append-only; projections and checkpoints are disposable derivatives.
-- Dependency direction is inward-only: core <- engine <- capabilities; core <- sandbox <- sandbox-local; core <- engine <- session <- storage adapters; platform packages outermost; core + engine + capabilities <- effect-agent (umbrella) <- pr-review. An inward package importing an outward one is blocking.
+- Dependency direction is inward-only: core <- engine <- capabilities; core <- sandbox <- sandbox-local; core <- sandbox <- capabilities (the CodeExecutor port, ADR-0017); core <- engine <- session <- storage adapters; platform packages outermost; core + engine + capabilities <- effect-agent (umbrella) <- pr-review. An inward package importing an outward one is blocking.
 - Effect AI primitives are used directly — no framework-owned copies of Tool, Toolkit, LanguageModel, Prompt, Response, or Model; provider SDK values never become canonical records.
 - Model output and delegated child results are untrusted input: flag any trust of model-supplied paths, ids, ranges, or anchors without fail-closed validation, and any automatic replay of an unresolved ordinary tool call.
 - Node platform assumptions must not enter core domain modules.
 
 Testing changes: tests are deterministic — no wall-clock sleeps; typed exits are asserted, not just success; a shared test Layer's name matches the behavior it honestly provides, and partial fixtures stay local. New state transitions need deterministic tests; new durable mutations need before/after failpoints.
 
-Repository facts that pre-empt false findings: the committed `action/dist` bundle is excluded from your view by configuration, and `bun run check` fails whenever it is stale — never report bundle staleness or absence. Lockfiles, changelogs, and dev-kit-managed skill copies are likewise excluded by configuration, not missing from the change.
+Repository facts that pre-empt false findings: the committed `action/dist` bundle is excluded from your view by configuration, and `bun run check` fails whenever it is stale — never report bundle staleness or absence. Lockfiles, changelogs, and dev-kit-managed skill copies are likewise excluded by configuration, not missing from the change. Coverage-exception rows in docs/REQUIREMENTS.md MUST be deleted once an executable test title references the ID — the coverage gate fails on stale rows, so a removed row alongside new ID-titled tests is the required disposition, never lost traceability.
 
 Severity mapping: blocking = the framework invariants above, hidden authority over external effects, unchecked external data, and expected failures escaping the typed channel. Important = dependency drilling, hidden Layer requirements, duplicated capabilities, unjustified assertions, pass-through abstractions, and dishonest test substitutes. Nit = naming and co-location. End honest: prefer an explicit keep over an invented finding.

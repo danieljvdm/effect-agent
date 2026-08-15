@@ -1,14 +1,17 @@
 # Code Mode Implementation Plan
 
-Status: **Proposed**  
+Status: **Accepted for implementation — ephemeral slices C0–C4 plus a leaf demo example**  
 Date: 2026-08-14  
-Owner approval: **Required before implementation changes normative Tool or durability semantics**
+Owner approval: **Granted for the ephemeral slices on 2026-08-14; durable (`DN`/`DC`) Code Mode
+still requires its own accepted ADR**
 
-Governance registration: this proposal is registered as **D-035 (Proposed)** in
-`docs/DECISIONS.md` and its normative architecture content lives in
-[ADR-0017](adr/0017-code-mode-executor-and-broker.md). This file remains working material and
-does not itself amend accepted architecture or roadmap status. The section 17 design decisions
-were resolved by the owner on 2026-08-14.
+Governance registration: this work is registered as **D-035 (Accepted, owner-directed
+2026-08-14)** in `docs/DECISIONS.md` and its normative architecture content lives in
+[ADR-0017](adr/0017-code-mode-executor-and-broker.md) (Accepted). This file remains working
+material; the specifications under `docs/spec/` carry the normative Code Mode requirements
+(CAP-014…016, RUN-016…017, DEPLOY-011, SEC-014…015, TEST-015), and per-slice evidence grows in
+[CODE-MODE-EVIDENCE.md](CODE-MODE-EVIDENCE.md). The section 17 design decisions were resolved by
+the owner on 2026-08-14.
 
 ## 1. Objective
 
@@ -298,8 +301,11 @@ enters canonical state.
 Per-call broker input is data only:
 
 - the selected namespace and method;
-- the encoded arguments;
-- the deterministic sequence index.
+- the encoded arguments.
+
+The deterministic sequence index is broker-owned: the broker allocates it from its own monotonic
+per-pass state, and a transport-carried index is validated against that state, failing typed on
+mismatch, so generated code can never replay, skip, or duplicate an identity.
 
 The live native Toolkit handlers, engine policy context, and parent Tool Call identity are
 capabilities, not invocation data: they are bound once when the per-outer-call broker service is
@@ -491,10 +497,14 @@ Expected errors are Schema tagged and remain in `E`. The initial union should di
 
 Interruption of the host fiber itself follows ordinary Effect interruption semantics and is never
 represented in `E`. Where an inner failure belongs to the Tool rather than the executor, the
-broker envelope carries the existing framework tags — `ToolInputError`, `ApprovalRequired`,
-`PolicyDenied`, `BudgetExceeded`, `ToolInfrastructureError`, `ToolOutputError`, and the Tool's
-own declared failures — rather than a parallel Code Mode union. New tags are reserved for
-executor-side failures.
+broker envelope carries the tags the framework actually defines rather than a parallel Code Mode
+union (C2 note: the six tag names an earlier draft listed here were the documented ARCHITECTURE
+§8 taxonomy, not code): the Tool's own declared failure tags, `ModelProtocolError` for invalid
+parameters and invalid success encodings, `AgentPolicyError` for the Tool-call limit,
+`BudgetExceeded` from the budget hook, and the broker-owned preflight tags
+`ProgrammaticToolUnknownError`, `ProgrammaticApprovalUnsupportedError`,
+`ProgrammaticCallConcurrencyError`, and `ProgrammaticResultLimitError`. New tags stay reserved
+for executor- and broker-side failures.
 
 Defects, sandbox termination, and remote transport failures must not be collapsed into a generic
 successful `{ error: string }` value. A Tool may explicitly choose a model-visible failure mode,
@@ -637,7 +647,8 @@ Deliverables:
   rules, and the CI package-graph check for the new `capabilities -> sandbox` edge;
 - stable requirement IDs and traceability rows, including the decision whether Code Mode extends
   the `CAP-` requirement family or opens a new prefix family (IDs become coverage-gate-bearing
-  only once defined in `docs/spec/*.md`);
+  only once defined in `docs/spec/*.md`) — decided at C0: extend the existing families with
+  CAP-014…016, RUN-016…017, DEPLOY-011, SEC-014…015, and TEST-015;
 - a decision on the first public constructor and package placement;
 - a decision on the generated-program calling convention (section 17);
 - explicit deployment-class and durability non-claims.

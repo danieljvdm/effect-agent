@@ -32236,1390 +32236,6 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
-// packages/capabilities/src/conversation.ts
-var ConversationText = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
-var MAX_CONVERSATION_MESSAGES = 1024;
-var MAX_CONVERSATION_CONTENT_BYTES = 4 * 1024 * 1024;
-var MAX_EPHEMERAL_CONVERSATIONS = 256;
-var MAX_EPHEMERAL_CONTENT_BYTES = 64 * 1024 * 1024;
-
-class ConversationMessage extends exports_Schema.Class("@effect-agent/capabilities/ConversationMessage")({
-  conversationId: ConversationId,
-  sequence: exports_Schema.Natural,
-  runId: exports_Schema.optionalKey(RunId),
-  message: exports_Prompt.Message,
-  encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_CONVERSATION_CONTENT_BYTES)),
-  timestamp: exports_Schema.DateTimeUtcFromString
-}) {
-}
-
-class ConversationSnapshot extends exports_Schema.Class("@effect-agent/capabilities/ConversationSnapshot")({
-  version: exports_Schema.Literal(1),
-  conversationId: ConversationId,
-  nextSequence: exports_Schema.Natural,
-  contentBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_CONVERSATION_CONTENT_BYTES)),
-  messages: exports_Schema.Array(ConversationMessage).check(exports_Schema.isMaxLength(MAX_CONVERSATION_MESSAGES))
-}) {
-}
-
-class ConversationExport extends exports_Schema.Class("@effect-agent/capabilities/ConversationExport")({
-  format: exports_Schema.Literal("effect-agent/ephemeral-conversation@1"),
-  exportedAt: exports_Schema.DateTimeUtcFromString,
-  snapshot: ConversationSnapshot
-}) {
-}
-
-class ConversationAppend extends exports_Schema.Class("@effect-agent/capabilities/ConversationAppend")({
-  runId: exports_Schema.optionalKey(RunId),
-  message: exports_Prompt.Message
-}) {
-}
-
-class ConversationNotFound extends exports_Schema.TaggedError()("ConversationNotFound", { conversationId: ConversationId }) {
-}
-
-class ConversationLimitExceeded extends exports_Schema.TaggedError()("ConversationLimitExceeded", {
-  conversationId: ConversationId,
-  limit: exports_Schema.Literals(["messages", "content-bytes", "conversations", "store-content-bytes"]),
-  limitValue: exports_Schema.Natural,
-  observedValue: exports_Schema.Natural
-}) {
-}
-
-class ConversationHistoryDiverged extends exports_Schema.TaggedError()("ConversationHistoryDiverged", { conversationId: ConversationId, message: exports_Schema.String }) {
-}
-
-class ConversationEncodingError extends exports_Schema.TaggedError()("ConversationEncodingError", { conversationId: ConversationId, message: exports_Schema.String }) {
-}
-var conversationPrompt = (snapshot2) => exports_Prompt.fromMessages(snapshot2.messages.map((entry) => entry.message));
-
-class EphemeralConversations extends exports_Context.Service()("@effect-agent/capabilities/EphemeralConversations") {
-}
-var utf8Bytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
-var encodeMessage = (conversationId, message) => exports_Schema.encodeEffect(exports_Prompt.Message)(message).pipe(exports_Effect.map((encoded) => JSON.stringify(encoded)), exports_Effect.mapError((error2) => ConversationEncodingError.make({
-  conversationId,
-  message: `Could not encode native Effect AI message: ${error2.message}`
-})));
-var findSnapshot = (state, conversationId) => {
-  const snapshot2 = state.get(conversationId);
-  return snapshot2 === undefined ? exports_Effect.fail(ConversationNotFound.make({ conversationId })) : exports_Effect.succeed(snapshot2);
-};
-var totalStoreBytes = (conversations) => {
-  let total = 0;
-  for (const snapshot2 of conversations.values())
-    total += snapshot2.contentBytes;
-  return total;
-};
-var appendEncoded = (conversations, conversationId, append3, encoded, timestamp) => {
-  const current = conversations.get(conversationId);
-  if (current === undefined)
-    return [{ _tag: "not-found" }, conversations];
-  if (current.messages.length >= MAX_CONVERSATION_MESSAGES) {
-    return [
-      {
-        _tag: "failure",
-        error: ConversationLimitExceeded.make({
-          conversationId,
-          limit: "messages",
-          limitValue: MAX_CONVERSATION_MESSAGES,
-          observedValue: current.messages.length + 1
-        })
-      },
-      conversations
-    ];
-  }
-  const messageBytes = utf8Bytes2(encoded);
-  const contentBytes = current.contentBytes + messageBytes;
-  if (contentBytes > MAX_CONVERSATION_CONTENT_BYTES) {
-    return [
-      {
-        _tag: "failure",
-        error: ConversationLimitExceeded.make({
-          conversationId,
-          limit: "content-bytes",
-          limitValue: MAX_CONVERSATION_CONTENT_BYTES,
-          observedValue: contentBytes
-        })
-      },
-      conversations
-    ];
-  }
-  const storeBytes = totalStoreBytes(conversations) + messageBytes;
-  if (storeBytes > MAX_EPHEMERAL_CONTENT_BYTES) {
-    return [
-      {
-        _tag: "failure",
-        error: ConversationLimitExceeded.make({
-          conversationId,
-          limit: "store-content-bytes",
-          limitValue: MAX_EPHEMERAL_CONTENT_BYTES,
-          observedValue: storeBytes
-        })
-      },
-      conversations
-    ];
-  }
-  const message = ConversationMessage.make({
-    conversationId,
-    sequence: current.nextSequence,
-    ...append3.runId === undefined ? {} : { runId: append3.runId },
-    message: append3.message,
-    encodedBytes: messageBytes,
-    timestamp
-  });
-  const next2 = ConversationSnapshot.make({
-    version: current.version,
-    conversationId: current.conversationId,
-    nextSequence: current.nextSequence + 1,
-    contentBytes,
-    messages: [...current.messages, message]
-  });
-  return [{ _tag: "success", value: next2 }, new Map(conversations).set(conversationId, next2)];
-};
-var commitHistorySuffix = (conversations, conversationId, base2, suffix, timestamp) => {
-  const current = conversations.get(conversationId);
-  if (current === undefined) {
-    return [
-      { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
-      conversations
-    ];
-  }
-  if (current !== base2)
-    return [{ _tag: "stale" }, conversations];
-  let next2 = conversations;
-  let snapshot2 = current;
-  for (const entry of suffix) {
-    const [result4, updated] = appendEncoded(next2, conversationId, entry.append, entry.encoded, timestamp);
-    if (result4._tag === "not-found") {
-      return [
-        { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
-        conversations
-      ];
-    }
-    if (result4._tag === "failure") {
-      return [{ _tag: "failure", error: result4.error }, conversations];
-    }
-    snapshot2 = result4.value;
-    next2 = updated;
-  }
-  return [{ _tag: "success", value: snapshot2 }, next2];
-};
-var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, exports_Effect.gen(function* () {
-  const state = yield* exports_Ref.make(new Map);
-  const append3 = (conversationId, message) => exports_Effect.gen(function* () {
-    const encoded = yield* encodeMessage(conversationId, message.message);
-    const timestamp = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
-    const result4 = yield* exports_Ref.modify(state, (conversations) => appendEncoded(conversations, conversationId, message, encoded, timestamp));
-    if (result4._tag === "not-found") {
-      return yield* ConversationNotFound.make({ conversationId });
-    }
-    if (result4._tag === "failure")
-      return yield* result4.error;
-    return result4.value;
-  });
-  return EphemeralConversations.of({
-    create: (conversationId) => exports_Effect.gen(function* () {
-      const result4 = yield* exports_Ref.modify(state, (conversations) => {
-        const existing = conversations.get(conversationId);
-        if (existing !== undefined) {
-          return [{ _tag: "success", value: existing }, conversations];
-        }
-        if (conversations.size >= MAX_EPHEMERAL_CONVERSATIONS) {
-          return [
-            {
-              _tag: "failure",
-              error: ConversationLimitExceeded.make({
-                conversationId,
-                limit: "conversations",
-                limitValue: MAX_EPHEMERAL_CONVERSATIONS,
-                observedValue: conversations.size + 1
-              })
-            },
-            conversations
-          ];
-        }
-        const created = ConversationSnapshot.make({
-          version: 1,
-          conversationId,
-          nextSequence: 0,
-          contentBytes: 0,
-          messages: []
-        });
-        return [
-          { _tag: "success", value: created },
-          new Map(conversations).set(conversationId, created)
-        ];
-      });
-      if (result4._tag === "failure")
-        return yield* result4.error;
-      return result4.value;
-    }),
-    append: append3,
-    recordHistory: (conversationId, historyRunId, history) => exports_Effect.gen(function* () {
-      const incoming = yield* exports_Effect.forEach(history.content, (message) => encodeMessage(conversationId, message).pipe(exports_Effect.map((encoded) => ({ message, encoded }))));
-      const attempt = exports_Effect.gen(function* () {
-        const current = yield* exports_Ref.get(state).pipe(exports_Effect.flatMap((all5) => findSnapshot(all5, conversationId)));
-        const currentEncoded = yield* exports_Effect.forEach(current.messages, (entry) => encodeMessage(conversationId, entry.message));
-        if (incoming.length < currentEncoded.length || currentEncoded.some((encoded, index2) => encoded !== incoming[index2]?.encoded)) {
-          return yield* ConversationHistoryDiverged.make({
-            conversationId,
-            message: "Engine history is not an append-only extension of official history"
-          });
-        }
-        const timestamp = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
-        const suffix = incoming.slice(currentEncoded.length).map((entry) => ({
-          append: ConversationAppend.make({ runId: historyRunId, message: entry.message }),
-          encoded: entry.encoded
-        }));
-        const result4 = yield* exports_Ref.modify(state, (conversations) => commitHistorySuffix(conversations, conversationId, current, suffix, timestamp));
-        if (result4._tag === "stale")
-          return yield* attempt;
-        if (result4._tag === "failure")
-          return yield* result4.error;
-        return result4.value;
-      });
-      return yield* attempt;
-    }),
-    snapshot: (conversationId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all5) => findSnapshot(all5, conversationId))),
-    export: (conversationId) => exports_Effect.gen(function* () {
-      const snapshot2 = yield* findSnapshot(yield* exports_Ref.get(state), conversationId);
-      return ConversationExport.make({
-        format: "effect-agent/ephemeral-conversation@1",
-        exportedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis)),
-        snapshot: snapshot2
-      });
-    })
-  });
-}));
-
-// packages/capabilities/src/commands.ts
-var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-
-class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
-  id: exports_Schema.NonEmptyString,
-  runId: RunId,
-  conversationId: ConversationId,
-  author: exports_Schema.NonEmptyString,
-  content: ConversationText,
-  createdAt: exports_Schema.DateTimeUtcFromString
-}) {
-}
-
-class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
-  id: exports_Schema.NonEmptyString,
-  runId: RunId,
-  conversationId: ConversationId,
-  author: exports_Schema.NonEmptyString,
-  content: ConversationText,
-  createdAt: exports_Schema.DateTimeUtcFromString
-}) {
-}
-var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
-var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
-
-class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt2 }) {
-}
-
-class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
-}
-var makeRunCommandQueue = exports_Effect.fn("makeRunCommandQueue")(function* (runId, config) {
-  const queue = yield* exports_Queue.bounded(config.capacity);
-  const shutdown3 = exports_Queue.shutdown(queue).pipe(exports_Effect.asVoid);
-  yield* exports_Effect.addFinalizer(() => shutdown3);
-  const offer2 = (command) => exports_Queue.offer(queue, command).pipe(exports_Effect.flatMap((accepted) => accepted ? exports_Effect.void : exports_Effect.fail(RunCommandQueueClosed.make({ runId }))));
-  const drainOne = exports_Queue.poll(queue).pipe(exports_Effect.map(exports_Option.toArray));
-  return {
-    offer: offer2,
-    drain: (policy2 = "one") => policy2 === "one" ? drainOne : exports_Queue.size(queue).pipe(exports_Effect.flatMap((count2) => exports_Effect.forEach(Array.from({ length: count2 }), () => drainOne).pipe(exports_Effect.map((batches) => batches.flat())))),
-    shutdown: shutdown3
-  };
-});
-// packages/capabilities/src/context.ts
-var MAX_CONTEXT_MESSAGES = 1024;
-var MAX_CONTEXT_MESSAGE_BYTES = 4 * 1024 * 1024;
-var MAX_SOURCE_SEQUENCES = 1024;
-var MAX_RETAINED_FACTS = 256;
-var MAX_RETAINED_FACT_BYTES = 1024 * 1024;
-var MAX_COMPACTIONS = 16;
-var SourceSequences = exports_Schema.Array(exports_Schema.Natural).check(exports_Schema.isMaxLength(MAX_SOURCE_SEQUENCES));
-
-class ModelContextMessage extends exports_Schema.Class("@effect-agent/capabilities/ModelContextMessage")({
-  role: exports_Schema.Literals(["system", "user", "assistant", "tool"]),
-  content: ConversationText,
-  sourceSequences: SourceSequences
-}) {
-}
-
-class RetainedFact extends exports_Schema.Class("@effect-agent/capabilities/RetainedFact")({
-  fact: exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024)),
-  sourceSequences: SourceSequences
-}) {
-}
-var encodedBytes = (value4) => exports_Encoding.encodeHex(value4).length / 2;
-var ModelContextMessages = exports_Schema.Array(ModelContextMessage).check(exports_Schema.isMaxLength(MAX_CONTEXT_MESSAGES)).pipe(exports_Schema.refine((messages) => messages.reduce((total, message) => total + encodedBytes(message.content), 0) <= MAX_CONTEXT_MESSAGE_BYTES, { expected: `model context totaling at most ${MAX_CONTEXT_MESSAGE_BYTES} UTF-8 bytes` }));
-var RetainedFacts = exports_Schema.Array(RetainedFact).check(exports_Schema.isMaxLength(MAX_RETAINED_FACTS)).pipe(exports_Schema.refine((facts) => facts.reduce((total, retained) => total + encodedBytes(retained.fact), 0) <= MAX_RETAINED_FACT_BYTES, { expected: `retained facts totaling at most ${MAX_RETAINED_FACT_BYTES} UTF-8 bytes` }));
-var SourceDigest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
-
-class CompactionArtifact extends exports_Schema.Class("@effect-agent/capabilities/CompactionArtifact")({
-  version: exports_Schema.Literal(1),
-  conversationId: ConversationId,
-  coversFrom: exports_Schema.Natural,
-  coversThrough: exports_Schema.Natural,
-  summary: ModelContextMessage,
-  retainedFacts: RetainedFacts,
-  tokenEstimate: exports_Schema.Natural,
-  sourceDigest: SourceDigest,
-  compactorVersion: exports_Schema.NonEmptyString
-}) {
-}
-
-class PreparedModelContext extends exports_Schema.Class("@effect-agent/capabilities/PreparedModelContext")({
-  source: ConversationSnapshot,
-  messages: ModelContextMessages,
-  compactions: exports_Schema.Array(CompactionArtifact).check(exports_Schema.isMaxLength(MAX_COMPACTIONS))
-}) {
-}
-
-class ContextTransformError extends exports_Schema.TaggedError()("ContextTransformError", { transformId: exports_Schema.NonEmptyString, message: exports_Schema.String }) {
-}
-
-class CompactionDigestError extends exports_Schema.TaggedError()("CompactionDigestError", { message: exports_Schema.String }) {
-}
-
-class InvalidCompactionArtifact extends exports_Schema.TaggedError()("InvalidCompactionArtifact", { message: exports_Schema.String }) {
-}
-
-class ContextLimitExceeded extends exports_Schema.TaggedError()("ContextLimitExceeded", {
-  limit: exports_Schema.Literals(["messages", "message-bytes", "compactions"]),
-  limitValue: exports_Schema.Natural,
-  observedValue: exports_Schema.Natural
-}) {
-}
-
-class ContextCompactor extends exports_Context.Service()("@effect-agent/capabilities/ContextCompactor") {
-}
-var validateModelView = (messages, transformId) => {
-  if (messages.length > MAX_CONTEXT_MESSAGES) {
-    return exports_Effect.fail(ContextTransformError.make({
-      transformId,
-      message: `Transform produced ${messages.length} messages; maximum is ${MAX_CONTEXT_MESSAGES}`
-    }));
-  }
-  const bytes = messages.reduce((total, message) => total + encodedBytes(message.content), 0);
-  return bytes > MAX_CONTEXT_MESSAGE_BYTES ? exports_Effect.fail(ContextTransformError.make({
-    transformId,
-    message: `Transform produced ${bytes} UTF-8 bytes; maximum is ${MAX_CONTEXT_MESSAGE_BYTES}`
-  })) : exports_Effect.succeed(messages);
-};
-var exactSourceRange = (snapshot2, coversFrom, coversThrough) => {
-  if (coversFrom > coversThrough || coversThrough >= snapshot2.nextSequence) {
-    return exports_Effect.fail(InvalidCompactionArtifact.make({
-      message: "Compaction artifact covers an invalid source range"
-    }));
-  }
-  const selected = snapshot2.messages.filter((message) => message.sequence >= coversFrom && message.sequence <= coversThrough);
-  const expectedCount = coversThrough - coversFrom + 1;
-  if (selected.length !== expectedCount || selected[0]?.sequence !== coversFrom || selected[selected.length - 1]?.sequence !== coversThrough) {
-    return exports_Effect.fail(InvalidCompactionArtifact.make({
-      message: "Compaction source range is not contiguous in authoritative history"
-    }));
-  }
-  return exports_Effect.succeed(selected);
-};
-var utf8Bytes3 = (value4) => {
-  const hex2 = exports_Encoding.encodeHex(value4);
-  const bytes = new Uint8Array(hex2.length / 2);
-  for (let index2 = 0;index2 < bytes.length; index2 += 1) {
-    bytes[index2] = Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16);
-  }
-  return bytes;
-};
-var digestCompactionSource = exports_Effect.fn("digestCompactionSource")(function* (snapshot2, coversFrom, coversThrough) {
-  const selected = yield* exactSourceRange(snapshot2, coversFrom, coversThrough);
-  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Array(ConversationMessage))(selected).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
-    message: `Could not encode compaction source: ${error2.message}`
-  })));
-  const crypto2 = yield* exports_Crypto.Crypto;
-  const digest2 = yield* crypto2.digest("SHA-256", utf8Bytes3(JSON.stringify(encoded))).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
-    message: `Could not digest compaction source: ${error2.message}`
-  })));
-  return `sha256:${exports_Encoding.encodeHex(digest2)}`;
-});
-var applyCompaction = exports_Effect.fn("applyCompaction")(function* (context3, artifact) {
-  if (artifact.conversationId !== context3.source.conversationId) {
-    return yield* InvalidCompactionArtifact.make({
-      message: "Compaction artifact belongs to another Conversation"
-    });
-  }
-  const actualDigest = yield* digestCompactionSource(context3.source, artifact.coversFrom, artifact.coversThrough);
-  if (actualDigest !== artifact.sourceDigest) {
-    return yield* InvalidCompactionArtifact.make({
-      message: "Compaction source digest does not match authoritative history"
-    });
-  }
-  const provenanceInRange = (sequences) => sequences.length > 0 && sequences.every((sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough);
-  if (!provenanceInRange(artifact.summary.sourceSequences) || artifact.retainedFacts.some((fact) => !provenanceInRange(fact.sourceSequences))) {
-    return yield* InvalidCompactionArtifact.make({
-      message: "Compaction summary or retained-fact provenance falls outside its covered range"
-    });
-  }
-  if (context3.compactions.length >= MAX_COMPACTIONS) {
-    return yield* ContextLimitExceeded.make({
-      limit: "compactions",
-      limitValue: MAX_COMPACTIONS,
-      observedValue: context3.compactions.length + 1
-    });
-  }
-  const fullyCovered = (message) => message.sourceSequences.length > 0 && message.sourceSequences.every((sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough);
-  const kept = context3.messages.filter((message) => !fullyCovered(message));
-  const summaryAt = kept.findIndex((message) => message.sourceSequences.length > 0 && message.sourceSequences.every((sequence) => sequence > artifact.coversThrough));
-  const messages = yield* validateModelView(summaryAt === -1 ? [...kept, artifact.summary] : [...kept.slice(0, summaryAt), artifact.summary, ...kept.slice(summaryAt)], `compaction:${artifact.compactorVersion}`);
-  return PreparedModelContext.make({
-    source: context3.source,
-    messages,
-    compactions: [...context3.compactions, artifact]
-  });
-});
-// packages/capabilities/src/engine-adapters.ts
-class ApprovalAdapterError extends exports_Schema.TaggedError()("ApprovalAdapterError", { message: exports_Schema.String }) {
-}
-
-class BudgetAdapterError extends exports_Schema.TaggedError()("BudgetAdapterError", { message: exports_Schema.String }) {
-}
-var toRunApprovalHook = (policy2) => ({
-  request: (engineRequest) => exports_Effect.gen(function* () {
-    const validatedPolicy = yield* exports_Schema.decodeUnknownEffect(RunApprovalAdapterPolicySchema)(policy2).pipe(exports_Effect.mapError((error2) => ApprovalAdapterError.make({
-      message: `Approval adapter policy is invalid: ${error2.message}`
-    })));
-    const now3 = yield* exports_Clock.currentTimeMillis;
-    const metadata = yield* exports_Effect.try({
-      try: () => ({
-        actionSummary: policy2.actionSummary(engineRequest),
-        resourceTargets: policy2.resourceTargets(engineRequest)
-      }),
-      catch: () => ApprovalAdapterError.make({
-        message: "Approval policy failed while describing the native Tool request"
-      })
-    });
-    const draft = yield* exports_Schema.decodeUnknownEffect(ApprovalRequestDraft)({
-      requestId: engineRequest.request.approvalId,
-      runId: engineRequest.runId,
-      conversationId: engineRequest.conversationId,
-      toolCallId: engineRequest.toolCallId,
-      toolName: engineRequest.toolName,
-      actionSummary: metadata.actionSummary,
-      resourceTargets: metadata.resourceTargets,
-      risk: validatedPolicy.risk,
-      expiresAt: exports_DateTime.formatIso(exports_DateTime.toUtc(exports_DateTime.makeUnsafe(now3 + validatedPolicy.expiresInMillis))),
-      denial: validatedPolicy.denial
-    }).pipe(exports_Effect.mapError((error2) => ApprovalAdapterError.make({
-      message: `Approval adapter policy is invalid: ${error2.message}`
-    })));
-    const request3 = yield* makeApprovalRequest(draft, engineRequest.parameters);
-    const decision = yield* requestApproval(request3);
-    if (decision._tag === "ApprovalApproved") {
-      return { _tag: "approved" };
-    }
-    if (decision.timedOut && request3.denial === "recoverable") {
-      return {
-        _tag: "unresolved",
-        reason: decision.reason
-      };
-    }
-    return {
-      _tag: "denied",
-      reason: decision.reason
-    };
-  })
-});
-var toDurableRunApprovalHook = exports_Effect.fn("toDurableRunApprovalHook")(function* (policy2) {
-  const services2 = yield* exports_Effect.context();
-  const hook = toRunApprovalHook(policy2);
-  return {
-    request: (request3) => hook.request(request3).pipe(exports_Effect.provideContext(services2), exports_Effect.catch((error2) => exports_Effect.succeed({
-      _tag: "unresolved",
-      reason: `Approval delegation failed (${error2._tag}); the decision defers to the durable resolveApproval path`
-    })))
-  };
-});
-var toRunBudgetHook = (budget) => ({
-  guard: budget.guard,
-  consume: (delta) => exports_Schema.decodeUnknownEffect(UsageDelta)({
-    inputTokens: delta.inputTokens,
-    outputTokens: delta.outputTokens,
-    toolCalls: delta.toolCalls,
-    costMicrousd: delta.costMicrousd
-  }).pipe(exports_Effect.mapError((error2) => BudgetAdapterError.make({
-    message: `Engine usage delta is invalid: ${error2.message}`
-  })), exports_Effect.flatMap((usage) => budget.consume(usage)), exports_Effect.asVoid)
-});
-var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(function* (conversations, conversationId, runId) {
-  const snapshot2 = yield* conversations.snapshot(conversationId);
-  return {
-    conversationId,
-    history: conversationPrompt(snapshot2),
-    onHistory: (history) => conversations.recordHistory(conversationId, runId, history).pipe(exports_Effect.asVoid)
-  };
-});
-var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
-  expiresInMillis: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
-  denial: exports_Schema.Literals(["terminal", "recoverable"])
-});
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PrimaryKey.js
-var symbol4 = "~effect/interfaces/PrimaryKey";
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/RpcSchema.js
-var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
-var schema2 = /* @__PURE__ */ declare(isStream);
-function Stream(success, error2) {
-  return make37(schema2.ast, {
-    [StreamSchemaTypeId]: StreamSchemaTypeId,
-    success,
-    error: error2
-  });
-}
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId47 = "~effect/rpc/Rpc";
-var Proto12 = {
-  [TypeId47]: TypeId47,
-  pipe() {
-    return pipeArguments(this, arguments);
-  },
-  setSuccess(successSchema) {
-    return makeProto3({
-      _tag: this._tag,
-      payloadSchema: this.payloadSchema,
-      successSchema,
-      errorSchema: this.errorSchema,
-      defectSchema: this.defectSchema,
-      annotations: this.annotations,
-      middlewares: this.middlewares
-    });
-  },
-  setError(errorSchema) {
-    return makeProto3({
-      _tag: this._tag,
-      payloadSchema: this.payloadSchema,
-      successSchema: this.successSchema,
-      errorSchema,
-      defectSchema: this.defectSchema,
-      annotations: this.annotations,
-      middlewares: this.middlewares
-    });
-  },
-  setPayload(payloadSchema) {
-    return makeProto3({
-      _tag: this._tag,
-      payloadSchema: isSchema(payloadSchema) ? payloadSchema : Struct(payloadSchema),
-      successSchema: this.successSchema,
-      errorSchema: this.errorSchema,
-      defectSchema: this.defectSchema,
-      annotations: this.annotations,
-      middlewares: this.middlewares
-    });
-  },
-  middleware(middleware) {
-    return makeProto3({
-      _tag: this._tag,
-      payloadSchema: this.payloadSchema,
-      successSchema: this.successSchema,
-      errorSchema: this.errorSchema,
-      defectSchema: this.defectSchema,
-      annotations: this.annotations,
-      middlewares: new Set([...this.middlewares, middleware])
-    });
-  },
-  prefix(prefix) {
-    return makeProto3({
-      _tag: `${prefix}${this._tag}`,
-      payloadSchema: this.payloadSchema,
-      successSchema: this.successSchema,
-      errorSchema: this.errorSchema,
-      defectSchema: this.defectSchema,
-      annotations: this.annotations,
-      middlewares: this.middlewares
-    });
-  },
-  annotate(tag2, value4) {
-    return makeProto3({
-      _tag: this._tag,
-      payloadSchema: this.payloadSchema,
-      successSchema: this.successSchema,
-      errorSchema: this.errorSchema,
-      defectSchema: this.defectSchema,
-      middlewares: this.middlewares,
-      annotations: add(this.annotations, tag2, value4)
-    });
-  },
-  annotateMerge(context3) {
-    return makeProto3({
-      _tag: this._tag,
-      payloadSchema: this.payloadSchema,
-      successSchema: this.successSchema,
-      errorSchema: this.errorSchema,
-      defectSchema: this.defectSchema,
-      middlewares: this.middlewares,
-      annotations: merge(this.annotations, context3)
-    });
-  }
-};
-var makeProto3 = (options) => {
-  function Rpc() {}
-  Object.setPrototypeOf(Rpc, Proto12);
-  Object.assign(Rpc, options);
-  Rpc.key = `effect/rpc/Rpc/${options._tag}`;
-  return Rpc;
-};
-var make50 = (tag2, options) => {
-  const successSchema = options?.success ?? Void2;
-  const errorSchema = options?.error ?? Never2;
-  const defectSchema = options?.defect ?? Defect();
-  let payloadSchema;
-  if (options?.primaryKey) {
-    payloadSchema = class Payload extends Class4(`effect/rpc/Rpc/${tag2}`)(options.payload) {
-      [symbol4]() {
-        return options.primaryKey(this);
-      }
-    };
-  } else {
-    payloadSchema = isSchema(options?.payload) ? options?.payload : options?.payload ? Struct(options?.payload) : Void2;
-  }
-  return makeProto3({
-    _tag: tag2,
-    payloadSchema,
-    successSchema: options?.stream ? Stream(successSchema, errorSchema) : successSchema,
-    errorSchema: options?.stream ? Never2 : errorSchema,
-    defectSchema,
-    annotations: empty(),
-    middlewares: new Set
-  });
-};
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/McpSchema.js
-var optionalWithDefault = (schema3, defaultValue) => {
-  const effect2 = sync3(defaultValue);
-  return optionalKey2(schema3).pipe(decode({
-    decode: withDefault(effect2),
-    encode: passthrough2()
-  }), withConstructorDefault2(effect2));
-};
-var optional3 = (schema3) => optionalKey2(schema3).pipe(decodeTo2(optional2(schema3), {
-  decode: passthrough2(),
-  encode: transformOptional(flatMap(fromUndefinedOr))
-}));
-var RequestId = /* @__PURE__ */ Union2([String6, Finite]);
-var ProgressToken = /* @__PURE__ */ Union2([String6, Finite]);
-
-class RequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
-    progressToken: /* @__PURE__ */ optional3(ProgressToken)
-  }))
-}))) {
-}
-
-class ResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
-}))) {
-}
-
-class NotificationMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
-}))) {
-}
-var Cursor = String6;
-
-class PaginatedRequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...RequestMeta.fields,
-  cursor: /* @__PURE__ */ optional3(Cursor)
-}))) {
-}
-
-class PaginatedResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...ResultMeta.fields,
-  nextCursor: /* @__PURE__ */ optional3(Cursor)
-}))) {
-}
-var Role = /* @__PURE__ */ Literals(["user", "assistant"]);
-
-class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  audience: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Role)),
-  priority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
-    minimum: 0,
-    maximum: 1
-  })))
-}))) {
-}
-
-class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  name: String6,
-  title: /* @__PURE__ */ optional3(String6),
-  version: String6
-}))) {
-}
-
-class ClientCapabilities extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ClientCapabilities")({
-  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct({}))),
-  extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
-  roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
-  })),
-  sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
-  elicitation: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({}))
-})) {
-}
-
-class ServerCapabilities extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct({}))),
-  extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
-  logging: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
-  completions: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
-  prompts: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
-  })),
-  resources: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
-    subscribe: /* @__PURE__ */ optional3(Boolean3),
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
-  })),
-  tools: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
-    listChanged: /* @__PURE__ */ optional3(Boolean3)
-  }))
-}))) {
-}
-
-class McpErrorBase extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/McpErrorBase")({
-  code: Int,
-  message: String6,
-  data: /* @__PURE__ */ optional3(Any2)
-})) {
-}
-var INVALID_REQUEST_ERROR_CODE = -32600;
-var METHOD_NOT_FOUND_ERROR_CODE = -32601;
-var INVALID_PARAMS_ERROR_CODE = -32602;
-var INTERNAL_ERROR_CODE = -32603;
-var PARSE_ERROR_CODE = -32700;
-
-class ParseError extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/ParseError")({
-  ...McpErrorBase.fields,
-  _tag: /* @__PURE__ */ tag("ParseError"),
-  code: /* @__PURE__ */ tag(PARSE_ERROR_CODE)
-})) {
-}
-
-class InvalidRequest extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/InvalidRequest")({
-  ...McpErrorBase.fields,
-  _tag: /* @__PURE__ */ tag("InvalidRequest"),
-  code: /* @__PURE__ */ tag(INVALID_REQUEST_ERROR_CODE)
-})) {
-}
-
-class MethodNotFound extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/MethodNotFound")({
-  ...McpErrorBase.fields,
-  _tag: /* @__PURE__ */ tag("MethodNotFound"),
-  code: /* @__PURE__ */ tag(METHOD_NOT_FOUND_ERROR_CODE)
-})) {
-}
-
-class InvalidParams extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/InvalidParams")({
-  ...McpErrorBase.fields,
-  _tag: /* @__PURE__ */ tag("InvalidParams"),
-  code: /* @__PURE__ */ tag(INVALID_PARAMS_ERROR_CODE)
-})) {
-}
-
-class InternalError extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/InternalError")({
-  ...McpErrorBase.fields,
-  _tag: /* @__PURE__ */ tag("InternalError"),
-  code: /* @__PURE__ */ tag(INTERNAL_ERROR_CODE)
-})) {
-  static notImplemented = /* @__PURE__ */ new InternalError({
-    message: "Not implemented"
-  });
-}
-var McpError = /* @__PURE__ */ Union2([ParseError, InvalidRequest, MethodNotFound, InvalidParams, InternalError, McpErrorBase]);
-class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...ResultMeta.fields,
-  protocolVersion: String6,
-  capabilities: ServerCapabilities,
-  serverInfo: Implementation,
-  instructions: /* @__PURE__ */ optional3(String6)
-}))) {
-}
-
-class Initialize extends (/* @__PURE__ */ make50("initialize", {
-  success: InitializeResult,
-  error: McpError,
-  payload: {
-    ...RequestMeta.fields,
-    protocolVersion: String6,
-    capabilities: ClientCapabilities,
-    clientInfo: Implementation
-  }
-})) {
-}
-class CancelledNotification extends (/* @__PURE__ */ make50("notifications/cancelled", {
-  payload: {
-    ...NotificationMeta.fields,
-    requestId: RequestId,
-    reason: /* @__PURE__ */ optional3(String6)
-  }
-})) {
-}
-
-class ProgressNotification extends (/* @__PURE__ */ make50("notifications/progress", {
-  payload: {
-    ...NotificationMeta.fields,
-    progressToken: ProgressToken,
-    progress: /* @__PURE__ */ optional3(Finite),
-    total: /* @__PURE__ */ optional3(Finite),
-    message: /* @__PURE__ */ optional3(String6)
-  }
-})) {
-}
-
-class Resource2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Resource")({
-  uri: String6,
-  name: String6,
-  title: /* @__PURE__ */ optional3(String6),
-  description: /* @__PURE__ */ optional3(String6),
-  mimeType: /* @__PURE__ */ optional3(String6),
-  annotations: /* @__PURE__ */ optional3(Annotations),
-  size: /* @__PURE__ */ optional3(Int),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
-})) {
-}
-
-class ResourceTemplate extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ResourceTemplate")({
-  uriTemplate: String6,
-  name: String6,
-  title: /* @__PURE__ */ optional3(String6),
-  description: /* @__PURE__ */ optional3(String6),
-  mimeType: /* @__PURE__ */ optional3(String6),
-  annotations: /* @__PURE__ */ optional3(Annotations),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
-})) {
-}
-
-class ResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  uri: String6,
-  mimeType: /* @__PURE__ */ optional3(String6),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
-}))) {
-}
-
-class TextResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...ResourceContents.fields,
-  text: String6
-}))) {
-}
-
-class BlobResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...ResourceContents.fields,
-  blob: Uint8Array2
-}))) {
-}
-
-class ListResourcesResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListResourcesResult")({
-  ...PaginatedResultMeta.fields,
-  resources: /* @__PURE__ */ ArraySchema(Resource2)
-})) {
-}
-class ListResourceTemplatesResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListResourceTemplatesResult")({
-  ...PaginatedResultMeta.fields,
-  resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate)
-})) {
-}
-class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...ResultMeta.fields,
-  contents: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]))
-}))) {
-}
-
-class ReadResource extends (/* @__PURE__ */ make50("resources/read", {
-  success: ReadResourceResult,
-  error: McpError,
-  payload: {
-    ...RequestMeta.fields,
-    uri: String6
-  }
-})) {
-}
-class Subscribe extends (/* @__PURE__ */ make50("resources/subscribe", {
-  success: /* @__PURE__ */ Struct({}),
-  error: McpError,
-  payload: {
-    ...RequestMeta.fields,
-    uri: String6
-  }
-})) {
-}
-
-class Unsubscribe extends (/* @__PURE__ */ make50("resources/unsubscribe", {
-  success: /* @__PURE__ */ Struct({}),
-  error: McpError,
-  payload: {
-    ...RequestMeta.fields,
-    uri: String6
-  }
-})) {
-}
-
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make50("notifications/resources/updated", {
-  payload: {
-    ...NotificationMeta.fields,
-    uri: String6
-  }
-})) {
-}
-
-class PromptArgument extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  name: String6,
-  title: /* @__PURE__ */ optional3(String6),
-  description: /* @__PURE__ */ optional3(String6),
-  required: /* @__PURE__ */ optional3(Boolean3)
-}))) {
-}
-
-class Prompt2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Prompt")({
-  name: String6,
-  title: /* @__PURE__ */ optional3(String6),
-  description: /* @__PURE__ */ optional3(String6),
-  arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(PromptArgument))
-})) {
-}
-
-class TextContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  type: /* @__PURE__ */ tag("text"),
-  text: String6,
-  annotations: /* @__PURE__ */ optional3(Annotations)
-}))) {
-}
-
-class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  type: /* @__PURE__ */ tag("image"),
-  data: Uint8Array2,
-  mimeType: String6,
-  annotations: /* @__PURE__ */ optional3(Annotations)
-}))) {
-}
-
-class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  type: /* @__PURE__ */ tag("audio"),
-  data: Uint8Array2,
-  mimeType: String6,
-  annotations: /* @__PURE__ */ optional3(Annotations)
-}))) {
-}
-
-class EmbeddedResource extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  type: /* @__PURE__ */ tag("resource"),
-  resource: /* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]),
-  annotations: /* @__PURE__ */ optional3(Annotations)
-}))) {
-}
-
-class ResourceLink extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  ...Resource2.fields,
-  type: /* @__PURE__ */ tag("resource_link")
-}))) {
-}
-var ContentBlock = /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent, EmbeddedResource, ResourceLink]);
-
-class PromptMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  role: Role,
-  content: ContentBlock
-}))) {
-}
-
-class ListPromptsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListPromptsResult")({
-  ...PaginatedResultMeta.fields,
-  prompts: /* @__PURE__ */ ArraySchema(Prompt2)
-})) {
-}
-class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetPromptResult")({
-  ...ResultMeta.fields,
-  messages: /* @__PURE__ */ ArraySchema(PromptMessage),
-  description: /* @__PURE__ */ optional3(String6)
-})) {
-}
-
-class GetPrompt extends (/* @__PURE__ */ make50("prompts/get", {
-  success: GetPromptResult,
-  error: McpError,
-  payload: {
-    ...RequestMeta.fields,
-    name: String6,
-    title: /* @__PURE__ */ optional3(String6),
-    arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, String6))
-  }
-})) {
-}
-class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  title: /* @__PURE__ */ optional3(String6),
-  readOnlyHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
-  destructiveHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue),
-  idempotentHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
-  openWorldHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue)
-}))) {
-}
-
-class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
-  name: String6,
-  title: /* @__PURE__ */ optional3(String6),
-  description: /* @__PURE__ */ optional3(String6),
-  inputSchema: Any2,
-  outputSchema: /* @__PURE__ */ optional3(Any2),
-  annotations: /* @__PURE__ */ optional3(ToolAnnotations),
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
-})) {
-}
-
-class ListToolsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListToolsResult")({
-  ...PaginatedResultMeta.fields,
-  tools: /* @__PURE__ */ ArraySchema(Tool)
-})) {
-}
-class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallToolResult")({
-  ...ResultMeta.fields,
-  content: /* @__PURE__ */ ArraySchema(ContentBlock),
-  structuredContent: /* @__PURE__ */ optional3(Any2),
-  isError: /* @__PURE__ */ optional3(Boolean3)
-})) {
-}
-
-class CallTool extends (/* @__PURE__ */ make50("tools/call", {
-  success: CallToolResult,
-  error: McpError,
-  payload: {
-    ...RequestMeta.fields,
-    name: String6,
-    arguments: /* @__PURE__ */ optionalWithDefault(/* @__PURE__ */ Record(String6, Any2), () => ({}))
-  }
-})) {
-}
-var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
-
-class SetLevel extends (/* @__PURE__ */ make50("logging/setLevel", {
-  payload: {
-    ...RequestMeta.fields,
-    level: LoggingLevel
-  },
-  success: /* @__PURE__ */ Struct({}),
-  error: McpError
-})) {
-}
-
-class LoggingMessageNotification extends (/* @__PURE__ */ make50("notifications/message", {
-  payload: /* @__PURE__ */ Struct({
-    ...NotificationMeta.fields,
-    level: LoggingLevel,
-    logger: /* @__PURE__ */ optional3(String6),
-    data: Any2
-  })
-})) {
-}
-
-class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  role: Role,
-  content: /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent])
-}))) {
-}
-
-class ModelHint extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  name: /* @__PURE__ */ optional3(String6)
-}))) {
-}
-
-class ModelPreferences extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ModelPreferences")({
-  hints: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(ModelHint)),
-  costPriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
-    minimum: 0,
-    maximum: 1
-  }))),
-  speedPriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
-    minimum: 0,
-    maximum: 1
-  }))),
-  intelligencePriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
-    minimum: 0,
-    maximum: 1
-  })))
-})) {
-}
-
-class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CreateMessageResult")({
-  ...SamplingMessage.fields,
-  model: String6,
-  stopReason: /* @__PURE__ */ optional3(String6)
-})) {
-}
-
-class CreateMessage extends (/* @__PURE__ */ make50("sampling/createMessage", {
-  success: CreateMessageResult,
-  error: McpError,
-  payload: {
-    messages: /* @__PURE__ */ ArraySchema(SamplingMessage),
-    modelPreferences: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct(ModelPreferences.fields)),
-    systemPrompt: /* @__PURE__ */ optional3(String6),
-    includeContext: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["none", "thisServer", "allServers"])),
-    temperature: /* @__PURE__ */ optional3(Finite),
-    maxTokens: Int,
-    stopSequences: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
-    metadata: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2))
-  }
-})) {
-}
-class ElicitAcceptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitAcceptResult")({
-  ...ResultMeta.fields,
-  action: /* @__PURE__ */ Literal2("accept"),
-  content: Any2
-})) {
-}
-
-class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitDeclineResult")({
-  ...ResultMeta.fields,
-  action: /* @__PURE__ */ Literals(["cancel", "decline"])
-})) {
-}
-var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
-
-class Elicit extends (/* @__PURE__ */ make50("elicitation/create", {
-  success: ElicitResult,
-  error: McpError,
-  payload: {
-    message: String6,
-    requestedSchema: Any2
-  }
-})) {
-}
-
-class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/ElicitationDeclined")({
-  _tag: /* @__PURE__ */ tag("ElicitationDeclined"),
-  request: Elicit.payloadSchema,
-  cause: /* @__PURE__ */ optional3(/* @__PURE__ */ Defect())
-})) {
-}
-
-// packages/capabilities/src/mcp.ts
-var MAX_MCP_TOOLS = 128;
-var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
-var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
-var JsonArray = exports_Schema.Array(exports_Schema.Json);
-var isJsonArray = exports_Schema.is(JsonArray);
-
-class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities/McpServerIdentity")({
-  serverId: exports_Schema.NonEmptyString,
-  implementation: Implementation
-}) {
-}
-
-class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
-  serverId: exports_Schema.NonEmptyString,
-  maxToolCount: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
-  maxToolDescriptionBytes: PositiveInt3,
-  maxDiscoveryBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  connectTimeoutMillis: PositiveInt3
-}) {
-}
-
-class McpConnectionError extends exports_Schema.TaggedError()("McpConnectionError", {
-  serverId: exports_Schema.NonEmptyString,
-  message: exports_Schema.String,
-  cause: exports_Schema.optionalKey(exports_Schema.Defect())
-}) {
-}
-
-class McpDiscoveryLimitExceeded extends exports_Schema.TaggedError()("McpDiscoveryLimitExceeded", {
-  serverId: exports_Schema.NonEmptyString,
-  limit: exports_Schema.Literals(["tool-count", "tool-description-bytes", "discovery-bytes"]),
-  limitValue: exports_Schema.Natural,
-  observedValue: exports_Schema.Natural
-}) {
-}
-
-class McpToolkitMismatch extends exports_Schema.TaggedError()("McpToolkitMismatch", {
-  serverId: exports_Schema.NonEmptyString,
-  message: exports_Schema.String,
-  cause: exports_Schema.optionalKey(exports_Schema.Defect())
-}) {
-}
-
-class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpDiscovery")({
-  identity: McpServerIdentity,
-  capabilities: ServerCapabilities,
-  tools: exports_Schema.Array(Tool).check(exports_Schema.isMaxLength(MAX_MCP_TOOLS)),
-  encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
-  toolkitSchemaDigest: Sha256Digest
-}) {
-}
-
-class McpConnector extends exports_Context.Service()("@effect-agent/capabilities/McpConnector") {
-}
-var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
-var canonicalJson = (value4) => {
-  if (value4 === null || typeof value4 === "string" || typeof value4 === "boolean" || typeof value4 === "number") {
-    return value4;
-  }
-  if (isJsonArray(value4))
-    return value4.map(canonicalJson);
-  const output = {};
-  for (const [key, item] of Object.entries(value4).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
-    output[key] = canonicalJson(item);
-  }
-  return output;
-};
-var utf8 = (value4) => {
-  const hex2 = exports_Encoding.encodeHex(value4);
-  const bytes = new Uint8Array(hex2.length / 2);
-  for (let index2 = 0;index2 < bytes.length; index2 += 1) {
-    bytes[index2] = Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16);
-  }
-  return bytes;
-};
-var digestJson = exports_Effect.fn("digestMcpSchema")(function* (serverId, value4) {
-  const json = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(value4).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
-    cause: error2,
-    serverId,
-    message: `MCP Tool schema is not canonical JSON: ${error2.message}`
-  })));
-  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(exports_Schema.Json))(canonicalJson(json)).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
-    cause: error2,
-    serverId,
-    message: `Could not encode canonical MCP Tool schema JSON: ${error2.message}`
-  })));
-  const crypto2 = yield* exports_Crypto.Crypto;
-  const digest2 = yield* crypto2.digest("SHA-256", utf8(encoded)).pipe(exports_Effect.mapError((cause) => McpToolkitMismatch.make({
-    cause,
-    serverId,
-    message: "Could not hash MCP Tool schemas"
-  })));
-  return `sha256:${exports_Encoding.encodeHex(digest2)}`;
-});
-var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (request3, server) {
-  if (server.identity.serverId !== request3.serverId) {
-    return yield* McpToolkitMismatch.make({
-      serverId: request3.serverId,
-      message: `Connected server identity '${server.identity.serverId}' does not match the requested server`
-    });
-  }
-  if (server.tools.length > request3.maxToolCount) {
-    return yield* McpDiscoveryLimitExceeded.make({
-      serverId: request3.serverId,
-      limit: "tool-count",
-      limitValue: request3.maxToolCount,
-      observedValue: server.tools.length
-    });
-  }
-  for (const tool of server.tools) {
-    const descriptionBytes = encodedBytes2(tool.description ?? "");
-    if (descriptionBytes > request3.maxToolDescriptionBytes) {
-      return yield* McpDiscoveryLimitExceeded.make({
-        serverId: request3.serverId,
-        limit: "tool-description-bytes",
-        limitValue: request3.maxToolDescriptionBytes,
-        observedValue: descriptionBytes
-      });
-    }
-  }
-  const discoveredNames = server.tools.map((tool) => tool.name).sort();
-  const toolkitNames = Object.keys(server.toolkit.tools).sort();
-  if (discoveredNames.length !== toolkitNames.length || discoveredNames.some((name, index2) => name !== toolkitNames[index2])) {
-    return yield* McpToolkitMismatch.make({
-      serverId: request3.serverId,
-      message: "Native Effect AI Toolkit names do not match MCP tool discovery"
-    });
-  }
-  const discoverySchemas = server.tools.map((tool) => ({
-    name: tool.name,
-    inputSchema: tool.inputSchema,
-    ...tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}
-  })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
-  const toolkitSchemas = yield* exports_Effect.try({
-    try: () => Object.values(server.toolkit.tools).map((tool) => {
-      const outputSchema = exports_Tool.getJsonSchemaFromSchema(tool.successSchema);
-      return {
-        name: tool.name,
-        inputSchema: exports_Tool.getJsonSchema(tool),
-        ...outputSchema.type === "object" ? { outputSchema } : {}
-      };
-    }).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
-    catch: (cause) => McpToolkitMismatch.make({
-      cause,
-      serverId: request3.serverId,
-      message: "Could not derive JSON Schema from the native Effect AI Toolkit"
-    })
-  });
-  const discoveryDigest = yield* digestJson(request3.serverId, discoverySchemas);
-  const toolkitDigest = yield* digestJson(request3.serverId, toolkitSchemas);
-  if (discoveryDigest !== toolkitDigest) {
-    return yield* McpToolkitMismatch.make({
-      serverId: request3.serverId,
-      message: "Native Effect AI Toolkit schemas do not match MCP tool discovery"
-    });
-  }
-  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Struct({
-    identity: McpServerIdentity,
-    capabilities: ServerCapabilities,
-    tools: exports_Schema.Array(Tool)
-  }))({
-    identity: server.identity,
-    capabilities: server.capabilities,
-    tools: server.tools
-  }).pipe(exports_Effect.mapError((error2) => McpConnectionError.make({
-    cause: error2,
-    serverId: request3.serverId,
-    message: `Could not encode MCP discovery response: ${error2.message}`
-  })));
-  const discoveryJson = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(encoded).pipe(exports_Effect.mapError((error2) => McpConnectionError.make({
-    cause: error2,
-    serverId: request3.serverId,
-    message: `Could not normalize MCP discovery response as JSON: ${error2.message}`
-  })));
-  const discoveryText = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(exports_Schema.Json))(discoveryJson).pipe(exports_Effect.mapError((error2) => McpConnectionError.make({
-    cause: error2,
-    serverId: request3.serverId,
-    message: `Could not serialize MCP discovery response: ${error2.message}`
-  })));
-  const discoveryBytes = encodedBytes2(discoveryText);
-  if (discoveryBytes > request3.maxDiscoveryBytes) {
-    return yield* McpDiscoveryLimitExceeded.make({
-      serverId: request3.serverId,
-      limit: "discovery-bytes",
-      limitValue: request3.maxDiscoveryBytes,
-      observedValue: discoveryBytes
-    });
-  }
-  return McpDiscovery.make({
-    identity: server.identity,
-    capabilities: server.capabilities,
-    tools: server.tools,
-    encodedBytes: discoveryBytes,
-    toolkitSchemaDigest: toolkitDigest
-  });
-});
-var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
-  const connector = yield* McpConnector;
-  const server = yield* connector.connect(request3).pipe(exports_Effect.timeoutOrElse({
-    duration: exports_Duration.millis(request3.connectTimeoutMillis),
-    orElse: () => exports_Effect.fail(McpConnectionError.make({
-      serverId: request3.serverId,
-      message: "MCP connection timed out"
-    }))
-  }));
-  const discovery = yield* validateMcpDiscovery(request3, server);
-  return {
-    discovery,
-    toolkit: server.toolkit
-  };
-});
-// packages/capabilities/src/scheduling.ts
-var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
-var RunSchedulingOverride = exports_Schema.Union([
-  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt4 }),
-  exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
-]);
 // packages/engine/src/durable-step.ts
 var ToolExecutionClass = exports_Context.Reference("@effect-agent/engine/ToolExecutionClass", { defaultValue: () => "uncertain" });
 var getToolExecutionClass = (tool) => exports_Context.get(tool.annotations, ToolExecutionClass);
@@ -33648,6 +32264,19 @@ class RunEventSinkClosedError extends exports_Schema.TaggedError()("RunEventSink
 }
 
 class RunEventSink extends exports_Context.Service()("@effect-agent/engine/RunEventSink") {
+}
+// packages/engine/src/tool-broker.ts
+class ToolBrokerUnavailableError extends exports_Schema.TaggedError()("ToolBrokerUnavailableError", {
+  message: exports_Schema.String
+}) {
+}
+
+class ToolBrokerConfigurationError extends exports_Schema.TaggedError()("ToolBrokerConfigurationError", {
+  message: exports_Schema.String
+}) {
+}
+
+class ToolBroker extends exports_Context.Service()("@effect-agent/engine/ToolBroker") {
 }
 // packages/engine/src/index.ts
 var runCounter = exports_Metric.counter("effect_agent_runs_total", {
@@ -33961,7 +32590,7 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, onWa
     }
   }));
 };
-var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, brokerAccounting, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const prepared = yield* exports_Effect.forEach(calls, (call, declarationIndex) => prepareToolCall(toolkit, call, declarationIndex));
   const semaphore = yield* exports_Semaphore.make(concurrency);
   const approvalPreflight = prepared.reduce((stream, call) => stream.pipe(exports_Stream.concat(preflightApproval(context3, turnId, call, options))), exports_Stream.empty);
@@ -33982,6 +32611,24 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
     return descriptors.length === 0 ? exports_Effect.void : durability.prepareToolCalls(descriptors);
   })).pipe(exports_Stream.drain);
   const stepServiceFor = (call) => durability === undefined ? passthroughDurableStep() : makeDurableStepService(call.toolCallId, durability.step, hookServices);
+  const liveBrokers = new Map;
+  const brokerFor = (call) => {
+    const existing = liveBrokers.get(call.call.id);
+    if (existing !== undefined) {
+      return existing;
+    }
+    const created = makeToolBrokerService({
+      context: context3,
+      turnId,
+      outerToolCallId: call.toolCallId,
+      maxToolCalls: brokerAccounting.maxToolCalls,
+      declaredToolCalls: brokerAccounting.declaredToolCalls,
+      budget: options.budget,
+      hookServices
+    });
+    liveBrokers.set(call.call.id, created);
+    return created;
+  };
   const subagentHook = options.subagent;
   const batchSubagentDurability = subagentHook === undefined ? ephemeralSubagentDurability : makeSubagentDurabilityService(subagentHook, hookServices);
   const waitingByDeclaration = new Map;
@@ -34005,7 +32652,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
   const handlers = groups.reduce((stream, group2) => {
     const next2 = exports_Stream.mergeAll(group2.map((call) => withSemaphorePermit(semaphore, executePreparedToolCall(context3, turnId, toolkit, call, trace2, (waiting) => {
       waitingByDeclaration.set(call.declarationIndex, waiting);
-    }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call))))), { concurrency: "unbounded" });
+    }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call)), exports_Stream.provideService(ToolBroker, brokerFor(call).service), exports_Stream.ensuring(exports_Effect.sync(() => brokerFor(call).close()))))), { concurrency: "unbounded" });
     return stream.pipe(exports_Stream.concat(next2));
   }, exports_Stream.empty);
   const sinkQueue = yield* exports_Queue.unbounded();
@@ -34590,7 +33237,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     }
     yield* consumeUsage(agent2, context3, trace2, options);
     const toolCalls = priorToolCalls + trace2.toolCalls.size;
-    if (toolCalls > agent2.definition.policy.maxToolCalls) {
+    if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
       return failRunEventStream(AgentPolicyError.make({
         limit: "tool-calls",
         message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
@@ -34667,7 +33314,10 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
           calls: trace2.applicationCallDescriptors
         });
       }
-      const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options), options.budget);
+      const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
+        maxToolCalls: agent2.definition.policy.maxToolCalls,
+        declaredToolCalls: toolCalls
+      }), options.budget);
       return toolResults.pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
     }
     if (trace2.finishReason !== "stop") {
@@ -34801,7 +33451,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     };
   }
   const toolCalls = trace2.toolCalls.size;
-  if (toolCalls > agent2.definition.policy.maxToolCalls) {
+  if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "tool-calls",
       message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
@@ -34840,7 +33490,10 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.resume"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
-  const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, settledIds), options.budget);
+  const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
+    maxToolCalls: agent2.definition.policy.maxToolCalls,
+    declaredToolCalls: toolCalls
+  }, settledIds), options.budget);
   return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
 }));
 var failRunEventStream = (error2) => exports_Stream.fail(error2);
@@ -34862,7 +33515,8 @@ var stream = (agent2, input, options = {}) => {
       inputTokens: 0,
       outputTokens: 0,
       costMicrousd: 0,
-      sequence: 0
+      sequence: 0,
+      programmaticToolCalls: 0
     };
     if (options.input?.start !== undefined) {
       yield* options.input.start();
@@ -34905,7 +33559,7 @@ var stream = (agent2, input, options = {}) => {
       agentId: context3.agentId,
       conversationId: context3.conversationId,
       runId: context3.runId
-    }, options.parentLink?.depth ?? 0)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability));
+    }, options.parentLink?.depth ?? 0)).pipe(exports_Context.add(RunEventSink, closedRunEventSink), exports_Context.add(DurableStep, closedDurableStep), exports_Context.add(SubagentDurability, closedSubagentDurability), exports_Context.add(ToolBroker, closedToolBroker));
     return started.pipe(exports_Stream.concat(deadline), exports_Stream.catch((error2) => {
       const terminal = exports_Stream.fromEffect(exports_Effect.gen(function* () {
         if (error2 instanceof AgentApprovalPending || error2 instanceof AgentChildPending) {
@@ -34984,6 +33638,196 @@ var closedDurableStep = {
     reason: "no-active-tool-call",
     message: `Durable Step ${name} was executed outside an active Tool Call`
   }))
+};
+var closedToolBroker = {
+  openPass: () => exports_Effect.fail(ToolBrokerUnavailableError.make({
+    message: "The programmatic Tool broker was used outside an active Tool Call"
+  }))
+};
+var programmaticOutcomeError = (index2, tag2, message) => ({
+  _tag: "ProgrammaticCallError",
+  index: index2,
+  errorTag: tag2,
+  message
+});
+
+class BrokerHandlerFailure {
+  error;
+  constructor(error2) {
+    this.error = error2;
+  }
+}
+var brokerUtf8ByteLength = (value4) => {
+  let total = 0;
+  for (const character of value4) {
+    const codePoint = character.codePointAt(0) ?? 0;
+    total += codePoint <= 127 ? 1 : codePoint <= 2047 ? 2 : codePoint <= 65535 ? 3 : 4;
+  }
+  return total;
+};
+var brokerEncodedByteLength = (value4) => {
+  try {
+    const encoded = JSON.stringify(value4);
+    return encoded === undefined ? undefined : brokerUtf8ByteLength(encoded);
+  } catch {
+    return;
+  }
+};
+var emptyProgrammaticUsage = exports_Response.Usage.make({ inputTokens: {}, outputTokens: {} });
+var brokerDecodeJson = (value4) => {
+  try {
+    return exports_Schema.decodeUnknownOption(exports_Schema.Json)(value4);
+  } catch {
+    return exports_Option.none();
+  }
+};
+var makeToolBrokerService = (binding) => {
+  const lifecycle = { closed: false };
+  const service4 = {
+    openPass: (toolkit, passOptions) => exports_Effect.gen(function* () {
+      if (lifecycle.closed) {
+        return yield* ToolBrokerUnavailableError.make({
+          message: "The outer Tool Call for this broker has already settled"
+        });
+      }
+      if (passOptions?.maxResultBytes !== undefined && (!Number.isSafeInteger(passOptions.maxResultBytes) || passOptions.maxResultBytes <= 0)) {
+        return yield* ToolBrokerConfigurationError.make({
+          message: `maxResultBytes must be a positive safe integer; received ${String(passOptions.maxResultBytes)}`
+        });
+      }
+      const handlerServices = yield* exports_Effect.context();
+      const state = { nextIndex: 0, inFlight: false };
+      const body = (input) => exports_Effect.gen(function* () {
+        if (!hasTool(toolkit.tools, input.toolName)) {
+          return programmaticOutcomeError(undefined, "ProgrammaticToolUnknownError", `Tool ${input.toolName} is not part of this pass's allowlisted Toolkit`);
+        }
+        const tool = toolkit.tools[input.toolName];
+        const approval = tool.needsApproval;
+        if (approval !== undefined && approval !== false) {
+          return programmaticOutcomeError(undefined, "ProgrammaticApprovalUnsupportedError", `Tool ${input.toolName} requires approval; approval-requiring Tools never start programmatically in the ephemeral slice`);
+        }
+        const decodeParameters = exports_Schema.decodeUnknownEffect(tool.parametersSchema);
+        const invalidParameters = yield* decodeParameters(input.encodedArguments).pipe(exports_Effect.map(() => {
+          return;
+        }), exports_Effect.catch((cause) => exports_Effect.succeed(programmaticOutcomeError(undefined, "ModelProtocolError", `Invalid parameters for Tool ${input.toolName}: ${cause.message}`))));
+        if (invalidParameters !== undefined) {
+          return invalidParameters;
+        }
+        const used = binding.declaredToolCalls + binding.context.programmaticToolCalls;
+        if (used + 1 > binding.maxToolCalls) {
+          return programmaticOutcomeError(undefined, "AgentPolicyError", `Agent exceeded its ${binding.maxToolCalls} Tool Call limit`);
+        }
+        binding.context.programmaticToolCalls += 1;
+        if (binding.budget !== undefined) {
+          const exhausted = yield* provideHookServices(binding.budget.consume({
+            modelCalls: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            totalTokens: 0,
+            toolCalls: 1,
+            costMicrousd: 0,
+            usage: emptyProgrammaticUsage
+          }), binding.hookServices).pipe(exports_Effect.map(() => {
+            return;
+          }), exports_Effect.catch((error2) => exports_Effect.succeed(programmaticOutcomeError(undefined, errorTag(error2), errorMessage(error2)))));
+          if (exhausted !== undefined) {
+            binding.context.programmaticToolCalls -= 1;
+            return exhausted;
+          }
+        }
+        const index2 = state.nextIndex++;
+        const handleId = `${binding.outerToolCallId}#${index2}`;
+        yield* exports_Effect.logDebug("agent programmatic tool handler started").pipe(exports_Effect.annotateLogs({
+          agentId: binding.context.agentId,
+          runId: binding.context.runId,
+          turnId: binding.turnId,
+          toolCallId: binding.outerToolCallId,
+          toolName: input.toolName,
+          sequenceIndex: index2
+        }));
+        yield* exports_Metric.update(toolCounter, 1);
+        let terminal;
+        let resultAfterTerminal = false;
+        const handlerFailed = yield* exports_Stream.unwrap(toolkit.handle(input.toolName, input.encodedArguments, handleId).pipe(exports_Effect.withSpan("AgentRuntime.toolkit.handle"))).pipe(exports_Stream.runForEach((result4) => exports_Effect.sync(() => {
+          if (terminal !== undefined) {
+            resultAfterTerminal = true;
+            return;
+          }
+          if (!result4.preliminary) {
+            terminal = {
+              encodedResult: result4.encodedResult,
+              isFailure: result4.isFailure
+            };
+          }
+        })), exports_Effect.map(() => {
+          return;
+        }), exports_Effect.catch((error2) => exports_Effect.succeed(new BrokerHandlerFailure(error2))));
+        if (handlerFailed instanceof BrokerHandlerFailure) {
+          return programmaticOutcomeError(index2, errorTag(handlerFailed.error), errorMessage(handlerFailed.error));
+        }
+        if (resultAfterTerminal) {
+          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} produced more than one terminal result`);
+        }
+        if (terminal === undefined) {
+          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool Call ${handleId} completed without a terminal result`);
+        }
+        if (terminal.isFailure) {
+          return {
+            _tag: "ProgrammaticCallFailure",
+            index: index2,
+            encodedResult: terminal.encodedResult
+          };
+        }
+        if (exports_Option.isNone(exports_Schema.decodeUnknownOption(exports_Schema.Json)(terminal.encodedResult))) {
+          return programmaticOutcomeError(index2, "ModelProtocolError", `Tool ${input.toolName} produced a success encoding outside JSON`);
+        }
+        let encodedResult = terminal.encodedResult;
+        if (passOptions?.redactResult !== undefined) {
+          const redacted2 = brokerDecodeJson(yield* passOptions.redactResult(encodedResult));
+          if (exports_Option.isNone(redacted2)) {
+            return programmaticOutcomeError(index2, "ModelProtocolError", `The redacted result for Tool ${input.toolName} is outside the JSON surface`);
+          }
+          encodedResult = redacted2.value;
+        }
+        if (passOptions?.maxResultBytes !== undefined) {
+          const bytes = brokerEncodedByteLength(encodedResult);
+          if (bytes === undefined || bytes > passOptions.maxResultBytes) {
+            return programmaticOutcomeError(index2, "ProgrammaticResultLimitError", `Tool ${input.toolName} result of ${bytes ?? "unencodable"} bytes exceeds the ${passOptions.maxResultBytes}-byte broker bound`);
+          }
+        }
+        return { _tag: "ProgrammaticCallSuccess", index: index2, encodedResult };
+      }).pipe(exports_Effect.provideContext(handlerServices), exports_Effect.withSpan("AgentRuntime.programmaticTool", {
+        attributes: {
+          agentId: binding.context.agentId,
+          runId: binding.context.runId,
+          turnId: binding.turnId,
+          toolCallId: binding.outerToolCallId,
+          toolName: input.toolName
+        }
+      }));
+      const pass = {
+        invoke: (input) => exports_Effect.suspend(() => {
+          if (lifecycle.closed) {
+            return exports_Effect.succeed(programmaticOutcomeError(undefined, "ToolBrokerUnavailableError", "The outer Tool Call for this pass has already settled"));
+          }
+          if (state.inFlight) {
+            return exports_Effect.succeed(programmaticOutcomeError(undefined, "ProgrammaticCallConcurrencyError", `Host call ${input.toolName} was issued while another call from this pass is unsettled; in-program Tool calls are strictly sequential`));
+          }
+          state.inFlight = true;
+          return body(input).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
+            state.inFlight = false;
+          })));
+        })
+      };
+      return pass;
+    })
+  };
+  return {
+    service: service4,
+    close: () => {
+      lifecycle.closed = true;
+    }
+  };
 };
 var passthroughDurableStep = () => {
   const usedNames = new Set;
@@ -35164,6 +34008,1818 @@ var AgentRuntime = {
   stream
 };
 
+// packages/sandbox/src/sandbox.ts
+var BoundedName = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var BoundedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4 * 1024));
+var BoundedArgument = exports_Schema.String.check(exports_Schema.isMaxLength(32 * 1024));
+var BoundedOutputText = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024 * 1024));
+var PositiveInt2 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveNumber = exports_Schema.Finite.check(exports_Schema.isGreaterThan(0));
+var MaxOutputBytes = PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(16 * 1024 * 1024));
+var BoundedArguments = exports_Schema.Array(BoundedArgument).check(exports_Schema.isMaxLength(256));
+var BoundedEnvironmentNames = exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(128));
+var FinitePositiveDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
+var FiniteNonNegativeDuration = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && !exports_Duration.isNegative(duration2), { expected: "a finite non-negative duration" }));
+
+class SandboxRuntime extends exports_Schema.Class("SandboxRuntime")({
+  kind: exports_Schema.Literals(["container", "microvm", "wasm", "unisolated-process"]),
+  identity: BoundedName
+}) {
+}
+
+class SandboxImplementation extends exports_Schema.Class("SandboxImplementation")({
+  isolation: exports_Schema.Literals(["isolated", "unisolated"]),
+  identity: BoundedName
+}) {
+}
+
+class SandboxMount extends exports_Schema.Class("SandboxMount")({
+  source: BoundedPath,
+  target: BoundedPath,
+  access: exports_Schema.Literals(["read-only", "read-write"])
+}) {
+}
+
+class NetworkDisabled extends exports_Schema.TaggedClass()("NetworkDisabled", {}) {
+}
+
+class NetworkAllowlist extends exports_Schema.TaggedClass()("NetworkAllowlist", {
+  domains: exports_Schema.Array(BoundedName).check(exports_Schema.isMaxLength(256)),
+  ports: exports_Schema.Array(PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(65535))).check(exports_Schema.isMaxLength(256))
+}) {
+}
+var SandboxNetworkPolicy = exports_Schema.Union([NetworkDisabled, NetworkAllowlist]);
+
+class SandboxEnvironment extends exports_Schema.Class("SandboxEnvironment")({
+  allow: BoundedEnvironmentNames
+}) {
+}
+
+class SandboxLimits extends exports_Schema.Class("SandboxLimits")({
+  cpuCores: exports_Schema.optionalKey(PositiveNumber.check(exports_Schema.isLessThanOrEqualTo(1024))),
+  memoryBytes: exports_Schema.optionalKey(PositiveInt2.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024 * 1024 * 1024))),
+  maxOutputBytes: MaxOutputBytes,
+  maxWallTime: FinitePositiveDuration2
+}) {
+}
+
+class SandboxSecretHandle extends exports_Schema.Class("SandboxSecretHandle")({
+  id: BoundedName,
+  purpose: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2 * 1024))
+}) {
+}
+
+class SandboxArtifactRule extends exports_Schema.Class("SandboxArtifactRule")({
+  path: BoundedPath,
+  maxBytes: MaxOutputBytes
+}) {
+}
+
+class SandboxArtifact extends exports_Schema.Class("SandboxArtifact")({
+  path: BoundedPath,
+  bytes: exports_Schema.Natural,
+  digest: BoundedName,
+  mediaType: exports_Schema.optionalKey(BoundedName)
+}) {
+}
+
+class SandboxRequest extends exports_Schema.Class("SandboxRequest")({
+  runtime: SandboxRuntime,
+  command: BoundedPath,
+  args: BoundedArguments,
+  cwd: BoundedPath,
+  environment: SandboxEnvironment,
+  mounts: exports_Schema.Array(SandboxMount).check(exports_Schema.isMaxLength(64)),
+  network: SandboxNetworkPolicy,
+  limits: SandboxLimits,
+  secretHandles: exports_Schema.Array(SandboxSecretHandle).check(exports_Schema.isMaxLength(64)),
+  artifactRules: exports_Schema.Array(SandboxArtifactRule).check(exports_Schema.isMaxLength(64))
+}) {
+}
+
+class SandboxResourceUse extends exports_Schema.Class("SandboxResourceUse")({
+  wallTime: FiniteNonNegativeDuration,
+  stdoutBytes: exports_Schema.Natural,
+  stderrBytes: exports_Schema.Natural,
+  cpuMillis: exports_Schema.optionalKey(exports_Schema.Natural),
+  memoryBytes: exports_Schema.optionalKey(exports_Schema.Natural)
+}) {
+}
+var SandboxEventBase = {
+  eventVersion: exports_Schema.Literal(1),
+  implementation: SandboxImplementation
+};
+
+class SandboxStarted extends exports_Schema.TaggedClass()("SandboxStarted", {
+  ...SandboxEventBase,
+  runtime: SandboxRuntime
+}) {
+}
+
+class SandboxOutput extends exports_Schema.TaggedClass()("SandboxOutput", {
+  ...SandboxEventBase,
+  stream: exports_Schema.Literals(["stdout", "stderr"]),
+  text: BoundedOutputText,
+  bytes: exports_Schema.Natural
+}) {
+}
+
+class SandboxExited extends exports_Schema.TaggedClass()("SandboxExited", {
+  ...SandboxEventBase,
+  exitCode: exports_Schema.Int,
+  resourceUse: SandboxResourceUse,
+  artifacts: exports_Schema.Array(SandboxArtifact)
+}) {
+}
+var SandboxEvent = exports_Schema.Union([SandboxStarted, SandboxOutput, SandboxExited]);
+
+class SandboxSpawnError extends exports_Schema.TaggedError()("SandboxSpawnError", {
+  implementation: SandboxImplementation,
+  command: BoundedPath,
+  message: exports_Schema.String,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class SandboxExitError extends exports_Schema.TaggedError()("SandboxExitError", {
+  implementation: SandboxImplementation,
+  exitCode: exports_Schema.Int,
+  message: exports_Schema.String,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class SandboxTimeoutError extends exports_Schema.TaggedError()("SandboxTimeoutError", {
+  implementation: SandboxImplementation,
+  maxWallTime: FinitePositiveDuration2
+}) {
+}
+
+class SandboxOutputLimitError extends exports_Schema.TaggedError()("SandboxOutputLimitError", {
+  implementation: SandboxImplementation,
+  stream: exports_Schema.Literals(["stdout", "stderr"]),
+  limit: PositiveInt2,
+  observed: PositiveInt2
+}) {
+}
+
+class SandboxUnsupportedRequestError extends exports_Schema.TaggedError()("SandboxUnsupportedRequestError", {
+  implementation: SandboxImplementation,
+  feature: exports_Schema.Literals([
+    "runtime",
+    "mounts",
+    "network",
+    "cpu-limit",
+    "memory-limit",
+    "secret-handles",
+    "artifacts"
+  ]),
+  message: exports_Schema.String
+}) {
+}
+var SandboxError = exports_Schema.Union([
+  SandboxSpawnError,
+  SandboxExitError,
+  SandboxTimeoutError,
+  SandboxOutputLimitError,
+  SandboxUnsupportedRequestError
+]);
+
+class Sandbox extends exports_Context.Service()("@effect-agent/sandbox/Sandbox") {
+}
+
+// packages/sandbox/src/code-executor.ts
+var BoundedLogLine = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024));
+var BoundedMessage = exports_Schema.String.check(exports_Schema.isMaxLength(8 * 1024));
+var BoundedLogs = exports_Schema.Array(BoundedLogLine).check(exports_Schema.isMaxLength(4096));
+var BoundedSourceText = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024 * 1024));
+var PositiveInt3 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var FinitePositiveDuration3 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
+var FiniteNonNegativeDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && !exports_Duration.isNegative(duration2), { expected: "a finite non-negative duration" }));
+var reservedIdentifiers = new Set([
+  "arguments",
+  "await",
+  "break",
+  "case",
+  "catch",
+  "class",
+  "const",
+  "continue",
+  "debugger",
+  "default",
+  "delete",
+  "do",
+  "else",
+  "enum",
+  "eval",
+  "export",
+  "extends",
+  "false",
+  "finally",
+  "for",
+  "function",
+  "if",
+  "implements",
+  "import",
+  "in",
+  "instanceof",
+  "interface",
+  "let",
+  "new",
+  "null",
+  "package",
+  "private",
+  "protected",
+  "public",
+  "return",
+  "static",
+  "super",
+  "switch",
+  "this",
+  "throw",
+  "true",
+  "try",
+  "typeof",
+  "var",
+  "void",
+  "while",
+  "with",
+  "yield"
+]);
+var JsIdentifier = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z_$][A-Za-z0-9_$]*$/)).pipe(exports_Schema.refine((value4) => !reservedIdentifiers.has(value4), {
+  expected: "a JavaScript identifier that is not a reserved word"
+}));
+
+class CodeExecutionNamespace extends exports_Schema.Class("CodeExecutionNamespace")({
+  name: JsIdentifier,
+  methods: exports_Schema.Array(JsIdentifier).check(exports_Schema.isMaxLength(64), exports_Schema.isMinLength(1))
+}) {
+}
+
+class CodeExecutionLimits extends exports_Schema.Class("CodeExecutionLimits")({
+  maxSourceBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
+  maxWallTime: FinitePositiveDuration3,
+  cpuMillis: exports_Schema.optionalKey(PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(5 * 60 * 1000))),
+  maxLogBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
+  maxResultBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024)),
+  maxHostCalls: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(1e4)),
+  maxHostCallArgumentBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(1024 * 1024)),
+  maxHostCallResultBytes: PositiveInt3.check(exports_Schema.isLessThanOrEqualTo(4 * 1024 * 1024))
+}) {
+}
+
+class CodeExecutionRequest extends exports_Schema.Class("CodeExecutionRequest")({
+  language: exports_Schema.Literals(["javascript"]),
+  source: BoundedSourceText,
+  namespaces: exports_Schema.Array(CodeExecutionNamespace).check(exports_Schema.isMaxLength(32)),
+  network: SandboxNetworkPolicy,
+  limits: CodeExecutionLimits
+}) {
+}
+
+class CodeHostCall extends exports_Schema.Class("CodeHostCall")({
+  namespace: JsIdentifier,
+  method: JsIdentifier,
+  argument: exports_Schema.Json
+}) {
+}
+
+class CodeHostCallSuccess extends exports_Schema.TaggedClass()("CodeHostCallSuccess", {
+  value: exports_Schema.Json
+}) {
+}
+
+class CodeHostCallFailure extends exports_Schema.TaggedClass()("CodeHostCallFailure", {
+  error: exports_Schema.Json
+}) {
+}
+var CodeHostCallResult = exports_Schema.Union([CodeHostCallSuccess, CodeHostCallFailure]);
+
+class CodeExecutionHost extends exports_Context.Service()("@effect-agent/sandbox/CodeExecutionHost") {
+}
+
+class CodeExecutionResourceUse extends exports_Schema.Class("CodeExecutionResourceUse")({
+  wallTime: FiniteNonNegativeDuration2,
+  hostCalls: exports_Schema.Natural,
+  logBytes: exports_Schema.Natural,
+  resultBytes: exports_Schema.Natural,
+  cpuMillis: exports_Schema.optionalKey(exports_Schema.Natural)
+}) {
+}
+
+class CodeExecutionResult extends exports_Schema.Class("CodeExecutionResult")({
+  implementation: SandboxImplementation,
+  value: exports_Schema.Json,
+  logs: BoundedLogs,
+  resourceUse: CodeExecutionResourceUse
+}) {
+}
+
+class CodeSourceError extends exports_Schema.TaggedError()("CodeSourceError", {
+  implementation: SandboxImplementation,
+  reason: exports_Schema.Literals(["invalid", "oversized", "not-a-function"]),
+  message: BoundedMessage
+}) {
+}
+
+class CodeExecutorUnsupportedError extends exports_Schema.TaggedError()("CodeExecutorUnsupportedError", {
+  implementation: SandboxImplementation,
+  feature: exports_Schema.Literals([
+    "language",
+    "network",
+    "cpu-limit",
+    "namespaces",
+    "wall-clock",
+    "host-calls"
+  ]),
+  message: BoundedMessage
+}) {
+}
+
+class CodeExecutorStartError extends exports_Schema.TaggedError()("CodeExecutorStartError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class CodeExecutionTimeoutError extends exports_Schema.TaggedError()("CodeExecutionTimeoutError", {
+  implementation: SandboxImplementation,
+  kind: exports_Schema.Literals(["cpu", "wall-clock"]),
+  maxWallTime: FinitePositiveDuration3,
+  logs: BoundedLogs
+}) {
+}
+
+class CodeOutputLimitError extends exports_Schema.TaggedError()("CodeOutputLimitError", {
+  implementation: SandboxImplementation,
+  surface: exports_Schema.Literals(["logs", "result", "host-call-argument", "host-call-result"]),
+  limit: PositiveInt3,
+  observed: exports_Schema.Natural,
+  logs: BoundedLogs
+}) {
+}
+
+class CodeHostCallLimitError extends exports_Schema.TaggedError()("CodeHostCallLimitError", {
+  implementation: SandboxImplementation,
+  limit: exports_Schema.Natural,
+  logs: BoundedLogs
+}) {
+}
+
+class CodeProgramFailedError extends exports_Schema.TaggedError()("CodeProgramFailedError", {
+  implementation: SandboxImplementation,
+  reason: exports_Schema.Literals(["threw", "rejected", "non-json-result"]),
+  thrown: exports_Schema.Json,
+  message: BoundedMessage,
+  logs: BoundedLogs
+}) {
+}
+
+class CodeExecutionProtocolError extends exports_Schema.TaggedError()("CodeExecutionProtocolError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage
+}) {
+}
+
+class CodeExecutorTerminatedError extends exports_Schema.TaggedError()("CodeExecutorTerminatedError", {
+  implementation: SandboxImplementation,
+  message: BoundedMessage
+}) {
+}
+var CodeExecutionError = exports_Schema.Union([
+  CodeSourceError,
+  CodeExecutorUnsupportedError,
+  CodeExecutorStartError,
+  CodeExecutionTimeoutError,
+  CodeOutputLimitError,
+  CodeHostCallLimitError,
+  CodeProgramFailedError,
+  CodeExecutionProtocolError,
+  CodeExecutorTerminatedError
+]);
+
+class CodeExecutor extends exports_Context.Service()("@effect-agent/sandbox/CodeExecutor") {
+}
+// packages/capabilities/src/code-mode.ts
+var maxFailureTextLength = 4 * 1024;
+var BoundedFailureText = exports_Schema.String.check(exports_Schema.isMaxLength(maxFailureTextLength));
+var BoundedErrorTag = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256));
+var BoundedLogLine2 = exports_Schema.String.check(exports_Schema.isMaxLength(16 * 1024));
+var BoundedLogs2 = exports_Schema.Array(BoundedLogLine2).check(exports_Schema.isMaxLength(4096));
+var BoundedCode = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512 * 1024));
+var CodeModeParameters = exports_Schema.Struct({
+  code: BoundedCode
+});
+
+class CodeModeSuccess extends exports_Schema.Class("@effect-agent/capabilities/CodeModeSuccess")({
+  result: exports_Schema.Json,
+  logs: BoundedLogs2
+}) {
+}
+
+class CodeModeFailure extends exports_Schema.TaggedError()("CodeModeFailure", {
+  errorTag: BoundedErrorTag,
+  message: BoundedFailureText,
+  logs: BoundedLogs2,
+  thrown: exports_Schema.optionalKey(exports_Schema.Json)
+}) {
+}
+var defaultLimits = CodeExecutionLimits.make({
+  maxSourceBytes: 256 * 1024,
+  maxWallTime: exports_Duration.seconds(30),
+  maxLogBytes: 256 * 1024,
+  maxResultBytes: 1024 * 1024,
+  maxHostCalls: 64,
+  maxHostCallArgumentBytes: 256 * 1024,
+  maxHostCallResultBytes: 1024 * 1024
+});
+var defaultMaxEgressBytes = 64 * 1024;
+var decodeIdentifier = exports_Schema.decodeUnknownOption(JsIdentifier);
+// packages/capabilities/src/conversation.ts
+var ConversationText = exports_Schema.String.check(exports_Schema.isMaxLength(64 * 1024));
+var MAX_CONVERSATION_MESSAGES = 1024;
+var MAX_CONVERSATION_CONTENT_BYTES = 4 * 1024 * 1024;
+var MAX_EPHEMERAL_CONVERSATIONS = 256;
+var MAX_EPHEMERAL_CONTENT_BYTES = 64 * 1024 * 1024;
+
+class ConversationMessage extends exports_Schema.Class("@effect-agent/capabilities/ConversationMessage")({
+  conversationId: ConversationId,
+  sequence: exports_Schema.Natural,
+  runId: exports_Schema.optionalKey(RunId),
+  message: exports_Prompt.Message,
+  encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_CONVERSATION_CONTENT_BYTES)),
+  timestamp: exports_Schema.DateTimeUtcFromString
+}) {
+}
+
+class ConversationSnapshot extends exports_Schema.Class("@effect-agent/capabilities/ConversationSnapshot")({
+  version: exports_Schema.Literal(1),
+  conversationId: ConversationId,
+  nextSequence: exports_Schema.Natural,
+  contentBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_CONVERSATION_CONTENT_BYTES)),
+  messages: exports_Schema.Array(ConversationMessage).check(exports_Schema.isMaxLength(MAX_CONVERSATION_MESSAGES))
+}) {
+}
+
+class ConversationExport extends exports_Schema.Class("@effect-agent/capabilities/ConversationExport")({
+  format: exports_Schema.Literal("effect-agent/ephemeral-conversation@1"),
+  exportedAt: exports_Schema.DateTimeUtcFromString,
+  snapshot: ConversationSnapshot
+}) {
+}
+
+class ConversationAppend extends exports_Schema.Class("@effect-agent/capabilities/ConversationAppend")({
+  runId: exports_Schema.optionalKey(RunId),
+  message: exports_Prompt.Message
+}) {
+}
+
+class ConversationNotFound extends exports_Schema.TaggedError()("ConversationNotFound", { conversationId: ConversationId }) {
+}
+
+class ConversationLimitExceeded extends exports_Schema.TaggedError()("ConversationLimitExceeded", {
+  conversationId: ConversationId,
+  limit: exports_Schema.Literals(["messages", "content-bytes", "conversations", "store-content-bytes"]),
+  limitValue: exports_Schema.Natural,
+  observedValue: exports_Schema.Natural
+}) {
+}
+
+class ConversationHistoryDiverged extends exports_Schema.TaggedError()("ConversationHistoryDiverged", { conversationId: ConversationId, message: exports_Schema.String }) {
+}
+
+class ConversationEncodingError extends exports_Schema.TaggedError()("ConversationEncodingError", { conversationId: ConversationId, message: exports_Schema.String }) {
+}
+var conversationPrompt = (snapshot2) => exports_Prompt.fromMessages(snapshot2.messages.map((entry) => entry.message));
+
+class EphemeralConversations extends exports_Context.Service()("@effect-agent/capabilities/EphemeralConversations") {
+}
+var utf8Bytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var encodeMessage = (conversationId, message) => exports_Schema.encodeEffect(exports_Prompt.Message)(message).pipe(exports_Effect.map((encoded) => JSON.stringify(encoded)), exports_Effect.mapError((error2) => ConversationEncodingError.make({
+  conversationId,
+  message: `Could not encode native Effect AI message: ${error2.message}`
+})));
+var findSnapshot = (state, conversationId) => {
+  const snapshot2 = state.get(conversationId);
+  return snapshot2 === undefined ? exports_Effect.fail(ConversationNotFound.make({ conversationId })) : exports_Effect.succeed(snapshot2);
+};
+var totalStoreBytes = (conversations) => {
+  let total = 0;
+  for (const snapshot2 of conversations.values())
+    total += snapshot2.contentBytes;
+  return total;
+};
+var appendEncoded = (conversations, conversationId, append3, encoded, timestamp) => {
+  const current = conversations.get(conversationId);
+  if (current === undefined)
+    return [{ _tag: "not-found" }, conversations];
+  if (current.messages.length >= MAX_CONVERSATION_MESSAGES) {
+    return [
+      {
+        _tag: "failure",
+        error: ConversationLimitExceeded.make({
+          conversationId,
+          limit: "messages",
+          limitValue: MAX_CONVERSATION_MESSAGES,
+          observedValue: current.messages.length + 1
+        })
+      },
+      conversations
+    ];
+  }
+  const messageBytes = utf8Bytes2(encoded);
+  const contentBytes = current.contentBytes + messageBytes;
+  if (contentBytes > MAX_CONVERSATION_CONTENT_BYTES) {
+    return [
+      {
+        _tag: "failure",
+        error: ConversationLimitExceeded.make({
+          conversationId,
+          limit: "content-bytes",
+          limitValue: MAX_CONVERSATION_CONTENT_BYTES,
+          observedValue: contentBytes
+        })
+      },
+      conversations
+    ];
+  }
+  const storeBytes = totalStoreBytes(conversations) + messageBytes;
+  if (storeBytes > MAX_EPHEMERAL_CONTENT_BYTES) {
+    return [
+      {
+        _tag: "failure",
+        error: ConversationLimitExceeded.make({
+          conversationId,
+          limit: "store-content-bytes",
+          limitValue: MAX_EPHEMERAL_CONTENT_BYTES,
+          observedValue: storeBytes
+        })
+      },
+      conversations
+    ];
+  }
+  const message = ConversationMessage.make({
+    conversationId,
+    sequence: current.nextSequence,
+    ...append3.runId === undefined ? {} : { runId: append3.runId },
+    message: append3.message,
+    encodedBytes: messageBytes,
+    timestamp
+  });
+  const next2 = ConversationSnapshot.make({
+    version: current.version,
+    conversationId: current.conversationId,
+    nextSequence: current.nextSequence + 1,
+    contentBytes,
+    messages: [...current.messages, message]
+  });
+  return [{ _tag: "success", value: next2 }, new Map(conversations).set(conversationId, next2)];
+};
+var commitHistorySuffix = (conversations, conversationId, base2, suffix, timestamp) => {
+  const current = conversations.get(conversationId);
+  if (current === undefined) {
+    return [
+      { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
+      conversations
+    ];
+  }
+  if (current !== base2)
+    return [{ _tag: "stale" }, conversations];
+  let next2 = conversations;
+  let snapshot2 = current;
+  for (const entry of suffix) {
+    const [result4, updated] = appendEncoded(next2, conversationId, entry.append, entry.encoded, timestamp);
+    if (result4._tag === "not-found") {
+      return [
+        { _tag: "failure", error: ConversationNotFound.make({ conversationId }) },
+        conversations
+      ];
+    }
+    if (result4._tag === "failure") {
+      return [{ _tag: "failure", error: result4.error }, conversations];
+    }
+    snapshot2 = result4.value;
+    next2 = updated;
+  }
+  return [{ _tag: "success", value: snapshot2 }, next2];
+};
+var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, exports_Effect.gen(function* () {
+  const state = yield* exports_Ref.make(new Map);
+  const append3 = (conversationId, message) => exports_Effect.gen(function* () {
+    const encoded = yield* encodeMessage(conversationId, message.message);
+    const timestamp = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
+    const result4 = yield* exports_Ref.modify(state, (conversations) => appendEncoded(conversations, conversationId, message, encoded, timestamp));
+    if (result4._tag === "not-found") {
+      return yield* ConversationNotFound.make({ conversationId });
+    }
+    if (result4._tag === "failure")
+      return yield* result4.error;
+    return result4.value;
+  });
+  return EphemeralConversations.of({
+    create: (conversationId) => exports_Effect.gen(function* () {
+      const result4 = yield* exports_Ref.modify(state, (conversations) => {
+        const existing = conversations.get(conversationId);
+        if (existing !== undefined) {
+          return [{ _tag: "success", value: existing }, conversations];
+        }
+        if (conversations.size >= MAX_EPHEMERAL_CONVERSATIONS) {
+          return [
+            {
+              _tag: "failure",
+              error: ConversationLimitExceeded.make({
+                conversationId,
+                limit: "conversations",
+                limitValue: MAX_EPHEMERAL_CONVERSATIONS,
+                observedValue: conversations.size + 1
+              })
+            },
+            conversations
+          ];
+        }
+        const created = ConversationSnapshot.make({
+          version: 1,
+          conversationId,
+          nextSequence: 0,
+          contentBytes: 0,
+          messages: []
+        });
+        return [
+          { _tag: "success", value: created },
+          new Map(conversations).set(conversationId, created)
+        ];
+      });
+      if (result4._tag === "failure")
+        return yield* result4.error;
+      return result4.value;
+    }),
+    append: append3,
+    recordHistory: (conversationId, historyRunId, history) => exports_Effect.gen(function* () {
+      const incoming = yield* exports_Effect.forEach(history.content, (message) => encodeMessage(conversationId, message).pipe(exports_Effect.map((encoded) => ({ message, encoded }))));
+      const attempt = exports_Effect.gen(function* () {
+        const current = yield* exports_Ref.get(state).pipe(exports_Effect.flatMap((all5) => findSnapshot(all5, conversationId)));
+        const currentEncoded = yield* exports_Effect.forEach(current.messages, (entry) => encodeMessage(conversationId, entry.message));
+        if (incoming.length < currentEncoded.length || currentEncoded.some((encoded, index2) => encoded !== incoming[index2]?.encoded)) {
+          return yield* ConversationHistoryDiverged.make({
+            conversationId,
+            message: "Engine history is not an append-only extension of official history"
+          });
+        }
+        const timestamp = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis));
+        const suffix = incoming.slice(currentEncoded.length).map((entry) => ({
+          append: ConversationAppend.make({ runId: historyRunId, message: entry.message }),
+          encoded: entry.encoded
+        }));
+        const result4 = yield* exports_Ref.modify(state, (conversations) => commitHistorySuffix(conversations, conversationId, current, suffix, timestamp));
+        if (result4._tag === "stale")
+          return yield* attempt;
+        if (result4._tag === "failure")
+          return yield* result4.error;
+        return result4.value;
+      });
+      return yield* attempt;
+    }),
+    snapshot: (conversationId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all5) => findSnapshot(all5, conversationId))),
+    export: (conversationId) => exports_Effect.gen(function* () {
+      const snapshot2 = yield* findSnapshot(yield* exports_Ref.get(state), conversationId);
+      return ConversationExport.make({
+        format: "effect-agent/ephemeral-conversation@1",
+        exportedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis)),
+        snapshot: snapshot2
+      });
+    })
+  });
+}));
+
+// packages/capabilities/src/commands.ts
+var PositiveInt4 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class SteeringCommand extends exports_Schema.TaggedClass()("SteeringCommand", {
+  id: exports_Schema.NonEmptyString,
+  runId: RunId,
+  conversationId: ConversationId,
+  author: exports_Schema.NonEmptyString,
+  content: ConversationText,
+  createdAt: exports_Schema.DateTimeUtcFromString
+}) {
+}
+
+class FollowUpCommand extends exports_Schema.TaggedClass()("FollowUpCommand", {
+  id: exports_Schema.NonEmptyString,
+  runId: RunId,
+  conversationId: ConversationId,
+  author: exports_Schema.NonEmptyString,
+  content: ConversationText,
+  createdAt: exports_Schema.DateTimeUtcFromString
+}) {
+}
+var RunCommand = exports_Schema.Union([SteeringCommand, FollowUpCommand]);
+var CommandDrainPolicy = exports_Schema.Literals(["one", "all"]);
+
+class RunCommandQueueConfig extends exports_Schema.Class("@effect-agent/capabilities/RunCommandQueueConfig")({ capacity: PositiveInt4 }) {
+}
+
+class RunCommandQueueClosed extends exports_Schema.TaggedError()("RunCommandQueueClosed", { runId: RunId }) {
+}
+var makeRunCommandQueue = exports_Effect.fn("makeRunCommandQueue")(function* (runId, config) {
+  const queue = yield* exports_Queue.bounded(config.capacity);
+  const shutdown3 = exports_Queue.shutdown(queue).pipe(exports_Effect.asVoid);
+  yield* exports_Effect.addFinalizer(() => shutdown3);
+  const offer2 = (command) => exports_Queue.offer(queue, command).pipe(exports_Effect.flatMap((accepted) => accepted ? exports_Effect.void : exports_Effect.fail(RunCommandQueueClosed.make({ runId }))));
+  const drainOne = exports_Queue.poll(queue).pipe(exports_Effect.map(exports_Option.toArray));
+  return {
+    offer: offer2,
+    drain: (policy2 = "one") => policy2 === "one" ? drainOne : exports_Queue.size(queue).pipe(exports_Effect.flatMap((count2) => exports_Effect.forEach(Array.from({ length: count2 }), () => drainOne).pipe(exports_Effect.map((batches) => batches.flat())))),
+    shutdown: shutdown3
+  };
+});
+// packages/capabilities/src/context.ts
+var MAX_CONTEXT_MESSAGES = 1024;
+var MAX_CONTEXT_MESSAGE_BYTES = 4 * 1024 * 1024;
+var MAX_SOURCE_SEQUENCES = 1024;
+var MAX_RETAINED_FACTS = 256;
+var MAX_RETAINED_FACT_BYTES = 1024 * 1024;
+var MAX_COMPACTIONS = 16;
+var SourceSequences = exports_Schema.Array(exports_Schema.Natural).check(exports_Schema.isMaxLength(MAX_SOURCE_SEQUENCES));
+
+class ModelContextMessage extends exports_Schema.Class("@effect-agent/capabilities/ModelContextMessage")({
+  role: exports_Schema.Literals(["system", "user", "assistant", "tool"]),
+  content: ConversationText,
+  sourceSequences: SourceSequences
+}) {
+}
+
+class RetainedFact extends exports_Schema.Class("@effect-agent/capabilities/RetainedFact")({
+  fact: exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024)),
+  sourceSequences: SourceSequences
+}) {
+}
+var encodedBytes = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var ModelContextMessages = exports_Schema.Array(ModelContextMessage).check(exports_Schema.isMaxLength(MAX_CONTEXT_MESSAGES)).pipe(exports_Schema.refine((messages) => messages.reduce((total, message) => total + encodedBytes(message.content), 0) <= MAX_CONTEXT_MESSAGE_BYTES, { expected: `model context totaling at most ${MAX_CONTEXT_MESSAGE_BYTES} UTF-8 bytes` }));
+var RetainedFacts = exports_Schema.Array(RetainedFact).check(exports_Schema.isMaxLength(MAX_RETAINED_FACTS)).pipe(exports_Schema.refine((facts) => facts.reduce((total, retained) => total + encodedBytes(retained.fact), 0) <= MAX_RETAINED_FACT_BYTES, { expected: `retained facts totaling at most ${MAX_RETAINED_FACT_BYTES} UTF-8 bytes` }));
+var SourceDigest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
+
+class CompactionArtifact extends exports_Schema.Class("@effect-agent/capabilities/CompactionArtifact")({
+  version: exports_Schema.Literal(1),
+  conversationId: ConversationId,
+  coversFrom: exports_Schema.Natural,
+  coversThrough: exports_Schema.Natural,
+  summary: ModelContextMessage,
+  retainedFacts: RetainedFacts,
+  tokenEstimate: exports_Schema.Natural,
+  sourceDigest: SourceDigest,
+  compactorVersion: exports_Schema.NonEmptyString
+}) {
+}
+
+class PreparedModelContext extends exports_Schema.Class("@effect-agent/capabilities/PreparedModelContext")({
+  source: ConversationSnapshot,
+  messages: ModelContextMessages,
+  compactions: exports_Schema.Array(CompactionArtifact).check(exports_Schema.isMaxLength(MAX_COMPACTIONS))
+}) {
+}
+
+class ContextTransformError extends exports_Schema.TaggedError()("ContextTransformError", { transformId: exports_Schema.NonEmptyString, message: exports_Schema.String }) {
+}
+
+class CompactionDigestError extends exports_Schema.TaggedError()("CompactionDigestError", { message: exports_Schema.String }) {
+}
+
+class InvalidCompactionArtifact extends exports_Schema.TaggedError()("InvalidCompactionArtifact", { message: exports_Schema.String }) {
+}
+
+class ContextLimitExceeded extends exports_Schema.TaggedError()("ContextLimitExceeded", {
+  limit: exports_Schema.Literals(["messages", "message-bytes", "compactions"]),
+  limitValue: exports_Schema.Natural,
+  observedValue: exports_Schema.Natural
+}) {
+}
+
+class ContextCompactor extends exports_Context.Service()("@effect-agent/capabilities/ContextCompactor") {
+}
+var validateModelView = (messages, transformId) => {
+  if (messages.length > MAX_CONTEXT_MESSAGES) {
+    return exports_Effect.fail(ContextTransformError.make({
+      transformId,
+      message: `Transform produced ${messages.length} messages; maximum is ${MAX_CONTEXT_MESSAGES}`
+    }));
+  }
+  const bytes = messages.reduce((total, message) => total + encodedBytes(message.content), 0);
+  return bytes > MAX_CONTEXT_MESSAGE_BYTES ? exports_Effect.fail(ContextTransformError.make({
+    transformId,
+    message: `Transform produced ${bytes} UTF-8 bytes; maximum is ${MAX_CONTEXT_MESSAGE_BYTES}`
+  })) : exports_Effect.succeed(messages);
+};
+var exactSourceRange = (snapshot2, coversFrom, coversThrough) => {
+  if (coversFrom > coversThrough || coversThrough >= snapshot2.nextSequence) {
+    return exports_Effect.fail(InvalidCompactionArtifact.make({
+      message: "Compaction artifact covers an invalid source range"
+    }));
+  }
+  const selected = snapshot2.messages.filter((message) => message.sequence >= coversFrom && message.sequence <= coversThrough);
+  const expectedCount = coversThrough - coversFrom + 1;
+  if (selected.length !== expectedCount || selected[0]?.sequence !== coversFrom || selected[selected.length - 1]?.sequence !== coversThrough) {
+    return exports_Effect.fail(InvalidCompactionArtifact.make({
+      message: "Compaction source range is not contiguous in authoritative history"
+    }));
+  }
+  return exports_Effect.succeed(selected);
+};
+var utf8Bytes3 = (value4) => {
+  const hex2 = exports_Encoding.encodeHex(value4);
+  const bytes = new Uint8Array(hex2.length / 2);
+  for (let index2 = 0;index2 < bytes.length; index2 += 1) {
+    bytes[index2] = Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16);
+  }
+  return bytes;
+};
+var digestCompactionSource = exports_Effect.fn("digestCompactionSource")(function* (snapshot2, coversFrom, coversThrough) {
+  const selected = yield* exactSourceRange(snapshot2, coversFrom, coversThrough);
+  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Array(ConversationMessage))(selected).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
+    message: `Could not encode compaction source: ${error2.message}`
+  })));
+  const crypto2 = yield* exports_Crypto.Crypto;
+  const digest2 = yield* crypto2.digest("SHA-256", utf8Bytes3(JSON.stringify(encoded))).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
+    message: `Could not digest compaction source: ${error2.message}`
+  })));
+  return `sha256:${exports_Encoding.encodeHex(digest2)}`;
+});
+var applyCompaction = exports_Effect.fn("applyCompaction")(function* (context3, artifact) {
+  if (artifact.conversationId !== context3.source.conversationId) {
+    return yield* InvalidCompactionArtifact.make({
+      message: "Compaction artifact belongs to another Conversation"
+    });
+  }
+  const actualDigest = yield* digestCompactionSource(context3.source, artifact.coversFrom, artifact.coversThrough);
+  if (actualDigest !== artifact.sourceDigest) {
+    return yield* InvalidCompactionArtifact.make({
+      message: "Compaction source digest does not match authoritative history"
+    });
+  }
+  const provenanceInRange = (sequences) => sequences.length > 0 && sequences.every((sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough);
+  if (!provenanceInRange(artifact.summary.sourceSequences) || artifact.retainedFacts.some((fact) => !provenanceInRange(fact.sourceSequences))) {
+    return yield* InvalidCompactionArtifact.make({
+      message: "Compaction summary or retained-fact provenance falls outside its covered range"
+    });
+  }
+  if (context3.compactions.length >= MAX_COMPACTIONS) {
+    return yield* ContextLimitExceeded.make({
+      limit: "compactions",
+      limitValue: MAX_COMPACTIONS,
+      observedValue: context3.compactions.length + 1
+    });
+  }
+  const fullyCovered = (message) => message.sourceSequences.length > 0 && message.sourceSequences.every((sequence) => sequence >= artifact.coversFrom && sequence <= artifact.coversThrough);
+  const kept = context3.messages.filter((message) => !fullyCovered(message));
+  const summaryAt = kept.findIndex((message) => message.sourceSequences.length > 0 && message.sourceSequences.every((sequence) => sequence > artifact.coversThrough));
+  const messages = yield* validateModelView(summaryAt === -1 ? [...kept, artifact.summary] : [...kept.slice(0, summaryAt), artifact.summary, ...kept.slice(summaryAt)], `compaction:${artifact.compactorVersion}`);
+  return PreparedModelContext.make({
+    source: context3.source,
+    messages,
+    compactions: [...context3.compactions, artifact]
+  });
+});
+// packages/capabilities/src/engine-adapters.ts
+class ApprovalAdapterError extends exports_Schema.TaggedError()("ApprovalAdapterError", { message: exports_Schema.String }) {
+}
+
+class BudgetAdapterError extends exports_Schema.TaggedError()("BudgetAdapterError", { message: exports_Schema.String }) {
+}
+var toRunApprovalHook = (policy2) => ({
+  request: (engineRequest) => exports_Effect.gen(function* () {
+    const validatedPolicy = yield* exports_Schema.decodeUnknownEffect(RunApprovalAdapterPolicySchema)(policy2).pipe(exports_Effect.mapError((error2) => ApprovalAdapterError.make({
+      message: `Approval adapter policy is invalid: ${error2.message}`
+    })));
+    const now3 = yield* exports_Clock.currentTimeMillis;
+    const metadata = yield* exports_Effect.try({
+      try: () => ({
+        actionSummary: policy2.actionSummary(engineRequest),
+        resourceTargets: policy2.resourceTargets(engineRequest)
+      }),
+      catch: () => ApprovalAdapterError.make({
+        message: "Approval policy failed while describing the native Tool request"
+      })
+    });
+    const draft = yield* exports_Schema.decodeUnknownEffect(ApprovalRequestDraft)({
+      requestId: engineRequest.request.approvalId,
+      runId: engineRequest.runId,
+      conversationId: engineRequest.conversationId,
+      toolCallId: engineRequest.toolCallId,
+      toolName: engineRequest.toolName,
+      actionSummary: metadata.actionSummary,
+      resourceTargets: metadata.resourceTargets,
+      risk: validatedPolicy.risk,
+      expiresAt: exports_DateTime.formatIso(exports_DateTime.toUtc(exports_DateTime.makeUnsafe(now3 + validatedPolicy.expiresInMillis))),
+      denial: validatedPolicy.denial
+    }).pipe(exports_Effect.mapError((error2) => ApprovalAdapterError.make({
+      message: `Approval adapter policy is invalid: ${error2.message}`
+    })));
+    const request3 = yield* makeApprovalRequest(draft, engineRequest.parameters);
+    const decision = yield* requestApproval(request3);
+    if (decision._tag === "ApprovalApproved") {
+      return { _tag: "approved" };
+    }
+    if (decision.timedOut && request3.denial === "recoverable") {
+      return {
+        _tag: "unresolved",
+        reason: decision.reason
+      };
+    }
+    return {
+      _tag: "denied",
+      reason: decision.reason
+    };
+  })
+});
+var toDurableRunApprovalHook = exports_Effect.fn("toDurableRunApprovalHook")(function* (policy2) {
+  const services2 = yield* exports_Effect.context();
+  const hook = toRunApprovalHook(policy2);
+  return {
+    request: (request3) => hook.request(request3).pipe(exports_Effect.provideContext(services2), exports_Effect.catch((error2) => exports_Effect.succeed({
+      _tag: "unresolved",
+      reason: `Approval delegation failed (${error2._tag}); the decision defers to the durable resolveApproval path`
+    })))
+  };
+});
+var toRunBudgetHook = (budget) => ({
+  guard: budget.guard,
+  consume: (delta) => exports_Schema.decodeUnknownEffect(UsageDelta)({
+    inputTokens: delta.inputTokens,
+    outputTokens: delta.outputTokens,
+    toolCalls: delta.toolCalls,
+    costMicrousd: delta.costMicrousd
+  }).pipe(exports_Effect.mapError((error2) => BudgetAdapterError.make({
+    message: `Engine usage delta is invalid: ${error2.message}`
+  })), exports_Effect.flatMap((usage) => budget.consume(usage)), exports_Effect.asVoid)
+});
+var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(function* (conversations, conversationId, runId) {
+  const snapshot2 = yield* conversations.snapshot(conversationId);
+  return {
+    conversationId,
+    history: conversationPrompt(snapshot2),
+    onHistory: (history) => conversations.recordHistory(conversationId, runId, history).pipe(exports_Effect.asVoid)
+  };
+});
+var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
+  expiresInMillis: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
+  denial: exports_Schema.Literals(["terminal", "recoverable"])
+});
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PrimaryKey.js
+var symbol4 = "~effect/interfaces/PrimaryKey";
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/RpcSchema.js
+var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
+var schema2 = /* @__PURE__ */ declare(isStream);
+function Stream2(success, error2) {
+  return make37(schema2.ast, {
+    [StreamSchemaTypeId]: StreamSchemaTypeId,
+    success,
+    error: error2
+  });
+}
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/Rpc.js
+var TypeId47 = "~effect/rpc/Rpc";
+var Proto12 = {
+  [TypeId47]: TypeId47,
+  pipe() {
+    return pipeArguments(this, arguments);
+  },
+  setSuccess(successSchema) {
+    return makeProto3({
+      _tag: this._tag,
+      payloadSchema: this.payloadSchema,
+      successSchema,
+      errorSchema: this.errorSchema,
+      defectSchema: this.defectSchema,
+      annotations: this.annotations,
+      middlewares: this.middlewares
+    });
+  },
+  setError(errorSchema) {
+    return makeProto3({
+      _tag: this._tag,
+      payloadSchema: this.payloadSchema,
+      successSchema: this.successSchema,
+      errorSchema,
+      defectSchema: this.defectSchema,
+      annotations: this.annotations,
+      middlewares: this.middlewares
+    });
+  },
+  setPayload(payloadSchema) {
+    return makeProto3({
+      _tag: this._tag,
+      payloadSchema: isSchema(payloadSchema) ? payloadSchema : Struct(payloadSchema),
+      successSchema: this.successSchema,
+      errorSchema: this.errorSchema,
+      defectSchema: this.defectSchema,
+      annotations: this.annotations,
+      middlewares: this.middlewares
+    });
+  },
+  middleware(middleware) {
+    return makeProto3({
+      _tag: this._tag,
+      payloadSchema: this.payloadSchema,
+      successSchema: this.successSchema,
+      errorSchema: this.errorSchema,
+      defectSchema: this.defectSchema,
+      annotations: this.annotations,
+      middlewares: new Set([...this.middlewares, middleware])
+    });
+  },
+  prefix(prefix) {
+    return makeProto3({
+      _tag: `${prefix}${this._tag}`,
+      payloadSchema: this.payloadSchema,
+      successSchema: this.successSchema,
+      errorSchema: this.errorSchema,
+      defectSchema: this.defectSchema,
+      annotations: this.annotations,
+      middlewares: this.middlewares
+    });
+  },
+  annotate(tag2, value4) {
+    return makeProto3({
+      _tag: this._tag,
+      payloadSchema: this.payloadSchema,
+      successSchema: this.successSchema,
+      errorSchema: this.errorSchema,
+      defectSchema: this.defectSchema,
+      middlewares: this.middlewares,
+      annotations: add(this.annotations, tag2, value4)
+    });
+  },
+  annotateMerge(context3) {
+    return makeProto3({
+      _tag: this._tag,
+      payloadSchema: this.payloadSchema,
+      successSchema: this.successSchema,
+      errorSchema: this.errorSchema,
+      defectSchema: this.defectSchema,
+      middlewares: this.middlewares,
+      annotations: merge(this.annotations, context3)
+    });
+  }
+};
+var makeProto3 = (options) => {
+  function Rpc() {}
+  Object.setPrototypeOf(Rpc, Proto12);
+  Object.assign(Rpc, options);
+  Rpc.key = `effect/rpc/Rpc/${options._tag}`;
+  return Rpc;
+};
+var make50 = (tag2, options) => {
+  const successSchema = options?.success ?? Void2;
+  const errorSchema = options?.error ?? Never2;
+  const defectSchema = options?.defect ?? Defect();
+  let payloadSchema;
+  if (options?.primaryKey) {
+    payloadSchema = class Payload extends Class4(`effect/rpc/Rpc/${tag2}`)(options.payload) {
+      [symbol4]() {
+        return options.primaryKey(this);
+      }
+    };
+  } else {
+    payloadSchema = isSchema(options?.payload) ? options?.payload : options?.payload ? Struct(options?.payload) : Void2;
+  }
+  return makeProto3({
+    _tag: tag2,
+    payloadSchema,
+    successSchema: options?.stream ? Stream2(successSchema, errorSchema) : successSchema,
+    errorSchema: options?.stream ? Never2 : errorSchema,
+    defectSchema,
+    annotations: empty(),
+    middlewares: new Set
+  });
+};
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/McpSchema.js
+var optionalWithDefault = (schema3, defaultValue) => {
+  const effect2 = sync3(defaultValue);
+  return optionalKey2(schema3).pipe(decode({
+    decode: withDefault(effect2),
+    encode: passthrough2()
+  }), withConstructorDefault2(effect2));
+};
+var optional3 = (schema3) => optionalKey2(schema3).pipe(decodeTo2(optional2(schema3), {
+  decode: passthrough2(),
+  encode: transformOptional(flatMap(fromUndefinedOr))
+}));
+var RequestId = /* @__PURE__ */ Union2([String6, Finite]);
+var ProgressToken = /* @__PURE__ */ Union2([String6, Finite]);
+
+class RequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+    progressToken: /* @__PURE__ */ optional3(ProgressToken)
+  }))
+}))) {
+}
+
+class ResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+}))) {
+}
+
+class NotificationMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+}))) {
+}
+var Cursor = String6;
+
+class PaginatedRequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...RequestMeta.fields,
+  cursor: /* @__PURE__ */ optional3(Cursor)
+}))) {
+}
+
+class PaginatedResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...ResultMeta.fields,
+  nextCursor: /* @__PURE__ */ optional3(Cursor)
+}))) {
+}
+var Role = /* @__PURE__ */ Literals(["user", "assistant"]);
+
+class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  audience: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Role)),
+  priority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  })))
+}))) {
+}
+
+class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6),
+  version: String6
+}))) {
+}
+
+class ClientCapabilities extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ClientCapabilities")({
+  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct({}))),
+  extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
+  roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+    listChanged: /* @__PURE__ */ optional3(Boolean3)
+  })),
+  sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
+  elicitation: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({}))
+})) {
+}
+
+class ServerCapabilities extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct({}))),
+  extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
+  logging: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
+  completions: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
+  prompts: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+    listChanged: /* @__PURE__ */ optional3(Boolean3)
+  })),
+  resources: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+    subscribe: /* @__PURE__ */ optional3(Boolean3),
+    listChanged: /* @__PURE__ */ optional3(Boolean3)
+  })),
+  tools: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+    listChanged: /* @__PURE__ */ optional3(Boolean3)
+  }))
+}))) {
+}
+
+class McpErrorBase extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/McpErrorBase")({
+  code: Int,
+  message: String6,
+  data: /* @__PURE__ */ optional3(Any2)
+})) {
+}
+var INVALID_REQUEST_ERROR_CODE = -32600;
+var METHOD_NOT_FOUND_ERROR_CODE = -32601;
+var INVALID_PARAMS_ERROR_CODE = -32602;
+var INTERNAL_ERROR_CODE = -32603;
+var PARSE_ERROR_CODE = -32700;
+
+class ParseError extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/ParseError")({
+  ...McpErrorBase.fields,
+  _tag: /* @__PURE__ */ tag("ParseError"),
+  code: /* @__PURE__ */ tag(PARSE_ERROR_CODE)
+})) {
+}
+
+class InvalidRequest extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/InvalidRequest")({
+  ...McpErrorBase.fields,
+  _tag: /* @__PURE__ */ tag("InvalidRequest"),
+  code: /* @__PURE__ */ tag(INVALID_REQUEST_ERROR_CODE)
+})) {
+}
+
+class MethodNotFound extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/MethodNotFound")({
+  ...McpErrorBase.fields,
+  _tag: /* @__PURE__ */ tag("MethodNotFound"),
+  code: /* @__PURE__ */ tag(METHOD_NOT_FOUND_ERROR_CODE)
+})) {
+}
+
+class InvalidParams extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/InvalidParams")({
+  ...McpErrorBase.fields,
+  _tag: /* @__PURE__ */ tag("InvalidParams"),
+  code: /* @__PURE__ */ tag(INVALID_PARAMS_ERROR_CODE)
+})) {
+}
+
+class InternalError extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/InternalError")({
+  ...McpErrorBase.fields,
+  _tag: /* @__PURE__ */ tag("InternalError"),
+  code: /* @__PURE__ */ tag(INTERNAL_ERROR_CODE)
+})) {
+  static notImplemented = /* @__PURE__ */ new InternalError({
+    message: "Not implemented"
+  });
+}
+var McpError = /* @__PURE__ */ Union2([ParseError, InvalidRequest, MethodNotFound, InvalidParams, InternalError, McpErrorBase]);
+class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...ResultMeta.fields,
+  protocolVersion: String6,
+  capabilities: ServerCapabilities,
+  serverInfo: Implementation,
+  instructions: /* @__PURE__ */ optional3(String6)
+}))) {
+}
+
+class Initialize extends (/* @__PURE__ */ make50("initialize", {
+  success: InitializeResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    protocolVersion: String6,
+    capabilities: ClientCapabilities,
+    clientInfo: Implementation
+  }
+})) {
+}
+class CancelledNotification extends (/* @__PURE__ */ make50("notifications/cancelled", {
+  payload: {
+    ...NotificationMeta.fields,
+    requestId: RequestId,
+    reason: /* @__PURE__ */ optional3(String6)
+  }
+})) {
+}
+
+class ProgressNotification extends (/* @__PURE__ */ make50("notifications/progress", {
+  payload: {
+    ...NotificationMeta.fields,
+    progressToken: ProgressToken,
+    progress: /* @__PURE__ */ optional3(Finite),
+    total: /* @__PURE__ */ optional3(Finite),
+    message: /* @__PURE__ */ optional3(String6)
+  }
+})) {
+}
+
+class Resource2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Resource")({
+  uri: String6,
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  mimeType: /* @__PURE__ */ optional3(String6),
+  annotations: /* @__PURE__ */ optional3(Annotations),
+  size: /* @__PURE__ */ optional3(Int),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+})) {
+}
+
+class ResourceTemplate extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ResourceTemplate")({
+  uriTemplate: String6,
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  mimeType: /* @__PURE__ */ optional3(String6),
+  annotations: /* @__PURE__ */ optional3(Annotations),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+})) {
+}
+
+class ResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  uri: String6,
+  mimeType: /* @__PURE__ */ optional3(String6),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+}))) {
+}
+
+class TextResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...ResourceContents.fields,
+  text: String6
+}))) {
+}
+
+class BlobResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...ResourceContents.fields,
+  blob: Uint8Array2
+}))) {
+}
+
+class ListResourcesResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListResourcesResult")({
+  ...PaginatedResultMeta.fields,
+  resources: /* @__PURE__ */ ArraySchema(Resource2)
+})) {
+}
+class ListResourceTemplatesResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListResourceTemplatesResult")({
+  ...PaginatedResultMeta.fields,
+  resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate)
+})) {
+}
+class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...ResultMeta.fields,
+  contents: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]))
+}))) {
+}
+
+class ReadResource extends (/* @__PURE__ */ make50("resources/read", {
+  success: ReadResourceResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    uri: String6
+  }
+})) {
+}
+class Subscribe extends (/* @__PURE__ */ make50("resources/subscribe", {
+  success: /* @__PURE__ */ Struct({}),
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    uri: String6
+  }
+})) {
+}
+
+class Unsubscribe extends (/* @__PURE__ */ make50("resources/unsubscribe", {
+  success: /* @__PURE__ */ Struct({}),
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    uri: String6
+  }
+})) {
+}
+
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make50("notifications/resources/updated", {
+  payload: {
+    ...NotificationMeta.fields,
+    uri: String6
+  }
+})) {
+}
+
+class PromptArgument extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  required: /* @__PURE__ */ optional3(Boolean3)
+}))) {
+}
+
+class Prompt2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Prompt")({
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(PromptArgument))
+})) {
+}
+
+class TextContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  type: /* @__PURE__ */ tag("text"),
+  text: String6,
+  annotations: /* @__PURE__ */ optional3(Annotations)
+}))) {
+}
+
+class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  type: /* @__PURE__ */ tag("image"),
+  data: Uint8Array2,
+  mimeType: String6,
+  annotations: /* @__PURE__ */ optional3(Annotations)
+}))) {
+}
+
+class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  type: /* @__PURE__ */ tag("audio"),
+  data: Uint8Array2,
+  mimeType: String6,
+  annotations: /* @__PURE__ */ optional3(Annotations)
+}))) {
+}
+
+class EmbeddedResource extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  type: /* @__PURE__ */ tag("resource"),
+  resource: /* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]),
+  annotations: /* @__PURE__ */ optional3(Annotations)
+}))) {
+}
+
+class ResourceLink extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  ...Resource2.fields,
+  type: /* @__PURE__ */ tag("resource_link")
+}))) {
+}
+var ContentBlock = /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent, EmbeddedResource, ResourceLink]);
+
+class PromptMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  role: Role,
+  content: ContentBlock
+}))) {
+}
+
+class ListPromptsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListPromptsResult")({
+  ...PaginatedResultMeta.fields,
+  prompts: /* @__PURE__ */ ArraySchema(Prompt2)
+})) {
+}
+class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetPromptResult")({
+  ...ResultMeta.fields,
+  messages: /* @__PURE__ */ ArraySchema(PromptMessage),
+  description: /* @__PURE__ */ optional3(String6)
+})) {
+}
+
+class GetPrompt extends (/* @__PURE__ */ make50("prompts/get", {
+  success: GetPromptResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    name: String6,
+    title: /* @__PURE__ */ optional3(String6),
+    arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, String6))
+  }
+})) {
+}
+class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  title: /* @__PURE__ */ optional3(String6),
+  readOnlyHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
+  destructiveHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue),
+  idempotentHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
+  openWorldHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue)
+}))) {
+}
+
+class Tool2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
+  name: String6,
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  inputSchema: Any2,
+  outputSchema: /* @__PURE__ */ optional3(Any2),
+  annotations: /* @__PURE__ */ optional3(ToolAnnotations),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+})) {
+}
+
+class ListToolsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListToolsResult")({
+  ...PaginatedResultMeta.fields,
+  tools: /* @__PURE__ */ ArraySchema(Tool2)
+})) {
+}
+class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallToolResult")({
+  ...ResultMeta.fields,
+  content: /* @__PURE__ */ ArraySchema(ContentBlock),
+  structuredContent: /* @__PURE__ */ optional3(Any2),
+  isError: /* @__PURE__ */ optional3(Boolean3)
+})) {
+}
+
+class CallTool extends (/* @__PURE__ */ make50("tools/call", {
+  success: CallToolResult,
+  error: McpError,
+  payload: {
+    ...RequestMeta.fields,
+    name: String6,
+    arguments: /* @__PURE__ */ optionalWithDefault(/* @__PURE__ */ Record(String6, Any2), () => ({}))
+  }
+})) {
+}
+var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
+
+class SetLevel extends (/* @__PURE__ */ make50("logging/setLevel", {
+  payload: {
+    ...RequestMeta.fields,
+    level: LoggingLevel
+  },
+  success: /* @__PURE__ */ Struct({}),
+  error: McpError
+})) {
+}
+
+class LoggingMessageNotification extends (/* @__PURE__ */ make50("notifications/message", {
+  payload: /* @__PURE__ */ Struct({
+    ...NotificationMeta.fields,
+    level: LoggingLevel,
+    logger: /* @__PURE__ */ optional3(String6),
+    data: Any2
+  })
+})) {
+}
+
+class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  role: Role,
+  content: /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent])
+}))) {
+}
+
+class ModelHint extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+  name: /* @__PURE__ */ optional3(String6)
+}))) {
+}
+
+class ModelPreferences extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ModelPreferences")({
+  hints: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(ModelHint)),
+  costPriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  }))),
+  speedPriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  }))),
+  intelligencePriority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
+    minimum: 0,
+    maximum: 1
+  })))
+})) {
+}
+
+class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CreateMessageResult")({
+  ...SamplingMessage.fields,
+  model: String6,
+  stopReason: /* @__PURE__ */ optional3(String6)
+})) {
+}
+
+class CreateMessage extends (/* @__PURE__ */ make50("sampling/createMessage", {
+  success: CreateMessageResult,
+  error: McpError,
+  payload: {
+    messages: /* @__PURE__ */ ArraySchema(SamplingMessage),
+    modelPreferences: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct(ModelPreferences.fields)),
+    systemPrompt: /* @__PURE__ */ optional3(String6),
+    includeContext: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["none", "thisServer", "allServers"])),
+    temperature: /* @__PURE__ */ optional3(Finite),
+    maxTokens: Int,
+    stopSequences: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
+    metadata: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2))
+  }
+})) {
+}
+class ElicitAcceptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitAcceptResult")({
+  ...ResultMeta.fields,
+  action: /* @__PURE__ */ Literal2("accept"),
+  content: Any2
+})) {
+}
+
+class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitDeclineResult")({
+  ...ResultMeta.fields,
+  action: /* @__PURE__ */ Literals(["cancel", "decline"])
+})) {
+}
+var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
+
+class Elicit extends (/* @__PURE__ */ make50("elicitation/create", {
+  success: ElicitResult,
+  error: McpError,
+  payload: {
+    message: String6,
+    requestedSchema: Any2
+  }
+})) {
+}
+
+class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/ElicitationDeclined")({
+  _tag: /* @__PURE__ */ tag("ElicitationDeclined"),
+  request: Elicit.payloadSchema,
+  cause: /* @__PURE__ */ optional3(/* @__PURE__ */ Defect())
+})) {
+}
+
+// packages/capabilities/src/mcp.ts
+var MAX_MCP_TOOLS = 128;
+var MAX_MCP_DISCOVERY_BYTES = 1024 * 1024;
+var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var Sha256Digest = exports_Schema.String.check(exports_Schema.isPattern(/^sha256:[a-f0-9]{64}$/));
+var JsonArray = exports_Schema.Array(exports_Schema.Json);
+var isJsonArray = exports_Schema.is(JsonArray);
+
+class McpServerIdentity extends exports_Schema.Class("@effect-agent/capabilities/McpServerIdentity")({
+  serverId: exports_Schema.NonEmptyString,
+  implementation: Implementation
+}) {
+}
+
+class McpConnectionRequest extends exports_Schema.Class("@effect-agent/capabilities/McpConnectionRequest")({
+  serverId: exports_Schema.NonEmptyString,
+  maxToolCount: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_TOOLS)),
+  maxToolDescriptionBytes: PositiveInt5,
+  maxDiscoveryBytes: PositiveInt5.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  connectTimeoutMillis: PositiveInt5
+}) {
+}
+
+class McpConnectionError extends exports_Schema.TaggedError()("McpConnectionError", {
+  serverId: exports_Schema.NonEmptyString,
+  message: exports_Schema.String,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class McpDiscoveryLimitExceeded extends exports_Schema.TaggedError()("McpDiscoveryLimitExceeded", {
+  serverId: exports_Schema.NonEmptyString,
+  limit: exports_Schema.Literals(["tool-count", "tool-description-bytes", "discovery-bytes"]),
+  limitValue: exports_Schema.Natural,
+  observedValue: exports_Schema.Natural
+}) {
+}
+
+class McpToolkitMismatch extends exports_Schema.TaggedError()("McpToolkitMismatch", {
+  serverId: exports_Schema.NonEmptyString,
+  message: exports_Schema.String,
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpDiscovery")({
+  identity: McpServerIdentity,
+  capabilities: ServerCapabilities,
+  tools: exports_Schema.Array(Tool2).check(exports_Schema.isMaxLength(MAX_MCP_TOOLS)),
+  encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
+  toolkitSchemaDigest: Sha256Digest
+}) {
+}
+
+class McpConnector extends exports_Context.Service()("@effect-agent/capabilities/McpConnector") {
+}
+var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var canonicalJson = (value4) => {
+  if (value4 === null || typeof value4 === "string" || typeof value4 === "boolean" || typeof value4 === "number") {
+    return value4;
+  }
+  if (isJsonArray(value4))
+    return value4.map(canonicalJson);
+  const output = {};
+  for (const [key, item] of Object.entries(value4).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) {
+    output[key] = canonicalJson(item);
+  }
+  return output;
+};
+var utf8 = (value4) => {
+  const hex2 = exports_Encoding.encodeHex(value4);
+  const bytes = new Uint8Array(hex2.length / 2);
+  for (let index2 = 0;index2 < bytes.length; index2 += 1) {
+    bytes[index2] = Number.parseInt(hex2.slice(index2 * 2, index2 * 2 + 2), 16);
+  }
+  return bytes;
+};
+var digestJson = exports_Effect.fn("digestMcpSchema")(function* (serverId, value4) {
+  const json = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(value4).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
+    cause: error2,
+    serverId,
+    message: `MCP Tool schema is not canonical JSON: ${error2.message}`
+  })));
+  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(exports_Schema.Json))(canonicalJson(json)).pipe(exports_Effect.mapError((error2) => McpToolkitMismatch.make({
+    cause: error2,
+    serverId,
+    message: `Could not encode canonical MCP Tool schema JSON: ${error2.message}`
+  })));
+  const crypto2 = yield* exports_Crypto.Crypto;
+  const digest2 = yield* crypto2.digest("SHA-256", utf8(encoded)).pipe(exports_Effect.mapError((cause) => McpToolkitMismatch.make({
+    cause,
+    serverId,
+    message: "Could not hash MCP Tool schemas"
+  })));
+  return `sha256:${exports_Encoding.encodeHex(digest2)}`;
+});
+var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (request3, server) {
+  if (server.identity.serverId !== request3.serverId) {
+    return yield* McpToolkitMismatch.make({
+      serverId: request3.serverId,
+      message: `Connected server identity '${server.identity.serverId}' does not match the requested server`
+    });
+  }
+  if (server.tools.length > request3.maxToolCount) {
+    return yield* McpDiscoveryLimitExceeded.make({
+      serverId: request3.serverId,
+      limit: "tool-count",
+      limitValue: request3.maxToolCount,
+      observedValue: server.tools.length
+    });
+  }
+  for (const tool of server.tools) {
+    const descriptionBytes = encodedBytes2(tool.description ?? "");
+    if (descriptionBytes > request3.maxToolDescriptionBytes) {
+      return yield* McpDiscoveryLimitExceeded.make({
+        serverId: request3.serverId,
+        limit: "tool-description-bytes",
+        limitValue: request3.maxToolDescriptionBytes,
+        observedValue: descriptionBytes
+      });
+    }
+  }
+  const discoveredNames = server.tools.map((tool) => tool.name).sort();
+  const toolkitNames = Object.keys(server.toolkit.tools).sort();
+  if (discoveredNames.length !== toolkitNames.length || discoveredNames.some((name, index2) => name !== toolkitNames[index2])) {
+    return yield* McpToolkitMismatch.make({
+      serverId: request3.serverId,
+      message: "Native Effect AI Toolkit names do not match MCP tool discovery"
+    });
+  }
+  const discoverySchemas = server.tools.map((tool) => ({
+    name: tool.name,
+    inputSchema: tool.inputSchema,
+    ...tool.outputSchema !== undefined ? { outputSchema: tool.outputSchema } : {}
+  })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
+  const toolkitSchemas = yield* exports_Effect.try({
+    try: () => Object.values(server.toolkit.tools).map((tool) => {
+      const outputSchema = exports_Tool.getJsonSchemaFromSchema(tool.successSchema);
+      return {
+        name: tool.name,
+        inputSchema: exports_Tool.getJsonSchema(tool),
+        ...outputSchema.type === "object" ? { outputSchema } : {}
+      };
+    }).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
+    catch: (cause) => McpToolkitMismatch.make({
+      cause,
+      serverId: request3.serverId,
+      message: "Could not derive JSON Schema from the native Effect AI Toolkit"
+    })
+  });
+  const discoveryDigest = yield* digestJson(request3.serverId, discoverySchemas);
+  const toolkitDigest = yield* digestJson(request3.serverId, toolkitSchemas);
+  if (discoveryDigest !== toolkitDigest) {
+    return yield* McpToolkitMismatch.make({
+      serverId: request3.serverId,
+      message: "Native Effect AI Toolkit schemas do not match MCP tool discovery"
+    });
+  }
+  const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Struct({
+    identity: McpServerIdentity,
+    capabilities: ServerCapabilities,
+    tools: exports_Schema.Array(Tool2)
+  }))({
+    identity: server.identity,
+    capabilities: server.capabilities,
+    tools: server.tools
+  }).pipe(exports_Effect.mapError((error2) => McpConnectionError.make({
+    cause: error2,
+    serverId: request3.serverId,
+    message: `Could not encode MCP discovery response: ${error2.message}`
+  })));
+  const discoveryJson = yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(encoded).pipe(exports_Effect.mapError((error2) => McpConnectionError.make({
+    cause: error2,
+    serverId: request3.serverId,
+    message: `Could not normalize MCP discovery response as JSON: ${error2.message}`
+  })));
+  const discoveryText = yield* exports_Schema.encodeEffect(exports_Schema.fromJsonString(exports_Schema.Json))(discoveryJson).pipe(exports_Effect.mapError((error2) => McpConnectionError.make({
+    cause: error2,
+    serverId: request3.serverId,
+    message: `Could not serialize MCP discovery response: ${error2.message}`
+  })));
+  const discoveryBytes = encodedBytes2(discoveryText);
+  if (discoveryBytes > request3.maxDiscoveryBytes) {
+    return yield* McpDiscoveryLimitExceeded.make({
+      serverId: request3.serverId,
+      limit: "discovery-bytes",
+      limitValue: request3.maxDiscoveryBytes,
+      observedValue: discoveryBytes
+    });
+  }
+  return McpDiscovery.make({
+    identity: server.identity,
+    capabilities: server.capabilities,
+    tools: server.tools,
+    encodedBytes: discoveryBytes,
+    toolkitSchemaDigest: toolkitDigest
+  });
+});
+var connectMcp = exports_Effect.fn("connectMcp")(function* (request3) {
+  const connector = yield* McpConnector;
+  const server = yield* connector.connect(request3).pipe(exports_Effect.timeoutOrElse({
+    duration: exports_Duration.millis(request3.connectTimeoutMillis),
+    orElse: () => exports_Effect.fail(McpConnectionError.make({
+      serverId: request3.serverId,
+      message: "MCP connection timed out"
+    }))
+  }));
+  const discovery = yield* validateMcpDiscovery(request3, server);
+  return {
+    discovery,
+    toolkit: server.toolkit
+  };
+});
+// packages/capabilities/src/scheduling.ts
+var PositiveInt6 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var RunSchedulingOverride = exports_Schema.Union([
+  exports_Schema.Struct({ mode: exports_Schema.Literal("bounded"), concurrency: PositiveInt6 }),
+  exports_Schema.Struct({ mode: exports_Schema.Literal("sequential") })
+]);
 // packages/capabilities/src/subagent-reservation.ts
 var Natural3 = exports_Schema.Natural;
 var BudgetReservationId = exports_Schema.NonEmptyString.pipe(exports_Schema.brand("@effect-agent/capabilities/BudgetReservationId"));
@@ -35617,19 +36273,19 @@ var SubagentReservationsMemoryLive = exports_Layer.effect(SubagentReservations, 
 }));
 
 // packages/capabilities/src/subagent.ts
-var PositiveInt5 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+var PositiveInt7 = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var Natural4 = exports_Schema.Natural;
-var FinitePositiveDuration2 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
+var FinitePositiveDuration4 = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
 var SubagentPolicyFields = exports_Schema.Struct({
-  maxChildren: PositiveInt5,
-  maxConcurrency: PositiveInt5,
-  maxTurns: PositiveInt5,
-  maxToolCalls: PositiveInt5,
-  maxDuration: FinitePositiveDuration2,
-  maxInputTokens: exports_Schema.optionalKey(PositiveInt5),
-  maxOutputTokens: exports_Schema.optionalKey(PositiveInt5),
+  maxChildren: PositiveInt7,
+  maxConcurrency: PositiveInt7,
+  maxTurns: PositiveInt7,
+  maxToolCalls: PositiveInt7,
+  maxDuration: FinitePositiveDuration4,
+  maxInputTokens: exports_Schema.optionalKey(PositiveInt7),
+  maxOutputTokens: exports_Schema.optionalKey(PositiveInt7),
   maxCostMicrousd: exports_Schema.optionalKey(Natural4),
-  maxResultBytes: exports_Schema.optionalKey(PositiveInt5)
+  maxResultBytes: exports_Schema.optionalKey(PositiveInt7)
 });
 
 class SubagentPolicy extends exports_Schema.Class("@effect-agent/capabilities/SubagentPolicy")(SubagentPolicyFields) {
@@ -35646,20 +36302,20 @@ class SubagentGrant extends exports_Schema.Class("@effect-agent/capabilities/Sub
   maxDepth: exports_Schema.Literal(1)
 }) {
 }
-var BoundedFailureText = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024));
+var BoundedFailureText2 = exports_Schema.String.check(exports_Schema.isMaxLength(4 * 1024));
 
 class SubagentPrestartDenied extends exports_Schema.TaggedError()("SubagentPrestartDenied", {
   delegationId: DelegationId,
   targetAgentId: AgentId,
   reason: exports_Schema.Literals(["nested-delegation", "grant-violation", "budget-conflict"]),
-  message: BoundedFailureText
+  message: BoundedFailureText2
 }) {
 }
 
 class SubagentProjectionFailure extends exports_Schema.TaggedError()("SubagentProjectionFailure", {
   delegationId: DelegationId,
   stage: exports_Schema.Literals(["input", "result"]),
-  message: BoundedFailureText
+  message: BoundedFailureText2
 }) {
 }
 var SubagentExecutionFailureClassification = exports_Schema.Literals([
@@ -35670,7 +36326,7 @@ var SubagentExecutionFailureClassification = exports_Schema.Literals([
   "declaration-unavailable"
 ]);
 var maxErrorTagLength = 256;
-var BoundedErrorTag = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(maxErrorTagLength));
+var BoundedErrorTag2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(maxErrorTagLength));
 
 class SubagentExecutionFailure extends exports_Schema.TaggedError()("SubagentExecutionFailure", {
   delegationId: DelegationId,
@@ -35679,8 +36335,8 @@ class SubagentExecutionFailure extends exports_Schema.TaggedError()("SubagentExe
   childConversationId: exports_Schema.optionalKey(ConversationId),
   childSubmissionId: exports_Schema.optionalKey(SubmissionId),
   childRunId: exports_Schema.optionalKey(RunId),
-  errorTag: BoundedErrorTag,
-  message: BoundedFailureText
+  errorTag: BoundedErrorTag2,
+  message: BoundedFailureText2
 }) {
 }
 var DelegationToolName = exports_Schema.String.pipe(exports_Schema.refine((name) => name.startsWith(delegationToolPrefix) && name.length > delegationToolPrefix.length, { expected: `a delegation Tool name of the form "${delegationToolPrefix}<target>"` }));
@@ -37518,7 +38174,7 @@ var formDataRecord = (entries3) => {
   return formData(data);
 };
 
-class Stream2 extends Proto16 {
+class Stream3 extends Proto16 {
   _tag = "Stream";
   stream;
   contentType;
@@ -37538,7 +38194,7 @@ class Stream2 extends Proto16 {
     };
   }
 }
-var stream2 = (body, contentType, contentLength) => new Stream2(body, contentType ?? "application/octet-stream", contentLength);
+var stream2 = (body, contentType, contentLength) => new Stream3(body, contentType ?? "application/octet-stream", contentLength);
 var fileContentLength = (size9, options) => {
   const available = Math.max(0, Number(size9) - Number(options?.offset ?? 0));
   return options?.bytesToRead === undefined ? available : Math.min(available, Math.max(0, Number(options.bytesToRead)));

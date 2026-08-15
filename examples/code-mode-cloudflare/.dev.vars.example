@@ -1,0 +1,5 @@
+# Optional: set to run the live OpenAI profile instead of the scripted one.
+OPENAI_API_KEY=
+# Optional shared secret. When set, /ask requires `Authorization: Bearer <token>`.
+# Set this whenever OPENAI_API_KEY is deployed so the paid endpoint is gated.
+DEMO_AUTH_TOKEN=
