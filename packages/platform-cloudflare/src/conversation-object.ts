@@ -680,10 +680,10 @@ export interface ConversationObjectClass {
 
 /**
  * Build the application's Conversation Object class (export it from the Worker entry).
- * effect-cf owns the cached ManagedRuntime, native RPC methods, event scopes, and post-RPC OTLP
- * flush scheduling. The optional outer Layer is built per native event, so a host can install
- * Tracer/Logger/Metric services and `OtlpExporter.Flusher` without Effect Agent owning exporter
- * lifecycle machinery.
+ * effect-cf owns the cached ManagedRuntime, native RPC methods, event scopes, and post-handler
+ * OTLP flush scheduling for RPC and alarm events. The optional outer Layer is built per native
+ * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
+ * Effect Agent owning exporter lifecycle machinery.
  */
 export const makeConversationObjectClass = <EventLayerError = never, EventServices = never>(
   options: ConversationObjectOptions,
@@ -752,9 +752,6 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     // in each bounded pass so cross-Object initialization cannot deadlock.
     initialize: Effect.void,
     rpc,
-    // effect-cf@0.25.2 runs raw alarms in the same event-scoped runtime, but its automatic
-    // post-exit flusher currently covers native RPC only. Keep that upstream gap explicit rather
-    // than rebuilding a second waitUntil/flush coordinator here.
     alarm: () => alarmEndpoint,
   });
 
