@@ -29086,7 +29086,7 @@ class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", {
   ...RunEventBase,
   output: exports_Schema.Json,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop"])
+  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"])
 }) {
 }
 
@@ -29135,7 +29135,7 @@ class SubagentProgress extends exports_Schema.TaggedClass()("SubagentProgress", 
 class SubagentCompleted extends exports_Schema.TaggedClass()("SubagentCompleted", {
   ...SubagentEventBase,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop"])
+  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"])
 }) {
 }
 
@@ -29183,12 +29183,14 @@ var RunEvent = exports_Schema.Union([
 var PositiveInt = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 var NonNegativeInt = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0));
 var FinitePositiveDuration = exports_Schema.Duration.pipe(exports_Schema.refine((duration2) => exports_Duration.isFinite(duration2) && exports_Duration.isPositive(duration2), { expected: "a finite positive duration" }));
+var OnExhaustion = exports_Schema.Literals(["final-answer", "fail"]);
 var AgentPolicyFields = exports_Schema.Struct({
   maxTurns: PositiveInt,
   maxToolCalls: PositiveInt,
   maxDuration: FinitePositiveDuration,
   toolConcurrency: PositiveInt,
   repeatedFailureLimit: NonNegativeInt,
+  onExhaustion: OnExhaustion,
   tokenBudget: exports_Schema.optionalKey(PositiveInt),
   costBudgetMicrousd: exports_Schema.optionalKey(NonNegativeInt)
 });
@@ -29198,7 +29200,8 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
     return super.make({
       ...input,
       maxDuration: exports_Duration.fromInputUnsafe(input.maxDuration),
-      repeatedFailureLimit: input.repeatedFailureLimit ?? 3
+      repeatedFailureLimit: input.repeatedFailureLimit ?? 3,
+      onExhaustion: input.onExhaustion ?? "final-answer"
     });
   }
 }
@@ -33089,6 +33092,29 @@ var makeToolFailedEvent = exports_Effect.fn("AgentRuntime.makeToolFailedEvent")(
     providerExecuted: false
   });
 });
+var settleRejectedBatch = exports_Effect.fn("AgentRuntime.settleRejectedBatch")(function* (context3, turnId, trace2, policyError, alreadySettled) {
+  const encodedResult = {
+    _tag: policyError._tag,
+    limit: policyError.limit,
+    message: policyError.message
+  };
+  const events2 = [];
+  for (const [index2, call] of trace2.applicationToolCalls.entries()) {
+    if (alreadySettled?.has(call.id) === true) {
+      continue;
+    }
+    trace2.finalToolResultIds.add(call.id);
+    trace2.applicationToolResults[index2] = {
+      id: call.id,
+      name: call.name,
+      encodedResult,
+      isFailure: true,
+      budgetRejected: true
+    };
+    events2.push(yield* makeToolFailedEvent(context3, turnId, call, policyError));
+  }
+  return events2;
+});
 var stampSubagentEvent = exports_Effect.fn("AgentRuntime.stampSubagentEvent")(function* (context3, turnId, payload) {
   const shared = {
     ...yield* eventBase(context3),
@@ -33545,7 +33571,7 @@ var turnToolFailures = (trace2) => {
       continue;
     }
     const result4 = trace2.applicationToolResults.find((candidate) => candidate?.id === id2);
-    if (result4 !== undefined) {
+    if (result4 !== undefined && result4.budgetRejected !== true) {
       outcomes.push(result4.isFailure);
     }
   }
@@ -34171,10 +34197,13 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.model"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
+  const policy2 = agent2.definition.policy;
+  const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > policy2.maxTurns || priorToolCalls + context3.programmaticToolCalls > policy2.maxToolCalls);
   const response = guardBudgetStream(exports_LanguageModel.streamText({
     prompt: modelContext.prompt,
     toolkit: agent2.definition.toolkit,
-    disableToolCallResolution: true
+    disableToolCallResolution: true,
+    ...finalAnswerOnly ? { toolChoice: "none" } : {}
   }), options.budget).pipe(exports_Stream.mapEffect((part) => eventsForPart(context3, turnId, turn, agent2.definition.toolkit.tools, trace2, part)), exports_Stream.flatMap(exports_Stream.fromIterable), exports_Stream.withSpan("AgentRuntime.model", {
     attributes: {
       agentId: context3.agentId,
@@ -34193,6 +34222,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
     if (hasProviderCalls && turnCompletion === undefined) {
       return failRunEventStream(ModelProtocolError.make({ message: "Model response omitted staged Turn completion" }));
     }
+    if (finalAnswerOnly && trace2.toolCalls.size > 0) {
+      return failRunEventStream(ModelProtocolError.make({
+        message: `Model declared ${trace2.toolCalls.size} Tool Call(s) under toolChoice "none" after budget exhaustion`
+      }));
+    }
     const providerOnly = trace2.toolCalls.size > 0 && Array.from(trace2.toolCalls.values()).every(({ providerExecuted }) => providerExecuted);
     const missingProviderResult = Array.from(trace2.toolCalls.entries()).find(([id2, call]) => call.providerExecuted && !trace2.finalToolResultIds.has(id2));
     if (missingProviderResult !== undefined) {
@@ -34201,10 +34235,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       }));
     }
     const toolCalls = priorToolCalls + trace2.toolCalls.size;
-    if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
+    const overToolBudget = toolCalls + context3.programmaticToolCalls > policy2.maxToolCalls;
+    if (overToolBudget && policy2.onExhaustion === "fail") {
       return failRunEventStream(AgentPolicyError.make({
         limit: "tool-calls",
-        message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
+        message: `Agent exceeded its ${policy2.maxToolCalls} Tool Call limit`
       }));
     }
     const stagedResponse = exports_Stream.fromIterable(trace2.providerResultPayloads).pipe(exports_Stream.mapEffect((payload) => stampProviderResultEvent(context3, turnId, payload)), exports_Stream.concat(turnCompletion === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => TurnCompleted.make({
@@ -34230,10 +34265,11 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       const steering = yield* drainInputs(context3, options);
       const queued = steering.length > 0 ? steering : takeFollowUps(context3, options.commandDrainPolicy ?? "one");
       if (queued.length > 0) {
-        if (turn >= agent2.definition.policy.maxTurns) {
+        const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= policy2.maxTurns : turn > policy2.maxTurns;
+        if (turnsBlocked) {
           return failRunEventStream(AgentPolicyError.make({
             limit: "turns",
-            message: `Agent exceeded its ${agent2.definition.policy.maxTurns} Turn limit`
+            message: `Agent exceeded its ${policy2.maxTurns} Turn limit`
           }));
         }
         yield* applyRepeatedFailurePolicy(context3, trace2, agent2.definition.policy.repeatedFailureLimit);
@@ -34245,7 +34281,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         ...base2,
         output,
         turns: turn,
-        finishReason: "model-stop"
+        finishReason: finalAnswerOnly ? "budget-exhausted" : "model-stop"
       })));
     });
     if (providerOnly && trace2.finishReason === "stop") {
@@ -34257,10 +34293,20 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
           message: `Model declared Tool Calls with incompatible finish reason ${trace2.finishReason}`
         }));
       }
-      if (turn >= agent2.definition.policy.maxTurns) {
+      const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= policy2.maxTurns : turn > policy2.maxTurns;
+      if (turnsBlocked) {
         return failRunEventStream(AgentPolicyError.make({
           limit: "turns",
-          message: `Agent exceeded its ${agent2.definition.policy.maxTurns} Turn limit`
+          message: `Agent exceeded its ${policy2.maxTurns} Turn limit`
+        }));
+      }
+      if (overToolBudget && trace2.applicationToolCalls.length > 0) {
+        return afterValidatedResponse(exports_Effect.gen(function* () {
+          const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
+            limit: "tool-calls",
+            message: `Tool Call budget exhausted: this Run's ${policy2.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
+          }));
+          return exports_Stream.fromIterable(rejection).pipe(exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, prompt, turn, toolCalls, options)));
         }));
       }
       if (trace2.applicationToolCalls.length === 0) {
@@ -34420,17 +34466,20 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       isFailure: settledCall.isFailure
     };
   }
+  const policy2 = agent2.definition.policy;
   const toolCalls = trace2.toolCalls.size;
-  if (toolCalls + context3.programmaticToolCalls > agent2.definition.policy.maxToolCalls) {
+  const overToolBudget = toolCalls + context3.programmaticToolCalls > policy2.maxToolCalls;
+  if (overToolBudget && policy2.onExhaustion === "fail") {
     return failRunEventStream(AgentPolicyError.make({
       limit: "tool-calls",
-      message: `Agent exceeded its ${agent2.definition.policy.maxToolCalls} Tool Call limit`
+      message: `Agent exceeded its ${policy2.maxToolCalls} Tool Call limit`
     }));
   }
-  if (turn >= agent2.definition.policy.maxTurns) {
+  const turnsBlocked = policy2.onExhaustion === "fail" ? turn >= policy2.maxTurns : turn > policy2.maxTurns;
+  if (turnsBlocked) {
     return failRunEventStream(AgentPolicyError.make({
       limit: "turns",
-      message: `Agent exceeded its ${agent2.definition.policy.maxTurns} Turn limit`
+      message: `Agent exceeded its ${policy2.maxTurns} Turn limit`
     }));
   }
   const toolkit = yield* agent2.definition.toolkit;
@@ -34460,6 +34509,13 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.resume"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
+  if (overToolBudget) {
+    const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
+      limit: "tool-calls",
+      message: `Tool Call budget exhausted: this Run's ${policy2.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
+    }), settledIds);
+    return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
+  }
   const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
     maxToolCalls: agent2.definition.policy.maxToolCalls,
     declaredToolCalls: toolCalls
@@ -38222,7 +38278,8 @@ var defaultReviewPolicy = AgentPolicy.make({
   maxToolCalls: 24,
   maxDuration: "8 minutes",
   toolConcurrency: 2,
-  tokenBudget: 300000
+  tokenBudget: 300000,
+  onExhaustion: "fail"
 });
 var PullRequestReviewer = Agent.define("pr-reviewer", {
   input: ReviewMission,
@@ -38371,7 +38428,8 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "4 minutes",
   toolConcurrency: 2,
-  tokenBudget: 200000
+  tokenBudget: 200000,
+  onExhaustion: "fail"
 });
 
 class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
@@ -38468,7 +38526,8 @@ var defaultFanOutPolicy = AgentPolicy.make({
   maxDuration: "15 minutes",
   toolConcurrency: 3,
   repeatedFailureLimit: MAX_REVIEW_UNITS + 1,
-  tokenBudget: 300000
+  tokenBudget: 300000,
+  onExhaustion: "fail"
 });
 var makeFileReviewerDefinition = (options = {}) => Agent.define("pr-file-reviewer", {
   input: FileReviewBrief,
