@@ -187,6 +187,8 @@ export interface RunTurnUsage {
   readonly turn: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** Estimated spend of the staged call; recovery re-seeds the cost budget from it. */
+  readonly costMicrousd: number;
 }
 
 /**
@@ -502,6 +504,8 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
         readonly outputTokens: number;
         readonly lastInputTokens: number;
         readonly lastOutputTokens: number;
+        /** Cumulative estimated spend of prior Attempts; the cost budget resumes from it. */
+        readonly costMicrousd: number;
       }
     | undefined;
   /** Required when the core policy declares `costBudgetMicrousd`. */

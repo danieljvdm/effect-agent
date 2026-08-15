@@ -9,6 +9,7 @@ import {
   ToolResultBounds,
   TruncatedToolResult,
   TurnId,
+  UnserializableToolResult,
   type RunCompleted,
   type RunEvent,
 } from "@effect-agent/core";
@@ -918,5 +919,302 @@ layer(identifiers)("context economics — bounding, tracking, status, exhaustion
       expect(result.exhausted).toBe("tokens");
       expect(result.output).toEqual({ answer: "overrun" });
     }),
+  );
+
+  // ------------------------------------------------- round-2 review findings
+
+  it.effect("RUN-025: a simultaneous token and cost breach fails typed on the cost rail", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("both-breach", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          tokenBudget: 100,
+          costBudgetMicrousd: 1_000,
+        }),
+      });
+      const { model } = scriptedModel([finalParts('{"answer":"spent"}', usageOf(150, 10))]);
+      const exit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        { estimateCostMicrousd: () => Effect.succeed(2_000) },
+      ).pipe(Effect.exit);
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect((failure as AgentPolicyError).limit).toBe("cost");
+    }),
+  );
+
+  it.effect("RUN-022: an unserializable Tool result becomes the fail-closed sentinel", () =>
+    Effect.gen(function* () {
+      const UnknownTool = Tool.make("emitUnknown", {
+        parameters: Schema.Struct({}),
+        success: Schema.Unknown,
+      });
+      const unknownToolkit = Toolkit.make(UnknownTool);
+      const definition = Agent.define("bounds-unserializable", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Use the tool once, then answer.",
+        toolkit: unknownToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([
+        toolCallParts("u-1", "emitUnknown", {}),
+        finalParts('{"answer":"done"}'),
+      ]);
+      const toolLayer = unknownToolkit.toLayer({
+        emitUnknown: () =>
+          Effect.succeed({
+            toJSON: () => {
+              throw new Error("cyclic tool payload");
+            },
+          }),
+      });
+      const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "u",
+      }).pipe(Effect.provide(toolLayer));
+      expect(result.output).toEqual({ answer: "done" });
+      const second = requests[1];
+      if (second === undefined) throw new Error("expected a second model request");
+      const values = toolResultValues(second.prompt);
+      expect(values).toHaveLength(1);
+      const sentinel = Schema.decodeUnknownSync(UnserializableToolResult)(values[0]);
+      expect(sentinel.reason).toContain("cyclic tool payload");
+    }),
+  );
+
+  it.effect("RUN-022: an unserializable FAILED Tool result becomes the sentinel too", () =>
+    Effect.gen(function* () {
+      const FragileTool = Tool.make("fragile", {
+        parameters: Schema.Struct({}),
+        success: Schema.Struct({ ok: Schema.Boolean }),
+        failure: Schema.Unknown,
+        failureMode: "return",
+      });
+      const fragileToolkit = Toolkit.make(FragileTool);
+      const definition = Agent.define("bounds-failed-unserializable", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Use the tool once, then answer.",
+        toolkit: fragileToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      });
+      const { model, requests } = scriptedModel([
+        toolCallParts("f-1", "fragile", {}),
+        finalParts('{"answer":"recovered"}'),
+      ]);
+      const toolLayer = fragileToolkit.toLayer({
+        fragile: () =>
+          Effect.fail({
+            toJSON: () => {
+              throw new Error("unserializable failure payload");
+            },
+          }),
+      });
+      const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+        question: "f",
+      }).pipe(Effect.provide(toolLayer));
+      expect(result.output).toEqual({ answer: "recovered" });
+      const second = requests[1];
+      if (second === undefined) throw new Error("expected a second model request");
+      const values = toolResultValues(second.prompt);
+      expect(values).toHaveLength(1);
+      const sentinel = Schema.decodeUnknownSync(UnserializableToolResult)(values[0]);
+      expect(sentinel.reason).toContain("unserializable failure payload");
+    }),
+  );
+
+  it.effect(
+    "RUN-025: restored totals that already breach fail before any model call under fail mode",
+    () =>
+      Effect.gen(function* () {
+        const definition = Agent.define("resume-breach-fail", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Answer.",
+          toolkit: Toolkit.empty,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 100,
+            onExhaustion: "fail",
+          }),
+        });
+        const { model, requests } = scriptedModel([finalParts('{"answer":"never"}')]);
+        const exit = yield* AgentRuntime.run(
+          Agent.withModel(definition, model),
+          { question: "q" },
+          {
+            resumeUsage: {
+              modelCalls: 2,
+              inputTokens: 90,
+              outputTokens: 20,
+              lastInputTokens: 90,
+              lastOutputTokens: 20,
+              costMicrousd: 0,
+            },
+          },
+        ).pipe(Effect.exit);
+        const failure = failureFrom(exit);
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect((failure as AgentPolicyError).limit).toBe("tokens");
+        expect(requests).toHaveLength(0);
+      }),
+  );
+
+  it.effect("RUN-025: restored totals that already breach start final-answer constrained", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("resume-breach-final", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        // A real toolkit: `toolChoice: "none"` on the first request can only
+        // come from the derived exhaustion constraint, never from an empty
+        // tool list.
+        toolkit: emitToolkit,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          tokenBudget: 100,
+        }),
+      });
+      const { model, requests } = scriptedModel([
+        finalParts('{"answer":"partial"}', usageOf(10, 5)),
+      ]);
+      const result = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        {
+          resumeUsage: {
+            modelCalls: 2,
+            inputTokens: 90,
+            outputTokens: 20,
+            lastInputTokens: 90,
+            lastOutputTokens: 20,
+            costMicrousd: 0,
+          },
+        },
+      ).pipe(
+        Effect.provide(emitToolkit.toLayer({ emit: () => Effect.succeed({ data: "unused" }) })),
+      );
+      expect(result.finishReason).toBe("budget-exhausted");
+      expect(result.exhausted).toBe("tokens");
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.toolChoice).toBe("none");
+    }),
+  );
+
+  it.effect("RUN-023: restored cost accumulates into the cost budget across resume", () =>
+    Effect.gen(function* () {
+      const definition = Agent.define("resume-cost", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: answerOutput,
+        instructions: "Answer.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 3,
+          maxToolCalls: 2,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          costBudgetMicrousd: 1_000,
+        }),
+      });
+      const { model } = scriptedModel([finalParts('{"answer":"cheap"}', usageOf(10, 5))]);
+      const exit = yield* AgentRuntime.run(
+        Agent.withModel(definition, model),
+        { question: "q" },
+        {
+          estimateCostMicrousd: () => Effect.succeed(200),
+          resumeUsage: {
+            modelCalls: 1,
+            inputTokens: 10,
+            outputTokens: 5,
+            lastInputTokens: 10,
+            lastOutputTokens: 5,
+            costMicrousd: 900,
+          },
+        },
+      ).pipe(Effect.exit);
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect((failure as AgentPolicyError).limit).toBe("cost");
+    }),
+  );
+
+  it.effect(
+    "RUN-025: a token-breaching stop response with only provider-executed calls completes budget-exhausted",
+    () =>
+      Effect.gen(function* () {
+        const HostedSearch = Tool.providerDefined({
+          id: "test.web_search",
+          customName: "HostedSearch",
+          providerName: "web_search",
+          parameters: Schema.Struct({ query: Schema.String }),
+          success: Schema.Struct({ status: Schema.String }),
+        })(undefined);
+        const hostedToolkit = Toolkit.make(HostedSearch);
+        const definition = Agent.define("provider-only-breach", {
+          input: Schema.Struct({ question: Schema.String }),
+          output: answerOutput,
+          instructions: "Answer.",
+          toolkit: hostedToolkit,
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 2,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            tokenBudget: 100,
+          }),
+        });
+        const { model } = scriptedModel([
+          [
+            {
+              type: "tool-call",
+              id: "hosted-1",
+              name: "HostedSearch",
+              params: { query: "sea" },
+              providerExecuted: true,
+            },
+            {
+              type: "tool-result",
+              id: "hosted-1",
+              name: "HostedSearch",
+              result: { status: "completed" },
+              isFailure: false,
+              providerExecuted: true,
+            },
+            { type: "text-start", id: "answer" },
+            { type: "text-delta", id: "answer", delta: '{"answer":"hosted"}' },
+            { type: "text-end", id: "answer" },
+            { type: "finish", reason: "stop", usage: usageOf(150, 10) },
+          ],
+        ]);
+        const result = yield* AgentRuntime.run(Agent.withModel(definition, model), {
+          question: "q",
+        });
+        expect(result.finishReason).toBe("budget-exhausted");
+        expect(result.exhausted).toBe("tokens");
+      }),
   );
 });

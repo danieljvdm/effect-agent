@@ -29223,6 +29223,19 @@ class TruncatedToolResult extends exports_Schema.Class("TruncatedToolResult")({
   tail: exports_Schema.String
 }) {
 }
+
+class UnserializableToolResult extends exports_Schema.Class("UnserializableToolResult")({
+  unserializableToolResult: exports_Schema.Literal(true),
+  reason: exports_Schema.String.check(exports_Schema.isMaxLength(256))
+}) {
+}
+var unserializableToolResult = (cause) => {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  return exports_Schema.encodeSync(UnserializableToolResult)(UnserializableToolResult.make({
+    unserializableToolResult: true,
+    reason: reason.length > 256 ? reason.slice(0, 256) : reason
+  }));
+};
 var codePointUtf8Length = (codePoint) => {
   if (codePoint < 128)
     return 1;
@@ -34095,14 +34108,21 @@ var boundEncodedToolResult = (encodedResult, bounds) => {
   let text;
   try {
     text = JSON.stringify(encodedResult);
-  } catch {
-    return encodedResult;
+  } catch (cause) {
+    return unserializableToolResult(cause);
   }
   if (text === undefined) {
-    return encodedResult;
+    return unserializableToolResult("the encoded result is not a JSON value");
   }
   const bounded3 = applyToolResultBounds(text, bounds);
-  return bounded3 === text ? encodedResult : JSON.parse(bounded3);
+  if (bounded3 === text) {
+    return encodedResult;
+  }
+  try {
+    return exports_Schema.decodeSync(exports_Schema.fromJsonString(exports_Schema.Unknown))(bounded3);
+  } catch (cause) {
+    return unserializableToolResult(cause);
+  }
 };
 var RUN_STATUS_WARNING = " · WARNING: approaching limits — converge and deliver your final result now.";
 var nearingLimit = (consumed, limit) => consumed * 5 >= limit * 4;
@@ -34156,6 +34176,7 @@ var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_
   context3.lastInputTokens = inputTokens;
   context3.lastOutputTokens = outputTokens;
   context3.costMicrousd += costMicrousd;
+  context3.lastCostMicrousd = costMicrousd;
   const policy2 = agent2.definition.policy;
   const consumedTokens = context3.inputTokens + context3.outputTokens;
   const tokenBudget = policy2.tokenBudget;
@@ -34170,21 +34191,20 @@ var consumeUsage = (agent2, context3, usage, toolCallCount, options) => exports_
     }
     context3.tokenExhausted = true;
     context3.exhaustedDimension ??= "tokens";
-  } else {
-    const costBudget = policy2.costBudgetMicrousd;
-    if (costBudget !== undefined) {
-      if (options.estimateCostMicrousd === undefined) {
-        return yield* AgentPolicyError.make({
-          limit: "cost",
-          message: "Agent cost budget requires a model cost estimator"
-        });
-      }
-      if (context3.costMicrousd > costBudget) {
-        return yield* AgentPolicyError.make({
-          limit: "cost",
-          message: `Agent exceeded its ${costBudget} microdollar cost budget`
-        });
-      }
+  }
+  const costBudget = policy2.costBudgetMicrousd;
+  if (costBudget !== undefined) {
+    if (options.estimateCostMicrousd === undefined) {
+      return yield* AgentPolicyError.make({
+        limit: "cost",
+        message: "Agent cost budget requires a model cost estimator"
+      });
+    }
+    if (context3.costMicrousd > costBudget) {
+      return yield* AgentPolicyError.make({
+        limit: "cost",
+        message: `Agent exceeded its ${costBudget} microdollar cost budget`
+      });
     }
   }
   if (options.budget !== undefined) {
@@ -34362,6 +34382,14 @@ ${transcript}
   const consumed = yield* consumeUsage(agent2, context3, summaryUsage, 0, options).pipe(exports_Effect.ensuring(exports_Effect.sync(() => {
     context3.finalizing = wasFinalizing;
   })));
+  if (options.durability !== undefined) {
+    yield* options.durability.noteTurnUsage({
+      turn,
+      inputTokens: context3.lastInputTokens,
+      outputTokens: context3.lastOutputTokens,
+      costMicrousd: context3.lastCostMicrousd
+    });
+  }
   events2.push(...consumed.warnings);
   const summaryText = pieces.join("").trim();
   const summary2 = summaryText.length === 0 ? "(no summary produced)" : summaryText;
@@ -34937,7 +34965,8 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         yield* options.durability.noteTurnUsage({
           turn,
           inputTokens: context3.lastInputTokens,
-          outputTokens: context3.lastOutputTokens
+          outputTokens: context3.lastOutputTokens,
+          costMicrousd: context3.lastCostMicrousd
         });
       }
       const pre = [...consumed.warnings];
@@ -34961,7 +34990,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       }
       const emitThen = (nextStream) => pre.length === 0 ? nextStream : exports_Stream.fromIterable(pre).pipe(exports_Stream.concat(nextStream));
       if (consumed.breach !== undefined) {
-        if (trace2.toolCalls.size === 0 && trace2.finishReason === "stop") {
+        if (trace2.applicationToolCalls.length === 0 && trace2.finishReason === "stop") {
           const output = yield* decodeFinalOutput(agent2, trace2.text.join("")).pipe(exports_Effect.map(exports_Option.some), exports_Effect.catch(() => exports_Effect.succeed(exports_Option.none())));
           if (exports_Option.isSome(output)) {
             yield* advanceHistory(context3, historyWithResponse(), options);
@@ -35275,7 +35304,8 @@ var stream = (agent2, input, options = {}) => {
       outputTokens: options.resumeUsage?.outputTokens ?? 0,
       lastInputTokens: options.resumeUsage?.lastInputTokens ?? 0,
       lastOutputTokens: options.resumeUsage?.lastOutputTokens ?? 0,
-      costMicrousd: 0,
+      costMicrousd: options.resumeUsage?.costMicrousd ?? 0,
+      lastCostMicrousd: 0,
       warnedLimits: new Set,
       finalizing: false,
       tokenExhausted: false,
@@ -35284,6 +35314,19 @@ var stream = (agent2, input, options = {}) => {
       sequence: 0,
       programmaticToolCalls: 0
     };
+    if (options.resumeUsage !== undefined) {
+      const seededBudget = agent2.definition.policy.tokenBudget;
+      if (seededBudget !== undefined && context3.inputTokens + context3.outputTokens > seededBudget) {
+        if (agent2.definition.policy.onExhaustion === "fail") {
+          return failRunEventStream(AgentPolicyError.make({
+            limit: "tokens",
+            message: `Agent exceeded its ${seededBudget} token budget`
+          }));
+        }
+        context3.tokenExhausted = true;
+        context3.exhaustedDimension ??= "tokens";
+      }
+    }
     if (options.input?.start !== undefined) {
       yield* options.input.start();
     }

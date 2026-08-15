@@ -25,6 +25,33 @@ export class TruncatedToolResult extends Schema.Class<TruncatedToolResult>("Trun
   tail: Schema.String,
 }) {}
 
+/**
+ * Canonical fail-closed sentinel replacing an encoded Tool result that could
+ * not be JSON-serialized at all (cyclic value, BigInt, `undefined`, throwing
+ * `toJSON`). The original value never enters history or durable records —
+ * an unserializable value is unbounded by construction, so the bound seam
+ * replaces it wholesale rather than passing it through (runtime spec §9).
+ */
+export class UnserializableToolResult extends Schema.Class<UnserializableToolResult>(
+  "UnserializableToolResult",
+)({
+  unserializableToolResult: Schema.Literal(true),
+  reason: Schema.String.check(Schema.isMaxLength(256)),
+}) {}
+
+/** Build the encoded sentinel for a serialization failure, clipping the reason. */
+export const unserializableToolResult = (
+  cause: unknown,
+): typeof UnserializableToolResult.Encoded => {
+  const reason = cause instanceof Error ? cause.message : String(cause);
+  return Schema.encodeSync(UnserializableToolResult)(
+    UnserializableToolResult.make({
+      unserializableToolResult: true,
+      reason: reason.length > 256 ? reason.slice(0, 256) : reason,
+    }),
+  );
+};
+
 const codePointUtf8Length = (codePoint: number): number => {
   if (codePoint < 0x80) return 1;
   if (codePoint < 0x800) return 2;

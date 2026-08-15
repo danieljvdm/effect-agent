@@ -209,6 +209,8 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
    */
   inputTokens: Schema.optionalKey(Schema.Natural),
   outputTokens: Schema.optionalKey(Schema.Natural),
+  /** Estimated spend staged with the usage; recovery re-seeds the cost budget (RUN-023). */
+  costMicrousd: Schema.optionalKey(Schema.Natural),
 }) {}
 
 /**

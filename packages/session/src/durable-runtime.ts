@@ -2769,7 +2769,11 @@ const make = Effect.gen(function* () {
       // Turn's canonical response record (keyed by CANONICAL turn number).
       const stagedUsage = new Map<
         number,
-        { readonly inputTokens: number; readonly outputTokens: number }
+        {
+          readonly inputTokens: number;
+          readonly outputTokens: number;
+          readonly costMicrousd: number;
+        }
       >();
       // RUN-026: durable compaction covers only records of PRIOR Runs — never
       // the appending Run's own records — so the owner's instruction/input
@@ -3069,9 +3073,14 @@ const make = Effect.gen(function* () {
         },
         noteTurnUsage: (usage) =>
           Effect.sync(() => {
-            stagedUsage.set(turnOffset + usage.turn, {
-              inputTokens: usage.inputTokens,
-              outputTokens: usage.outputTokens,
+            // Accumulate, never replace: a compaction summarizer and the
+            // Turn's own response stage into the same canonical Turn.
+            const key = turnOffset + usage.turn;
+            const prior = stagedUsage.get(key);
+            stagedUsage.set(key, {
+              inputTokens: (prior?.inputTokens ?? 0) + usage.inputTokens,
+              outputTokens: (prior?.outputTokens ?? 0) + usage.outputTokens,
+              costMicrousd: (prior?.costMicrousd ?? 0) + usage.costMicrousd,
             });
           }),
         commitCompaction: (commit) =>

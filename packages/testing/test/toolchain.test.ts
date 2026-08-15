@@ -1,3 +1,5 @@
+import { fileURLToPath } from "node:url";
+
 import { NodeServices } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Effect, FileSystem, Schema, Stream } from "effect";
@@ -24,7 +26,10 @@ const ChangesetConfig = Schema.Struct({
 });
 
 // Vite+ runs this package test from packages/testing; Bun is the pinned test runtime in CI and locally.
-const repositoryRoot = "../..";
+// Anchored to this file, not the process CWD: a CWD-relative "../.." escapes
+// nested git worktrees (.worktrees/<branch>) into the primary checkout and
+// silently audits the wrong tree.
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url)).replace(/\/$/, "");
 const packageNames = [
   "capabilities",
   "core",
