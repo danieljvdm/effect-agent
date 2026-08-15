@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, FileSystem, Path, Schema, Stream } from "effect";
+import { Cause, Console, Effect, Exit, FileSystem, Path, Schema, Stream } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
@@ -56,6 +56,15 @@ export class ReleaseTreeMismatch extends Schema.TaggedError<ReleaseTreeMismatch>
   }
 }
 
+export class VerificationCleanupError extends Schema.TaggedError<VerificationCleanupError>()(
+  "VerificationCleanupError",
+  {
+    cause: Schema.optionalKey(Schema.Defect()),
+    message: Schema.String,
+    operation: Schema.String,
+  },
+) {}
+
 const decodeCommitSha = Effect.fn("verifyChangesetsRelease.decodeCommitSha")(function* (
   label: string,
   value: string,
@@ -97,50 +106,93 @@ const findRepositoryRoot = Effect.fn("verifyChangesetsRelease.findRepositoryRoot
   return path.resolve(path.dirname(scriptPath), "..");
 });
 
-const acquireExpectedWorktree = Effect.fn("verifyChangesetsRelease.acquireExpectedWorktree")(
-  function* (root: string, baseSha: string) {
+const cleanupError = (operation: string) => (cause: unknown) =>
+  VerificationCleanupError.make({
+    cause,
+    message: `Verification cleanup failed during ${operation}: ${String(cause)}`,
+    operation,
+  });
+
+const cleanupExpectedWorktree = Effect.fn("verifyChangesetsRelease.cleanupExpectedWorktree")(
+  function* (root: string, temporaryRoot: string, worktree: string) {
     const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
-    return yield* Effect.acquireRelease(
-      Effect.gen(function* () {
-        const temporaryRoot = yield* fs.makeTempDirectory({
-          prefix: "effect-agent-changesets-release-",
-        });
-        const worktree = path.join(temporaryRoot, "expected");
-        yield* runCommand(root, "git", ["worktree", "add", "--detach", worktree, baseSha]).pipe(
-          Effect.tapError(() =>
-            fs.remove(temporaryRoot, { force: true, recursive: true }).pipe(Effect.ignore),
-          ),
-        );
-        return { temporaryRoot, worktree } as const;
-      }),
-      ({ temporaryRoot, worktree }) =>
-        Effect.gen(function* () {
-          yield* Effect.scoped(
-            runCommand(root, "git", ["worktree", "remove", "--force", worktree]),
-          ).pipe(
-            Effect.catch((error) =>
-              Console.error(`Failed to remove temporary verification worktree: ${String(error)}`),
-            ),
-          );
-          yield* fs
-            .remove(temporaryRoot, { force: true, recursive: true })
-            .pipe(
-              Effect.catch((error) =>
-                Console.error(
-                  `Failed to remove temporary verification directory: ${String(error)}`,
-                ),
-              ),
-            );
-          yield* Effect.scoped(runCommand(root, "git", ["worktree", "prune"])).pipe(
-            Effect.catch((error) =>
-              Console.error(`Failed to prune temporary Git worktree metadata: ${String(error)}`),
-            ),
-          );
-        }),
-    );
+    const worktreeExistsExit = yield* fs
+      .exists(worktree)
+      .pipe(Effect.mapError(cleanupError("worktree existence check")), Effect.exit);
+    const cleanupEffects = [
+      ...(Exit.isSuccess(worktreeExistsExit) && worktreeExistsExit.value
+        ? [
+            Effect.scoped(
+              runCommand(root, "git", ["worktree", "remove", "--force", worktree]),
+            ).pipe(Effect.asVoid, Effect.mapError(cleanupError("git worktree remove"))),
+          ]
+        : []),
+      fs
+        .remove(temporaryRoot, { force: true, recursive: true })
+        .pipe(Effect.mapError(cleanupError("temporary directory removal"))),
+      Effect.scoped(runCommand(root, "git", ["worktree", "prune"])).pipe(
+        Effect.asVoid,
+        Effect.mapError(cleanupError("git worktree prune")),
+      ),
+    ];
+    const exits = yield* Effect.forEach(cleanupEffects, (cleanup) => cleanup.pipe(Effect.exit), {
+      concurrency: 1,
+    });
+    let combined: Cause.Cause<VerificationCleanupError> | undefined = Exit.isFailure(
+      worktreeExistsExit,
+    )
+      ? worktreeExistsExit.cause
+      : undefined;
+    for (const exit of exits) {
+      if (Exit.isSuccess(exit)) continue;
+      combined = combined === undefined ? exit.cause : Cause.combine(combined, exit.cause);
+    }
+    if (combined !== undefined) return yield* Effect.failCause(combined);
   },
 );
+
+const withExpectedWorktree = <A, E, R>(
+  root: string,
+  baseSha: string,
+  use: (worktree: string) => Effect.Effect<A, E, R>,
+) =>
+  Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const temporaryRoot = yield* fs.makeTempDirectory({
+        prefix: "effect-agent-changesets-release-",
+      });
+      const worktree = path.join(temporaryRoot, "expected");
+      const acquisitionExit = yield* restore(
+        runCommand(root, "git", ["worktree", "add", "--detach", worktree, baseSha]),
+      ).pipe(Effect.exit);
+      if (Exit.isFailure(acquisitionExit)) {
+        const cleanupExit = yield* cleanupExpectedWorktree(root, temporaryRoot, worktree).pipe(
+          Effect.exit,
+        );
+        return yield* Effect.failCause(
+          Exit.isFailure(cleanupExit)
+            ? Cause.combine(acquisitionExit.cause, cleanupExit.cause)
+            : acquisitionExit.cause,
+        );
+      }
+
+      const useExit = yield* restore(use(worktree)).pipe(Effect.exit);
+      const cleanupExit = yield* cleanupExpectedWorktree(root, temporaryRoot, worktree).pipe(
+        Effect.exit,
+      );
+      if (Exit.isFailure(useExit)) {
+        return yield* Effect.failCause(
+          Exit.isFailure(cleanupExit)
+            ? Cause.combine(useExit.cause, cleanupExit.cause)
+            : useExit.cause,
+        );
+      }
+      if (Exit.isFailure(cleanupExit)) return yield* Effect.failCause(cleanupExit.cause);
+      return useExit.value;
+    }),
+  );
 
 export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(function* (options: {
   readonly baseSha: string;
@@ -157,11 +209,17 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
   yield* runCommand(root, "git", ["cat-file", "-e", `${headSha}^{commit}`]);
   const actualTree = yield* runCommand(root, "git", ["rev-parse", `${headSha}^{tree}`]);
 
-  const changesetBinary =
-    options.changesetBinary ?? path.join(root, "node_modules", ".bin", "changeset");
-  const expectedTree = yield* Effect.scoped(
+  const expectedTree = yield* withExpectedWorktree(root, baseSha, (expectedWorktree) =>
     Effect.gen(function* () {
-      const { worktree: expectedWorktree } = yield* acquireExpectedWorktree(root, baseSha);
+      if (options.changesetBinary === undefined) {
+        yield* runCommand(expectedWorktree, "bun", [
+          "install",
+          "--frozen-lockfile",
+          "--ignore-scripts",
+        ]);
+      }
+      const changesetBinary =
+        options.changesetBinary ?? path.join(expectedWorktree, "node_modules", ".bin", "changeset");
       yield* runCommand(expectedWorktree, changesetBinary, ["version"]);
       yield* runCommand(expectedWorktree, "bun", ["install", "--ignore-scripts"]);
       yield* runCommand(expectedWorktree, "git", ["add", "--all"]);

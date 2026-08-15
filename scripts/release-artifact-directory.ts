@@ -52,24 +52,32 @@ export const prepareReleaseArtifactDirectory = <A, E, R>(
     return yield* Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
         const directory = yield* acquire;
-        const useExit = yield* restore(
-          Effect.gen(function* () {
-            const result = yield* prepare(directory);
-            yield* fs
-              .rename(directory, destination)
-              .pipe(Effect.mapError(artifactDirectoryError(destination, "commit")));
-            return result;
-          }),
-        ).pipe(Effect.exit);
-        if (Exit.isSuccess(useExit)) return useExit.value;
-
-        const cleanupExit = yield* fs
-          .remove(directory, { force: true, recursive: true })
-          .pipe(Effect.mapError(artifactDirectoryError(destination, "cleanup")), Effect.exit);
-        if (Exit.isFailure(cleanupExit)) {
-          return yield* Effect.failCause(Cause.combine(useExit.cause, cleanupExit.cause));
+        const prepareExit = yield* restore(prepare(directory)).pipe(Effect.exit);
+        if (Exit.isFailure(prepareExit)) {
+          const cleanupExit = yield* fs
+            .remove(directory, { force: true, recursive: true })
+            .pipe(Effect.mapError(artifactDirectoryError(destination, "cleanup")), Effect.exit);
+          return yield* Effect.failCause(
+            Exit.isFailure(cleanupExit)
+              ? Cause.combine(prepareExit.cause, cleanupExit.cause)
+              : prepareExit.cause,
+          );
         }
-        return yield* Effect.failCause(useExit.cause);
+
+        const commitExit = yield* fs
+          .rename(directory, destination)
+          .pipe(Effect.mapError(artifactDirectoryError(destination, "commit")), Effect.exit);
+        if (Exit.isFailure(commitExit)) {
+          const cleanupExit = yield* fs
+            .remove(directory, { force: true, recursive: true })
+            .pipe(Effect.mapError(artifactDirectoryError(destination, "cleanup")), Effect.exit);
+          return yield* Effect.failCause(
+            Exit.isFailure(cleanupExit)
+              ? Cause.combine(commitExit.cause, cleanupExit.cause)
+              : commitExit.cause,
+          );
+        }
+        return prepareExit.value;
       }),
     );
   });
