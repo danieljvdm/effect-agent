@@ -566,6 +566,14 @@ const decodeResumedToolCallParameters = <Tools extends Record<string, Tool.Any>>
  * extension by re-invoking with a larger allowance below the Definition's
  * ceiling.
  */
+const boundedAllowance = (policyBound: number, allowance: number | undefined): number =>
+  // Fail closed on non-finite allowances (RUN-021): `NaN` propagates through
+  // floor/max/min and every later `>` comparison answers false, which would
+  // silently erase the bound — an invalid allowance keeps the policy bound.
+  allowance === undefined || !Number.isFinite(allowance)
+    ? policyBound
+    : Math.min(policyBound, Math.max(1, Math.floor(allowance)));
+
 const effectiveRunBounds = (
   policy: AgentPolicy,
   options: {
@@ -573,14 +581,8 @@ const effectiveRunBounds = (
     readonly turnAllowance?: number | undefined;
   },
 ): { readonly maxTurns: number; readonly maxToolCalls: number } => ({
-  maxTurns:
-    options.turnAllowance === undefined
-      ? policy.maxTurns
-      : Math.min(policy.maxTurns, Math.max(1, Math.floor(options.turnAllowance))),
-  maxToolCalls:
-    options.toolCallAllowance === undefined
-      ? policy.maxToolCalls
-      : Math.min(policy.maxToolCalls, Math.max(1, Math.floor(options.toolCallAllowance))),
+  maxTurns: boundedAllowance(policy.maxTurns, options.turnAllowance),
+  maxToolCalls: boundedAllowance(policy.maxToolCalls, options.toolCallAllowance),
 });
 
 const makeToolFailedEvent = Effect.fn("AgentRuntime.makeToolFailedEvent")(function* (

@@ -2448,31 +2448,104 @@ layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => 
   );
 
   it.effect(
-    "SUB-034 the orchestrator grants a budget extension by re-delegating with a raised allowance",
+    "SUB-034 the orchestrator OBSERVES the budget-truncated partial, then grants an extension by re-delegating",
     () =>
       Effect.gen(function* () {
-        const { result, events, probeStarts } = yield* runAllowance({
-          name: "parent-allowance-extension",
-          calls: [
-            { id: "call-1", params: { topic: "small" } },
-            { id: "call-2", params: { topic: "grant-4" } },
-          ],
-          childScripts: [
+        const probeStarts = yield* Ref.make(0);
+        const childBinding = Agent.withModel(
+          probingChildDefinition,
+          probingChildModel([
             { topic: "small", declares: 2, answer: '{"answer":"draft"}' },
             { topic: "grant-4", declares: 2, answer: '{"answer":"complete"}' },
-          ],
-          runId: "parent-run-allowance-extension",
+          ]),
+        );
+        // Sequential, content-keyed coordinator: the granting call is
+        // declared ONLY after the partial result is visible in the prompt —
+        // the grant is a reaction to observed exhaustion, never preplanned.
+        const parentModel = Model.make(
+          "scripted",
+          "parent-allowance-sequential",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                const promptJson = JSON.stringify(request.prompt);
+                if (promptJson.includes("finding:complete")) {
+                  return Stream.fromIterable(finalParts('{"report":"done"}'));
+                }
+                if (promptJson.includes("partial:draft")) {
+                  return Stream.fromIterable<Response.StreamPartEncoded>([
+                    {
+                      type: "tool-call",
+                      id: "call-2",
+                      name: "delegate_allowance",
+                      params: { topic: "grant-4" },
+                      providerExecuted: false,
+                    },
+                    { type: "finish", reason: "tool-calls", usage },
+                  ]);
+                }
+                return Stream.fromIterable<Response.StreamPartEncoded>([
+                  {
+                    type: "tool-call",
+                    id: "call-1",
+                    name: "delegate_allowance",
+                    params: { topic: "small" },
+                    providerExecuted: false,
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ]);
+              },
+            }),
+          ),
+        );
+        const parent = Agent.withModel(allowanceCoordinator, parentModel);
+        const probeLayer = probeToolkit.toLayer({
+          probe_doc: ({ ref }) =>
+            Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
+        });
+        const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
+          mapChildFailure,
+        }).pipe(Layer.provide(probeLayer));
+
+        const detached = yield* AgentRuntime.start(
+          parent,
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-allowance-sequential") },
+        ).pipe(Effect.provide(runtimeLayer));
+        const result = yield* detached.await;
+        const events = yield* detached.events;
+
+        // Turn 1: default allowance 1 rejects the first child's batch — the
+        // coordinator SEES "partial:draft" and only then grants allowance 4;
+        // the second child executes both probes and returns the full finding.
+        expect(result.output).toEqual({ report: "done" });
+        expect(yield* Ref.get(probeStarts)).toBe(2);
+        const succeeded = events.filter((event) => event._tag === "ToolCallSucceeded");
+        expect(succeeded.map((event) => event.result)).toEqual([
+          { summary: "partial:draft" },
+          { summary: "finding:complete" },
+        ]);
+      }),
+  );
+
+  it.effect(
+    "SUB-034 a non-finite model-granted allowance falls back fail-closed to the default",
+    () =>
+      Effect.gen(function* () {
+        const { result, probeStarts } = yield* runAllowance({
+          name: "parent-allowance-nan",
+          // "grant-garbage" extracts Number("garbage") === NaN.
+          calls: [{ id: "call-1", params: { topic: "grant-garbage" } }],
+          childScripts: [{ topic: "grant-garbage", declares: 2, answer: '{"answer":"nan-safe"}' }],
+          runId: "parent-run-allowance-nan",
         });
 
-        // First invocation: default allowance 1 rejects the batch of 2 — a
-        // budget-truncated partial. Second invocation with the granted
-        // allowance of 4 executes both probes and returns the full finding.
+        // NaN never reaches the child options: the default of 1 applies, the
+        // batch of 2 is rejected, and the run still soft-lands bounded.
         expect(result.output).toEqual({ report: "done" });
-        expect(probeStarts).toBe(2);
-        const succeeded = events.filter((event) => event._tag === "ToolCallSucceeded");
-        expect(succeeded.map((event) => event.result)).toEqual(
-          expect.arrayContaining([{ summary: "partial:draft" }, { summary: "finding:complete" }]),
-        );
+        expect(probeStarts).toBe(0);
       }),
   );
 
