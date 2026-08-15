@@ -34242,7 +34242,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
   const bounds = effectiveRunBounds(policy2, options);
   const finalAnswerOnly = policy2.onExhaustion !== "fail" && (turn > bounds.maxTurns || priorToolCalls + context3.programmaticToolCalls > bounds.maxToolCalls);
   if (outputContract._tag === "unrenderable" && turn === 1) {
-    yield* exports_Effect.logWarning("Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted (ADR-0020)").pipe(exports_Effect.annotateLogs({
+    yield* exports_Effect.logWarning("Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted").pipe(exports_Effect.annotateLogs({
       agentId: context3.agentId,
       runId: context3.runId,
       reason: outputContract.reason

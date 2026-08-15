@@ -2453,7 +2453,7 @@ const makeTurn = <
     Effect.gen(function* () {
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
-      // Model-visible final-output contract (ADR-0020 / D-038, Proposed):
+      // Model-visible final-output contract (proposed default):
       // derived before context preparation so a limit-targeting adapter can
       // reserve the contract's overhead in its window calculation, applied to
       // the request after preparation so compaction cannot drop it, and never
@@ -2537,7 +2537,7 @@ const makeTurn = <
 
       if (outputContract._tag === "unrenderable" && turn === 1) {
         yield* Effect.logWarning(
-          "Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted (ADR-0020)",
+          "Agent output schema cannot render to JSON Schema; the model-visible final output contract is omitted",
         ).pipe(
           Effect.annotateLogs({
             agentId: context.agentId,

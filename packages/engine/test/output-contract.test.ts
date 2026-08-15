@@ -15,7 +15,7 @@ import { AgentRuntime } from "../src/index.ts";
 import { insertOutputContract, outputSchemaContract } from "../src/output-contract-internal.ts";
 
 /**
- * ADR-0020 / D-038 (both Proposed): the model-visible final-output contract.
+ * The model-visible final-output contract (proposed default).
  *
  * These suites cover the proposed default's three claims: the contract rides
  * every model request adjacent to the last system block; official history
@@ -146,7 +146,7 @@ const policy = AgentPolicy.make({
   toolConcurrency: 1,
 });
 
-layer(identifiers)("ADR-0020 model-visible output contract (proposed default)", (it) => {
+layer(identifiers)("model-visible output contract (proposed default)", (it) => {
   it.effect(
     "carries the contract on every Turn's request adjacent to the last system block and never in official history",
     () => {
