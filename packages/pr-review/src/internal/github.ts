@@ -5,6 +5,7 @@ import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstab
 import { ChangedFile } from "./diff.ts";
 import { extractFingerprint } from "./fingerprint.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
+import { extractReviewState, ReviewHeadComparison, type ReviewState } from "./review-state.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
@@ -62,7 +63,7 @@ const GitHubPullRequestWire = Schema.Struct({
   title: Schema.String,
   body: Schema.NullOr(Schema.String),
   changed_files: Schema.Int,
-  base: Schema.Struct({ ref: Schema.String }),
+  base: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
   head: Schema.Struct({ ref: Schema.String, sha: Schema.String }),
 });
 
@@ -201,6 +202,7 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
           title: wire.title.slice(0, 400),
           body: (wire.body ?? "").slice(0, 20_000),
           baseRef: wire.base.ref,
+          baseSha: wire.base.sha,
           headRef: wire.head.ref,
           headSha: wire.head.sha,
           totalChangedFiles: wire.changed_files,
@@ -273,7 +275,7 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
         return text;
       });
 
-    return PullRequestSource.of({ metadata, changedFiles, readFile });
+    return PullRequestSource.of({ metadata, changedFiles, anchorFiles: changedFiles, readFile });
   }),
 );
 
@@ -358,13 +360,35 @@ export class PriorReviews extends Context.Service<
   {
     /** The fingerprint embedded in the most recent marker-bearing review. */
     readonly latestFingerprint: Effect.Effect<Option.Option<string>, PriorReviewLookupFailure>;
+    /** The latest valid, successfully covered review state marker. */
+    readonly latestState: Effect.Effect<Option.Option<ReviewState>, PriorReviewLookupFailure>;
+    /** Compare a previously reviewed head to the live current head. */
+    readonly compareHeads: (
+      baseSha: string,
+      headSha: string,
+    ) => Effect.Effect<ReviewHeadComparison, PriorReviewLookupFailure>;
   }
 >()("@effect-agent/pr-review/PriorReviews") {}
 
 const GitHubPriorReviewWire = Schema.Struct({
   body: Schema.NullOr(Schema.String),
+  user: Schema.optionalKey(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.String,
+        type: Schema.String,
+      }),
+    ),
+  ),
 });
 const GitHubPriorReviewsPageWire = Schema.Array(GitHubPriorReviewWire);
+
+const GitHubCompareWire = Schema.Struct({
+  status: Schema.Literals(["ahead", "behind", "diverged", "identical"]),
+  base_commit: Schema.Struct({ sha: Schema.String }),
+  merge_base_commit: Schema.Struct({ sha: Schema.String }),
+  files: Schema.optionalKey(GitHubFilesPageWire),
+});
 
 /** Reviews are paged chronologically; scanning stays bounded. */
 const MAX_PRIOR_REVIEW_PAGES = 5;
@@ -384,9 +408,10 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
       PriorReviewLookupFailure.make({
         reason: `${error._tag}: ${error.message ?? "request failed"}`.slice(0, 2_048),
       });
-    const latestFingerprint = Effect.gen(function* () {
+    const readMarkers = Effect.gen(function* () {
       const perPage = 100;
       let latest = Option.none<string>();
+      let latestState = Option.none<ReviewState>();
       for (let page = 1; page <= MAX_PRIOR_REVIEW_PAGES; page += 1) {
         const response = yield* HttpClient.execute(
           withCommonHeaders(
@@ -405,14 +430,54 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
           Effect.flatMap((body) => decodePage(body).pipe(Effect.mapError(asLookupFailure))),
         );
         for (const wire of wires) {
+          // State controls what required scope may be omitted. Accept it only
+          // from this workflow's default GitHub Actions identity; user-authored
+          // marker text is untrusted and therefore ignored. Custom-token
+          // authors safely fall back to a full review.
+          if (wire.user?.login !== "github-actions[bot]" || wire.user.type !== "Bot") continue;
           const fingerprint = extractFingerprint(wire.body ?? "");
           if (fingerprint !== undefined) latest = Option.some(fingerprint);
+          const state = extractReviewState(wire.body ?? "");
+          if (state !== undefined) latestState = Option.some(state);
         }
         if (wires.length < perPage) break;
       }
-      return latest;
+      return { latestFingerprint: latest, latestState };
     }).pipe(Effect.provideService(HttpClient.HttpClient, client));
-    return PriorReviews.of({ latestFingerprint });
+    const cachedMarkers = yield* Effect.cached(readMarkers);
+    const compareHeads = (baseSha: string, headSha: string) =>
+      Effect.gen(function* () {
+        const response = yield* HttpClient.execute(
+          withCommonHeaders(
+            HttpClientRequest.get(
+              `${target.apiUrl}/repos/${target.repository}/compare/${encodeURIComponent(baseSha)}...${encodeURIComponent(headSha)}`,
+            ).pipe(HttpClientRequest.acceptJson),
+            target.token,
+          ),
+        ).pipe(Effect.flatMap(HttpClientResponse.filterStatusOk), Effect.mapError(asLookupFailure));
+        const wire = yield* response.json.pipe(
+          Effect.mapError(asLookupFailure),
+          Effect.flatMap((body) =>
+            Schema.decodeUnknownEffect(GitHubCompareWire)(body).pipe(
+              Effect.mapError(asLookupFailure),
+            ),
+          ),
+        );
+        const files = (wire.files ?? []).map(toChangedFile);
+        return ReviewHeadComparison.make({
+          status: wire.status,
+          baseSha: wire.base_commit.sha,
+          headSha,
+          mergeBaseSha: wire.merge_base_commit.sha,
+          files,
+          truncated: files.length >= MAX_CHANGED_FILES,
+        });
+      }).pipe(Effect.provideService(HttpClient.HttpClient, client));
+    return PriorReviews.of({
+      latestFingerprint: cachedMarkers.pipe(Effect.map((markers) => markers.latestFingerprint)),
+      latestState: cachedMarkers.pipe(Effect.map((markers) => markers.latestState)),
+      compareHeads,
+    });
   }),
 );
 

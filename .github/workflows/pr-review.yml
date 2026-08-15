@@ -1,13 +1,14 @@
 # Agentic pull-request review via the prebuilt ./action bundle
-# (@effect-agent/pr-review). The job runs only when the OPENAI_API_KEY secret
-# is configured (the secrets context is unavailable in `if:` conditions, so
-# presence is carried through a job-level env var). Reviews always post as
-# COMMENT events.
+# (@effect-agent/pr-review). Reviews always post as COMMENT events; a missing
+# provider credential fails the Action instead of producing a skipped green
+# check. Normal synchronize events review
+# only changes since the last compatible successfully covered head. Applying
+# the `pr-review:final-audit` label requests one deliberate full-diff audit.
 name: PR Review
 
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review, synchronize]
+    types: [opened, reopened, ready_for_review, synchronize, labeled]
 
 permissions:
   contents: read
@@ -19,24 +20,20 @@ concurrency:
 
 jobs:
   review:
-    name: review
+    name: ${{ github.event.action == 'labeled' && github.event.label.name != 'pr-review:final-audit' && 'pr-review-ignored' || 'review' }}
     # Drafts wait for ready_for_review (the action also skips drafts
     # internally; this guard saves the runner spin-up).
-    if: ${{ !github.event.pull_request.draft }}
+    if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
     runs-on: ubuntu-latest
     # Above the fan-out run's 15-minute duration budget, so a run approaching
     # its own budget ends gracefully instead of being killed by the runner
     # with nothing posted.
     timeout-minutes: 20
-    env:
-      HAS_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
       - name: Check out repository
-        if: env.HAS_OPENAI_KEY == 'true'
         uses: actions/checkout@v4
 
       - name: Review the pull request and post the validated result
-        if: env.HAS_OPENAI_KEY == 'true'
         uses: ./action
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -54,3 +51,4 @@ jobs:
           # output, and dev-kit-managed skill copies.
           ignore: "bun.lock,dev-kit.lock.json,action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
           max-findings: "12"
+          review-mode: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'final' || 'incremental' }}

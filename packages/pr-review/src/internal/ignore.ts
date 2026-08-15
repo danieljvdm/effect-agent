@@ -59,8 +59,11 @@ export const ignoringPullRequestSourceLayer = (
       const changedFiles = source.changedFiles.pipe(
         Effect.map((files) => files.filter((file) => !ignored(file.path))),
       );
+      const anchorFiles = source.anchorFiles.pipe(
+        Effect.map((files) => files.filter((file) => !ignored(file.path))),
+      );
       const metadata = Effect.gen(function* () {
-        const [meta, files] = yield* Effect.all([source.metadata, source.changedFiles]);
+        const [meta, files] = yield* Effect.all([source.metadata, source.anchorFiles]);
         const ignoredCount = files.filter((file) => ignored(file.path)).length;
         return PullRequestMetadata.make({
           ...meta,
@@ -70,6 +73,7 @@ export const ignoringPullRequestSourceLayer = (
       return PullRequestSource.of({
         metadata,
         changedFiles,
+        anchorFiles,
         readFile: (path) =>
           ignored(path)
             ? Effect.fail(

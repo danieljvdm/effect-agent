@@ -207,6 +207,7 @@ const runOfflineFanOut = (script: {
       post: true,
       applyVerdict: false,
       limits: fanOutReviewBudgetLimits,
+      reviewShape: "fan-out",
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -452,6 +453,8 @@ describe("offline fan-out review run", () => {
         // Publication went through the collecting publisher exactly once.
         expect(result.published).toHaveLength(1);
         expect(result.outcome.published?.inlineComments).toBe(2);
+        expect(result.outcome.coverage.status).toBe("incomplete");
+        expect(result.outcome.coverage.unreviewedPaths).toContain("assets/logo.png");
 
         // Context isolation: each child saw exactly its briefed unit — never
         // the other unit's paths and never the parent-only mission marker.
@@ -566,6 +569,11 @@ describe("offline fan-out review run", () => {
       expect(result.outcome.plan.comments.map((comment) => comment.path)).toEqual([
         "src/api/alpha.ts",
       ]);
+      expect(result.outcome.coverage.status).toBe("incomplete");
+      expect(result.outcome.coverage.failedUnits).toContainEqual({
+        unitId: "unit-002",
+        errorTag: "FileReviewUnitFailed",
+      });
     }),
   );
 
@@ -646,6 +654,11 @@ describe("offline fan-out review run", () => {
       expect(finalPrompt).toContain("16 Tool Call limit");
       expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
       expect(result.published).toHaveLength(1);
+      expect(result.outcome.coverage.status).toBe("incomplete");
+      expect(result.outcome.coverage.failedUnits).toContainEqual({
+        unitId: "unit-002",
+        errorTag: "FileReviewUnitFailed",
+      });
     }),
   );
 });

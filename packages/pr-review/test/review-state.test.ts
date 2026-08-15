@@ -1,0 +1,189 @@
+import { describe, expect, it } from "@effect/vitest";
+
+import {
+  ChangedFile,
+  extractReviewState,
+  PullRequestMetadata,
+  renderReviewStateMarker,
+  ReviewHeadComparison,
+  ReviewState,
+  selectReviewRange,
+  StoredReviewFinding,
+} from "../src/index.ts";
+
+const BASE_SHA = "1".repeat(40);
+const REVIEWED_HEAD_SHA = "2".repeat(40);
+const CURRENT_HEAD_SHA = "3".repeat(40);
+const PROFILE_FINGERPRINT = "a".repeat(64);
+const SCOPE_FINGERPRINT = "b".repeat(64);
+
+const acceptedFile = ChangedFile.make({
+  path: "src/accepted.ts",
+  status: "modified",
+  additions: 1,
+  deletions: 1,
+  patch: "@@ -1 +1 @@\n-old\n+accepted",
+});
+
+const correctiveFile = ChangedFile.make({
+  path: "src/corrective.ts",
+  status: "modified",
+  additions: 1,
+  deletions: 1,
+  patch: "@@ -1 +1 @@\n-before\n+after",
+});
+
+const metadata = PullRequestMetadata.make({
+  repository: "acme/widgets",
+  number: 30,
+  title: "Correct the review finding",
+  body: "",
+  baseRef: "main",
+  baseSha: BASE_SHA,
+  headRef: "fix/review",
+  headSha: CURRENT_HEAD_SHA,
+  totalChangedFiles: 2,
+});
+
+const unresolvedFinding = StoredReviewFinding.make({
+  path: "src/accepted.ts",
+  startLine: 1,
+  endLine: 1,
+  severity: "important",
+  title: "Still requires attention",
+  body: "This unresolved finding must remain active while another file changes.",
+});
+
+const priorState = ReviewState.make({
+  version: 1,
+  repository: metadata.repository,
+  pullRequestNumber: metadata.number,
+  baseRef: metadata.baseRef,
+  baseSha: BASE_SHA,
+  headRef: metadata.headRef,
+  reviewedHeadSha: REVIEWED_HEAD_SHA,
+  profileFingerprint: PROFILE_FINGERPRINT,
+  acceptedScopeFingerprint: SCOPE_FINGERPRINT,
+  reviewedPathCount: 1,
+  unresolvedFindings: [unresolvedFinding],
+  unresolvedConcerns: [],
+  lastReviewMode: "full",
+});
+
+const comparison = ReviewHeadComparison.make({
+  status: "ahead",
+  baseSha: REVIEWED_HEAD_SHA,
+  headSha: CURRENT_HEAD_SHA,
+  mergeBaseSha: REVIEWED_HEAD_SHA,
+  files: [correctiveFile],
+  truncated: false,
+});
+
+const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}) =>
+  selectReviewRange({
+    requestedMode: "incremental",
+    current: metadata,
+    fullFiles: [acceptedFile, correctiveFile],
+    profileFingerprint: PROFILE_FINGERPRINT,
+    priorState,
+    comparison,
+    ...overrides,
+  });
+
+describe("durable review state", () => {
+  it("round-trips a schema-validated review-body marker and ignores malformed state", () => {
+    const marker = renderReviewStateMarker(priorState);
+    expect(extractReviewState(`review body\n${marker}`)).toEqual(priorState);
+    expect(extractReviewState("<!-- effect-agent-pr-review state-v1:not-base64 -->")).toBe(
+      undefined,
+    );
+  });
+
+  it("reviews only the corrective delta and preserves unchanged prior scope", () => {
+    const selection = select();
+    expect(selection.mode).toBe("incremental");
+    expect(selection.baselineSha).toBe(REVIEWED_HEAD_SHA);
+    expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
+    expect(selection.files.map((file) => file.path)).not.toContain("src/accepted.ts");
+    expect(selection.priorState?.unresolvedFindings).toEqual([unresolvedFinding]);
+    expect(selection.reason).toContain(REVIEWED_HEAD_SHA.slice(0, 7));
+  });
+
+  it("falls back to the full diff when state is missing or incompatible", () => {
+    const missing = select({ priorState: undefined, comparison: undefined });
+    expect(missing.mode).toBe("full");
+    expect(missing.reason).toContain("no compatible stored review state");
+
+    const wrongProfile = select({ profileFingerprint: "c".repeat(64) });
+    expect(wrongProfile.mode).toBe("full");
+    expect(wrongProfile.reason).toContain("profile or model configuration changed");
+
+    const changedBase = select({
+      current: PullRequestMetadata.make({ ...metadata, baseSha: "4".repeat(40) }),
+    });
+    expect(changedBase.mode).toBe("full");
+    expect(changedBase.reason).toContain("base changed");
+  });
+
+  it("falls back to the full diff for unsafe or incomplete head comparisons", () => {
+    const diverged = select({
+      comparison: ReviewHeadComparison.make({ ...comparison, status: "diverged" }),
+    });
+    expect(diverged.mode).toBe("full");
+    expect(diverged.reason).toContain("not an ancestor");
+
+    const truncated = select({
+      comparison: ReviewHeadComparison.make({ ...comparison, truncated: true }),
+    });
+    expect(truncated.mode).toBe("full");
+    expect(truncated.reason).toContain("file bound");
+
+    const unavailable = select({ comparison: undefined });
+    expect(unavailable.mode).toBe("full");
+    expect(unavailable.reason).toContain("comparison was unavailable");
+  });
+
+  it("keeps an ancestor base advance incremental and includes overlapping PR context", () => {
+    const nextBase = "4".repeat(40);
+    const baseComparison = ReviewHeadComparison.make({
+      status: "ahead",
+      baseSha: BASE_SHA,
+      headSha: nextBase,
+      mergeBaseSha: BASE_SHA,
+      files: [acceptedFile],
+      truncated: false,
+    });
+    const selection = select({
+      current: PullRequestMetadata.make({ ...metadata, baseSha: nextBase }),
+      baseComparison,
+    });
+    expect(selection.mode).toBe("incremental");
+    expect(selection.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    expect(selection.reason).toContain("base advanced");
+
+    const rewrittenBase = select({
+      current: PullRequestMetadata.make({ ...metadata, baseSha: nextBase }),
+      baseComparison: ReviewHeadComparison.make({
+        ...baseComparison,
+        status: "diverged",
+        mergeBaseSha: "5".repeat(40),
+      }),
+    });
+    expect(rewrittenBase.mode).toBe("full");
+    expect(rewrittenBase.reason).toContain("changed materially");
+  });
+
+  it("performs a bounded full-diff audit only when final mode is explicit", () => {
+    const selection = select({ requestedMode: "final" });
+    expect(selection.mode).toBe("full");
+    expect(selection.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    expect(selection.reason).toBe("explicit final full-diff audit requested");
+    expect(selection.priorState).toBe(undefined);
+  });
+});

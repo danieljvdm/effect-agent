@@ -26,6 +26,8 @@ export class PullRequestMetadata extends Schema.Class<PullRequestMetadata>(
   /** Author-provided description; empty when the author left none. */
   body: Schema.String.check(Schema.isMaxLength(20_000)),
   baseRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
+  /** Exact base commit used to validate persisted incremental-review lineage. */
+  baseSha: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(64))),
   headRef: Schema.NonEmptyString.check(Schema.isMaxLength(300)),
   headSha: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
   /** GitHub's own changed-file total; may exceed what `changedFiles` returns. */
@@ -93,7 +95,10 @@ export class PullRequestSource extends Context.Service<
   PullRequestSource,
   {
     readonly metadata: Effect.Effect<PullRequestMetadata, PullRequestSourceFailure>;
+    /** Files exposed to the model for this run (full PR or selected delta). */
     readonly changedFiles: Effect.Effect<ReadonlyArray<ChangedFile>, PullRequestSourceFailure>;
+    /** Full current PR diff used only for host-side anchor/state validation. */
+    readonly anchorFiles: Effect.Effect<ReadonlyArray<ChangedFile>, PullRequestSourceFailure>;
     /**
      * The head-version content of one CHANGED file. Paths outside the
      * changeset are violations: the reviewer reads the change, not the tree.

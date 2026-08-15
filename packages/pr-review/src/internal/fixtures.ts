@@ -1,8 +1,14 @@
 import { Effect, Layer, Option, Ref, Schema } from "effect";
 
 import { ChangedFile } from "./diff.ts";
-import { PriorReviews, PublishedReview, ReviewPublisher } from "./github.ts";
+import {
+  PriorReviewLookupFailure,
+  PriorReviews,
+  PublishedReview,
+  ReviewPublisher,
+} from "./github.ts";
 import type { ReviewPublicationPlan } from "./render.ts";
+import { ReviewHeadComparison, type ReviewState } from "./review-state.ts";
 import {
   MAX_CHANGED_FILES,
   MAX_FILE_CHARS,
@@ -56,6 +62,7 @@ export const fixturePullRequestSourceLayer = (
     PullRequestSource.of({
       metadata: Effect.succeed(fixture.metadata),
       changedFiles: Effect.succeed(fixture.files.map((entry) => entry.file)),
+      anchorFiles: Effect.succeed(fixture.files.map((entry) => entry.file)),
       readFile: (path) =>
         Effect.gen(function* () {
           const relative = yield* normalizeRepoRelativePath(path);
@@ -95,5 +102,18 @@ export const collectingReviewPublisherLayer = (
 /** Static `PriorReviews` for tests: a fixed latest fingerprint (or none). */
 export const staticPriorReviewsLayer = (
   fingerprint: Option.Option<string>,
+  options: {
+    readonly state?: Option.Option<ReviewState> | undefined;
+    readonly comparison?: ReviewHeadComparison | undefined;
+  } = {},
 ): Layer.Layer<PriorReviews> =>
-  Layer.succeed(PriorReviews)(PriorReviews.of({ latestFingerprint: Effect.succeed(fingerprint) }));
+  Layer.succeed(PriorReviews)(
+    PriorReviews.of({
+      latestFingerprint: Effect.succeed(fingerprint),
+      latestState: Effect.succeed(options.state ?? Option.none()),
+      compareHeads: () =>
+        options.comparison === undefined
+          ? Effect.fail(PriorReviewLookupFailure.make({ reason: "no fixture comparison" }))
+          : Effect.succeed(options.comparison),
+    }),
+  );

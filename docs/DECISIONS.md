@@ -483,13 +483,19 @@ Record: [ADR-0009](adr/0009-leaf-example-workspaces.md)
 configuration factory (`PrReview.make` / `PrReview.makeFanOut`), the GitHub adapters, a
 deterministic `./testing` entry, and `./action` + `./cli` host entrypoints. Ship a prebuilt
 node-runtime GitHub Action at `action/` whose bundled `action/dist/index.mjs` is committed — a
-recorded exception to the dist-is-gitignored convention, kept fresh by a `bun run check` gate.
+recorded exception to the dist-is-gitignored convention, kept fresh by a `vp run check` gate.
 
 The package depends on the `effect-agent` umbrella (the first package-level consumer of that
 edge), declares deployment class E only, and never claims exactly-once review posting (DUR-003).
 Customization widens the review's inputs (guidance, extra `readonly` tools, ignore globs, bounds);
 the fail-closed publication path — anchor validation, findings bound, publication after
 settlement — is not configurable.
+
+Completed reviews also carry bounded, schema-validated continuity state in their GitHub review
+body. Normal synchronize runs validate that state and review the affected head-to-head delta;
+explicit final mode audits the full diff. The Actions check is host-derived and non-success for
+any active blocker or incomplete required coverage, regardless of model verdict. See ADR-0016's
+2026-08-15 amendment.
 
 This is the first package created outside a numbered roadmap phase; D-025's phase gate is
 otherwise unchanged.
