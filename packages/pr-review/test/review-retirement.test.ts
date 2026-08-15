@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Option, Redacted, Ref } from "effect";
+import { Effect, Exit, Option, Redacted, Ref } from "effect";
 
 import {
   decideReviewRetirement,
@@ -20,6 +20,8 @@ const CURRENT_HEAD_SHA = "3".repeat(40);
 const PROFILE_FINGERPRINT = "a".repeat(64);
 const SCOPE_FINGERPRINT = "b".repeat(64);
 const STATE_SECRET = Redacted.make("review-retirement-test-secret");
+const BOT_NODE_ID = "BOT_effect-agent-reviewer";
+const CURRENT_SUBMITTED_AT = "2026-08-15T20:10:00Z";
 
 const resolvedFinding = StoredReviewFinding.make({
   path: "src/resolved.ts",
@@ -144,7 +146,7 @@ describe("review retirement", () => {
   );
 
   it.effect(
-    "touches only marker-bearing prior reviews and minimizes only resolved inline comments",
+    "touches only older same-actor marker reviews and minimizes only resolved inline comments",
     () =>
       Effect.gen(function* () {
         const prior = yield* renderPriorBody;
@@ -156,16 +158,36 @@ describe("review retirement", () => {
               reviewId: 1,
               body: prior.body,
               commitSha: PRIOR_HEAD_SHA,
+              authorNodeId: BOT_NODE_ID,
+              submittedAt: "2026-08-15T20:00:00Z",
             }),
             RetirableReview.make({
               reviewId: 7,
               body: "A human-authored review without the package metadata marker.",
               commitSha: PRIOR_HEAD_SHA,
+              authorNodeId: BOT_NODE_ID,
+              submittedAt: "2026-08-15T20:01:00Z",
+            }),
+            RetirableReview.make({
+              reviewId: 8,
+              body: prior.body,
+              commitSha: PRIOR_HEAD_SHA,
+              authorNodeId: "USER_copied-signed-state",
+              submittedAt: "2026-08-15T20:02:00Z",
             }),
             RetirableReview.make({
               reviewId: 9,
               body: prior.body,
               commitSha: CURRENT_HEAD_SHA,
+              authorNodeId: BOT_NODE_ID,
+              submittedAt: CURRENT_SUBMITTED_AT,
+            }),
+            RetirableReview.make({
+              reviewId: 10,
+              body: prior.body,
+              commitSha: CURRENT_HEAD_SHA,
+              authorNodeId: BOT_NODE_ID,
+              submittedAt: "2026-08-15T20:11:00Z",
             }),
           ]),
           listComments: () => Effect.succeed([resolvedComment, unresolvedComment]),
@@ -177,6 +199,8 @@ describe("review retirement", () => {
         const report = yield* retireStaleReviews({
           currentReviewId: 9,
           currentReviewUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-9",
+          currentAuthorNodeId: BOT_NODE_ID,
+          currentSubmittedAt: CURRENT_SUBMITTED_AT,
           currentState,
         }).pipe(Effect.provideService(ReviewRetirementHost, host));
 
@@ -202,6 +226,8 @@ describe("review retirement", () => {
             reviewId: 1,
             body: prior.body,
             commitSha: PRIOR_HEAD_SHA,
+            authorNodeId: BOT_NODE_ID,
+            submittedAt: "2026-08-15T20:00:00Z",
           }),
         ]),
         listComments: () => Effect.succeed([resolvedComment]),
@@ -212,6 +238,8 @@ describe("review retirement", () => {
       const report = yield* retireStaleReviews({
         currentReviewId: 9,
         currentReviewUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-9",
+        currentAuthorNodeId: BOT_NODE_ID,
+        currentSubmittedAt: CURRENT_SUBMITTED_AT,
         currentState,
       }).pipe(Effect.provideService(ReviewRetirementHost, host));
 
@@ -221,6 +249,27 @@ describe("review retirement", () => {
         commentsMinimized: 0,
         failures: 2,
       });
+    }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(STATE_SECRET))),
+  );
+
+  it.effect("does not downgrade retirement defects into cosmetic failures", () =>
+    Effect.gen(function* () {
+      const host = ReviewRetirementHost.of({
+        listReviews: Effect.die("scripted retirement defect"),
+        listComments: () => Effect.die("Unexpected comment listing"),
+        updateBody: () => Effect.die("Unexpected review edit"),
+        minimizeComment: () => Effect.die("Unexpected comment minimization"),
+      });
+
+      const exit = yield* retireStaleReviews({
+        currentReviewId: 9,
+        currentReviewUrl: "https://github.com/acme/widgets/pull/42#pullrequestreview-9",
+        currentAuthorNodeId: BOT_NODE_ID,
+        currentSubmittedAt: CURRENT_SUBMITTED_AT,
+        currentState,
+      }).pipe(Effect.provideService(ReviewRetirementHost, host), Effect.exit);
+
+      expect(Exit.isFailure(exit)).toBe(true);
     }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(STATE_SECRET))),
   );
 });

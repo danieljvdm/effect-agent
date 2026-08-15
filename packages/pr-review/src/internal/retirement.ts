@@ -21,6 +21,8 @@ export class RetirableReview extends Schema.Class<RetirableReview>(
   reviewId: Schema.Int.check(Schema.isGreaterThan(0)),
   body: Schema.String.check(Schema.isMaxLength(60_000)),
   commitSha: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+  authorNodeId: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
+  submittedAt: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(100))),
 }) {}
 
 /** One inline comment attached to a previously posted review. */
@@ -79,6 +81,8 @@ export class ReviewRetirementReport extends Schema.Class<ReviewRetirementReport>
 export interface ReviewRetirementInput {
   readonly currentReviewId: number;
   readonly currentReviewUrl: string;
+  readonly currentAuthorNodeId: string;
+  readonly currentSubmittedAt: string;
   readonly currentState: ReviewState;
 }
 
@@ -211,10 +215,15 @@ const failOpen = <A, E, R>(
   message: string,
 ): Effect.Effect<A, never, R> =>
   effect.pipe(
-    Effect.catchCause((cause) =>
-      Effect.logWarning(`${message}: ${String(cause)}`).pipe(Effect.as(fallback)),
+    Effect.catch((error) =>
+      Effect.logWarning(`${message}: ${String(error)}`).pipe(Effect.as(fallback)),
     ),
   );
+
+const isStrictlyOlderReview = (review: RetirableReview, input: ReviewRetirementInput): boolean =>
+  review.submittedAt !== null &&
+  (review.submittedAt < input.currentSubmittedAt ||
+    (review.submittedAt === input.currentSubmittedAt && review.reviewId < input.currentReviewId));
 
 /**
  * Retire every marker-bearing prior review against the newest posted state.
@@ -253,7 +262,11 @@ export const retireStaleReviews = Effect.fn("retireStaleReviews")(function* (
   }
 
   for (const review of reviews) {
-    if (review.reviewId === input.currentReviewId || !hasReviewMetadataMarker(review.body)) {
+    if (
+      review.authorNodeId !== input.currentAuthorNodeId ||
+      !isStrictlyOlderReview(review, input) ||
+      !hasReviewMetadataMarker(review.body)
+    ) {
       continue;
     }
     const priorState = yield* failOpen(

@@ -102,15 +102,21 @@ const GitHubFileWire = Schema.Struct({
 
 const GitHubFilesPageWire = Schema.Array(GitHubFileWire);
 
+const GitHubActorWire = Schema.Struct({ node_id: Schema.String });
+
 const GitHubReviewWire = Schema.Struct({
   id: Schema.Int,
   html_url: Schema.String,
+  user: Schema.NullOr(GitHubActorWire),
+  submitted_at: Schema.NullOr(Schema.String),
 });
 
 const GitHubRetirableReviewWire = Schema.Struct({
   id: Schema.Int,
   body: Schema.NullOr(Schema.String),
   commit_id: Schema.String,
+  user: Schema.NullOr(GitHubActorWire),
+  submitted_at: Schema.NullOr(Schema.String),
 });
 const GitHubRetirableReviewsPageWire = Schema.Array(GitHubRetirableReviewWire);
 
@@ -148,6 +154,9 @@ export class PublishedReview extends Schema.Class<PublishedReview>(
   url: Schema.String,
   event: Schema.String,
   inlineComments: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** Actor and ordering boundary returned by the create-review response. */
+  authorNodeId: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
+  submittedAt: Schema.NullOr(Schema.NonEmptyString.check(Schema.isMaxLength(100))),
 }) {}
 
 /** Posts one planned review; the ONLY mutating operation in this package. */
@@ -388,6 +397,8 @@ export const gitHubReviewPublisherLayer: Layer.Layer<
             url: wire.html_url,
             event: plan.event,
             inlineComments: plan.comments.length,
+            authorNodeId: wire.user?.node_id ?? null,
+            submittedAt: wire.submitted_at,
           });
         }),
     });
@@ -482,6 +493,8 @@ export const gitHubReviewRetirementHostLayer: Layer.Layer<
               reviewId: review.id,
               body: review.body ?? "",
               commitSha: review.commit_id,
+              authorNodeId: review.user?.node_id ?? null,
+              submittedAt: review.submitted_at,
             }),
           ),
         ),

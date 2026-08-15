@@ -576,20 +576,30 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       if (outcome.published !== undefined) {
         yield* Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
         if (options.retireStaleReviews !== false && outcome.state !== undefined) {
-          const retirement = retireStaleReviews({
-            currentReviewId: outcome.published.reviewId,
-            currentReviewUrl: outcome.published.url,
-            currentState: outcome.state,
-          });
-          const report = yield* options.retirementHost === undefined
-            ? retirement
-            : retirement.pipe(Effect.provideService(ReviewRetirementHost, options.retirementHost));
-          yield* Console.log(
-            `Review retirement: ${report.reviewsRetired} prior review(s), ` +
-              `${report.findingsResolved} resolved finding(s), ` +
-              `${report.commentsMinimized} minimized inline comment(s), ` +
-              `${report.failures} failure(s).`,
-          );
+          if (outcome.published.authorNodeId === null || outcome.published.submittedAt === null) {
+            yield* Console.warn(
+              "Skipping stale-review retirement because GitHub did not return the posted review's actor and submission time.",
+            );
+          } else {
+            const retirement = retireStaleReviews({
+              currentReviewId: outcome.published.reviewId,
+              currentReviewUrl: outcome.published.url,
+              currentAuthorNodeId: outcome.published.authorNodeId,
+              currentSubmittedAt: outcome.published.submittedAt,
+              currentState: outcome.state,
+            });
+            const report = yield* options.retirementHost === undefined
+              ? retirement
+              : retirement.pipe(
+                  Effect.provideService(ReviewRetirementHost, options.retirementHost),
+                );
+            yield* Console.log(
+              `Review retirement: ${report.reviewsRetired} prior review(s), ` +
+                `${report.findingsResolved} resolved finding(s), ` +
+                `${report.commentsMinimized} minimized inline comment(s), ` +
+                `${report.failures} failure(s).`,
+            );
+          }
         }
       }
       const check = concludeReviewOutcome(outcome);

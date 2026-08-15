@@ -78,6 +78,9 @@ After a new state-bearing review posts, `retire-stale-reviews: "true"` (the
 default) turns earlier marker-bearing bot reviews into collapsed, superseded
 history. Findings absent from the newest unresolved set are struck through in
 the old body, and their inline comments are minimized as outdated. The
+mutation boundary requires the same GitHub actor as the newly posted review
+and a strictly older submission time/id, so copied markers and newer concurrent
+reviews are not touched. The
 authenticated state comments remain byte-identical and terminal, so edited
 reviews are still valid continuity inputs. Retirement is cosmetic and
 fail-open: GitHub edit or minimization failures are logged without changing

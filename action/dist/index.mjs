@@ -41755,7 +41755,9 @@ var PositiveLine = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
 class RetirableReview extends exports_Schema.Class("@effect-agent/pr-review/RetirableReview")({
   reviewId: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   body: exports_Schema.String.check(exports_Schema.isMaxLength(60000)),
-  commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))
+  commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
+  authorNodeId: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
+  submittedAt: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)))
 }) {
 }
 
@@ -41862,7 +41864,8 @@ var inlineCommentIdentity = (comment) => {
     title
   });
 };
-var failOpen = (effect2, fallback, message) => effect2.pipe(exports_Effect.catchCause((cause) => exports_Effect.logWarning(`${message}: ${String(cause)}`).pipe(exports_Effect.as(fallback))));
+var failOpen = (effect2, fallback, message) => effect2.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`${message}: ${String(error2)}`).pipe(exports_Effect.as(fallback))));
+var isStrictlyOlderReview = (review, input) => review.submittedAt !== null && (review.submittedAt < input.currentSubmittedAt || review.submittedAt === input.currentSubmittedAt && review.reviewId < input.currentReviewId);
 var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (input) {
   const host = yield* ReviewRetirementHost;
   const authenticator = yield* ReviewStateAuthenticator;
@@ -41889,7 +41892,7 @@ var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (inpu
     });
   }
   for (const review of reviews) {
-    if (review.reviewId === input.currentReviewId || !hasReviewMetadataMarker(review.body)) {
+    if (review.authorNodeId !== input.currentAuthorNodeId || !isStrictlyOlderReview(review, input) || !hasReviewMetadataMarker(review.body)) {
       continue;
     }
     const priorState = yield* failOpen(authenticator.extract(review.body), exports_Option.none(), `Could not authenticate prior review ${review.reviewId}`);
@@ -41972,14 +41975,19 @@ var GitHubFileWire = exports_Schema.Struct({
   previous_filename: exports_Schema.optionalKey(exports_Schema.String)
 });
 var GitHubFilesPageWire = exports_Schema.Array(GitHubFileWire);
+var GitHubActorWire = exports_Schema.Struct({ node_id: exports_Schema.String });
 var GitHubReviewWire = exports_Schema.Struct({
   id: exports_Schema.Int,
-  html_url: exports_Schema.String
+  html_url: exports_Schema.String,
+  user: exports_Schema.NullOr(GitHubActorWire),
+  submitted_at: exports_Schema.NullOr(exports_Schema.String)
 });
 var GitHubRetirableReviewWire = exports_Schema.Struct({
   id: exports_Schema.Int,
   body: exports_Schema.NullOr(exports_Schema.String),
-  commit_id: exports_Schema.String
+  commit_id: exports_Schema.String,
+  user: exports_Schema.NullOr(GitHubActorWire),
+  submitted_at: exports_Schema.NullOr(exports_Schema.String)
 });
 var GitHubRetirableReviewsPageWire = exports_Schema.Array(GitHubRetirableReviewWire);
 var GitHubReviewCommentWire = exports_Schema.Struct({
@@ -42005,7 +42013,9 @@ class PublishedReview extends exports_Schema.Class("@effect-agent/pr-review/Publ
   reviewId: exports_Schema.Int,
   url: exports_Schema.String,
   event: exports_Schema.String,
-  inlineComments: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+  inlineComments: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  authorNodeId: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
+  submittedAt: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(100)))
 }) {
 }
 
@@ -42125,7 +42135,9 @@ var gitHubReviewPublisherLayer = exports_Layer.effect(ReviewPublisher)(exports_E
         reviewId: wire.id,
         url: wire.html_url,
         event: plan.event,
-        inlineComments: plan.comments.length
+        inlineComments: plan.comments.length,
+        authorNodeId: wire.user?.node_id ?? null,
+        submittedAt: wire.submitted_at
       });
     })
   });
@@ -42175,7 +42187,9 @@ var gitHubReviewRetirementHostLayer = exports_Layer.effect(ReviewRetirementHost)
     }).pipe(exports_Effect.map((reviews) => reviews.map((review) => RetirableReview.make({
       reviewId: review.id,
       body: review.body ?? "",
-      commitSha: review.commit_id
+      commitSha: review.commit_id,
+      authorNodeId: review.user?.node_id ?? null,
+      submittedAt: review.submitted_at
     })))),
     listComments: (reviewId) => listPaged({
       operation: "listReviewCommentsForRetirement",
@@ -53874,13 +53888,19 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
       if (options3.retireStaleReviews !== false && outcome.state !== undefined) {
-        const retirement = retireStaleReviews({
-          currentReviewId: outcome.published.reviewId,
-          currentReviewUrl: outcome.published.url,
-          currentState: outcome.state
-        });
-        const report2 = yield* options3.retirementHost === undefined ? retirement : retirement.pipe(exports_Effect.provideService(ReviewRetirementHost, options3.retirementHost));
-        yield* exports_Console.log(`Review retirement: ${report2.reviewsRetired} prior review(s), ` + `${report2.findingsResolved} resolved finding(s), ` + `${report2.commentsMinimized} minimized inline comment(s), ` + `${report2.failures} failure(s).`);
+        if (outcome.published.authorNodeId === null || outcome.published.submittedAt === null) {
+          yield* exports_Console.warn("Skipping stale-review retirement because GitHub did not return the posted review's actor and submission time.");
+        } else {
+          const retirement = retireStaleReviews({
+            currentReviewId: outcome.published.reviewId,
+            currentReviewUrl: outcome.published.url,
+            currentAuthorNodeId: outcome.published.authorNodeId,
+            currentSubmittedAt: outcome.published.submittedAt,
+            currentState: outcome.state
+          });
+          const report2 = yield* options3.retirementHost === undefined ? retirement : retirement.pipe(exports_Effect.provideService(ReviewRetirementHost, options3.retirementHost));
+          yield* exports_Console.log(`Review retirement: ${report2.reviewsRetired} prior review(s), ` + `${report2.findingsResolved} resolved finding(s), ` + `${report2.commentsMinimized} minimized inline comment(s), ` + `${report2.failures} failure(s).`);
+        }
       }
     }
     const check2 = concludeReviewOutcome(outcome);

@@ -125,8 +125,10 @@ stored blocking/success conclusion.
 After a new state-bearing Action review posts, prior marker-bearing bot reviews
 are retired by default: their bodies become collapsed, superseded history,
 resolved findings are struck through, and matching inline comments are
-minimized as outdated. The machine-state comments remain byte-identical and
-terminal, so an edited body still participates in incremental state recovery.
+minimized as outdated. Only strictly older reviews from the same GitHub actor
+are eligible, so copied markers and newer concurrent reviews are untouched.
+The machine-state comments remain byte-identical and terminal, so an edited
+body still participates in incremental state recovery.
 This cosmetic pass is fail-open and can be disabled with the Action input
 `retire-stale-reviews: "false"`.
 

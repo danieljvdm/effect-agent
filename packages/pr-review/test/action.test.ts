@@ -210,6 +210,8 @@ const fakeOutcome = (
             url: "memory://review/12",
             event: "COMMENT",
             inlineComments: 0,
+            authorNodeId: "BOT_action-reviewer",
+            submittedAt: "2026-08-15T20:00:00Z",
           }),
         }),
     turns: 1,
