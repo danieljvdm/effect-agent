@@ -77,6 +77,12 @@ never starts. How exhaustion resolves is policy-selected via `onExhaustion`:
   `finishReason: "budget-exhausted"` (RUN-011), and a model that declares a Tool Call under the
   constraint fails the Run typed (`ModelProtocolError`, RUN-020).
 
+A Run may carry tightening-only allowances (`toolCallAllowance`, `turnAllowance`, RUN-021): the
+effective limit is `min(policy bound, max(1, floor(allowance)))`, so an allowance can never widen
+the Definition's ceiling, and the `onExhaustion` resolution keys off the effective limits. This is
+the budget-extension seam: an orchestrator grants a delegated child more budget by re-invoking the
+delegation with a larger allowance below the child Definition's policy.
+
 Duration, token, cost, and hierarchical budget-hook bounds are hard rails regardless of
 `onExhaustion`. Repeated-failure enforcement is Run-level: each completed Turn's terminal Tool
 Call outcomes fold into one consecutive-failure counter in declaration order, any terminal Tool
@@ -429,3 +435,6 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   normally, and no second grace Turn exists. Under `"fail"` the Run fails typed at the seam.
 - **RUN-020:** Final-answer Turns are fail-closed: a model that declares any Tool Call under a
   `toolChoice: "none"` request fails the Run typed.
+- **RUN-021:** Per-Run allowances are tightening-only: the effective Turn/Tool-Call limit is the
+  minimum of the Agent Policy bound and the normalized allowance, never more, and the
+  `onExhaustion` resolution applies at the effective limit.

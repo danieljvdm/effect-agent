@@ -2254,3 +2254,443 @@ layer(TestServices)("SubagentRuntime SUB-033 contained failure mode", (it) => {
     ]).not.toContain(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// SUB-034: per-invocation Tool Call allowance and the budget-extension flow —
+// the orchestrator grants more budget by re-delegating with a raised
+// allowance (fresh child, never a mid-flight top-up), and `projectResult`
+// receives the framework's honest exhaustion marker.
+// ---------------------------------------------------------------------------
+
+const ProbeDoc = Tool.make("probe_doc", {
+  parameters: Schema.Struct({ ref: Schema.String }),
+  success: Schema.String,
+});
+const probeToolkit = Toolkit.make(ProbeDoc);
+
+const probingChildDefinition = Agent.define("probing-child", {
+  input: ChildInput,
+  output: ChildOutput,
+  instructions: "Probe, then answer as JSON.",
+  toolkit: probeToolkit,
+  policy: AgentPolicy.make({
+    // The Definition's own ceiling: deliberately ABOVE every allowance below,
+    // so a broken clamp is observable as executed probe handlers.
+    maxTurns: 4,
+    maxToolCalls: 8,
+    maxDuration: "30 seconds",
+    toolConcurrency: 2,
+  }),
+});
+
+/**
+ * Scripted probing child shared by concurrent invocations: each child's turn
+ * is keyed on ITS briefed topic in the prompt plus whether its probe call ids
+ * are already committed there.
+ */
+const probingChildModel = (
+  scripts: ReadonlyArray<{ topic: string; declares: number; answer: string }>,
+) =>
+  Model.make(
+    "scripted",
+    "probing-child-scripted",
+    Layer.effect(
+      LanguageModel.LanguageModel,
+      LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: (request) => {
+          const promptJson = JSON.stringify(request.prompt);
+          const script = scripts.find((candidate) =>
+            promptJson.includes(`research:${candidate.topic}`),
+          );
+          if (script === undefined) {
+            return Stream.die(new Error("The child prompt names no scripted topic"));
+          }
+          if (promptJson.includes(`probe-${script.topic}-1`)) {
+            return Stream.fromIterable(finalParts(script.answer));
+          }
+          return Stream.fromIterable<Response.StreamPartEncoded>([
+            ...Array.from(
+              { length: script.declares },
+              (_, index): Response.StreamPartEncoded => ({
+                type: "tool-call",
+                id: `probe-${script.topic}-${index + 1}`,
+                name: "probe_doc",
+                params: { ref: `doc-${index + 1}` },
+                providerExecuted: false,
+              }),
+            ),
+            { type: "finish", reason: "tool-calls", usage },
+          ]);
+        },
+      }),
+    ),
+  );
+
+const allowancePolicy = SubagentPolicy.make({
+  maxChildren: 2,
+  maxConcurrency: 2,
+  maxTurns: 4,
+  // The per-invocation reservation slice: the fail-closed clamp ceiling.
+  maxToolCalls: 4,
+  maxDuration: "10 seconds",
+});
+
+const allowanceDelegation = Subagent.define("delegate_allowance", {
+  description: "Research one topic under a per-invocation Tool Call allowance.",
+  target: probingChildDefinition,
+  parameters: ResearchParams,
+  success: ResearchFindings,
+  failure: ResearchDelegationFailed,
+  prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+  // SUB-034: the projection surfaces the framework's honest exhaustion marker
+  // in the declared success Schema, so the orchestrator can re-delegate.
+  projectResult: (output, context) =>
+    Effect.succeed({
+      summary: `${context.budgetExhausted ? "partial:" : "finding:"}${output.answer}`,
+    }),
+  policy: allowancePolicy,
+  toolCallAllowance: {
+    default: 1,
+    fromParameters: ({ topic }) =>
+      topic.startsWith("grant-") ? Number(topic.slice("grant-".length)) : undefined,
+  },
+});
+
+const allowanceCoordinator = Agent.define("allowance-coordinator", {
+  input: Schema.Struct({ mission: Schema.String }),
+  output: Schema.Struct({ report: Schema.String }),
+  instructions: "Delegate, then answer as JSON.",
+  toolkit: Toolkit.make(allowanceDelegation.tool),
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 3,
+    maxDuration: "30 seconds",
+    toolConcurrency: 2,
+  }),
+});
+
+layer(TestServices)("SubagentRuntime SUB-034 per-invocation allowance", (it) => {
+  const runAllowance = (options: {
+    readonly name: string;
+    readonly calls: ReadonlyArray<{ readonly id: string; readonly params: unknown }>;
+    readonly childScripts: ReadonlyArray<{ topic: string; declares: number; answer: string }>;
+    readonly runId: string;
+  }) =>
+    Effect.gen(function* () {
+      const probeStarts = yield* Ref.make(0);
+      const childBinding = Agent.withModel(
+        probingChildDefinition,
+        probingChildModel(options.childScripts),
+      );
+      const parent = Agent.withModel(
+        allowanceCoordinator,
+        delegatingModel(options.name, "delegate_allowance", options.calls, '{"report":"done"}'),
+      );
+      const probeLayer = probeToolkit.toLayer({
+        probe_doc: ({ ref }) =>
+          Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
+      });
+      const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
+        mapChildFailure,
+      }).pipe(Layer.provide(probeLayer));
+      const detached = yield* AgentRuntime.start(
+        parent,
+        { mission: "m" },
+        { runId: decodeRunId(options.runId) },
+      ).pipe(Effect.provide(runtimeLayer));
+      const result = yield* detached.await;
+      const events = yield* detached.events;
+      return { result, events, probeStarts: yield* Ref.get(probeStarts) };
+    });
+
+  it.effect(
+    "SUB-034 the default allowance tightens the child below its Definition policy and the projection surfaces the exhaustion marker",
+    () =>
+      Effect.gen(function* () {
+        const { result, events, probeStarts } = yield* runAllowance({
+          name: "parent-allowance-default",
+          calls: [{ id: "call-1", params: { topic: "small" } }],
+          childScripts: [{ topic: "small", declares: 2, answer: '{"answer":"draft"}' }],
+          runId: "parent-run-allowance-default",
+        });
+
+        // Definition ceiling 8 admits the batch of 2; the allowance of 1
+        // rejects it, no probe executes, and the child soft-lands (RUN-021).
+        expect(result.output).toEqual({ report: "done" });
+        expect(probeStarts).toBe(0);
+        expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
+          result: { summary: "partial:draft" },
+        });
+        expect(findEvent(events, "SubagentCompleted")).toMatchObject({
+          finishReason: "budget-exhausted",
+        });
+      }),
+  );
+
+  it.effect(
+    "SUB-034 a model-granted allowance is clamped fail-closed to the per-invocation reservation slice",
+    () =>
+      Effect.gen(function* () {
+        const { result, probeStarts } = yield* runAllowance({
+          name: "parent-allowance-clamp",
+          calls: [{ id: "call-1", params: { topic: "grant-100" } }],
+          childScripts: [{ topic: "grant-100", declares: 5, answer: '{"answer":"clamped"}' }],
+          runId: "parent-run-allowance-clamp",
+        });
+
+        // Requested 100 clamps to the slice ceiling of 4: the batch of 5 is
+        // rejected. A broken clamp (min with the Definition's 8 only) would
+        // have executed all five probes.
+        expect(result.output).toEqual({ report: "done" });
+        expect(probeStarts).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "SUB-034 the orchestrator OBSERVES the budget-truncated partial, then grants an extension by re-delegating",
+    () =>
+      Effect.gen(function* () {
+        const probeStarts = yield* Ref.make(0);
+        const childBinding = Agent.withModel(
+          probingChildDefinition,
+          probingChildModel([
+            { topic: "small", declares: 2, answer: '{"answer":"draft"}' },
+            { topic: "grant-4", declares: 2, answer: '{"answer":"complete"}' },
+          ]),
+        );
+        // Sequential, content-keyed coordinator: the granting call is
+        // declared ONLY after the partial result is visible in the prompt —
+        // the grant is a reaction to observed exhaustion, never preplanned.
+        const parentModel = Model.make(
+          "scripted",
+          "parent-allowance-sequential",
+          Layer.effect(
+            LanguageModel.LanguageModel,
+            LanguageModel.make({
+              generateText: () => Effect.succeed([]),
+              streamText: (request) => {
+                const promptJson = JSON.stringify(request.prompt);
+                if (promptJson.includes("finding:complete")) {
+                  return Stream.fromIterable(finalParts('{"report":"done"}'));
+                }
+                if (promptJson.includes("partial:draft")) {
+                  return Stream.fromIterable<Response.StreamPartEncoded>([
+                    {
+                      type: "tool-call",
+                      id: "call-2",
+                      name: "delegate_allowance",
+                      params: { topic: "grant-4" },
+                      providerExecuted: false,
+                    },
+                    { type: "finish", reason: "tool-calls", usage },
+                  ]);
+                }
+                return Stream.fromIterable<Response.StreamPartEncoded>([
+                  {
+                    type: "tool-call",
+                    id: "call-1",
+                    name: "delegate_allowance",
+                    params: { topic: "small" },
+                    providerExecuted: false,
+                  },
+                  { type: "finish", reason: "tool-calls", usage },
+                ]);
+              },
+            }),
+          ),
+        );
+        const parent = Agent.withModel(allowanceCoordinator, parentModel);
+        const probeLayer = probeToolkit.toLayer({
+          probe_doc: ({ ref }) =>
+            Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
+        });
+        const runtimeLayer = SubagentRuntime.layer(allowanceDelegation, childBinding, {
+          mapChildFailure,
+        }).pipe(Layer.provide(probeLayer));
+
+        const detached = yield* AgentRuntime.start(
+          parent,
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-allowance-sequential") },
+        ).pipe(Effect.provide(runtimeLayer));
+        const result = yield* detached.await;
+        const events = yield* detached.events;
+
+        // Turn 1: default allowance 1 rejects the first child's batch — the
+        // coordinator SEES "partial:draft" and only then grants allowance 4;
+        // the second child executes both probes and returns the full finding.
+        expect(result.output).toEqual({ report: "done" });
+        expect(yield* Ref.get(probeStarts)).toBe(2);
+        const succeeded = events.filter((event) => event._tag === "ToolCallSucceeded");
+        expect(succeeded.map((event) => event.result)).toEqual([
+          { summary: "partial:draft" },
+          { summary: "finding:complete" },
+        ]);
+      }),
+  );
+
+  it.effect(
+    "SUB-034 a configured allowance with a non-finite default clamps to the reservation slice, never the Definition policy",
+    () =>
+      Effect.gen(function* () {
+        const brokenDefaultDelegation = Subagent.define("delegate_allowance_broken", {
+          description: "Allowance configured with a broken default.",
+          target: probingChildDefinition,
+          parameters: ResearchParams,
+          success: ResearchFindings,
+          failure: ResearchDelegationFailed,
+          prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
+          projectResult: (output, context) =>
+            Effect.succeed({
+              summary: `${context.budgetExhausted ? "partial:" : "finding:"}${output.answer}`,
+            }),
+          policy: allowancePolicy,
+          toolCallAllowance: { default: Number.NaN },
+        });
+        const brokenCoordinator = Agent.define("allowance-broken-coordinator", {
+          input: Schema.Struct({ mission: Schema.String }),
+          output: Schema.Struct({ report: Schema.String }),
+          instructions: "Delegate, then answer as JSON.",
+          toolkit: Toolkit.make(brokenDefaultDelegation.tool),
+          policy: AgentPolicy.make({
+            maxTurns: 3,
+            maxToolCalls: 3,
+            maxDuration: "30 seconds",
+            toolConcurrency: 2,
+          }),
+        });
+        const probeStarts = yield* Ref.make(0);
+        const childBinding = Agent.withModel(
+          probingChildDefinition,
+          // Declares 5: above the slice ceiling of 4, below the Definition's 8.
+          probingChildModel([{ topic: "small", declares: 5, answer: '{"answer":"sliced"}' }]),
+        );
+        const parent = Agent.withModel(
+          brokenCoordinator,
+          delegatingModel(
+            "parent-allowance-broken",
+            "delegate_allowance_broken",
+            [{ id: "call-1", params: { topic: "small" } }],
+            '{"report":"done"}',
+          ),
+        );
+        const probeLayer = probeToolkit.toLayer({
+          probe_doc: ({ ref }) =>
+            Ref.update(probeStarts, (count) => count + 1).pipe(Effect.as(`probed-${ref}`)),
+        });
+        const runtimeLayer = SubagentRuntime.layer(brokenDefaultDelegation, childBinding, {
+          mapChildFailure,
+        }).pipe(Layer.provide(probeLayer));
+
+        const detached = yield* AgentRuntime.start(
+          parent,
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-allowance-broken") },
+        ).pipe(Effect.provide(runtimeLayer));
+        const result = yield* detached.await;
+
+        // A broken default clamps to the SLICE (4): the batch of 5 is
+        // rejected. Dropping the allowance entirely would have run all five
+        // probes under the Definition's ceiling of 8.
+        expect(result.output).toEqual({ report: "done" });
+        expect(yield* Ref.get(probeStarts)).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "SUB-034 a non-finite model-granted allowance falls back fail-closed to the default",
+    () =>
+      Effect.gen(function* () {
+        const { result, probeStarts } = yield* runAllowance({
+          name: "parent-allowance-nan",
+          // "grant-garbage" extracts Number("garbage") === NaN.
+          calls: [{ id: "call-1", params: { topic: "grant-garbage" } }],
+          childScripts: [{ topic: "grant-garbage", declares: 2, answer: '{"answer":"nan-safe"}' }],
+          runId: "parent-run-allowance-nan",
+        });
+
+        // NaN never reaches the child options: the default of 1 applies, the
+        // batch of 2 is rejected, and the run still soft-lands bounded.
+        expect(result.output).toEqual({ report: "done" });
+        expect(probeStarts).toBe(0);
+      }),
+  );
+
+  it.effect(
+    "SUB-034 a durable settled budget-exhausted child surfaces the marker to projectResult",
+    () =>
+      Effect.gen(function* () {
+        const invocations = yield* Ref.make(0);
+        const child = durableChildIdentity("allowance-durable");
+        const subagent = scriptedDurableHook({
+          establish: () => ({
+            _tag: "settled",
+            ...child,
+            outcome: "completed",
+            encodedResult: { answer: "durable partial" },
+            finishReason: "budget-exhausted",
+          }),
+        });
+        const parent = Agent.withModel(
+          allowanceCoordinator,
+          delegatingModel(
+            "parent-allowance-durable",
+            "delegate_allowance",
+            [{ id: "call-1", params: { topic: "small" } }],
+            '{"report":"done"}',
+          ),
+        );
+        const probeLayer = probeToolkit.toLayer({
+          probe_doc: () => Effect.succeed("unused"),
+        });
+        const runtimeLayer = SubagentRuntime.layer(
+          allowanceDelegation,
+          countingProbingChildBinding(invocations),
+          { mapChildFailure, durable: { targetDigests: durableDigests } },
+        ).pipe(Layer.provide(probeLayer));
+
+        const detached = yield* AgentRuntime.start(
+          parent,
+          { mission: "m" },
+          { runId: decodeRunId("parent-run-allowance-durable"), subagent },
+        ).pipe(Effect.provide(runtimeLayer));
+        const result = yield* detached.await;
+        const events = yield* detached.events;
+
+        expect(result.output).toEqual({ report: "done" });
+        expect(yield* Ref.get(invocations)).toBe(0);
+        // The durable Settlement's honest marker reached the projection: the
+        // parent Tool result carries the budget-truncated partial.
+        expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
+          result: { summary: "partial:durable partial" },
+        });
+      }),
+  );
+});
+
+/** Probing-child binding whose scripted model counts invocations (durable mode must never run it). */
+const countingProbingChildBinding = (invocations: Ref.Ref<number>) =>
+  Agent.withModel(
+    probingChildDefinition,
+    Model.make(
+      "scripted",
+      "probing-counting-child",
+      Layer.effect(
+        LanguageModel.LanguageModel,
+        LanguageModel.make({
+          generateText: () => Effect.succeed([]),
+          streamText: () =>
+            Stream.unwrap(
+              Ref.update(invocations, (count) => count + 1).pipe(
+                Effect.as(
+                  Stream.fromIterable<Response.StreamPartEncoded>(
+                    finalParts('{"answer":"in-process"}'),
+                  ),
+                ),
+              ),
+            ),
+        }),
+      ),
+    ),
+  );

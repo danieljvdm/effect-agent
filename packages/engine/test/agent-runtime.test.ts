@@ -5782,6 +5782,195 @@ layer(identifiers)("RUN-018 budget soft landing", (it) => {
       expect(yield* Ref.get(handlerStarts)).toBe(0);
     }),
   );
+
+  it.effect(
+    "RUN-021 a per-Run Tool Call allowance tightens below the policy and soft-lands at the effective limit",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+        const turns = yield* Ref.make(0);
+        const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+        const definition = softLandingDefinition(
+          AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 5,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+          }),
+        );
+        const model = turnScriptedModel(
+          "allowance-tightens",
+          turns,
+          toolChoices,
+          prompts,
+          (turn) =>
+            turn === 0
+              ? [
+                  searchCall("search-1"),
+                  searchCall("search-2"),
+                  { type: "finish", reason: "tool-calls", usage },
+                ]
+              : finalParts('{"answer":"partial under allowance"}'),
+        );
+        const toolLayer = softLandingTools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+
+        const exit = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "research" },
+          { toolCallAllowance: 1 },
+        ).pipe(
+          Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+          Stream.runDrain,
+          Effect.provide(toolLayer),
+          Effect.exit,
+        );
+        const observed = yield* Ref.get(events);
+
+        // The batch of 2 exceeds the effective limit of min(5, 1) = 1: it is
+        // rejected without a handler start and the Run soft-lands.
+        expect(Exit.isSuccess(exit)).toBe(true);
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+        expect(observed.filter((event) => event._tag === "ToolCallFailed")).toHaveLength(2);
+        expect(observed.at(-1)).toMatchObject({
+          _tag: "RunCompleted",
+          finishReason: "budget-exhausted",
+        });
+        expect(yield* Ref.get(toolChoices)).toEqual(["auto", "none"]);
+      }),
+  );
+
+  it.effect("RUN-021 an allowance can never widen the policy ceiling", () =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+          onExhaustion: "fail",
+        }),
+      );
+      const model = turnScriptedModel("allowance-no-widen", turns, toolChoices, prompts, () => [
+        searchCall("search-1"),
+        searchCall("search-2"),
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+      });
+
+      const exit = yield* AgentRuntime.stream(
+        Agent.withModel(definition, model),
+        { question: "research" },
+        { toolCallAllowance: 100 },
+      ).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.exit);
+      const failure = failureFrom(exit);
+
+      // min(policy 1, allowance 100) = 1: the policy ceiling holds.
+      expect(failure).toBeInstanceOf(AgentPolicyError);
+      expect(failure).toMatchObject({ limit: "tool-calls" });
+      expect(errorMessageForTest(failure)).toContain("1 Tool Call limit");
+      expect(yield* Ref.get(handlerStarts)).toBe(0);
+    }),
+  );
+
+  it.effect(
+    "RUN-021 a non-finite allowance is ignored fail-closed and the policy bound holds",
+    () =>
+      Effect.gen(function* () {
+        const handlerStarts = yield* Ref.make(0);
+        const turns = yield* Ref.make(0);
+        const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+        const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+        const definition = softLandingDefinition(
+          AgentPolicy.make({
+            maxTurns: 5,
+            maxToolCalls: 1,
+            maxDuration: "30 seconds",
+            toolConcurrency: 1,
+            onExhaustion: "fail",
+          }),
+        );
+        const model = turnScriptedModel("allowance-nan", turns, toolChoices, prompts, () => [
+          searchCall("search-1"),
+          searchCall("search-2"),
+          { type: "finish", reason: "tool-calls", usage },
+        ]);
+        const toolLayer = softLandingTools.toLayer({
+          search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+        });
+
+        // NaN would poison every `>` comparison (always false) and silently
+        // erase the bound; the engine must keep the policy limit instead.
+        const exit = yield* AgentRuntime.stream(
+          Agent.withModel(definition, model),
+          { question: "research" },
+          { toolCallAllowance: Number.NaN },
+        ).pipe(Stream.runDrain, Effect.provide(toolLayer), Effect.exit);
+        const failure = failureFrom(exit);
+
+        expect(failure).toBeInstanceOf(AgentPolicyError);
+        expect(failure).toMatchObject({ limit: "tool-calls" });
+        expect(yield* Ref.get(handlerStarts)).toBe(0);
+      }),
+  );
+
+  it.effect("RUN-021 a per-Run Turn allowance tightens maxTurns with the same grace", () =>
+    Effect.gen(function* () {
+      const handlerStarts = yield* Ref.make(0);
+      const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const turns = yield* Ref.make(0);
+      const toolChoices = yield* Ref.make<ReadonlyArray<unknown>>([]);
+      const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const definition = softLandingDefinition(
+        AgentPolicy.make({
+          maxTurns: 5,
+          maxToolCalls: 5,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+      );
+      const model = turnScriptedModel("turn-allowance", turns, toolChoices, prompts, (turn) =>
+        turn === 0
+          ? [searchCall("search-1"), { type: "finish", reason: "tool-calls", usage }]
+          : finalParts('{"answer":"grace under allowance"}'),
+      );
+      const toolLayer = softLandingTools.toLayer({
+        search: () => Ref.update(handlerStarts, (count) => count + 1).pipe(Effect.as("found")),
+      });
+
+      const exit = yield* AgentRuntime.stream(
+        Agent.withModel(definition, model),
+        { question: "research" },
+        { turnAllowance: 1 },
+      ).pipe(
+        Stream.tap((event) => Ref.update(events, (all) => [...all, event])),
+        Stream.runDrain,
+        Effect.provide(toolLayer),
+        Effect.exit,
+      );
+      const observed = yield* Ref.get(events);
+
+      // The pending batch at the effective final Turn executes; the single
+      // grace Turn runs tool-free and settles honestly.
+      expect(Exit.isSuccess(exit)).toBe(true);
+      expect(yield* Ref.get(handlerStarts)).toBe(1);
+      expect(yield* Ref.get(toolChoices)).toEqual(["auto", "none"]);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        turns: 2,
+        finishReason: "budget-exhausted",
+      });
+    }),
+  );
 });
 
 /**

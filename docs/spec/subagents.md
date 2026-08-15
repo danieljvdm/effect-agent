@@ -212,7 +212,10 @@ declared Tool failure.
 ### 4.2 Output and failure projection
 
 The child Agent output is decoded by its normal output Schema before `projectResult` runs.
-`projectResult` produces the bounded value encoded by the delegation Tool success Schema.
+`projectResult` produces the bounded value encoded by the delegation Tool success Schema; it also
+receives the framework's bounded result context (SUB-034) — currently the honest
+`budgetExhausted` marker — so a budget-truncated partial can be surfaced in the declared success
+Schema for the orchestrator's extension decision.
 
 An Agent's full inferred error channel does not automatically form a stable cross-Agent wire
 contract, and native Effect AI handlers cannot leak an arbitrary child `E`. A Delegation
@@ -918,3 +921,9 @@ Require separate proposals:
   instead of failing the parent Tool batch; the engine-owned waiting signal and durability error
   always stay in the error channel, durable suspension semantics are preserved unchanged, and the
   durable settlement join records the same non-failure polarity the live batch continues with.
+- **SUB-034**: A per-invocation Tool Call allowance is tightening-only and clamped fail-closed to
+  the delegation's per-invocation reservation slice and the child Definition's policy;
+  `projectResult` receives the framework's honest exhaustion marker (from the child result on the
+  ephemeral path and the child Settlement on the durable path), and a budget extension is a fresh
+  re-delegation with a raised allowance — never a mid-flight reservation top-up or child
+  Conversation reuse.
