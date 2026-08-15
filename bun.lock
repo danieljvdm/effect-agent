@@ -339,6 +339,7 @@
         "@effect-agent/core": "workspace:*",
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/platform-node": "workspace:*",
+        "@effect-agent/sandbox": "workspace:*",
         "@effect-agent/session": "workspace:*",
         "@effect-agent/storage-memory": "workspace:*",
         "@effect-agent/storage-sqlite": "workspace:*",

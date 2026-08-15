@@ -146,6 +146,7 @@ const allowedWorkspaceEdges: Record<(typeof packageNames)[number], ReadonlyArray
     "core",
     "engine",
     "platform-node",
+    "sandbox",
     "session",
     "storage-memory",
     "storage-sqlite",
