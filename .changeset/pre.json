@@ -39,6 +39,7 @@
     "pr-review-guidance-file",
     "pr-review-incremental-continuity",
     "pr-review-package",
+    "pr-review-posting-identity",
     "pr-review-skip-unchanged",
     "retire-stale-reviews"
   ]
