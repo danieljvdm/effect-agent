@@ -7,8 +7,7 @@ and S2 durable attached Subagents (proven by the capabilities and testing suites
 
 This document specifies how one Agent delegates bounded work to another Agent while preserving
 Effect typing, structured concurrency, least authority, deterministic parent history, and the
-accepted-work contract. Its requirements are proposed until the owner accepts the decision and
-assigns the implementation slices in the roadmap.
+accepted-work contract.
 
 ## 1. Scope
 
@@ -787,16 +786,14 @@ consequence, and durable Settlement mapping in the executable state-machine fixt
 - Node/SQLite and Cloudflare run the same Subagent conformance suite;
 - no deployment claims durable Subagents while any required crash test is skipped.
 
-## 17. Proposed implementation slices
+## 17. Implementation slices
 
-Subagents should be introduced in two proof stages rather than waiting for open-source preparation
-or mixing unproven cross-Conversation recovery into the base durable runtime.
+Subagents were introduced in two proof slices rather than mixing unproven cross-Conversation
+recovery into the base durable runtime.
 
 ### S1 — Attached ephemeral Subagents
 
-Recommended placement: immediately after Phase 3 and before or alongside early Phase 4 work.
-
-Deliver:
+Delivers:
 
 - pure `Subagent.define` Tool helper, explicit `AgentSpawner` dependency, and
   `SubagentRuntime.layer` in `@effect-agent/capabilities`;
@@ -816,13 +813,12 @@ Conversation Store is supplied. Process loss still ends the work; no durable acc
 
 ### S2 — Durable attached Subagents
 
-Recommended placement: after Phase 5 proves base admission, ordinary Tool uncertainty, durable
-Steps, approval suspension, and joined input; complete it before Phase 6 platform equivalence.
-Phase 3's epoch-bearing Conversation Store is insufficient. S2 also requires the Phase 4 durable
-ledger/ownership port, with every claim, reservation, abort, accounting, join, and Settlement
-transition fenced by the current ownership token and epoch.
+S2 builds on base admission, ordinary Tool uncertainty, durable Steps, approval suspension, and
+joined input. An epoch-bearing Conversation Store alone is insufficient: S2 also requires the
+durable ledger/ownership port, with every claim, reservation, abort, accounting, join, and
+Settlement transition fenced by the current ownership token and epoch.
 
-Deliver:
+Delivers:
 
 - child accepted-work admission and Receipt;
 - Parent Link and exact binding resolution;

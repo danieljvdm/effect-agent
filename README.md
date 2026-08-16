@@ -79,18 +79,14 @@ Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usua
 
 ## Read this first
 
-The curated, future-facing documentation site lives in [`docs/`](docs/index.md). Run it locally
-with `bun run docs:dev`; its guides distinguish implemented APIs from next, planned, and proposed
-interfaces. The specifications below remain the normative design source.
+The documentation site lives in [`docs/`](docs/index.md); run it locally with
+`bun run docs:dev`. The specifications below remain the normative design source.
 
-1. [Product specification](docs/PRODUCT.md)
-2. [Domain language](CONTEXT.md)
-3. [Technical architecture](docs/ARCHITECTURE.md)
-4. [Repository toolchain](docs/TOOLCHAIN.md)
-5. [Requirements and traceability index](docs/REQUIREMENTS.md)
-6. [Instructions for implementation agents](AGENTS.md)
-7. [Target API examples](docs/guides/examples.md)
-8. [Progressive Travel Planner reference application](docs/guides/travel-planner.md)
+1. [Domain language](CONTEXT.md)
+2. [Technical architecture](docs/ARCHITECTURE.md)
+3. [Repository toolchain](docs/TOOLCHAIN.md)
+4. [Requirements and traceability index](docs/REQUIREMENTS.md)
+5. [Instructions for implementation agents](AGENTS.md)
 
 ## Detailed specifications
 

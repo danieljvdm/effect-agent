@@ -294,7 +294,7 @@ Step 5 runs at the pre-Turn seam, synchronously, when the estimated next context
    instruction prefix, the summary message, and the kept tail.
 
 Cut points never split an assistant Tool call from its result, and prepared-unsettled Tool
-records are always in the kept tail (ADR-0004). In the DN and DC assemblies each compaction appends a
+records are always in the kept tail. In the DN and DC assemblies each compaction appends a
 canonical `CompactionCreated` record (`kind`, `coversThrough`, optional `summary`) inside the
 epoch-fenced log it covers; the run-journal projection folds it — covered records render as the
 summary or with cleared Tool results — and an invalid range is ignored fail-safe with the full

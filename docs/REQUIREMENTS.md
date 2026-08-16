@@ -43,10 +43,6 @@ Each implementation issue includes:
 requirements:
   - RUN-004
   - TEST-003
-decision_dependencies:
-  - (none)
-adrs:
-  - (none)
 packages:
   - packages/engine
 verification:
@@ -186,9 +182,9 @@ Exception statuses are honest dispositions, not waivers:
 | SEC-012    | evidence | `packages/capabilities/test/capabilities.test.ts` — hierarchical budget guard; `packages/capabilities/test/subagent-reservation.test.ts` — ancestor-atomic consumption                                                                                                                                     | —                                                                               |
 | SEC-013    | evidence | `packages/capabilities/test/capabilities.test.ts` — MCP discovery bounds; `packages/sandbox-local/test/local-sandbox.test.ts` — output limits; `packages/platform-cloudflare/test/limits.test.ts` — admission byte bounds                                                                                  | —                                                                               |
 | SEC-014    | evidence | `packages/platform-cloudflare/test/code-mode/code-mode-executor.test.ts` — generated code in the real isolated executor is denied ambient network and reaches host Tools only through the brokered RPC surface; `packages/testing/test/code-mode-e2e.test.ts` — the brokered allowlist boundary end to end | —                                                                               |
-| OPS-001    | evidence | `packages/testing/test/admin-operations.test.ts` — scanObligations ages and severities deterministically under TestClock; hosts own the alert loop per `docs/guides/operations.md`                                                                                                                         | —                                                                               |
+| OPS-001    | evidence | `packages/testing/test/admin-operations.test.ts` — scanObligations ages and severities deterministically under TestClock; hosts own the alert loop per `docs/guide/operations.md`                                                                                                                          | —                                                                               |
 | OPS-002    | evidence | `packages/testing/test/admin-operations.test.ts` — unknown-blocked lanes surface as obligation rows; `packages/testing/test/chaos-memory.test.ts` — every converged plan asserts a zero-entry obligation report                                                                                            | —                                                                               |
-| OPS-003    | evidence | `packages/platform-node/test/restore-drill.test.ts` — the executable DN restore drill; `docs/guides/operations.md` — incident/backup/restore runbooks, the DC PITR half honestly a manual runbook                                                                                                          | —                                                                               |
+| OPS-003    | evidence | `packages/platform-node/test/restore-drill.test.ts` — the executable DN restore drill; `docs/guide/operations.md` — incident/backup/restore runbooks, the DC PITR half honestly a manual runbook                                                                                                           | —                                                                               |
 | TEST-001   | evidence | `packages/core/test/core.test.ts`, `packages/session/test/session.test.ts` — round-trip, invalid-input, and limit suites for public schemas                                                                                                                                                                | —                                                                               |
 | TEST-003   | evidence | `packages/testing/test/chaos-memory.test.ts`, `packages/testing/test/chaos-sqlite.test.ts` — seeded generated fault/abort interleavings converge to verified invariants (`CHAOS_SEED` replays)                                                                                                             | —                                                                               |
 | TEST-005   | evidence | `packages/platform-node/test/crash/crash.test.ts` — real process kills; `packages/platform-cloudflare/test/eviction.test.ts` — real DO eviction                                                                                                                                                            | —                                                                               |
@@ -235,7 +231,7 @@ storage, Effect service boundaries around bindings, and Cloudflare fault scenari
 ## Change control
 
 - Do not reuse a retired requirement ID.
-- Semantic changes update the normative source and relevant ADR.
+- Semantic changes update the normative specification page.
 - Splitting a requirement creates new IDs and retires the old ID with a pointer.
 - Pure editorial changes retain the ID.
 - Generated coverage tooling fails on duplicate or unknown IDs.

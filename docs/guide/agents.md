@@ -5,8 +5,6 @@ description: Immutable, model-agnostic agent programs with explicit Effect AI Mo
 
 # Agent definitions
 
-<StatusCallout status="available" phase="P1" title="Definitions, Bindings, policies, and type projections are implemented." />
-
 An Agent Definition is immutable program data. It contains Schemas, instructions, a native Effect
 AI Toolkit, and finite policy. It does not contain a provider client, database connection, mutable
 Conversation, or acquired resource.
@@ -64,8 +62,7 @@ rejected by `AgentRuntime`.
 The string passed to `Agent.define` is decoded as a branded `AgentId`. It becomes part of
 definition digests and durable identity.
 
-During private development, renaming it creates new identity. Stored-data migrations are not yet a
-compatibility promise.
+Renaming it creates new identity; pre-1.0 there is no stored-data migration promise.
 
 ## Policy is part of the program
 
@@ -85,14 +82,11 @@ AgentPolicy.make({
 Turns, Tool Calls, duration, and concurrency are positive finite bounds. Token and cost budgets are
 optional because not every Model reports enough usage data to enforce them honestly.
 
-`onExhaustion` selects how Turn, Tool Call, and token exhaustion resolve. The default
-`"final-answer"` soft-lands the Run: an over-budget Tool batch is rejected with model-visible
-failed results, the model gets one final tool-free opportunity to answer, and the Run completes
-with the honest `finishReason: "budget-exhausted"` and an `exhausted` marker naming the
-dimension. `"fail"` fails the Run typed instead — the strict rail for pipelines that must never
-accept a truncated answer. Duration, cost, and repeated-failure bounds always fail typed.
-
-Bounded Tool results, the run-status message, `contextTokenLimit`, and compaction are covered in
+`onExhaustion` selects how Turn, Tool Call, and token exhaustion resolve — the default
+`"final-answer"` soft-lands the Run with one constrained final answer and the honest
+`finishReason: "budget-exhausted"`. Every bound, the exhaustion resolutions, and sizing guidance
+are covered in [Budgets & bounded autonomy](/concepts/budgets); bounded Tool results, the
+run-status message, `contextTokenLimit`, and compaction in
 [Context management](/guide/context-management).
 
 ## Deliberate absences
@@ -100,6 +94,3 @@ Bounded Tool results, the run-status message, `contextTokenLimit`, and compactio
 Definitions do not use render hooks, module directives, global provider registries, or mutable
 Session instances. Dynamic Models, Tools, and context belong at explicit Turn boundaries or in
 application Effects before the Binding is created.
-
-This is a core architectural constraint: adding expressiveness must not introduce a second hidden
-runtime.

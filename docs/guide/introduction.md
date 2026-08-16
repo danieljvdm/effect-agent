@@ -1,17 +1,15 @@
 ---
 title: What is Effect Agent?
-description: The product model, current boundary, and reason Effect Agent exists.
+description: An interpreter for autonomous agents inside Effect applications — what it adds, what it deliberately leaves to Effect AI, and where the current boundary sits.
 ---
 
 # What is Effect Agent?
 
-<StatusCallout status="available" phase="P0–P3" title="The typed interpreter and persistent Conversation foundation exist today.">
-
-The workspace is private and pre-release. The current implementation is an ephemeral, bounded
-runtime with operational capabilities and persistent Conversation records. Durable accepted work
-is the next phase—not a current claim.
-
-</StatusCallout>
+**Effect Agent** is an interpreter for autonomous agents inside Effect applications. An Agent is
+an immutable, Schema-defined value; pair it with an Effect AI Model and the runtime interprets it
+as an `Effect` result or a semantic `Stream` — with failures typed in `E`, dependencies visible
+in `R`, and every resource owned by a Scope. This page shows one complete Agent, explains what
+the framework adds on top of Effect AI, and names the three persistence levels it supports.
 
 ## One Agent, end to end
 
@@ -83,11 +81,7 @@ void Effect.runPromise(program);
 `CalculatorAgent` fixes the Model selection, and `AppLive` provides the runtime dependencies.
 `IdGenerator.layer` is the framework's default Web Crypto identity authority; the
 [testing guide](./testing) replaces it with deterministic IDs. The result remains an `Effect`
-until the application entrypoint executes it.
-
-Effect Agent is an interpreter for autonomous programs in Effect applications. An Agent is an
-immutable, schema-defined value. Pair it with an Effect AI Model and the runtime can interpret it as
-an `Effect` result or a semantic `Stream`.
+until the application entrypoint executes it:
 
 ```ts
 AgentRuntime.run(agent, input);
@@ -122,30 +116,27 @@ It adds only the concepts needed to interpret autonomous work:
 There is no framework provider registry, second Tool type, callback middleware runtime, or
 Promise-first facade.
 
-## Three maturity levels
+## Three levels of persistence
 
-Understanding the current boundary depends on keeping three related ideas separate.
+The runtime makes three distinct claims, and keeping them separate is deliberate. All three are
+implemented and tested.
 
-### Ephemeral execution <StatusBadge status="available" />
+**Ephemeral execution.** A Run executes now, inside one Scope. It supports bounded model Turns,
+Tool Calls, interruption, semantic events, steering, follow-up, approval, budgets,
+[context management](./context-management), MCP, and a local sandbox adapter. If the process
+disappears, active work disappears with it.
 
-A Run executes now, inside one Scope. It supports bounded model Turns, Tool Calls, interruption,
-semantic events, steering, follow-up, approval, budgets, context transforms, MCP, and a local
-sandbox adapter. If the process disappears, active work disappears with it.
+**Persistent Conversations.** Canonical Conversation records survive restart through memory or
+SQLite adapters. History can be replayed, projected, exported, checkpointed, and observed from an
+opaque offset. Persistence does not mean the runtime has accepted an obligation to finish active
+work.
 
-### Persistent Conversations <StatusBadge status="available" />
-
-Canonical Conversation records can survive restart through memory or SQLite adapters. History can
-be replayed, projected, exported, checkpointed, and observed from an opaque offset. Persistence
-does not mean the runtime has accepted an obligation to finish active work.
-
-### Durable accepted work <StatusBadge status="available" />
-
-The durable runtime first commits a Submission obligation, then returns a Receipt. Attempts may
-be replaced after a crash, but exactly one terminal Settlement is eventually recorded. The base
-Node/SQLite runtime — fencing, recovery classification, and deterministic failpoints — is
-implemented; recovery resumes at Turn boundaries, so
-the claim covers safe-to-repeat toolkits. Honest unknown external outcomes, durable Steps, and
-replay-safe external mutations are Phase 5 work.
+**Durable accepted work.** The durable runtime first commits a Submission obligation, then
+returns a Receipt. Attempts may be replaced after a crash, but exactly one terminal Settlement is
+eventually recorded. Unresolved external Tool effects stop at an explicit Unknown Outcome instead
+of replaying, and the same contract runs on Node/SQLite and on Cloudflare Durable Objects. No
+level claims exactly-once external side effects — see
+[Persistence & durability](../concepts/durability).
 
 ## What the framework optimizes for
 
@@ -156,13 +147,14 @@ adopting a second application runtime. It is especially opinionated about:
 - replacing live integrations with deterministic Layers in tests;
 - bounding autonomy by default;
 - preserving one canonical, replayable history;
-- refusing to label ambiguous external effects “exactly once.”
+- refusing to label ambiguous external effects "exactly once."
 
-It is not currently a hosted control plane, visual builder, turnkey chat product, generic workflow
-engine, or secure remote code sandbox.
+It is not a hosted control plane, visual builder, turnkey chat product, generic workflow engine,
+or secure remote code sandbox. The project is pre-1.0: packages are private, Effect v4 is pinned
+to a beta release, and there is no compatibility window yet.
 
-## Where to go next
+## Next steps
 
-- [Build a Definition and Binding](./getting-started)
-- [Understand the Effect-native architecture](../concepts/effect-native)
-- [See exactly what is implemented](../reference/status)
+- [Getting started](./getting-started) — build the Definition and Binding yourself.
+- [Effect-native by construction](../concepts/effect-native) — why the architecture holds these properties structurally.
+- [Implementation status](../reference/status) — what is claimed, its evidence, and the explicit non-claims.

@@ -5,16 +5,13 @@ description: Define, bind, and run a bounded Effect-native Agent.
 
 # Getting started
 
-<StatusCallout status="available" phase="P1" title="This authoring and runtime shape is implemented.">
-
-The packages currently live in this private workspace and are not published to npm. The examples
-below describe the real source API; use the monorepo with `bun install` until distribution work
-begins.
-
-</StatusCallout>
-
 An Effect Agent has five pieces: input and output Schemas, instructions, an Effect AI Toolkit, a
-finite policy, and an explicit Model Binding.
+finite policy, and an explicit Model Binding. This page builds one from scratch. The packages
+publish to npm on the opt-in `beta` dist-tag:
+
+```sh
+npm install @effect-agent/core@beta @effect-agent/engine@beta effect
+```
 
 ## 1. Model the boundary
 

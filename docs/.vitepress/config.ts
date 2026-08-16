@@ -6,6 +6,14 @@ export default defineConfig({
   description: "An Effect-native runtime for typed, resource-safe autonomous agents.",
   cleanUrls: true,
   lastUpdated: true,
+  // Contributor artifacts stay in the repository but out of the published site.
+  srcExclude: [
+    "REQUIREMENTS.md",
+    "TOOLCHAIN.md",
+    "ARCHITECTURE.md",
+    "THREAT-MODEL.md",
+    "security/**",
+  ],
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/mark.svg" }],
     ["meta", { name: "theme-color", content: "#161714" }],
@@ -20,6 +28,8 @@ export default defineConfig({
     ],
   ],
   markdown: {
+    // Code panels are always dark (--vp-code-block-bg), so pin dark tokens in both modes.
+    theme: { light: "github-dark", dark: "github-dark" },
     lineNumbers: true,
     image: { lazyLoading: true },
     codeTransformers: [
@@ -37,14 +47,7 @@ export default defineConfig({
     nav: [
       { text: "Guide", link: "/guide/getting-started", activeMatch: "/guide/" },
       { text: "Architecture", link: "/concepts/effect-native", activeMatch: "/concepts/" },
-      { text: "Reference", link: "/reference/status", activeMatch: "/reference/" },
-      {
-        text: "Design source",
-        items: [
-          { text: "Product specification", link: "/PRODUCT" },
-          { text: "Technical architecture", link: "/ARCHITECTURE" },
-        ],
-      },
+      { text: "Reference", link: "/reference/packages", activeMatch: "/(reference|spec)/" },
     ],
     sidebar: [
       {
@@ -66,6 +69,13 @@ export default defineConfig({
         ],
       },
       {
+        text: "Operate",
+        items: [
+          { text: "Operations", link: "/guide/operations" },
+          { text: "Certify storage adapters", link: "/guide/certify-adapters" },
+        ],
+      },
+      {
         text: "Architecture",
         items: [
           { text: "Effect-native by construction", link: "/concepts/effect-native" },
@@ -77,9 +87,25 @@ export default defineConfig({
       {
         text: "Reference",
         items: [
-          { text: "Implementation status", link: "/reference/status" },
           { text: "Package map", link: "/reference/packages" },
-          { text: "Normative specifications", link: "/REQUIREMENTS" },
+          { text: "Implementation status", link: "/reference/status" },
+        ],
+      },
+      {
+        text: "Specifications",
+        collapsed: true,
+        items: [
+          { text: "Authoring", link: "/spec/authoring" },
+          { text: "Runtime", link: "/spec/runtime" },
+          { text: "Providers", link: "/spec/providers" },
+          { text: "Capabilities", link: "/spec/capabilities" },
+          { text: "Subagents", link: "/spec/subagents" },
+          { text: "Durability", link: "/spec/durability" },
+          { text: "Persistence", link: "/spec/persistence" },
+          { text: "Deployment", link: "/spec/deployment" },
+          { text: "Security & operations", link: "/spec/security-operations" },
+          { text: "Testing", link: "/spec/testing" },
+          { text: "Compatibility", link: "/spec/compatibility" },
         ],
       },
     ],

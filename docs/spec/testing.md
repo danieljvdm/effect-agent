@@ -283,12 +283,12 @@ provider latency.
 Golden provider/event fixtures are versioned, minimal, redacted, and annotated with
 their source adapter version. Golden snapshots do not replace semantic assertions.
 
-The [Travel Planner Reference Application](../guides/travel-planner.md) is the cumulative
-application-shaped fixture:
+The Travel Planner Reference Application (the cumulative fixture tree in
+`packages/testing/src/fixtures/travel-planner`) is the application-shaped fixture:
 
 - its ordinary suite uses the scripted Effect AI `LanguageModel`, deterministic travel-service
   Layers, controllable time and IDs, and no network or credentials;
-- each phase extends the same scenario and retains all earlier assertions;
+- each capability slice extends the same scenario and retains all earlier assertions;
 - public API slices compile from package-local tests or fixtures rather than an application
   workspace;
 - live model and supplier profiles are opt-in smoke or release tests, rate-limited and structurally
