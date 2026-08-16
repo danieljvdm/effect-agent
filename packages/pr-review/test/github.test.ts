@@ -83,6 +83,7 @@ describe("GitHub prior reviews", () => {
         Layer.succeed(HttpClient.HttpClient)(client),
       );
       const priorReviewsLayer = gitHubPriorReviewsLayer.pipe(Layer.provide(dependencies));
+      const testLayer = Layer.merge(priorReviewsLayer, authenticatorLayer);
 
       const result = yield* Effect.gen(function* () {
         const priorReviews = yield* PriorReviews;
@@ -90,7 +91,7 @@ describe("GitHub prior reviews", () => {
           fingerprint: yield* priorReviews.latestFingerprint,
           state: yield* priorReviews.latestState,
         };
-      }).pipe(Effect.provide(priorReviewsLayer), Effect.provide(authenticatorLayer));
+      }).pipe(Effect.provide(testLayer));
 
       expect(Option.getOrUndefined(result.fingerprint)).toBe(FINGERPRINT);
       expect(Option.getOrUndefined(result.state)).toEqual(reviewState);

@@ -46,7 +46,10 @@ export const PROVIDER_EFFORT_RUNGS = {
 /** One OpenAI review model binding with the package's structured-output settings. */
 export const makeOpenAiReviewModel = (model?: string, effort?: EffortPosition) =>
   OpenAiLanguageModel.model(model ?? DEFAULT_MODEL.openai, {
-    max_output_tokens: 8_000,
+    // OpenAI counts hidden reasoning tokens and visible answer tokens against
+    // this same ceiling. High-effort reviews can exhaust an 8k allowance
+    // after reading every file but before emitting their structured report.
+    max_output_tokens: 32_000,
     store: false,
     strictJsonSchema: true,
     ...(effort === undefined
