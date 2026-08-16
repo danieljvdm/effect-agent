@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.10
+
+### Patch Changes
+
+- [#77](https://github.com/danieljvdm/effect-agent/pull/77) [`41fc909`](https://github.com/danieljvdm/effect-agent/commit/41fc9095238a30654280396350ac0339ca603726) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Allow GitHub App-authored reviews to supply the expected posting login for authenticated
+  incremental continuity and unchanged-review fingerprint matching.
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.10
+
 ## 0.1.0-beta.9
 
 ### Minor Changes
