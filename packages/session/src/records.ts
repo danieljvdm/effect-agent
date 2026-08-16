@@ -3,6 +3,8 @@ import {
   AttemptId,
   ConversationId,
   DelegationId,
+  ExhaustedLimit,
+  PolicyLimit,
   ReceiptId,
   RunId,
   SettlementId,
@@ -421,19 +423,49 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
    * existing histories and goldens byte-stable (additive, schemaVersion 1).
    */
   finishReason: Schema.optionalKey(Schema.Literal("budget-exhausted")),
+  /**
+   * The dimension that bound a budget-exhausted completion (RUN-011,
+   * RUN-025), carried verbatim from the live `RunCompleted` event so
+   * consumers never reconstruct it from message text. Valid only alongside
+   * `finishReason: "budget-exhausted"`; absent on histories persisted before
+   * the dimension became durable (additive, schemaVersion 1).
+   */
+  exhausted: Schema.optionalKey(ExhaustedLimit),
+  /**
+   * The typed `AgentPolicyError.limit` of a `failed` hard-rail settlement
+   * (RUN-011): which finite policy dimension failed the Run, preserved
+   * alongside the bounded `{errorTag, message}` failure projection in
+   * `result`. Absent for every non-policy failure and on histories persisted
+   * before the limit became durable (additive, schemaVersion 1).
+   */
+  policyLimit: Schema.optionalKey(PolicyLimit),
 }) {}
+
+const isPolicyFailureProjection = Schema.is(
+  Schema.Struct({ errorTag: Schema.Literal("AgentPolicyError") }),
+);
 
 /**
  * Canonical-boundary view of `SubmissionSettled`: `finishReason` is valid
- * only on a `completed` outcome, so a malformed persisted combination such as
- * `{ outcome: "failed", finishReason: "budget-exhausted" }` fails closed at
- * decode instead of becoming trusted audit history (STORE-006, RUN-011).
+ * only on a `completed` outcome, `exhausted` only alongside
+ * `finishReason: "budget-exhausted"`, and `policyLimit` only on a `failed`
+ * outcome whose `result` carries the `AgentPolicyError` failure projection —
+ * so a malformed persisted combination such as
+ * `{ outcome: "failed", finishReason: "budget-exhausted" }` or a
+ * `policyLimit` contradicting `result.errorTag` fails closed at decode
+ * instead of becoming trusted audit history (STORE-006, RUN-011).
  */
 const SubmissionSettledRecord = SubmissionSettled.pipe(
   Schema.refine(
     (settled): settled is SubmissionSettled =>
-      settled.finishReason === undefined || settled.outcome === "completed",
-    { expected: "finishReason only on a completed settlement" },
+      (settled.finishReason === undefined || settled.outcome === "completed") &&
+      (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
+      (settled.policyLimit === undefined ||
+        (settled.outcome === "failed" && isPolicyFailureProjection(settled.result))),
+    {
+      expected:
+        "finishReason only on a completed settlement, exhausted only with finishReason budget-exhausted, policyLimit only on a failed AgentPolicyError settlement",
+    },
   ),
 );
 
