@@ -300,6 +300,8 @@ Current platform references:
   in leaf `examples/*`, and there is no deployable `apps/` workspace;
 - the root Bun catalog pins the exact Effect v4 version before 1.0;
 - workspace manifests consume that version through `catalog:` and may not introduce another copy;
+- `platform-cloudflare` publishes `effect-cf` as a compatible caret peer while the root catalog
+  selects its exact development version, so the host owns one shared Effect service identity;
 - `platform-node` and `platform-cloudflare` are Layer-assembly libraries, not application
   entrypoints;
 - releases include generated API docs, changelog, and supported Effect/platform versions;

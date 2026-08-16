@@ -24,6 +24,7 @@ The root `package.json` is the only version source for shared dependencies.
 | `@effect/platform-browser`        |   `4.0.0-beta.107` | `BrowserCrypto` for the workerd runtime (Cloudflare packages)                     |
 | `@effect/sql-sqlite-do`           |   `4.0.0-beta.107` | Durable Object SQLite `SqlClient` and Migrator (Cloudflare packages)              |
 | `@effect/vitest`                  |   `4.0.0-beta.107` | Effect-aware test execution and scoped Layer composition                          |
+| `effect-cf`                       |           `0.27.0` | Effect-native Cloudflare runtime boundary used by `platform-cloudflare`           |
 | `@cloudflare/vitest-pool-workers` |           `0.21.3` | In-workerd Vitest pool for the Cloudflare package suites (vendors wrangler)       |
 | `@cloudflare/workers-types`       |     `5.20260813.1` | Cloudflare runtime types (types-only devDependency)                               |
 | Miniflare                         |     `4.20260730.0` | Programmatic workerd runtimes for the restart-persistence test lane               |
@@ -37,6 +38,11 @@ The root `package.json` is the only version source for shared dependencies.
 
 Workspace packages refer to shared versions with `catalog:`. They must not introduce a second
 Effect version. The Bun lockfile is committed and CI installs it with `--frozen-lockfile`.
+
+The root catalog selects one exact `effect-cf` version for reproducible workspace installs.
+`@effect-agent/platform-cloudflare` publishes `effect-cf` as the compatible `^0.27.0` host peer
+and uses the catalog entry only as a development dependency. Consumers therefore provide one
+shared runtime instance without needing a root override to replace a nested exact dependency.
 
 Root overrides align the contributor skills CLI with the repository's Effect and
 `@effect/platform-node` versions. Framework packages, repository scripts, and contributor tooling
