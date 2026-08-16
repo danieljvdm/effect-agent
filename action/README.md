@@ -91,6 +91,24 @@ fail-open: GitHub edit or minimization failures are logged without changing
 the review check conclusion. Set the input to `"false"` to leave prior review
 bodies and inline comments untouched.
 
+## Run visibility
+
+The moment a run starts reviewing (typed skips excluded), the action posts
+one sticky "review in progress" issue comment naming the selected scope, head
+commit, model, and workflow run, then rewrites that same comment in place
+with the settled outcome — the posted verdict, a blocking/incomplete callout,
+or the run failure. One comment per pull request is reused across runs, found
+by its invisible marker and the configured `review-author` bot identity so a
+pasted marker in someone else's comment is never edited. Progress reporting
+is cosmetic and fail-open: GitHub faults here are logged and never change the
+review, the check conclusion, or the run result. Dry runs (`post: "false"`)
+post no progress. Disable it with `progress-comment: "false"`.
+
+Action logs render one compact line per event — tool executions as short
+progress lines, warnings and errors with their cause. Set `log-level: Debug`
+to additionally see the engine's per-turn and per-handler telemetry, or
+`Warn` to quiet routine runs.
+
 ## Final merge-readiness audit
 
 `review-mode: final` deliberately ignores the incremental baseline and audits

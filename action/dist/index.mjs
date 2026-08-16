@@ -291,6 +291,68 @@ var getAllObjectKeys = (obj) => {
 var byReferenceInstances = /* @__PURE__ */ new WeakSet;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Predicate.js
+var exports_Predicate = {};
+__export(exports_Predicate, {
+  xor: () => xor,
+  some: () => some,
+  or: () => or,
+  not: () => not,
+  nor: () => nor,
+  nand: () => nand,
+  mapInput: () => mapInput,
+  isUnknown: () => isUnknown,
+  isUndefined: () => isUndefined,
+  isUint8Array: () => isUint8Array,
+  isTupleOfAtLeast: () => isTupleOfAtLeast,
+  isTupleOf: () => isTupleOf,
+  isTruthy: () => isTruthy,
+  isTagged: () => isTagged,
+  isSymbol: () => isSymbol,
+  isString: () => isString,
+  isSet: () => isSet,
+  isRegExp: () => isRegExp,
+  isReadonlyObject: () => isReadonlyObject,
+  isPropertyKey: () => isPropertyKey,
+  isPromiseLike: () => isPromiseLike,
+  isPromise: () => isPromise,
+  isObjectOrArray: () => isObjectOrArray,
+  isObjectKeyword: () => isObjectKeyword,
+  isObject: () => isObject,
+  isNumber: () => isNumber,
+  isNullish: () => isNullish,
+  isNull: () => isNull,
+  isNotUndefined: () => isNotUndefined,
+  isNotNullish: () => isNotNullish,
+  isNotNull: () => isNotNull,
+  isNever: () => isNever,
+  isMap: () => isMap,
+  isIterable: () => isIterable,
+  isFunction: () => isFunction,
+  isError: () => isError,
+  isDate: () => isDate,
+  isBoolean: () => isBoolean,
+  isBigInt: () => isBigInt,
+  implies: () => implies,
+  hasProperty: () => hasProperty,
+  every: () => every,
+  eqv: () => eqv,
+  compose: () => compose,
+  and: () => and,
+  Tuple: () => Tuple,
+  Struct: () => Struct
+});
+var mapInput = /* @__PURE__ */ dual(2, (self, f) => (b) => self(f(b)));
+var isTupleOf = /* @__PURE__ */ dual(2, (self, n) => self.length === n);
+var isTupleOfAtLeast = /* @__PURE__ */ dual(2, (self, n) => self.length >= n);
+function isTruthy(input) {
+  return !!input;
+}
+function isSet(input) {
+  return input instanceof Set;
+}
+function isMap(input) {
+  return input instanceof Map;
+}
 function isString(input) {
   return typeof input === "string";
 }
@@ -318,6 +380,9 @@ function isUndefined(input) {
 function isNotUndefined(input) {
   return input !== undefined;
 }
+function isNull(input) {
+  return input === null;
+}
 function isNotNull(input) {
   return input !== null;
 }
@@ -333,8 +398,14 @@ function isNever(_) {
 function isUnknown(_) {
   return true;
 }
+function isObjectOrArray(input) {
+  return typeof input === "object" && input !== null;
+}
 function isObject(input) {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+function isReadonlyObject(input) {
+  return isObject(input);
 }
 function isObjectKeyword(input) {
   return typeof input === "object" && input !== null || isFunction(input);
@@ -344,10 +415,76 @@ var isTagged = /* @__PURE__ */ dual(2, (self, tag) => hasProperty(self, "_tag") 
 function isError(input) {
   return input instanceof Error;
 }
+function isUint8Array(input) {
+  return input instanceof Uint8Array;
+}
+function isDate(input) {
+  return input instanceof Date;
+}
 function isIterable(input) {
   return hasProperty(input, Symbol.iterator) || isString(input);
 }
+function isPromise(input) {
+  return hasProperty(input, "then") && "catch" in input && isFunction(input.then) && isFunction(input.catch);
+}
+function isPromiseLike(input) {
+  return hasProperty(input, "then") && isFunction(input.then);
+}
+function isRegExp(input) {
+  return input instanceof RegExp;
+}
+var compose = /* @__PURE__ */ dual(2, (ab, bc) => (a) => ab(a) && bc(a));
+function Tuple(elements) {
+  return (as) => {
+    for (let i = 0;i < elements.length; i++) {
+      if (elements[i](as[i]) === false) {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+function Struct(fields) {
+  const keys = Object.keys(fields);
+  return (a) => {
+    for (const key of keys) {
+      if (!fields[key](a[key])) {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+function not(self) {
+  return (a) => !self(a);
+}
 var or = /* @__PURE__ */ dual(2, (self, that) => (a) => self(a) || that(a));
+var and = /* @__PURE__ */ dual(2, (self, that) => (a) => self(a) && that(a));
+var xor = /* @__PURE__ */ dual(2, (self, that) => (a) => self(a) !== that(a));
+var eqv = /* @__PURE__ */ dual(2, (self, that) => (a) => self(a) === that(a));
+var implies = /* @__PURE__ */ dual(2, (antecedent, consequent) => (a) => antecedent(a) ? consequent(a) : true);
+var nor = /* @__PURE__ */ dual(2, (self, that) => (a) => !(self(a) || that(a)));
+var nand = /* @__PURE__ */ dual(2, (self, that) => (a) => !(self(a) && that(a)));
+function every(collection) {
+  return (a) => {
+    for (const p of collection) {
+      if (!p(a)) {
+        return false;
+      }
+    }
+    return true;
+  };
+}
+function some(collection) {
+  return (a) => {
+    for (const p of collection) {
+      if (p(a)) {
+        return true;
+      }
+    }
+    return false;
+  };
+}
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Hash.js
 var symbol = "~effect/interfaces/Hash";
@@ -1307,7 +1444,7 @@ __export(exports_Option, {
   toRefinement: () => toRefinement,
   toArray: () => toArray,
   tap: () => tap,
-  some: () => some2,
+  some: () => some3,
   reduceCompact: () => reduceCompact,
   productMany: () => productMany,
   product: () => product,
@@ -1394,7 +1531,7 @@ function make2(combine2, initialValue, combineAll) {
 var make3 = (isEquivalent) => (self, that) => self === that || isEquivalent(self, that);
 var isStrictEquivalent = (x, y) => x === y;
 var strictEqual = () => isStrictEquivalent;
-function Tuple(elements) {
+function Tuple2(elements) {
   return make3((self, that) => {
     if (self.length !== that.length) {
       return false;
@@ -1492,7 +1629,7 @@ var isOption = (input) => hasProperty(input, TypeId);
 var isNone = (fa) => fa._tag === "None";
 var isSome = (fa) => fa._tag === "Some";
 var none = /* @__PURE__ */ Object.create(NoneProto);
-var some = (value) => {
+var some2 = (value) => {
   const a = Object.create(SomeProto);
   a.value = value;
   return a;
@@ -1563,8 +1700,8 @@ var succeed = (success) => {
   a.success = success;
   return a;
 };
-var getFailure = (self) => isSuccess(self) ? none : some(self.failure);
-var getSuccess = (self) => isFailure(self) ? none : some(self.success);
+var getFailure = (self) => isSuccess(self) ? none : some2(self.failure);
+var getSuccess = (self) => isFailure(self) ? none : some2(self.success);
 var fromOption = /* @__PURE__ */ dual(2, (self, onNone) => isNone(self) ? fail(onNone()) : succeed(self.value));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Order.js
@@ -1582,8 +1719,8 @@ var Number2 = /* @__PURE__ */ make4((self, that) => {
   return self < that ? -1 : 1;
 });
 var BigInt2 = /* @__PURE__ */ make4((self, that) => self < that ? -1 : 1);
-var mapInput = /* @__PURE__ */ dual(2, (self, f) => make4((b1, b2) => self(f(b1), f(b2))));
-var Date2 = /* @__PURE__ */ mapInput(Number2, (date) => date.getTime());
+var mapInput2 = /* @__PURE__ */ dual(2, (self, f) => make4((b1, b2) => self(f(b1), f(b2))));
+var Date2 = /* @__PURE__ */ mapInput2(Number2, (date) => date.getTime());
 var isLessThan = (O) => dual(2, (self, that) => O(self, that) === -1);
 var isGreaterThan = (O) => dual(2, (self, that) => O(self, that) === 1);
 var isLessThanOrEqualTo = (O) => dual(2, (self, that) => O(self, that) !== 1);
@@ -1595,7 +1732,7 @@ var isBetween = (O) => dual(2, (self, options) => !isLessThan(O)(self, options.m
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Option.js
 var none2 = () => none;
-var some2 = some;
+var some3 = some2;
 var isOption2 = isOption;
 var isNone2 = isNone;
 var isSome2 = isSome;
@@ -1606,7 +1743,7 @@ var match = /* @__PURE__ */ dual(2, (self, {
 var toRefinement = (f) => (a) => isSome2(f(a));
 var fromIterable = (collection) => {
   for (const a of collection) {
-    return some2(a);
+    return some3(a);
   }
   return none2();
 };
@@ -1614,7 +1751,7 @@ var getSuccess2 = getSuccess;
 var getFailure2 = getFailure;
 var getOrElse = /* @__PURE__ */ dual(2, (self, onNone) => isNone2(self) ? onNone() : self.value);
 var orElse = /* @__PURE__ */ dual(2, (self, that) => isNone2(self) ? that() : self);
-var orElseSome = /* @__PURE__ */ dual(2, (self, onNone) => isNone2(self) ? some2(onNone()) : self);
+var orElseSome = /* @__PURE__ */ dual(2, (self, onNone) => isNone2(self) ? some3(onNone()) : self);
 var orElseResult = /* @__PURE__ */ dual(2, (self, that) => isNone2(self) ? map(that(), succeed) : map(self, fail));
 var firstSomeOf = (collection) => {
   let out = none2();
@@ -1625,15 +1762,15 @@ var firstSomeOf = (collection) => {
   }
   return out;
 };
-var fromNullishOr = (a) => a == null ? none2() : some2(a);
-var fromUndefinedOr = (a) => a === undefined ? none2() : some2(a);
-var fromNullOr = (a) => a === null ? none2() : some2(a);
+var fromNullishOr = (a) => a == null ? none2() : some3(a);
+var fromUndefinedOr = (a) => a === undefined ? none2() : some3(a);
+var fromNullOr = (a) => a === null ? none2() : some3(a);
 var liftNullishOr = (f) => (...a) => fromNullishOr(f(...a));
 var getOrNull = /* @__PURE__ */ getOrElse(constNull);
 var getOrUndefined = /* @__PURE__ */ getOrElse(constUndefined);
 var liftThrowable = (f) => (...a) => {
   try {
-    return some2(f(...a));
+    return some3(f(...a));
   } catch {
     return none2();
   }
@@ -1645,14 +1782,14 @@ var getOrThrowWith = /* @__PURE__ */ dual(2, (self, onNone) => {
   throw onNone();
 });
 var getOrThrow = /* @__PURE__ */ getOrThrowWith(() => new Error("getOrThrow called on a None"));
-var map = /* @__PURE__ */ dual(2, (self, f) => isNone2(self) ? none2() : some2(f(self.value)));
+var map = /* @__PURE__ */ dual(2, (self, f) => isNone2(self) ? none2() : some3(f(self.value)));
 var as = /* @__PURE__ */ dual(2, (self, b) => map(self, () => b));
 var asVoid = /* @__PURE__ */ as(undefined);
-var void_ = /* @__PURE__ */ some2(undefined);
+var void_ = /* @__PURE__ */ some3(undefined);
 var flatMap = /* @__PURE__ */ dual(2, (self, f) => isNone2(self) ? none2() : f(self.value));
 var andThen = /* @__PURE__ */ dual(2, (self, f) => flatMap(self, (a) => {
   const b = isFunction(f) ? f(a) : f;
-  return isOption2(b) ? b : some2(b);
+  return isOption2(b) ? b : some3(b);
 }));
 var flatMapNullishOr = /* @__PURE__ */ dual(2, (self, f) => isNone2(self) ? none2() : fromNullishOr(f(self.value)));
 var flatten = /* @__PURE__ */ flatMap(identity);
@@ -1660,7 +1797,7 @@ var zipRight = /* @__PURE__ */ dual(2, (self, that) => flatMap(self, () => that)
 var zipLeft = /* @__PURE__ */ dual(2, (self, that) => tap(self, () => that));
 var composeK = /* @__PURE__ */ dual(2, (afb, bfc) => (a) => flatMap(afb(a), bfc));
 var tap = /* @__PURE__ */ dual(2, (self, f) => flatMap(self, (a) => map(f(a), () => a)));
-var product = (self, that) => isSome2(self) && isSome2(that) ? some2([self.value, that.value]) : none2();
+var product = (self, that) => isSome2(self) && isSome2(that) ? some3([self.value, that.value]) : none2();
 var productMany = (self, collection) => {
   if (isNone2(self)) {
     return none2();
@@ -1672,7 +1809,7 @@ var productMany = (self, collection) => {
     }
     out.push(o.value);
   }
-  return some2(out);
+  return some3(out);
 };
 var all = (input) => {
   if (Symbol.iterator in input) {
@@ -1683,7 +1820,7 @@ var all = (input) => {
       }
       out2.push(o.value);
     }
-    return some2(out2);
+    return some3(out2);
   }
   const out = {};
   for (const key of Object.keys(input)) {
@@ -1693,7 +1830,7 @@ var all = (input) => {
     }
     assignProperty(out, key, o.value);
   }
-  return some2(out);
+  return some3(out);
 };
 var zipWith = /* @__PURE__ */ dual(3, (self, that, f) => map(product(self, that), ([a, b]) => f(a, b)));
 var reduceCompact = /* @__PURE__ */ dual(3, (self, b, f) => {
@@ -1711,27 +1848,27 @@ var partitionMap = /* @__PURE__ */ dual(2, (self, f) => {
     return [none2(), none2()];
   }
   const e = f(self.value);
-  return isFailure(e) ? [some2(e.failure), none2()] : [none2(), some2(e.success)];
+  return isFailure(e) ? [some3(e.failure), none2()] : [none2(), some3(e.success)];
 });
 var filterMap = /* @__PURE__ */ dual(2, (self, f) => {
   if (isNone2(self)) {
     return none2();
   }
   const next = f(self.value);
-  return isSuccess(next) ? some2(next.success) : none2();
+  return isSuccess(next) ? some3(next.success) : none2();
 });
-var filter = /* @__PURE__ */ dual(2, (self, predicate) => isNone2(self) ? none2() : predicate(self.value) ? some2(self.value) : none2());
+var filter = /* @__PURE__ */ dual(2, (self, predicate) => isNone2(self) ? none2() : predicate(self.value) ? some3(self.value) : none2());
 var makeEquivalence = (isEquivalent) => make3((x, y) => isNone2(x) ? isNone2(y) : isNone2(y) ? false : isEquivalent(x.value, y.value));
 var makeOrder = (O) => make4((self, that) => isSome2(self) ? isSome2(that) ? O(self.value, that.value) : 1 : -1);
 var lift2 = (f) => dual(2, (self, that) => zipWith(self, that, f));
-var liftPredicate = /* @__PURE__ */ dual(2, (b, predicate) => predicate(b) ? some2(b) : none2());
+var liftPredicate = /* @__PURE__ */ dual(2, (b, predicate) => predicate(b) ? some3(b) : none2());
 var containsWith = (isEquivalent) => dual(2, (self, a) => isNone2(self) ? false : isEquivalent(self.value, a));
 var contains = /* @__PURE__ */ containsWith(/* @__PURE__ */ asEquivalence());
 var exists = /* @__PURE__ */ dual(2, (self, refinement) => isNone2(self) ? false : refinement(self.value));
 var bindTo2 = /* @__PURE__ */ bindTo(map);
 var let_2 = /* @__PURE__ */ let_(map);
 var bind2 = /* @__PURE__ */ bind(map, flatMap);
-var Do = /* @__PURE__ */ some2({});
+var Do = /* @__PURE__ */ some3({});
 var gen = (...args2) => {
   const f = args2.length === 1 ? args2[0] : args2[1].bind(args2[0]);
   const iterator = f();
@@ -1743,7 +1880,7 @@ var gen = (...args2) => {
     }
     state = iterator.next(current.value);
   }
-  return some2(state.value);
+  return some3(state.value);
 };
 function makeReducer(combiner) {
   return make2((self, that) => {
@@ -1751,19 +1888,19 @@ function makeReducer(combiner) {
       return that;
     if (isNone2(that))
       return self;
-    return some2(combiner.combine(self.value, that.value));
+    return some3(combiner.combine(self.value, that.value));
   }, none2());
 }
 function makeCombinerFailFast(combiner) {
   return make((self, that) => {
     if (isNone2(self) || isNone2(that))
       return none2();
-    return some2(combiner.combine(self.value, that.value));
+    return some3(combiner.combine(self.value, that.value));
   });
 }
 function makeReducerFailFast(reducer) {
   const combine2 = makeCombinerFailFast(reducer).combine;
-  const initialValue = some2(reducer.initialValue);
+  const initialValue = some3(reducer.initialValue);
   return make2(combine2, initialValue, (collection) => {
     let out = initialValue;
     for (const value of collection) {
@@ -1975,8 +2112,8 @@ var serviceNotFoundError = (service) => {
 var getOption = /* @__PURE__ */ dual(2, (self, service) => {
   const value = lookup(self, service.key);
   if (value !== notFound)
-    return some2(value);
-  return isReference(service) ? some2(getDefaultValue(service)) : none2();
+    return some3(value);
+  return isReference(service) ? some3(getDefaultValue(service)) : none2();
 });
 var merge = /* @__PURE__ */ dual(2, (self, that) => {
   if (self.mapUnsafe.size === 0)
@@ -2154,11 +2291,11 @@ var bind3 = /* @__PURE__ */ bind(map2, flatMap2);
 var bindTo3 = /* @__PURE__ */ bindTo(map2);
 var let_3 = /* @__PURE__ */ let_(map2);
 var transposeOption = (self) => {
-  return isNone(self) ? succeedNone : map2(self.value, some);
+  return isNone(self) ? succeedNone : map2(self.value, some2);
 };
-var transposeMapOption = /* @__PURE__ */ dual(2, (self, f) => isNone(self) ? succeedNone : map2(f(self.value), some));
+var transposeMapOption = /* @__PURE__ */ dual(2, (self, f) => isNone(self) ? succeedNone : map2(f(self.value), some2));
 var succeedNone = /* @__PURE__ */ succeed2(none);
-var succeedSome = (a) => succeed2(some(a));
+var succeedSome = (a) => succeed2(some2(a));
 var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
   if (isSuccess2(self)) {
     f(self.success);
@@ -2167,7 +2304,7 @@ var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tuple.js
-var makeEquivalence3 = Tuple;
+var makeEquivalence3 = Tuple2;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Iterable.js
 var makeBy = (f, options) => {
@@ -2322,7 +2459,7 @@ var getUnsafe2 = /* @__PURE__ */ dual(2, (self, index) => {
   }
   return self[i];
 });
-var last = (self) => isReadonlyArrayNonEmpty(self) ? some2(lastNonEmpty(self)) : none2();
+var last = (self) => isReadonlyArrayNonEmpty(self) ? some3(lastNonEmpty(self)) : none2();
 var lastNonEmpty = (self) => self[self.length - 1];
 var takeWhile = /* @__PURE__ */ dual(2, (self, predicate) => {
   let i = 0;
@@ -2893,16 +3030,16 @@ var divide = /* @__PURE__ */ dual(2, (self, by) => {
   if (by === 0 || Object.is(by, -0))
     return none2();
   return match3(self, {
-    onMillis: (millis2) => some2(make6(millis2 / by)),
+    onMillis: (millis2) => some3(make6(millis2 / by)),
     onNanos: (nanos2) => {
       try {
-        return some2(make6(nanos2 / BigInt(by)));
+        return some3(make6(nanos2 / BigInt(by)));
       } catch {
         return none2();
       }
     },
-    onInfinity: () => some2(by > 0 ? infinity : negativeInfinity),
-    onNegativeInfinity: () => some2(by > 0 ? negativeInfinity : infinity)
+    onInfinity: () => some3(by > 0 ? infinity : negativeInfinity),
+    onNegativeInfinity: () => some3(by > 0 ? negativeInfinity : infinity)
   });
 });
 var divideUnsafe = /* @__PURE__ */ dual(2, (self, by) => {
@@ -3050,7 +3187,7 @@ var CombinerMin = /* @__PURE__ */ min(Order);
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Filter.js
 var toPredicate = (self) => (input) => !isFailure2(self(input));
 var has2 = (key) => (input) => input.has(key) ? succeed2(input) : fail2(input);
-var compose = /* @__PURE__ */ dual(2, (left, right) => (input) => {
+var compose2 = /* @__PURE__ */ dual(2, (left, right) => (input) => {
   const leftOut = left(input);
   if (isFailure2(leftOut))
     return leftOut;
@@ -3067,7 +3204,7 @@ var composePassthrough = /* @__PURE__ */ dual(2, (left, right) => (input) => {
 });
 var toOption = (self) => (input) => {
   const result = self(input);
-  return isFailure2(result) ? none2() : some2(result.success);
+  return isFailure2(result) ? none2() : some3(result.success);
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Scheduler.js
@@ -3318,6 +3455,9 @@ var CurrentLogLevel = /* @__PURE__ */ Reference("effect/References/CurrentLogLev
 var MinimumLogLevel = /* @__PURE__ */ Reference("effect/References/MinimumLogLevel", {
   fiberCached: true,
   defaultValue: () => "Info"
+});
+var UnhandledLogLevel = /* @__PURE__ */ Reference("effect/References/UnhandledLogLevel", {
+  defaultValue: () => "Error"
 });
 var CurrentLogSpans = /* @__PURE__ */ Reference("effect/References/CurrentLogSpans", {
   defaultValue: () => []
@@ -4022,9 +4162,9 @@ var yieldNowWith = /* @__PURE__ */ makePrimitive({
   }
 });
 var yieldNow = /* @__PURE__ */ yieldNowWith(0);
-var succeedSome2 = (a) => succeed3(some2(a));
+var succeedSome2 = (a) => succeed3(some3(a));
 var succeedNone2 = /* @__PURE__ */ succeed3(/* @__PURE__ */ none2());
-var transposeOption2 = (self) => isNone2(self) ? succeedNone2 : map5(self.value, some2);
+var transposeOption2 = (self) => isNone2(self) ? succeedNone2 : map5(self.value, some3);
 var failCauseSync = (evaluate2) => suspend(() => failCause(internalCall(evaluate2)));
 var die = (defect) => exitDie(defect);
 var failSync = (error) => suspend(() => fail3(internalCall(error)));
@@ -4238,7 +4378,7 @@ var as2 = /* @__PURE__ */ dual(2, (self, value) => {
   const b = succeed3(value);
   return flatMap3(self, (_) => b);
 });
-var asSome = (self) => map5(self, some2);
+var asSome = (self) => map5(self, some3);
 var flip2 = (self) => matchEffect(self, {
   onFailure: succeed3,
   onSuccess: fail3
@@ -4402,11 +4542,11 @@ var exitAsVoidAll = (exits) => {
   }
   return failures.length === 0 ? exitVoid : exitFailCause(causeFromReasons(failures));
 };
-var exitGetSuccess = (self) => exitIsSuccess(self) ? some2(self.value) : none2();
-var exitGetCause = (self) => exitIsFailure(self) ? some2(self.cause) : none2();
+var exitGetSuccess = (self) => exitIsSuccess(self) ? some3(self.value) : none2();
+var exitGetCause = (self) => exitIsFailure(self) ? some3(self.cause) : none2();
 var exitFindErrorOption = (self) => {
   const error = exitFindError(self);
-  return isFailure2(error) ? none2() : some2(error.success);
+  return isFailure2(error) ? none2() : some3(error.success);
 };
 var service = (service2) => service2;
 var serviceOption = (service2) => withFiber((fiber2) => succeed3(getOption(fiber2.context, service2)));
@@ -4634,7 +4774,7 @@ var ignoreCause = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, opt
 });
 var option = (self) => match4(self, {
   onFailure: none2,
-  onSuccess: some2
+  onSuccess: some3
 });
 var result = (self) => matchEager(self, {
   onFailure: fail2,
@@ -5010,7 +5150,7 @@ var findFirst = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !isEffec
 }));
 var findFirstLoop = (iterator, index, predicate, value) => flatMap3(predicate(value, index), (keep) => {
   if (keep) {
-    return succeed3(some2(value));
+    return succeed3(some3(value));
   }
   const next = iterator.next();
   if (!next.done) {
@@ -5028,7 +5168,7 @@ var findFirstFilter = /* @__PURE__ */ dual((args2) => isIterable(args2[0]) && !i
 }));
 var findFirstFilterLoop = (iterator, index, filter4, value) => flatMap3(filter4(value, index), (result2) => {
   if (isSuccess2(result2)) {
-    return succeed3(some2(result2.success));
+    return succeed3(some3(result2.success));
   }
   const next = iterator.next();
   if (!next.done) {
@@ -5562,11 +5702,11 @@ var noopSpan = (options) => Object.assign(Object.create(NoopSpanProto), options)
 var filterDisablePropagation = (span) => {
   if (!span)
     return none2();
-  return get(span.annotations, DisablePropagation) ? span._tag === "Span" ? filterDisablePropagation(getOrUndefined(span.parent)) : none2() : some2(span);
+  return get(span.annotations, DisablePropagation) ? span._tag === "Span" ? filterDisablePropagation(getOrUndefined(span.parent)) : none2() : some3(span);
 };
 var makeSpanUnsafe = (fiber2, name, options) => {
   const disablePropagation = !fiber2.getRef(TracerEnabled) || options?.annotations && get(options.annotations, DisablePropagation);
-  const parent = options?.parent !== undefined ? some2(options.parent) : options?.root ? none2() : filterDisablePropagation(fiber2.currentSpan);
+  const parent = options?.parent !== undefined ? some3(options.parent) : options?.root ? none2() : filterDisablePropagation(fiber2.currentSpan);
   let span;
   if (disablePropagation) {
     span = noopSpan({
@@ -5867,7 +6007,7 @@ var logLevelToOrder = (level) => {
       return Number.MAX_SAFE_INTEGER;
   }
 };
-var LogLevelOrder = /* @__PURE__ */ mapInput(Number2, logLevelToOrder);
+var LogLevelOrder = /* @__PURE__ */ mapInput2(Number2, logLevelToOrder);
 var isLogLevelGreaterThan = /* @__PURE__ */ isGreaterThan(LogLevelOrder);
 var CurrentLoggers = /* @__PURE__ */ Reference("effect/Loggers/CurrentLoggers", {
   defaultValue: () => new Set([defaultLogger, tracerLogger])
@@ -5927,6 +6067,18 @@ var formatLogSpan = (self, now) => {
   const label = formatLabel(self[0]);
   return `${label}=${now - self[1]}ms`;
 };
+var structuredMessage = (u) => {
+  switch (typeof u) {
+    case "bigint":
+    case "function":
+    case "symbol": {
+      return String(u);
+    }
+    default: {
+      return toJson(u);
+    }
+  }
+};
 var logWithLevel = (level) => (...message) => {
   let cause = undefined;
   for (let i = 0, len = message.length;i < len; i++) {
@@ -5966,6 +6118,14 @@ var logWithLevel = (level) => (...message) => {
     return void_3;
   });
 };
+var withColor = (text, ...colors) => {
+  let out = "";
+  for (let i = 0;i < colors.length; i++) {
+    out += `\x1B[${colors[i]}m`;
+  }
+  return out + text + "\x1B[0m";
+};
+var withColorNoop = (text, ..._colors) => text;
 var colors = {
   bold: "1",
   red: "31",
@@ -5988,7 +6148,140 @@ var logLevelColors = {
   Error: [colors.red],
   Fatal: [colors.bgBrightRed, colors.black]
 };
+var logLevelStyle = {
+  None: "",
+  All: "",
+  Trace: "color:gray",
+  Debug: "color:blue",
+  Info: "color:green",
+  Warn: "color:orange",
+  Error: "color:red",
+  Fatal: "background-color:red;color:white"
+};
 var defaultDateFormat = (date) => `${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}:${date.getSeconds().toString().padStart(2, "0")}.${date.getMilliseconds().toString().padStart(3, "0")}`;
+var consolePretty = (options) => {
+  const process2 = globalThis.process;
+  const hasProcessStdout = typeof process2?.stdout === "object" && process2.stdout !== null;
+  const processStdoutIsTTY = hasProcessStdout && process2.stdout.isTTY === true;
+  const hasProcessStdoutOrDeno = hasProcessStdout || "Deno" in globalThis;
+  const mode_ = options?.mode ?? "auto";
+  const mode = mode_ === "auto" ? hasProcessStdoutOrDeno ? "tty" : "browser" : mode_;
+  const isBrowser = mode === "browser";
+  const showColors = typeof options?.colors === "boolean" ? options.colors : processStdoutIsTTY || isBrowser;
+  const formatDate2 = options?.formatDate ?? defaultDateFormat;
+  return isBrowser ? prettyLoggerBrowser({
+    colors: showColors,
+    formatDate: formatDate2
+  }) : prettyLoggerTty({
+    colors: showColors,
+    formatDate: formatDate2
+  });
+};
+var prettyLoggerTty = (options) => {
+  const processIsBun = globalThis.process?.isBun === true;
+  const color = options.colors ? withColor : withColorNoop;
+  return loggerMake(({
+    cause,
+    date,
+    fiber: fiber2,
+    logLevel,
+    message: message_
+  }) => {
+    const console = fiber2.getRef(ConsoleRef);
+    const log = fiber2.getRef(LogToStderr) ? console.error : console.log;
+    const message = Array.isArray(message_) ? message_.slice() : [message_];
+    let firstLine = color(`[${options.formatDate(date)}]`, colors.white) + ` ${color(logLevel.toUpperCase(), ...logLevelColors[logLevel])}` + ` (#${fiber2.id})`;
+    const now = date.getTime();
+    const spans = fiber2.getRef(CurrentLogSpans);
+    for (const span of spans) {
+      firstLine += " " + formatLogSpan(span, now);
+    }
+    firstLine += ":";
+    let messageIndex = 0;
+    if (message.length > 0) {
+      const firstMaybeString = structuredMessage(message[0]);
+      if (typeof firstMaybeString === "string") {
+        firstLine += " " + color(firstMaybeString, colors.bold, colors.cyan);
+        messageIndex++;
+      }
+    }
+    log(firstLine);
+    if (!processIsBun)
+      console.group();
+    if (cause.reasons.length > 0) {
+      log(causePretty(cause));
+    }
+    if (messageIndex < message.length) {
+      for (;messageIndex < message.length; messageIndex++) {
+        log(redact(message[messageIndex]));
+      }
+    }
+    const annotations = fiber2.getRef(CurrentLogAnnotations);
+    for (const [key, value] of Object.entries(annotations)) {
+      log(color(`${key}:`, colors.bold, colors.white), redact(value));
+    }
+    if (!processIsBun)
+      console.groupEnd();
+  });
+};
+var prettyLoggerBrowser = (options) => {
+  const color = options.colors ? "%c" : "";
+  return loggerMake(({
+    cause,
+    date,
+    fiber: fiber2,
+    logLevel,
+    message: message_
+  }) => {
+    const console = fiber2.getRef(ConsoleRef);
+    const message = Array.isArray(message_) ? message_.slice() : [message_];
+    let firstLine = `${color}[${options.formatDate(date)}]`;
+    const firstParams = [];
+    if (options.colors) {
+      firstParams.push("color:gray");
+    }
+    firstLine += ` ${color}${logLevel.toUpperCase()}${color} (#${fiber2.id})`;
+    if (options.colors) {
+      firstParams.push(logLevelStyle[logLevel], "");
+    }
+    const now = date.getTime();
+    const spans = fiber2.getRef(CurrentLogSpans);
+    for (const span of spans) {
+      firstLine += " " + formatLogSpan(span, now);
+    }
+    firstLine += ":";
+    let messageIndex = 0;
+    if (message.length > 0) {
+      const firstMaybeString = structuredMessage(message[0]);
+      if (typeof firstMaybeString === "string") {
+        firstLine += ` ${color}${firstMaybeString}`;
+        if (options.colors) {
+          firstParams.push("color:deepskyblue");
+        }
+        messageIndex++;
+      }
+    }
+    console.groupCollapsed(firstLine, ...firstParams);
+    if (cause.reasons.length > 0) {
+      console.error(causePretty(cause));
+    }
+    if (messageIndex < message.length) {
+      for (;messageIndex < message.length; messageIndex++) {
+        console.log(redact(message[messageIndex]));
+      }
+    }
+    const annotations = fiber2.getRef(CurrentLogAnnotations);
+    for (const [key, value] of Object.entries(annotations)) {
+      const redacted = redact(value);
+      if (options.colors) {
+        console.log(`%c${key}:`, "color:gray", redacted);
+      } else {
+        console.log(`${key}:`, redacted);
+      }
+    }
+    console.groupEnd();
+  });
+};
 var defaultLogger = /* @__PURE__ */ loggerMake(({
   cause,
   date,
@@ -6511,10 +6804,40 @@ var doneUnsafe = (self, effect) => {
 var into = /* @__PURE__ */ dual(2, (self, deferred) => uninterruptibleMask((restore) => flatMap3(exit(restore(self)), (exit2) => done3(deferred, exit2))));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/References.js
+var exports_References = {};
+__export(exports_References, {
+  UnhandledLogLevel: () => UnhandledLogLevel2,
+  TracerTimingEnabled: () => TracerTimingEnabled2,
+  TracerSpanLinks: () => TracerSpanLinks2,
+  TracerSpanAnnotations: () => TracerSpanAnnotations2,
+  TracerEnabled: () => TracerEnabled2,
+  Tracer: () => Tracer,
+  Scheduler: () => Scheduler,
+  PreventSchedulerYield: () => PreventSchedulerYield,
+  MinimumTraceLevel: () => MinimumTraceLevel,
+  MinimumLogLevel: () => MinimumLogLevel2,
+  MaxOpsBeforeYield: () => MaxOpsBeforeYield,
+  LogToStderr: () => LogToStderr2,
+  DisablePropagation: () => DisablePropagation,
+  CurrentTraceLevel: () => CurrentTraceLevel,
+  CurrentStackFrame: () => CurrentStackFrame2,
+  CurrentLoggers: () => CurrentLoggers2,
+  CurrentLogSpans: () => CurrentLogSpans2,
+  CurrentLogLevel: () => CurrentLogLevel2,
+  CurrentLogAnnotations: () => CurrentLogAnnotations2
+});
 var CurrentLogAnnotations2 = CurrentLogAnnotations;
+var CurrentLogLevel2 = CurrentLogLevel;
 var CurrentLogSpans2 = CurrentLogSpans;
 var CurrentStackFrame2 = CurrentStackFrame;
+var MinimumLogLevel2 = MinimumLogLevel;
+var TracerEnabled2 = TracerEnabled;
+var TracerSpanAnnotations2 = TracerSpanAnnotations;
+var TracerSpanLinks2 = TracerSpanLinks;
 var TracerTimingEnabled2 = TracerTimingEnabled;
+var UnhandledLogLevel2 = UnhandledLogLevel;
+var CurrentLoggers2 = CurrentLoggers;
+var LogToStderr2 = LogToStderr;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Scope.js
 var exports_Scope = {};
@@ -7090,7 +7413,7 @@ var offsetZoneRegExp = /^(?:GMT|[+-])/;
 var zoneFromString = (zone) => {
   if (offsetZoneRegExp.test(zone)) {
     const offset = parseOffset(zone);
-    return offset === null ? none2() : some2(zoneMakeOffset(offset));
+    return offset === null ? none2() : some3(zoneMakeOffset(offset));
   }
   return zoneMakeNamed(zone);
 };
@@ -7523,19 +7846,19 @@ var nextPow2 = (n) => {
 };
 var parse = (s) => {
   if (s === "NaN") {
-    return some2(NaN);
+    return some3(NaN);
   }
   if (s === "Infinity") {
-    return some2(Infinity);
+    return some3(Infinity);
   }
   if (s === "-Infinity") {
-    return some2(-Infinity);
+    return some3(-Infinity);
   }
   if (s.trim() === "") {
     return none2();
   }
   const n = Number3(s);
-  return Number3.isNaN(n) ? none2() : some2(n);
+  return Number3.isNaN(n) ? none2() : some3(n);
 };
 var ReducerMax = /* @__PURE__ */ make2((a, b) => Math.max(a, b), -Infinity);
 var ReducerMin = /* @__PURE__ */ make2((a, b) => Math.min(a, b), Infinity);
@@ -7682,7 +8005,7 @@ var repeatOrElse = /* @__PURE__ */ dual(3, (self, schedule, orElse3) => flatMap3
     meta = meta_;
   })), {
     disableYield: true
-  }), (error) => isDone(error) ? succeed3(error.value) : orElse3(error, meta.attempt === 0 ? none2() : some2(meta)));
+  }), (error) => isDone(error) ? succeed3(error.value) : orElse3(error, meta.attempt === 0 ? none2() : some3(meta)));
 }));
 var retryOrElse = /* @__PURE__ */ dual(3, (self, policy, orElse3) => flatMap3(toStepWithMetadata(policy), (step) => {
   let meta = CurrentMetadata2.defaultValue();
@@ -7994,7 +8317,7 @@ __export(exports_Metric, {
   snapshotUnsafe: () => snapshotUnsafe,
   snapshot: () => snapshot,
   modify: () => modify,
-  mapInput: () => mapInput2,
+  mapInput: () => mapInput3,
   linearBoundaries: () => linearBoundaries,
   isMetric: () => isMetric,
   histogram: () => histogram,
@@ -8331,7 +8654,7 @@ var counter = (name, options) => new CounterMetric(name, options);
 var gauge = (name, options) => new GaugeMetric(name, options);
 var frequency = (name, options) => new FrequencyMetric(name, options);
 var histogram = (name, options) => new HistogramMetric(name, options);
-var summary = (name, options) => mapInput2(summaryWithTimestamp(name, options), (input, context2) => [input, get(context2, ClockRef).currentTimeMillisUnsafe()]);
+var summary = (name, options) => mapInput3(summaryWithTimestamp(name, options), (input, context2) => [input, get(context2, ClockRef).currentTimeMillisUnsafe()]);
 var summaryWithTimestamp = (name, options) => new SummaryMetric(name, options);
 var timer = (name, options) => {
   const boundaries = isNotUndefined(options?.boundaries) ? options.boundaries : exponentialBoundaries({
@@ -8347,13 +8670,13 @@ var timer = (name, options) => {
     boundaries,
     attributes
   });
-  return mapInput2(metric, toMillis);
+  return mapInput3(metric, toMillis);
 };
 var value = (self) => flatMap3(context(), (context2) => sync(() => self.valueUnsafe(context2)));
 var modify = /* @__PURE__ */ dual(2, (self, input) => flatMap3(context(), (context2) => sync(() => self.modifyUnsafe(input, context2))));
 var update = /* @__PURE__ */ dual(2, (self, input) => contextWith((services) => sync(() => self.updateUnsafe(input, services))));
-var mapInput2 = /* @__PURE__ */ dual(2, (self, f) => new MetricTransform(self, (context2) => self.valueUnsafe(context2), (input, context2) => self.updateUnsafe(f(input, context2), context2), (input, context2) => self.modifyUnsafe(f(input, context2), context2)));
-var withConstantInput = /* @__PURE__ */ dual(2, (self, input) => mapInput2(self, () => input));
+var mapInput3 = /* @__PURE__ */ dual(2, (self, f) => new MetricTransform(self, (context2) => self.valueUnsafe(context2), (input, context2) => self.updateUnsafe(f(input, context2), context2), (input, context2) => self.modifyUnsafe(f(input, context2), context2)));
+var withConstantInput = /* @__PURE__ */ dual(2, (self, input) => mapInput3(self, () => input));
 var withAttributes = /* @__PURE__ */ dual(2, (self, attributes) => new MetricTransform(self, (context2) => self.valueUnsafe(addAttributesToContext(context2, attributes)), (input, context2) => self.updateUnsafe(input, addAttributesToContext(context2, attributes)), (input, context2) => self.modifyUnsafe(input, addAttributesToContext(context2, attributes))));
 var snapshot = /* @__PURE__ */ map5(/* @__PURE__ */ context(), (context2) => snapshotUnsafe(context2));
 var dump = /* @__PURE__ */ flatMap3(/* @__PURE__ */ context(), (context2) => {
@@ -9649,7 +9972,7 @@ var remainingUnsafe = (self) => {
   if (self.shutdownFlag.current) {
     return none2();
   }
-  return some2(self.subscription.size() + self.replayWindow.remaining);
+  return some3(self.subscription.size() + self.replayWindow.remaining);
 };
 var AbsentValue = /* @__PURE__ */ Symbol.for("effect/PubSub/AbsentValue");
 var addSubscribers = (subscribers, subscription, pollers) => {
@@ -10890,7 +11213,7 @@ var poll = (self) => suspend(() => {
     return succeed3(none2());
   }
   if (result3._tag === "Success") {
-    return succeed3(some2(result3.value));
+    return succeed3(some3(result3.value));
   }
   return succeed3(none2());
 });
@@ -11279,7 +11602,7 @@ var acquireUseRelease3 = (acquire, use2, release2) => fromTransformBracket(fnUnt
   let option3 = none2();
   yield* addFinalizerExit(forkedScope, (exit3) => isSome2(option3) ? release2(option3.value, exit3) : void_5);
   const value2 = yield* uninterruptible2(acquire);
-  option3 = some2(value2);
+  option3 = some3(value2);
   return yield* toTransform(use2(value2))(upstream, scope3);
 }));
 var fromArray = (array2) => fromPull(sync3(() => {
@@ -11299,7 +11622,7 @@ var fromIteratorArray = (iterator, chunkSize = DefaultChunkSize) => fromPull(syn
         if (buffer.length === 0) {
           return done2(state.value);
         }
-        done4 = some2(state.value);
+        done4 = some3(state.value);
         break;
       }
       buffer.push(state.value);
@@ -11879,7 +12202,7 @@ var splitLines = () => fromTransform((upstream, _scope) => sync3(() => {
       onSuccess: loop,
       onFailure: failCause4,
       onDone: (leftover) => {
-        done4 = some2(leftover);
+        done4 = some3(leftover);
         if (stringBuilder.length > 0 || midCRLF) {
           const last2 = stringBuilder;
           stringBuilder = "";
@@ -12465,13 +12788,13 @@ var empty8 = () => {
 };
 var get3 = /* @__PURE__ */ dual(2, (self, key) => {
   if (self.backing.has(key)) {
-    return some2(self.backing.get(key));
+    return some3(self.backing.get(key));
   } else if (isSimpleKey(key)) {
     return none2();
   }
   const refKey = referentialKeysCache.get(self);
   if (refKey !== undefined) {
-    return self.backing.has(refKey) ? some2(self.backing.get(refKey)) : none2();
+    return self.backing.has(refKey) ? some3(self.backing.get(refKey)) : none2();
   }
   const hash2 = hash(key);
   const bucket = self.buckets.get(hash2);
@@ -12487,7 +12810,7 @@ var getFromBucket = (self, bucket, key) => {
     if (equals(key, bucket[i])) {
       const refKey = bucket[i];
       referentialKeysCache.set(key, refKey);
-      return some2(self.backing.get(refKey));
+      return some3(self.backing.get(refKey));
     }
   }
   return none2();
@@ -13129,12 +13452,12 @@ var zipWithNext = (self) => mapAccumArray(self, none2, (acc, arr) => {
   let i = 0;
   if (acc._tag === "None") {
     i = 1;
-    acc = some2(arr[0]);
+    acc = some3(arr[0]);
   }
   const pairs = empty3();
   for (;i < arr.length; i++) {
     const value2 = acc.value;
-    acc = some2(arr[i]);
+    acc = some3(arr[i]);
     pairs.push([value2, acc]);
   }
   return [acc, pairs];
@@ -13148,7 +13471,7 @@ var zipWithPrevious = (self) => mapAccumArray(self, none2, (acc, arr) => {
   for (let i = 0;i < arr.length; i++) {
     const value2 = arr[i];
     pairs.push([acc, value2]);
-    acc = some2(arr[i]);
+    acc = some3(arr[i]);
   }
   return [acc, pairs];
 });
@@ -13161,16 +13484,16 @@ var zipWithPreviousAndNext = (self) => mapAccumArray(self, () => ({
   if (acc.current._tag === "None") {
     i = 1;
     current = arr[0];
-    acc.current = some2(current);
+    acc.current = some3(current);
   } else {
     current = acc.current.value;
   }
   const pairs = empty3();
   for (;i < arr.length; i++) {
     const element = arr[i];
-    acc.current = some2(element);
+    acc.current = some3(element);
     pairs.push([acc.prev, current, acc.current]);
-    acc.prev = some2(current);
+    acc.prev = some3(current);
     current = element;
   }
   return [acc, pairs];
@@ -13389,7 +13712,7 @@ var withExecutionPlan3 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (se
       if (preventFallbackOnPartialStream && receivedElements) {
         return fail10(error);
       }
-      lastError = some2(error);
+      lastError = some3(error);
       return loop;
     });
   });
@@ -13985,7 +14308,7 @@ var aggregateWithin = /* @__PURE__ */ dual(3, (self, sink, schedule4) => fromCha
   const catchSinkHalt = flatMap5(([value2, leftover_]) => {
     if (!sinkHasInput && buffer3.state._tag === "Done")
       return done2();
-    lastOutput = some2(value2);
+    lastOutput = some3(value2);
     leftover = leftover_;
     return succeed6(of(value2));
   });
@@ -15020,7 +15343,7 @@ var missing = /* @__PURE__ */ Symbol();
 var succeed9 = succeed4;
 var missingExit = /* @__PURE__ */ succeed9(missing);
 var sameExit = /* @__PURE__ */ succeed9(missing);
-var toOption2 = (value2) => value2 === missing ? none2() : some2(value2);
+var toOption2 = (value2) => value2 === missing ? none2() : some3(value2);
 var fromOptionExit = (option3) => option3._tag === "None" ? missingExit : succeed9(option3.value);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaIssue.js
@@ -15752,7 +16075,7 @@ function transform(f) {
   return transformOptional(map(f));
 }
 function transformOrFail(f) {
-  return onSome((e, options) => f(e, options).pipe(mapEager2(some2)));
+  return onSome((e, options) => f(e, options).pipe(mapEager2(some3)));
 }
 function transformOptional(f) {
   return new Getter((oe) => succeed6(f(oe)));
@@ -15763,7 +16086,7 @@ function omit2() {
 function withDefault(defaultValue) {
   return new Getter((o) => {
     const filtered = filter(o, isNotUndefined);
-    return isSome2(filtered) ? succeed6(filtered) : mapEager2(defaultValue, some2);
+    return isSome2(filtered) ? succeed6(filtered) : mapEager2(defaultValue, some3);
   });
 }
 function String4() {
@@ -15783,7 +16106,7 @@ function trim2() {
 }
 function parseJson(options) {
   return onSome((input, parseOptions) => try_3({
-    try: () => some2(JSON.parse(input, options?.reviver)),
+    try: () => some3(JSON.parse(input, options?.reviver)),
     catch: () => new InvalidValue({
       expected: "a valid JSON string"
     }, input, parseOptions)
@@ -15796,7 +16119,7 @@ function stringifyJson(options) {
       if (output === undefined) {
         throw new TypeError("Value cannot be represented as JSON");
       }
-      return some2(output);
+      return some3(output);
     },
     catch: () => new InvalidValue({
       expected: "a JSON-serializable value"
@@ -16140,7 +16463,7 @@ var Equivalence4 = /* @__PURE__ */ make3((self, that) => {
 var equals3 = /* @__PURE__ */ dual(2, (self, that) => Equivalence4(self, that));
 var fromString = (s) => {
   if (s === "") {
-    return some2(zero2);
+    return some3(zero2);
   }
   let base;
   let exp;
@@ -16175,7 +16498,7 @@ var fromString = (s) => {
   if (!Number.isSafeInteger(scale2)) {
     return none2();
   }
-  return some2(make22(BigInt(digits), scale2));
+  return some3(make22(BigInt(digits), scale2));
 };
 var format6 = (n) => {
   const normalized = normalize(n);
@@ -16406,13 +16729,13 @@ function optionFromNullishOr(options) {
 }
 function optionFromOptionalKey() {
   return transformOptional2({
-    decode: some2,
+    decode: some3,
     encode: flatten
   });
 }
 function optionFromOptional() {
   return transformOptional2({
-    decode: (ot) => ot.pipe(filter(isNotUndefined), some2),
+    decode: (ot) => ot.pipe(filter(isNotUndefined), some3),
     encode: flatten
   });
 }
@@ -18465,7 +18788,7 @@ var unknownToStringTree = /* @__PURE__ */ new Link(StringTree, /* @__PURE__ */ p
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Brand.js
 function nominal() {
   return Object.assign((input) => input, {
-    option: (input) => some2(input),
+    option: (input) => some3(input),
     result: (input) => succeed2(input),
     is: (_) => true
   });
@@ -19541,11 +19864,11 @@ var makeFile = /* @__PURE__ */ (() => {
           }
           this.position = position + BigInt(bytesRead);
           if (bytesRead === sizeNumber) {
-            return some2(buffer3);
+            return some3(buffer3);
           }
           const dst = Buffer.allocUnsafeSlow(bytesRead);
           buffer3.copy(dst, 0, 0, bytesRead);
-          return some2(dst);
+          return some3(dst);
         });
       });
     }
@@ -19659,7 +19982,7 @@ var makeFileInfo = (stat2) => ({
   uid: fromNullishOr(stat2.uid),
   gid: fromNullishOr(stat2.gid),
   size: Size(stat2.size),
-  blksize: stat2.blksize !== undefined ? some2(Size(stat2.blksize)) : none2(),
+  blksize: stat2.blksize !== undefined ? some3(Size(stat2.blksize)) : none2(),
   blocks: fromNullishOr(stat2.blocks)
 });
 var stat2 = /* @__PURE__ */ (() => {
@@ -20096,7 +20419,7 @@ __export(exports_Schema, {
   URLFromString: () => URLFromString,
   URL: () => URL2,
   TupleWithRest: () => TupleWithRest,
-  Tuple: () => Tuple2,
+  Tuple: () => Tuple3,
   Trimmed: () => Trimmed,
   Trim: () => Trim,
   Tree: () => Tree,
@@ -20116,7 +20439,7 @@ __export(exports_Schema, {
   TaggedClass: () => TaggedClass2,
   Symbol: () => Symbol3,
   StructWithRest: () => StructWithRest,
-  Struct: () => Struct,
+  Struct: () => Struct2,
   StringFromUriComponent: () => StringFromUriComponent,
   StringFromHex: () => StringFromHex,
   StringFromBase64Url: () => StringFromBase64Url,
@@ -20301,7 +20624,7 @@ class LeafNode extends Node {
   }
   get(_shift, hash2, key) {
     if (this.hash === hash2 && equals(this.key, key)) {
-      return some2(this.value);
+      return some3(this.value);
     }
     return none2();
   }
@@ -20367,7 +20690,7 @@ class CollisionNode extends Node {
     }
     for (const [k, v] of this.entries) {
       if (equals(k, key)) {
-        return some2(v);
+        return some3(v);
       }
     }
     return none2();
@@ -20880,7 +21203,7 @@ var HashSetProto = {
     return hash(HashSetTypeId);
   },
   [symbol2](that) {
-    return isHashSet(that) && size7(this) === size7(that) && every2(this, (value2) => has5(that, value2));
+    return isHashSet(that) && size7(this) === size7(that) && every3(this, (value2) => has5(that, value2));
   },
   [Symbol.iterator]() {
     return keys3(keyMap(this));
@@ -20918,7 +21241,7 @@ var fromIterable7 = (values2) => {
 };
 var has5 = (self, value2) => has4(keyMap(self), value2);
 var size7 = (self) => size5(keyMap(self));
-var every2 = (self, predicate) => {
+var every3 = (self, predicate) => {
   for (const value2 of self) {
     if (!predicate(value2)) {
       return false;
@@ -20949,7 +21272,7 @@ function makeOption(schema) {
   return (input, options) => {
     const exit3 = runSyncExit2(parser(input, options));
     if (isSuccess4(exit3)) {
-      return some2(exit3.value);
+      return some3(exit3.value);
     }
     getSchemaIssueOrThrow(exit3.cause, "Option adapter can only return none for schema issues");
     return none2();
@@ -21074,7 +21397,7 @@ function asOption(parser) {
   return (input, options) => {
     const exit3 = parserExit(input, options);
     if (isSuccess4(exit3)) {
-      return some2(exit3.value);
+      return some3(exit3.value);
     }
     getSchemaIssueOrThrow(exit3.cause, "Option adapter can only return none for schema issues");
     return none2();
@@ -21769,7 +22092,7 @@ function base(ast, path) {
             return;
           }
           length++;
-          elementArbitraries.push(out2.map(some2));
+          elementArbitraries.push(out2.map(some3));
         }
         const minLength = ctx.constraint?.minLength ?? 0;
         const needsRest = isReadonlyArrayNonEmpty(rest) && minLength > length + optionals.length;
@@ -21782,7 +22105,7 @@ function base(ast, path) {
           }
           includedOptionals++;
           length++;
-          elementArbitraries.push(out2.map(some2));
+          elementArbitraries.push(out2.map(some3));
         }
         if (includedOptionals < optionalTarget) {
           return;
@@ -21826,7 +22149,7 @@ function base(ast, path) {
           arbitrary
         }) => {
           const out2 = arbitrary(fc, reset, recursionStack);
-          return isOptional(ast2) ? out2.chain((a) => fc.boolean().map((b) => b ? some2(a) : none2())) : out2.map(some2);
+          return isOptional(ast2) ? out2.chain((a) => fc.boolean().map((b) => b ? some3(a) : none2())) : out2.map(some3);
         });
         let out = fc.tuple(...elementArbitraries).map((elements2) => getSomes(takeWhile(elements2, isSome2)));
         if (isReadonlyArrayNonEmpty(rest)) {
@@ -23437,7 +23760,7 @@ class CheckNode {
     this.get = (s) => runChecks(checks, s);
   }
 }
-function compose2(a, b) {
+function compose3(a, b) {
   if (a.length === 0)
     return b;
   if (b.length === 0)
@@ -23476,13 +23799,13 @@ class OptionalImpl {
     return (s) => getOrElse3(flatMap2(this.getResult(s), (a) => this.replaceResult(f(a), s)), () => s);
   }
   compose(that) {
-    return make35(compose2(this.node, that.node));
+    return make35(compose3(this.node, that.node));
   }
   key(key) {
-    return make35(compose2(this.node, [new PathNode([key])]));
+    return make35(compose3(this.node, [new PathNode([key])]));
   }
   optionalKey(key) {
-    return make35(compose2(this.node, primitiveNode("Lens", (s) => s[key], (a, s) => {
+    return make35(compose3(this.node, primitiveNode("Lens", (s) => s[key], (a, s) => {
       const copy3 = cloneShallow(s);
       if (a === undefined) {
         if (Array.isArray(copy3) && typeof key === "number") {
@@ -23497,20 +23820,20 @@ class OptionalImpl {
     })));
   }
   check(...checks) {
-    return make35(compose2(this.node, [new CheckNode(checks)]));
+    return make35(compose3(this.node, [new CheckNode(checks)]));
   }
   refine(refinement, annotations2) {
-    return make35(compose2(this.node, [new CheckNode([makeFilterByGuard(refinement, annotations2)])]));
+    return make35(compose3(this.node, [new CheckNode([makeFilterByGuard(refinement, annotations2)])]));
   }
   tag(tag) {
     const err = fail2(new InvalidValue({
       expected: `${JSON.stringify(tag)} tag`
     }));
-    return make35(compose2(this.node, primitiveNode("Prism", (s) => s._tag === tag ? succeed2(s) : err, identity)));
+    return make35(compose3(this.node, primitiveNode("Prism", (s) => s._tag === tag ? succeed2(s) : err, identity)));
   }
   at(key, ..._rest) {
     const err = fail2(new Pointer([key], new MissingKey(undefined)));
-    return make35(compose2(this.node, primitiveNode("Optional", (s) => Object.hasOwn(s, key) ? succeed2(s[key]) : err, (a, s) => {
+    return make35(compose3(this.node, primitiveNode("Optional", (s) => Object.hasOwn(s, key) ? succeed2(s[key]) : err, (a, s) => {
       if (Object.hasOwn(s, key)) {
         const copy3 = cloneShallow(s);
         assignProperty(copy3, key, a);
@@ -24135,7 +24458,7 @@ function makeStruct(ast, fields) {
     }
   });
 }
-function Struct(fields) {
+function Struct2(fields) {
   return makeStruct(struct(fields, undefined), fields);
 }
 function fieldsAssign(fields) {
@@ -24163,7 +24486,7 @@ function encodeKeys(mapping) {
         reverseMapping[encodedKey] = k;
       }
     }
-    return Struct(fields).pipe(decodeTo2(self, transform2({
+    return Struct2(fields).pipe(decodeTo2(self, transform2({
       decode: renameKeys(reverseMapping),
       encode: renameKeys(appliedMapping)
     })));
@@ -24172,7 +24495,7 @@ function encodeKeys(mapping) {
 function extendTo(fields, derive) {
   return (self) => {
     const f = map3(self.fields, toType2);
-    const to = Struct({
+    const to = Struct2({
       ...f,
       ...fields
     });
@@ -24223,7 +24546,7 @@ function makeTuple(ast, elements) {
     }
   });
 }
-function Tuple2(elements) {
+function Tuple3(elements) {
   return makeTuple(tuple(elements), elements);
 }
 function TupleWithRest(schema, rest) {
@@ -24395,7 +24718,7 @@ function tagDefaultOmit(literal) {
   }));
 }
 function TaggedStruct(value4, fields) {
-  return Struct({
+  return Struct2({
     _tag: tag(value4),
     ...fields
   });
@@ -24534,7 +24857,7 @@ function isPattern2(regExp, annotations2) {
     ...annotations2
   });
 }
-var IsPatternPayload = /* @__PURE__ */ Struct({
+var IsPatternPayload = /* @__PURE__ */ Struct2({
   source: String6,
   flags: String6
 }).check(/* @__PURE__ */ makeFilter2((payload) => {
@@ -24608,7 +24931,7 @@ function isUUID(version, annotations2) {
     ...annotations2
   });
 }
-var isUUIDReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isUUID", /* @__PURE__ */ Struct({
+var isUUIDReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isUUID", /* @__PURE__ */ Struct2({
   version: /* @__PURE__ */ Union2([/* @__PURE__ */ Literals([1, 2, 3, 4, 5, 6, 7, 8]), Null2])
 }), ({
   annotations: annotations2,
@@ -24718,7 +25041,7 @@ function isStartsWith(startsWith, annotations2) {
     ...annotations2
   });
 }
-var isStartsWithReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isStartsWith", /* @__PURE__ */ Struct({
+var isStartsWithReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isStartsWith", /* @__PURE__ */ Struct2({
   startsWith: String6
 }), ({
   annotations: annotations2,
@@ -24749,7 +25072,7 @@ function isEndsWith(endsWith, annotations2) {
     ...annotations2
   });
 }
-var isEndsWithReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isEndsWith", /* @__PURE__ */ Struct({
+var isEndsWithReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isEndsWith", /* @__PURE__ */ Struct2({
   endsWith: String6
 }), ({
   annotations: annotations2,
@@ -24780,7 +25103,7 @@ function isIncludes(includes, annotations2) {
     ...annotations2
   });
 }
-var isIncludesReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isIncludes", /* @__PURE__ */ Struct({
+var isIncludesReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isIncludes", /* @__PURE__ */ Struct2({
   includes: String6
 }), ({
   annotations: annotations2,
@@ -25037,7 +25360,7 @@ var isGreaterThan6 = /* @__PURE__ */ makeIsGreaterThan({
     })
   })
 });
-var isGreaterThanReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThan", /* @__PURE__ */ Struct({
+var isGreaterThanReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThan", /* @__PURE__ */ Struct2({
   exclusiveMinimum: Finite
 }), ({
   annotations: annotations2,
@@ -25060,7 +25383,7 @@ var isGreaterThanOrEqualTo5 = /* @__PURE__ */ makeIsGreaterThanOrEqualTo({
     })
   })
 });
-var isGreaterThanOrEqualToReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanOrEqualTo", /* @__PURE__ */ Struct({
+var isGreaterThanOrEqualToReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanOrEqualTo", /* @__PURE__ */ Struct2({
   minimum: Finite
 }), ({
   annotations: annotations2,
@@ -25083,7 +25406,7 @@ var isLessThan6 = /* @__PURE__ */ makeIsLessThan({
     })
   })
 });
-var isLessThanReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThan", /* @__PURE__ */ Struct({
+var isLessThanReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThan", /* @__PURE__ */ Struct2({
   exclusiveMaximum: Finite
 }), ({
   annotations: annotations2,
@@ -25106,7 +25429,7 @@ var isLessThanOrEqualTo5 = /* @__PURE__ */ makeIsLessThanOrEqualTo({
     })
   })
 });
-var isLessThanOrEqualToReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanOrEqualTo", /* @__PURE__ */ Struct({
+var isLessThanOrEqualToReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanOrEqualTo", /* @__PURE__ */ Struct2({
   maximum: Finite
 }), ({
   annotations: annotations2,
@@ -25142,7 +25465,7 @@ var isBetween2 = /* @__PURE__ */ makeIsBetween({
     };
   }
 });
-var isBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBetween", /* @__PURE__ */ Struct({
+var isBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBetween", /* @__PURE__ */ Struct2({
   minimum: Finite,
   maximum: Finite,
   exclusiveMinimum: /* @__PURE__ */ optional2(/* @__PURE__ */ Literal2(true)),
@@ -25170,7 +25493,7 @@ var isMultipleOf = /* @__PURE__ */ makeIsMultipleOf({
     })
   })
 });
-var isMultipleOfReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMultipleOf", /* @__PURE__ */ Struct({
+var isMultipleOfReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMultipleOf", /* @__PURE__ */ Struct2({
   divisor: Finite
 }), ({
   annotations: annotations2,
@@ -25476,7 +25799,7 @@ function isMinLength(minLength, annotations2) {
     ...annotations2
   });
 }
-var isMinLengthReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMinLength", /* @__PURE__ */ Struct({
+var isMinLengthReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMinLength", /* @__PURE__ */ Struct2({
   minLength: Natural
 }), ({
   annotations: annotations2,
@@ -25514,7 +25837,7 @@ function isMaxLength(maxLength, annotations2) {
     ...annotations2
   });
 }
-var isMaxLengthReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMaxLength", /* @__PURE__ */ Struct({
+var isMaxLengthReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMaxLength", /* @__PURE__ */ Struct2({
   maxLength: Natural
 }), ({
   annotations: annotations2,
@@ -25560,7 +25883,7 @@ function isLengthBetween(minimum, maximum, annotations2) {
     ...annotations2
   });
 }
-var isLengthBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLengthBetween", /* @__PURE__ */ Struct({
+var isLengthBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLengthBetween", /* @__PURE__ */ Struct2({
   minimum: Natural,
   maximum: Natural
 }), ({
@@ -25590,7 +25913,7 @@ function isMinSize(minSize, annotations2) {
     ...annotations2
   });
 }
-var isMinSizeReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMinSize", /* @__PURE__ */ Struct({
+var isMinSizeReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMinSize", /* @__PURE__ */ Struct2({
   minSize: Natural
 }), ({
   annotations: annotations2,
@@ -25619,7 +25942,7 @@ function isMaxSize(maxSize, annotations2) {
     ...annotations2
   });
 }
-var isMaxSizeReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMaxSize", /* @__PURE__ */ Struct({
+var isMaxSizeReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMaxSize", /* @__PURE__ */ Struct2({
   maxSize: Natural
 }), ({
   annotations: annotations2,
@@ -25651,7 +25974,7 @@ function isSizeBetween(minimum, maximum, annotations2) {
     ...annotations2
   });
 }
-var isSizeBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isSizeBetween", /* @__PURE__ */ Struct({
+var isSizeBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isSizeBetween", /* @__PURE__ */ Struct2({
   minimum: Natural,
   maximum: Natural
 }), ({
@@ -25683,7 +26006,7 @@ function isMinProperties(minProperties, annotations2) {
     ...annotations2
   });
 }
-var isMinPropertiesReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMinProperties", /* @__PURE__ */ Struct({
+var isMinPropertiesReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMinProperties", /* @__PURE__ */ Struct2({
   minProperties: Natural
 }), ({
   annotations: annotations2,
@@ -25714,7 +26037,7 @@ function isMaxProperties(maxProperties, annotations2) {
     ...annotations2
   });
 }
-var isMaxPropertiesReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMaxProperties", /* @__PURE__ */ Struct({
+var isMaxPropertiesReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isMaxProperties", /* @__PURE__ */ Struct2({
   maxProperties: Natural
 }), ({
   annotations: annotations2,
@@ -25749,7 +26072,7 @@ function isPropertiesLengthBetween(minimum, maximum, annotations2) {
     ...annotations2
   });
 }
-var isPropertiesLengthBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isPropertiesLengthBetween", /* @__PURE__ */ Struct({
+var isPropertiesLengthBetweenReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isPropertiesLengthBetween", /* @__PURE__ */ Struct2({
   minimum: Natural,
   maximum: Natural
 }), ({
@@ -25832,7 +26155,7 @@ function Option(value4) {
         return succeedNone3;
       }
       return mapBothEager2(decodeUnknownEffect(value5)(input.value, options), {
-        onSuccess: some2,
+        onSuccess: some3,
         onFailure: (issue) => makeCompositeAtKey(ast, "value", issue, input, options)
       });
     }
@@ -25850,13 +26173,13 @@ function Option(value4) {
       importDeclarations: [`import * as Option from "effect/Option"`]
     }),
     expected: "Option",
-    toCodec: ([value5]) => link3()(Union2([Struct({
+    toCodec: ([value5]) => link3()(Union2([Struct2({
       _tag: Literal2("Some"),
       value: value5
-    }), Struct({
+    }), Struct2({
       _tag: Literal2("None")
     })]), transform2({
-      decode: (e) => e._tag === "None" ? none2() : some2(e.value),
+      decode: (e) => e._tag === "None" ? none2() : some3(e.value),
       encode: (o) => isSome2(o) ? {
         _tag: "Some",
         value: o.value
@@ -25866,7 +26189,7 @@ function Option(value4) {
     })),
     toArbitrary: ([value5]) => (fc, ctx) => {
       const terminal = fc.constant(none2());
-      const arbitrary = fc.oneof(terminal, value5.arbitrary.map(some2));
+      const arbitrary = fc.oneof(terminal, value5.arbitrary.map(some3));
       return withRecursion(fc, ctx, terminal, arbitrary);
     },
     toEquivalence: ([value5]) => makeEquivalence(value5),
@@ -25905,8 +26228,8 @@ function OptionFromOptionalNullOr(schema, options) {
   const onNoneEncoding = options === undefined ? "omit" : options.onNoneEncoding;
   const noneValue = onNoneEncoding === null ? null : undefined;
   return optional2(NullOr(schema)).pipe(decodeTo2(Option(toType2(schema)), transformOptional2({
-    decode: (oe) => oe.pipe(filter(isNotNullish), some2),
-    encode: onNoneEncoding === "omit" ? flatten : (ot) => some2(getOrElse(flatten(ot), () => noneValue))
+    decode: (oe) => oe.pipe(filter(isNotNullish), some3),
+    encode: onNoneEncoding === "omit" ? flatten : (ot) => some3(getOrElse(flatten(ot), () => noneValue))
   })));
 }
 function Result(success, failure) {
@@ -25939,10 +26262,10 @@ function Result(success, failure) {
       importDeclarations: [`import * as Result from "effect/Result"`]
     }),
     expected: "Result",
-    toCodec: ([success2, failure2]) => link3()(Union2([Struct({
+    toCodec: ([success2, failure2]) => link3()(Union2([Struct2({
       _tag: Literal2("Success"),
       success: success2
-    }), Struct({
+    }), Struct2({
       _tag: Literal2("Failure"),
       failure: failure2
     })]), transform2({
@@ -26103,13 +26426,13 @@ function CauseReason(error, defect) {
       importDeclarations: [`import * as Cause from "effect/Cause"`]
     }),
     expected: "Cause.Failure",
-    toCodec: ([error2, defect2]) => link3()(Union2([Struct({
+    toCodec: ([error2, defect2]) => link3()(Union2([Struct2({
       _tag: Literal2("Fail"),
       error: error2
-    }), Struct({
+    }), Struct2({
       _tag: Literal2("Die"),
       defect: defect2
-    }), Struct({
+    }), Struct2({
       _tag: Literal2("Interrupt"),
       fiberId: UndefinedOr(Finite)
     })]), transform2({
@@ -26342,10 +26665,10 @@ function Exit(value4, error, defect) {
       importDeclarations: [`import * as Exit from "effect/Exit"`]
     }),
     expected: "Exit",
-    toCodec: ([value5, error2, defect2]) => link3()(Union2([Struct({
+    toCodec: ([value5, error2, defect2]) => link3()(Union2([Struct2({
       _tag: Literal2("Success"),
       value: value5
-    }), Struct({
+    }), Struct2({
       _tag: Literal2("Failure"),
       cause: Cause(error2, defect2)
     })]), transform2({
@@ -26446,7 +26769,7 @@ function entriesArbitrary(fc, ctx, key, value4, fromIterable9) {
 }
 function ReadonlyMap(key, value4) {
   const schema = declareConstructor()([key, value4], ([key2, value5]) => {
-    const array3 = ArraySchema(Tuple2([key2, value5]));
+    const array3 = ArraySchema(Tuple3([key2, value5]));
     return (input, ast, options) => {
       if (input instanceof globalThis.Map) {
         return mapBothEager2(decodeUnknownEffect(array3)([...input], options), {
@@ -26468,7 +26791,7 @@ function ReadonlyMap(key, value4) {
       Type: `globalThis.ReadonlyMap<${typeParameters[0].Type}, ${typeParameters[1].Type}>`
     }),
     expected: "ReadonlyMap",
-    toCodec: ([key2, value5]) => link3()(ArraySchema(Tuple2([key2, value5])), transform2({
+    toCodec: ([key2, value5]) => link3()(ArraySchema(Tuple3([key2, value5])), transform2({
       decode: (e) => new globalThis.Map(e),
       encode: (map13) => [...map13.entries()]
     })),
@@ -26497,7 +26820,7 @@ var ReadonlyMapReviver = /* @__PURE__ */ makeDeclarationReviver("effect/schema/R
 });
 function HashMap(key, value4) {
   const schema = declareConstructor()([key, value4], ([key2, value5]) => {
-    const entries3 = ArraySchema(Tuple2([key2, value5]));
+    const entries3 = ArraySchema(Tuple3([key2, value5]));
     return (input, ast, options) => {
       if (isHashMap2(input)) {
         return mapBothEager2(decodeUnknownEffect(entries3)(toEntries(input), options), {
@@ -26520,7 +26843,7 @@ function HashMap(key, value4) {
       importDeclarations: [`import * as HashMap from "effect/HashMap"`]
     }),
     expected: "HashMap",
-    toCodec: ([key2, value5]) => link3()(ArraySchema(Tuple2([key2, value5])), transform2({
+    toCodec: ([key2, value5]) => link3()(ArraySchema(Tuple3([key2, value5])), transform2({
       decode: fromIterable6,
       encode: toEntries
     })),
@@ -26707,7 +27030,7 @@ var RegExp3 = /* @__PURE__ */ instanceOf(globalThis.RegExp, {
     Type: `globalThis.RegExp`
   }),
   expected: "RegExp",
-  toCodecJson: () => link3()(Struct({
+  toCodecJson: () => link3()(Struct2({
     source: String6,
     flags: String6
   }), transformOrFail2({
@@ -26800,14 +27123,14 @@ var Duration = /* @__PURE__ */ declare(isDuration, {
     importDeclarations: [`import * as Duration from "effect/Duration"`]
   }),
   expected: "Duration",
-  toCodecJson: () => link3()(Union2([Struct({
+  toCodecJson: () => link3()(Union2([Struct2({
     _tag: Literal2("Infinity")
-  }), Struct({
+  }), Struct2({
     _tag: Literal2("NegativeInfinity")
-  }), Struct({
+  }), Struct2({
     _tag: Literal2("Nanos"),
     value: BigInt5
-  }), Struct({
+  }), Struct2({
     _tag: Literal2("Millis"),
     value: Int
   })]), transform2({
@@ -26958,7 +27281,7 @@ var File = /* @__PURE__ */ instanceOf(globalThis.File, {
     Type: `globalThis.File`
   }),
   expected: "File",
-  toCodecJson: () => link3()(Struct({
+  toCodecJson: () => link3()(Struct2({
     data: String6.check(isBase64()),
     type: String6,
     name: String6,
@@ -27003,10 +27326,10 @@ var FormData2 = /* @__PURE__ */ instanceOf(globalThis.FormData, {
     Type: `globalThis.FormData`
   }),
   expected: "FormData",
-  toCodecJson: () => link3()(ArraySchema(Tuple2([String6, Union2([Struct({
+  toCodecJson: () => link3()(ArraySchema(Tuple3([String6, Union2([Struct2({
     _tag: tag("String"),
     value: String6
-  }), Struct({
+  }), Struct2({
     _tag: tag("File"),
     value: File
   })])])), transformOrFail2({
@@ -27083,10 +27406,10 @@ var StringFromUriComponent = /* @__PURE__ */ String6.annotate({
   expected: "a URI component encoded string that will be decoded as a UTF-8 string"
 }).pipe(/* @__PURE__ */ decodeTo2(String6, stringFromUriComponent));
 var PropertyKey = /* @__PURE__ */ Union2([Finite, Symbol3, String6]);
-var StandardSchemaV1FailureResult = /* @__PURE__ */ Struct({
-  issues: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct({
+var StandardSchemaV1FailureResult = /* @__PURE__ */ Struct2({
+  issues: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct2({
     message: String6,
-    path: /* @__PURE__ */ optional2(/* @__PURE__ */ ArraySchema(/* @__PURE__ */ Union2([PropertyKey, /* @__PURE__ */ Struct({
+    path: /* @__PURE__ */ optional2(/* @__PURE__ */ ArraySchema(/* @__PURE__ */ Union2([PropertyKey, /* @__PURE__ */ Struct2({
       key: PropertyKey
     })])))
   }))
@@ -27304,7 +27627,7 @@ function makeClass(Inherited, identifier2, struct2, annotations2, proto) {
     }
     static extend(identifier3) {
       return (schema, annotations3) => {
-        const extension = isStruct(schema) ? schema : Struct(schema);
+        const extension = isStruct(schema) ? schema : Struct2(schema);
         const fields = {
           ...struct2.fields,
           ...extension.fields
@@ -27368,7 +27691,7 @@ function isStruct(schema) {
   return isSchema(schema);
 }
 var Class4 = (identifier2) => (schema, annotations2) => {
-  const struct2 = isStruct(schema) ? schema : Struct(schema);
+  const struct2 = isStruct(schema) ? schema : Struct2(schema);
   return makeClass(Class3, identifier2, struct2, annotations2, (identifier3) => ({
     toString() {
       return `${identifier3}(${format({
@@ -27389,7 +27712,7 @@ var TaggedClass2 = (identifier2) => {
   };
 };
 var Error4 = (identifier2) => (schema, annotations2) => {
-  const struct2 = isStruct(schema) ? schema : Struct(schema);
+  const struct2 = isStruct(schema) ? schema : Struct2(schema);
   const self = makeClass(Error2, identifier2, struct2, annotations2, (identifier3) => ({
     name: identifier3
   }));
@@ -27857,31 +28180,31 @@ var toCodecArrayFromSingleAST = /* @__PURE__ */ applyToSelfOrLastLinkEncodingIde
 function toCodecArrayFromSingleASTStep(ast) {
   return ast._tag === "Declaration" || ast._tag === "Arrays" || ast._tag === "Objects" || ast._tag === "Union" || ast._tag === "Suspend" ? ast.recur(toCodecArrayFromSingleAST) : ast;
 }
-var isGreaterThanDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanDate", /* @__PURE__ */ Struct({
+var isGreaterThanDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanDate", /* @__PURE__ */ Struct2({
   exclusiveMinimum: Date4
 }), ({
   annotations: annotations2,
   payload
 }) => isGreaterThanDate(payload.exclusiveMinimum, annotations2));
-var isGreaterThanOrEqualToDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanOrEqualToDate", /* @__PURE__ */ Struct({
+var isGreaterThanOrEqualToDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanOrEqualToDate", /* @__PURE__ */ Struct2({
   minimum: Date4
 }), ({
   annotations: annotations2,
   payload
 }) => isGreaterThanOrEqualToDate(payload.minimum, annotations2));
-var isLessThanDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanDate", /* @__PURE__ */ Struct({
+var isLessThanDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanDate", /* @__PURE__ */ Struct2({
   exclusiveMaximum: Date4
 }), ({
   annotations: annotations2,
   payload
 }) => isLessThanDate(payload.exclusiveMaximum, annotations2));
-var isLessThanOrEqualToDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanOrEqualToDate", /* @__PURE__ */ Struct({
+var isLessThanOrEqualToDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanOrEqualToDate", /* @__PURE__ */ Struct2({
   maximum: Date4
 }), ({
   annotations: annotations2,
   payload
 }) => isLessThanOrEqualToDate(payload.maximum, annotations2));
-var isBetweenDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBetweenDate", /* @__PURE__ */ Struct({
+var isBetweenDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBetweenDate", /* @__PURE__ */ Struct2({
   minimum: Date4,
   maximum: Date4,
   exclusiveMinimum: /* @__PURE__ */ optional2(/* @__PURE__ */ Literal2(true)),
@@ -27890,31 +28213,31 @@ var isBetweenDateReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBe
   annotations: annotations2,
   payload
 }) => isBetweenDate(payload, annotations2));
-var isGreaterThanBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanBigInt", /* @__PURE__ */ Struct({
+var isGreaterThanBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanBigInt", /* @__PURE__ */ Struct2({
   exclusiveMinimum: BigInt5
 }), ({
   annotations: annotations2,
   payload
 }) => isGreaterThanBigInt(payload.exclusiveMinimum, annotations2));
-var isGreaterThanOrEqualToBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanOrEqualToBigInt", /* @__PURE__ */ Struct({
+var isGreaterThanOrEqualToBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isGreaterThanOrEqualToBigInt", /* @__PURE__ */ Struct2({
   minimum: BigInt5
 }), ({
   annotations: annotations2,
   payload
 }) => isGreaterThanOrEqualToBigInt(payload.minimum, annotations2));
-var isLessThanBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanBigInt", /* @__PURE__ */ Struct({
+var isLessThanBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanBigInt", /* @__PURE__ */ Struct2({
   exclusiveMaximum: BigInt5
 }), ({
   annotations: annotations2,
   payload
 }) => isLessThanBigInt(payload.exclusiveMaximum, annotations2));
-var isLessThanOrEqualToBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanOrEqualToBigInt", /* @__PURE__ */ Struct({
+var isLessThanOrEqualToBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isLessThanOrEqualToBigInt", /* @__PURE__ */ Struct2({
   maximum: BigInt5
 }), ({
   annotations: annotations2,
   payload
 }) => isLessThanOrEqualToBigInt(payload.maximum, annotations2));
-var isBetweenBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBetweenBigInt", /* @__PURE__ */ Struct({
+var isBetweenBigIntReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isBetweenBigInt", /* @__PURE__ */ Struct2({
   minimum: BigInt5,
   maximum: BigInt5,
   exclusiveMinimum: /* @__PURE__ */ optional2(/* @__PURE__ */ Literal2(true)),
@@ -27969,7 +28292,7 @@ var Json2 = /* @__PURE__ */ make37(/* @__PURE__ */ annotate2(Json, {
   })
 }));
 var JsonReviver = /* @__PURE__ */ makeFixedDeclarationReviver("effect/schema/Json", Json2);
-var JsonError = /* @__PURE__ */ Struct({
+var JsonError = /* @__PURE__ */ Struct2({
   message: String6,
   name: /* @__PURE__ */ optionalKey2(String6),
   stack: /* @__PURE__ */ optionalKey2(String6),
@@ -28201,10 +28524,10 @@ var Proto6 = {
   }
 };
 var identityPath = (path) => path;
-function makeProvider(load, mapInput3) {
+function makeProvider(load, mapInput4) {
   const self = Object.create(Proto6);
   self.load = load;
-  self.mapInput = mapInput3;
+  self.mapInput = mapInput4;
   return self;
 }
 function makeSource(get9, transform3) {
@@ -28412,7 +28735,7 @@ var resolveRecord = (results) => {
 var withDefault2 = /* @__PURE__ */ dual(2, (self, defaultValue) => {
   return make41((provider, pathPrefix) => mapEager2(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Absent" ? resolved(defaultValue, false) : resolution));
 });
-var option3 = (self) => self.pipe(map13(some2), withDefault2(none2()));
+var option3 = (self) => self.pipe(map13(some3), withDefault2(none2()));
 var unwrap5 = (wrapped) => {
   if (isConfig(wrapped))
     return wrapped;
@@ -28790,6 +29113,174 @@ var getAttributes = (error2) => {
   return attributes in error2 ? error2[attributes] : emptyAttributes;
 };
 var emptyAttributes = {};
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Logger.js
+var exports_Logger = {};
+__export(exports_Logger, {
+  withLeveledConsole: () => withLeveledConsole,
+  withConsoleLog: () => withConsoleLog,
+  withConsoleError: () => withConsoleError,
+  tracerLogger: () => tracerLogger2,
+  toFile: () => toFile,
+  map: () => map14,
+  make: () => make43,
+  layer: () => layer14,
+  isLogger: () => isLogger,
+  formatStructured: () => formatStructured,
+  formatSimple: () => formatSimple,
+  formatLogFmt: () => formatLogFmt,
+  formatJson: () => formatJson2,
+  defaultLogger: () => defaultLogger2,
+  consoleStructured: () => consoleStructured,
+  consolePretty: () => consolePretty2,
+  consoleLogFmt: () => consoleLogFmt,
+  consoleJson: () => consoleJson,
+  batched: () => batched,
+  LogToStderr: () => LogToStderr3,
+  CurrentLoggers: () => CurrentLoggers3
+});
+var TypeId42 = "~effect/Logger";
+var isLogger = (u) => hasProperty(u, TypeId42);
+var CurrentLoggers3 = CurrentLoggers;
+var LogToStderr3 = LogToStderr;
+var map14 = /* @__PURE__ */ dual(2, (self, f) => loggerMake((options) => f(self.log(options))));
+var withConsoleLog = (self) => loggerMake((options) => {
+  const console = options.fiber.getRef(ConsoleRef);
+  return console.log(self.log(options));
+});
+var withConsoleError = (self) => loggerMake((options) => {
+  const console = options.fiber.getRef(ConsoleRef);
+  return console.error(self.log(options));
+});
+var withLeveledConsole = (self) => loggerMake((options) => {
+  const console = options.fiber.getRef(ConsoleRef);
+  const output = self.log(options);
+  switch (options.logLevel) {
+    case "Debug":
+      return console.debug(output);
+    case "Info":
+      return console.info(output);
+    case "Trace":
+      return console.trace(output);
+    case "Warn":
+      return console.warn(output);
+    case "Error":
+    case "Fatal":
+      return console.error(output);
+    default:
+      return console.log(output);
+  }
+});
+var textOnly = /^[^\s"=]*$/;
+var escapeDoubleQuotes = (s) => `"${s.replace(/\\([\s\S])|(")/g, "\\$1$2")}"`;
+var formatFiberId = (fiberId3) => `#${fiberId3}`;
+var format7 = (quoteValue, space) => ({
+  cause,
+  date: date2,
+  fiber: fiber3,
+  logLevel: logLevel2,
+  message
+}) => {
+  const formatUnknown = (value4) => typeof value4 === "string" ? value4 : format(value4, {
+    space
+  });
+  const formatValue = (value4) => value4.match(textOnly) ? value4 : quoteValue(value4);
+  const format8 = (label, value4) => `${formatLabel(label)}=${formatValue(value4)}`;
+  const append3 = (label, value4) => " " + format8(label, value4);
+  let out = format8("timestamp", date2.toISOString());
+  out += append3("level", logLevel2);
+  out += append3("fiber", formatFiberId(fiber3.id));
+  const messages = ensure(message);
+  for (let i = 0;i < messages.length; i++) {
+    out += append3("message", formatUnknown(messages[i]));
+  }
+  if (cause.reasons.length > 0) {
+    out += append3("cause", causePretty(cause));
+  }
+  const now3 = date2.getTime();
+  const spans = fiber3.getRef(CurrentLogSpans2);
+  for (const span2 of spans) {
+    out += " " + formatLogSpan(span2, now3);
+  }
+  const annotations2 = fiber3.getRef(CurrentLogAnnotations2);
+  for (const [label, value4] of Object.entries(annotations2)) {
+    out += append3(label, formatUnknown(value4));
+  }
+  return out;
+};
+var make43 = loggerMake;
+var defaultLogger2 = defaultLogger;
+var formatSimple = /* @__PURE__ */ loggerMake(/* @__PURE__ */ format7(escapeDoubleQuotes));
+var formatLogFmt = /* @__PURE__ */ loggerMake(/* @__PURE__ */ format7(JSON.stringify, 0));
+var formatStructured = /* @__PURE__ */ loggerMake(({
+  cause,
+  date: date2,
+  fiber: fiber3,
+  logLevel: logLevel2,
+  message
+}) => {
+  const annotationsObj = {};
+  const spansObj = {};
+  const annotations2 = fiber3.getRef(CurrentLogAnnotations2);
+  for (const [key, value4] of Object.entries(annotations2)) {
+    assignProperty(annotationsObj, key, structuredMessage(value4));
+  }
+  const now3 = date2.getTime();
+  const spans = fiber3.getRef(CurrentLogSpans2);
+  for (const [label, timestamp] of spans) {
+    assignProperty(spansObj, label, now3 - timestamp);
+  }
+  const messageArr = ensure(message);
+  return {
+    message: messageArr.length === 1 ? structuredMessage(messageArr[0]) : messageArr.map(structuredMessage),
+    level: logLevel2.toUpperCase(),
+    timestamp: date2.toISOString(),
+    cause: cause.reasons.length > 0 ? causePretty(cause) : undefined,
+    annotations: annotationsObj,
+    spans: spansObj,
+    fiberId: formatFiberId(fiber3.id)
+  };
+});
+var formatJson2 = /* @__PURE__ */ map14(formatStructured, formatJson);
+var batched = /* @__PURE__ */ dual(2, (self, options) => flatMap3(scope, (scope3) => {
+  let buffer3 = [];
+  const flush = suspend(() => {
+    if (buffer3.length === 0) {
+      return void_3;
+    }
+    const arr = buffer3;
+    buffer3 = [];
+    return options.flush(arr);
+  });
+  return uninterruptibleMask((restore) => restore(sleep(options.window).pipe(andThen3(flush), forever2)).pipe(forkDetach, flatMap3((fiber3) => scopeAddFinalizerExit(scope3, () => fiberInterrupt(fiber3))), andThen3(addFinalizer(() => flush)), as2(loggerMake((options2) => {
+    buffer3.push(self.log(options2));
+  }))));
+}));
+var consolePretty2 = consolePretty;
+var consoleLogFmt = /* @__PURE__ */ withConsoleLog(formatLogFmt);
+var consoleStructured = /* @__PURE__ */ withConsoleLog(formatStructured);
+var consoleJson = /* @__PURE__ */ withConsoleLog(formatJson2);
+var tracerLogger2 = tracerLogger;
+var layer14 = (loggers, options) => effect(CurrentLoggers3, withFiber(fnUntraced(function* (fiber3) {
+  const currentLoggers = new Set(options?.mergeWithExisting === true ? fiber3.getRef(CurrentLoggers) : []);
+  for (const logger of loggers) {
+    currentLoggers.add(isEffect(logger) ? yield* logger : logger);
+  }
+  return currentLoggers;
+})));
+var toFile = /* @__PURE__ */ dual((args2) => isLogger(args2[0]), (self, path, options) => gen3(function* () {
+  const fs = yield* FileSystem;
+  const logFile = yield* fs.open(path, {
+    flag: "a+",
+    ...options
+  });
+  const encoder2 = new TextEncoder;
+  return yield* batched(self, {
+    window: options?.batchWindow ?? 1000,
+    flush: (output) => ignore(logFile.write(encoder2.encode(output.join(`
+`) + `
+`)))
+  });
+}));
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Ref.js
 var exports_Ref = {};
 __export(exports_Ref, {
@@ -28802,16 +29293,16 @@ __export(exports_Ref, {
   modifySome: () => modifySome,
   modify: () => modify4,
   makeUnsafe: () => makeUnsafe9,
-  make: () => make43,
+  make: () => make44,
   getUnsafe: () => getUnsafe5,
   getAndUpdateSome: () => getAndUpdateSome,
   getAndUpdate: () => getAndUpdate,
   getAndSet: () => getAndSet,
   get: () => get9
 });
-var TypeId42 = "~effect/Ref";
+var TypeId43 = "~effect/Ref";
 var RefProto = {
-  [TypeId42]: {
+  [TypeId43]: {
     _A: identity
   },
   ...PipeInspectableProto,
@@ -28827,7 +29318,7 @@ var makeUnsafe9 = (value4) => {
   self.ref = make11(value4);
   return self;
 };
-var make43 = (value4) => sync3(() => makeUnsafe9(value4));
+var make44 = (value4) => sync3(() => makeUnsafe9(value4));
 var get9 = (self) => sync3(() => self.ref.current);
 var set4 = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => set(self.ref, value4)));
 var getAndSet = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => {
@@ -29958,7 +30449,7 @@ var makeUsageBudget = (limits) => makeUsageBudgetRoot(UsageBudgetNodeConfig.make
 var exports_AiError = {};
 __export(exports_AiError, {
   reasonFromHttpStatus: () => reasonFromHttpStatus,
-  make: () => make44,
+  make: () => make45,
   isAiErrorReason: () => isAiErrorReason,
   isAiError: () => isAiError,
   UsageInfo: () => UsageInfo,
@@ -30059,7 +30550,7 @@ var StreamPart = (toolkit) => {
   return Union2([TextStartPart, TextDeltaPart, TextEndPart, ReasoningStartPart, ReasoningDeltaPart, ReasoningEndPart, ToolParamsStartPart, ToolParamsDeltaPart, ToolParamsEndPart, ToolApprovalRequestPart, FilePart, DocumentSourcePart, UrlSourcePart, ResponseMetadataPart, FinishPart, ErrorPart, ...toolCalls, ...toolResults]);
 };
 var ProviderMetadata = /* @__PURE__ */ Record(String6, /* @__PURE__ */ NullOr(Json2));
-var BasePart = /* @__PURE__ */ Struct({
+var BasePart = /* @__PURE__ */ Struct2({
   [PartTypeId]: /* @__PURE__ */ tag(PartTypeId).pipe(/* @__PURE__ */ withDecodingDefaultKey(/* @__PURE__ */ succeed6(PartTypeId), {
     encodingStrategy: "omit"
   })),
@@ -30071,21 +30562,21 @@ var makePart = (type, params) => ({
   type,
   metadata: params.metadata ?? {}
 });
-var TextPart = /* @__PURE__ */ Struct({
+var TextPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("text"),
   text: String6
 }).annotate({
   identifier: "TextPart"
 });
-var TextStartPart = /* @__PURE__ */ Struct({
+var TextStartPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("text-start"),
   id: String6
 }).annotate({
   identifier: "TextStartPart"
 });
-var TextDeltaPart = /* @__PURE__ */ Struct({
+var TextDeltaPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("text-delta"),
   id: String6,
@@ -30093,28 +30584,28 @@ var TextDeltaPart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "TextDeltaPart"
 });
-var TextEndPart = /* @__PURE__ */ Struct({
+var TextEndPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("text-end"),
   id: String6
 }).annotate({
   identifier: "TextEndPart"
 });
-var ReasoningPart = /* @__PURE__ */ Struct({
+var ReasoningPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("reasoning"),
   text: String6
 }).annotate({
   identifier: "ReasoningPart"
 });
-var ReasoningStartPart = /* @__PURE__ */ Struct({
+var ReasoningStartPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("reasoning-start"),
   id: String6
 }).annotate({
   identifier: "ReasoningStartPart"
 });
-var ReasoningDeltaPart = /* @__PURE__ */ Struct({
+var ReasoningDeltaPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("reasoning-delta"),
   id: String6,
@@ -30122,14 +30613,14 @@ var ReasoningDeltaPart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "ReasoningDeltaPart"
 });
-var ReasoningEndPart = /* @__PURE__ */ Struct({
+var ReasoningEndPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("reasoning-end"),
   id: String6
 }).annotate({
   identifier: "ReasoningEndPart"
 });
-var ToolParamsStartPart = /* @__PURE__ */ Struct({
+var ToolParamsStartPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("tool-params-start"),
   id: String6,
@@ -30138,7 +30629,7 @@ var ToolParamsStartPart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "ToolParamsStartPart"
 });
-var ToolParamsDeltaPart = /* @__PURE__ */ Struct({
+var ToolParamsDeltaPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("tool-params-delta"),
   id: String6,
@@ -30146,14 +30637,14 @@ var ToolParamsDeltaPart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "ToolParamsDeltaPart"
 });
-var ToolParamsEndPart = /* @__PURE__ */ Struct({
+var ToolParamsEndPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("tool-params-end"),
   id: String6
 }).annotate({
   identifier: "ToolParamsEndPart"
 });
-var ToolCallPart = (name, params) => Struct({
+var ToolCallPart = (name, params) => Struct2({
   ...BasePart.fields,
   type: Literal2("tool-call"),
   id: String6,
@@ -30172,7 +30663,7 @@ var ToolResultPart = (name, success, failure) => {
     isFailure: Boolean3,
     name: Literal2(name)
   };
-  const Decoded = Struct({
+  const Decoded = Struct2({
     ...Common,
     [PartTypeId]: Literal2(PartTypeId),
     result: ResultSchema,
@@ -30181,7 +30672,7 @@ var ToolResultPart = (name, success, failure) => {
     encodedResult: toEncoded2(ResultSchema),
     preliminary: Boolean3
   });
-  const Encoded = Struct({
+  const Encoded = Struct2({
     ...Common,
     result: toEncoded2(ResultSchema),
     providerExecuted: optional2(Boolean3),
@@ -30203,7 +30694,7 @@ var ToolResultPart = (name, success, failure) => {
   });
 };
 var toolResultPart = (params) => makePart("tool-result", params);
-var ToolApprovalRequestPart = /* @__PURE__ */ Struct({
+var ToolApprovalRequestPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("tool-approval-request"),
   approvalId: String6,
@@ -30212,7 +30703,7 @@ var ToolApprovalRequestPart = /* @__PURE__ */ Struct({
   identifier: "ToolApprovalRequestPart"
 });
 var toolApprovalRequestPart = (params) => makePart("tool-approval-request", params);
-var FilePart = /* @__PURE__ */ Struct({
+var FilePart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("file"),
   mediaType: String6,
@@ -30220,7 +30711,7 @@ var FilePart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "FilePart"
 });
-var DocumentSourcePart = /* @__PURE__ */ Struct({
+var DocumentSourcePart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("source"),
   sourceType: tag("document"),
@@ -30231,7 +30722,7 @@ var DocumentSourcePart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "DocumentSourcePart"
 });
-var UrlSourcePart = /* @__PURE__ */ Struct({
+var UrlSourcePart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("source"),
   sourceType: tag("url"),
@@ -30241,22 +30732,22 @@ var UrlSourcePart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "UrlSourcePart"
 });
-var HttpRequestDetails = /* @__PURE__ */ Struct({
+var HttpRequestDetails = /* @__PURE__ */ Struct2({
   method: Literals(["GET", "POST", "PATCH", "PUT", "DELETE", "HEAD", "OPTIONS", "TRACE"]),
   url: String6,
-  urlParams: ArraySchema(Tuple2([String6, String6])),
+  urlParams: ArraySchema(Tuple3([String6, String6])),
   hash: optional2(String6),
   headers: Record(String6, Union2([String6, Redacted(String6)]))
 }).annotate({
   identifier: "HttpRequestDetails"
 });
-var HttpResponseDetails = /* @__PURE__ */ Struct({
+var HttpResponseDetails = /* @__PURE__ */ Struct2({
   status: Int,
   headers: Record(String6, Union2([String6, Redacted(String6)]))
 }).annotate({
   identifier: "HttpResponseDetails"
 });
-var ResponseMetadataPart = /* @__PURE__ */ Struct({
+var ResponseMetadataPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("response-metadata"),
   id: optional2(String6),
@@ -30269,20 +30760,20 @@ var ResponseMetadataPart = /* @__PURE__ */ Struct({
 var FinishReason = /* @__PURE__ */ Literals(["stop", "length", "content-filter", "tool-calls", "error", "pause", "other", "unknown"]);
 
 class Usage extends (/* @__PURE__ */ Class4("effect/ai/AiResponse/Usage")({
-  inputTokens: /* @__PURE__ */ Struct({
+  inputTokens: /* @__PURE__ */ Struct2({
     uncached: /* @__PURE__ */ optional2(Int),
     total: /* @__PURE__ */ optional2(Int),
     cacheRead: /* @__PURE__ */ optional2(Int),
     cacheWrite: /* @__PURE__ */ optional2(Int)
   }),
-  outputTokens: /* @__PURE__ */ Struct({
+  outputTokens: /* @__PURE__ */ Struct2({
     total: /* @__PURE__ */ optional2(Int),
     text: /* @__PURE__ */ optional2(Int),
     reasoning: /* @__PURE__ */ optional2(Int)
   })
 })) {
 }
-var FinishPart = /* @__PURE__ */ Struct({
+var FinishPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("finish"),
   reason: FinishReason,
@@ -30291,7 +30782,7 @@ var FinishPart = /* @__PURE__ */ Struct({
 }).annotate({
   identifier: "FinishPart"
 });
-var ErrorPart = /* @__PURE__ */ Struct({
+var ErrorPart = /* @__PURE__ */ Struct2({
   ...BasePart.fields,
   type: tag("error"),
   error: Unknown2
@@ -30362,14 +30853,14 @@ ${suggestion}`;
   }
 }
 var ProviderMetadata2 = /* @__PURE__ */ Record(String6, /* @__PURE__ */ NullOr(MutableJson2));
-var UsageInfo = /* @__PURE__ */ Struct({
+var UsageInfo = /* @__PURE__ */ Struct2({
   promptTokens: optional2(Int),
   completionTokens: optional2(Int),
   totalTokens: optional2(Int)
 }).annotate({
   identifier: "UsageInfo"
 });
-var HttpContext = /* @__PURE__ */ Struct({
+var HttpContext = /* @__PURE__ */ Struct2({
   request: HttpRequestDetails,
   response: optional2(HttpResponseDetails),
   body: optional2(String6)
@@ -30661,7 +31152,7 @@ class InvalidUserInputError extends (/* @__PURE__ */ Error4("effect/ai/AiError/I
   }
 }
 var AiErrorReason = /* @__PURE__ */ Union2([RateLimitError, QuotaExhaustedError, AuthenticationError, ContentPolicyError, InvalidRequestError, InternalProviderError, NetworkError, InvalidOutputError, StructuredOutputError, UnsupportedSchemaError, UnknownError3, ToolNotFoundError, ToolParameterValidationError, InvalidToolResultError, ToolResultEncodingError, ToolConfigurationError, ToolkitRequiredError, InvalidUserInputError]);
-var TypeId43 = "~effect/unstable/ai/AiError/AiError";
+var TypeId44 = "~effect/unstable/ai/AiError/AiError";
 
 class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
   _tag: /* @__PURE__ */ tag("AiError"),
@@ -30669,7 +31160,7 @@ class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
   method: String6,
   reason: AiErrorReason
 })) {
-  [TypeId43] = TypeId43;
+  [TypeId44] = TypeId44;
   cause = this.reason;
   get isRetryable() {
     return this.reason.isRetryable;
@@ -30681,9 +31172,9 @@ class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
     return `${this.module}.${this.method}: ${this.reason.message}`;
   }
 }
-var isAiError = (u) => hasProperty(u, TypeId43);
+var isAiError = (u) => hasProperty(u, TypeId44);
 var isAiErrorReason = (u) => hasProperty(u, ReasonTypeId2);
-var make44 = (params) => new AiError(params);
+var make45 = (params) => new AiError(params);
 var reasonFromHttpStatus = (params) => {
   const {
     status,
@@ -30729,7 +31220,7 @@ var reasonFromHttpStatus = (params) => {
 var exports_LanguageModel = {};
 __export(exports_LanguageModel, {
   streamText: () => streamText,
-  make: () => make49,
+  make: () => make50,
   getObjectName: () => getObjectName,
   generateText: () => generateText,
   generateObject: () => generateObject,
@@ -30740,10 +31231,10 @@ __export(exports_LanguageModel, {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FiberSet.js
-var TypeId44 = "~effect/FiberSet";
-var isFiberSet = (u) => hasProperty(u, TypeId44);
+var TypeId45 = "~effect/FiberSet";
+var isFiberSet = (u) => hasProperty(u, TypeId45);
 var Proto8 = {
-  [TypeId44]: TypeId44,
+  [TypeId45]: TypeId45,
   [Symbol.iterator]() {
     if (this.state._tag === "Closed") {
       return empty2();
@@ -30767,7 +31258,7 @@ var makeUnsafe10 = (backing, deferred) => {
   self.deferred = deferred;
   return self;
 };
-var make45 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
+var make46 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
   const state = set5.state;
   if (state._tag === "Closed")
     return void_5;
@@ -30778,7 +31269,7 @@ var make45 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2
   return interruptAll(fibers).pipe(into(set5.deferred));
 }));
 var internalFiberId = -1;
-var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
+var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose2(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
 var addUnsafe = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
   if (self.state._tag === "Closed") {
     fiber3.interruptUnsafe(internalFiberId);
@@ -30911,7 +31402,7 @@ __export(exports_Prompt, {
   prependSystem: () => prependSystem,
   makePart: () => makePart2,
   makeMessage: () => makeMessage,
-  make: () => make46,
+  make: () => make47,
   isPrompt: () => isPrompt,
   isPart: () => isPart2,
   isMessage: () => isMessage,
@@ -30945,7 +31436,7 @@ __export(exports_Prompt, {
 var ProviderOptions = /* @__PURE__ */ Record(String6, /* @__PURE__ */ NullOr(Json2));
 var PartTypeId2 = "~effect/ai/Prompt/Part";
 var isPart2 = (u) => hasProperty(u, PartTypeId2);
-var BasePart2 = /* @__PURE__ */ Struct({
+var BasePart2 = /* @__PURE__ */ Struct2({
   [PartTypeId2]: /* @__PURE__ */ Literal2(PartTypeId2).pipe(/* @__PURE__ */ withDecodingDefaultKey(/* @__PURE__ */ succeed6(PartTypeId2), {
     encodingStrategy: "omit"
   })),
@@ -30957,7 +31448,7 @@ var makePart2 = (type, params) => ({
   type,
   options: params.options ?? {}
 });
-var TextPart2 = /* @__PURE__ */ Struct({
+var TextPart2 = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("text"),
   text: String6
@@ -30965,7 +31456,7 @@ var TextPart2 = /* @__PURE__ */ Struct({
   identifier: "TextPart"
 });
 var textPart = (params) => makePart2("text", params);
-var ReasoningPart2 = /* @__PURE__ */ Struct({
+var ReasoningPart2 = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("reasoning"),
   text: String6
@@ -30973,7 +31464,7 @@ var ReasoningPart2 = /* @__PURE__ */ Struct({
   identifier: "ReasoningPart"
 });
 var reasoningPart = (params) => makePart2("reasoning", params);
-var FilePart2 = /* @__PURE__ */ Struct({
+var FilePart2 = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("file"),
   mediaType: String6,
@@ -30983,7 +31474,7 @@ var FilePart2 = /* @__PURE__ */ Struct({
   identifier: "FilePart"
 });
 var filePart = (params) => makePart2("file", params);
-var ToolCallPart2 = /* @__PURE__ */ Struct({
+var ToolCallPart2 = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("tool-call"),
   id: String6,
@@ -30994,7 +31485,7 @@ var ToolCallPart2 = /* @__PURE__ */ Struct({
   identifier: "ToolCallPart"
 });
 var toolCallPart2 = (params) => makePart2("tool-call", params);
-var ToolResultPart2 = /* @__PURE__ */ Struct({
+var ToolResultPart2 = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("tool-result"),
   id: String6,
@@ -31006,7 +31497,7 @@ var ToolResultPart2 = /* @__PURE__ */ Struct({
   identifier: "ToolResultPart"
 });
 var toolResultPart2 = (params) => makePart2("tool-result", params);
-var ToolApprovalResponsePart = /* @__PURE__ */ Struct({
+var ToolApprovalResponsePart = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("tool-approval-response"),
   approvalId: String6,
@@ -31016,7 +31507,7 @@ var ToolApprovalResponsePart = /* @__PURE__ */ Struct({
   identifier: "ToolApprovalResponsePart"
 });
 var toolApprovalResponsePart = (params) => makePart2("tool-approval-response", params);
-var ToolApprovalRequestPart2 = /* @__PURE__ */ Struct({
+var ToolApprovalRequestPart2 = /* @__PURE__ */ Struct2({
   ...BasePart2.fields,
   type: Literal2("tool-approval-request"),
   approvalId: String6,
@@ -31028,7 +31519,7 @@ var toolApprovalRequestPart2 = (params) => makePart2("tool-approval-request", pa
 var Part2 = /* @__PURE__ */ Union2([TextPart2, ReasoningPart2, FilePart2, ToolCallPart2, ToolResultPart2, ToolApprovalResponsePart, ToolApprovalRequestPart2]);
 var MessageTypeId = "~effect/ai/Prompt/Message";
 var isMessage = (u) => hasProperty(u, MessageTypeId);
-var BaseMessage = /* @__PURE__ */ Struct({
+var BaseMessage = /* @__PURE__ */ Struct2({
   [MessageTypeId]: /* @__PURE__ */ Literal2(MessageTypeId).pipe(/* @__PURE__ */ withDecodingDefaultKey(/* @__PURE__ */ succeed6(MessageTypeId), {
     encodingStrategy: "omit"
   })),
@@ -31046,7 +31537,7 @@ var ContentFromString = /* @__PURE__ */ String6.pipe(/* @__PURE__ */ decodeTo2(/
   })),
   encode: (content) => content[0].text
 })));
-var SystemMessage = /* @__PURE__ */ Struct({
+var SystemMessage = /* @__PURE__ */ Struct2({
   ...BaseMessage.fields,
   role: Literal2("system"),
   content: String6
@@ -31055,7 +31546,7 @@ var SystemMessage = /* @__PURE__ */ Struct({
 });
 var systemMessage = (params) => makeMessage("system", params);
 var UserMessagePart = /* @__PURE__ */ Union2([TextPart2, FilePart2]);
-var UserMessage = /* @__PURE__ */ Struct({
+var UserMessage = /* @__PURE__ */ Struct2({
   ...BaseMessage.fields,
   role: Literal2("user"),
   content: Union2([ContentFromString, ArraySchema(Union2([TextPart2, FilePart2]))])
@@ -31064,7 +31555,7 @@ var UserMessage = /* @__PURE__ */ Struct({
 });
 var userMessage = (params) => makeMessage("user", params);
 var AssistantMessagePart = /* @__PURE__ */ Union2([TextPart2, FilePart2, ReasoningPart2, ToolCallPart2, ToolResultPart2, ToolApprovalRequestPart2]);
-var AssistantMessage = /* @__PURE__ */ Struct({
+var AssistantMessage = /* @__PURE__ */ Struct2({
   ...BaseMessage.fields,
   role: Literal2("assistant"),
   content: Union2([ContentFromString, ArraySchema(Union2([TextPart2, FilePart2, ReasoningPart2, ToolCallPart2, ToolResultPart2, ToolApprovalRequestPart2]))])
@@ -31073,7 +31564,7 @@ var AssistantMessage = /* @__PURE__ */ Struct({
 });
 var assistantMessage = (params) => makeMessage("assistant", params);
 var ToolMessagePart = /* @__PURE__ */ Union2([ToolResultPart2, ToolApprovalResponsePart]);
-var ToolMessage = /* @__PURE__ */ Struct({
+var ToolMessage = /* @__PURE__ */ Struct2({
   ...BaseMessage.fields,
   role: Literal2("tool"),
   content: ArraySchema(Union2([ToolResultPart2, ToolApprovalResponsePart]))
@@ -31082,12 +31573,12 @@ var ToolMessage = /* @__PURE__ */ Struct({
 });
 var toolMessage = (params) => makeMessage("tool", params);
 var Message = /* @__PURE__ */ Union2([SystemMessage, UserMessage, AssistantMessage, ToolMessage]);
-var TypeId45 = "~effect/unstable/ai/Prompt";
-var isPrompt = (u) => hasProperty(u, TypeId45);
+var TypeId46 = "~effect/unstable/ai/Prompt";
+var isPrompt = (u) => hasProperty(u, TypeId46);
 var $Prompt = /* @__PURE__ */ declare((u) => isPrompt(u), {
   identifier: "Prompt"
 });
-var Prompt = /* @__PURE__ */ Struct({
+var Prompt = /* @__PURE__ */ Struct2({
   content: ArraySchema(toEncoded2(Message))
 }).pipe(/* @__PURE__ */ decodeTo2($Prompt, /* @__PURE__ */ transformOrFail2({
   decode: (input, options) => mapBothEager2(decodeEffect(ArraySchema(Message))(input.content), {
@@ -31106,7 +31597,7 @@ var Prompt = /* @__PURE__ */ Struct({
   })
 })));
 var Proto9 = {
-  [TypeId45]: TypeId45,
+  [TypeId46]: TypeId46,
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -31116,7 +31607,7 @@ var makePrompt = (content) => Object.assign(Object.create(Proto9), {
 });
 var decodeMessagesSync = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ ArraySchema(Message));
 var empty12 = /* @__PURE__ */ makePrompt([]);
-var make46 = (input) => {
+var make47 = (input) => {
   if (typeof input === "string") {
     const part = makePart2("text", {
       text: input
@@ -31264,7 +31755,7 @@ var fromResponseParts = (parts2) => {
   return makePrompt(messages);
 };
 var concat3 = /* @__PURE__ */ dual(2, (self, input) => {
-  const other = make46(input);
+  const other = make47(input);
   if (self.content.length === 0) {
     return other;
   }
@@ -31322,7 +31813,7 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
-var make47 = /* @__PURE__ */ sync3(() => {
+var make48 = /* @__PURE__ */ sync3(() => {
   const sentParts = new Map;
   const none3 = () => {
     sentParts.clear();
@@ -31370,7 +31861,7 @@ var make47 = /* @__PURE__ */ sync3(() => {
       if (partsAfterLastAssistant.length === 0) {
         return none3();
       }
-      return some2({
+      return some3({
         previousResponseId: responseId,
         prompt: fromMessages(partsAfterLastAssistant)
       });
@@ -31415,10 +31906,10 @@ class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telem
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
   merge: () => merge6,
-  make: () => make48,
+  make: () => make49,
   empty: () => empty13
 });
-var TypeId46 = "~effect/ai/Toolkit";
+var TypeId47 = "~effect/ai/Toolkit";
 var Proto10 = {
   .../* @__PURE__ */ Prototype2({
     label: "Toolkit",
@@ -31452,7 +31943,7 @@ var Proto10 = {
           parameters: params
         });
         if (isUndefined(tool)) {
-          return yield* make44({
+          return yield* make45({
             module: "Toolkit",
             method: `${name}.handle`,
             reason: new ToolNotFoundError({
@@ -31462,7 +31953,7 @@ var Proto10 = {
           });
         }
         const schemas = getSchemas(tool);
-        const decodedParams = yield* schemas.decodeParameters(params).pipe(mapError4((cause) => make44({
+        const decodedParams = yield* schemas.decodeParameters(params).pipe(mapError4((cause) => make45({
           module: "Toolkit",
           method: `${name}.handle`,
           reason: new ToolParameterValidationError({
@@ -31488,7 +31979,7 @@ var Proto10 = {
           onFailure: (cause) => failCause5(queue, cause),
           onSuccess: () => end(queue)
         }), forkChild2);
-        const encodeResult2 = (result4) => schemas.encodeResult(result4).pipe(mapError4((cause) => make44({
+        const encodeResult2 = (result4) => schemas.encodeResult(result4).pipe(mapError4((cause) => make45({
           module: "Toolkit",
           method: `${name}.handle`,
           reason: new ToolResultEncodingError({
@@ -31498,14 +31989,14 @@ var Proto10 = {
           })
         })));
         const normalizeError = (error2) => {
-          const normalizedError = isSchemaError(error2) ? make44({
+          const normalizedError = isSchemaError(error2) ? make45({
             module: "Toolkit",
             method: `${name}.handle`,
             reason: new InvalidToolResultError({
               toolName: name,
               description: `Tool handler returned invalid result: ${error2.message}`
             })
-          }) : isAiErrorReason(error2) ? make44({
+          }) : isAiErrorReason(error2) ? make45({
             module: "Toolkit",
             method: `${name}.handle`,
             reason: error2
@@ -31533,7 +32024,7 @@ var Proto10 = {
       };
     })
   }),
-  [TypeId46]: TypeId46,
+  [TypeId47]: TypeId47,
   of: identity,
   toHandlers(build2) {
     return gen4({
@@ -31576,7 +32067,7 @@ var resolveInput = (...tools) => {
   return output;
 };
 var empty13 = /* @__PURE__ */ makeProto2({});
-var make48 = (...tools) => makeProto2(resolveInput(...tools));
+var make49 = (...tools) => makeProto2(resolveInput(...tools));
 var merge6 = (...toolkits) => {
   const tools = {};
   for (const toolkit of toolkits) {
@@ -31656,7 +32147,7 @@ class GenerateObjectResponse extends GenerateTextResponse {
     this.value = value4;
   }
 }
-var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
+var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
   const codecTransformer = params.codecTransformer ?? defaultCodecTransformer2;
   const parentSpanTransformer = yield* serviceOption2(CurrentSpanTransformer);
   const getSpanTransformer = serviceOption2(CurrentSpanTransformer).pipe(map8(orElse(() => parentSpanTransformer)));
@@ -31669,7 +32160,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
   }, fnUntraced2(function* (span2) {
     const spanTransformer = yield* getSpanTransformer;
     const providerOptions = {
-      prompt: make46(options.prompt),
+      prompt: make47(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -31682,7 +32173,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const content = yield* generateContent(options, providerOptions);
     applySpanTransformer(spanTransformer, content, providerOptions);
     return new GenerateTextResponse(content);
-  }, catchTag3("SchemaError", (error2) => fail6(make44({
+  }, catchTag3("SchemaError", (error2) => fail6(make45({
     module: "LanguageModel",
     method: "generateText",
     reason: InvalidOutputError.fromSchemaError(error2)
@@ -31700,7 +32191,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }, fnUntraced2(function* (span2) {
       const spanTransformer = yield* getSpanTransformer;
       const providerOptions = {
-        prompt: make46(options.prompt),
+        prompt: make47(options.prompt),
         tools: [],
         toolChoice: "none",
         responseFormat: {
@@ -31718,7 +32209,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
         codec
       } = yield* try_3({
         try: () => codecTransformer(options.schema),
-        catch: (error2) => make44({
+        catch: (error2) => make45({
           module: "LanguageModel",
           method: "generateObject",
           reason: new UnsupportedSchemaError({
@@ -31728,7 +32219,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
       });
       const value4 = yield* resolveStructuredOutput(content, codec);
       return new GenerateObjectResponse(value4, content);
-    }, catchTag3("SchemaError", (error2) => fail6(make44({
+    }, catchTag3("SchemaError", (error2) => fail6(make45({
       module: "LanguageModel",
       method: "generateObject",
       reason: InvalidOutputError.fromSchemaError(error2)
@@ -31744,7 +32235,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
     });
     const providerOptions = {
-      prompt: make46(options.prompt),
+      prompt: make47(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -31769,7 +32260,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
         response: content
       });
     })));
-  }, unwrap4, mapError6((error2) => isSchemaError(error2) ? make44({
+  }, unwrap4, mapError6((error2) => isSchemaError(error2) ? make45({
     module: "LanguageModel",
     method: "streamText",
     reason: InvalidOutputError.fromSchemaError(error2)
@@ -31801,7 +32292,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const hasPendingApprovals = approved.length > 0 || denied.length > 0;
     if (isUndefined(options.toolkit)) {
       if (hasPendingApprovals) {
-        return yield* make44({
+        return yield* make45({
           module: "LanguageModel",
           method: "generateText",
           reason: new ToolkitRequiredError({
@@ -31830,7 +32321,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const toolkit = yield* resolveToolkit(options.toolkit);
     if (Object.values(toolkit.tools).length === 0) {
       if (hasPendingApprovals) {
-        return yield* make44({
+        return yield* make45({
           module: "LanguageModel",
           method: "generateText",
           reason: new ToolkitRequiredError({
@@ -31859,7 +32350,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (hasPendingApprovals) {
       for (const approval of approved) {
         if (approval.toolCall && !toolkit.tools[approval.toolCall.name]) {
-          return yield* make44({
+          return yield* make45({
             module: "LanguageModel",
             method: "generateText",
             reason: new ToolNotFoundError({
@@ -31947,7 +32438,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const hasPendingApprovals = pendingApproved.length > 0 || pendingDenied.length > 0;
     if (isUndefined(options.toolkit)) {
       if (hasPendingApprovals) {
-        return yield* make44({
+        return yield* make45({
           module: "LanguageModel",
           method: "streamText",
           reason: new ToolkitRequiredError({
@@ -31976,7 +32467,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const toolkit = yield* resolveToolkit(options.toolkit);
     if (Object.values(toolkit.tools).length === 0) {
       if (hasPendingApprovals) {
-        return yield* make44({
+        return yield* make45({
           module: "LanguageModel",
           method: "streamText",
           reason: new ToolkitRequiredError({
@@ -32006,7 +32497,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (hasPendingApprovals) {
       for (const approval of pendingApproved) {
         if (approval.toolCall && !toolkit.tools[approval.toolCall.name]) {
-          return yield* make44({
+          return yield* make45({
             module: "LanguageModel",
             method: "streamText",
             reason: new ToolNotFoundError({
@@ -32072,7 +32563,7 @@ var make49 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
-    const toolCallFibers = yield* make45();
+    const toolCallFibers = yield* make46();
     const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make15(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
@@ -32248,7 +32739,7 @@ var executeApprovedToolCalls = (approvals, toolkit, concurrency) => {
     }
     const tool = toolkit.tools[toolCall.name];
     if (isUndefined(tool)) {
-      return yield* make44({
+      return yield* make45({
         module: "LanguageModel",
         method: "generateText",
         reason: new ToolNotFoundError({
@@ -32382,7 +32873,7 @@ var resolveStructuredOutput = /* @__PURE__ */ fnUntraced2(function* (response, s
   }
   const text = texts.join("");
   if (text.length === 0) {
-    return yield* make44({
+    return yield* make45({
       module: "LanguageModel",
       method: "generateObject",
       reason: new StructuredOutputError({
@@ -32392,7 +32883,7 @@ var resolveStructuredOutput = /* @__PURE__ */ fnUntraced2(function* (response, s
     });
   }
   const decode2 = decodeEffect2(fromJsonString2(schema2));
-  return yield* mapError4(decode2(text), (error2) => make44({
+  return yield* mapError4(decode2(text), (error2) => make45({
     module: "LanguageModel",
     method: "generateObject",
     reason: StructuredOutputError.fromSchemaError(error2, text)
@@ -32411,7 +32902,7 @@ var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
   providerDefined: () => providerDefined,
-  make: () => make50,
+  make: () => make51,
   isUserDefined: () => isUserDefined,
   isProviderDefined: () => isProviderDefined,
   isEmptyParamsRecord: () => isEmptyParamsRecord,
@@ -32421,7 +32912,7 @@ __export(exports_Tool, {
   getJsonSchema: () => getJsonSchema,
   getDescription: () => getDescription,
   dynamic: () => dynamic,
-  TypeId: () => TypeId47,
+  TypeId: () => TypeId48,
   Title: () => Title,
   Strict: () => Strict,
   Readonly: () => Readonly,
@@ -32434,15 +32925,15 @@ __export(exports_Tool, {
   DynamicTypeId: () => DynamicTypeId,
   Destructive: () => Destructive
 });
-var TypeId47 = "~effect/ai/Tool";
+var TypeId48 = "~effect/ai/Tool";
 var ProviderDefinedTypeId = "~effect/ai/Tool/ProviderDefined";
 var DynamicTypeId = "~effect/ai/Tool/Dynamic";
-var isUserDefined = (u) => hasProperty(u, TypeId47) && !isProviderDefined(u) && !isDynamic(u);
+var isUserDefined = (u) => hasProperty(u, TypeId48) && !isProviderDefined(u) && !isDynamic(u);
 var isProviderDefined = (u) => hasProperty(u, ProviderDefinedTypeId);
 var isDynamic = (u) => hasProperty(u, DynamicTypeId);
 var clone = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
 var Proto11 = {
-  [TypeId47]: {
+  [TypeId48]: {
     _Requirements: identity
   },
   pipe() {
@@ -32504,7 +32995,7 @@ var dynamicProto = (options) => {
   self.id = `effect/ai/Tool/${options.name}`;
   return self;
 };
-var make50 = (name, options) => {
+var make51 = (name, options) => {
   const successSchema = options?.success ?? Void2;
   const failureSchema = options?.failure ?? Never2;
   return userDefinedProto({
@@ -36868,9 +37359,9 @@ function Stream2(success, error2) {
 }
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId48 = "~effect/rpc/Rpc";
+var TypeId49 = "~effect/rpc/Rpc";
 var Proto12 = {
-  [TypeId48]: TypeId48,
+  [TypeId49]: TypeId49,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -36899,7 +37390,7 @@ var Proto12 = {
   setPayload(payloadSchema) {
     return makeProto3({
       _tag: this._tag,
-      payloadSchema: isSchema(payloadSchema) ? payloadSchema : Struct(payloadSchema),
+      payloadSchema: isSchema(payloadSchema) ? payloadSchema : Struct2(payloadSchema),
       successSchema: this.successSchema,
       errorSchema: this.errorSchema,
       defectSchema: this.defectSchema,
@@ -36959,7 +37450,7 @@ var makeProto3 = (options) => {
   Rpc.key = `effect/rpc/Rpc/${options._tag}`;
   return Rpc;
 };
-var make51 = (tag2, options) => {
+var make52 = (tag2, options) => {
   const successSchema = options?.success ?? Void2;
   const errorSchema = options?.error ?? Never2;
   const defectSchema = options?.defect ?? Defect();
@@ -36971,7 +37462,7 @@ var make51 = (tag2, options) => {
       }
     };
   } else {
-    payloadSchema = isSchema(options?.payload) ? options?.payload : options?.payload ? Struct(options?.payload) : Void2;
+    payloadSchema = isSchema(options?.payload) ? options?.payload : options?.payload ? Struct2(options?.payload) : Void2;
   }
   return makeProto3({
     _tag: tag2,
@@ -36999,38 +37490,38 @@ var optional3 = (schema3) => optionalKey2(schema3).pipe(decodeTo2(optional2(sche
 var RequestId = /* @__PURE__ */ Union2([String6, Finite]);
 var ProgressToken = /* @__PURE__ */ Union2([String6, Finite]);
 
-class RequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+class RequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     progressToken: /* @__PURE__ */ optional3(ProgressToken)
   }))
 }))) {
 }
 
-class ResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 
-class NotificationMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class NotificationMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 var Cursor = String6;
 
-class PaginatedRequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class PaginatedRequestMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...RequestMeta.fields,
   cursor: /* @__PURE__ */ optional3(Cursor)
 }))) {
 }
 
-class PaginatedResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class PaginatedResultMeta extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResultMeta.fields,
   nextCursor: /* @__PURE__ */ optional3(Cursor)
 }))) {
 }
 var Role = /* @__PURE__ */ Literals(["user", "assistant"]);
 
-class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   audience: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Role)),
   priority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
     minimum: 0,
@@ -37039,7 +37530,7 @@ class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
 }))) {
 }
 
-class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   version: String6
@@ -37047,29 +37538,29 @@ class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
 }
 
 class ClientCapabilities extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ClientCapabilities")({
-  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct({}))),
+  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct2({}))),
   extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
-  roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+  roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     listChanged: /* @__PURE__ */ optional3(Boolean3)
   })),
-  sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
-  elicitation: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({}))
+  sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
+  elicitation: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({}))
 })) {
 }
 
-class ServerCapabilities extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
-  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct({}))),
+class ServerCapabilities extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
+  experimental: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Struct2({}))),
   extensions: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(/* @__PURE__ */ TemplateLiteral2([String6, "/", String6]), Json2)),
-  logging: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
-  completions: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({})),
-  prompts: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+  logging: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
+  completions: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
+  prompts: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     listChanged: /* @__PURE__ */ optional3(Boolean3)
   })),
-  resources: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+  resources: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     subscribe: /* @__PURE__ */ optional3(Boolean3),
     listChanged: /* @__PURE__ */ optional3(Boolean3)
   })),
-  tools: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct({
+  tools: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     listChanged: /* @__PURE__ */ optional3(Boolean3)
   }))
 }))) {
@@ -37125,7 +37616,7 @@ class InternalError extends (/* @__PURE__ */ Error4("effect/ai/McpSchema/Interna
   });
 }
 var McpError = /* @__PURE__ */ Union2([ParseError, InvalidRequest, MethodNotFound, InvalidParams, InternalError, McpErrorBase]);
-class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResultMeta.fields,
   protocolVersion: String6,
   capabilities: ServerCapabilities,
@@ -37134,7 +37625,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct(
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make51("initialize", {
+class Initialize extends (/* @__PURE__ */ make52("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -37145,7 +37636,7 @@ class Initialize extends (/* @__PURE__ */ make51("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make51("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make52("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -37154,7 +37645,7 @@ class CancelledNotification extends (/* @__PURE__ */ make51("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make51("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make52("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
@@ -37188,20 +37679,20 @@ class ResourceTemplate extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Res
 })) {
 }
 
-class ResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   uri: String6,
   mimeType: /* @__PURE__ */ optional3(String6),
   _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 
-class TextResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class TextResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResourceContents.fields,
   text: String6
 }))) {
 }
 
-class BlobResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class BlobResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResourceContents.fields,
   blob: Uint8Array2
 }))) {
@@ -37217,13 +37708,13 @@ class ListResourceTemplatesResult extends (/* @__PURE__ */ Class4("@effect/ai/Mc
   resourceTemplates: /* @__PURE__ */ ArraySchema(ResourceTemplate)
 })) {
 }
-class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResultMeta.fields,
   contents: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]))
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make51("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make52("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -37232,8 +37723,8 @@ class ReadResource extends (/* @__PURE__ */ make51("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make51("resources/subscribe", {
-  success: /* @__PURE__ */ Struct({}),
+class Subscribe extends (/* @__PURE__ */ make52("resources/subscribe", {
+  success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
     ...RequestMeta.fields,
@@ -37242,8 +37733,8 @@ class Subscribe extends (/* @__PURE__ */ make51("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make51("resources/unsubscribe", {
-  success: /* @__PURE__ */ Struct({}),
+class Unsubscribe extends (/* @__PURE__ */ make52("resources/unsubscribe", {
+  success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
     ...RequestMeta.fields,
@@ -37252,7 +37743,7 @@ class Unsubscribe extends (/* @__PURE__ */ make51("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make51("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make52("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -37260,7 +37751,7 @@ class ResourceUpdatedNotification extends (/* @__PURE__ */ make51("notifications
 })) {
 }
 
-class PromptArgument extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class PromptArgument extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -37276,14 +37767,14 @@ class Prompt2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Prompt")({
 })) {
 }
 
-class TextContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class TextContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("text"),
   text: String6,
   annotations: /* @__PURE__ */ optional3(Annotations)
 }))) {
 }
 
-class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("image"),
   data: Uint8Array2,
   mimeType: String6,
@@ -37291,7 +37782,7 @@ class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
 }))) {
 }
 
-class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("audio"),
   data: Uint8Array2,
   mimeType: String6,
@@ -37299,21 +37790,21 @@ class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
 }))) {
 }
 
-class EmbeddedResource extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class EmbeddedResource extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("resource"),
   resource: /* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]),
   annotations: /* @__PURE__ */ optional3(Annotations)
 }))) {
 }
 
-class ResourceLink extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ResourceLink extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...Resource2.fields,
   type: /* @__PURE__ */ tag("resource_link")
 }))) {
 }
 var ContentBlock = /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent, EmbeddedResource, ResourceLink]);
 
-class PromptMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class PromptMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   role: Role,
   content: ContentBlock
 }))) {
@@ -37331,7 +37822,7 @@ class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetP
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make51("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make52("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -37342,7 +37833,7 @@ class GetPrompt extends (/* @__PURE__ */ make51("prompts/get", {
   }
 })) {
 }
-class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   title: /* @__PURE__ */ optional3(String6),
   readOnlyHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constFalse),
   destructiveHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue),
@@ -37375,7 +37866,7 @@ class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallT
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make51("tools/call", {
+class CallTool extends (/* @__PURE__ */ make52("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -37387,18 +37878,18 @@ class CallTool extends (/* @__PURE__ */ make51("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make51("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make52("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
   },
-  success: /* @__PURE__ */ Struct({}),
+  success: /* @__PURE__ */ Struct2({}),
   error: McpError
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make51("notifications/message", {
-  payload: /* @__PURE__ */ Struct({
+class LoggingMessageNotification extends (/* @__PURE__ */ make52("notifications/message", {
+  payload: /* @__PURE__ */ Struct2({
     ...NotificationMeta.fields,
     level: LoggingLevel,
     logger: /* @__PURE__ */ optional3(String6),
@@ -37407,13 +37898,13 @@ class LoggingMessageNotification extends (/* @__PURE__ */ make51("notifications/
 })) {
 }
 
-class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   role: Role,
   content: /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent])
 }))) {
 }
 
-class ModelHint extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct({
+class ModelHint extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   name: /* @__PURE__ */ optional3(String6)
 }))) {
 }
@@ -37442,12 +37933,12 @@ class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make51("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make52("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
     messages: /* @__PURE__ */ ArraySchema(SamplingMessage),
-    modelPreferences: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct(ModelPreferences.fields)),
+    modelPreferences: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2(ModelPreferences.fields)),
     systemPrompt: /* @__PURE__ */ optional3(String6),
     includeContext: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["none", "thisServer", "allServers"])),
     temperature: /* @__PURE__ */ optional3(Finite),
@@ -37471,7 +37962,7 @@ class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make51("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make52("elicitation/create", {
   success: ElicitResult,
   error: McpError,
   payload: {
@@ -38398,7 +38889,7 @@ class GenuineEngineSignal {
   }
 }
 var wrapEngineSignal = (signal) => new GenuineEngineSignal(signal);
-var layer14 = (delegation, childBinding, options) => {
+var layer15 = (delegation, childBinding, options) => {
   const caps = options.parentCaps ?? delegationCapsFromPolicy(delegation.policy);
   const allocation = delegationAllocationFromPolicy(delegation.policy);
   const toolkit = exports_Toolkit.make(delegation.tool);
@@ -38712,20 +39203,20 @@ var layer14 = (delegation, childBinding, options) => {
   });
   return toolkit.toLayer(build2);
 };
-var SubagentRuntime = { layer: layer14 };
+var SubagentRuntime = { layer: layer15 };
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
-  layer: () => layer15,
+  layer: () => layer16,
   RequestInit: () => RequestInit,
   Fetch: () => Fetch
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Headers.js
-var TypeId49 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
+var TypeId50 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
 var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
-  [TypeId49]: {
-    value: TypeId49
+  [TypeId50]: {
+    value: TypeId50
   },
   [symbolRedactable]: {
     value(context4) {
@@ -38754,7 +39245,7 @@ var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.cre
     value: BaseProto[NodeInspectSymbol]
   }
 });
-var make52 = (input) => Object.assign(Object.create(Proto13), input);
+var make53 = (input) => Object.assign(Object.create(Proto13), input);
 var Equivalence6 = /* @__PURE__ */ makeEquivalence4(/* @__PURE__ */ strictEqual());
 var empty14 = /* @__PURE__ */ Object.create(Proto13);
 var fromInput2 = (input) => {
@@ -38779,21 +39270,21 @@ var fromInput2 = (input) => {
 };
 var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto13);
 var set5 = /* @__PURE__ */ dual(3, (self, key, value4) => {
-  const out = make52(self);
+  const out = make53(self);
   out[key.toLowerCase()] = value4;
   return out;
 });
-var setAll = /* @__PURE__ */ dual(2, (self, headers) => make52({
+var setAll = /* @__PURE__ */ dual(2, (self, headers) => make53({
   ...self,
   ...fromInput2(headers)
 }));
 var merge7 = /* @__PURE__ */ dual(2, (self, headers) => {
-  const out = make52(self);
+  const out = make53(self);
   Object.assign(out, headers);
   return out;
 });
 var remove7 = /* @__PURE__ */ dual(2, (self, key) => {
-  const out = make52(self);
+  const out = make53(self);
   delete out[key.toLowerCase()];
   return out;
 });
@@ -38850,7 +39341,7 @@ __export(exports_HttpClient, {
   mapRequestEffect: () => mapRequestEffect,
   mapRequest: () => mapRequest,
   makeWith: () => makeWith2,
-  make: () => make56,
+  make: () => make57,
   layerMergedContext: () => layerMergedContext,
   isHttpClient: () => isHttpClient,
   head: () => head2,
@@ -38873,10 +39364,10 @@ __export(exports_HttpClient, {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Cookies.js
-var TypeId50 = "~effect/http/Cookies";
+var TypeId51 = "~effect/http/Cookies";
 var CookieTypeId = "~effect/http/Cookies/Cookie";
 var Proto14 = {
-  [TypeId50]: TypeId50,
+  [TypeId51]: TypeId51,
   ...BaseProto,
   toJSON() {
     return {
@@ -39062,11 +39553,11 @@ var tryDecodeURIComponent = (str) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/UrlParams.js
-var TypeId51 = "~effect/http/UrlParams";
-var isUrlParams = (u) => hasProperty(u, TypeId51);
+var TypeId52 = "~effect/http/UrlParams";
+var isUrlParams = (u) => hasProperty(u, TypeId52);
 var Proto15 = {
   ...PipeInspectableProto,
-  [TypeId51]: TypeId51,
+  [TypeId52]: TypeId52,
   [Symbol.iterator]() {
     return this.params[Symbol.iterator]();
   },
@@ -39083,7 +39574,7 @@ var Proto15 = {
     return array(this.params.flat());
   }
 };
-var make53 = (params) => {
+var make54 = (params) => {
   const self = Object.create(Proto15);
   self.params = params;
   return self;
@@ -39102,7 +39593,7 @@ var fromInput3 = (input) => {
       out.push(parsed[i]);
     }
   }
-  return make53(out);
+  return make54(out);
 };
 var fromInputNested = (input) => {
   const entries3 = typeof input[Symbol.iterator] === "function" ? fromIterable2(input) : Object.entries(input);
@@ -39139,14 +39630,14 @@ var UrlParamsSchema = /* @__PURE__ */ declare(isUrlParams, {
   }),
   expected: "UrlParams",
   toEquivalence: () => Equivalence7,
-  toCodec: () => link3()(ArraySchema(Tuple2([String6, String6])), transform2({
-    decode: make53,
+  toCodec: () => link3()(ArraySchema(Tuple3([String6, String6])), transform2({
+    decode: make54,
     encode: (self) => self.params
   }))
 });
-var empty15 = /* @__PURE__ */ make53([]);
-var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make53(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
-var transform3 = /* @__PURE__ */ dual(2, (self, f) => make53(f(self.params)));
+var empty15 = /* @__PURE__ */ make54([]);
+var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make54(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
+var transform3 = /* @__PURE__ */ dual(2, (self, f) => make54(f(self.params)));
 var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   const out = fromInput3(input);
   const params = out.params;
@@ -39161,7 +39652,7 @@ var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   }
   return out;
 });
-var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make53(append(self.params, [key, String(value4)])));
+var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make54(append(self.params, [key, String(value4)])));
 var appendAll3 = /* @__PURE__ */ dual(2, (self, input) => transform3(self, appendAll(fromInput3(input).params)));
 var toString = (input) => new URLSearchParams(fromInput3(input).params).toString();
 var toRecord = (self) => {
@@ -39187,7 +39678,7 @@ var schemaRecord = /* @__PURE__ */ UrlParamsSchema.pipe(/* @__PURE__ */ decodeTo
 })));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpBody.js
-var TypeId52 = "~effect/http/HttpBody";
+var TypeId53 = "~effect/http/HttpBody";
 var HttpBodyErrorTypeId = "~effect/http/HttpBody/HttpBodyError";
 
 class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
@@ -39195,9 +39686,9 @@ class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
 }
 
 class Proto16 {
-  [TypeId52];
+  [TypeId53];
   constructor() {
-    this[TypeId52] = TypeId52;
+    this[TypeId53] = TypeId53;
   }
   [NodeInspectSymbol]() {
     return this.toJSON();
@@ -39360,8 +39851,8 @@ var fileContentLength = (size9, options) => {
 var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (info2) => stream2(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options))));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientError.js
-var TypeId53 = "~effect/http/HttpClientError";
-var isHttpClientError = (u) => hasProperty(u, TypeId53);
+var TypeId54 = "~effect/http/HttpClientError";
+var isHttpClientError = (u) => hasProperty(u, TypeId54);
 
 class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) {
   constructor(props) {
@@ -39374,7 +39865,7 @@ class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) 
       super(props);
     }
   }
-  [TypeId53] = TypeId53;
+  [TypeId54] = TypeId54;
   get request() {
     return this.reason.request;
   }
@@ -39462,7 +39953,7 @@ __export(exports_HttpClientRequest, {
   options: () => options,
   modify: () => modify5,
   makeWith: () => makeWith,
-  make: () => make55,
+  make: () => make56,
   isHttpClientRequest: () => isHttpClientRequest,
   head: () => head,
   get: () => get10,
@@ -39503,7 +39994,7 @@ var updateHeaders = (headers, body) => {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Url.js
 class UrlError extends (/* @__PURE__ */ TaggedError2("UrlError")) {
 }
-var make54 = (url2, params, hash2) => try_({
+var make55 = (url2, params, hash2) => try_({
   try: () => {
     const urlInstance = new URL(url2, baseUrl());
     for (let i = 0;i < params.params.length; i++) {
@@ -39529,10 +40020,10 @@ var baseUrl = () => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientRequest.js
-var TypeId54 = "~effect/http/HttpClientRequest";
-var isHttpClientRequest = (u) => hasProperty(u, TypeId54);
+var TypeId55 = "~effect/http/HttpClientRequest";
+var isHttpClientRequest = (u) => hasProperty(u, TypeId55);
 var Proto17 = {
-  [TypeId54]: TypeId54,
+  [TypeId55]: TypeId55,
   ...BaseProto,
   toJSON() {
     return {
@@ -39560,19 +40051,19 @@ function makeWith(method, url2, urlParams2, hash2, headers, body) {
   return self;
 }
 var empty17 = /* @__PURE__ */ makeWith("GET", "", empty15, /* @__PURE__ */ none2(), empty14, empty16);
-var make55 = (method) => (url2, options) => modify5(empty17, {
+var make56 = (method) => (url2, options) => modify5(empty17, {
   method,
   url: url2,
   ...options ?? undefined
 });
-var get10 = /* @__PURE__ */ make55("GET");
-var post = /* @__PURE__ */ make55("POST");
-var patch = /* @__PURE__ */ make55("PATCH");
-var put = /* @__PURE__ */ make55("PUT");
-var del = /* @__PURE__ */ make55("DELETE");
-var head = /* @__PURE__ */ make55("HEAD");
-var options = /* @__PURE__ */ make55("OPTIONS");
-var trace2 = /* @__PURE__ */ make55("TRACE");
+var get10 = /* @__PURE__ */ make56("GET");
+var post = /* @__PURE__ */ make56("POST");
+var patch = /* @__PURE__ */ make56("PATCH");
+var put = /* @__PURE__ */ make56("PUT");
+var del = /* @__PURE__ */ make56("DELETE");
+var head = /* @__PURE__ */ make56("HEAD");
+var options = /* @__PURE__ */ make56("OPTIONS");
+var trace2 = /* @__PURE__ */ make56("TRACE");
 var modify5 = /* @__PURE__ */ dual(2, (self, options2) => {
   let result4 = self;
   if (options2.method) {
@@ -39643,7 +40134,7 @@ var setUrlParam = /* @__PURE__ */ dual(3, (self, key, value4) => makeWith(self.m
 var setUrlParams = /* @__PURE__ */ dual(2, (self, input) => makeWith(self.method, self.url, setAll2(self.urlParams, input), self.hash, self.headers, self.body));
 var appendUrlParam = /* @__PURE__ */ dual(3, (self, key, value4) => makeWith(self.method, self.url, append3(self.urlParams, key, value4), self.hash, self.headers, self.body));
 var appendUrlParams = /* @__PURE__ */ dual(2, (self, input) => makeWith(self.method, self.url, appendAll3(self.urlParams, input), self.hash, self.headers, self.body));
-var setHash2 = /* @__PURE__ */ dual(2, (self, hash2) => makeWith(self.method, self.url, self.urlParams, some2(hash2), self.headers, self.body));
+var setHash2 = /* @__PURE__ */ dual(2, (self, hash2) => makeWith(self.method, self.url, self.urlParams, some3(hash2), self.headers, self.body));
 var removeHash = (self) => makeWith(self.method, self.url, self.urlParams, none2(), self.headers, self.body);
 var setBody = /* @__PURE__ */ dual(2, (self, body) => {
   return makeWith(self.method, self.url, self.urlParams, self.hash, updateHeaders(self.headers, body), body);
@@ -39662,9 +40153,9 @@ var bodyFormDataRecord = /* @__PURE__ */ dual(2, (self, entries3) => setBody(sel
 var bodyStream = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, body, options2) => setBody(self, stream2(body, options2?.contentType, options2?.contentLength)));
 var bodyFile = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, path, options2) => map8(file(path, options2), (body) => setBody(self, body)));
 function toUrl(self) {
-  const r = make54(self.url, self.urlParams, getOrUndefined(self.hash));
+  const r = make55(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isSuccess2(r)) {
-    return some2(r.success);
+    return some3(r.success);
   }
   return none2();
 }
@@ -39694,7 +40185,7 @@ var parseContentLength = (contentLength) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 var toWebResult = (self, options2) => {
-  const url2 = make54(self.url, self.urlParams, getOrUndefined(self.hash));
+  const url2 = make55(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isFailure2(url2)) {
     return fail2(url2.failure);
   }
@@ -39758,11 +40249,11 @@ __export(exports_HttpClientResponse, {
   fromWeb: () => fromWeb2,
   filterStatusOk: () => filterStatusOk,
   filterStatus: () => filterStatus,
-  TypeId: () => TypeId56
+  TypeId: () => TypeId57
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
-var TypeId55 = "~effect/http/HttpIncomingMessage";
+var TypeId56 = "~effect/http/HttpIncomingMessage";
 var schemaBodyJson2 = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3));
   return (self) => flatMap5(self.json, (u) => decode2(u, options2));
@@ -39799,7 +40290,7 @@ var inspect = (self, that) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientResponse.js
-var TypeId56 = "~effect/http/HttpClientResponse";
+var TypeId57 = "~effect/http/HttpClientResponse";
 var fromWeb2 = (request3, source) => new WebHttpClientResponse(request3, source);
 var schemaJson = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3).annotate({
@@ -39852,16 +40343,16 @@ var filterStatusOk = (self) => self.status >= 200 && self.status < 300 ? succeed
 }));
 
 class WebHttpClientResponse extends Class2 {
-  [TypeId55];
   [TypeId56];
+  [TypeId57];
   request;
   source;
   constructor(request3, source) {
     super();
     this.request = request3;
     this.source = source;
-    this[TypeId55] = TypeId55;
     this[TypeId56] = TypeId56;
+    this[TypeId57] = TypeId57;
   }
   toJSON() {
     return inspect(this, {
@@ -39977,8 +40468,8 @@ var toHeaders = (span2) => fromRecordUnsafe({
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClient.js
-var TypeId57 = "~effect/http/HttpClient";
-var isHttpClient = (u) => hasProperty(u, TypeId57);
+var TypeId58 = "~effect/http/HttpClient";
+var isHttpClient = (u) => hasProperty(u, TypeId58);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
 var accessor = (method) => (...args2) => flatMap5(HttpClient, (client) => client[method](...args2));
 var execute = /* @__PURE__ */ accessor("execute");
@@ -40008,7 +40499,7 @@ var makeWith2 = (postprocess, preprocess) => {
   return self;
 };
 var Proto18 = {
-  [TypeId57]: TypeId57,
+  [TypeId58]: TypeId58,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -40019,13 +40510,13 @@ var Proto18 = {
     };
   },
   .../* @__PURE__ */ Object.fromEntries(/* @__PURE__ */ allShort.map(([fullMethod, method]) => [method, function(url2, options3) {
-    return this.execute(make55(fullMethod)(url2, options3));
+    return this.execute(make56(fullMethod)(url2, options3));
   }]))
 };
-var make56 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
+var make57 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
   const scopedController = scopedRequests.get(request3);
   const controller = scopedController ?? new AbortController;
-  const urlResult = make54(request3.url, request3.urlParams, getOrUndefined(request3.hash));
+  const urlResult = make55(request3.url, request3.urlParams, getOrUndefined(request3.hash));
   if (isFailure2(urlResult)) {
     return fail6(new HttpClientError({
       reason: new InvalidUrlError({
@@ -40411,8 +40902,8 @@ class InterruptibleResponse {
     this.original = original;
     this.controller = controller;
   }
+  [TypeId57] = TypeId57;
   [TypeId56] = TypeId56;
-  [TypeId55] = TypeId55;
   applyInterrupt(effect2) {
     return suspend3(() => {
       responseRegistry.unregister(this.original);
@@ -40481,7 +40972,7 @@ var Fetch = /* @__PURE__ */ Reference("effect/http/FetchHttpClient/Fetch", {
 
 class RequestInit extends (/* @__PURE__ */ Service()("effect/http/FetchHttpClient/RequestInit")) {
 }
-var fetch = /* @__PURE__ */ make56((request3, url2, signal, fiber3) => {
+var fetch = /* @__PURE__ */ make57((request3, url2, signal, fiber3) => {
   const fetch2 = fiber3.getRef(Fetch);
   const options3 = fiber3.context.mapUnsafe.get(RequestInit.key) ?? {};
   let headers = options3.headers ? merge7(fromInput2(options3.headers), request3.headers) : request3.headers;
@@ -40515,7 +41006,7 @@ var fetch = /* @__PURE__ */ make56((request3, url2, signal, fiber3) => {
   }
   return send(undefined);
 });
-var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+var layer16 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
 // packages/pr-review/src/internal/effort.ts
 var EFFORT_ALIASES = {
   low: 0,
@@ -42780,7 +43271,7 @@ var makeReviewSnapshot = (ignore6) => provideIgnore(exports_Effect.gen(function*
     files: yield* source.anchorFiles
   };
 }), ignore6);
-var make57 = (options3) => {
+var make58 = (options3) => {
   const extraTools = options3.extraTools ?? EMPTY_TOOLS;
   requireReadonly(extraTools);
   const definition = Agent.define("pr-reviewer", {
@@ -42883,7 +43374,140 @@ var makeFanOut = (options3) => {
     }
   };
 };
-var PrReview = { make: make57, makeFanOut };
+var PrReview = { make: make58, makeFanOut };
+
+// packages/pr-review/src/internal/progress.ts
+var PROGRESS_COMMENT_MARKER = "<!-- effect-agent-pr-review progress -->";
+var footerLine = (options3) => {
+  const parts2 = ["@effect-agent/pr-review"];
+  if (options3.modelLabel !== undefined)
+    parts2.push(options3.modelLabel);
+  if (options3.runUrl !== undefined)
+    parts2.push(`[workflow run](${options3.runUrl})`);
+  return `_${parts2.join(" · ")}._`;
+};
+var scopeSentence = (info2) => {
+  const subject = info2.filesInScope === undefined ? "this pull request" : `${info2.filesInScope} changed file(s)`;
+  const at = info2.headSha === undefined ? "" : ` at \`${info2.headSha.slice(0, 7)}\``;
+  const scope3 = info2.reviewMode === undefined ? "" : ` — ${info2.reviewMode === "incremental" ? "incremental" : "full-diff"} scope${info2.reviewReason === undefined ? "" : `: ${info2.reviewReason.slice(0, 1000)}`}`;
+  return `Reviewing ${subject}${at}${scope3}.`;
+};
+var renderProgressBeginBody = (info2) => [
+  "> \uD83D\uDD0D **Code review in progress…**",
+  ">",
+  `> ${scopeSentence(info2)}`,
+  "",
+  "_This comment is updated in place by each review run._",
+  "",
+  footerLine(info2),
+  PROGRESS_COMMENT_MARKER
+].join(`
+`);
+var settleCallout = (info2) => {
+  if (info2.outcome === "failed") {
+    return "> ⚠️ **Code review run failed** — nothing was posted.";
+  }
+  switch (info2.conclusion) {
+    case "success":
+      return `> ✅ **Code review posted** — verdict \`${info2.verdict}\`, ${info2.inlineComments} inline comment(s), nothing blocking.`;
+    case "blocking":
+      return `> \uD83D\uDED1 **Code review posted** — blocking findings; the check fails until they are addressed.`;
+    case "incomplete":
+      return `> ⚠️ **Code review posted** — required coverage is incomplete, so the check fails.`;
+  }
+};
+var renderProgressSettleBody = (info2) => {
+  const link4 = info2.outcome === "reviewed" && info2.reviewUrl !== undefined ? `See the [posted review](${info2.reviewUrl}).` : info2.runUrl !== undefined ? `See the [workflow run](${info2.runUrl}) for details.` : undefined;
+  return [
+    settleCallout(info2),
+    ...link4 === undefined ? [] : ["", link4],
+    "",
+    footerLine(info2),
+    PROGRESS_COMMENT_MARKER
+  ].join(`
+`);
+};
+
+class ReviewProgressReporter extends exports_Context.Service()("@effect-agent/pr-review/ReviewProgressReporter") {
+}
+var noopReviewProgressReporterLayer = exports_Layer.succeed(ReviewProgressReporter, ReviewProgressReporter.of({
+  begin: () => exports_Effect.void,
+  settle: () => exports_Effect.void
+}));
+var GitHubIssueCommentWire = exports_Schema.Struct({
+  id: exports_Schema.Int,
+  body: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.String)),
+  user: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Struct({ login: exports_Schema.String, type: exports_Schema.String })))
+});
+var GitHubIssueCommentsPageWire = exports_Schema.Array(GitHubIssueCommentWire);
+var MAX_PROGRESS_LOOKUP_PAGES = 5;
+var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exports_Effect.gen(function* () {
+  const target = yield* GitHubReviewTarget;
+  const client = yield* exports_HttpClient.HttpClient;
+  const knownCommentId = yield* exports_Ref.make(exports_Option.none());
+  const authorLogin = (target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN).toLowerCase();
+  const issuePrefix = `${target.apiUrl}/repos/${target.repository}/issues`;
+  const withHeaders = (request3) => {
+    const base2 = request3.pipe(exports_HttpClientRequest.setHeaders({
+      "X-GitHub-Api-Version": "2022-11-28",
+      "User-Agent": "effect-agent-pr-review"
+    }), exports_HttpClientRequest.acceptJson);
+    return exports_Option.isSome(target.token) ? base2.pipe(exports_HttpClientRequest.bearerToken(target.token.value)) : base2;
+  };
+  const asApiFailure = (operation) => (error2) => GitHubApiFailure.make({
+    operation,
+    reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
+  });
+  const execute2 = (operation, request3) => exports_HttpClient.execute(request3).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asApiFailure(operation)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  const decodeComments = exports_Schema.decodeUnknownEffect(GitHubIssueCommentsPageWire);
+  const decodeComment = exports_Schema.decodeUnknownEffect(GitHubIssueCommentWire);
+  const findExisting = exports_Effect.gen(function* () {
+    const perPage = 100;
+    let found = exports_Option.none();
+    for (let page = 1;page <= MAX_PROGRESS_LOOKUP_PAGES; page += 1) {
+      const response = yield* execute2("listProgressComments", withHeaders(exports_HttpClientRequest.get(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.setUrlParams({
+        per_page: String(perPage),
+        page: String(page)
+      }))));
+      const wires = yield* response.json.pipe(exports_Effect.mapError(asApiFailure("listProgressComments")), exports_Effect.flatMap((body) => decodeComments(body).pipe(exports_Effect.mapError(asApiFailure("listProgressComments")))));
+      for (const wire of wires) {
+        if (wire.user?.login.toLowerCase() === authorLogin && wire.user.type === "Bot" && (wire.body ?? "").includes(PROGRESS_COMMENT_MARKER)) {
+          found = exports_Option.some(wire.id);
+        }
+      }
+      if (wires.length < perPage)
+        return found;
+    }
+    return yield* GitHubApiFailure.make({
+      operation: "listProgressComments",
+      reason: `comment history exceeds the bounded ${MAX_PROGRESS_LOOKUP_PAGES * 100}-comment lookup`
+    });
+  });
+  const create = (body) => execute2("createProgressComment", withHeaders(exports_HttpClientRequest.post(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.flatMap((response) => response.json.pipe(exports_Effect.mapError(asApiFailure("createProgressComment")), exports_Effect.flatMap((payload) => decodeComment(payload).pipe(exports_Effect.mapError(asApiFailure("createProgressComment")))))), exports_Effect.map((wire) => wire.id));
+  const update3 = (commentId, body) => execute2("updateProgressComment", withHeaders(exports_HttpClientRequest.patch(`${issuePrefix}/comments/${commentId}`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.asVoid);
+  const upsert = exports_Effect.fn("ReviewProgressReporter.upsert")(function* (body) {
+    const cached3 = yield* exports_Ref.get(knownCommentId);
+    if (exports_Option.isSome(cached3)) {
+      return yield* update3(cached3.value, body);
+    }
+    const existing = yield* findExisting;
+    if (exports_Option.isSome(existing)) {
+      yield* exports_Ref.set(knownCommentId, existing);
+      return yield* update3(existing.value, body);
+    }
+    const created = yield* create(body);
+    yield* exports_Ref.set(knownCommentId, exports_Option.some(created));
+  });
+  const failOpen2 = (phase) => (effect2) => effect2.pipe(exports_Effect.catch((failure) => exports_Effect.logWarning("review progress comment update failed").pipe(exports_Effect.annotateLogs({
+    progressPhase: phase,
+    operation: failure.operation,
+    reason: failure.reason
+  }))));
+  return ReviewProgressReporter.of({
+    begin: (info2) => upsert(renderProgressBeginBody(info2)).pipe(failOpen2("begin")),
+    settle: (info2) => upsert(renderProgressSettleBody(info2)).pipe(failOpen2("settle"))
+  });
+}));
 
 // packages/pr-review/src/internal/github-env.ts
 class ReviewTargetUnresolved extends exports_Schema.TaggedError()("ReviewTargetUnresolved", {
@@ -42944,15 +43568,80 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
     token,
     reviewAuthorLogin
   });
-  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)));
+  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewProgressLayer.pipe(exports_Layer.provide(targetLayer)));
+}));
+
+// packages/pr-review/src/internal/logging.ts
+var levelTag = {
+  Trace: "trace",
+  Debug: "debug",
+  Warn: "WARN",
+  Error: "ERROR",
+  Fatal: "FATAL"
+};
+var asText = (value4) => {
+  if (exports_Predicate.isString(value4))
+    return value4;
+  try {
+    return JSON.stringify(value4) ?? String(value4);
+  } catch {
+    return String(value4);
+  }
+};
+var annotationText = (annotations2) => Object.entries(annotations2).filter(([key]) => !key.includes(".")).map(([key, value4]) => `${key}=${asText(value4).slice(0, 120)}`).join(" ");
+var telemetryLine = (message, annotations2) => {
+  const toolName = asText(annotations2["toolName"] ?? "tool");
+  switch (message) {
+    case "agent tool execution completed":
+      return `✓ tool ${toolName}`;
+    case "agent tool execution failed":
+      return `✗ tool ${toolName} failed`;
+    case "agent tool handler started":
+    case "agent programmatic tool handler started":
+      return `→ tool ${toolName}`;
+    case "agent model call started":
+      return `→ model call`;
+    case "agent run started":
+      return `→ agent ${asText(annotations2["agentId"] ?? "run")} started`;
+    default:
+      return;
+  }
+};
+var formatCompactLogLine = (record2) => {
+  const time2 = record2.date.toISOString().slice(11, 19);
+  const messages = Array.isArray(record2.message) ? record2.message : [record2.message];
+  const messageText = messages.map(asText).join(" ");
+  const mapped = messages.length === 1 && exports_Predicate.isString(messages[0]) ? telemetryLine(messages[0], record2.annotations) : undefined;
+  const tag2 = levelTag[record2.logLevel];
+  let line;
+  if (mapped !== undefined) {
+    line = `[${time2}] ${tag2 === undefined ? "" : `${tag2} `}${mapped}`;
+  } else {
+    const isSevere = record2.logLevel === "Warn" || record2.logLevel === "Error" || record2.logLevel === "Fatal";
+    const annotations2 = isSevere ? annotationText(record2.annotations) : "";
+    line = `[${time2}] ${tag2 === undefined ? "" : `${tag2} `}${messageText}${annotations2 === "" ? "" : ` · ${annotations2}`}`;
+  }
+  return record2.cause === undefined ? line : `${line}
+${record2.cause}`;
+};
+var compactReviewLogger = exports_Logger.make((options3) => formatCompactLogLine({
+  date: options3.date,
+  logLevel: options3.logLevel,
+  message: options3.message,
+  annotations: options3.fiber.getRef(exports_References.CurrentLogAnnotations),
+  cause: options3.cause.reasons.length > 0 ? exports_Cause.pretty(options3.cause) : undefined
+}));
+var compactReviewLoggingLayer = exports_Layer.unwrap(exports_Effect.gen(function* () {
+  const level = yield* exports_Config.literals(["All", "Trace", "Debug", "Info", "Warn", "Error"], "PR_REVIEW_LOG_LEVEL").pipe(exports_Config.withDefault("Info"));
+  return exports_Layer.merge(exports_Logger.layer([exports_Logger.withLeveledConsole(compactReviewLogger)]), exports_Layer.succeed(exports_References.MinimumLogLevel, level));
 }));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
-  make: () => make59,
+  make: () => make60,
   layerConfig: () => layerConfig,
-  layer: () => layer16,
+  layer: () => layer17,
   AnthropicClient: () => AnthropicClient
 });
 
@@ -43010,7 +43699,7 @@ var decode3 = (options3) => fromTransform((upstream, _scope) => sync3(() => {
 }));
 var decodeSchema = (schema3, options3) => pipeTo(decode3(options3), decode2(EventEncoded.pipe(decodeTo2(schema3)))());
 var decodeDataSchema = (schema3, options3) => {
-  const eventSchema = Struct({
+  const eventSchema = Struct2({
     ...EventEncoded.fields,
     data: fromJsonString2(schema3)
   });
@@ -43146,7 +43835,7 @@ function makeParser2(onParse, options3) {
   }
 }
 var BOM = "\uFEFF";
-var EventEncoded = /* @__PURE__ */ Struct({
+var EventEncoded = /* @__PURE__ */ Struct2({
   id: /* @__PURE__ */ optional2(String6),
   event: String6,
   data: String6
@@ -43169,7 +43858,7 @@ class AnthropicConfig extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/A
 }
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/Generated.js
-var APIError = /* @__PURE__ */ Struct({
+var APIError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Internal server error"
@@ -43181,7 +43870,7 @@ var APIError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "APIError"
 });
-var AuthenticationError2 = /* @__PURE__ */ Struct({
+var AuthenticationError2 = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Authentication error"
@@ -43193,7 +43882,7 @@ var AuthenticationError2 = /* @__PURE__ */ Struct({
 }).annotate({
   title: "AuthenticationError"
 });
-var Base64PDFSource = /* @__PURE__ */ Struct({
+var Base64PDFSource = /* @__PURE__ */ Struct2({
   data: String6.annotate({
     title: "Data",
     format: "byte"
@@ -43210,7 +43899,7 @@ var Base64PDFSource = /* @__PURE__ */ Struct({
 var BashCodeExecutionToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input", "unavailable", "too_many_requests", "execution_time_exceeded", "output_file_too_large"]).annotate({
   title: "BashCodeExecutionToolResultErrorCode"
 });
-var BetaAPIError = /* @__PURE__ */ Struct({
+var BetaAPIError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Internal server error"
@@ -43222,7 +43911,7 @@ var BetaAPIError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "APIError"
 });
-var BetaAuthenticationError = /* @__PURE__ */ Struct({
+var BetaAuthenticationError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Authentication error"
@@ -43234,7 +43923,7 @@ var BetaAuthenticationError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "AuthenticationError"
 });
-var BetaBase64PDFSource = /* @__PURE__ */ Struct({
+var BetaBase64PDFSource = /* @__PURE__ */ Struct2({
   data: String6.annotate({
     title: "Data",
     format: "byte"
@@ -43251,7 +43940,7 @@ var BetaBase64PDFSource = /* @__PURE__ */ Struct({
 var BetaBashCodeExecutionToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input", "unavailable", "too_many_requests", "execution_time_exceeded", "output_file_too_large"]).annotate({
   title: "BashCodeExecutionToolResultErrorCode"
 });
-var BetaBillingError = /* @__PURE__ */ Struct({
+var BetaBillingError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Billing error"
@@ -43263,7 +43952,7 @@ var BetaBillingError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "BillingError"
 });
-var BetaCacheCreation = /* @__PURE__ */ Struct({
+var BetaCacheCreation = /* @__PURE__ */ Struct2({
   ephemeral_1h_input_tokens: Number6.annotate({
     title: "Ephemeral 1H Input Tokens",
     description: "The number of input tokens used to create the 1 hour cache entry.",
@@ -43280,7 +43969,7 @@ var BetaCacheCreation = /* @__PURE__ */ Struct({
 var BetaCodeExecutionToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input", "unavailable", "too_many_requests", "execution_time_exceeded"]).annotate({
   title: "CodeExecutionToolResultErrorCode"
 });
-var BetaCompactionContentBlockDelta = /* @__PURE__ */ Struct({
+var BetaCompactionContentBlockDelta = /* @__PURE__ */ Struct2({
   content: Union2([String6, Null2]).annotate({
     title: "Content"
   }),
@@ -43291,7 +43980,7 @@ var BetaCompactionContentBlockDelta = /* @__PURE__ */ Struct({
 }).annotate({
   title: "CompactionContentBlockDelta"
 });
-var BetaContentBlockStopEvent = /* @__PURE__ */ Struct({
+var BetaContentBlockStopEvent = /* @__PURE__ */ Struct2({
   index: Number6.annotate({
     title: "Index"
   }).check(isInt()),
@@ -43302,7 +43991,7 @@ var BetaContentBlockStopEvent = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ContentBlockStopEvent"
 });
-var BetaContextManagementResponse = /* @__PURE__ */ Struct({
+var BetaContextManagementResponse = /* @__PURE__ */ Struct2({
   original_input_tokens: Number6.annotate({
     title: "Original Input Tokens",
     description: "The original token count before context management was applied"
@@ -43310,7 +43999,7 @@ var BetaContextManagementResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ContextManagementResponse"
 });
-var BetaCreateSkillResponse = /* @__PURE__ */ Struct({
+var BetaCreateSkillResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill was created."
@@ -43349,7 +44038,7 @@ This represents the most recent version of the skill that has been created.`
 }).annotate({
   title: "CreateSkillResponse"
 });
-var BetaCreateSkillVersionResponse = /* @__PURE__ */ Struct({
+var BetaCreateSkillVersionResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill version was created."
@@ -43396,7 +44085,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 }).annotate({
   title: "CreateSkillVersionResponse"
 });
-var BetaDeleteMessageBatchResponse = /* @__PURE__ */ Struct({
+var BetaDeleteMessageBatchResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: "ID of the Message Batch."
@@ -43409,7 +44098,7 @@ var BetaDeleteMessageBatchResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "DeleteMessageBatchResponse"
 });
-var BetaDeleteSkillResponse = /* @__PURE__ */ Struct({
+var BetaDeleteSkillResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: `Unique identifier for the skill.
@@ -43424,7 +44113,7 @@ The format and length of IDs may change over time.`
 }).annotate({
   title: "DeleteSkillResponse"
 });
-var BetaDeleteSkillVersionResponse = /* @__PURE__ */ Struct({
+var BetaDeleteSkillVersionResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: `Version identifier for the skill.
@@ -43439,7 +44128,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 }).annotate({
   title: "DeleteSkillVersionResponse"
 });
-var BetaDirectCaller = /* @__PURE__ */ Struct({
+var BetaDirectCaller = /* @__PURE__ */ Struct2({
   type: Literal2("direct").annotate({
     title: "Type"
   })
@@ -43447,7 +44136,7 @@ var BetaDirectCaller = /* @__PURE__ */ Struct({
   title: "DirectCaller",
   description: "Tool invocation directly from the model."
 });
-var BetaFileDeleteResponse = /* @__PURE__ */ Struct({
+var BetaFileDeleteResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: "ID of the deleted file."
@@ -43460,7 +44149,7 @@ var BetaFileDeleteResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "FileDeleteResponse"
 });
-var BetaFileMetadataSchema = /* @__PURE__ */ Struct({
+var BetaFileMetadataSchema = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "RFC 3339 datetime string representing when the file was created.",
@@ -43496,7 +44185,7 @@ The format and length of IDs may change over time.`
 }).annotate({
   title: "FileMetadataSchema"
 });
-var BetaGatewayTimeoutError = /* @__PURE__ */ Struct({
+var BetaGatewayTimeoutError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Request timeout"
@@ -43508,7 +44197,7 @@ var BetaGatewayTimeoutError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "GatewayTimeoutError"
 });
-var BetaGetSkillResponse = /* @__PURE__ */ Struct({
+var BetaGetSkillResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill was created."
@@ -43547,7 +44236,7 @@ This represents the most recent version of the skill that has been created.`
 }).annotate({
   title: "GetSkillResponse"
 });
-var BetaGetSkillVersionResponse = /* @__PURE__ */ Struct({
+var BetaGetSkillVersionResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill version was created."
@@ -43594,7 +44283,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 }).annotate({
   title: "GetSkillVersionResponse"
 });
-var BetaInputJsonContentBlockDelta = /* @__PURE__ */ Struct({
+var BetaInputJsonContentBlockDelta = /* @__PURE__ */ Struct2({
   partial_json: String6.annotate({
     title: "Partial Json"
   }),
@@ -43605,7 +44294,7 @@ var BetaInputJsonContentBlockDelta = /* @__PURE__ */ Struct({
 }).annotate({
   title: "InputJsonContentBlockDelta"
 });
-var BetaInvalidRequestError = /* @__PURE__ */ Struct({
+var BetaInvalidRequestError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Invalid request"
@@ -43617,7 +44306,7 @@ var BetaInvalidRequestError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "InvalidRequestError"
 });
-var BetaMessageBatch = /* @__PURE__ */ Struct({
+var BetaMessageBatch = /* @__PURE__ */ Struct2({
   archived_at: Union2([String6.annotate({
     format: "date-time"
   }), Null2]).annotate({
@@ -43658,7 +44347,7 @@ The format and length of IDs may change over time.`
     title: "Processing Status",
     description: "Processing status of the Message Batch."
   }),
-  request_counts: Struct({
+  request_counts: Struct2({
     canceled: Number6.annotate({
       title: "Canceled",
       description: `Number of requests in the Message Batch that have been canceled.
@@ -43708,7 +44397,7 @@ This is zero until processing of the entire Message Batch has ended.`,
 }).annotate({
   title: "MessageBatch"
 });
-var BetaMessageStopEvent = /* @__PURE__ */ Struct({
+var BetaMessageStopEvent = /* @__PURE__ */ Struct2({
   type: Literal2("message_stop").annotate({
     title: "Type",
     default: "message_stop"
@@ -43716,7 +44405,7 @@ var BetaMessageStopEvent = /* @__PURE__ */ Struct({
 }).annotate({
   title: "MessageStopEvent"
 });
-var BetaModelInfo = /* @__PURE__ */ Struct({
+var BetaModelInfo = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "RFC 3339 datetime string representing the time at which the model was released. May be set to an epoch value if the release date is unknown.",
@@ -43738,7 +44427,7 @@ var BetaModelInfo = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ModelInfo"
 });
-var BetaNotFoundError = /* @__PURE__ */ Struct({
+var BetaNotFoundError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Not found"
@@ -43750,7 +44439,7 @@ var BetaNotFoundError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "NotFoundError"
 });
-var BetaOverloadedError = /* @__PURE__ */ Struct({
+var BetaOverloadedError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Overloaded"
@@ -43762,7 +44451,7 @@ var BetaOverloadedError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "OverloadedError"
 });
-var BetaPermissionError = /* @__PURE__ */ Struct({
+var BetaPermissionError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Permission denied"
@@ -43774,7 +44463,7 @@ var BetaPermissionError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "PermissionError"
 });
-var BetaPlainTextSource = /* @__PURE__ */ Struct({
+var BetaPlainTextSource = /* @__PURE__ */ Struct2({
   data: String6.annotate({
     title: "Data"
   }),
@@ -43787,7 +44476,7 @@ var BetaPlainTextSource = /* @__PURE__ */ Struct({
 }).annotate({
   title: "PlainTextSource"
 });
-var BetaRateLimitError = /* @__PURE__ */ Struct({
+var BetaRateLimitError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Rate limited"
@@ -43799,7 +44488,7 @@ var BetaRateLimitError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "RateLimitError"
 });
-var BetaResponseBashCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
+var BetaResponseBashCodeExecutionOutputBlock = /* @__PURE__ */ Struct2({
   file_id: String6.annotate({
     title: "File Id"
   }),
@@ -43810,7 +44499,7 @@ var BetaResponseBashCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionOutputBlock"
 });
-var BetaResponseCharLocationCitation = /* @__PURE__ */ Struct({
+var BetaResponseCharLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -43837,7 +44526,7 @@ var BetaResponseCharLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCharLocationCitation"
 });
-var BetaResponseCitationsConfig = /* @__PURE__ */ Struct({
+var BetaResponseCitationsConfig = /* @__PURE__ */ Struct2({
   enabled: Boolean3.annotate({
     title: "Enabled",
     default: false
@@ -43845,7 +44534,7 @@ var BetaResponseCitationsConfig = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCitationsConfig"
 });
-var BetaResponseClearThinking20251015Edit = /* @__PURE__ */ Struct({
+var BetaResponseClearThinking20251015Edit = /* @__PURE__ */ Struct2({
   cleared_input_tokens: Number6.annotate({
     title: "Cleared Input Tokens",
     description: "Number of input tokens cleared by this edit."
@@ -43862,7 +44551,7 @@ var BetaResponseClearThinking20251015Edit = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseClearThinking20251015Edit"
 });
-var BetaResponseClearToolUses20250919Edit = /* @__PURE__ */ Struct({
+var BetaResponseClearToolUses20250919Edit = /* @__PURE__ */ Struct2({
   cleared_input_tokens: Number6.annotate({
     title: "Cleared Input Tokens",
     description: "Number of input tokens cleared by this edit."
@@ -43879,7 +44568,7 @@ var BetaResponseClearToolUses20250919Edit = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseClearToolUses20250919Edit"
 });
-var BetaResponseCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
+var BetaResponseCodeExecutionOutputBlock = /* @__PURE__ */ Struct2({
   file_id: String6.annotate({
     title: "File Id"
   }),
@@ -43890,7 +44579,7 @@ var BetaResponseCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionOutputBlock"
 });
-var BetaResponseCompactionBlock = /* @__PURE__ */ Struct({
+var BetaResponseCompactionBlock = /* @__PURE__ */ Struct2({
   content: Union2([String6, Null2]).annotate({
     title: "Content",
     description: "Summary of compacted content, or null if compaction failed"
@@ -43907,7 +44596,7 @@ When content is None, it indicates the compaction failed to produce a valid
 summary (e.g., malformed output from the model). Clients may round-trip
 compaction blocks with null content; the server treats them as no-ops.`
 });
-var BetaResponseContainerUploadBlock = /* @__PURE__ */ Struct({
+var BetaResponseContainerUploadBlock = /* @__PURE__ */ Struct2({
   file_id: String6.annotate({
     title: "File Id"
   }),
@@ -43919,7 +44608,7 @@ var BetaResponseContainerUploadBlock = /* @__PURE__ */ Struct({
   title: "ResponseContainerUploadBlock",
   description: "Response model for a file uploaded to the container."
 });
-var BetaResponseContentBlockLocationCitation = /* @__PURE__ */ Struct({
+var BetaResponseContentBlockLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -43946,7 +44635,7 @@ var BetaResponseContentBlockLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseContentBlockLocationCitation"
 });
-var BetaResponseMCPToolUseBlock = /* @__PURE__ */ Struct({
+var BetaResponseMCPToolUseBlock = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id"
   }).check(isPattern2(new RegExp("^[a-zA-Z0-9_-]+$"))),
@@ -43968,7 +44657,7 @@ var BetaResponseMCPToolUseBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseMCPToolUseBlock"
 });
-var BetaResponsePageLocationCitation = /* @__PURE__ */ Struct({
+var BetaResponsePageLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -43995,7 +44684,7 @@ var BetaResponsePageLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponsePageLocationCitation"
 });
-var BetaResponseRedactedThinkingBlock = /* @__PURE__ */ Struct({
+var BetaResponseRedactedThinkingBlock = /* @__PURE__ */ Struct2({
   data: String6.annotate({
     title: "Data"
   }),
@@ -44006,7 +44695,7 @@ var BetaResponseRedactedThinkingBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseRedactedThinkingBlock"
 });
-var BetaResponseSearchResultLocationCitation = /* @__PURE__ */ Struct({
+var BetaResponseSearchResultLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -44032,7 +44721,7 @@ var BetaResponseSearchResultLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseSearchResultLocationCitation"
 });
-var BetaResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct2({
   is_file_update: Boolean3.annotate({
     title: "Is File Update"
   }),
@@ -44043,7 +44732,7 @@ var BetaResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struc
 }).annotate({
   title: "ResponseTextEditorCodeExecutionCreateResultBlock"
 });
-var BetaResponseTextEditorCodeExecutionStrReplaceResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseTextEditorCodeExecutionStrReplaceResultBlock = /* @__PURE__ */ Struct2({
   lines: Union2([ArraySchema(String6), Null2]).annotate({
     title: "Lines",
     default: null
@@ -44071,7 +44760,7 @@ var BetaResponseTextEditorCodeExecutionStrReplaceResultBlock = /* @__PURE__ */ S
 }).annotate({
   title: "ResponseTextEditorCodeExecutionStrReplaceResultBlock"
 });
-var BetaResponseTextEditorCodeExecutionViewResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseTextEditorCodeExecutionViewResultBlock = /* @__PURE__ */ Struct2({
   content: String6.annotate({
     title: "Content"
   }),
@@ -44097,7 +44786,7 @@ var BetaResponseTextEditorCodeExecutionViewResultBlock = /* @__PURE__ */ Struct(
 }).annotate({
   title: "ResponseTextEditorCodeExecutionViewResultBlock"
 });
-var BetaResponseThinkingBlock = /* @__PURE__ */ Struct({
+var BetaResponseThinkingBlock = /* @__PURE__ */ Struct2({
   signature: String6.annotate({
     title: "Signature"
   }),
@@ -44111,7 +44800,7 @@ var BetaResponseThinkingBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseThinkingBlock"
 });
-var BetaResponseToolReferenceBlock = /* @__PURE__ */ Struct({
+var BetaResponseToolReferenceBlock = /* @__PURE__ */ Struct2({
   tool_name: String6.annotate({
     title: "Tool Name"
   }).check(isMinLength(1)).check(isMaxLength(256)).check(isPattern2(new RegExp("^[a-zA-Z0-9_-]{1,256}$"))),
@@ -44122,7 +44811,7 @@ var BetaResponseToolReferenceBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolReferenceBlock"
 });
-var BetaResponseWebSearchResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseWebSearchResultBlock = /* @__PURE__ */ Struct2({
   encrypted_content: String6.annotate({
     title: "Encrypted Content"
   }),
@@ -44143,7 +44832,7 @@ var BetaResponseWebSearchResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchResultBlock"
 });
-var BetaResponseWebSearchResultLocationCitation = /* @__PURE__ */ Struct({
+var BetaResponseWebSearchResultLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -44163,7 +44852,7 @@ var BetaResponseWebSearchResultLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchResultLocationCitation"
 });
-var BetaServerToolCaller = /* @__PURE__ */ Struct({
+var BetaServerToolCaller = /* @__PURE__ */ Struct2({
   tool_id: String6.annotate({
     title: "Tool Id"
   }).check(isPattern2(new RegExp("^srvtoolu_[a-zA-Z0-9_]+$"))),
@@ -44174,7 +44863,7 @@ var BetaServerToolCaller = /* @__PURE__ */ Struct({
   title: "ServerToolCaller",
   description: "Tool invocation generated by a server-side tool."
 });
-var BetaServerToolCaller_20260120 = /* @__PURE__ */ Struct({
+var BetaServerToolCaller_20260120 = /* @__PURE__ */ Struct2({
   tool_id: String6.annotate({
     title: "Tool Id"
   }).check(isPattern2(new RegExp("^srvtoolu_[a-zA-Z0-9_]+$"))),
@@ -44184,7 +44873,7 @@ var BetaServerToolCaller_20260120 = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ServerToolCaller_20260120"
 });
-var BetaServerToolUsage = /* @__PURE__ */ Struct({
+var BetaServerToolUsage = /* @__PURE__ */ Struct2({
   web_fetch_requests: Number6.annotate({
     title: "Web Fetch Requests",
     description: "The number of web fetch tool requests.",
@@ -44198,7 +44887,7 @@ var BetaServerToolUsage = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ServerToolUsage"
 });
-var BetaSignatureContentBlockDelta = /* @__PURE__ */ Struct({
+var BetaSignatureContentBlockDelta = /* @__PURE__ */ Struct2({
   signature: String6.annotate({
     title: "Signature"
   }),
@@ -44209,7 +44898,7 @@ var BetaSignatureContentBlockDelta = /* @__PURE__ */ Struct({
 }).annotate({
   title: "SignatureContentBlockDelta"
 });
-var BetaSkill = /* @__PURE__ */ Struct({
+var BetaSkill = /* @__PURE__ */ Struct2({
   skill_id: String6.annotate({
     title: "Skill Id",
     description: "Skill ID"
@@ -44226,7 +44915,7 @@ var BetaSkill = /* @__PURE__ */ Struct({
   title: "Skill",
   description: "A skill that was loaded in a container (response model)."
 });
-var BetaSkillVersion = /* @__PURE__ */ Struct({
+var BetaSkillVersion = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill version was created."
@@ -44276,7 +44965,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 var BetaSpeed = /* @__PURE__ */ Literals(["standard", "fast"]).annotate({
   title: "Speed"
 });
-var BetaTextContentBlockDelta = /* @__PURE__ */ Struct({
+var BetaTextContentBlockDelta = /* @__PURE__ */ Struct2({
   text: String6.annotate({
     title: "Text"
   }),
@@ -44290,7 +44979,7 @@ var BetaTextContentBlockDelta = /* @__PURE__ */ Struct({
 var BetaTextEditorCodeExecutionToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input", "unavailable", "too_many_requests", "execution_time_exceeded", "file_not_found"]).annotate({
   title: "TextEditorCodeExecutionToolResultErrorCode"
 });
-var BetaThinkingContentBlockDelta = /* @__PURE__ */ Struct({
+var BetaThinkingContentBlockDelta = /* @__PURE__ */ Struct2({
   thinking: String6.annotate({
     title: "Thinking"
   }),
@@ -44310,7 +44999,7 @@ var BetaWebFetchToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_in
 var BetaWebSearchToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input", "unavailable", "max_uses_exceeded", "too_many_requests", "query_too_long", "request_too_large"]).annotate({
   title: "WebSearchToolResultErrorCode"
 });
-var Betaapi__schemas__skills__Skill = /* @__PURE__ */ Struct({
+var Betaapi__schemas__skills__Skill = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill was created."
@@ -44349,7 +45038,7 @@ This represents the most recent version of the skill that has been created.`
 }).annotate({
   title: "Skill"
 });
-var BillingError = /* @__PURE__ */ Struct({
+var BillingError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Billing error"
@@ -44361,7 +45050,7 @@ var BillingError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "BillingError"
 });
-var CacheCreation = /* @__PURE__ */ Struct({
+var CacheCreation = /* @__PURE__ */ Struct2({
   ephemeral_1h_input_tokens: Number6.annotate({
     title: "Ephemeral 1H Input Tokens",
     description: "The number of input tokens used to create the 1 hour cache entry.",
@@ -44378,7 +45067,7 @@ var CacheCreation = /* @__PURE__ */ Struct({
 var CodeExecutionToolResultErrorCode = /* @__PURE__ */ Literals(["invalid_tool_input", "unavailable", "too_many_requests", "execution_time_exceeded"]).annotate({
   title: "CodeExecutionToolResultErrorCode"
 });
-var Container = /* @__PURE__ */ Struct({
+var Container = /* @__PURE__ */ Struct2({
   expires_at: String6.annotate({
     title: "Expires At",
     description: "The time at which the container will expire.",
@@ -44392,7 +45081,7 @@ var Container = /* @__PURE__ */ Struct({
   title: "Container",
   description: "Information about the container used in the request (for the code execution tool)"
 });
-var CountMessageTokensResponse = /* @__PURE__ */ Struct({
+var CountMessageTokensResponse = /* @__PURE__ */ Struct2({
   input_tokens: Number6.annotate({
     title: "Input Tokens",
     description: "The total number of tokens across the provided list of messages, system prompt, and tools."
@@ -44400,7 +45089,7 @@ var CountMessageTokensResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "CountMessageTokensResponse"
 });
-var CreateSkillResponse = /* @__PURE__ */ Struct({
+var CreateSkillResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill was created."
@@ -44439,7 +45128,7 @@ This represents the most recent version of the skill that has been created.`
 }).annotate({
   title: "CreateSkillResponse"
 });
-var CreateSkillVersionResponse = /* @__PURE__ */ Struct({
+var CreateSkillVersionResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill version was created."
@@ -44486,7 +45175,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 }).annotate({
   title: "CreateSkillVersionResponse"
 });
-var DeleteMessageBatchResponse = /* @__PURE__ */ Struct({
+var DeleteMessageBatchResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: "ID of the Message Batch."
@@ -44499,7 +45188,7 @@ var DeleteMessageBatchResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "DeleteMessageBatchResponse"
 });
-var DeleteSkillResponse = /* @__PURE__ */ Struct({
+var DeleteSkillResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: `Unique identifier for the skill.
@@ -44514,7 +45203,7 @@ The format and length of IDs may change over time.`
 }).annotate({
   title: "DeleteSkillResponse"
 });
-var DeleteSkillVersionResponse = /* @__PURE__ */ Struct({
+var DeleteSkillVersionResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: `Version identifier for the skill.
@@ -44529,7 +45218,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 }).annotate({
   title: "DeleteSkillVersionResponse"
 });
-var DirectCaller = /* @__PURE__ */ Struct({
+var DirectCaller = /* @__PURE__ */ Struct2({
   type: Literal2("direct").annotate({
     title: "Type"
   })
@@ -44537,7 +45226,7 @@ var DirectCaller = /* @__PURE__ */ Struct({
   title: "DirectCaller",
   description: "Tool invocation directly from the model."
 });
-var FileDeleteResponse = /* @__PURE__ */ Struct({
+var FileDeleteResponse = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: "ID of the deleted file."
@@ -44550,7 +45239,7 @@ var FileDeleteResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "FileDeleteResponse"
 });
-var FileMetadataSchema = /* @__PURE__ */ Struct({
+var FileMetadataSchema = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "RFC 3339 datetime string representing when the file was created.",
@@ -44586,7 +45275,7 @@ The format and length of IDs may change over time.`
 }).annotate({
   title: "FileMetadataSchema"
 });
-var GatewayTimeoutError = /* @__PURE__ */ Struct({
+var GatewayTimeoutError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Request timeout"
@@ -44598,7 +45287,7 @@ var GatewayTimeoutError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "GatewayTimeoutError"
 });
-var GetSkillResponse = /* @__PURE__ */ Struct({
+var GetSkillResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill was created."
@@ -44637,7 +45326,7 @@ This represents the most recent version of the skill that has been created.`
 }).annotate({
   title: "GetSkillResponse"
 });
-var GetSkillVersionResponse = /* @__PURE__ */ Struct({
+var GetSkillVersionResponse = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill version was created."
@@ -44684,7 +45373,7 @@ Each version is identified by a Unix epoch timestamp (e.g., "1759178010641129").
 }).annotate({
   title: "GetSkillVersionResponse"
 });
-var InvalidRequestError2 = /* @__PURE__ */ Struct({
+var InvalidRequestError2 = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Invalid request"
@@ -44696,7 +45385,7 @@ var InvalidRequestError2 = /* @__PURE__ */ Struct({
 }).annotate({
   title: "InvalidRequestError"
 });
-var MessageBatch = /* @__PURE__ */ Struct({
+var MessageBatch = /* @__PURE__ */ Struct2({
   archived_at: Union2([String6.annotate({
     format: "date-time"
   }), Null2]).annotate({
@@ -44737,7 +45426,7 @@ The format and length of IDs may change over time.`
     title: "Processing Status",
     description: "Processing status of the Message Batch."
   }),
-  request_counts: Struct({
+  request_counts: Struct2({
     canceled: Number6.annotate({
       title: "Canceled",
       description: `Number of requests in the Message Batch that have been canceled.
@@ -44787,7 +45476,7 @@ This is zero until processing of the entire Message Batch has ended.`,
 }).annotate({
   title: "MessageBatch"
 });
-var ModelInfo = /* @__PURE__ */ Struct({
+var ModelInfo = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "RFC 3339 datetime string representing the time at which the model was released. May be set to an epoch value if the release date is unknown.",
@@ -44809,7 +45498,7 @@ var ModelInfo = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ModelInfo"
 });
-var NotFoundError = /* @__PURE__ */ Struct({
+var NotFoundError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Not found"
@@ -44821,7 +45510,7 @@ var NotFoundError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "NotFoundError"
 });
-var OverloadedError = /* @__PURE__ */ Struct({
+var OverloadedError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Overloaded"
@@ -44833,7 +45522,7 @@ var OverloadedError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "OverloadedError"
 });
-var PermissionError = /* @__PURE__ */ Struct({
+var PermissionError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Permission denied"
@@ -44845,7 +45534,7 @@ var PermissionError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "PermissionError"
 });
-var PlainTextSource = /* @__PURE__ */ Struct({
+var PlainTextSource = /* @__PURE__ */ Struct2({
   data: String6.annotate({
     title: "Data"
   }),
@@ -44858,7 +45547,7 @@ var PlainTextSource = /* @__PURE__ */ Struct({
 }).annotate({
   title: "PlainTextSource"
 });
-var RateLimitError2 = /* @__PURE__ */ Struct({
+var RateLimitError2 = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
     default: "Rate limited"
@@ -44870,7 +45559,7 @@ var RateLimitError2 = /* @__PURE__ */ Struct({
 }).annotate({
   title: "RateLimitError"
 });
-var ResponseBashCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
+var ResponseBashCodeExecutionOutputBlock = /* @__PURE__ */ Struct2({
   file_id: String6.annotate({
     title: "File Id"
   }),
@@ -44881,7 +45570,7 @@ var ResponseBashCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionOutputBlock"
 });
-var ResponseCharLocationCitation = /* @__PURE__ */ Struct({
+var ResponseCharLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -44908,7 +45597,7 @@ var ResponseCharLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCharLocationCitation"
 });
-var ResponseCitationsConfig = /* @__PURE__ */ Struct({
+var ResponseCitationsConfig = /* @__PURE__ */ Struct2({
   enabled: Boolean3.annotate({
     title: "Enabled",
     default: false
@@ -44916,7 +45605,7 @@ var ResponseCitationsConfig = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCitationsConfig"
 });
-var ResponseCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
+var ResponseCodeExecutionOutputBlock = /* @__PURE__ */ Struct2({
   file_id: String6.annotate({
     title: "File Id"
   }),
@@ -44927,7 +45616,7 @@ var ResponseCodeExecutionOutputBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionOutputBlock"
 });
-var ResponseContainerUploadBlock = /* @__PURE__ */ Struct({
+var ResponseContainerUploadBlock = /* @__PURE__ */ Struct2({
   file_id: String6.annotate({
     title: "File Id"
   }),
@@ -44939,7 +45628,7 @@ var ResponseContainerUploadBlock = /* @__PURE__ */ Struct({
   title: "ResponseContainerUploadBlock",
   description: "Response model for a file uploaded to the container."
 });
-var ResponseContentBlockLocationCitation = /* @__PURE__ */ Struct({
+var ResponseContentBlockLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -44966,7 +45655,7 @@ var ResponseContentBlockLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseContentBlockLocationCitation"
 });
-var ResponsePageLocationCitation = /* @__PURE__ */ Struct({
+var ResponsePageLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -44993,7 +45682,7 @@ var ResponsePageLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponsePageLocationCitation"
 });
-var ResponseRedactedThinkingBlock = /* @__PURE__ */ Struct({
+var ResponseRedactedThinkingBlock = /* @__PURE__ */ Struct2({
   data: String6.annotate({
     title: "Data"
   }),
@@ -45004,7 +45693,7 @@ var ResponseRedactedThinkingBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseRedactedThinkingBlock"
 });
-var ResponseSearchResultLocationCitation = /* @__PURE__ */ Struct({
+var ResponseSearchResultLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -45030,7 +45719,7 @@ var ResponseSearchResultLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseSearchResultLocationCitation"
 });
-var ResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct({
+var ResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct2({
   is_file_update: Boolean3.annotate({
     title: "Is File Update"
   }),
@@ -45041,7 +45730,7 @@ var ResponseTextEditorCodeExecutionCreateResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseTextEditorCodeExecutionCreateResultBlock"
 });
-var ResponseTextEditorCodeExecutionStrReplaceResultBlock = /* @__PURE__ */ Struct({
+var ResponseTextEditorCodeExecutionStrReplaceResultBlock = /* @__PURE__ */ Struct2({
   lines: Union2([ArraySchema(String6), Null2]).annotate({
     title: "Lines",
     default: null
@@ -45069,7 +45758,7 @@ var ResponseTextEditorCodeExecutionStrReplaceResultBlock = /* @__PURE__ */ Struc
 }).annotate({
   title: "ResponseTextEditorCodeExecutionStrReplaceResultBlock"
 });
-var ResponseTextEditorCodeExecutionViewResultBlock = /* @__PURE__ */ Struct({
+var ResponseTextEditorCodeExecutionViewResultBlock = /* @__PURE__ */ Struct2({
   content: String6.annotate({
     title: "Content"
   }),
@@ -45095,7 +45784,7 @@ var ResponseTextEditorCodeExecutionViewResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseTextEditorCodeExecutionViewResultBlock"
 });
-var ResponseThinkingBlock = /* @__PURE__ */ Struct({
+var ResponseThinkingBlock = /* @__PURE__ */ Struct2({
   signature: String6.annotate({
     title: "Signature"
   }),
@@ -45109,7 +45798,7 @@ var ResponseThinkingBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseThinkingBlock"
 });
-var ResponseToolReferenceBlock = /* @__PURE__ */ Struct({
+var ResponseToolReferenceBlock = /* @__PURE__ */ Struct2({
   tool_name: String6.annotate({
     title: "Tool Name"
   }).check(isMinLength(1)).check(isMaxLength(256)).check(isPattern2(new RegExp("^[a-zA-Z0-9_-]{1,256}$"))),
@@ -45120,7 +45809,7 @@ var ResponseToolReferenceBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolReferenceBlock"
 });
-var ResponseWebSearchResultBlock = /* @__PURE__ */ Struct({
+var ResponseWebSearchResultBlock = /* @__PURE__ */ Struct2({
   encrypted_content: String6.annotate({
     title: "Encrypted Content"
   }),
@@ -45141,7 +45830,7 @@ var ResponseWebSearchResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchResultBlock"
 });
-var ResponseWebSearchResultLocationCitation = /* @__PURE__ */ Struct({
+var ResponseWebSearchResultLocationCitation = /* @__PURE__ */ Struct2({
   cited_text: String6.annotate({
     title: "Cited Text"
   }),
@@ -45161,7 +45850,7 @@ var ResponseWebSearchResultLocationCitation = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchResultLocationCitation"
 });
-var ServerToolCaller = /* @__PURE__ */ Struct({
+var ServerToolCaller = /* @__PURE__ */ Struct2({
   tool_id: String6.annotate({
     title: "Tool Id"
   }).check(isPattern2(new RegExp("^srvtoolu_[a-zA-Z0-9_]+$"))),
@@ -45172,7 +45861,7 @@ var ServerToolCaller = /* @__PURE__ */ Struct({
   title: "ServerToolCaller",
   description: "Tool invocation generated by a server-side tool."
 });
-var ServerToolCaller_20260120 = /* @__PURE__ */ Struct({
+var ServerToolCaller_20260120 = /* @__PURE__ */ Struct2({
   tool_id: String6.annotate({
     title: "Tool Id"
   }).check(isPattern2(new RegExp("^srvtoolu_[a-zA-Z0-9_]+$"))),
@@ -45182,7 +45871,7 @@ var ServerToolCaller_20260120 = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ServerToolCaller_20260120"
 });
-var ServerToolUsage = /* @__PURE__ */ Struct({
+var ServerToolUsage = /* @__PURE__ */ Struct2({
   web_fetch_requests: Number6.annotate({
     title: "Web Fetch Requests",
     description: "The number of web fetch tool requests.",
@@ -45196,7 +45885,7 @@ var ServerToolUsage = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ServerToolUsage"
 });
-var Skill = /* @__PURE__ */ Struct({
+var Skill = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill was created."
@@ -45235,7 +45924,7 @@ This represents the most recent version of the skill that has been created.`
 }).annotate({
   title: "Skill"
 });
-var SkillVersion = /* @__PURE__ */ Struct({
+var SkillVersion = /* @__PURE__ */ Struct2({
   created_at: String6.annotate({
     title: "Created At",
     description: "ISO 8601 timestamp of when the skill version was created."
@@ -45302,7 +45991,7 @@ var Model2 = /* @__PURE__ */ Union2([String6, Literals(["claude-sonnet-5", "clau
 
 See [models](https://docs.anthropic.com/en/docs/models-overview) for additional details and options.`
 });
-var ResponseBashCodeExecutionToolResultError = /* @__PURE__ */ Struct({
+var ResponseBashCodeExecutionToolResultError = /* @__PURE__ */ Struct2({
   error_code: BashCodeExecutionToolResultErrorCode,
   type: Literal2("bash_code_execution_tool_result_error").annotate({
     title: "Type",
@@ -45311,7 +46000,7 @@ var ResponseBashCodeExecutionToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionToolResultError"
 });
-var BetaResponseBashCodeExecutionToolResultError = /* @__PURE__ */ Struct({
+var BetaResponseBashCodeExecutionToolResultError = /* @__PURE__ */ Struct2({
   error_code: BetaBashCodeExecutionToolResultErrorCode,
   type: Literal2("bash_code_execution_tool_result_error").annotate({
     title: "Type",
@@ -45320,7 +46009,7 @@ var BetaResponseBashCodeExecutionToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionToolResultError"
 });
-var BetaCompactionIterationUsage = /* @__PURE__ */ Struct({
+var BetaCompactionIterationUsage = /* @__PURE__ */ Struct2({
   cache_creation: Union2([BetaCacheCreation, Null2]).annotate({
     description: "Breakdown of cached tokens by TTL",
     default: null
@@ -45352,7 +46041,7 @@ var BetaCompactionIterationUsage = /* @__PURE__ */ Struct({
   title: "CompactionIterationUsage",
   description: "Token usage for a compaction iteration."
 });
-var BetaMessageIterationUsage = /* @__PURE__ */ Struct({
+var BetaMessageIterationUsage = /* @__PURE__ */ Struct2({
   cache_creation: Union2([BetaCacheCreation, Null2]).annotate({
     description: "Breakdown of cached tokens by TTL",
     default: null
@@ -45384,7 +46073,7 @@ var BetaMessageIterationUsage = /* @__PURE__ */ Struct({
   title: "MessageIterationUsage",
   description: "Token usage for a sampling iteration."
 });
-var BetaResponseCodeExecutionToolResultError = /* @__PURE__ */ Struct({
+var BetaResponseCodeExecutionToolResultError = /* @__PURE__ */ Struct2({
   error_code: BetaCodeExecutionToolResultErrorCode,
   type: Literal2("code_execution_tool_result_error").annotate({
     title: "Type",
@@ -45393,7 +46082,7 @@ var BetaResponseCodeExecutionToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionToolResultError"
 });
-var BetaCountMessageTokensResponse = /* @__PURE__ */ Struct({
+var BetaCountMessageTokensResponse = /* @__PURE__ */ Struct2({
   context_management: Union2([BetaContextManagementResponse, Null2]).annotate({
     description: "Information about context management applied to the message."
   }),
@@ -45404,7 +46093,7 @@ var BetaCountMessageTokensResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "CountMessageTokensResponse"
 });
-var BetaFileListResponse = /* @__PURE__ */ Struct({
+var BetaFileListResponse = /* @__PURE__ */ Struct2({
   data: ArraySchema(BetaFileMetadataSchema).annotate({
     title: "Data",
     description: "List of file metadata objects."
@@ -45425,7 +46114,7 @@ var BetaFileListResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "FileListResponse"
 });
-var BetaListResponse_MessageBatch_ = /* @__PURE__ */ Struct({
+var BetaListResponse_MessageBatch_ = /* @__PURE__ */ Struct2({
   data: ArraySchema(BetaMessageBatch).annotate({
     title: "Data"
   }),
@@ -45444,7 +46133,7 @@ var BetaListResponse_MessageBatch_ = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListResponse[MessageBatch]"
 });
-var BetaListResponse_ModelInfo_ = /* @__PURE__ */ Struct({
+var BetaListResponse_ModelInfo_ = /* @__PURE__ */ Struct2({
   data: ArraySchema(BetaModelInfo).annotate({
     title: "Data"
   }),
@@ -45463,7 +46152,7 @@ var BetaListResponse_ModelInfo_ = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListResponse[ModelInfo]"
 });
-var BetaErrorResponse = /* @__PURE__ */ Struct({
+var BetaErrorResponse = /* @__PURE__ */ Struct2({
   error: Union2([BetaInvalidRequestError, BetaAuthenticationError, BetaBillingError, BetaPermissionError, BetaNotFoundError, BetaRateLimitError, BetaGatewayTimeoutError, BetaAPIError, BetaOverloadedError], {
     mode: "oneOf"
   }).annotate({
@@ -45480,7 +46169,7 @@ var BetaErrorResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ErrorResponse"
 });
-var BetaResponseBashCodeExecutionResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseBashCodeExecutionResultBlock = /* @__PURE__ */ Struct2({
   content: ArraySchema(BetaResponseBashCodeExecutionOutputBlock).annotate({
     title: "Content"
   }),
@@ -45500,7 +46189,7 @@ var BetaResponseBashCodeExecutionResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionResultBlock"
 });
-var BetaResponseDocumentBlock = /* @__PURE__ */ Struct({
+var BetaResponseDocumentBlock = /* @__PURE__ */ Struct2({
   citations: Union2([BetaResponseCitationsConfig, Null2]).annotate({
     description: "Citation configuration for the document",
     default: null
@@ -45522,7 +46211,7 @@ var BetaResponseDocumentBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseDocumentBlock"
 });
-var BetaResponseContextManagement = /* @__PURE__ */ Struct({
+var BetaResponseContextManagement = /* @__PURE__ */ Struct2({
   applied_edits: ArraySchema(Union2([BetaResponseClearToolUses20250919Edit, BetaResponseClearThinking20251015Edit], {
     mode: "oneOf"
   })).annotate({
@@ -45532,7 +46221,7 @@ var BetaResponseContextManagement = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseContextManagement"
 });
-var BetaResponseCodeExecutionResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseCodeExecutionResultBlock = /* @__PURE__ */ Struct2({
   content: ArraySchema(BetaResponseCodeExecutionOutputBlock).annotate({
     title: "Content"
   }),
@@ -45552,7 +46241,7 @@ var BetaResponseCodeExecutionResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionResultBlock"
 });
-var BetaResponseEncryptedCodeExecutionResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseEncryptedCodeExecutionResultBlock = /* @__PURE__ */ Struct2({
   content: ArraySchema(BetaResponseCodeExecutionOutputBlock).annotate({
     title: "Content"
   }),
@@ -45573,7 +46262,7 @@ var BetaResponseEncryptedCodeExecutionResultBlock = /* @__PURE__ */ Struct({
   title: "ResponseEncryptedCodeExecutionResultBlock",
   description: "Code execution result with encrypted stdout for PFC + web_search results."
 });
-var BetaResponseToolSearchToolSearchResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseToolSearchToolSearchResultBlock = /* @__PURE__ */ Struct2({
   tool_references: ArraySchema(BetaResponseToolReferenceBlock).annotate({
     title: "Tool References"
   }),
@@ -45584,7 +46273,7 @@ var BetaResponseToolSearchToolSearchResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolSearchToolSearchResultBlock"
 });
-var BetaCitationsDelta = /* @__PURE__ */ Struct({
+var BetaCitationsDelta = /* @__PURE__ */ Struct2({
   citation: Union2([BetaResponseCharLocationCitation, BetaResponsePageLocationCitation, BetaResponseContentBlockLocationCitation, BetaResponseWebSearchResultLocationCitation, BetaResponseSearchResultLocationCitation], {
     mode: "oneOf"
   }).annotate({
@@ -45597,8 +46286,8 @@ var BetaCitationsDelta = /* @__PURE__ */ Struct({
 }).annotate({
   title: "CitationsDelta"
 });
-var BetaResponseMCPToolResultBlock = /* @__PURE__ */ Struct({
-  content: Union2([String6, ArraySchema(Struct({
+var BetaResponseMCPToolResultBlock = /* @__PURE__ */ Struct2({
+  content: Union2([String6, ArraySchema(Struct2({
     citations: Union2([ArraySchema(Union2([BetaResponseCharLocationCitation, BetaResponsePageLocationCitation, BetaResponseContentBlockLocationCitation, BetaResponseWebSearchResultLocationCitation, BetaResponseSearchResultLocationCitation], {
       mode: "oneOf"
     })), Null2]).annotate({
@@ -45634,7 +46323,7 @@ var BetaResponseMCPToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseMCPToolResultBlock"
 });
-var BetaResponseTextBlock = /* @__PURE__ */ Struct({
+var BetaResponseTextBlock = /* @__PURE__ */ Struct2({
   citations: optionalKey2(Union2([ArraySchema(Union2([BetaResponseCharLocationCitation, BetaResponsePageLocationCitation, BetaResponseContentBlockLocationCitation, BetaResponseWebSearchResultLocationCitation, BetaResponseSearchResultLocationCitation], {
     mode: "oneOf"
   })), Null2]).annotate({
@@ -45652,7 +46341,7 @@ var BetaResponseTextBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseTextBlock"
 });
-var BetaResponseServerToolUseBlock = /* @__PURE__ */ Struct({
+var BetaResponseServerToolUseBlock = /* @__PURE__ */ Struct2({
   caller: optionalKey2(Union2([BetaDirectCaller, BetaServerToolCaller, BetaServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -45674,7 +46363,7 @@ var BetaResponseServerToolUseBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseServerToolUseBlock"
 });
-var BetaResponseToolUseBlock = /* @__PURE__ */ Struct({
+var BetaResponseToolUseBlock = /* @__PURE__ */ Struct2({
   caller: optionalKey2(Union2([BetaDirectCaller, BetaServerToolCaller, BetaServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -45696,7 +46385,7 @@ var BetaResponseToolUseBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolUseBlock"
 });
-var BetaContainer = /* @__PURE__ */ Struct({
+var BetaContainer = /* @__PURE__ */ Struct2({
   expires_at: String6.annotate({
     title: "Expires At",
     description: "The time at which the container will expire.",
@@ -45715,7 +46404,7 @@ var BetaContainer = /* @__PURE__ */ Struct({
   title: "Container",
   description: "Information about the container used in the request (for the code execution tool)"
 });
-var BetaListSkillVersionsResponse = /* @__PURE__ */ Struct({
+var BetaListSkillVersionsResponse = /* @__PURE__ */ Struct2({
   data: ArraySchema(BetaSkillVersion).annotate({
     title: "Data",
     description: "List of skill versions."
@@ -45731,7 +46420,7 @@ var BetaListSkillVersionsResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListSkillVersionsResponse"
 });
-var BetaResponseTextEditorCodeExecutionToolResultError = /* @__PURE__ */ Struct({
+var BetaResponseTextEditorCodeExecutionToolResultError = /* @__PURE__ */ Struct2({
   error_code: BetaTextEditorCodeExecutionToolResultErrorCode,
   error_message: Union2([String6, Null2]).annotate({
     title: "Error Message",
@@ -45744,7 +46433,7 @@ var BetaResponseTextEditorCodeExecutionToolResultError = /* @__PURE__ */ Struct(
 }).annotate({
   title: "ResponseTextEditorCodeExecutionToolResultError"
 });
-var BetaResponseToolSearchToolResultError = /* @__PURE__ */ Struct({
+var BetaResponseToolSearchToolResultError = /* @__PURE__ */ Struct2({
   error_code: BetaToolSearchToolResultErrorCode,
   error_message: Union2([String6, Null2]).annotate({
     title: "Error Message",
@@ -45757,7 +46446,7 @@ var BetaResponseToolSearchToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolSearchToolResultError"
 });
-var BetaResponseWebFetchToolResultError = /* @__PURE__ */ Struct({
+var BetaResponseWebFetchToolResultError = /* @__PURE__ */ Struct2({
   error_code: BetaWebFetchToolResultErrorCode,
   type: Literal2("web_fetch_tool_result_error").annotate({
     title: "Type",
@@ -45766,7 +46455,7 @@ var BetaResponseWebFetchToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebFetchToolResultError"
 });
-var BetaResponseWebSearchToolResultError = /* @__PURE__ */ Struct({
+var BetaResponseWebSearchToolResultError = /* @__PURE__ */ Struct2({
   error_code: BetaWebSearchToolResultErrorCode,
   type: Literal2("web_search_tool_result_error").annotate({
     title: "Type",
@@ -45775,7 +46464,7 @@ var BetaResponseWebSearchToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchToolResultError"
 });
-var BetaListSkillsResponse = /* @__PURE__ */ Struct({
+var BetaListSkillsResponse = /* @__PURE__ */ Struct2({
   data: ArraySchema(Betaapi__schemas__skills__Skill).annotate({
     title: "Data",
     description: "List of skills."
@@ -45791,7 +46480,7 @@ var BetaListSkillsResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListSkillsResponse"
 });
-var ResponseCodeExecutionToolResultError = /* @__PURE__ */ Struct({
+var ResponseCodeExecutionToolResultError = /* @__PURE__ */ Struct2({
   error_code: CodeExecutionToolResultErrorCode,
   type: Literal2("code_execution_tool_result_error").annotate({
     title: "Type",
@@ -45800,7 +46489,7 @@ var ResponseCodeExecutionToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionToolResultError"
 });
-var FileListResponse = /* @__PURE__ */ Struct({
+var FileListResponse = /* @__PURE__ */ Struct2({
   data: ArraySchema(FileMetadataSchema).annotate({
     title: "Data",
     description: "List of file metadata objects."
@@ -45821,7 +46510,7 @@ var FileListResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "FileListResponse"
 });
-var ListResponse_MessageBatch_ = /* @__PURE__ */ Struct({
+var ListResponse_MessageBatch_ = /* @__PURE__ */ Struct2({
   data: ArraySchema(MessageBatch).annotate({
     title: "Data"
   }),
@@ -45840,7 +46529,7 @@ var ListResponse_MessageBatch_ = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListResponse[MessageBatch]"
 });
-var ListResponse_ModelInfo_ = /* @__PURE__ */ Struct({
+var ListResponse_ModelInfo_ = /* @__PURE__ */ Struct2({
   data: ArraySchema(ModelInfo).annotate({
     title: "Data"
   }),
@@ -45859,7 +46548,7 @@ var ListResponse_ModelInfo_ = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListResponse[ModelInfo]"
 });
-var ErrorResponse = /* @__PURE__ */ Struct({
+var ErrorResponse = /* @__PURE__ */ Struct2({
   error: Union2([InvalidRequestError2, AuthenticationError2, BillingError, PermissionError, NotFoundError, RateLimitError2, GatewayTimeoutError, APIError, OverloadedError], {
     mode: "oneOf"
   }).annotate({
@@ -45876,7 +46565,7 @@ var ErrorResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ErrorResponse"
 });
-var ResponseBashCodeExecutionResultBlock = /* @__PURE__ */ Struct({
+var ResponseBashCodeExecutionResultBlock = /* @__PURE__ */ Struct2({
   content: ArraySchema(ResponseBashCodeExecutionOutputBlock).annotate({
     title: "Content"
   }),
@@ -45896,7 +46585,7 @@ var ResponseBashCodeExecutionResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionResultBlock"
 });
-var ResponseDocumentBlock = /* @__PURE__ */ Struct({
+var ResponseDocumentBlock = /* @__PURE__ */ Struct2({
   citations: Union2([ResponseCitationsConfig, Null2]).annotate({
     description: "Citation configuration for the document",
     default: null
@@ -45918,7 +46607,7 @@ var ResponseDocumentBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseDocumentBlock"
 });
-var ResponseCodeExecutionResultBlock = /* @__PURE__ */ Struct({
+var ResponseCodeExecutionResultBlock = /* @__PURE__ */ Struct2({
   content: ArraySchema(ResponseCodeExecutionOutputBlock).annotate({
     title: "Content"
   }),
@@ -45938,7 +46627,7 @@ var ResponseCodeExecutionResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionResultBlock"
 });
-var ResponseEncryptedCodeExecutionResultBlock = /* @__PURE__ */ Struct({
+var ResponseEncryptedCodeExecutionResultBlock = /* @__PURE__ */ Struct2({
   content: ArraySchema(ResponseCodeExecutionOutputBlock).annotate({
     title: "Content"
   }),
@@ -45959,7 +46648,7 @@ var ResponseEncryptedCodeExecutionResultBlock = /* @__PURE__ */ Struct({
   title: "ResponseEncryptedCodeExecutionResultBlock",
   description: "Code execution result with encrypted stdout for PFC + web_search results."
 });
-var ResponseToolSearchToolSearchResultBlock = /* @__PURE__ */ Struct({
+var ResponseToolSearchToolSearchResultBlock = /* @__PURE__ */ Struct2({
   tool_references: ArraySchema(ResponseToolReferenceBlock).annotate({
     title: "Tool References"
   }),
@@ -45970,7 +46659,7 @@ var ResponseToolSearchToolSearchResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolSearchToolSearchResultBlock"
 });
-var ResponseTextBlock = /* @__PURE__ */ Struct({
+var ResponseTextBlock = /* @__PURE__ */ Struct2({
   citations: optionalKey2(Union2([ArraySchema(Union2([ResponseCharLocationCitation, ResponsePageLocationCitation, ResponseContentBlockLocationCitation, ResponseWebSearchResultLocationCitation, ResponseSearchResultLocationCitation], {
     mode: "oneOf"
   })), Null2]).annotate({
@@ -45988,7 +46677,7 @@ var ResponseTextBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseTextBlock"
 });
-var ResponseServerToolUseBlock = /* @__PURE__ */ Struct({
+var ResponseServerToolUseBlock = /* @__PURE__ */ Struct2({
   caller: Union2([DirectCaller, ServerToolCaller, ServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -46013,7 +46702,7 @@ var ResponseServerToolUseBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseServerToolUseBlock"
 });
-var ResponseToolUseBlock = /* @__PURE__ */ Struct({
+var ResponseToolUseBlock = /* @__PURE__ */ Struct2({
   caller: Union2([DirectCaller, ServerToolCaller, ServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -46038,7 +46727,7 @@ var ResponseToolUseBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolUseBlock"
 });
-var ListSkillsResponse = /* @__PURE__ */ Struct({
+var ListSkillsResponse = /* @__PURE__ */ Struct2({
   data: ArraySchema(Skill).annotate({
     title: "Data",
     description: "List of skills."
@@ -46054,7 +46743,7 @@ var ListSkillsResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListSkillsResponse"
 });
-var ListSkillVersionsResponse = /* @__PURE__ */ Struct({
+var ListSkillVersionsResponse = /* @__PURE__ */ Struct2({
   data: ArraySchema(SkillVersion).annotate({
     title: "Data",
     description: "List of skill versions."
@@ -46070,7 +46759,7 @@ var ListSkillVersionsResponse = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ListSkillVersionsResponse"
 });
-var ResponseTextEditorCodeExecutionToolResultError = /* @__PURE__ */ Struct({
+var ResponseTextEditorCodeExecutionToolResultError = /* @__PURE__ */ Struct2({
   error_code: TextEditorCodeExecutionToolResultErrorCode,
   error_message: Union2([String6, Null2]).annotate({
     title: "Error Message",
@@ -46083,7 +46772,7 @@ var ResponseTextEditorCodeExecutionToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseTextEditorCodeExecutionToolResultError"
 });
-var ResponseToolSearchToolResultError = /* @__PURE__ */ Struct({
+var ResponseToolSearchToolResultError = /* @__PURE__ */ Struct2({
   error_code: ToolSearchToolResultErrorCode,
   error_message: Union2([String6, Null2]).annotate({
     title: "Error Message",
@@ -46096,7 +46785,7 @@ var ResponseToolSearchToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolSearchToolResultError"
 });
-var ResponseWebFetchToolResultError = /* @__PURE__ */ Struct({
+var ResponseWebFetchToolResultError = /* @__PURE__ */ Struct2({
   error_code: WebFetchToolResultErrorCode,
   type: Literal2("web_fetch_tool_result_error").annotate({
     title: "Type",
@@ -46105,7 +46794,7 @@ var ResponseWebFetchToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebFetchToolResultError"
 });
-var ResponseWebSearchToolResultError = /* @__PURE__ */ Struct({
+var ResponseWebSearchToolResultError = /* @__PURE__ */ Struct2({
   error_code: WebSearchToolResultErrorCode,
   type: Literal2("web_search_tool_result_error").annotate({
     title: "Type",
@@ -46114,7 +46803,7 @@ var ResponseWebSearchToolResultError = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchToolResultError"
 });
-var CompletionResponse = /* @__PURE__ */ Struct({
+var CompletionResponse = /* @__PURE__ */ Struct2({
   completion: String6.annotate({
     title: "Completion",
     description: "The resulting completion up to and excluding the stop sequences."
@@ -46148,7 +46837,7 @@ Each entry represents one sampling iteration, with its own input/output token co
 - Understand token accumulation across server-side tool use loops`,
   default: null
 });
-var BetaResponseBashCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseBashCodeExecutionToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([BetaResponseBashCodeExecutionToolResultError, BetaResponseBashCodeExecutionResultBlock]).annotate({
     title: "Content"
   }),
@@ -46162,7 +46851,7 @@ var BetaResponseBashCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionToolResultBlock"
 });
-var BetaResponseWebFetchResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseWebFetchResultBlock = /* @__PURE__ */ Struct2({
   content: BetaResponseDocumentBlock,
   retrieved_at: Union2([String6, Null2]).annotate({
     title: "Retrieved At",
@@ -46180,7 +46869,7 @@ var BetaResponseWebFetchResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebFetchResultBlock"
 });
-var BetaResponseCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseCodeExecutionToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([BetaResponseCodeExecutionToolResultError, BetaResponseCodeExecutionResultBlock, BetaResponseEncryptedCodeExecutionResultBlock]).annotate({
     title: "Content"
   }),
@@ -46194,7 +46883,7 @@ var BetaResponseCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionToolResultBlock"
 });
-var BetaContentBlockDeltaEvent = /* @__PURE__ */ Struct({
+var BetaContentBlockDeltaEvent = /* @__PURE__ */ Struct2({
   delta: Union2([BetaTextContentBlockDelta, BetaInputJsonContentBlockDelta, BetaCitationsDelta, BetaThinkingContentBlockDelta, BetaSignatureContentBlockDelta, BetaCompactionContentBlockDelta], {
     mode: "oneOf"
   }).annotate({
@@ -46210,7 +46899,7 @@ var BetaContentBlockDeltaEvent = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ContentBlockDeltaEvent"
 });
-var BetaMessageDelta = /* @__PURE__ */ Struct({
+var BetaMessageDelta = /* @__PURE__ */ Struct2({
   container: optionalKey2(Union2([BetaContainer, Null2]).annotate({
     description: `Information about the container used in this request.
 
@@ -46228,7 +46917,7 @@ This will be non-null if a container tool (e.g. code execution) was used.`,
 }).annotate({
   title: "MessageDelta"
 });
-var BetaResponseTextEditorCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseTextEditorCodeExecutionToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([BetaResponseTextEditorCodeExecutionToolResultError, BetaResponseTextEditorCodeExecutionViewResultBlock, BetaResponseTextEditorCodeExecutionCreateResultBlock, BetaResponseTextEditorCodeExecutionStrReplaceResultBlock]).annotate({
     title: "Content"
   }),
@@ -46242,7 +46931,7 @@ var BetaResponseTextEditorCodeExecutionToolResultBlock = /* @__PURE__ */ Struct(
 }).annotate({
   title: "ResponseTextEditorCodeExecutionToolResultBlock"
 });
-var BetaResponseToolSearchToolResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseToolSearchToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([BetaResponseToolSearchToolResultError, BetaResponseToolSearchToolSearchResultBlock]).annotate({
     title: "Content"
   }),
@@ -46256,7 +46945,7 @@ var BetaResponseToolSearchToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolSearchToolResultBlock"
 });
-var BetaResponseWebSearchToolResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseWebSearchToolResultBlock = /* @__PURE__ */ Struct2({
   caller: optionalKey2(Union2([BetaDirectCaller, BetaServerToolCaller, BetaServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -46275,7 +46964,7 @@ var BetaResponseWebSearchToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchToolResultBlock"
 });
-var ResponseBashCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
+var ResponseBashCodeExecutionToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([ResponseBashCodeExecutionToolResultError, ResponseBashCodeExecutionResultBlock]).annotate({
     title: "Content"
   }),
@@ -46289,7 +46978,7 @@ var ResponseBashCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseBashCodeExecutionToolResultBlock"
 });
-var ResponseWebFetchResultBlock = /* @__PURE__ */ Struct({
+var ResponseWebFetchResultBlock = /* @__PURE__ */ Struct2({
   content: ResponseDocumentBlock,
   retrieved_at: Union2([String6, Null2]).annotate({
     title: "Retrieved At",
@@ -46307,7 +46996,7 @@ var ResponseWebFetchResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebFetchResultBlock"
 });
-var ResponseCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
+var ResponseCodeExecutionToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([ResponseCodeExecutionToolResultError, ResponseCodeExecutionResultBlock, ResponseEncryptedCodeExecutionResultBlock]).annotate({
     title: "Content"
   }),
@@ -46321,7 +47010,7 @@ var ResponseCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseCodeExecutionToolResultBlock"
 });
-var ResponseTextEditorCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
+var ResponseTextEditorCodeExecutionToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([ResponseTextEditorCodeExecutionToolResultError, ResponseTextEditorCodeExecutionViewResultBlock, ResponseTextEditorCodeExecutionCreateResultBlock, ResponseTextEditorCodeExecutionStrReplaceResultBlock]).annotate({
     title: "Content"
   }),
@@ -46335,7 +47024,7 @@ var ResponseTextEditorCodeExecutionToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseTextEditorCodeExecutionToolResultBlock"
 });
-var ResponseToolSearchToolResultBlock = /* @__PURE__ */ Struct({
+var ResponseToolSearchToolResultBlock = /* @__PURE__ */ Struct2({
   content: Union2([ResponseToolSearchToolResultError, ResponseToolSearchToolSearchResultBlock]).annotate({
     title: "Content"
   }),
@@ -46349,7 +47038,7 @@ var ResponseToolSearchToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseToolSearchToolResultBlock"
 });
-var ResponseWebSearchToolResultBlock = /* @__PURE__ */ Struct({
+var ResponseWebSearchToolResultBlock = /* @__PURE__ */ Struct2({
   caller: Union2([DirectCaller, ServerToolCaller, ServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -46371,7 +47060,7 @@ var ResponseWebSearchToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebSearchToolResultBlock"
 });
-var BetaResponseWebFetchToolResultBlock = /* @__PURE__ */ Struct({
+var BetaResponseWebFetchToolResultBlock = /* @__PURE__ */ Struct2({
   caller: optionalKey2(Union2([BetaDirectCaller, BetaServerToolCaller, BetaServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -46390,7 +47079,7 @@ var BetaResponseWebFetchToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebFetchToolResultBlock"
 });
-var BetaMessageDeltaEvent = /* @__PURE__ */ Struct({
+var BetaMessageDeltaEvent = /* @__PURE__ */ Struct2({
   context_management: optionalKey2(Union2([BetaResponseContextManagement, Null2]).annotate({
     description: "Information about context management strategies applied during the request",
     default: null
@@ -46400,7 +47089,7 @@ var BetaMessageDeltaEvent = /* @__PURE__ */ Struct({
     title: "Type",
     default: "message_delta"
   }),
-  usage: Struct({
+  usage: Struct2({
     cache_creation_input_tokens: Union2([Number6.check(isInt()).check(isGreaterThanOrEqualTo5(0)), Null2]).annotate({
       title: "Cache Creation Input Tokens",
       description: "The cumulative number of input tokens used to create the cache entry.",
@@ -46432,7 +47121,7 @@ var BetaMessageDeltaEvent = /* @__PURE__ */ Struct({
 }).annotate({
   title: "MessageDeltaEvent"
 });
-var ResponseWebFetchToolResultBlock = /* @__PURE__ */ Struct({
+var ResponseWebFetchToolResultBlock = /* @__PURE__ */ Struct2({
   caller: Union2([DirectCaller, ServerToolCaller, ServerToolCaller_20260120], {
     mode: "oneOf"
   }).annotate({
@@ -46454,7 +47143,7 @@ var ResponseWebFetchToolResultBlock = /* @__PURE__ */ Struct({
 }).annotate({
   title: "ResponseWebFetchToolResultBlock"
 });
-var BetaContentBlockStartEvent = /* @__PURE__ */ Struct({
+var BetaContentBlockStartEvent = /* @__PURE__ */ Struct2({
   content_block: Union2([BetaResponseTextBlock, BetaResponseThinkingBlock, BetaResponseRedactedThinkingBlock, BetaResponseToolUseBlock, BetaResponseServerToolUseBlock, BetaResponseWebSearchToolResultBlock, BetaResponseWebFetchToolResultBlock, BetaResponseCodeExecutionToolResultBlock, BetaResponseBashCodeExecutionToolResultBlock, BetaResponseTextEditorCodeExecutionToolResultBlock, BetaResponseToolSearchToolResultBlock, BetaResponseMCPToolUseBlock, BetaResponseMCPToolResultBlock, BetaResponseContainerUploadBlock, BetaResponseCompactionBlock], {
     mode: "oneOf"
   }).annotate({
@@ -46476,7 +47165,7 @@ var BetaContentBlock = /* @__PURE__ */ Union2([BetaResponseTextBlock, BetaRespon
 var ContentBlock2 = /* @__PURE__ */ Union2([ResponseTextBlock, ResponseThinkingBlock, ResponseRedactedThinkingBlock, ResponseToolUseBlock, ResponseServerToolUseBlock, ResponseWebSearchToolResultBlock, ResponseWebFetchToolResultBlock, ResponseCodeExecutionToolResultBlock, ResponseBashCodeExecutionToolResultBlock, ResponseTextEditorCodeExecutionToolResultBlock, ResponseToolSearchToolResultBlock, ResponseContainerUploadBlock], {
   mode: "oneOf"
 });
-var BetaMessage = /* @__PURE__ */ Struct({
+var BetaMessage = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: `Unique object identifier.
@@ -46509,7 +47198,7 @@ The format and length of IDs may change over time.`
 This value will be a non-null string if one of your custom stop sequences was generated.`,
     default: null
   }),
-  usage: Struct({
+  usage: Struct2({
     cache_creation: Union2([BetaCacheCreation, Null2]).annotate({
       description: "Breakdown of cached tokens by TTL",
       default: null
@@ -46570,7 +47259,7 @@ This will be non-null if a container tool (e.g. code execution) was used.`,
 }).annotate({
   title: "Message"
 });
-var Message2 = /* @__PURE__ */ Struct({
+var Message2 = /* @__PURE__ */ Struct2({
   id: String6.annotate({
     title: "Id",
     description: `Unique object identifier.
@@ -46603,7 +47292,7 @@ The format and length of IDs may change over time.`
 This value will be a non-null string if one of your custom stop sequences was generated.`,
     default: null
   }),
-  usage: Struct({
+  usage: Struct2({
     cache_creation: Union2([CacheCreation, Null2]).annotate({
       description: "Breakdown of cached tokens by TTL",
       default: null
@@ -46653,7 +47342,7 @@ This will be non-null if a container tool (e.g. code execution) was used.`,
 }).annotate({
   title: "Message"
 });
-var BetaMessageStartEvent = /* @__PURE__ */ Struct({
+var BetaMessageStartEvent = /* @__PURE__ */ Struct2({
   message: BetaMessage,
   type: Literal2("message_start").annotate({
     title: "Type",
@@ -46750,7 +47439,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make58 = (httpClient, options3 = {}) => {
+var make59 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail6(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -47222,19 +47911,19 @@ var AnthropicClientError = (tag2, cause, response) => new AnthropicClientErrorIm
 });
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/internal/errors.js
-var AnthropicErrorBody = /* @__PURE__ */ Struct({
+var AnthropicErrorBody = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("error"),
-  error: /* @__PURE__ */ Struct({
+  error: /* @__PURE__ */ Struct2({
     type: String6,
     message: String6
   })
 });
-var mapSchemaError = /* @__PURE__ */ dual(2, (error2, method) => make44({
+var mapSchemaError = /* @__PURE__ */ dual(2, (error2, method) => make45({
   module: "AnthropicClient",
   method,
   reason: InvalidOutputError.fromSchemaError(error2)
 }));
-var mapSseError = /* @__PURE__ */ dual(2, (error2, method) => make44({
+var mapSseError = /* @__PURE__ */ dual(2, (error2, method) => make45({
   module: "AnthropicClient",
   method,
   reason: new InvalidOutputError({
@@ -47265,7 +47954,7 @@ var mapClientError = /* @__PURE__ */ dual(2, (error2, method) => {
     metadata,
     http
   });
-  return make44({
+  return make45({
     module: "AnthropicClient",
     method,
     reason
@@ -47275,7 +47964,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
   const reason = error2.reason;
   switch (reason._tag) {
     case "TransportError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "AnthropicClient",
         method,
         reason: new NetworkError({
@@ -47286,7 +47975,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EncodeError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "AnthropicClient",
         method,
         reason: new NetworkError({
@@ -47297,7 +47986,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "InvalidUrlError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "AnthropicClient",
         method,
         reason: new NetworkError({
@@ -47311,7 +48000,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       return mapStatusCodeError(reason, method);
     }
     case "DecodeError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "AnthropicClient",
         method,
         reason: new InvalidOutputError({
@@ -47320,7 +48009,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EmptyBodyError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "AnthropicClient",
         method,
         reason: new InvalidOutputError({
@@ -47367,7 +48056,7 @@ var mapStatusCodeError = /* @__PURE__ */ fnUntraced2(function* (error2, method) 
       requestId: requestId ?? null
     }
   });
-  return yield* make44({
+  return yield* make45({
     module: "AnthropicClient",
     method,
     reason
@@ -47539,11 +48228,11 @@ var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make59 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make60 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make58(httpClient, {
+  const client = make59(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -47564,7 +48253,7 @@ var make59 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     HttpClientError: (error2) => mapHttpClientError(error2, "createMessage"),
     SchemaError: (error2) => fail6(mapSchemaError(error2, "createMessage"))
   }), withRedactedHeaders);
-  const PingEvent = Struct({
+  const PingEvent = Struct2({
     type: Literal2("ping")
   });
   const MessageEvent = Union2([PingEvent, BetaMessageStartEvent, BetaMessageDeltaEvent, BetaMessageStopEvent, BetaContentBlockStartEvent, BetaContentBlockDeltaEvent, BetaContentBlockStopEvent, BetaErrorResponse]);
@@ -47597,12 +48286,12 @@ var make59 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer16 = (options3) => effect(AnthropicClient, make59(options3));
+var layer17 = (options3) => effect(AnthropicClient, make60(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make59({
+  return yield* make60({
     apiKey,
     apiUrl,
     apiVersion,
@@ -47614,8 +48303,8 @@ var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
-  make: () => make61,
-  layer: () => layer17,
+  make: () => make62,
+  layer: () => layer18,
   Config: () => Config
 });
 
@@ -48227,7 +48916,7 @@ function hoistAllOfDescriptions(schema3) {
       continue;
     const {
       description,
-      format: format7,
+      format: format8,
       title,
       ...memberRest
     } = member;
@@ -48239,8 +48928,8 @@ function hoistAllOfDescriptions(schema3) {
     if (typeof description === "string") {
       appendDescription(out, description);
     }
-    if (out.format === undefined && typeof format7 === "string")
-      out.format = format7;
+    if (out.format === undefined && typeof format8 === "string")
+      out.format = format8;
     if (out.title === undefined && typeof title === "string")
       out.title = title;
     if (Object.keys(rest).length > 0)
@@ -48254,7 +48943,7 @@ var supportedKeywords2 = /* @__PURE__ */ new Set(["$ref", "type", "title", "desc
 var formats2 = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"]);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Model.js
-var TypeId58 = "~effect/ai/Model";
+var TypeId59 = "~effect/ai/Model";
 
 class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
 }
@@ -48262,7 +48951,7 @@ class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/
 class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
 }
 var Proto19 = {
-  [TypeId58]: TypeId58,
+  [TypeId59]: TypeId59,
   ["~effect/Layer"]: {
     _ROut: identity,
     _E: identity,
@@ -48280,9 +48969,9 @@ var Proto19 = {
     };
   }
 };
-var make60 = (provider, modelName, layer17) => Object.assign(Object.create(Proto19), {
+var make61 = (provider, modelName, layer18) => Object.assign(Object.create(Proto19), {
   provider
-}, merge3(layer17, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
+}, merge3(layer18, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
@@ -48324,11 +49013,11 @@ var formatIssue = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make60("anthropic", model2, layer17({
+var model = (model2, config) => make61("anthropic", model2, layer18({
   model: model2,
   config
 }));
-var make61 = /* @__PURE__ */ fnUntraced2(function* ({
+var make62 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
@@ -48407,7 +49096,7 @@ var make61 = /* @__PURE__ */ fnUntraced2(function* ({
       payload
     };
   });
-  return yield* make49({
+  return yield* make50({
     codecTransformer: toCodecAnthropic,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -48449,7 +49138,7 @@ var make61 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer17 = (options3) => effect(LanguageModel, make61(options3));
+var layer18 = (options3) => effect(LanguageModel, make62(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -48962,7 +49651,7 @@ var prepareTools = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         default: {
-          return yield* make44({
+          return yield* make45({
             module: "AnthropicLanguageModel",
             method: "prepareTools",
             reason: new InvalidUserInputError({
@@ -50184,7 +50873,7 @@ var getModelCapabilities = (modelId) => {
     };
   }
 };
-var unsupportedSchemaError = (error2, method) => make44({
+var unsupportedSchemaError = (error2, method) => make45({
   module: "AnthropicLanguageModel",
   method,
   reason: new UnsupportedSchemaError({
@@ -50223,7 +50912,7 @@ var getOutputFormat = /* @__PURE__ */ fnUntraced2(function* ({
 var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, toolName, toolParams) {
   const tool = tools.find((tool2) => tool2.name === toolName);
   if (isUndefined(tool)) {
-    return yield* make44({
+    return yield* make45({
       module: "AnthropicLanguageModel",
       method: "makeResponse",
       reason: new ToolNotFoundError({
@@ -50236,7 +50925,7 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
     codec
   } = yield* tryCodecTransform(tool.parametersSchema, "makeResponse");
   const transform6 = decodeEffect2(codec);
-  return yield* transform6(toolParams).pipe(mapError4((error2) => make44({
+  return yield* transform6(toolParams).pipe(mapError4((error2) => make45({
     module: "AnthropicLanguageModel",
     method: "makeResponse",
     reason: new ToolParameterValidationError({
@@ -50250,19 +50939,19 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
 var exports_OpenAiClient = {};
 __export(exports_OpenAiClient, {
   withWebSocketMode: () => withWebSocketMode,
-  make: () => make63,
+  make: () => make64,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig2,
-  layer: () => layer18,
+  layer: () => layer19,
   OpenAiSocket: () => OpenAiSocket,
   OpenAiClient: () => OpenAiClient
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/socket/Socket.js
-var TypeId59 = "~effect/socket/Socket";
+var TypeId60 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make62 = (options3) => Socket.of({
-  [TypeId59]: TypeId59,
+var make63 = (options3) => Socket.of({
+  [TypeId60]: TypeId60,
   runRaw: options3.runRaw,
   run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
   runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
@@ -50353,7 +51042,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   const acquireContext = fiber3.context;
   const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
   const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make45().pipe(provide(scope3));
+    const fiberSet = yield* make46().pipe(provide(scope3));
     const ws = yield* provide(acquire, scope3);
     const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
     let open3 = false;
@@ -50451,27 +51140,27 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
   }));
   const writer = succeed6(write2);
-  return succeed6(make62({
+  return succeed6(make63({
     runRaw,
     writer
   }));
 });
 
 // node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/internal/errors.js
-var OpenAiErrorBody = /* @__PURE__ */ Struct({
-  error: /* @__PURE__ */ Struct({
+var OpenAiErrorBody = /* @__PURE__ */ Struct2({
+  error: /* @__PURE__ */ Struct2({
     message: String6,
     type: /* @__PURE__ */ optional2(/* @__PURE__ */ NullOr(String6)),
     param: /* @__PURE__ */ optional2(/* @__PURE__ */ NullOr(String6)),
     code: /* @__PURE__ */ optional2(/* @__PURE__ */ NullOr(String6))
   })
 });
-var mapSchemaError2 = /* @__PURE__ */ dual(2, (error2, method) => make44({
+var mapSchemaError2 = /* @__PURE__ */ dual(2, (error2, method) => make45({
   module: "OpenAiClient",
   method,
   reason: InvalidOutputError.fromSchemaError(error2)
 }));
-var mapSseError2 = /* @__PURE__ */ dual(2, (error2, method) => make44({
+var mapSseError2 = /* @__PURE__ */ dual(2, (error2, method) => make45({
   module: "OpenAiClient",
   method,
   reason: new InvalidOutputError({
@@ -50482,7 +51171,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
   const reason = error2.reason;
   switch (reason._tag) {
     case "TransportError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "OpenAiClient",
         method,
         reason: new NetworkError({
@@ -50493,7 +51182,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EncodeError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "OpenAiClient",
         method,
         reason: new NetworkError({
@@ -50504,7 +51193,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "InvalidUrlError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "OpenAiClient",
         method,
         reason: new NetworkError({
@@ -50518,7 +51207,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       return mapStatusCodeError2(reason, method);
     }
     case "DecodeError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "OpenAiClient",
         method,
         reason: new InvalidOutputError({
@@ -50527,7 +51216,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EmptyBodyError": {
-      return fail6(make44({
+      return fail6(make45({
         module: "OpenAiClient",
         method,
         reason: new InvalidOutputError({
@@ -50575,7 +51264,7 @@ var mapStatusCodeError2 = /* @__PURE__ */ fnUntraced2(function* (error2, method)
       requestId: requestId ?? null
     }
   });
-  return yield* make44({
+  return yield* make45({
     module: "OpenAiClient",
     method,
     reason
@@ -50741,58 +51430,58 @@ class OpenAiConfig extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiC
 var UnknownRecord = /* @__PURE__ */ Record(String6, Unknown2);
 var ImageDetail = /* @__PURE__ */ Literals(["low", "high", "auto"]);
 var MessageStatus = /* @__PURE__ */ Literals(["in_progress", "completed", "incomplete"]);
-var InputTextContent = /* @__PURE__ */ Struct({
+var InputTextContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("input_text"),
   text: String6
 });
-var InputImageContent = /* @__PURE__ */ Struct({
+var InputImageContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("input_image"),
   image_url: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6)),
   file_id: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6)),
   detail: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(ImageDetail))
 });
-var InputFileContent = /* @__PURE__ */ Struct({
+var InputFileContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("input_file"),
   file_id: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6)),
   filename: /* @__PURE__ */ optionalKey2(String6),
   file_url: /* @__PURE__ */ optionalKey2(String6),
   file_data: /* @__PURE__ */ optionalKey2(String6)
 });
-var SummaryTextContent = /* @__PURE__ */ Struct({
+var SummaryTextContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("summary_text"),
   text: String6
 });
-var ReasoningTextContent = /* @__PURE__ */ Struct({
+var ReasoningTextContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("reasoning_text"),
   text: String6
 });
-var RefusalContent = /* @__PURE__ */ Struct({
+var RefusalContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("refusal"),
   refusal: String6
 });
-var TextContent2 = /* @__PURE__ */ Struct({
+var TextContent2 = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("text"),
   text: String6
 });
-var ComputerScreenshotContent = /* @__PURE__ */ Struct({
+var ComputerScreenshotContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("computer_screenshot"),
   image_url: /* @__PURE__ */ NullOr(String6),
   file_id: /* @__PURE__ */ NullOr(String6)
 });
-var FileCitationAnnotation = /* @__PURE__ */ Struct({
+var FileCitationAnnotation = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("file_citation"),
   file_id: String6,
   index: Int,
   filename: String6
 });
-var UrlCitationAnnotation = /* @__PURE__ */ Struct({
+var UrlCitationAnnotation = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("url_citation"),
   url: String6,
   start_index: Int,
   end_index: Int,
   title: String6
 });
-var ContainerFileCitationAnnotation = /* @__PURE__ */ Struct({
+var ContainerFileCitationAnnotation = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("container_file_citation"),
   container_id: String6,
   file_id: String6,
@@ -50800,27 +51489,27 @@ var ContainerFileCitationAnnotation = /* @__PURE__ */ Struct({
   end_index: Int,
   filename: String6
 });
-var FilePathAnnotation = /* @__PURE__ */ Struct({
+var FilePathAnnotation = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("file_path"),
   file_id: String6,
   index: Int
 });
 var Annotation = /* @__PURE__ */ Union2([FileCitationAnnotation, UrlCitationAnnotation, ContainerFileCitationAnnotation, FilePathAnnotation]);
-var OutputTextContent = /* @__PURE__ */ Struct({
+var OutputTextContent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("output_text"),
   text: String6,
   annotations: /* @__PURE__ */ ArraySchema(Annotation),
   logprobs: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ ArraySchema(Unknown2))
 });
 var OutputMessageContent = /* @__PURE__ */ Union2([InputTextContent, OutputTextContent, TextContent2, SummaryTextContent, ReasoningTextContent, RefusalContent, InputImageContent, ComputerScreenshotContent, InputFileContent]);
-var OutputMessage = /* @__PURE__ */ Struct({
+var OutputMessage = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("message"),
   role: /* @__PURE__ */ Literal2("assistant"),
   content: /* @__PURE__ */ ArraySchema(OutputMessageContent),
   status: MessageStatus
 });
-var ReasoningItem = /* @__PURE__ */ Struct({
+var ReasoningItem = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("reasoning"),
   id: String6,
   encrypted_content: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6)),
@@ -50828,7 +51517,7 @@ var ReasoningItem = /* @__PURE__ */ Struct({
   content: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ ArraySchema(ReasoningTextContent)),
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var FunctionCall = /* @__PURE__ */ Struct({
+var FunctionCall = /* @__PURE__ */ Struct2({
   id: /* @__PURE__ */ optionalKey2(String6),
   type: /* @__PURE__ */ Literal2("function_call"),
   call_id: String6,
@@ -50836,40 +51525,40 @@ var FunctionCall = /* @__PURE__ */ Struct({
   arguments: String6,
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var LocalShellCall = /* @__PURE__ */ Struct({
+var LocalShellCall = /* @__PURE__ */ Struct2({
   id: /* @__PURE__ */ optionalKey2(String6),
   type: /* @__PURE__ */ Literal2("local_shell_call"),
   call_id: String6,
   action: Unknown2,
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var ShellCall = /* @__PURE__ */ Struct({
+var ShellCall = /* @__PURE__ */ Struct2({
   id: /* @__PURE__ */ optionalKey2(String6),
   type: /* @__PURE__ */ Literal2("shell_call"),
   call_id: String6,
   action: Unknown2,
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var ResponseUsage = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct({
+var ResponseUsage = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
   input_tokens: Int,
   output_tokens: Int,
   total_tokens: Int,
   input_tokens_details: /* @__PURE__ */ optionalKey2(Unknown2),
   output_tokens_details: /* @__PURE__ */ optionalKey2(Unknown2)
 }), [UnknownRecord]);
-var ApplyPatchOperation = /* @__PURE__ */ Struct({
+var ApplyPatchOperation = /* @__PURE__ */ Struct2({
   type: String6,
   path: String6,
   diff: /* @__PURE__ */ optionalKey2(String6)
 });
-var ApplyPatchCall = /* @__PURE__ */ Struct({
+var ApplyPatchCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("apply_patch_call"),
   call_id: String6,
   operation: ApplyPatchOperation,
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var CodeInterpreterCall = /* @__PURE__ */ Struct({
+var CodeInterpreterCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("code_interpreter_call"),
   code: /* @__PURE__ */ optionalKey2(String6),
@@ -50877,25 +51566,25 @@ var CodeInterpreterCall = /* @__PURE__ */ Struct({
   outputs: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ ArraySchema(Unknown2)),
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var ComputerCall = /* @__PURE__ */ Struct({
+var ComputerCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("computer_call"),
   status: /* @__PURE__ */ optionalKey2(MessageStatus)
 });
-var FileSearchCall = /* @__PURE__ */ Struct({
+var FileSearchCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("file_search_call"),
   status: /* @__PURE__ */ optionalKey2(String6),
   queries: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ ArraySchema(String6)),
   results: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(Unknown2))
 });
-var ImageGenerationCall = /* @__PURE__ */ Struct({
+var ImageGenerationCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("image_generation_call"),
   result: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6)),
   status: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ Literals(["in_progress", "completed", "generating", "failed"]))
 });
-var McpCall = /* @__PURE__ */ Struct({
+var McpCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("mcp_call"),
   approval_request_id: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6)),
@@ -50905,29 +51594,29 @@ var McpCall = /* @__PURE__ */ Struct({
   error: /* @__PURE__ */ optionalKey2(Unknown2),
   server_label: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(String6))
 });
-var McpListTools = /* @__PURE__ */ Struct({
+var McpListTools = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("mcp_list_tools")
 });
-var McpApprovalRequest = /* @__PURE__ */ Struct({
+var McpApprovalRequest = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("mcp_approval_request"),
   approval_request_id: /* @__PURE__ */ optionalKey2(String6),
   name: String6,
   arguments: Unknown2
 });
-var WebSearchCall = /* @__PURE__ */ Struct({
+var WebSearchCall = /* @__PURE__ */ Struct2({
   id: String6,
   type: /* @__PURE__ */ Literal2("web_search_call"),
   action: /* @__PURE__ */ optionalKey2(Unknown2),
   status: /* @__PURE__ */ optionalKey2(String6)
 });
 var OutputItem = /* @__PURE__ */ Union2([ApplyPatchCall, CodeInterpreterCall, ComputerCall, FileSearchCall, FunctionCall, ImageGenerationCall, LocalShellCall, McpCall, McpListTools, McpApprovalRequest, OutputMessage, ReasoningItem, ShellCall, WebSearchCall]);
-var ResponseError = /* @__PURE__ */ Struct({
+var ResponseError = /* @__PURE__ */ Struct2({
   code: String6,
   message: String6
 });
-var Response2 = /* @__PURE__ */ Struct({
+var Response2 = /* @__PURE__ */ Struct2({
   id: String6,
   object: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ Literal2("response")),
   model: String6,
@@ -50935,44 +51624,44 @@ var Response2 = /* @__PURE__ */ Struct({
   output: /* @__PURE__ */ ArraySchema(OutputItem).pipe(/* @__PURE__ */ withDecodingDefault(/* @__PURE__ */ succeed6([]))),
   usage: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(ResponseUsage)),
   error: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(ResponseError)),
-  incomplete_details: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(/* @__PURE__ */ Struct({
+  incomplete_details: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ NullOr(/* @__PURE__ */ Struct2({
     reason: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ Literals(["max_output_tokens", "content_filter"]))
   }))),
   service_tier: /* @__PURE__ */ optionalKey2(String6)
 });
-var ResponseCreatedEvent = /* @__PURE__ */ Struct({
+var ResponseCreatedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.created"),
   response: Response2,
   sequence_number: Int
 });
-var ResponseCompletedEvent = /* @__PURE__ */ Struct({
+var ResponseCompletedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.completed"),
   response: Response2,
   sequence_number: Int
 });
-var ResponseIncompleteEvent = /* @__PURE__ */ Struct({
+var ResponseIncompleteEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.incomplete"),
   response: Response2,
   sequence_number: Int
 });
-var ResponseFailedEvent = /* @__PURE__ */ Struct({
+var ResponseFailedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.failed"),
   response: Response2,
   sequence_number: Int
 });
-var ResponseOutputItemAddedEvent = /* @__PURE__ */ Struct({
+var ResponseOutputItemAddedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.output_item.added"),
   output_index: Int,
   sequence_number: Int,
   item: OutputItem
 });
-var ResponseOutputItemDoneEvent = /* @__PURE__ */ Struct({
+var ResponseOutputItemDoneEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.output_item.done"),
   output_index: Int,
   sequence_number: Int,
   item: OutputItem
 });
-var ResponseOutputTextDeltaEvent = /* @__PURE__ */ Struct({
+var ResponseOutputTextDeltaEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.output_text.delta"),
   item_id: String6,
   output_index: Int,
@@ -50981,7 +51670,7 @@ var ResponseOutputTextDeltaEvent = /* @__PURE__ */ Struct({
   sequence_number: Int,
   logprobs: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ ArraySchema(Unknown2))
 });
-var ResponseOutputTextAnnotationAddedEvent = /* @__PURE__ */ Struct({
+var ResponseOutputTextAnnotationAddedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.output_text.annotation.added"),
   item_id: String6,
   output_index: Int,
@@ -50990,7 +51679,7 @@ var ResponseOutputTextAnnotationAddedEvent = /* @__PURE__ */ Struct({
   sequence_number: Int,
   annotation: Annotation
 });
-var ResponseReasoningSummaryPartAddedEvent = /* @__PURE__ */ Struct({
+var ResponseReasoningSummaryPartAddedEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.reasoning_summary_part.added"),
   item_id: String6,
   output_index: Int,
@@ -50998,7 +51687,7 @@ var ResponseReasoningSummaryPartAddedEvent = /* @__PURE__ */ Struct({
   sequence_number: Int,
   part: SummaryTextContent
 });
-var ResponseReasoningSummaryPartDoneEvent = /* @__PURE__ */ Struct({
+var ResponseReasoningSummaryPartDoneEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.reasoning_summary_part.done"),
   item_id: String6,
   output_index: Int,
@@ -51006,7 +51695,7 @@ var ResponseReasoningSummaryPartDoneEvent = /* @__PURE__ */ Struct({
   sequence_number: Int,
   part: SummaryTextContent
 });
-var ResponseReasoningSummaryTextDeltaEvent = /* @__PURE__ */ Struct({
+var ResponseReasoningSummaryTextDeltaEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.reasoning_summary_text.delta"),
   item_id: String6,
   output_index: Int,
@@ -51014,56 +51703,56 @@ var ResponseReasoningSummaryTextDeltaEvent = /* @__PURE__ */ Struct({
   delta: String6,
   sequence_number: Int
 });
-var ResponseFunctionCallArgumentsDeltaEvent = /* @__PURE__ */ Struct({
+var ResponseFunctionCallArgumentsDeltaEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.function_call_arguments.delta"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   delta: String6
 });
-var ResponseFunctionCallArgumentsDoneEvent = /* @__PURE__ */ Struct({
+var ResponseFunctionCallArgumentsDoneEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.function_call_arguments.done"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   arguments: String6
 });
-var ResponseCodeInterpreterCallCodeDeltaEvent = /* @__PURE__ */ Struct({
+var ResponseCodeInterpreterCallCodeDeltaEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.code_interpreter_call_code.delta"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   delta: String6
 });
-var ResponseCodeInterpreterCallCodeDoneEvent = /* @__PURE__ */ Struct({
+var ResponseCodeInterpreterCallCodeDoneEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.code_interpreter_call_code.done"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   code: String6
 });
-var ResponseApplyPatchCallOperationDiffDeltaEvent = /* @__PURE__ */ Struct({
+var ResponseApplyPatchCallOperationDiffDeltaEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.apply_patch_call_operation_diff.delta"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   delta: String6
 });
-var ResponseApplyPatchCallOperationDiffDoneEvent = /* @__PURE__ */ Struct({
+var ResponseApplyPatchCallOperationDiffDoneEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.apply_patch_call_operation_diff.done"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   delta: /* @__PURE__ */ optionalKey2(String6)
 });
-var ResponseImageGenerationCallPartialImageEvent = /* @__PURE__ */ Struct({
+var ResponseImageGenerationCallPartialImageEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("response.image_generation_call.partial_image"),
   item_id: String6,
   output_index: Int,
   sequence_number: Int,
   partial_image_b64: String6
 });
-var ResponseErrorEvent = /* @__PURE__ */ Struct({
+var ResponseErrorEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("error"),
   code: /* @__PURE__ */ NullOr(String6),
   message: String6,
@@ -51077,16 +51766,16 @@ var UnknownResponseStreamEvent = /* @__PURE__ */ declare((value4) => hasProperty
   description: "Fallback for unknown future stream events"
 });
 var ResponseStreamEvent = /* @__PURE__ */ Union2([ResponseCreatedEvent, ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent, ResponseOutputItemAddedEvent, ResponseOutputItemDoneEvent, ResponseOutputTextDeltaEvent, ResponseOutputTextAnnotationAddedEvent, ResponseReasoningSummaryPartAddedEvent, ResponseReasoningSummaryPartDoneEvent, ResponseReasoningSummaryTextDeltaEvent, ResponseFunctionCallArgumentsDeltaEvent, ResponseFunctionCallArgumentsDoneEvent, ResponseCodeInterpreterCallCodeDeltaEvent, ResponseCodeInterpreterCallCodeDoneEvent, ResponseApplyPatchCallOperationDiffDeltaEvent, ResponseApplyPatchCallOperationDiffDoneEvent, ResponseImageGenerationCallPartialImageEvent, ResponseErrorEvent, UnknownResponseStreamEvent]);
-var Embedding = /* @__PURE__ */ Struct({
+var Embedding = /* @__PURE__ */ Struct2({
   embedding: /* @__PURE__ */ Union2([/* @__PURE__ */ ArraySchema(Finite), String6]),
   index: Int,
   object: /* @__PURE__ */ optionalKey2(String6)
 });
-var CreateEmbeddingResponse = /* @__PURE__ */ Struct({
+var CreateEmbeddingResponse = /* @__PURE__ */ Struct2({
   data: /* @__PURE__ */ ArraySchema(Embedding),
   model: String6,
   object: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ Literal2("list")),
-  usage: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ Struct({
+  usage: /* @__PURE__ */ optionalKey2(/* @__PURE__ */ Struct2({
     prompt_tokens: Int,
     total_tokens: Int
   }))
@@ -51100,7 +51789,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make63 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -51146,13 +51835,13 @@ var make63 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer18 = (options3) => effect(OpenAiClient, make63(options3));
+var layer19 = (options3) => effect(OpenAiClient, make64(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make63({
+  return yield* make64({
     apiKey,
     apiUrl,
     organizationId,
@@ -51165,7 +51854,7 @@ class OpenAiSocket extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiC
 }
 var makeSocket = /* @__PURE__ */ gen4(function* () {
   const client = yield* OpenAiClient;
-  const tracker = yield* make47;
+  const tracker = yield* make48;
   const socketScope = yield* scope2;
   const makeRequest = flatMap5(OpenAiConfig.getOrUndefined, (config) => {
     const httpClient = isNotUndefined(config?.transformClient) ? config.transformClient(client.client) : client.client;
@@ -51190,7 +51879,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
       const send = (message) => write2(JSON.stringify({
         type: "response.create",
         ...message
-      })).pipe(mapError4((_error) => make44({
+      })).pipe(mapError4((_error) => make45({
         module: "OpenAiClient",
         method: "createResponseStream",
         reason: new NetworkError({
@@ -51213,7 +51902,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
             const status = Number(event.status);
             const error2 = "error" in event ? event.error : event;
             const json2 = JSON.stringify(error2);
-            return fail6(make44({
+            return fail6(make45({
               module: "OpenAiClient",
               method: "createResponseStream",
               reason: reasonFromHttpStatus({
@@ -51235,7 +51924,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
           }
           offerUnsafe(incoming, event);
         } catch {}
-      }).pipe(catchTag3("SocketError", (error2) => make44({
+      }).pipe(catchTag3("SocketError", (error2) => make45({
         module: "OpenAiClient",
         method: "createResponseStream",
         reason: new NetworkError({
@@ -51288,10 +51977,10 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
     }
   }).pipe(add(ResponseIdTracker, tracker));
 });
-var ErrorEvent = /* @__PURE__ */ Struct({
+var ErrorEvent = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("error"),
   status: /* @__PURE__ */ Int.pipe(/* @__PURE__ */ withDecodingDefault(/* @__PURE__ */ succeed6(500))),
-  error: /* @__PURE__ */ Struct({
+  error: /* @__PURE__ */ Struct2({
     type: String6,
     message: String6
   })
@@ -51312,8 +52001,8 @@ var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
   model: () => model2,
-  make: () => make64,
-  layer: () => layer19,
+  make: () => make65,
+  layer: () => layer20,
   Config: () => Config2
 });
 
@@ -51363,11 +52052,11 @@ var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make60("openai", model3, layer19({
+var model2 = (model3, config) => make61("openai", model3, layer20({
   model: model3,
   config
 }));
-var make64 = /* @__PURE__ */ fnUntraced2(function* ({
+var make65 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
@@ -51428,7 +52117,7 @@ var make64 = /* @__PURE__ */ fnUntraced2(function* ({
       request3.previous_response_id = options3.previousResponseId;
     return request3;
   });
-  return yield* make49({
+  return yield* make50({
     codecTransformer: toCodecOpenAI,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -51471,7 +52160,7 @@ var make64 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer19 = (options3) => effect(LanguageModel, make64(options3));
+var layer20 = (options3) => effect(LanguageModel, make65(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -51581,7 +52270,7 @@ var prepareMessages2 = /* @__PURE__ */ fnUntraced2(function* ({
                   });
                 }
               } else {
-                return yield* make44({
+                return yield* make45({
                   module: "OpenAiLanguageModel",
                   method: "prepareMessages",
                   reason: new InvalidRequestError({
@@ -51694,7 +52383,7 @@ var prepareMessages2 = /* @__PURE__ */ fnUntraced2(function* ({
               }
               const toolName = toolNameMapper.getProviderName(part.name);
               if (isNotUndefined(localShellTool) && toolName === "local_shell") {
-                const params = yield* decodeUnknownEffect2(localShellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make44({
+                const params = yield* decodeUnknownEffect2(localShellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make45({
                   module: "OpenAiLanguageModel",
                   method: "prepareMessages",
                   reason: new ToolParameterValidationError({
@@ -51713,7 +52402,7 @@ var prepareMessages2 = /* @__PURE__ */ fnUntraced2(function* ({
                 break;
               }
               if (isNotUndefined(shellTool) && toolName === "shell") {
-                const params = yield* decodeUnknownEffect2(shellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make44({
+                const params = yield* decodeUnknownEffect2(shellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make45({
                   module: "OpenAiLanguageModel",
                   method: "prepareMessages",
                   reason: new ToolParameterValidationError({
@@ -51942,7 +52631,7 @@ var makeResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
         const toolName = part.name;
         const toolParams = yield* try_3({
           try: () => unsafeSecureJsonParse(part.arguments),
-          catch: (cause) => make44({
+          catch: (cause) => make45({
             module: "OpenAiLanguageModel",
             method: "makeResponse",
             reason: new ToolParameterValidationError({
@@ -52627,7 +53316,7 @@ var makeStreamResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
             const toolArgs = event.item.arguments;
             const toolParams = yield* try_3({
               try: () => unsafeSecureJsonParse(toolArgs),
-              catch: (cause) => make44({
+              catch: (cause) => make45({
                 module: "OpenAiLanguageModel",
                 method: "makeStreamResponse",
                 reason: new ToolParameterValidationError({
@@ -52928,7 +53617,7 @@ var makeStreamResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
           hasToolCalls = true;
           const toolParams = yield* try_3({
             try: () => unsafeSecureJsonParse(event.arguments),
-            catch: (cause) => make44({
+            catch: (cause) => make45({
               module: "OpenAiLanguageModel",
               method: "makeStreamResponse",
               reason: new ToolParameterValidationError({
@@ -53219,7 +53908,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiCodeInterpreter": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make44({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -53234,7 +53923,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiFileSearch": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make44({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -53255,7 +53944,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiImageGeneration": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make44({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -53276,7 +53965,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiMcp": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make44({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -53291,7 +53980,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiWebSearch": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make44({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -53306,7 +53995,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiWebSearchPreview": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make44({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -53321,7 +54010,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         default: {
-          return yield* make44({
+          return yield* make45({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new InvalidRequestError({
@@ -53365,7 +54054,7 @@ var makeItemIdMetadata = (itemId) => isNotUndefined(itemId) ? {
 var makeEncryptedContentMetadata = (encryptedContent) => isNotNullish(encryptedContent) ? {
   encryptedContent
 } : undefined;
-var unsupportedSchemaError2 = (error2, method) => make44({
+var unsupportedSchemaError2 = (error2, method) => make45({
   module: "OpenAiLanguageModel",
   method,
   reason: new UnsupportedSchemaError({
@@ -53454,7 +54143,7 @@ var normalizeMcpToolCall = /* @__PURE__ */ fnUntraced2(function* ({
   }
   const params = yield* try_3({
     try: () => unsafeSecureJsonParse(toolParams),
-    catch: (cause) => make44({
+    catch: (cause) => make45({
       module: "OpenAiLanguageModel",
       method,
       reason: new ToolParameterValidationError({
@@ -53526,7 +54215,7 @@ var getUsageTokenDetail = (details, key) => hasProperty(details, key) && typeof 
 var transformToolCallParams2 = /* @__PURE__ */ fnUntraced2(function* (tools, toolName, toolParams) {
   const tool = tools.find((tool2) => tool2.name === toolName);
   if (isUndefined(tool)) {
-    return yield* make44({
+    return yield* make45({
       module: "OpenAiLanguageModel",
       method: "makeResponse",
       reason: new ToolNotFoundError({
@@ -53539,7 +54228,7 @@ var transformToolCallParams2 = /* @__PURE__ */ fnUntraced2(function* (tools, too
     codec
   } = yield* tryCodecTransform2(tool.parametersSchema, "makeResponse");
   const transform6 = decodeEffect2(codec);
-  return yield* transform6(toolParams).pipe(mapError4((error2) => make44({
+  return yield* transform6(toolParams).pipe(mapError4((error2) => make45({
     module: "OpenAiLanguageModel",
     method: "makeResponse",
     reason: new ToolParameterValidationError({
@@ -53630,6 +54319,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
   const skipUnchanged = yield* exports_Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(exports_Config.withDefault(true));
   const retireStaleReviews2 = yield* exports_Config.boolean("PR_REVIEW_RETIRE_STALE_REVIEWS").pipe(exports_Config.withDefault(true));
+  const progressComment = yield* exports_Config.boolean("PR_REVIEW_PROGRESS_COMMENT").pipe(exports_Config.withDefault(true));
   return {
     provider,
     model: exports_Option.getOrUndefined(model3),
@@ -53645,7 +54335,8 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     reviewMode,
     failOn,
     skipUnchanged,
-    retireStaleReviews: retireStaleReviews2
+    retireStaleReviews: retireStaleReviews2,
+    progressComment
   };
 });
 var MAX_GUIDANCE_FILE_CHARS = 20000;
@@ -53895,7 +54586,27 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     }
     yield* exports_Console.log(`Reviewing ${target.repository}#${target.number} (${options3.post === false ? "dry run" : "posting"})...`);
     const runUrl = yield* resolveRunUrl();
-    const reviewEffect = reviewer.run({ post: options3.post ?? true, runUrl });
+    const progress = options3.progressComment === true && options3.post !== false ? exports_Option.some(yield* ReviewProgressReporter) : exports_Option.none();
+    if (exports_Option.isSome(progress)) {
+      const source = yield* PullRequestSource;
+      const headMetadata = yield* source.metadata.pipe(exports_Effect.orElseSucceed(() => {
+        return;
+      }));
+      yield* progress.value.begin({
+        headSha: headMetadata?.headSha,
+        reviewMode: selection?.mode,
+        reviewReason: selection?.reason,
+        filesInScope: selection?.files.length,
+        modelLabel: options3.modelLabel,
+        runUrl
+      });
+    }
+    const runReview = reviewer.run({ post: options3.post ?? true, runUrl });
+    const reviewEffect = exports_Option.isSome(progress) ? runReview.pipe(exports_Effect.tapCause(() => progress.value.settle({
+      outcome: "failed",
+      runUrl,
+      modelLabel: options3.modelLabel
+    }))) : runReview;
     const outcome = yield* selection === undefined ? reviewEffect : reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)), exports_Effect.provideService(ReviewExecutionContext, selection));
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
@@ -53916,6 +54627,17 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       }
     }
     const check2 = concludeReviewOutcome(outcome);
+    if (exports_Option.isSome(progress)) {
+      yield* progress.value.settle({
+        outcome: "reviewed",
+        conclusion: check2.conclusion,
+        verdict: outcome.review.verdict,
+        inlineComments: outcome.plan.comments.length,
+        reviewUrl: outcome.published?.url,
+        runUrl,
+        modelLabel: options3.modelLabel
+      });
+    }
     yield* writeActionOutputs(outcomeOutputs(outcome, check2.conclusion));
     yield* writeStepSummary(outcomeSummary(outcome, options3.modelLabel, check2.conclusion));
     if (check2.conclusion !== "success") {
@@ -53955,6 +54677,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
     retireStaleReviews: inputs.retireStaleReviews,
+    progressComment: inputs.progressComment,
     modelLabel
   };
   if (inputs.provider === "anthropic") {
@@ -53966,7 +54689,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
   return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
-var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_Layer.merge(exports_NodeServices.layer, exports_FetchHttpClient.layer))), { disableErrorReporting: true });
+var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_FetchHttpClient.layer, compactReviewLoggingLayer))), { disableErrorReporting: true });
 
 // packages/pr-review/src/internal/action-entry.ts
 var INPUT_TO_ENV = [
@@ -53985,6 +54708,8 @@ var INPUT_TO_ENV = [
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
   ["INPUT_RETIRE-STALE-REVIEWS", "PR_REVIEW_RETIRE_STALE_REVIEWS"],
+  ["INPUT_PROGRESS-COMMENT", "PR_REVIEW_PROGRESS_COMMENT"],
+  ["INPUT_LOG-LEVEL", "PR_REVIEW_LOG_LEVEL"],
   ["INPUT_STATE-SECRET", "PR_REVIEW_STATE_SECRET"],
   ["INPUT_REVIEW-AUTHOR", "PR_REVIEW_AUTHOR_LOGIN"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],

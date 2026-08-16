@@ -112,7 +112,8 @@ is a Layer-assembly library, not an application entrypoint.
 
 The packaged GitHub pull-request reviewer: schema-first review contracts, the
 `PullRequestSource`/`ReviewPublisher` ports with GitHub REST adapters, fail-closed anchor
-validation and publication planning, flat and fan-out reviewer shapes, and the `PrReview`
+validation and publication planning, a fail-open sticky progress comment
+(`ReviewProgressReporter`), flat and fan-out reviewer shapes, and the `PrReview`
 configuration factory. Subpath entries: `./testing` (fixture source, collecting publisher,
 prompt-keyed scripted models), `./action` and `./cli` (platform-node host entrypoints). Consumes
 the `effect-agent` umbrella — the first package-level consumer of that edge. Deployment class E

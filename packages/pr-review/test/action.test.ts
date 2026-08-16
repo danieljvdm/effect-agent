@@ -80,6 +80,7 @@ describe("resolveActionInputs", () => {
         failOn: "never",
         skipUnchanged: true,
         retireStaleReviews: true,
+        progressComment: true,
         reviewMode: "incremental",
       });
     }),
@@ -103,6 +104,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_FAIL_ON: "request-changes",
           PR_REVIEW_SKIP_UNCHANGED: "false",
           PR_REVIEW_RETIRE_STALE_REVIEWS: "false",
+          PR_REVIEW_PROGRESS_COMMENT: "false",
           PR_REVIEW_MODE: "final",
         }),
       );
@@ -121,6 +123,7 @@ describe("resolveActionInputs", () => {
         failOn: "request-changes",
         skipUnchanged: false,
         retireStaleReviews: false,
+        progressComment: false,
         reviewMode: "final",
       });
     }),
@@ -375,6 +378,68 @@ describe("runReviewAction", () => {
         }).pipe(Effect.provide(harness.layer));
         expect((yield* Ref.get(harness.requests)).length).toBe(1);
       }),
+  );
+
+  it.effect("posts progress comments only when enabled and posting", () =>
+    Effect.gen(function* () {
+      const event = JSON.stringify({
+        pull_request: { number: 5 },
+        repository: { full_name: "acme/widgets" },
+      });
+      const isProgressRequest = (request: string) => request.includes("/issues/");
+
+      // Default off: existing harnesses keep their exact mutation surface.
+      const defaultHarness = yield* actionHarness(event);
+      yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("comment")) },
+        { post: false },
+      ).pipe(Effect.provide(defaultHarness.layer));
+      expect((yield* Ref.get(defaultHarness.requests)).some(isProgressRequest)).toBe(false);
+
+      // Enabled but dry-run: progress never posts what the run itself won't.
+      const dryRunHarness = yield* actionHarness(event);
+      yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("comment")) },
+        { post: false, progressComment: true },
+      ).pipe(Effect.provide(dryRunHarness.layer));
+      expect((yield* Ref.get(dryRunHarness.requests)).some(isProgressRequest)).toBe(false);
+
+      // Enabled and posting: the sticky comment is begun before the run.
+      const enabledHarness = yield* actionHarness(event);
+      yield* runReviewAction(
+        { run: () => Effect.succeed(fakeOutcome("comment")) },
+        { progressComment: true },
+      ).pipe(Effect.provide(enabledHarness.layer));
+      const requests = yield* Ref.get(enabledHarness.requests);
+      expect(requests).toContain(
+        "GET https://api.github.com/repos/acme/widgets/issues/5/comments?per_page=100&page=1",
+      );
+      expect(requests).toContain(
+        "POST https://api.github.com/repos/acme/widgets/issues/5/comments",
+      );
+    }),
+  );
+
+  it.effect("settles the progress comment when the reviewer run fails", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const exit = yield* runReviewAction(
+        { run: () => Effect.fail(new Error("model unavailable")) },
+        { progressComment: true },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
+      expect(Exit.isFailure(exit)).toBe(true);
+      const requests = yield* Ref.get(harness.requests);
+      const progressWrites = requests.filter((request) =>
+        request.startsWith("POST https://api.github.com/repos/acme/widgets/issues/"),
+      );
+      // One write attempt from begin and one from the failure settle.
+      expect(progressWrites.length).toBe(2);
+    }),
   );
 
   it.effect("fails the check for a blocking finding regardless of model verdict or fail-on", () =>
