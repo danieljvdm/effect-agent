@@ -1,5 +1,15 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.14
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.14
+  - @effect-agent/sandbox@0.1.0-beta.14
+  - @effect-agent/session@0.1.0-beta.14
+  - @effect-agent/storage-cloudflare@0.1.0-beta.14
+
 ## 0.1.0-beta.13
 
 ### Patch Changes

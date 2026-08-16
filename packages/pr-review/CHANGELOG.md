@@ -1,5 +1,54 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.14
+
+### Minor Changes
+
+- [#89](https://github.com/danieljvdm/effect-agent/pull/89) [`1469580`](https://github.com/danieljvdm/effect-agent/commit/146958084443303c5b9a1202c085e551af0ee182) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Richer review presentation, derived host-side from validated data. Every inline
+  comment now ends with a collapsed "🤖 Prompt for AI agents" copy-paste block
+  (opening with a fixed untrusted-review-data preamble), and the review body adds
+  a consolidated all-findings prompt so demoted and carried findings hand an
+  agent their instruction too. The body opens with a host-derived stats line —
+  changeset size, severity tally, and a deterministic 1–5 review-effort estimate
+  — and renders the model's new optional per-file `walkthrough` as a collapsed
+  table whose paths are validated against the changeset like finding anchors
+  (fan-out children report `fileSummaries`, projected and merged by the
+  coordinator, and host-verified against the delegation Tool events so only
+  in-unit child-reported summaries survive; carried findings' prompts cite their
+  baseline commit, never the current head). Findings may carry an optional
+  `category` chip rendered beside
+  the severity; demoted and carried-finding sections collapse into counted
+  `<details>` blocks. Oversized bodies shed the consolidated prompt first, then
+  the walkthrough, before any review item, and every omission stays announced.
+  Stale-review retirement matches both the categorized and the pre-category
+  inline first-line formats.
+
+- [#87](https://github.com/danieljvdm/effect-agent/pull/87) [`68addaa`](https://github.com/danieljvdm/effect-agent/commit/68addaa026927a75d193b64cdb86542e5c37345b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Make review runs visible while they execute. The packaged Action now posts one sticky "review in
+  progress" issue comment the moment a run starts — naming the scope, head commit, model, and
+  workflow run — and rewrites that same comment in place with the settled outcome (posted verdict,
+  blocking/incomplete callout, or run failure). Posting is at-least-once with generation-fenced
+  writes: a stale run cannot replace a newer run's status, and duplicate comments left by unfenced
+  overlapping runs are best-effort deleted by the next run. Progress reporting is cosmetic and
+  fail-open: GitHub faults are logged and never change the review, the check conclusion, or the run
+  result. Disable with the new `progress-comment` input; dry runs post no progress.
+
+  Action logs now render one compact line per event (tool executions, warnings with their cause)
+  instead of raw OTel-style telemetry dumps. The new `log-level` input (default `Info`) shows the
+  engine's per-turn telemetry at `Debug` or quiets routine runs at `Warn`.
+
+### Patch Changes
+
+- [#87](https://github.com/danieljvdm/effect-agent/pull/87) [`68addaa`](https://github.com/danieljvdm/effect-agent/commit/68addaa026927a75d193b64cdb86542e5c37345b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Keep exploratory out-of-scope reads from killing a review run. The read tools already return
+  typed refusals as model-visible results, but the engine's default 3-consecutive-failure stop
+  policy aborted the run when one parallel batch probed several paths outside the review scope —
+  the first incremental delta whose pull-request description named other files died this way before
+  the model had seen a single refusal. The flat reviewer and per-unit child policies now tolerate an
+  exploratory batch (`repeatedFailureLimit: 12`, still bounded by their tool-call and duration
+  budgets), and the reviewer instructions state explicitly that the listed changeset is the complete
+  readable scope — in incremental reviews a deliberate subset of the pull request's full diff.
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.14
+
 ## 0.1.0-beta.13
 
 ### Minor Changes
