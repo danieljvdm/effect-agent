@@ -72,6 +72,15 @@ describe("DEPLOY-011 Cloudflare Dynamic Worker CodeExecutor", () => {
     const response = await runtime.dispatchFetch("http://placeholder/run");
     const payload = (await response.json()) as { readonly failures: ReadonlyArray<string> };
     expect(response.ok).toBe(true);
-    expect(payload.failures, JSON.stringify(payload.failures, null, 2)).toEqual([]);
+    expect(payload.failures).toEqual([]);
   }, 120_000);
+
+  it("runs guest host calls outside the in-flight executor fiber", async () => {
+    const response = await runtime.dispatchFetch("http://placeholder/host-call-root-fiber");
+    expect(response.ok).toBe(true);
+    expect(await response.json()).toMatchObject({
+      tag: "success",
+      detail: { value: "root" },
+    });
+  }, 30_000);
 });
