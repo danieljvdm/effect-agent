@@ -112,15 +112,17 @@ concerns are carried conservatively until a full audit because they cannot be
 mapped safely to one path.
 
 The state marker must be terminal, signed with the configured stable
-`PR_REVIEW_STATE_SECRET`, authored by the default GitHub Actions bot, and
-pinned to the reviewed commit. State lookup, authentication, schema, identity,
-ancestry, profile, and comparison checks are
-fail-closed for scope selection: missing, stale, incompatible, or truncated
-state/comparisons produce a visible full-diff fallback. An ancestor base
-advance remains incremental and adds overlapping PR paths as affected
-context; a materially changed base lineage falls back to full. Re-running the
-same covered head skips model execution by default while preserving its
-stored blocking/success conclusion.
+`PR_REVIEW_STATE_SECRET`, authored by the configured review-posting bot, and
+pinned to the reviewed commit. The expected author defaults to
+`github-actions[bot]`; set `PR_REVIEW_AUTHOR_LOGIN` (or the Action's
+`review-author` input) to `<app-slug>[bot]` when posting with a custom GitHub
+App token. State lookup, authentication, schema, identity, ancestry, profile,
+and comparison checks are fail-closed for scope selection: missing, stale,
+incompatible, or truncated state/comparisons produce a visible full-diff
+fallback. An ancestor base advance remains incremental and adds overlapping
+PR paths as affected context; a materially changed base lineage falls back to
+full. Re-running the same covered head skips model execution by default while
+preserving its stored blocking/success conclusion.
 
 After a new state-bearing Action review posts, prior marker-bearing bot reviews
 are retired by default: their bodies become collapsed, superseded history,
@@ -157,6 +159,8 @@ the full current PR diff and resets the incremental baseline; normal
 
 Environment: `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for the model,
 `PR_REVIEW_STATE_SECRET` to authenticate incremental state,
+`PR_REVIEW_AUTHOR_LOGIN` to match a custom review-posting bot (defaults to
+`github-actions[bot]`),
 `GITHUB_TOKEN` to post (optional for public-repository reads), and the
 standard `GITHUB_REPOSITORY` / `GITHUB_EVENT_PATH` / `GITHUB_API_URL`
 variables inside Actions.
