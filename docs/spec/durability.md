@@ -288,8 +288,9 @@ a `completed` soft landing persists `finishReason: "budget-exhausted"` with the
 `{errorTag, message}` failure projection in `result`. Because the metadata rides the
 exact reserved record, it survives reservation replay, canonical append, recovery,
 and every later read unchanged. Decode is family-bound fail-closed: metadata on the
-wrong settlement family rejects rather than becoming trusted audit history, and
-records persisted before the metadata existed decode with it absent (additive,
+wrong settlement family — or a `policyLimit` whose `result` does not carry the
+`AgentPolicyError` projection — rejects rather than becoming trusted audit history,
+and records persisted before the metadata existed decode with it absent (additive,
 schemaVersion 1).
 
 ## 13. Abort

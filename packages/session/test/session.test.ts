@@ -388,14 +388,35 @@ describe("phase 4 durable canonical payloads", () => {
       deploymentId: "test-deployment",
       payload,
     });
+    const policyFailureResult = {
+      errorTag: "AgentPolicyError",
+      message: "Agent exceeded its 100 token budget",
+    };
     const failures: ReadonlyArray<unknown> = [
       { ...encodedSubmissionSettled, outcome: "failed", finishReason: "budget-exhausted" },
       { ...encodedSubmissionSettled, exhausted: "turns" },
       { ...encodedSubmissionSettled, outcome: "failed", exhausted: "tokens" },
-      { ...encodedSubmissionSettled, policyLimit: "duration" },
-      { ...encodedSubmissionSettled, outcome: "aborted", policyLimit: "cost" },
+      { ...encodedSubmissionSettled, policyLimit: "duration", result: policyFailureResult },
+      {
+        ...encodedSubmissionSettled,
+        outcome: "aborted",
+        policyLimit: "cost",
+        result: policyFailureResult,
+      },
       { ...encodedSubmissionSettled, finishReason: "budget-exhausted", exhausted: "duration" },
       { ...encodedSubmissionSettled, outcome: "failed", policyLimit: "context" },
+      // A policyLimit contradicting the recorded failure projection is not audit truth.
+      {
+        ...encodedSubmissionSettled,
+        outcome: "failed",
+        policyLimit: "tokens",
+        result: { errorTag: "ModelProtocolError", message: "not a policy failure" },
+      },
+      // A policyLimit without any recorded failure projection fails closed too.
+      (() => {
+        const { result: _result, ...withoutResult } = encodedSubmissionSettled;
+        return { ...withoutResult, outcome: "failed", policyLimit: "tokens" };
+      })(),
     ];
     for (const payload of failures) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");

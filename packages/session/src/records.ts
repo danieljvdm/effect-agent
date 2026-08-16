@@ -441,23 +441,30 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
   policyLimit: Schema.optionalKey(PolicyLimit),
 }) {}
 
+const isPolicyFailureProjection = Schema.is(
+  Schema.Struct({ errorTag: Schema.Literal("AgentPolicyError") }),
+);
+
 /**
  * Canonical-boundary view of `SubmissionSettled`: `finishReason` is valid
  * only on a `completed` outcome, `exhausted` only alongside
  * `finishReason: "budget-exhausted"`, and `policyLimit` only on a `failed`
- * outcome, so a malformed persisted combination such as
- * `{ outcome: "failed", finishReason: "budget-exhausted" }` fails closed at
- * decode instead of becoming trusted audit history (STORE-006, RUN-011).
+ * outcome whose `result` carries the `AgentPolicyError` failure projection —
+ * so a malformed persisted combination such as
+ * `{ outcome: "failed", finishReason: "budget-exhausted" }` or a
+ * `policyLimit` contradicting `result.errorTag` fails closed at decode
+ * instead of becoming trusted audit history (STORE-006, RUN-011).
  */
 const SubmissionSettledRecord = SubmissionSettled.pipe(
   Schema.refine(
     (settled): settled is SubmissionSettled =>
       (settled.finishReason === undefined || settled.outcome === "completed") &&
       (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
-      (settled.policyLimit === undefined || settled.outcome === "failed"),
+      (settled.policyLimit === undefined ||
+        (settled.outcome === "failed" && isPolicyFailureProjection(settled.result))),
     {
       expected:
-        "finishReason only on a completed settlement, exhausted only with finishReason budget-exhausted, policyLimit only on a failed settlement",
+        "finishReason only on a completed settlement, exhausted only with finishReason budget-exhausted, policyLimit only on a failed AgentPolicyError settlement",
     },
   ),
 );
