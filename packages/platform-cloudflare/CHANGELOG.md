@@ -1,5 +1,18 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.13
+
+### Patch Changes
+
+- [#84](https://github.com/danieljvdm/effect-agent/pull/84) [`dd0e5c3`](https://github.com/danieljvdm/effect-agent/commit/dd0e5c38a462abe341063842521530c0d484e54a) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Run Dynamic Worker Code Mode host callbacks on retained independent Effect fibers so guest RPC
+  callbacks can complete without deadlocking the in-flight worker RPC. Bound callback execution by
+  the pass deadline and host-call limits, and close, interrupt, and settle callback work on teardown.
+- Updated dependencies [[`68b48c9`](https://github.com/danieljvdm/effect-agent/commit/68b48c932b6a76d2c8ed0f04cc87c123a9fd11e4)]:
+  - @effect-agent/core@0.1.0-beta.13
+  - @effect-agent/session@0.1.0-beta.13
+  - @effect-agent/storage-cloudflare@0.1.0-beta.13
+  - @effect-agent/sandbox@0.1.0-beta.13
+
 ## 0.1.0-beta.12
 
 ### Patch Changes
