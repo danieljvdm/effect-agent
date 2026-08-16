@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.13
+
+### Minor Changes
+
+- [#88](https://github.com/danieljvdm/effect-agent/pull/88) [`75f9aca`](https://github.com/danieljvdm/effect-agent/commit/75f9aca2558511b0b129c27669b7e920c3ef0b4f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Recover GitHub-omitted textual patches through bounded UTF-8 base/head content so generated and oversized text files can complete review coverage without repository-specific ignores. Binary, unreadable, incomplete, and over-bound content remains fail-closed.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.13
+
 ## 0.1.0-beta.12
 
 ### Patch Changes
