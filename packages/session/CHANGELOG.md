@@ -1,5 +1,26 @@
 # @effect-agent/session
 
+## 0.1.0-beta.13
+
+### Minor Changes
+
+- [#86](https://github.com/danieljvdm/effect-agent/pull/86) [`68b48c9`](https://github.com/danieljvdm/effect-agent/commit/68b48c932b6a76d2c8ed0f04cc87c123a9fd11e4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Typed budget dimension on durable settlements (RUN-011, [#83](https://github.com/danieljvdm/effect-agent/issues/83)): the canonical `SubmissionSettled`
+  record additively persists `exhausted` (`"tokens" | "tool-calls" | "turns"`) beside
+  `finishReason: "budget-exhausted"` for a completed soft landing, and `policyLimit` (the typed
+  `AgentPolicyError.limit`) beside the bounded `{errorTag, message}` failure projection for a
+  `failed` hard-rail settlement — consumers read the dimension typed instead of parsing message
+  text. Decode is family-bound fail-closed (`exhausted` only with the budget-exhausted
+  finishReason, `policyLimit` only on a failed outcome) and histories persisted before the
+  metadata existed keep decoding with it absent (schemaVersion 1 unchanged).
+  `@effect-agent/core` now exports the `ExhaustedLimit` and `PolicyLimit` literal schemas backing
+  the fields.
+
+### Patch Changes
+
+- Updated dependencies [[`68b48c9`](https://github.com/danieljvdm/effect-agent/commit/68b48c932b6a76d2c8ed0f04cc87c123a9fd11e4)]:
+  - @effect-agent/core@0.1.0-beta.13
+  - @effect-agent/engine@0.1.0-beta.13
+
 ## 0.1.0-beta.12
 
 ### Patch Changes
