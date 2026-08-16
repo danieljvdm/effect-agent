@@ -152,8 +152,10 @@ the full current PR diff and resets the incremental baseline; normal
   (`action/` at the repo root) — `uses` it with an API-key secret and nothing
   else. While a run executes it maintains one sticky, fail-open "review in
   progress" comment updated in place with the settled outcome
-  (`progress-comment` input, default on), and its logs render one compact
-  line per event (`log-level` input, default `Info`). For custom reviewers in
+  (`progress-comment` input, default on; at-least-once with generation-fenced
+  writes and best-effort duplicate cleanup — strict single-comment behavior
+  comes from a per-PR workflow concurrency group), and its logs render one
+  compact line per event (`log-level` input, default `Info`). For custom reviewers in
   CI, `@effect-agent/pr-review/action` exports `runReviewAction` (event
   resolution, typed draft/non-PR skips, bounded range selection, step
   outputs, and conservative check gate) to harness your own `reviewer.run`;

@@ -97,12 +97,19 @@ The moment a run starts reviewing (typed skips excluded), the action posts
 one sticky "review in progress" issue comment naming the selected scope, head
 commit, model, and workflow run, then rewrites that same comment in place
 with the settled outcome — the posted verdict, a blocking/incomplete callout,
-or the run failure. One comment per pull request is reused across runs, found
-by its invisible marker and the configured `review-author` bot identity so a
-pasted marker in someone else's comment is never edited. Progress reporting
-is cosmetic and fail-open: GitHub faults here are logged and never change the
-review, the check conclusion, or the run result. Dry runs (`post: "false"`)
-post no progress. Disable it with `progress-comment: "false"`.
+or the run failure. The comment is found by its invisible marker and the
+configured `review-author` bot identity, so a pasted marker in someone else's
+comment is never edited. Progress posting is at-least-once, never
+exactly-once: writes are generation-fenced (each run re-reads the comment and
+only overwrites its own or an older run's claim, so a stale run cannot
+replace a newer run's status outside the read-then-write window), runs adopt
+the newest existing marker comment, and duplicates left by unfenced
+overlapping runs are best-effort deleted by the next run. Strict
+single-comment behavior comes from a workflow-level per-PR concurrency group,
+as in this repository's reference workflow. Progress reporting is cosmetic
+and fail-open: GitHub faults here are logged and never change the review, the
+check conclusion, or the run result. Dry runs (`post: "false"`) post no
+progress. Disable it with `progress-comment: "false"`.
 
 Action logs render one compact line per event — tool executions as short
 progress lines, warnings and errors with their cause. Set `log-level: Debug`

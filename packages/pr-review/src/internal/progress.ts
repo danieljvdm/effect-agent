@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Option, Ref, Schema } from "effect";
+import { Context, DateTime, Effect, Layer, Option, Ref, Schema } from "effect";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import {
@@ -16,10 +16,51 @@ import type { ReviewScopeMode } from "./review-state.ts";
 // concludes, so every GitHub fault here is logged and swallowed. The review
 // itself still publishes only through the validated ReviewPublisher after
 // the run settles.
+//
+// Concurrency contract (honest, per the no-exactly-once rule): posting is
+// at-least-once and writes are GENERATION-FENCED, never atomic. Each run
+// embeds a claim marker (run token + start time) in the comment it writes and
+// re-reads the comment immediately before every update, writing only when the
+// current claim is its own or belongs to an older run — so a stale run cannot
+// replace a newer run's status outside the read-then-write window. Runs adopt
+// the newest existing claim comment and best-effort delete older duplicates,
+// so duplicates left by unfenced overlapping runs self-heal on the next run.
+// Strict single-comment behavior comes from workflow-level per-PR concurrency
+// groups (as in the reference workflow), not from this adapter.
 // ---------------------------------------------------------------------------
 
-/** Invisible marker identifying this package's sticky progress comment. */
-export const PROGRESS_COMMENT_MARKER = "<!-- effect-agent-pr-review progress -->";
+/** Every progress comment starts its invisible marker with this prefix. */
+export const PROGRESS_COMMENT_MARKER_PREFIX = "<!-- effect-agent-pr-review progress";
+
+/** One run's generation fence: who wrote a progress comment, and when. */
+export interface ProgressClaim {
+  /** Random per-run token; matching it means the comment is this run's own. */
+  readonly runToken: string;
+  /** Run start in epoch millis; newer runs may overwrite older claims. */
+  readonly startedMillis: number;
+}
+
+const CLAIM_PATTERN = /<!-- effect-agent-pr-review progress run=([0-9A-Za-z-]+) started=(\d+) -->/g;
+
+/** HTML comments must not contain `--`; tokens are reduced to a safe alphabet. */
+const sanitizeToken = (token: string): string =>
+  token.replaceAll(/[^0-9A-Za-z-]/g, "").replaceAll(/-{2,}/g, "-");
+
+/** Render one run's claim marker (token sanitized into the safe alphabet). */
+export const renderProgressClaimMarker = (claim: ProgressClaim): string =>
+  `${PROGRESS_COMMENT_MARKER_PREFIX} run=${sanitizeToken(claim.runToken)} started=${Math.max(0, Math.floor(claim.startedMillis))} -->`;
+
+/** Extract the last claim marker in one comment body, if any. */
+export const parseProgressClaim = (body: string): ProgressClaim | undefined => {
+  let last: ProgressClaim | undefined;
+  for (const match of body.matchAll(CLAIM_PATTERN)) {
+    const startedMillis = Number(match[2]);
+    if (match[1] !== undefined && Number.isFinite(startedMillis)) {
+      last = { runToken: match[1], startedMillis };
+    }
+  }
+  return last;
+};
 
 /** What a starting run can honestly say before any model turn has executed. */
 export interface ReviewProgressBegin {
@@ -72,7 +113,7 @@ const scopeSentence = (info: ReviewProgressBegin): string => {
 };
 
 /** The "a run just started" body; the outcome update replaces it in place. */
-export const renderProgressBeginBody = (info: ReviewProgressBegin): string =>
+export const renderProgressBeginBody = (info: ReviewProgressBegin, claim: ProgressClaim): string =>
   [
     "> 🔍 **Code review in progress…**",
     ">",
@@ -81,7 +122,7 @@ export const renderProgressBeginBody = (info: ReviewProgressBegin): string =>
     "_This comment is updated in place by each review run._",
     "",
     footerLine(info),
-    PROGRESS_COMMENT_MARKER,
+    renderProgressClaimMarker(claim),
   ].join("\n");
 
 const settleCallout = (info: ReviewProgressSettle): string => {
@@ -99,7 +140,10 @@ const settleCallout = (info: ReviewProgressSettle): string => {
 };
 
 /** The settled-outcome body written over the in-progress comment. */
-export const renderProgressSettleBody = (info: ReviewProgressSettle): string => {
+export const renderProgressSettleBody = (
+  info: ReviewProgressSettle,
+  claim: ProgressClaim,
+): string => {
   const link =
     info.outcome === "reviewed" && info.reviewUrl !== undefined
       ? `See the [posted review](${info.reviewUrl}).`
@@ -111,7 +155,7 @@ export const renderProgressSettleBody = (info: ReviewProgressSettle): string => 
     ...(link === undefined ? [] : ["", link]),
     "",
     footerLine(info),
-    PROGRESS_COMMENT_MARKER,
+    renderProgressClaimMarker(claim),
   ].join("\n");
 };
 
@@ -149,13 +193,36 @@ const GitHubIssueCommentsPageWire = Schema.Array(GitHubIssueCommentWire);
 /** Issue comments page chronologically; the sticky-comment scan stays bounded. */
 const MAX_PROGRESS_LOOKUP_PAGES = 5;
 
+interface ProgressCandidate {
+  readonly id: number;
+  readonly body: string;
+}
+
+/** The comment carrying the newest claim wins; unparseable claims lose ties. */
+const pickNewestClaim = (
+  candidates: ReadonlyArray<ProgressCandidate>,
+): ProgressCandidate | undefined => {
+  let newest: ProgressCandidate | undefined;
+  let newestStarted = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const started = parseProgressClaim(candidate.body)?.startedMillis ?? Number.NEGATIVE_INFINITY;
+    // >= keeps the LAST (chronologically newest) comment on ties.
+    if (newest === undefined || started >= newestStarted) {
+      newest = candidate;
+      newestStarted = started;
+    }
+  }
+  return newest;
+};
+
 /**
  * GitHub-backed progress reporter over the issue-comments API. The sticky
  * comment is found by its invisible marker AND the configured posting-bot
  * identity — a marker pasted into someone else's comment is never edited.
- * Every fault (lookup, create, update, bound exhaustion) degrades to a logged
- * warning: a pull request without a progress comment is a cosmetic loss, a
- * failed review run over a cosmetic fault would not be.
+ * Writes are generation-fenced per the module contract above, and every
+ * fault (lookup, create, update, delete, bound exhaustion) degrades to a
+ * logged warning: a pull request without a progress comment is a cosmetic
+ * loss, a failed review run over a cosmetic fault would not be.
  */
 export const gitHubReviewProgressLayer: Layer.Layer<
   ReviewProgressReporter,
@@ -165,11 +232,23 @@ export const gitHubReviewProgressLayer: Layer.Layer<
   Effect.gen(function* () {
     const target = yield* GitHubReviewTarget;
     const client = yield* HttpClient.HttpClient;
+    const started = yield* DateTime.now;
+    const claim: ProgressClaim = {
+      runToken: globalThis.crypto.randomUUID(),
+      startedMillis: DateTime.toEpochMillis(started),
+    };
     const knownCommentId = yield* Ref.make(Option.none<number>());
     const authorLogin = (
       target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN
     ).toLowerCase();
     const issuePrefix = `${target.apiUrl}/repos/${target.repository}/issues`;
+
+    /** May this run overwrite a comment currently carrying `body`? */
+    const canClaim = (body: string): boolean => {
+      const existing = parseProgressClaim(body);
+      if (existing === undefined) return true;
+      return existing.runToken === claim.runToken || claim.startedMillis >= existing.startedMillis;
+    };
 
     const withHeaders = (request: HttpClientRequest.HttpClientRequest) => {
       const base = request.pipe(
@@ -199,12 +278,20 @@ export const gitHubReviewProgressLayer: Layer.Layer<
         Effect.provideService(HttpClient.HttpClient, client),
       );
 
-    const decodeComments = Schema.decodeUnknownEffect(GitHubIssueCommentsPageWire);
-    const decodeComment = Schema.decodeUnknownEffect(GitHubIssueCommentWire);
+    const decodeJson = <S extends Schema.Top>(schema: S, operation: string) => {
+      const decode = Schema.decodeUnknownEffect(schema);
+      return (response: HttpClientResponse.HttpClientResponse) =>
+        response.json.pipe(
+          Effect.mapError(asApiFailure(operation)),
+          Effect.flatMap((payload) =>
+            decode(payload).pipe(Effect.mapError(asApiFailure(operation))),
+          ),
+        );
+    };
 
-    const findExisting = Effect.gen(function* () {
+    const findCandidates = Effect.gen(function* () {
       const perPage = 100;
-      let found = Option.none<number>();
+      const found: Array<ProgressCandidate> = [];
       for (let page = 1; page <= MAX_PROGRESS_LOOKUP_PAGES; page += 1) {
         const response = yield* execute(
           "listProgressComments",
@@ -217,28 +304,35 @@ export const gitHubReviewProgressLayer: Layer.Layer<
             ),
           ),
         );
-        const wires = yield* response.json.pipe(
-          Effect.mapError(asApiFailure("listProgressComments")),
-          Effect.flatMap((body) =>
-            decodeComments(body).pipe(Effect.mapError(asApiFailure("listProgressComments"))),
-          ),
-        );
+        const wires = yield* decodeJson(
+          GitHubIssueCommentsPageWire,
+          "listProgressComments",
+        )(response);
         for (const wire of wires) {
           if (
             wire.user?.login.toLowerCase() === authorLogin &&
             wire.user.type === "Bot" &&
-            (wire.body ?? "").includes(PROGRESS_COMMENT_MARKER)
+            (wire.body ?? "").includes(PROGRESS_COMMENT_MARKER_PREFIX)
           ) {
-            found = Option.some(wire.id);
+            found.push({ id: wire.id, body: wire.body ?? "" });
           }
         }
-        if (wires.length < perPage) return found;
+        if (wires.length < perPage) return found as ReadonlyArray<ProgressCandidate>;
       }
       return yield* GitHubApiFailure.make({
         operation: "listProgressComments",
         reason: `comment history exceeds the bounded ${MAX_PROGRESS_LOOKUP_PAGES * 100}-comment lookup`,
       });
     });
+
+    const readComment = (commentId: number) =>
+      execute(
+        "readProgressComment",
+        withHeaders(HttpClientRequest.get(`${issuePrefix}/comments/${commentId}`)),
+      ).pipe(
+        Effect.flatMap(decodeJson(GitHubIssueCommentWire, "readProgressComment")),
+        Effect.map((wire) => wire.body ?? ""),
+      );
 
     const create = (body: string) =>
       execute(
@@ -249,14 +343,7 @@ export const gitHubReviewProgressLayer: Layer.Layer<
           ),
         ),
       ).pipe(
-        Effect.flatMap((response) =>
-          response.json.pipe(
-            Effect.mapError(asApiFailure("createProgressComment")),
-            Effect.flatMap((payload) =>
-              decodeComment(payload).pipe(Effect.mapError(asApiFailure("createProgressComment"))),
-            ),
-          ),
-        ),
+        Effect.flatMap(decodeJson(GitHubIssueCommentWire, "createProgressComment")),
         Effect.map((wire) => wire.id),
       );
 
@@ -270,18 +357,59 @@ export const gitHubReviewProgressLayer: Layer.Layer<
         ),
       ).pipe(Effect.asVoid);
 
+    const deleteComment = (commentId: number) =>
+      execute(
+        "deleteProgressComment",
+        withHeaders(HttpClientRequest.delete(`${issuePrefix}/comments/${commentId}`)),
+      ).pipe(Effect.asVoid);
+
+    /** Re-read, fence, then write: a stale run must not replace newer status. */
+    const guardedUpdate = Effect.fn("ReviewProgressReporter.guardedUpdate")(function* (
+      commentId: number,
+      body: string,
+    ) {
+      const current = yield* readComment(commentId);
+      if (!canClaim(current)) {
+        return yield* Effect.logDebug(
+          "review progress comment is owned by a newer run; leaving it untouched",
+        );
+      }
+      yield* update(commentId, body);
+    });
+
     const upsert = Effect.fn("ReviewProgressReporter.upsert")(function* (body: string) {
       const cached = yield* Ref.get(knownCommentId);
       if (Option.isSome(cached)) {
-        return yield* update(cached.value, body);
+        return yield* guardedUpdate(cached.value, body);
       }
-      const existing = yield* findExisting;
-      if (Option.isSome(existing)) {
-        yield* Ref.set(knownCommentId, existing);
-        return yield* update(existing.value, body);
+      const candidates = yield* findCandidates;
+      const newest = pickNewestClaim(candidates);
+      if (newest === undefined) {
+        const created = yield* create(body);
+        yield* Ref.set(knownCommentId, Option.some(created));
+        return;
       }
-      const created = yield* create(body);
-      yield* Ref.set(knownCommentId, Option.some(created));
+      // Reconcile duplicates left by unfenced overlapping runs: keep the
+      // newest claim, best-effort delete the rest (each fault only logged).
+      yield* Effect.forEach(
+        candidates.filter((candidate) => candidate.id !== newest.id),
+        (duplicate) =>
+          deleteComment(duplicate.id).pipe(
+            Effect.catch((failure) =>
+              Effect.logWarning("duplicate review progress comment could not be deleted").pipe(
+                Effect.annotateLogs({ commentId: duplicate.id, reason: failure.reason }),
+              ),
+            ),
+          ),
+        { discard: true },
+      );
+      yield* Ref.set(knownCommentId, Option.some(newest.id));
+      if (!canClaim(newest.body)) {
+        return yield* Effect.logDebug(
+          "review progress comment is owned by a newer run; leaving it untouched",
+        );
+      }
+      yield* update(newest.id, body);
     });
 
     const failOpen = (phase: string) => (effect: Effect.Effect<void, GitHubApiFailure>) =>
@@ -298,8 +426,8 @@ export const gitHubReviewProgressLayer: Layer.Layer<
       );
 
     return ReviewProgressReporter.of({
-      begin: (info) => upsert(renderProgressBeginBody(info)).pipe(failOpen("begin")),
-      settle: (info) => upsert(renderProgressSettleBody(info)).pipe(failOpen("settle")),
+      begin: (info) => upsert(renderProgressBeginBody(info, claim)).pipe(failOpen("begin")),
+      settle: (info) => upsert(renderProgressSettleBody(info, claim)).pipe(failOpen("settle")),
     });
   }),
 );

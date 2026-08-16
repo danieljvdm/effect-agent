@@ -43378,7 +43378,20 @@ var makeFanOut = (options3) => {
 var PrReview = { make: make58, makeFanOut };
 
 // packages/pr-review/src/internal/progress.ts
-var PROGRESS_COMMENT_MARKER = "<!-- effect-agent-pr-review progress -->";
+var PROGRESS_COMMENT_MARKER_PREFIX = "<!-- effect-agent-pr-review progress";
+var CLAIM_PATTERN = /<!-- effect-agent-pr-review progress run=([0-9A-Za-z-]+) started=(\d+) -->/g;
+var sanitizeToken = (token) => token.replaceAll(/[^0-9A-Za-z-]/g, "").replaceAll(/-{2,}/g, "-");
+var renderProgressClaimMarker = (claim) => `${PROGRESS_COMMENT_MARKER_PREFIX} run=${sanitizeToken(claim.runToken)} started=${Math.max(0, Math.floor(claim.startedMillis))} -->`;
+var parseProgressClaim = (body) => {
+  let last3;
+  for (const match9 of body.matchAll(CLAIM_PATTERN)) {
+    const startedMillis = Number(match9[2]);
+    if (match9[1] !== undefined && Number.isFinite(startedMillis)) {
+      last3 = { runToken: match9[1], startedMillis };
+    }
+  }
+  return last3;
+};
 var footerLine = (options3) => {
   const parts2 = ["@effect-agent/pr-review"];
   if (options3.modelLabel !== undefined)
@@ -43393,7 +43406,7 @@ var scopeSentence = (info2) => {
   const scope3 = info2.reviewMode === undefined ? "" : ` — ${info2.reviewMode === "incremental" ? "incremental" : "full-diff"} scope${info2.reviewReason === undefined ? "" : `: ${info2.reviewReason.slice(0, 1000)}`}`;
   return `Reviewing ${subject}${at}${scope3}.`;
 };
-var renderProgressBeginBody = (info2) => [
+var renderProgressBeginBody = (info2, claim) => [
   "> \uD83D\uDD0D **Code review in progress…**",
   ">",
   `> ${scopeSentence(info2)}`,
@@ -43401,7 +43414,7 @@ var renderProgressBeginBody = (info2) => [
   "_This comment is updated in place by each review run._",
   "",
   footerLine(info2),
-  PROGRESS_COMMENT_MARKER
+  renderProgressClaimMarker(claim)
 ].join(`
 `);
 var settleCallout = (info2) => {
@@ -43417,14 +43430,14 @@ var settleCallout = (info2) => {
       return `> ⚠️ **Code review posted** — required coverage is incomplete, so the check fails.`;
   }
 };
-var renderProgressSettleBody = (info2) => {
+var renderProgressSettleBody = (info2, claim) => {
   const link4 = info2.outcome === "reviewed" && info2.reviewUrl !== undefined ? `See the [posted review](${info2.reviewUrl}).` : info2.runUrl !== undefined ? `See the [workflow run](${info2.runUrl}) for details.` : undefined;
   return [
     settleCallout(info2),
     ...link4 === undefined ? [] : ["", link4],
     "",
     footerLine(info2),
-    PROGRESS_COMMENT_MARKER
+    renderProgressClaimMarker(claim)
   ].join(`
 `);
 };
@@ -43442,12 +43455,35 @@ var GitHubIssueCommentWire = exports_Schema.Struct({
 });
 var GitHubIssueCommentsPageWire = exports_Schema.Array(GitHubIssueCommentWire);
 var MAX_PROGRESS_LOOKUP_PAGES = 5;
+var pickNewestClaim = (candidates) => {
+  let newest;
+  let newestStarted = Number.NEGATIVE_INFINITY;
+  for (const candidate of candidates) {
+    const started = parseProgressClaim(candidate.body)?.startedMillis ?? Number.NEGATIVE_INFINITY;
+    if (newest === undefined || started >= newestStarted) {
+      newest = candidate;
+      newestStarted = started;
+    }
+  }
+  return newest;
+};
 var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exports_Effect.gen(function* () {
   const target = yield* GitHubReviewTarget;
   const client = yield* exports_HttpClient.HttpClient;
+  const started = yield* exports_DateTime.now;
+  const claim = {
+    runToken: globalThis.crypto.randomUUID(),
+    startedMillis: exports_DateTime.toEpochMillis(started)
+  };
   const knownCommentId = yield* exports_Ref.make(exports_Option.none());
   const authorLogin = (target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN).toLowerCase();
   const issuePrefix = `${target.apiUrl}/repos/${target.repository}/issues`;
+  const canClaim = (body) => {
+    const existing = parseProgressClaim(body);
+    if (existing === undefined)
+      return true;
+    return existing.runToken === claim.runToken || claim.startedMillis >= existing.startedMillis;
+  };
   const withHeaders = (request3) => {
     const base2 = request3.pipe(exports_HttpClientRequest.setHeaders({
       "X-GitHub-Api-Version": "2022-11-28",
@@ -43460,20 +43496,22 @@ var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exp
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
   });
   const execute2 = (operation, request3) => exports_HttpClient.execute(request3).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asApiFailure(operation)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-  const decodeComments = exports_Schema.decodeUnknownEffect(GitHubIssueCommentsPageWire);
-  const decodeComment = exports_Schema.decodeUnknownEffect(GitHubIssueCommentWire);
-  const findExisting = exports_Effect.gen(function* () {
+  const decodeJson = (schema3, operation) => {
+    const decode2 = exports_Schema.decodeUnknownEffect(schema3);
+    return (response) => response.json.pipe(exports_Effect.mapError(asApiFailure(operation)), exports_Effect.flatMap((payload) => decode2(payload).pipe(exports_Effect.mapError(asApiFailure(operation)))));
+  };
+  const findCandidates = exports_Effect.gen(function* () {
     const perPage = 100;
-    let found = exports_Option.none();
+    const found = [];
     for (let page = 1;page <= MAX_PROGRESS_LOOKUP_PAGES; page += 1) {
       const response = yield* execute2("listProgressComments", withHeaders(exports_HttpClientRequest.get(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.setUrlParams({
         per_page: String(perPage),
         page: String(page)
       }))));
-      const wires = yield* response.json.pipe(exports_Effect.mapError(asApiFailure("listProgressComments")), exports_Effect.flatMap((body) => decodeComments(body).pipe(exports_Effect.mapError(asApiFailure("listProgressComments")))));
+      const wires = yield* decodeJson(GitHubIssueCommentsPageWire, "listProgressComments")(response);
       for (const wire of wires) {
-        if (wire.user?.login.toLowerCase() === authorLogin && wire.user.type === "Bot" && (wire.body ?? "").includes(PROGRESS_COMMENT_MARKER)) {
-          found = exports_Option.some(wire.id);
+        if (wire.user?.login.toLowerCase() === authorLogin && wire.user.type === "Bot" && (wire.body ?? "").includes(PROGRESS_COMMENT_MARKER_PREFIX)) {
+          found.push({ id: wire.id, body: wire.body ?? "" });
         }
       }
       if (wires.length < perPage)
@@ -43484,20 +43522,35 @@ var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exp
       reason: `comment history exceeds the bounded ${MAX_PROGRESS_LOOKUP_PAGES * 100}-comment lookup`
     });
   });
-  const create = (body) => execute2("createProgressComment", withHeaders(exports_HttpClientRequest.post(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.flatMap((response) => response.json.pipe(exports_Effect.mapError(asApiFailure("createProgressComment")), exports_Effect.flatMap((payload) => decodeComment(payload).pipe(exports_Effect.mapError(asApiFailure("createProgressComment")))))), exports_Effect.map((wire) => wire.id));
+  const readComment = (commentId) => execute2("readProgressComment", withHeaders(exports_HttpClientRequest.get(`${issuePrefix}/comments/${commentId}`))).pipe(exports_Effect.flatMap(decodeJson(GitHubIssueCommentWire, "readProgressComment")), exports_Effect.map((wire) => wire.body ?? ""));
+  const create = (body) => execute2("createProgressComment", withHeaders(exports_HttpClientRequest.post(`${issuePrefix}/${target.number}/comments`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.flatMap(decodeJson(GitHubIssueCommentWire, "createProgressComment")), exports_Effect.map((wire) => wire.id));
   const update3 = (commentId, body) => execute2("updateProgressComment", withHeaders(exports_HttpClientRequest.patch(`${issuePrefix}/comments/${commentId}`).pipe(exports_HttpClientRequest.bodyJsonUnsafe({ body })))).pipe(exports_Effect.asVoid);
+  const deleteComment = (commentId) => execute2("deleteProgressComment", withHeaders(exports_HttpClientRequest.delete(`${issuePrefix}/comments/${commentId}`))).pipe(exports_Effect.asVoid);
+  const guardedUpdate = exports_Effect.fn("ReviewProgressReporter.guardedUpdate")(function* (commentId, body) {
+    const current = yield* readComment(commentId);
+    if (!canClaim(current)) {
+      return yield* exports_Effect.logDebug("review progress comment is owned by a newer run; leaving it untouched");
+    }
+    yield* update3(commentId, body);
+  });
   const upsert = exports_Effect.fn("ReviewProgressReporter.upsert")(function* (body) {
     const cached3 = yield* exports_Ref.get(knownCommentId);
     if (exports_Option.isSome(cached3)) {
-      return yield* update3(cached3.value, body);
+      return yield* guardedUpdate(cached3.value, body);
     }
-    const existing = yield* findExisting;
-    if (exports_Option.isSome(existing)) {
-      yield* exports_Ref.set(knownCommentId, existing);
-      return yield* update3(existing.value, body);
+    const candidates = yield* findCandidates;
+    const newest = pickNewestClaim(candidates);
+    if (newest === undefined) {
+      const created = yield* create(body);
+      yield* exports_Ref.set(knownCommentId, exports_Option.some(created));
+      return;
     }
-    const created = yield* create(body);
-    yield* exports_Ref.set(knownCommentId, exports_Option.some(created));
+    yield* exports_Effect.forEach(candidates.filter((candidate) => candidate.id !== newest.id), (duplicate) => deleteComment(duplicate.id).pipe(exports_Effect.catch((failure) => exports_Effect.logWarning("duplicate review progress comment could not be deleted").pipe(exports_Effect.annotateLogs({ commentId: duplicate.id, reason: failure.reason })))), { discard: true });
+    yield* exports_Ref.set(knownCommentId, exports_Option.some(newest.id));
+    if (!canClaim(newest.body)) {
+      return yield* exports_Effect.logDebug("review progress comment is owned by a newer run; leaving it untouched");
+    }
+    yield* update3(newest.id, body);
   });
   const failOpen2 = (phase) => (effect2) => effect2.pipe(exports_Effect.catch((failure) => exports_Effect.logWarning("review progress comment update failed").pipe(exports_Effect.annotateLogs({
     progressPhase: phase,
@@ -43505,8 +43558,8 @@ var gitHubReviewProgressLayer = exports_Layer.effect(ReviewProgressReporter)(exp
     reason: failure.reason
   }))));
   return ReviewProgressReporter.of({
-    begin: (info2) => upsert(renderProgressBeginBody(info2)).pipe(failOpen2("begin")),
-    settle: (info2) => upsert(renderProgressSettleBody(info2)).pipe(failOpen2("settle"))
+    begin: (info2) => upsert(renderProgressBeginBody(info2, claim)).pipe(failOpen2("begin")),
+    settle: (info2) => upsert(renderProgressSettleBody(info2, claim)).pipe(failOpen2("settle"))
   });
 }));
 

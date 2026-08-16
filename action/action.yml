@@ -108,9 +108,13 @@ inputs:
     description: >-
       Maintain one sticky "review in progress" issue comment on the pull
       request, posted the moment a run starts and updated in place with the
-      settled outcome ('true', default). Fail-open and cosmetic: progress
-      faults never change the review or the check. Dry runs (post: 'false')
-      post no progress. Set 'false' to post nothing before the review itself.
+      settled outcome ('true', default). At-least-once with generation-fenced
+      writes: stale runs cannot replace newer status, duplicates from unfenced
+      overlapping runs are cleaned up best-effort, and a per-PR workflow
+      concurrency group gives strict single-comment behavior. Fail-open and
+      cosmetic: progress faults never change the review or the check. Dry
+      runs (post: 'false') post no progress. Set 'false' to post nothing
+      before the review itself.
     required: false
     default: "true"
   log-level:
