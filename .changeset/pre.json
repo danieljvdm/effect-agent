@@ -42,10 +42,13 @@
     "pr-review-incremental-continuity",
     "pr-review-package",
     "pr-review-posting-identity",
+    "pr-review-presentation",
     "pr-review-skip-unchanged",
     "quiet-review-headroom",
+    "resilient-review-scope",
     "retire-stale-reviews",
     "review-patchless-text",
-    "typed-budget-settlement"
+    "typed-budget-settlement",
+    "visible-review-runs"
   ]
 }
