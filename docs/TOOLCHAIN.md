@@ -250,12 +250,26 @@ transform-mode workers).
 
 ## Post-install setup
 
-`scripts/postinstall.ts` performs three deterministic steps:
+`bun install` runs `dev-kit apply` (the root `postinstall` script), which converges the committed
+contributor-skill copies, the `repos/effect` source checkout at the exact installed
+`effect@<version>` tag, the repository's `.vite-hooks` dispatcher, and the Effect-patched
+TypeScript compiler, in that order.
 
-1. `sync-effect-submodule.ts` reads the exact `effect` catalog version and checks out the matching
-   `effect@<version>` tag in `repos/effect`.
-2. `vp config` installs the repository's `.vite-hooks/pre-commit` hook.
-3. `effect-tsgo patch` patches the managed TypeScript compiler.
+The Effect source task is fail-closed and stops the whole apply when its destination is not a
+usable checkout. `repos/effect` is a tracked submodule, so in a fresh linked worktree (or any
+non-recursive clone) it starts as an empty tracked directory, the task refuses it, and postinstall
+aborts BEFORE the compiler patch — leaving plain `tsc` in place and local checks weaker than CI.
+Initialize the submodule before the first install:
+
+```sh
+git submodule update --init repos/effect
+bun install
+```
+
+`bun run patch:tsgo` (`dev-kit tsgo patch`) applies the compiler patch standalone, and
+`bun run sync:effect` (`dev-kit effect sync --path repos/effect`) syncs only the Effect checkout —
+the explicit `--path` matters, because the bare command defaults to `.repos/effect` and would
+create a duplicate clone.
 
 CI installs with lifecycle scripts suppressed, verifies the locked Dev Kit outputs, and then runs
 `bun run patch:tsgo` explicitly in every job that checks, tests, or builds TypeScript. This preserves

@@ -431,9 +431,9 @@ The framework uses these Effect foundations directly:
 Effect v4 is pinned exactly during private development. An Effect upgrade is an explicit
 repository-wide change with compile-time and runtime verification.
 
-The root Bun catalog is the single version source. `scripts/sync-effect-submodule.ts` derives the
-matching `effect@<version>` source tag from that catalog. Workspace packages use `catalog:` and may
-not declare independent Effect ranges.
+The root Bun catalog is the single version source. `bun run sync:effect` (Dev Kit's Effect-source
+task) derives the matching `effect@<version>` source tag from the installed package. Workspace
+packages use `catalog:` and may not declare independent Effect ranges.
 
 Other unstable Effect facilities may also be adopted directly when they fit the product. Do not
 wrap them solely because they are marked unstable. Do keep platform and persistence choices behind

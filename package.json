@@ -9,7 +9,7 @@
   "type": "module",
   "scripts": {
     "postinstall": "dev-kit apply",
-    "sync:effect": "dev-kit effect sync",
+    "sync:effect": "dev-kit effect sync --path repos/effect",
     "patch:tsgo": "dev-kit tsgo patch",
     "changeset": "bun x changeset",
     "changeset:version": "bun x changeset version",
