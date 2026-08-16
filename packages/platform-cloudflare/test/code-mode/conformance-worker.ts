@@ -4,13 +4,15 @@ import {
   CodeExecutionNamespace,
   CodeExecutionRequest,
   CodeExecutor,
+  CodeHostCallFailure,
+  CodeHostCallSuccess,
   NetworkAllowlist,
   NetworkDisabled,
   type CodeExecutionError,
   type CodeHostCall,
   type CodeHostCallResult,
 } from "@effect-agent/sandbox";
-import { Cause, Duration, Effect, Exit, Layer, Option } from "effect";
+import { Cause, Context, Duration, Effect, Exit, Option, Predicate, type Layer } from "effect";
 
 // Workspace-relative source import: esbuild bundles it, and the package
 // barrel would pull in Node-only storage fixtures the worker cannot load.
@@ -101,6 +103,7 @@ const workerdConformanceCaseNames: ReadonlyArray<string> = [
   "TEST-015 fails typed when the expression is not one async function",
   "TEST-015 fails typed when the final result exceeds its byte budget",
   "TEST-015 fails typed when host calls exceed the executor cap",
+  "TEST-015 fails typed on a host outcome outside the protocol schema",
   "TEST-015 surfaces an uncaught program throw with its bounded log capture",
   "TEST-015 fails typed when the program returns a non-JSON value",
   "CAP-015 rejects a network allowlist it cannot enforce with a typed unsupported error",
@@ -208,12 +211,66 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       failures.push(`host composition: expected 1 host call, observed ${calls.length}`);
     }
 
+    const resultLimit = CodeExecutionLimits.make({
+      ...baseLimits,
+      maxHostCallResultBytes: 128,
+    });
+    for (const [label, hostCallResult] of [
+      ["success", CodeHostCallSuccess.make({ value: "x".repeat(256) })],
+      [
+        "failure",
+        CodeHostCallFailure.make({ error: { _tag: "OversizedFailure", detail: "x".repeat(256) } }),
+      ],
+    ] as const) {
+      const outcome = yield* runOutcome(
+        request("async () => warehouse.query({})", {
+          namespaces: [namespace],
+          limits: resultLimit,
+        }),
+        layer,
+        { call: () => Effect.succeed(hostCallResult) },
+      );
+      if (
+        outcome.tag !== "CodeOutputLimitError" ||
+        !Predicate.isObject(outcome.detail) ||
+        outcome.detail.surface !== "host-call-result"
+      ) {
+        failures.push(
+          `oversized host ${label}: expected a host-call-result limit error, got ${JSON.stringify(outcome)}`,
+        );
+      }
+    }
+
     return failures;
   });
 
+const ExecutorFiberMarker = Context.Reference<"root" | "executor">(
+  "@effect-agent/platform-cloudflare/test/ExecutorFiberMarker",
+  { defaultValue: () => "root" },
+);
+
+const runHostCallRegression = (env: WorkerEnv) => {
+  const layer = executorLayerFor(env);
+  const namespace = CodeExecutionNamespace.make({ name: "warehouse", methods: ["query"] });
+  const host: CodeExecutionHost["Service"] = {
+    call: () =>
+      ExecutorFiberMarker.pipe(Effect.map((value) => CodeHostCallSuccess.make({ value }))),
+  };
+  return runOutcome(
+    request("async () => warehouse.query({ sql: 'select 1' })", {
+      namespaces: [namespace],
+    }),
+    layer,
+    host,
+  ).pipe(Effect.provideService(ExecutorFiberMarker, "executor"));
+};
+
 export default {
-  async fetch(_request: Request, env: WorkerEnv): Promise<Response> {
+  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     try {
+      if (new URL(request.url).pathname === "/host-call-root-fiber") {
+        return Response.json(await Effect.runPromise(runHostCallRegression(env)));
+      }
       const failures = await Effect.runPromise(runAllChecks(env));
       return Response.json({ failures });
     } catch (cause) {

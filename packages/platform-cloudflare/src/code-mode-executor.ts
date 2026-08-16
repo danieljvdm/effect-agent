@@ -1,6 +1,5 @@
 import {
   CodeExecutionHost,
-  CodeExecutionRequest,
   CodeExecutionResourceUse,
   CodeExecutionResult,
   CodeExecutionTimeoutError,
@@ -17,9 +16,10 @@ import {
   CodeSourceError,
   SandboxImplementation,
   type CodeExecutorExecute,
+  type CodeExecutionRequest,
 } from "@effect-agent/sandbox";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { Clock, Duration, Effect, Fiber, Layer, Option, Schema } from "effect";
+import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect";
 
 /**
  * The Cloudflare Dynamic Worker `CodeExecutor` adapter (C4 of ADR-0017;
@@ -301,6 +301,14 @@ const decodeHostCall = (value: unknown) => {
   }
 };
 
+const decodeHostCallResult = (value: unknown) => {
+  try {
+    return Schema.decodeUnknownOption(CodeHostCallResult)(value);
+  } catch {
+    return Option.none<CodeHostCallResult>();
+  }
+};
+
 /**
  * Project a host outcome to the plain JSON envelope the harness reads. A
  * `CodeExecutionHost` may return either real `CodeHostCallResult` instances
@@ -308,10 +316,26 @@ const decodeHostCall = (value: unknown) => {
  * Mode capability's broker route), so this reads the shared fields rather than
  * `Schema.encodeSync`, which would reject a plain object.
  */
-const hostResultEnvelope = (outcome: CodeHostCallResult): Record<string, unknown> =>
-  outcome._tag === "CodeHostCallSuccess"
-    ? { _tag: "CodeHostCallSuccess", value: outcome.value }
-    : { _tag: "CodeHostCallFailure", error: outcome.error };
+interface EncodedHostResultPayload {
+  readonly encodedPayload: string;
+  readonly resultBytes: number;
+}
+
+const encodeHostResultPayload = (
+  outcome: CodeHostCallResult,
+): EncodedHostResultPayload | undefined => {
+  try {
+    const payload = outcome._tag === "CodeHostCallSuccess" ? outcome.value : outcome.error;
+    const encodedPayload = JSON.stringify(payload);
+    if (encodedPayload === undefined) return undefined;
+    return {
+      encodedPayload,
+      resultBytes: utf8ByteLength(encodedPayload),
+    };
+  } catch {
+    return undefined;
+  }
+};
 
 const utf8ByteLength = (value: string): number => {
   let total = 0;
@@ -322,19 +346,22 @@ const utf8ByteLength = (value: string): number => {
   return total;
 };
 
-const encodedJsonByteLength = (value: unknown): number | undefined => {
-  try {
-    const encoded = JSON.stringify(value);
-    return encoded === undefined ? undefined : utf8ByteLength(encoded);
-  } catch {
-    return undefined;
-  }
-};
+type HostDispatchFailure =
+  | { readonly _tag: "host-call-limit" }
+  | { readonly _tag: "host-call-result-limit"; readonly observed: number }
+  | { readonly _tag: "host-call-protocol" }
+  | { readonly _tag: "wall-clock-timeout" }
+  | { readonly _tag: "host-call-defect"; readonly cause: Cause.Cause<never> };
 
-interface PendingHostCall {
-  readonly hostCall: unknown;
+interface QueuedHostCall {
+  readonly call: CodeHostCall;
   readonly resolve: (value: unknown) => void;
   readonly reject: (reason: unknown) => void;
+}
+
+interface ActiveHostCall {
+  readonly fiber: Fiber.Fiber<Record<string, unknown>, never>;
+  readonly settlement: Promise<void>;
 }
 
 /** Reserved global names the harness owns inside the dynamic worker. */
@@ -392,83 +419,193 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
     // prefix keeps ids debuggable; the random suffix makes them unforgeable.
     const passId = `code-mode-pass-${passCounterState.next}-${crypto.randomUUID()}`;
 
-    // Promise-side host calls bridge into the Effect world through a pending
-    // list served by a scoped fiber, exactly like the deterministic
-    // substitute: interruption reaches in-flight host calls, and pass-fatal
-    // conditions fail the pass by failing the server.
-    const pending: Array<PendingHostCall> = [];
-    let wake: (() => void) | undefined;
+    const startedAt = performance.now();
+    const passDeadline = startedAt + Duration.toMillis(request.limits.maxWallTime);
+    const remainingPassWallTime = (): Duration.Duration =>
+      Duration.millis(Math.max(0, passDeadline - performance.now()));
     let issuedHostCalls = 0;
-    const dispatch = (hostCall: unknown): Promise<unknown> =>
-      new Promise((resolve, reject) => {
-        issuedHostCalls += 1;
-        if (issuedHostCalls > request.limits.maxHostCalls + 1) {
-          reject(new Error("host-call limit exceeded"));
-          return;
-        }
-        pending.push({ hostCall, resolve, reject });
-        wake?.();
+    let passOpen = true;
+    const queuedHostCalls: Array<QueuedHostCall> = [];
+    let activeHostCall: ActiveHostCall | undefined;
+    let hostDispatchFailure: HostDispatchFailure | undefined;
+    let propagatedHostDispatchFailure: HostDispatchFailure | undefined;
+    let signalHostDispatchFailure = (_failure: HostDispatchFailure): void => undefined;
+    const hostDispatchFailureSignal = new Promise<HostDispatchFailure>((resolve) => {
+      signalHostDispatchFailure = resolve;
+    });
+    const rejectQueuedHostCalls = (reason: Error): void => {
+      for (const queued of queuedHostCalls.splice(0)) {
+        queued.reject(reason);
+      }
+    };
+    const recordHostDispatchFailure = (failure: HostDispatchFailure): void => {
+      if (hostDispatchFailure !== undefined) return;
+      hostDispatchFailure = failure;
+      signalHostDispatchFailure(failure);
+      rejectQueuedHostCalls(new Error("Code Mode pass failed"));
+    };
+    const failHostDispatch = (failure: HostDispatchFailure) => {
+      switch (failure._tag) {
+        case "host-call-limit":
+          return Effect.fail(
+            CodeHostCallLimitError.make({
+              implementation: dynamicWorkerImplementation,
+              limit: request.limits.maxHostCalls,
+              logs: [],
+            }),
+          );
+        case "host-call-result-limit":
+          return Effect.fail(
+            CodeOutputLimitError.make({
+              implementation: dynamicWorkerImplementation,
+              surface: "host-call-result",
+              limit: request.limits.maxHostCallResultBytes,
+              observed: failure.observed,
+              logs: [],
+            }),
+          );
+        case "host-call-protocol":
+          return Effect.fail(
+            CodeExecutionProtocolError.make({
+              implementation: dynamicWorkerImplementation,
+              message: "The execution host returned a value outside the CodeHostCallResult schema",
+            }),
+          );
+        case "wall-clock-timeout":
+          return Effect.fail(
+            CodeExecutionTimeoutError.make({
+              implementation: dynamicWorkerImplementation,
+              kind: "wall-clock",
+              maxWallTime: request.limits.maxWallTime,
+              logs: [],
+            }),
+          );
+        case "host-call-defect":
+          return Effect.failCause(failure.cause);
+      }
+    };
+    const propagateHostDispatchFailure = (failure: HostDispatchFailure) =>
+      Effect.gen(function* () {
+        propagatedHostDispatchFailure = failure;
+        return yield* failHostDispatch(failure);
       });
+
+    const startNextHostCall = (): void => {
+      if (!passOpen || hostDispatchFailure !== undefined || activeHostCall !== undefined) return;
+      const queued = queuedHostCalls.shift();
+      if (queued === undefined) return;
+
+      // A Dynamic Worker callback is a new Workers RPC into the loader isolate. Running the
+      // complete host call on an independent root fiber breaks its dependency on the still-open
+      // guest RPC. Retaining the handle and starting one call at a time preserves bounded,
+      // serialized execution and lets pass teardown interrupt and await the active call.
+      const fiber = Effect.runFork(
+        Effect.yieldNow.pipe(
+          Effect.andThen(host.call(queued.call)),
+          Effect.timeoutOrElse({
+            duration: remainingPassWallTime(),
+            orElse: () =>
+              Effect.sync(() => {
+                recordHostDispatchFailure({ _tag: "wall-clock-timeout" });
+                throw new Error("code-mode host call exceeded the pass wall-clock limit");
+              }),
+          }),
+          Effect.map((outcome) => {
+            const decoded = decodeHostCallResult(outcome);
+            if (Option.isNone(decoded)) {
+              recordHostDispatchFailure({ _tag: "host-call-protocol" });
+              throw new Error("host-call protocol violation");
+            }
+            const encoded = encodeHostResultPayload(decoded.value);
+            if (
+              encoded === undefined ||
+              encoded.resultBytes > request.limits.maxHostCallResultBytes
+            ) {
+              recordHostDispatchFailure({
+                _tag: "host-call-result-limit",
+                observed: encoded?.resultBytes ?? 0,
+              });
+              throw new Error("host-call result limit exceeded");
+            }
+            const normalizedPayload: unknown = JSON.parse(encoded.encodedPayload);
+            return decoded.value._tag === "CodeHostCallSuccess"
+              ? { _tag: "CodeHostCallSuccess", value: normalizedPayload }
+              : { _tag: "CodeHostCallFailure", error: normalizedPayload };
+          }),
+        ),
+      );
+      const settlement = Effect.runPromise(Fiber.await(fiber))
+        .then((exit) => {
+          if (Exit.isSuccess(exit)) {
+            queued.resolve(exit.value);
+            return;
+          }
+          if (!Cause.hasInterruptsOnly(exit.cause)) {
+            recordHostDispatchFailure({ _tag: "host-call-defect", cause: exit.cause });
+          }
+          queued.reject(new Error("Code Mode host call failed"));
+        })
+        .finally(() => {
+          if (activeHostCall?.fiber === fiber) activeHostCall = undefined;
+          startNextHostCall();
+        });
+      activeHostCall = { fiber, settlement };
+    };
+
+    const dispatch = (hostCall: unknown): Promise<unknown> => {
+      if (!passOpen) {
+        return Promise.reject(new Error("Code Mode pass is closing"));
+      }
+      issuedHostCalls += 1;
+      if (issuedHostCalls > request.limits.maxHostCalls) {
+        recordHostDispatchFailure({ _tag: "host-call-limit" });
+        return Promise.reject(new Error("host-call limit exceeded"));
+      }
+      const decoded = decodeHostCall(hostCall);
+      if (Option.isNone(decoded)) {
+        return Promise.reject(new TypeError("host calls must match the CodeHostCall schema"));
+      }
+      return new Promise((resolve, reject) => {
+        queuedHostCalls.push({ call: decoded.value, resolve, reject });
+        startNextHostCall();
+      });
+    };
+
+    const closeHostDispatch = Effect.gen(function* () {
+      passOpen = false;
+      passRegistry.delete(passId);
+      rejectQueuedHostCalls(new Error("Code Mode pass is closing"));
+      const active = activeHostCall;
+      if (active !== undefined) {
+        yield* Fiber.interrupt(active.fiber);
+        yield* Effect.promise(() => active.settlement);
+        if (activeHostCall === active) activeHostCall = undefined;
+      }
+      return hostDispatchFailure;
+    });
+    const stopHostDispatch = closeHostDispatch.pipe(
+      Effect.flatMap((failure) =>
+        failure !== undefined && propagatedHostDispatchFailure !== failure
+          ? propagateHostDispatchFailure(failure)
+          : Effect.void,
+      ),
+    );
+    const releaseHostDispatch = closeHostDispatch.pipe(
+      Effect.flatMap((failure) => {
+        if (failure?._tag !== "host-call-defect" || propagatedHostDispatchFailure === failure) {
+          return Effect.void;
+        }
+        propagatedHostDispatchFailure = failure;
+        return Effect.failCause(failure.cause);
+      }),
+    );
 
     yield* Effect.acquireRelease(
       Effect.sync(() => {
         passRegistry.set(passId, { dispatch });
       }),
-      () =>
-        Effect.sync(() => {
-          passRegistry.delete(passId);
-        }),
+      () => releaseHostDispatch,
     );
-
-    const nextPending = Effect.suspend(() => {
-      const item = pending.shift();
-      if (item !== undefined) {
-        return Effect.succeed(item);
-      }
-      return Effect.callback<PendingHostCall>((resume) => {
-        wake = () => {
-          wake = undefined;
-          const next = pending.shift();
-          if (next !== undefined) {
-            resume(Effect.succeed(next));
-          }
-        };
-      });
-    });
-
-    const serveHostCalls = Effect.gen(function* () {
-      let served = 0;
-      while (true) {
-        const item = yield* nextPending;
-        served += 1;
-        if (served > request.limits.maxHostCalls) {
-          return yield* CodeHostCallLimitError.make({
-            implementation: dynamicWorkerImplementation,
-            limit: request.limits.maxHostCalls,
-            logs: [],
-          });
-        }
-        const decoded = decodeHostCall(item.hostCall);
-        if (Option.isNone(decoded)) {
-          item.reject(new TypeError("host calls must match the CodeHostCall schema"));
-          continue;
-        }
-        const outcome = yield* host.call(decoded.value);
-        if (outcome._tag === "CodeHostCallSuccess") {
-          const bytes = encodedJsonByteLength(outcome.value);
-          if (bytes === undefined || bytes > request.limits.maxHostCallResultBytes) {
-            return yield* CodeOutputLimitError.make({
-              implementation: dynamicWorkerImplementation,
-              surface: "host-call-result",
-              limit: request.limits.maxHostCallResultBytes,
-              observed: bytes ?? 0,
-              logs: [],
-            });
-          }
-        }
-        item.resolve(hostResultEnvelope(outcome));
-      }
-    });
 
     const workerCode = {
       compatibilityDate: options.compatibilityDate ?? "2025-05-01",
@@ -505,7 +642,6 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
           }),
     };
 
-    const startedAt = yield* Clock.currentTimeMillis;
     const worker = yield* Effect.acquireRelease(
       Effect.try({
         try: () => options.loader.load(workerCode as never),
@@ -534,8 +670,6 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
         }),
     );
 
-    const server = yield* serveHostCalls.pipe(Effect.forkScoped);
-
     const rpc = Effect.tryPromise({
       try: async () => {
         const entrypoint = worker.getEntrypoint() as unknown as {
@@ -546,20 +680,29 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
       catch: (cause) => classifyWorkerFailure(cause, request.limits.maxWallTime),
     });
 
-    const raw = yield* Effect.raceFirst(rpc, Fiber.join(server)).pipe(
-      Effect.timeoutOrElse({
-        duration: request.limits.maxWallTime,
-        orElse: () =>
-          CodeExecutionTimeoutError.make({
-            implementation: dynamicWorkerImplementation,
-            kind: "wall-clock",
-            maxWallTime: request.limits.maxWallTime,
-            logs: [],
-          }),
-      }),
-      Effect.ensuring(Fiber.interrupt(server)),
+    const raw = yield* Effect.raceFirst(
+      rpc.pipe(
+        Effect.timeoutOrElse({
+          duration: remainingPassWallTime(),
+          orElse: () =>
+            CodeExecutionTimeoutError.make({
+              implementation: dynamicWorkerImplementation,
+              kind: "wall-clock",
+              maxWallTime: request.limits.maxWallTime,
+              logs: [],
+            }),
+        }),
+      ),
+      Effect.promise(() => hostDispatchFailureSignal).pipe(
+        Effect.flatMap(propagateHostDispatchFailure),
+      ),
     );
-    const finishedAt = yield* Clock.currentTimeMillis;
+    yield* stopHostDispatch;
+    const finishedAt = performance.now();
+
+    if (hostDispatchFailure !== undefined) {
+      return yield* propagateHostDispatchFailure(hostDispatchFailure);
+    }
 
     const outcome = decodeHarnessOutcome(raw);
     if (Option.isNone(outcome)) {
