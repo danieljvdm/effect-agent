@@ -281,6 +281,17 @@ rewrites history from the cached ledger status.
 Each step is idempotent. Conflicting terminal outcomes are rejected. Cleanup failure
 is recorded separately and cannot erase an accepted settlement.
 
+The settlement payload carries typed budget metadata alongside its outcome (RUN-011):
+a `completed` soft landing persists `finishReason: "budget-exhausted"` with the
+`exhausted` dimension (`tokens`, `tool-calls`, or `turns`), and a Run failed by
+`AgentPolicyError` persists the typed `limit` as `policyLimit` alongside the bounded
+`{errorTag, message}` failure projection in `result`. Because the metadata rides the
+exact reserved record, it survives reservation replay, canonical append, recovery,
+and every later read unchanged. Decode is family-bound fail-closed: metadata on the
+wrong settlement family rejects rather than becoming trusted audit history, and
+records persisted before the metadata existed decode with it absent (additive,
+schemaVersion 1).
+
 ## 13. Abort
 
 Abort is a durable command with identity, author, reason, and target.

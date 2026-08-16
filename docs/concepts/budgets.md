@@ -33,22 +33,25 @@ AgentPolicy.make({
 });
 ```
 
-| Bound                  | What it limits                                      | On exhaustion           |
-| ---------------------- | --------------------------------------------------- | ----------------------- |
-| `maxTurns`             | model requests per Run                              | `onExhaustion` resolves |
-| `maxToolCalls`         | declared Tool Calls per Run (programmatic included) | `onExhaustion` resolves |
-| `maxDuration`          | wall clock per Run                                  | always fails typed      |
-| `tokenBudget`          | input + output tokens per Run                       | always fails typed      |
-| `costBudgetMicrousd`   | estimated cost per Run (needs a cost estimator)     | always fails typed      |
-| `repeatedFailureLimit` | consecutive terminal Tool failures                  | always fails typed      |
-| `toolConcurrency`      | parallel Tool Handlers per batch                    | not a failure — a gate  |
+| Bound                  | What it limits                                      | On exhaustion                     |
+| ---------------------- | --------------------------------------------------- | --------------------------------- |
+| `maxTurns`             | model requests per Run                              | `onExhaustion` resolves           |
+| `maxToolCalls`         | declared Tool Calls per Run (programmatic included) | `onExhaustion` resolves           |
+| `maxDuration`          | wall clock per Run                                  | always fails typed                |
+| `tokenBudget`          | input + output tokens per Run                       | `onExhaustion` resolves (RUN-025) |
+| `costBudgetMicrousd`   | estimated cost per Run (needs a cost estimator)     | always fails typed                |
+| `repeatedFailureLimit` | consecutive terminal Tool failures                  | always fails typed                |
+| `toolConcurrency`      | parallel Tool Handlers per batch                    | not a failure — a gate            |
 
 A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming which bound bound.
+In the DN and DC assemblies a Run failed this way settles with that literal preserved as the
+canonical settlement's `policyLimit` (RUN-011) — consumers read the dimension typed, never from
+the failure message.
 
 ## Exhaustion: soft landing or fail
 
-`onExhaustion` selects the resolution for the two _countable work_ bounds — Turns and Tool Calls
-(runtime spec RUN-018/RUN-019):
+`onExhaustion` selects the resolution for the countable work bounds — Turns and Tool Calls
+(runtime spec RUN-018/RUN-019) — and, one-shot, for the token budget (RUN-025):
 
 **`"final-answer"` (the default).** The Run gets one constrained opportunity to deliver:
 
@@ -60,9 +63,10 @@ A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming w
    A second grace is structurally impossible.
 4. The Run settles _completed_ — with the honest `finishReason: "budget-exhausted"`, never a
    plain `"model-stop"` (RUN-011: budget exhaustion cannot masquerade as success). In the DN and
-   DC assemblies the canonical `SubmissionSettled` record carries the same marker, so a rebuilt
-   projection can distinguish an exhaustion-truncated answer from an ordinary one without the
-   live event stream.
+   DC assemblies the canonical `SubmissionSettled` record carries the same marker plus the
+   typed `exhausted` dimension (`tokens`, `tool-calls`, or `turns`), so a rebuilt projection
+   can tell an exhaustion-truncated answer from an ordinary one — and name which bound bound —
+   without the live event stream or message-text parsing.
 5. A model that declares a Tool Call under the constraint fails the Run typed
    (`ModelProtocolError`, RUN-020) — fail-closed, no rejection loops.
 
@@ -74,8 +78,9 @@ exceeding work starts. Choose it for pipelines that must never accept a truncate
 repository's own PR reviewer pins it for review _children_, because a review is a coverage claim
 and a partial produced without reading the diff would launder exhaustion into "reviewed".
 
-Duration, token, cost, and repeated-failure bounds are hard rails regardless: a soft landing can
-never loop or spend unboundedly, because the rails that measure spending stay fatal.
+Duration, cost, and repeated-failure bounds are hard rails regardless — and the token dimension's
+soft landing is one-shot (RUN-025): a soft landing can never loop or spend unboundedly, because
+the rails that measure spending stay fatal.
 
 ## Per-Run allowances
 
@@ -176,9 +181,9 @@ declared-plus-programmatic count.
   one Tool Call and each batch one Turn, so `maxTurns` usually binds before `maxToolCalls`; raise
   them together, and let the soft landing convert the residual tail into a partial cited answer
   instead of provisioning for the worst case.
-- **The token budget is the honest spend ceiling.** It stays fatal by design — one more turn
-  costs tokens the Run does not have — so pair a generous soft-landing surface with a firm
-  `tokenBudget`.
+- **The token budget is the honest spend ceiling.** Its soft landing is one-shot and constrained
+  (RUN-025) — one more turn costs tokens the Run does not have — so pair a generous soft-landing
+  surface with a firm `tokenBudget`.
 - **Delegate instead of raising.** A single window that needs 100 tool calls is usually a fan-out
   of five scouts needing 20 — with per-invocation allowances, containment, and extension grants
   where depth is actually warranted.

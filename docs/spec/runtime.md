@@ -486,11 +486,17 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
 - **RUN-008:** Interruption propagates to all attached children.
 - **RUN-009:** Concurrency is bounded.
 - **RUN-010:** Slow detached observers cannot determine durable liveness.
-- **RUN-011:** Budget exhaustion cannot masquerade as success. A Run that settles through the
-  final-answer resolution — Turn, Tool Call, or token exhaustion — carries
-  `finishReason: "budget-exhausted"` and the `exhausted` dimension marker — never
-  `"model-stop"` — on the live terminal event and on the durable `SubmissionSettled` record;
-  `onExhaustion: "fail"` fails typed before any successful stop.
+- **RUN-011:** Budget exhaustion cannot masquerade as success, and its dimension survives
+  durably typed. A Run that settles through the final-answer resolution — Turn, Tool Call, or
+  token exhaustion — carries `finishReason: "budget-exhausted"` and the `exhausted` dimension
+  marker — never `"model-stop"` — on the live terminal event and on the durable
+  `SubmissionSettled` record; `onExhaustion: "fail"` fails typed before any successful stop,
+  and a Run failed by `AgentPolicyError` settles with the typed `limit` preserved as the
+  durable record's `policyLimit`. Consumers never reconstruct either dimension from message
+  text. The metadata is family-bound fail-closed: `exhausted` decodes only alongside
+  `finishReason: "budget-exhausted"` on a `completed` settlement, `policyLimit` only on a
+  `failed` settlement, and histories persisted before the dimensions became durable decode with
+  the metadata absent.
 - **RUN-012:** Provider SDK types do not enter Conversation records; Effect AI Prompt and Response
   values remain the model-facing boundary.
 - **RUN-013:** No retry policy can blindly repeat an uncertain external effect.

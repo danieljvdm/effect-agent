@@ -466,6 +466,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(settled.outcome).toBe("completed");
           expect(settled.runId).toBe(runId);
           expect(settled.finishReason).toBe("budget-exhausted");
+          expect(settled.exhausted).toBe("tool-calls");
+          expect(settled.policyLimit).toBeUndefined();
           expect(settled.result).toEqual({ answer: "partial, budget exhausted" });
         }
 
@@ -492,7 +494,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   );
 
   it.effect(
-    "RUN-018 recovery preserves the budget-exhausted finishReason across both terminalize failpoints",
+    "RUN-018 recovery preserves the budget-exhausted finishReason and exhausted dimension across both terminalize failpoints",
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
@@ -577,6 +579,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(settledRecords[0]).toMatchObject({
             outcome: "completed",
             finishReason: "budget-exhausted",
+            exhausted: "tool-calls",
           });
         }
       }),
@@ -1844,5 +1847,283 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       expect(payload.inputTokens).toBe(90);
       expect(payload.outputTokens).toBe(5);
     }),
+  );
+});
+
+layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
+  const usageOf = (input: number, output: number) => ({
+    inputTokens: { total: input },
+    outputTokens: { total: output },
+  });
+
+  const finalPartsWithUsage = (
+    text: string,
+    used: ReturnType<typeof usageOf>,
+  ): ReadonlyArray<Response.StreamPartEncoded> => [
+    { type: "text-start", id: "answer" },
+    { type: "text-delta", id: "answer", delta: text },
+    { type: "text-end", id: "answer" },
+    { type: "finish", reason: "stop", usage: used },
+  ];
+
+  const lastSettlement = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {
+    const payload = records.at(-1)?.record.payload;
+    if (payload?._tag !== "SubmissionSettled") {
+      throw new Error("expected the canonical settlement to close the log");
+    }
+    return payload;
+  };
+
+  const policyOf = (overrides?: Partial<Parameters<typeof AgentPolicy.make>[0]>) =>
+    AgentPolicy.make({
+      maxTurns: 3,
+      maxToolCalls: 2,
+      maxDuration: "30 seconds",
+      toolConcurrency: 1,
+      ...overrides,
+    });
+
+  it.effect('RUN-011: a Turn-exhausted soft landing settles with exhausted: "turns"', () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const definition = Agent.define("durable-turns-landing", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Search before answering.",
+        toolkit: searchTools,
+        policy: policyOf({ maxTurns: 1 }),
+      });
+      // Turn 1 declares the permitted batch; the grace Turn past `maxTurns`
+      // delivers the constrained final answer (RUN-019).
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0 ? toolCallParts : finalParts('{"answer":"turn-bound partial"}'),
+      );
+      const agent = Agent.withModel(definition, scripted.model);
+      const conversation = "conversation-turns-landing";
+
+      yield* runtime.submit(agent, { question: "turns?" }, submitOptions(conversation, "turns-1"));
+      const settlements = yield* runtime
+        .processConversation(agent, decodeConversationId(conversation))
+        .pipe(Effect.provide(searchToolLayer));
+      expect(settlements[0]?.outcome).toBe("completed");
+
+      const settled = lastSettlement(yield* readLog(conversation));
+      expect(settled.outcome).toBe("completed");
+      expect(settled.finishReason).toBe("budget-exhausted");
+      expect(settled.exhausted).toBe("turns");
+      expect(settled.policyLimit).toBeUndefined();
+      expect(settled.result).toEqual({ answer: "turn-bound partial" });
+    }),
+  );
+
+  it.effect('RUN-011: a token-exhausted soft landing settles with exhausted: "tokens"', () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const definition = Agent.define("durable-tokens-landing", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer immediately.",
+        toolkit: Toolkit.empty,
+        policy: policyOf({ tokenBudget: 100 }),
+      });
+      // A token-breaching stop response that already decodes settles directly
+      // (RUN-025): 90 + 20 tokens against the 100-token budget.
+      const scripted = yield* makeScriptedModel(() =>
+        finalPartsWithUsage('{"answer":"token-bound partial"}', usageOf(90, 20)),
+      );
+      const agent = Agent.withModel(definition, scripted.model);
+      const conversation = "conversation-tokens-landing";
+
+      yield* runtime.submit(
+        agent,
+        { question: "tokens?" },
+        submitOptions(conversation, "tokens-1"),
+      );
+      const settlements = yield* runtime.processConversation(
+        agent,
+        decodeConversationId(conversation),
+      );
+      expect(settlements[0]?.outcome).toBe("completed");
+
+      const settled = lastSettlement(yield* readLog(conversation));
+      expect(settled.outcome).toBe("completed");
+      expect(settled.finishReason).toBe("budget-exhausted");
+      expect(settled.exhausted).toBe("tokens");
+      expect(settled.policyLimit).toBeUndefined();
+      expect(settled.result).toEqual({ answer: "token-bound partial" });
+    }),
+  );
+
+  it.effect("RUN-011: a fail-mode token breach settles failed with the typed policyLimit", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const definition = Agent.define("durable-tokens-rail", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer immediately.",
+        toolkit: Toolkit.empty,
+        policy: policyOf({ tokenBudget: 100, onExhaustion: "fail" }),
+      });
+      const scripted = yield* makeScriptedModel(() =>
+        finalPartsWithUsage('{"answer":"expensive"}', usageOf(90, 20)),
+      );
+      const agent = Agent.withModel(definition, scripted.model);
+      const conversation = "conversation-tokens-rail";
+
+      yield* runtime.submit(
+        agent,
+        { question: "tokens?" },
+        submitOptions(conversation, "tokens-rail-1"),
+      );
+      const settlements = yield* runtime.processConversation(
+        agent,
+        decodeConversationId(conversation),
+      );
+      expect(settlements[0]?.outcome).toBe("failed");
+
+      const settled = lastSettlement(yield* readLog(conversation));
+      expect(settled.outcome).toBe("failed");
+      expect(settled.policyLimit).toBe("tokens");
+      expect(settled.finishReason).toBeUndefined();
+      expect(settled.exhausted).toBeUndefined();
+      expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
+    }),
+  );
+
+  it.effect("RUN-011: a hard cost rail settles failed with the typed policyLimit", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const definition = Agent.define("durable-cost-rail", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer immediately.",
+        toolkit: Toolkit.empty,
+        // The durable runtime provides no cost estimator, so a configured cost
+        // budget fails the Run typed on the first usage consumption — the hard
+        // cost rail regardless of `onExhaustion` (runtime spec §3).
+        policy: policyOf({ costBudgetMicrousd: 1_000 }),
+      });
+      const scripted = yield* makeScriptedModel(() =>
+        finalPartsWithUsage('{"answer":"priced"}', usageOf(10, 10)),
+      );
+      const agent = Agent.withModel(definition, scripted.model);
+      const conversation = "conversation-cost-rail";
+
+      yield* runtime.submit(agent, { question: "cost?" }, submitOptions(conversation, "cost-1"));
+      const settlements = yield* runtime.processConversation(
+        agent,
+        decodeConversationId(conversation),
+      );
+      expect(settlements[0]?.outcome).toBe("failed");
+
+      const settled = lastSettlement(yield* readLog(conversation));
+      expect(settled.outcome).toBe("failed");
+      expect(settled.policyLimit).toBe("cost");
+      expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
+    }),
+  );
+
+  it.effect("RUN-011: a duration-exhausted Run settles failed with the typed policyLimit", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const definition = Agent.define("durable-duration-rail", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer immediately.",
+        toolkit: Toolkit.empty,
+        policy: policyOf({ maxDuration: "5 seconds" }),
+      });
+      // A model that never finishes streaming: only the duration rail can end
+      // this Run.
+      const hangingModel = Model.make(
+        "scripted",
+        "durable-test",
+        Layer.effect(
+          LanguageModel.LanguageModel,
+          LanguageModel.make({
+            generateText: () => Effect.succeed([]),
+            streamText: () => Stream.never,
+          }),
+        ),
+      );
+      const agent = Agent.withModel(definition, hangingModel);
+      const conversation = "conversation-duration-rail";
+
+      yield* runtime.submit(
+        agent,
+        { question: "slow?" },
+        submitOptions(conversation, "duration-1"),
+      );
+      const worker = yield* Effect.forkChild(
+        runtime.processConversation(agent, decodeConversationId(conversation)),
+      );
+      yield* TestClock.adjust(Duration.seconds(6));
+      const settlements = yield* Fiber.join(worker);
+      expect(settlements[0]?.outcome).toBe("failed");
+
+      const settled = lastSettlement(yield* readLog(conversation));
+      expect(settled.outcome).toBe("failed");
+      expect(settled.policyLimit).toBe("duration");
+      expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
+    }),
+  );
+
+  it.effect(
+    "RUN-011: recovery preserves the typed policyLimit across both terminalize failpoints",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const scenarios = [
+          {
+            location: "terminalize:after-reserve" as const,
+            conversation: "conversation-policy-reserve",
+            key: "policy-reserve-1",
+          },
+          {
+            location: "terminalize:after-canonical-append" as const,
+            conversation: "conversation-policy-append",
+            key: "policy-append-1",
+          },
+        ];
+        for (const scenario of scenarios) {
+          const definition = Agent.define("durable-policy-recovery", {
+            input: Schema.Struct({ question: Schema.String }),
+            output: Schema.Struct({ answer: Schema.String }),
+            instructions: "Answer immediately.",
+            toolkit: Toolkit.empty,
+            policy: policyOf({ tokenBudget: 100, onExhaustion: "fail" }),
+          });
+          const scripted = yield* makeScriptedModel(() =>
+            finalPartsWithUsage('{"answer":"expensive"}', usageOf(90, 20)),
+          );
+          const agent = Agent.withModel(definition, scripted.model);
+
+          const receipt = yield* runtime.submit(
+            agent,
+            { question: "tokens?" },
+            submitOptions(scenario.conversation, scenario.key),
+          );
+          yield* armFailpoint(scenario.location);
+          const killed = yield* Effect.exit(
+            runtime.processConversation(agent, decodeConversationId(scenario.conversation)),
+          );
+          expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+          yield* clearFailpoint;
+
+          yield* runtime.runRecovery;
+          const settlement = yield* runtime.awaitSettlement(receipt);
+          expect(settlement.outcome).toBe("failed");
+          const records = yield* readLog(scenario.conversation);
+          const settledRecords = records
+            .map((envelope) => envelope.record.payload)
+            .filter((payload) => payload._tag === "SubmissionSettled");
+          expect(settledRecords).toHaveLength(1);
+          expect(settledRecords[0]).toMatchObject({
+            outcome: "failed",
+            policyLimit: "tokens",
+            result: { errorTag: "AgentPolicyError" },
+          });
+        }
+      }),
   );
 });

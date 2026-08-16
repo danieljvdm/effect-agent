@@ -10,17 +10,21 @@ export class AgentOutputError extends Schema.TaggedError<AgentOutputError>()("Ag
   message: Schema.String,
 }) {}
 
+/** The finite policy dimension a run exhausted; shared with durable settlement metadata. */
+export const PolicyLimit = Schema.Literals([
+  "turns",
+  "tool-calls",
+  "duration",
+  "usage",
+  "tokens",
+  "cost",
+  "repeated-failures",
+]);
+export type PolicyLimit = typeof PolicyLimit.Type;
+
 /** A run exhausted one of its finite policy limits. */
 export class AgentPolicyError extends Schema.TaggedError<AgentPolicyError>()("AgentPolicyError", {
-  limit: Schema.Literals([
-    "turns",
-    "tool-calls",
-    "duration",
-    "usage",
-    "tokens",
-    "cost",
-    "repeated-failures",
-  ]),
+  limit: PolicyLimit,
   message: Schema.String,
 }) {}
 
