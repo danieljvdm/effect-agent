@@ -10,6 +10,7 @@ import {
   annotatePatch,
   ChangedFile,
   CodeReview,
+  estimateReviewEffort,
   executeReview,
   liveProfileEnabled,
   ListChangedFiles,
@@ -18,6 +19,8 @@ import {
   openAiClientLayer,
   parsePatch,
   planPublication,
+  planWalkthrough,
+  renderAgentPrompt,
   commentableLines,
   PullRequestMetadata,
   PullRequestReviewer,
@@ -36,6 +39,7 @@ import {
   selectReviewRange,
   selectedPullRequestSourceLayer,
   StoredReviewFinding,
+  WalkthroughEntry,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -150,6 +154,12 @@ const scriptedReview = CodeReview.make({
   summary: "The constant fix is correct; two notes could not be anchored.",
   verdict: "comment",
   concerns: [scriptedConcern],
+  walkthrough: [
+    WalkthroughEntry.make({
+      path: "src/hello.ts",
+      summary: "Fixes the `two` literal and introduces `three`.",
+    }),
+  ],
   findings: [
     ReviewFinding.make({
       path: "src/hello.ts",
@@ -418,6 +428,182 @@ describe("publication planning", () => {
     });
     expect(plan.body).toContain("_(demoted: line 99 is not part of the diff)_");
     expect(plan.body).toContain("_(demoted: file has no textual diff)_");
+  });
+
+  it("collapses the demoted-findings section with an honest count", () => {
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+    expect(plan.body).toContain("<summary>Findings without a valid diff anchor (2)</summary>");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Presentation derived host-side from validated data: the copy-paste agent
+// prompt on every inline comment, the category chip, the at-a-glance stats
+// line, and the walkthrough table.
+// ---------------------------------------------------------------------------
+
+describe("review presentation", () => {
+  const files = fixture.files.map((entry) => entry.file);
+  const validFinding = scriptedReview.findings[0] as ReviewFinding;
+  const planFor = (review: CodeReview) =>
+    planPublication(review, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+    });
+
+  it("appends a collapsed copy-paste agent prompt to every inline comment", () => {
+    const body = planFor(scriptedReview).comments[0]?.body ?? "";
+    expect(body).toContain("<summary>🤖 Prompt for AI agents</summary>");
+    expect(body).toContain("In src/hello.ts around line 3, address this nit code-review finding:");
+    expect(body).toContain("Name the magic number");
+    // The suggestion travels inside the prompt so an agent can apply it directly.
+    expect(body).toContain("Proposed replacement for exactly lines 3-3 of src/hello.ts:");
+    expect(body).toContain(`commit ${FIXTURE_SHA.slice(0, 7)}`);
+  });
+
+  it("renders the agent prompt with a range and without a suggestion section", () => {
+    const prompt = renderAgentPrompt(
+      ReviewFinding.make({
+        path: validFinding.path,
+        startLine: 2,
+        endLine: 3,
+        severity: validFinding.severity,
+        title: validFinding.title,
+        body: validFinding.body,
+      }),
+      FIXTURE_SHA,
+    );
+    expect(prompt).toContain("around lines 2 to 3");
+    expect(prompt).not.toContain("Proposed replacement");
+  });
+
+  it("extends the agent-prompt fence past backticks in the finding content", () => {
+    const tricky = CodeReview.make({
+      summary: "Fence test.",
+      verdict: "comment",
+      findings: [ReviewFinding.make({ ...validFinding, suggestion: 'const fence = "```";' })],
+    });
+    const body = planFor(tricky).comments[0]?.body ?? "";
+    const promptBlock = body.slice(body.indexOf("🤖"));
+    expect(promptBlock).toContain("````");
+  });
+
+  it("renders the category chip beside the severity everywhere the label appears", () => {
+    const categorized = CodeReview.make({
+      summary: "Category test.",
+      verdict: "comment",
+      findings: [
+        ReviewFinding.make({ ...validFinding, severity: "important", category: "security" }),
+        ReviewFinding.make({
+          ...validFinding,
+          startLine: 99,
+          endLine: 99,
+          severity: "nit",
+          category: "testing",
+          title: "Ghost anchor",
+        }),
+      ],
+    });
+    const plan = planFor(categorized);
+    expect(plan.comments[0]?.body.startsWith("**[⚠️ important · security] ")).toBe(true);
+    expect(plan.body).toContain("**[💅 nit · testing] Ghost anchor**");
+    // An uncategorized finding keeps the pre-category label exactly.
+    expect(planFor(scriptedReview).comments[0]?.body.startsWith("**[💅 nit] ")).toBe(true);
+  });
+
+  it("opens with the host-derived stats line under the callout", () => {
+    // 2 files, +2 −1; 2 important (1 demoted + 1 concern), 2 nits; cost
+    // 3 + 2*15 = 33 → effort 1/5.
+    expect(planFor(scriptedReview).body).toContain(
+      "**Changeset:** 2 files (+2 / −1) · **Findings:** 2 important, 2 nit · **Review effort:** 1/5 (trivial)",
+    );
+    expect(
+      planFor(CodeReview.make({ summary: "s", verdict: "approve", findings: [] })).body,
+    ).toContain("**Findings:** none");
+  });
+
+  it("pins the effort thresholds to the changeset shape alone", () => {
+    const fileOf = (changed: number) =>
+      ChangedFile.make({
+        path: "src/a.ts",
+        status: "modified",
+        additions: changed,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+x",
+      });
+    expect(estimateReviewEffort([fileOf(85)])).toEqual({ score: 1, label: "trivial" });
+    expect(estimateReviewEffort([fileOf(86)])).toEqual({ score: 2, label: "small" });
+    expect(estimateReviewEffort([fileOf(385)])).toEqual({ score: 2, label: "small" });
+    expect(estimateReviewEffort([fileOf(386)])).toEqual({ score: 3, label: "moderate" });
+    expect(estimateReviewEffort([fileOf(1_185)])).toEqual({ score: 3, label: "moderate" });
+    expect(estimateReviewEffort([fileOf(1_186)])).toEqual({ score: 4, label: "large" });
+    expect(estimateReviewEffort([fileOf(2_985)])).toEqual({ score: 4, label: "large" });
+    expect(estimateReviewEffort([fileOf(2_986)])).toEqual({ score: 5, label: "very large" });
+  });
+
+  it("validates walkthrough paths fail-closed, dedupes, and orders by path", () => {
+    const entries = [
+      WalkthroughEntry.make({ path: "src/hello.ts", summary: "Fixes the constant." }),
+      WalkthroughEntry.make({ path: "not/changed.ts", summary: "Invented path." }),
+      WalkthroughEntry.make({ path: "src/hello.ts", summary: "Duplicate loses." }),
+      WalkthroughEntry.make({ path: "assets/logo.png", summary: "Adds the logo." }),
+    ];
+    expect(planWalkthrough(entries, files)).toEqual([
+      WalkthroughEntry.make({ path: "assets/logo.png", summary: "Adds the logo." }),
+      WalkthroughEntry.make({ path: "src/hello.ts", summary: "Fixes the constant." }),
+    ]);
+    expect(planWalkthrough(undefined, files)).toEqual([]);
+  });
+
+  it("renders the kept walkthrough as a collapsed table with escaped cells", () => {
+    const review = CodeReview.make({
+      ...scriptedReview,
+      walkthrough: [
+        WalkthroughEntry.make({ path: "src/hello.ts", summary: "Adds `three` | fixes\nsum." }),
+        WalkthroughEntry.make({ path: "not/changed.ts", summary: "Invented path." }),
+      ],
+    });
+    const body = planFor(review).body;
+    expect(body).toContain("<summary>📝 Walkthrough (1 file)</summary>");
+    expect(body).toContain("| `src/hello.ts` | Adds `three` \\| fixes sum. |");
+    expect(body).not.toContain("Invented path.");
+  });
+
+  it("sheds the walkthrough before any review item when the body overflows", () => {
+    // Walkthrough entries dedupe by path, so a genuinely oversized table
+    // needs a wide changeset: 300 files × ~260-char rows overflows the 60k
+    // budget on its own.
+    const manyFiles = Array.from({ length: 300 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/file-${String(index).padStart(3, "0")}.ts`,
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: "@@ -0,0 +1 @@\n+export {};",
+      }),
+    );
+    const bigWalkthrough = CodeReview.make({
+      ...scriptedReview,
+      walkthrough: manyFiles.map((file) =>
+        WalkthroughEntry.make({ path: file.path, summary: "x".repeat(238) }),
+      ),
+    });
+    const plan = planPublication(bigWalkthrough, manyFiles, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 300,
+    });
+    expect(plan.body.length).toBeLessThanOrEqual(60_000);
+    expect(plan.body).toContain("⚠️ Walkthrough omitted — the body exceeded");
+    // The demoted findings and concern survive: informational content sheds first.
+    expect(plan.body).toContain("Findings without a valid diff anchor");
+    expect(plan.body).toContain(`### ⚠️ ${scriptedConcern.title}`);
+    expect(plan.body).not.toContain("review item");
   });
 });
 
@@ -792,6 +978,10 @@ describe("offline review run", () => {
       expect(outcome.review).toEqual(scriptedReview);
       expect(outcome.review.concerns).toEqual([scriptedConcern]);
       expect(outcome.plan.body).toContain(`### ⚠️ ${scriptedConcern.title}`);
+      // The walkthrough crossed the same boundary and rendered as a table row.
+      expect(outcome.plan.body).toContain(
+        "| `src/hello.ts` | Fixes the `two` literal and introduces `three`. |",
+      );
       // list -> diff -> read -> final: four model turns, four prompts.
       expect(outcome.turns).toBe(4);
       expect(yield* scripted.calls).toBe(4);

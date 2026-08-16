@@ -15,6 +15,7 @@ import {
   clampMaxFindings,
   CodeReview,
   MAX_CONCERNS,
+  MAX_WALKTHROUGH_SUMMARY_CHARS,
   ReadFile,
   ReadFileDiff,
   readFileDiffHandler,
@@ -22,6 +23,7 @@ import {
   ReviewConcern,
   ReviewFinding,
   ReviewMission,
+  WalkthroughEntry,
 } from "./review-agent.ts";
 import {
   MAX_REVIEW_UNITS,
@@ -92,6 +94,10 @@ export class FileReviewReport extends Schema.Class<FileReviewReport>(
   concerns: Schema.optionalKey(
     Schema.Array(ReviewConcern).check(Schema.isMaxLength(MAX_CHILD_CONCERNS)),
   ),
+  /** One-sentence per-file change summaries for the merged walkthrough. */
+  fileSummaries: Schema.optionalKey(
+    Schema.Array(WalkthroughEntry).check(Schema.isMaxLength(MAX_UNIT_FILES)),
+  ),
 }) {}
 
 /**
@@ -125,7 +131,8 @@ export const makeFileReviewerInstructions =
       "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
       "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
       "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
-      `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for concerns about YOUR unit's files with no valid line anchor (a missing cleanup, a coverage gap the diff implies, sequencing the diff leaves open) — never duplicate a finding here>}.`,
+      `4. For every file in your unit, write one factual sentence (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars) describing what changed in that file — for a reader scanning the pull request, never a line-by-line restatement.`,
+      `5. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for concerns about YOUR unit's files with no valid line anchor (a missing cleanup, a coverage gap the diff implies, sequencing the diff leaves open) — never duplicate a finding here>, "fileSummaries": <array, OPTIONAL: [{"path": <string, a file in your unit>, "summary": <string, the step-4 sentence>}], one entry per file in your unit>}.`,
       `Report at most ${MAX_CHILD_FINDINGS} findings and at most ${MAX_CHILD_CONCERNS} concerns; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`,
     ].join("\n");
 
@@ -175,6 +182,10 @@ export class FileReviewUnitResult extends Schema.Class<FileReviewUnitResult>(
   /** Unit-scoped concerns with no diff line to anchor to. */
   concerns: Schema.optionalKey(
     Schema.Array(ReviewConcern).check(Schema.isMaxLength(MAX_CHILD_CONCERNS)),
+  ),
+  /** One-sentence per-file change summaries for the merged walkthrough. */
+  fileSummaries: Schema.optionalKey(
+    Schema.Array(WalkthroughEntry).check(Schema.isMaxLength(MAX_UNIT_FILES)),
   ),
 }) {}
 
@@ -284,7 +295,8 @@ export const makeFanOutReviewInstructions =
       '3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan\'s undiffablePaths and unassignedPaths must also be named as not reviewed when present.',
       `4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
       `5. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
-      '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>}. Copy findings and concerns verbatim from the delegation results; never invent or edit anchors.',
+      "6. Merge the units' fileSummaries into one walkthrough: copy each entry verbatim, one entry per file, dropping duplicate paths.",
+      '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "category": <string, OPTIONAL>, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>, "walkthrough": <array, OPTIONAL: [{"path": <string>, "summary": <string>}], the merged fileSummaries>}. Copy findings (including "category" and "suggestion" when present), concerns, and walkthrough entries verbatim from the delegation results; never invent or edit anchors.',
       'Use verdict "request-changes" only when at least one finding or concern is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.',
     ].join("\n");
   };
@@ -364,6 +376,7 @@ const makeFileReviewDelegation = (child: ReturnType<typeof makeFileReviewerDefin
           unitId: report.unitId,
           findings: report.findings,
           ...(report.concerns !== undefined ? { concerns: report.concerns } : {}),
+          ...(report.fileSummaries !== undefined ? { fileSummaries: report.fileSummaries } : {}),
         }),
       ),
     policy: fileReviewPolicy,

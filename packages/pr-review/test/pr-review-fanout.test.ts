@@ -47,6 +47,7 @@ import {
   ReviewFinding,
   ReviewMission,
   ReviewPublicationPlan,
+  WalkthroughEntry,
   defaultFileReviewerPolicy,
   fileReviewPolicy,
 } from "../src/index.ts";
@@ -542,6 +543,52 @@ describe("offline fan-out review run", () => {
       // The published body renders it as a severity-tagged section.
       expect(result.outcome.plan.body).toContain(`### ⚠️ ${gammaConcern.title}`);
       expect(result.outcome.plan.body).toContain(gammaConcern.body);
+    }),
+  );
+
+  it.effect("projects child file summaries and renders the merged walkthrough", () =>
+    Effect.gen(function* () {
+      const alphaSummary = WalkthroughEntry.make({
+        path: "src/api/alpha.ts",
+        summary: "Renames the alpha constant and rewires its export.",
+      });
+      const summarizedChildren: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: {
+            _tag: "findings",
+            report: FileReviewReport.make({
+              unitId: "unit-001",
+              findings: [alphaFinding, betaGhostFinding],
+              fileSummaries: [alphaSummary],
+            }),
+          },
+        },
+        happyChildren[1] as OfflineUnitScript,
+      ];
+      const walkthroughReview = CodeReview.make({
+        summary: "Merged 2 units; the walkthrough carries the alpha summary.",
+        verdict: "comment",
+        findings: mergedFindings,
+        walkthrough: [alphaSummary],
+      });
+
+      const result = yield* runOfflineFanOut({
+        children: summarizedChildren,
+        review: walkthroughReview,
+      });
+
+      // The projection carried the per-file summary across the
+      // declassification boundary: the coordinator's merge turn saw it.
+      const finalPrompt = result.coordinatorPrompts[2] ?? "";
+      expect(finalPrompt).toContain("Renames the alpha constant");
+
+      // The published body renders the merged walkthrough as a collapsed table.
+      expect(result.outcome.plan.body).toContain("<summary>📝 Walkthrough (1 file)</summary>");
+      expect(result.outcome.plan.body).toContain(
+        "| `src/api/alpha.ts` | Renames the alpha constant and rewires its export. |",
+      );
     }),
   );
 

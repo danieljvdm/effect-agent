@@ -106,6 +106,16 @@ const resolvedComment = RetirableReviewComment.make({
   path: resolvedFinding.path,
   startLine: resolvedFinding.startLine,
   endLine: resolvedFinding.endLine,
+  // The current first-line format, carrying a category chip.
+  body: `**[🛑 blocking · resources] ${resolvedFinding.title}**\n\n${resolvedFinding.body}`,
+});
+
+const legacyResolvedComment = RetirableReviewComment.make({
+  nodeId: "PRRC_resolved_legacy",
+  path: resolvedFinding.path,
+  startLine: resolvedFinding.startLine,
+  endLine: resolvedFinding.endLine,
+  // The pre-category first line posted by older package versions.
   body: `**[🛑 blocking] ${resolvedFinding.title}**\n\n${resolvedFinding.body}`,
 });
 
@@ -208,7 +218,8 @@ describe("review retirement", () => {
               submittedAt: DateTime.makeUnsafe("2026-08-15T20:11:00Z"),
             }),
           ]),
-          listComments: () => Effect.succeed([resolvedComment, unresolvedComment]),
+          listComments: () =>
+            Effect.succeed([resolvedComment, legacyResolvedComment, unresolvedComment]),
           updateBody: (reviewId, body) =>
             Ref.update(updates, (entries) => [...entries, [reviewId, body] as const]),
           minimizeComment: (nodeId) => Ref.update(minimized, (nodeIds) => [...nodeIds, nodeId]),
@@ -225,11 +236,16 @@ describe("review retirement", () => {
         expect(report).toMatchObject({
           reviewsRetired: 1,
           findingsResolved: 1,
-          commentsMinimized: 1,
+          commentsMinimized: 2,
           failures: 0,
         });
         expect((yield* Ref.get(updates)).map(([reviewId]) => reviewId)).toEqual([1]);
-        expect(yield* Ref.get(minimized)).toEqual([resolvedComment.nodeId]);
+        // Both first-line formats matched: the categorized current format and
+        // the pre-category one posted by older package versions.
+        expect(yield* Ref.get(minimized)).toEqual([
+          resolvedComment.nodeId,
+          legacyResolvedComment.nodeId,
+        ]);
       }).pipe(Effect.provide(webCryptoReviewStateAuthenticatorLayer(STATE_SECRET))),
   );
 

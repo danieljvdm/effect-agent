@@ -157,6 +157,7 @@ export const enforceFindingsBound = (review: CodeReview, maxFindings: number): C
         verdict: review.verdict,
         findings: rankAndDedupeFindings(review.findings).slice(0, maxFindings),
         ...(review.concerns !== undefined ? { concerns: review.concerns } : {}),
+        ...(review.walkthrough !== undefined ? { walkthrough: review.walkthrough } : {}),
       });
 
 const findingKey = (finding: ReviewFinding): string =>
