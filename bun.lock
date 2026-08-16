@@ -216,7 +216,6 @@
         "@effect/platform-browser": "catalog:",
         "@effect/sql-sqlite-do": "catalog:",
         "effect": "catalog:",
-        "effect-cf": "catalog:",
       },
       "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:",
@@ -225,11 +224,15 @@
         "@effect-agent/engine": "workspace:*",
         "@effect-agent/testing": "workspace:*",
         "@effect/vitest": "catalog:",
+        "effect-cf": "catalog:",
         "esbuild": "catalog:",
         "miniflare": "catalog:",
         "typescript": "catalog:",
         "vite-plus": "catalog:",
         "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "effect-cf": "^0.27.0",
       },
     },
     "packages/platform-node": {
@@ -412,7 +415,7 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "effect": "4.0.0-beta.107",
-    "effect-cf": "0.25.3",
+    "effect-cf": "0.27.0",
     "esbuild": "0.28.1",
     "lucide-react": "1.27.0",
     "miniflare": "4.20260730.0",
@@ -1863,7 +1866,7 @@
 
     "effect-agent": ["effect-agent@workspace:packages/effect-agent"],
 
-    "effect-cf": ["effect-cf@0.25.3", "", { "peerDependencies": { "@cloudflare/vitest-pool-workers": "^0.21.3", "@cloudflare/workers-types": "^4.20260611.1", "@effect/sql-d1": "^4.0.0-beta.107 <4.0.0-rc.0", "@effect/sql-pg": "^4.0.0-beta.107 <4.0.0-rc.0", "@effect/sql-sqlite-do": "^4.0.0-beta.107 <4.0.0-rc.0", "effect": "^4.0.0-beta.107 <4.0.0-rc.0" }, "optionalPeers": ["@cloudflare/vitest-pool-workers", "@cloudflare/workers-types", "@effect/sql-pg"] }, "sha512-iLZsAfzdYJ0KUh9u2XZlDbDw7ZNALutpmMobV2pgE/wPasUuW3jy7lcw77+Bv/4BWzGddfIX08kPiQCmj8gOGQ=="],
+    "effect-cf": ["effect-cf@0.27.0", "", { "peerDependencies": { "@cloudflare/computer": "^0.2.0", "@cloudflare/vitest-pool-workers": "^0.21.3", "@cloudflare/workers-types": "^4.20260611.1", "@effect/sql-d1": "^4.0.0-beta.107 <4.0.0-rc.0", "@effect/sql-pg": "^4.0.0-beta.107 <4.0.0-rc.0", "@effect/sql-sqlite-do": "^4.0.0-beta.107 <4.0.0-rc.0", "effect": "^4.0.0-beta.107 <4.0.0-rc.0" }, "optionalPeers": ["@cloudflare/computer", "@cloudflare/vitest-pool-workers", "@cloudflare/workers-types", "@effect/sql-pg"] }, "sha512-x4+tAz1088ie4PJp/zdRP8MFn/kjcWw1u+SzebVOSlbn0xc6wHPgps+BG9NK82eGiv3LHcrzCBHkZL/kF21uaw=="],
 
     "electron-to-chromium": ["electron-to-chromium@1.5.398", "", {}, "sha512-AsvhAxopJGh6museTDMIjn6JpDYOfgu4RLlygomt87MUwBUqTfd/1EiPtx10/LZE8xpTvkP2E9Gafq7lkLtodQ=="],
 
