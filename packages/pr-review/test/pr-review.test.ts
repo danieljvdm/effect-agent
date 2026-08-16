@@ -281,7 +281,7 @@ describe("publication planning", () => {
     ).toContain("not part of the diff");
     expect(
       anchorViolation(ReviewFinding.make({ ...validFinding, path: "assets/logo.png" }), files),
-    ).toContain("no textual diff");
+    ).toContain("no anchorable textual diff");
     expect(
       anchorViolation(ReviewFinding.make({ ...validFinding, path: "not/changed.ts" }), files),
     ).toContain("not part of the changeset");
@@ -421,7 +421,7 @@ describe("publication planning", () => {
       totalChangedFiles: 2,
     });
     expect(plan.body).toContain("_(demoted: line 99 is not part of the diff)_");
-    expect(plan.body).toContain("_(demoted: file has no textual diff)_");
+    expect(plan.body).toContain("_(demoted: file has no anchorable textual diff)_");
   });
 });
 

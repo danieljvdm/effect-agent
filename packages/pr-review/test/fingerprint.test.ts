@@ -61,6 +61,21 @@ describe("computeChangesetFingerprint", () => {
       expect(yield* computeChangesetFingerprint([editedPatch, fileB], "sig")).not.toBe(forward);
       expect(yield* computeChangesetFingerprint([fileA, fileB], "other-sig")).not.toBe(forward);
       expect(yield* computeChangesetFingerprint([fileA], "sig")).not.toBe(forward);
+
+      const recovered = ChangedFile.make({
+        path: "db/snapshot.json",
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        reviewHeadContent: '{"version":1}',
+      });
+      const editedRecovered = ChangedFile.make({
+        ...recovered,
+        reviewHeadContent: '{"version":2}',
+      });
+      expect(yield* computeChangesetFingerprint([editedRecovered], "sig")).not.toBe(
+        yield* computeChangesetFingerprint([recovered], "sig"),
+      );
     }),
   );
 });

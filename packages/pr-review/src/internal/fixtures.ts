@@ -28,6 +28,7 @@ import {
 /** One fixture file: its changeset entry plus optional head content. */
 export class FixtureFile extends Schema.Class<FixtureFile>("@effect-agent/pr-review/FixtureFile")({
   file: ChangedFile,
+  baseContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_FILE_CHARS))),
   headContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(MAX_FILE_CHARS))),
 }) {}
 
@@ -57,12 +58,21 @@ const requireChanged = (
 /** Deterministic `PullRequestSource` over one fixture pull request. */
 export const fixturePullRequestSourceLayer = (
   fixture: FixturePullRequest,
-): Layer.Layer<PullRequestSource> =>
-  Layer.succeed(PullRequestSource)(
+): Layer.Layer<PullRequestSource> => {
+  const files = fixture.files.map((entry) =>
+    entry.file.patch !== undefined
+      ? entry.file
+      : ChangedFile.make({
+          ...entry.file,
+          ...(entry.baseContent === undefined ? {} : { reviewBaseContent: entry.baseContent }),
+          ...(entry.headContent === undefined ? {} : { reviewHeadContent: entry.headContent }),
+        }),
+  );
+  return Layer.succeed(PullRequestSource)(
     PullRequestSource.of({
       metadata: Effect.succeed(fixture.metadata),
-      changedFiles: Effect.succeed(fixture.files.map((entry) => entry.file)),
-      anchorFiles: Effect.succeed(fixture.files.map((entry) => entry.file)),
+      changedFiles: Effect.succeed(files),
+      anchorFiles: Effect.succeed(files),
       readFile: (path) =>
         Effect.gen(function* () {
           const relative = yield* normalizeRepoRelativePath(path);
@@ -77,6 +87,7 @@ export const fixturePullRequestSourceLayer = (
         }),
     }),
   );
+};
 
 /** In-memory publisher: records every plan and mints a deterministic receipt. */
 export const collectingReviewPublisherLayer = (

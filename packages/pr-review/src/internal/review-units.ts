@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 import type { ChangedFile } from "./diff.ts";
-import { ChangedPath } from "./diff.ts";
+import { ChangedPath, isReviewableFile } from "./diff.ts";
 import type { FindingSeverity } from "./review-agent.ts";
 import { ReviewFinding } from "./review-agent.ts";
 
@@ -48,7 +48,7 @@ export class ReviewUnitPlan extends Schema.Class<ReviewUnitPlan>(
   /** True when the source returned fewer files than the pull request has. */
   truncated: Schema.Boolean,
   units: Schema.Array(ReviewUnit).check(Schema.isMaxLength(MAX_REVIEW_UNITS)),
-  /** Changed files without a textual diff; no finding can anchor to them. */
+  /** Changed files with neither a textual diff nor bounded base/head text. */
   undiffablePaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(300)),
   /**
    * Diffable files beyond the fan-out capacity (MAX_REVIEW_UNITS units of
@@ -58,8 +58,12 @@ export class ReviewUnitPlan extends Schema.Class<ReviewUnitPlan>(
   unassignedPaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(300)),
 }) {}
 
-const fileCost = (file: ChangedFile): number =>
-  file.additions + file.deletions + FILE_OVERHEAD_LINES;
+const fileCost = (file: ChangedFile): number => {
+  const contentChars =
+    (file.reviewBaseContent?.length ?? 0) + (file.reviewHeadContent?.length ?? 0);
+  const contentWeight = Math.ceil(contentChars / 200);
+  return file.additions + file.deletions + contentWeight + FILE_OVERHEAD_LINES;
+};
 
 const unitOf = (index: number, files: ReadonlyArray<ChangedFile>): ReviewUnit =>
   ReviewUnit.make({
@@ -76,10 +80,12 @@ const unitOf = (index: number, files: ReadonlyArray<ChangedFile>): ReviewUnit =>
  * then packed greedily in that order under the soft changed-line budget and
  * the hard per-unit file bound. Capacity is finite and explicit:
  *
- * - files without a textual diff are not delegated — no finding can anchor
- *   to them (anchor validation demands a parsed patch), so they surface in
- *   `undiffablePaths` instead of consuming a child's budget;
- * - diffable files beyond `MAX_REVIEW_UNITS` full units surface in
+ * - files without a textual diff are still delegated when the source
+ *   recovered complete bounded UTF-8 base/head content. Findings from that
+ *   evidence cannot anchor inline and are reported as concerns;
+ * - files with neither form of textual evidence surface in
+ *   `undiffablePaths` instead of laundering missing coverage;
+ * - reviewable files beyond `MAX_REVIEW_UNITS` full units surface in
  *   `unassignedPaths` so the review can report them as unreviewed, never
  *   silently truncated.
  */
@@ -88,14 +94,14 @@ export const planReviewUnits = (
   options: { readonly totalChangedFiles: number },
 ): ReviewUnitPlan => {
   const ordered = [...files].sort((left, right) => (left.path < right.path ? -1 : 1));
-  const diffable = ordered.filter((file) => file.patch !== undefined);
-  const undiffable = ordered.filter((file) => file.patch === undefined);
+  const reviewable = ordered.filter(isReviewableFile);
+  const undiffable = ordered.filter((file) => !isReviewableFile(file));
 
   const groups: Array<Array<ChangedFile>> = [];
   const unassigned: Array<ChangedFile> = [];
   let current: Array<ChangedFile> = [];
   let currentCost = 0;
-  for (const file of diffable) {
+  for (const file of reviewable) {
     const cost = fileCost(file);
     const wouldOverflow =
       current.length >= MAX_UNIT_FILES ||
