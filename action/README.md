@@ -33,6 +33,7 @@ jobs:
             This is an Effect codebase. Flag naked Promises in public APIs.
           ignore: "**/*.lock,dist/**"
           review-mode: incremental
+          retire-stale-reviews: true
 ```
 
 No `actions/checkout` is required: the reviewer reads the pull request
@@ -72,6 +73,19 @@ secret; do not expose it to the model or derive it from pull-request content.
 The authenticated marker itself is capped at 24,000 characters. Signing or
 size failures omit state, render a bounded warning, and force the next run to
 review fully instead of posting continuity data that cannot be recovered.
+
+After a new state-bearing review posts, `retire-stale-reviews: "true"` (the
+default) turns earlier marker-bearing bot reviews into collapsed, superseded
+history. Findings absent from the newest unresolved set are struck through in
+the old body, and their inline comments are minimized as outdated. The
+mutation boundary requires the same GitHub actor as the newly posted review
+and a strictly older submission time/id, so copied markers and newer concurrent
+reviews are not touched. The
+authenticated state comments remain byte-identical and terminal, so edited
+reviews are still valid continuity inputs. Retirement is cosmetic and
+fail-open: GitHub edit or minimization failures are logged without changing
+the review check conclusion. Set the input to `"false"` to leave prior review
+bodies and inline comments untouched.
 
 ## Final merge-readiness audit
 

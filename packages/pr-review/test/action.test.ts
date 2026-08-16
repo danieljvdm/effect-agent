@@ -2,6 +2,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   Cause,
   ConfigProvider,
+  DateTime,
   Effect,
   Exit,
   FileSystem,
@@ -12,6 +13,7 @@ import {
   Schema,
 } from "effect";
 import { PlatformError, SystemError } from "effect/PlatformError";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   GuidanceFileUnreadable,
@@ -27,6 +29,7 @@ import {
   CodeReview,
   InvalidEffortInput,
   planPublication,
+  PublishedReview,
   PullRequestMetadata,
   ReviewCoverage,
   ReviewFinding,
@@ -76,6 +79,7 @@ describe("resolveActionInputs", () => {
         maxDurationMinutes: undefined,
         failOn: "never",
         skipUnchanged: true,
+        retireStaleReviews: true,
         reviewMode: "incremental",
       });
     }),
@@ -98,6 +102,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_MAX_DURATION_MINUTES: "12",
           PR_REVIEW_FAIL_ON: "request-changes",
           PR_REVIEW_SKIP_UNCHANGED: "false",
+          PR_REVIEW_RETIRE_STALE_REVIEWS: "false",
           PR_REVIEW_MODE: "final",
         }),
       );
@@ -115,6 +120,7 @@ describe("resolveActionInputs", () => {
         maxDurationMinutes: 12,
         failOn: "request-changes",
         skipUnchanged: false,
+        retireStaleReviews: false,
         reviewMode: "final",
       });
     }),
@@ -160,7 +166,11 @@ const OUTPUT_PATH = "/tmp/github-output";
 
 const fakeOutcome = (
   verdict: ReviewVerdict,
-  options: { readonly blocking?: boolean; readonly incomplete?: boolean } = {},
+  options: {
+    readonly blocking?: boolean;
+    readonly incomplete?: boolean;
+    readonly state?: ReviewState;
+  } = {},
 ): ReviewRunOutcome => {
   const findings = options.blocking
     ? [
@@ -192,6 +202,19 @@ const fakeOutcome = (
       headSha: "abcdefabcdefabcdefabcdefabcdefabcdefabcd",
       totalChangedFiles: 0,
     }),
+    ...(options.state === undefined
+      ? {}
+      : {
+          state: options.state,
+          published: PublishedReview.make({
+            reviewId: 12,
+            url: "memory://review/12",
+            event: "COMMENT",
+            inlineComments: 0,
+            authorNodeId: "BOT_action-reviewer",
+            submittedAt: DateTime.makeUnsafe("2026-08-15T20:00:00Z"),
+          }),
+        }),
     turns: 1,
   });
 };
@@ -200,6 +223,7 @@ const fakeOutcome = (
 const actionHarness = (eventJson: string | undefined) =>
   Effect.gen(function* () {
     const written = yield* Ref.make("");
+    const requests = yield* Ref.make<ReadonlyArray<string>>([]);
     const fs = FileSystem.makeNoop({
       readFileString: (path) =>
         eventJson !== undefined && path === EVENT_PATH
@@ -215,12 +239,23 @@ const actionHarness = (eventJson: string | undefined) =>
       GITHUB_REPOSITORY: "acme/widgets",
       ...(eventJson !== undefined ? { GITHUB_EVENT_PATH: EVENT_PATH } : {}),
     };
+    const httpClient = HttpClient.make((request, url) =>
+      Ref.update(requests, (previous) => [...previous, `${request.method} ${url.href}`]).pipe(
+        Effect.as(
+          HttpClientResponse.fromWeb(
+            request,
+            new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+          ),
+        ),
+      ),
+    );
     const layer = Layer.mergeAll(
       Layer.succeed(FileSystem.FileSystem)(fs),
+      Layer.succeed(HttpClient.HttpClient)(httpClient),
       ConfigProvider.layer(ConfigProvider.fromEnvRecord(env)),
       webCryptoReviewStateAuthenticatorLayer(Redacted.make("test-review-state-secret")),
     );
-    return { written, layer };
+    return { requests, written, layer };
   });
 
 describe("runReviewAction", () => {
@@ -276,6 +311,70 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("conclusion=success");
       expect(outputs).toContain("coverage=complete");
     }),
+  );
+
+  it.effect(
+    "starts retirement only for an enabled state-bearing post with a complete receipt",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* actionHarness(
+          JSON.stringify({
+            pull_request: { number: 5 },
+            repository: { full_name: "acme/widgets" },
+          }),
+        );
+        const state = ReviewState.make({
+          version: 1,
+          repository: "acme/widgets",
+          pullRequestNumber: 5,
+          baseRef: "main",
+          baseSha: "1".repeat(40),
+          headRef: "fix/review",
+          reviewedHeadSha: "2".repeat(40),
+          profileFingerprint: "a".repeat(64),
+          acceptedScopeFingerprint: "b".repeat(64),
+          reviewedPathCount: 0,
+          unresolvedFindings: [],
+          unresolvedConcerns: [],
+          lastReviewMode: "full",
+        });
+
+        yield* runReviewAction({
+          run: () => Effect.succeed(fakeOutcome("comment", { state })),
+        }).pipe(Effect.provide(harness.layer));
+        expect(yield* Ref.get(harness.requests)).toEqual([
+          "GET https://api.github.com/repos/acme/widgets/pulls/5/reviews?per_page=100&page=1",
+        ]);
+
+        yield* runReviewAction(
+          { run: () => Effect.succeed(fakeOutcome("comment", { state })) },
+          { retireStaleReviews: false },
+        ).pipe(Effect.provide(harness.layer));
+        expect((yield* Ref.get(harness.requests)).length).toBe(1);
+
+        const incompleteReceipt = fakeOutcome("comment", { state });
+        const completeReceipt = incompleteReceipt.published;
+        if (completeReceipt === undefined) {
+          throw new Error("Expected the state-bearing fixture to include a publication receipt");
+        }
+        yield* runReviewAction({
+          run: () =>
+            Effect.succeed(
+              ReviewRunOutcome.make({
+                ...incompleteReceipt,
+                published: PublishedReview.make({
+                  reviewId: completeReceipt.reviewId,
+                  url: completeReceipt.url,
+                  event: completeReceipt.event,
+                  inlineComments: completeReceipt.inlineComments,
+                  submittedAt: completeReceipt.submittedAt,
+                  authorNodeId: null,
+                }),
+              }),
+            ),
+        }).pipe(Effect.provide(harness.layer));
+        expect((yield* Ref.get(harness.requests)).length).toBe(1);
+      }),
   );
 
   it.effect("fails the check for a blocking finding regardless of model verdict or fail-on", () =>

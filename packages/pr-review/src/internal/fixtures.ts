@@ -1,4 +1,4 @@
-import { Effect, Layer, Option, Ref, Schema } from "effect";
+import { DateTime, Effect, Layer, Option, Ref, Schema } from "effect";
 
 import { ChangedFile } from "./diff.ts";
 import {
@@ -93,6 +93,10 @@ export const collectingReviewPublisherLayer = (
               url: `memory://review/${plans.length}`,
               event: plan.event,
               inlineComments: plan.comments.length,
+              authorNodeId: "BOT_memory-reviewer",
+              submittedAt: DateTime.makeUnsafe(
+                `2026-01-01T00:00:${String(plans.length).padStart(2, "0")}Z`,
+              ),
             }),
           ),
         ),

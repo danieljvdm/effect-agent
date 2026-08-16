@@ -1,5 +1,5 @@
 import { Config, Effect, FileSystem, Layer, Option, Schema } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
+import type { HttpClient } from "effect/unstable/http";
 
 import type { PriorReviews, ReviewPublisher } from "./github.ts";
 import {
@@ -7,7 +7,9 @@ import {
   gitHubPriorReviewsLayer,
   gitHubPullRequestSourceLayer,
   gitHubReviewPublisherLayer,
+  gitHubReviewRetirementHostLayer,
 } from "./github.ts";
+import type { ReviewRetirementHost } from "./retirement.ts";
 import type { PullRequestSource } from "./source.ts";
 
 // ---------------------------------------------------------------------------
@@ -105,24 +107,36 @@ export const resolveReviewTarget = Effect.fn("resolveReviewTarget")(function* (o
  */
 export const gitHubReviewLayers = (
   target: ResolvedReviewTarget,
-): Layer.Layer<PullRequestSource | ReviewPublisher | PriorReviews, Config.ConfigError> =>
+): Layer.Layer<
+  PullRequestSource | ReviewPublisher | PriorReviews | ReviewRetirementHost,
+  Config.ConfigError,
+  HttpClient.HttpClient
+> =>
   Layer.unwrap(
     Effect.gen(function* () {
       const apiUrl = yield* Config.string("GITHUB_API_URL").pipe(
         Config.withDefault("https://api.github.com"),
       );
+      const graphqlUrl = yield* Config.string("GITHUB_GRAPHQL_URL").pipe(
+        Config.withDefault(
+          apiUrl === "https://api.github.com"
+            ? "https://api.github.com/graphql"
+            : apiUrl.replace(/\/api\/v3$/, "/api/graphql"),
+        ),
+      );
       const token = yield* Config.option(Config.redacted("GITHUB_TOKEN"));
       const targetLayer = GitHubReviewTarget.layer({
         apiUrl,
+        graphqlUrl,
         repository: target.repository,
         number: target.number,
         token,
       });
-      const deps = Layer.merge(targetLayer, FetchHttpClient.layer);
       return Layer.mergeAll(
-        gitHubPullRequestSourceLayer.pipe(Layer.provide(deps)),
-        gitHubReviewPublisherLayer.pipe(Layer.provide(deps)),
-        gitHubPriorReviewsLayer.pipe(Layer.provide(deps)),
+        gitHubPullRequestSourceLayer.pipe(Layer.provide(targetLayer)),
+        gitHubReviewPublisherLayer.pipe(Layer.provide(targetLayer)),
+        gitHubPriorReviewsLayer.pipe(Layer.provide(targetLayer)),
+        gitHubReviewRetirementHostLayer.pipe(Layer.provide(targetLayer)),
       );
     }),
   );

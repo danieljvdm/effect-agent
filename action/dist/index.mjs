@@ -38713,1239 +38713,6 @@ var layer14 = (delegation, childBinding, options) => {
   return toolkit.toLayer(build2);
 };
 var SubagentRuntime = { layer: layer14 };
-// packages/pr-review/src/internal/effort.ts
-var EFFORT_ALIASES = {
-  low: 0,
-  medium: 0.25,
-  high: 0.5,
-  xhigh: 0.75,
-  max: 1
-};
-var aliasPosition = EFFORT_ALIASES;
-
-class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
-  input: exports_Schema.String
-}) {
-  get message() {
-    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
-  }
-}
-var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
-var parseEffortPosition = (raw) => {
-  const normalized = raw.trim().toLowerCase();
-  const named = aliasPosition[normalized];
-  if (named !== undefined)
-    return named;
-  if (normalized === "")
-    return;
-  const numeric = Number(normalized);
-  return isEffortPosition(numeric) ? numeric : undefined;
-};
-var resolveEffortRung = (position, rungs) => {
-  const clamped = Math.min(1, Math.max(0, position));
-  let selected = rungs[0];
-  for (const rung of rungs) {
-    if (EFFORT_ALIASES[rung] <= clamped)
-      selected = rung;
-  }
-  return selected;
-};
-
-// packages/pr-review/src/internal/diff.ts
-var ChangedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512));
-var ChangedFileStatus = exports_Schema.Literals([
-  "added",
-  "removed",
-  "modified",
-  "renamed",
-  "copied",
-  "changed",
-  "unchanged"
-]);
-
-class ChangedFile extends exports_Schema.Class("@effect-agent/pr-review/ChangedFile")({
-  path: ChangedPath,
-  status: ChangedFileStatus,
-  additions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  deletions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  previousPath: exports_Schema.optionalKey(ChangedPath),
-  patch: exports_Schema.optionalKey(exports_Schema.String)
-}) {
-}
-var HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
-var parsePatch = (patch) => {
-  const lines = [];
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
-  for (const raw of patch.split(`
-`)) {
-    const header = HUNK_HEADER.exec(raw);
-    if (header !== null) {
-      oldLine = Number(header[1]);
-      newLine = Number(header[2]);
-      inHunk = true;
-      continue;
-    }
-    if (!inHunk)
-      continue;
-    if (raw.startsWith("+")) {
-      lines.push({ kind: "add", oldLine: undefined, newLine, text: raw.slice(1) });
-      newLine += 1;
-    } else if (raw.startsWith("-")) {
-      lines.push({ kind: "del", oldLine, newLine: undefined, text: raw.slice(1) });
-      oldLine += 1;
-    } else if (raw.startsWith(" ") || raw === "") {
-      lines.push({ kind: "context", oldLine, newLine, text: raw.slice(1) });
-      oldLine += 1;
-      newLine += 1;
-    } else if (raw.startsWith("\\")) {} else {
-      inHunk = false;
-    }
-  }
-  return lines;
-};
-var commentableLines = (patch) => {
-  const lines = new Set;
-  for (const line of parsePatch(patch)) {
-    if (line.newLine !== undefined)
-      lines.add(line.newLine);
-  }
-  return lines;
-};
-var annotatePatch = (patch) => {
-  const output = [];
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
-  for (const raw of patch.split(`
-`)) {
-    const header = HUNK_HEADER.exec(raw);
-    if (header !== null) {
-      oldLine = Number(header[1]);
-      newLine = Number(header[2]);
-      inHunk = true;
-      output.push(raw);
-      continue;
-    }
-    if (!inHunk)
-      continue;
-    if (raw.startsWith("+")) {
-      output.push(`R${newLine} + ${raw.slice(1)}`);
-      newLine += 1;
-    } else if (raw.startsWith("-")) {
-      output.push(`      - ${raw.slice(1)}`);
-      oldLine += 1;
-    } else if (raw.startsWith(" ") || raw === "") {
-      output.push(`R${newLine}   ${raw.slice(1)}`);
-      oldLine += 1;
-      newLine += 1;
-    } else if (raw.startsWith("\\")) {
-      output.push(`        ${raw}`);
-    } else {
-      inHunk = false;
-    }
-  }
-  return output.join(`
-`);
-};
-
-// packages/pr-review/src/internal/source.ts
-var MAX_FILE_CHARS = 200000;
-var MAX_CHANGED_FILES = 300;
-
-class PullRequestMetadata extends exports_Schema.Class("@effect-agent/pr-review/PullRequestMetadata")({
-  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  number: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  title: exports_Schema.String.check(exports_Schema.isMaxLength(400)),
-  body: exports_Schema.String.check(exports_Schema.isMaxLength(20000)),
-  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  baseSha: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))),
-  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  headSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
-  totalChangedFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
-}) {
-}
-
-class PullRequestSourceFailure extends exports_Schema.TaggedError()("PullRequestSourceFailure", {
-  operation: exports_Schema.String,
-  reason: exports_Schema.String
-}) {
-  get message() {
-    return `Pull-request source operation '${this.operation}' failed: ${this.reason}`;
-  }
-}
-
-class ReviewInputViolation extends exports_Schema.TaggedError()("ReviewInputViolation", {
-  input: exports_Schema.String,
-  reason: exports_Schema.String
-}) {
-  get message() {
-    return `Rejected review input '${this.input}': ${this.reason}`;
-  }
-}
-var BACKSLASH = String.fromCharCode(92);
-var normalizeRepoRelativePath = (path) => {
-  const fail14 = (reason) => exports_Effect.fail(ReviewInputViolation.make({ input: path, reason }));
-  if (path.length === 0 || path.length > 512) {
-    return fail14("Path length is out of bounds.");
-  }
-  if (path.includes(BACKSLASH)) {
-    return fail14("Path contains a forbidden backslash.");
-  }
-  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) {
-    return fail14("Path must be repository-relative, not absolute.");
-  }
-  const segments = path.split("/");
-  for (const segment of segments) {
-    if (segment === "" || segment === "." || segment === "..") {
-      return fail14("Path segments must not be empty, '.', or '..'.");
-    }
-  }
-  return exports_Effect.succeed(segments.join("/"));
-};
-
-class PullRequestSource extends exports_Context.Service()("@effect-agent/pr-review/PullRequestSource") {
-}
-
-// packages/pr-review/src/internal/review-agent.ts
-var MAX_FINDINGS = 20;
-var MAX_CONCERNS = 10;
-var MAX_PATCH_CHARS = 60000;
-var MAX_SLICE_LINES = 1000;
-var DEFAULT_SLICE_LINES = 400;
-
-class ChangedFileSummary extends exports_Schema.Class("@effect-agent/pr-review/ChangedFileSummary")({
-  path: ChangedPath,
-  status: ChangedFileStatus,
-  additions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  deletions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  hasTextualDiff: exports_Schema.Boolean
-}) {
-}
-
-class ChangedFilesView extends exports_Schema.Class("@effect-agent/pr-review/ChangedFilesView")({
-  totalFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  truncated: exports_Schema.Boolean,
-  files: exports_Schema.Array(ChangedFileSummary).check(exports_Schema.isMaxLength(300))
-}) {
-}
-
-class ListChangedFilesQuery extends exports_Schema.Class("@effect-agent/pr-review/ListChangedFilesQuery")({
-  scope: exports_Schema.Literal("all")
-}) {
-}
-var ListChangedFiles = exports_Tool.make("list_changed_files", {
-  description: "List every file changed by this pull request with its status, line counts, and whether a textual diff is available.",
-  parameters: ListChangedFilesQuery,
-  success: ChangedFilesView,
-  failure: PullRequestSourceFailure,
-  failureMode: "error",
-  dependencies: [PullRequestSource]
-}).annotate(ToolExecutionClass, "readonly");
-
-class FileDiffQuery extends exports_Schema.Class("@effect-agent/pr-review/FileDiffQuery")({
-  path: ChangedPath
-}) {
-}
-
-class FileDiffView extends exports_Schema.Class("@effect-agent/pr-review/FileDiffView")({
-  path: ChangedPath,
-  status: ChangedFileStatus,
-  annotatedPatch: exports_Schema.String,
-  truncated: exports_Schema.Boolean
-}) {
-}
-var ReadFileDiff = exports_Tool.make("read_file_diff", {
-  description: "Read the annotated unified diff of one changed file. Lines marked R<number> exist in the new version and are the only valid finding anchors.",
-  parameters: FileDiffQuery,
-  success: FileDiffView,
-  failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "return",
-  dependencies: [PullRequestSource]
-}).annotate(ToolExecutionClass, "readonly");
-
-class FileSliceQuery extends exports_Schema.Class("@effect-agent/pr-review/FileSliceQuery")({
-  path: ChangedPath,
-  startLine: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0))),
-  maxLines: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0)).check(exports_Schema.isLessThanOrEqualTo(MAX_SLICE_LINES)))
-}) {
-}
-
-class FileSlice extends exports_Schema.Class("@effect-agent/pr-review/FileSlice")({
-  path: ChangedPath,
-  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  totalLines: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  content: exports_Schema.String
-}) {
-}
-var ReadFile = exports_Tool.make("read_file", {
-  description: "Read a numbered slice of the NEW (head) version of one changed file, for context around the diff. Only files in the changeset are readable.",
-  parameters: FileSliceQuery,
-  success: FileSlice,
-  failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
-  failureMode: "return",
-  dependencies: [PullRequestSource]
-}).annotate(ToolExecutionClass, "readonly");
-var ReviewToolkit = exports_Toolkit.make(ListChangedFiles, ReadFileDiff, ReadFile);
-var listChangedFilesHandler = (_query) => exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const files = yield* source.changedFiles;
-  const metadata = yield* source.metadata;
-  return ChangedFilesView.make({
-    totalFiles: metadata.totalChangedFiles,
-    truncated: files.length < metadata.totalChangedFiles,
-    files: files.map((file) => ChangedFileSummary.make({
-      path: file.path,
-      status: file.status,
-      additions: file.additions,
-      deletions: file.deletions,
-      hasTextualDiff: file.patch !== undefined
-    }))
-  });
-});
-var readFileDiffHandler = (query) => exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const relative = yield* normalizeRepoRelativePath(query.path);
-  const files = yield* source.changedFiles;
-  const file = files.find((candidate) => candidate.path === relative);
-  if (file === undefined) {
-    return yield* ReviewInputViolation.make({
-      input: relative,
-      reason: "Path is not part of this pull request's changeset."
-    });
-  }
-  const annotated = file.patch === undefined ? "" : annotatePatch(file.patch);
-  const truncated = annotated.length > MAX_PATCH_CHARS;
-  return FileDiffView.make({
-    path: file.path,
-    status: file.status,
-    annotatedPatch: truncated ? `${annotated.slice(0, MAX_PATCH_CHARS)}
-[diff truncated]` : annotated,
-    truncated
-  });
-});
-var readFileHandler = (query) => exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const relative = yield* normalizeRepoRelativePath(query.path);
-  const content = yield* source.readFile(relative);
-  const lines = content.split(`
-`);
-  const startLine = query.startLine ?? 1;
-  const maxLines = query.maxLines ?? DEFAULT_SLICE_LINES;
-  if (startLine > lines.length) {
-    return yield* ReviewInputViolation.make({
-      input: `${relative}:${startLine}`,
-      reason: `startLine is beyond the end of the file (${lines.length} lines).`
-    });
-  }
-  const slice = lines.slice(startLine - 1, startLine - 1 + maxLines);
-  const endLine = startLine + slice.length - 1;
-  return FileSlice.make({
-    path: relative,
-    startLine,
-    endLine,
-    totalLines: lines.length,
-    content: slice.map((text, index2) => `${String(startLine + index2).padStart(5)}  ${text}`).join(`
-`)
-  });
-});
-var ReviewToolkitLayer = ReviewToolkit.toLayer({
-  list_changed_files: listChangedFilesHandler,
-  read_file_diff: readFileDiffHandler,
-  read_file: readFileHandler
-});
-
-class ReviewMission extends exports_Schema.Class("@effect-agent/pr-review/ReviewMission")({
-  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  number: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  title: exports_Schema.String.check(exports_Schema.isMaxLength(400)),
-  body: exports_Schema.String.check(exports_Schema.isMaxLength(20000)),
-  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  changedFileCount: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
-}) {
-}
-var FindingSeverity = exports_Schema.Literals(["blocking", "important", "nit"]);
-
-class ReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/ReviewFinding")({
-  path: ChangedPath,
-  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  severity: FindingSeverity,
-  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000)),
-  suggestion: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(2000)))
-}) {
-}
-var ReviewVerdict = exports_Schema.Literals(["approve", "comment", "request-changes"]);
-
-class ReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/ReviewConcern")({
-  severity: FindingSeverity,
-  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000))
-}) {
-}
-
-class CodeReview extends exports_Schema.Class("@effect-agent/pr-review/CodeReview")({
-  summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4000)),
-  verdict: ReviewVerdict,
-  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_FINDINGS)),
-  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CONCERNS)))
-}) {
-}
-var resolveGuidance = (guidance, mission) => {
-  if (guidance === undefined)
-    return [];
-  const value4 = typeof guidance === "function" ? guidance(mission) : guidance;
-  const lines = typeof value4 === "string" ? [value4] : value4;
-  return lines.filter((line) => line.length > 0);
-};
-var clampMaxFindings = (maxFindings) => maxFindings === undefined ? MAX_FINDINGS : Math.min(MAX_FINDINGS, Math.max(1, Math.trunc(maxFindings)));
-var makeReviewInstructions = (options = {}) => (mission) => {
-  const maxFindings = clampMaxFindings(options.maxFindings);
-  return [
-    `You are a senior code reviewer for pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
-    mission.body.length > 0 ? `Author description:
-${mission.body}` : "The author provided no description.",
-    ...resolveGuidance(options.guidance, mission),
-    "Work in this order:",
-    "1. Call list_changed_files once to see the changeset.",
-    "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-    "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
-    "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-    "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
-    "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
-    "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
-    '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
-    '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>}.',
-    `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
-    'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.'
-  ].join(`
-`);
-};
-var reviewInstructions = makeReviewInstructions();
-var defaultReviewPolicy = AgentPolicy.make({
-  maxTurns: 12,
-  maxToolCalls: 24,
-  maxDuration: "8 minutes",
-  toolConcurrency: 2,
-  tokenBudget: 300000,
-  contextTokenLimit: 150000,
-  onExhaustion: "final-answer"
-});
-var PullRequestReviewer = Agent.define("pr-reviewer", {
-  input: ReviewMission,
-  output: CodeReview,
-  instructions: reviewInstructions,
-  toolkit: ReviewToolkit,
-  policy: defaultReviewPolicy,
-  description: "Review one pull request read-only: list the changeset, read annotated diffs and head-file context, and return a structured, line-anchored code review.",
-  metadata: { deploymentClass: "E", surface: "read-only" }
-});
-
-// packages/pr-review/src/internal/review-units.ts
-var MAX_REVIEW_UNITS = 8;
-var MAX_UNIT_FILES = 12;
-var UNIT_CHANGED_LINE_BUDGET = 800;
-var FILE_OVERHEAD_LINES = 20;
-var MAX_MERGED_FINDINGS = 20;
-var ReviewUnitId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32));
-
-class ReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/ReviewUnit")({
-  unitId: ReviewUnitId,
-  paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES)),
-  changedLines: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
-}) {
-}
-
-class ReviewUnitPlan extends exports_Schema.Class("@effect-agent/pr-review/ReviewUnitPlan")({
-  totalFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  truncated: exports_Schema.Boolean,
-  units: exports_Schema.Array(ReviewUnit).check(exports_Schema.isMaxLength(MAX_REVIEW_UNITS)),
-  undiffablePaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300)),
-  unassignedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300))
-}) {
-}
-var fileCost = (file) => file.additions + file.deletions + FILE_OVERHEAD_LINES;
-var unitOf = (index2, files) => ReviewUnit.make({
-  unitId: `unit-${String(index2 + 1).padStart(3, "0")}`,
-  paths: files.map((file) => file.path),
-  changedLines: files.reduce((total, file) => total + file.additions + file.deletions, 0)
-});
-var planReviewUnits = (files, options) => {
-  const ordered = [...files].sort((left, right) => left.path < right.path ? -1 : 1);
-  const diffable = ordered.filter((file) => file.patch !== undefined);
-  const undiffable = ordered.filter((file) => file.patch === undefined);
-  const groups = [];
-  const unassigned = [];
-  let current = [];
-  let currentCost = 0;
-  for (const file of diffable) {
-    const cost = fileCost(file);
-    const wouldOverflow = current.length >= MAX_UNIT_FILES || current.length > 0 && currentCost + cost > UNIT_CHANGED_LINE_BUDGET;
-    if (wouldOverflow) {
-      groups.push(current);
-      current = [];
-      currentCost = 0;
-    }
-    if (groups.length >= MAX_REVIEW_UNITS) {
-      unassigned.push(file);
-      continue;
-    }
-    current.push(file);
-    currentCost += cost;
-  }
-  if (current.length > 0 && groups.length < MAX_REVIEW_UNITS) {
-    groups.push(current);
-  }
-  return ReviewUnitPlan.make({
-    totalFiles: files.length,
-    truncated: files.length < options.totalChangedFiles,
-    units: groups.map((group2, index2) => unitOf(index2, group2)),
-    undiffablePaths: undiffable.map((file) => file.path),
-    unassignedPaths: unassigned.map((file) => file.path)
-  });
-};
-var severityRank = {
-  blocking: 0,
-  important: 1,
-  nit: 2
-};
-var anchorKey = (finding) => `${finding.path} ${finding.startLine} ${finding.endLine}`;
-var rankAndDedupeFindings = (findings) => {
-  const byAnchor = new Map;
-  for (const finding of findings) {
-    const key = anchorKey(finding);
-    const existing = byAnchor.get(key);
-    if (existing === undefined || severityRank[finding.severity] < severityRank[existing.severity]) {
-      byAnchor.set(key, finding);
-    }
-  }
-  return [...byAnchor.values()].sort((left, right) => {
-    const bySeverity = severityRank[left.severity] - severityRank[right.severity];
-    if (bySeverity !== 0)
-      return bySeverity;
-    if (left.path !== right.path)
-      return left.path < right.path ? -1 : 1;
-    return left.startLine - right.startLine;
-  }).slice(0, MAX_MERGED_FINDINGS);
-};
-
-// packages/pr-review/src/internal/fan-out.ts
-var MAX_CHILD_FINDINGS = 8;
-var MAX_CHILD_CONCERNS = 3;
-var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
-var FileReviewToolkit = exports_Toolkit.make(ReadFileDiff, ReadFile);
-var FileReviewToolkitLayer = FileReviewToolkit.toLayer({
-  read_file_diff: readFileDiffHandler,
-  read_file: readFileHandler
-});
-var UnitPaths = exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES));
-
-class FileReviewBrief extends exports_Schema.Class("@effect-agent/pr-review/FileReviewBrief")({
-  unitId: ReviewUnitId,
-  paths: UnitPaths,
-  focus: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))
-}) {
-}
-
-class FileReviewReport extends exports_Schema.Class("@effect-agent/pr-review/FileReviewReport")({
-  unitId: ReviewUnitId,
-  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS)),
-  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CHILD_CONCERNS)))
-}) {
-}
-var staticGuidanceLines = (guidance) => {
-  if (guidance === undefined)
-    return [];
-  const lines = typeof guidance === "string" ? [guidance] : guidance;
-  return lines.filter((line) => line.length > 0);
-};
-var makeFileReviewerInstructions = (options = {}) => (brief) => [
-  `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
-  ...staticGuidanceLines(options.guidance),
-  "Work in this order:",
-  "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-  "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
-  "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
-  "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
-  "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
-  `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for concerns about YOUR unit's files with no valid line anchor (a missing cleanup, a coverage gap the diff implies, sequencing the diff leaves open) — never duplicate a finding here>}.`,
-  `Report at most ${MAX_CHILD_FINDINGS} findings and at most ${MAX_CHILD_CONCERNS} concerns; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`
-].join(`
-`);
-var fileReviewerInstructions = makeFileReviewerInstructions();
-var defaultFileReviewerPolicy = AgentPolicy.make({
-  maxTurns: 8,
-  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "4 minutes",
-  toolConcurrency: 2,
-  tokenBudget: 200000,
-  contextTokenLimit: 150000,
-  onExhaustion: "fail"
-});
-
-class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
-  unitId: ReviewUnitId,
-  paths: UnitPaths
-}) {
-}
-
-class FileReviewUnitResult extends exports_Schema.Class("@effect-agent/pr-review/FileReviewUnitResult")({
-  unitId: ReviewUnitId,
-  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS)),
-  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CHILD_CONCERNS)))
-}) {
-}
-
-class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitFailed", {
-  childErrorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
-  message: exports_Schema.String.check(exports_Schema.isMaxLength(400))
-}) {
-}
-var fileReviewPolicy = SubagentPolicy.make({
-  maxChildren: MAX_REVIEW_UNITS,
-  maxConcurrency: 3,
-  maxTurns: 8,
-  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "4 minutes"
-});
-var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
-var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
-  childErrorTag: failure._tag,
-  message: (failure.message ?? "").slice(0, 400)
-});
-
-class ListReviewUnitsQuery extends exports_Schema.Class("@effect-agent/pr-review/ListReviewUnitsQuery")({
-  scope: exports_Schema.Literal("all")
-}) {
-}
-var ListReviewUnits = exports_Tool.make("list_review_units", {
-  description: "List this pull request's changeset grouped into bounded review units (size-budgeted, directory-affine), plus the files no unit can cover.",
-  parameters: ListReviewUnitsQuery,
-  success: ReviewUnitPlan,
-  failure: PullRequestSourceFailure,
-  failureMode: "error",
-  dependencies: [PullRequestSource]
-}).annotate(ToolExecutionClass, "readonly");
-var FanOutCoordinatorToolkit = exports_Toolkit.make(ListReviewUnits);
-var FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
-  list_review_units: () => exports_Effect.gen(function* () {
-    const source = yield* PullRequestSource;
-    const files = yield* source.changedFiles;
-    const metadata = yield* source.metadata;
-    return planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
-  })
-});
-var makeFanOutReviewInstructions = (options = {}) => (mission) => {
-  const maxFindings = clampMaxFindings(options.maxFindings);
-  return [
-    `You coordinate the review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
-    mission.body.length > 0 ? `Author description:
-${mission.body}` : "The author provided no description.",
-    ...staticGuidanceLines(options.guidance),
-    "Work in this order:",
-    "1. Call list_review_units once to get the planned review units.",
-    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
-    `3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan's undiffablePaths and unassignedPaths must also be named as not reviewed when present.`,
-    `4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
-    `5. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
-    '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>}. Copy findings and concerns verbatim from the delegation results; never invent or edit anchors.',
-    'Use verdict "request-changes" only when at least one finding or concern is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.'
-  ].join(`
-`);
-};
-var fanOutReviewInstructions = makeFanOutReviewInstructions();
-var defaultFanOutPolicy = AgentPolicy.make({
-  maxTurns: 6,
-  maxToolCalls: 1 + MAX_REVIEW_UNITS,
-  maxDuration: "15 minutes",
-  toolConcurrency: 3,
-  repeatedFailureLimit: 3,
-  tokenBudget: 300000,
-  contextTokenLimit: 150000,
-  onExhaustion: "final-answer"
-});
-var makeFileReviewerDefinition = (options = {}) => Agent.define("pr-file-reviewer", {
-  input: FileReviewBrief,
-  output: FileReviewReport,
-  instructions: makeFileReviewerInstructions(options),
-  toolkit: FileReviewToolkit,
-  policy: defaultFileReviewerPolicy,
-  description: "Review one bounded unit of a pull request's changeset read-only and return line-anchored findings for exactly those files.",
-  metadata: { deploymentClass: "E", surface: "read-only" }
-});
-var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review", {
-  description: delegationDescription,
-  target: child,
-  parameters: FileReviewRequest,
-  success: FileReviewUnitResult,
-  failure: FileReviewUnitFailed,
-  failureMode: "return",
-  prepareInput: (request3) => exports_Effect.succeed(FileReviewBrief.make({
-    unitId: request3.unitId,
-    paths: request3.paths,
-    focus: "defects-first: correctness, security, concurrency, resources, error handling"
-  })),
-  projectResult: (report2) => exports_Effect.succeed(FileReviewUnitResult.make({
-    unitId: report2.unitId,
-    findings: report2.findings,
-    ...report2.concerns !== undefined ? { concerns: report2.concerns } : {}
-  })),
-  policy: fileReviewPolicy
-});
-var delegationToolFor = (delegation) => delegation.tool.annotate(ToolExecutionClass, "readonly");
-var makeFanOutReviewerDefinition = (options, delegation) => Agent.define("pr-fanout-reviewer", {
-  input: ReviewMission,
-  output: CodeReview,
-  instructions: makeFanOutReviewInstructions(options),
-  toolkit: exports_Toolkit.make(ListReviewUnits, delegationToolFor(delegation)),
-  policy: defaultFanOutPolicy,
-  description: "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
-  metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" }
-});
-var makeFanOutReviewSuite = (options = {}) => {
-  const child = makeFileReviewerDefinition({ guidance: options.guidance });
-  const delegation = makeFileReviewDelegation(child);
-  return {
-    child,
-    parent: makeFanOutReviewerDefinition(options, delegation),
-    delegation
-  };
-};
-var defaultSuite = makeFanOutReviewSuite();
-var FileReviewer = defaultSuite.child;
-var FanOutReviewer = defaultSuite.parent;
-var fileReviewDelegation = defaultSuite.delegation;
-var DelegateFileReview = delegationToolFor(fileReviewDelegation);
-var FanOutReviewToolkit = FanOutReviewer.toolkit;
-var FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
-var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.layer(delegation, childBinding, {
-  mapChildFailure: mapFileReviewChildFailure
-});
-var fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);
-
-// packages/pr-review/src/internal/fingerprint.ts
-var MARKER_PREFIX = "<!-- effect-agent-pr-review fingerprint=sha256:";
-var MARKER_SUFFIX = " -->";
-var MARKER_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:([0-9a-f]{64}) -->/g;
-var renderFingerprintMarker = (fingerprint) => `${MARKER_PREFIX}${fingerprint}${MARKER_SUFFIX}`;
-var FINGERPRINT_MARKER_LENGTH = renderFingerprintMarker("0".repeat(64)).length;
-var extractFingerprint = (body) => {
-  let last3;
-  for (const match9 of body.matchAll(MARKER_PATTERN)) {
-    last3 = match9[1];
-  }
-  return last3;
-};
-var sha256Hex = (text) => exports_Effect.promise(async () => {
-  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-});
-var FIELD = "\x00";
-var RECORD = "\x01";
-var SECTION = "\x02";
-var canonicalChangeset = (files) => files.map((file) => `${file.path}${FIELD}${file.status}${FIELD}${String(file.additions)}${FIELD}${String(file.deletions)}${FIELD}${file.patch ?? ""}`).sort().join(RECORD);
-var computeChangesetFingerprint = (files, signature) => sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
-
-// packages/pr-review/src/internal/ignore.ts
-var REGEX_SPECIALS = /[.+^${}()|[\]\\]/g;
-var CROSSING_SLASH = "\x00";
-var CROSSING = "\x01";
-var globToRegExpSource = (pattern) => pattern.replace(REGEX_SPECIALS, String.raw`\$&`).replaceAll("**/", CROSSING_SLASH).replaceAll("**", CROSSING).replaceAll("*", "[^/]*").replaceAll("?", "[^/]").replaceAll(CROSSING_SLASH, "(?:.*/)?").replaceAll(CROSSING, ".*");
-var compileIgnoreGlobs = (patterns) => {
-  if (patterns.length === 0)
-    return () => false;
-  const expressions = patterns.map((pattern) => new RegExp(`^(?:${globToRegExpSource(pattern)})$`));
-  return (path) => expressions.some((expression) => expression.test(path));
-};
-var ignoringPullRequestSourceLayer = (patterns) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const ignored = compileIgnoreGlobs(patterns);
-  const changedFiles = source.changedFiles.pipe(exports_Effect.map((files) => files.filter((file) => !ignored(file.path))));
-  const anchorFiles = source.anchorFiles.pipe(exports_Effect.map((files) => files.filter((file) => !ignored(file.path))));
-  const metadata = exports_Effect.gen(function* () {
-    const [meta, files] = yield* exports_Effect.all([source.metadata, source.anchorFiles]);
-    const ignoredCount = files.filter((file) => ignored(file.path)).length;
-    return PullRequestMetadata.make({
-      ...meta,
-      totalChangedFiles: Math.max(0, meta.totalChangedFiles - ignoredCount)
-    });
-  });
-  return PullRequestSource.of({
-    metadata,
-    changedFiles,
-    anchorFiles,
-    readFile: (path) => ignored(path) ? exports_Effect.fail(ReviewInputViolation.make({
-      input: path,
-      reason: "Path is excluded from this review by configuration."
-    })) : source.readFile(path)
-  });
-}));
-
-// packages/pr-review/src/internal/review-state.ts
-var ReviewMode = exports_Schema.Literals(["incremental", "final"]);
-var ReviewScopeMode = exports_Schema.Literals(["incremental", "full"]);
-var GitCommitSha = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64), exports_Schema.isPattern(/^[0-9a-f]{40,64}$/));
-var Fingerprint = exports_Schema.String.check(exports_Schema.isPattern(/^[0-9a-f]{64}$/));
-var StoredText = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(800));
-
-class StoredReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewFinding")({
-  path: ChangedPath,
-  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  severity: FindingSeverity,
-  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  body: StoredText
-}) {
-}
-
-class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewConcern")({
-  severity: FindingSeverity,
-  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
-  body: StoredText
-}) {
-}
-
-class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
-  version: exports_Schema.Literal(1),
-  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
-  pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  baseSha: GitCommitSha,
-  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
-  reviewedHeadSha: GitCommitSha,
-  profileFingerprint: Fingerprint,
-  acceptedScopeFingerprint: Fingerprint,
-  reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
-  unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
-  unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
-  lastReviewMode: ReviewScopeMode
-}) {
-}
-var toStoredFinding = (finding) => StoredReviewFinding.make({
-  path: finding.path,
-  startLine: finding.startLine,
-  endLine: finding.endLine,
-  severity: finding.severity,
-  title: finding.title,
-  body: finding.body.slice(0, 800)
-});
-var fromStoredFinding = (finding) => ReviewFinding.make({
-  path: finding.path,
-  startLine: finding.startLine,
-  endLine: finding.endLine,
-  severity: finding.severity,
-  title: finding.title,
-  body: finding.body
-});
-var toStoredConcern = (concern) => StoredReviewConcern.make({
-  severity: concern.severity,
-  title: concern.title,
-  body: concern.body.slice(0, 800)
-});
-var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
-var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
-var STATE_MARKER_SUFFIX = " -->";
-var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
-var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
-var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
-var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
-
-class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
-  operation: exports_Schema.Literals(["sign", "verify"]),
-  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
-}) {
-}
-
-class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
-  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
-}) {
-}
-
-class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
-}
-var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
-  operation,
-  reason: String(cause).slice(0, 2048)
-});
-var hmacKey = (secret, operation) => exports_Effect.tryPromise({
-  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
-  catch: (cause) => authenticationFailure(operation, cause)
-});
-var signatureBytes = (signature) => {
-  const pairs = signature.match(/../g) ?? [];
-  const buffer3 = new ArrayBuffer(pairs.length);
-  const bytes = new Uint8Array(buffer3);
-  for (let index2 = 0;index2 < pairs.length; index2 += 1) {
-    bytes[index2] = Number.parseInt(pairs[index2] ?? "", 16);
-  }
-  return buffer3;
-};
-var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
-  status: "available",
-  unavailableReason: undefined,
-  render: (state) => exports_Effect.gen(function* () {
-    const json = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
-    const payload = exports_Encoding.encodeBase64(json);
-    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-    const key = yield* hmacKey(secret, "sign");
-    const signature = yield* exports_Effect.tryPromise({
-      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
-      catch: (cause) => authenticationFailure("sign", cause)
-    });
-    const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
-    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
-      return yield* ReviewStateMarkerTooLarge.make({
-        observedChars: marker.length,
-        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
-      });
-    }
-    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
-  }),
-  extract: (body) => {
-    if (body.length > 60000)
-      return exports_Effect.succeed(exports_Option.none());
-    const match9 = STATE_MARKER_PATTERN.exec(body);
-    const payload = match9?.[1];
-    const signature = match9?.[2];
-    if (payload === undefined || signature === undefined)
-      return exports_Effect.succeed(exports_Option.none());
-    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
-    if (!exports_Schema.is(ReviewStateMarker)(marker))
-      return exports_Effect.succeed(exports_Option.none());
-    const json = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
-    if (json === undefined)
-      return exports_Effect.succeed(exports_Option.none());
-    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json);
-    if (exports_Option.isNone(decoded))
-      return exports_Effect.succeed(exports_Option.none());
-    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
-    return exports_Effect.gen(function* () {
-      const key = yield* hmacKey(secret, "verify");
-      const valid = yield* exports_Effect.tryPromise({
-        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
-        catch: (cause) => authenticationFailure("verify", cause)
-      });
-      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
-    });
-  }
-}));
-var unavailableReviewStateAuthenticatorLayer = (reason) => {
-  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
-  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
-    status: "unavailable",
-    unavailableReason: safeReason.slice(0, 1000),
-    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
-      operation: "sign",
-      reason: safeReason.slice(0, 2048)
-    })),
-    extract: () => exports_Effect.succeed(exports_Option.none())
-  }));
-};
-
-class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
-  status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
-  baseSha: GitCommitSha,
-  headSha: GitCommitSha,
-  mergeBaseSha: GitCommitSha,
-  files: exports_Schema.Array(ChangedFile).check(exports_Schema.isMaxLength(300)),
-  truncated: exports_Schema.Boolean
-}) {
-}
-var fullSelection = (input) => ({
-  mode: "full",
-  reason: input.reason,
-  files: input.files,
-  affectedPaths: input.files.flatMap((file) => file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]),
-  totalFiles: input.totalFiles,
-  baselineSha: undefined,
-  priorState: undefined,
-  profileFingerprint: input.profileFingerprint
-});
-var validateReviewState = (state, current, profileFingerprint) => {
-  if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
-    return "stored state belongs to a different pull request";
-  }
-  if (current.baseSha === undefined)
-    return "the current base commit is unavailable";
-  if (state.baseRef !== current.baseRef)
-    return "the pull request base ref changed";
-  if (state.headRef !== current.headRef)
-    return "the pull request head ref changed";
-  if (state.profileFingerprint !== profileFingerprint) {
-    return "the reviewer profile or model configuration changed";
-  }
-  return;
-};
-var selectReviewRange = (input) => {
-  const full = (reason) => fullSelection({
-    reason,
-    files: input.fullFiles,
-    totalFiles: input.current.totalChangedFiles,
-    profileFingerprint: input.profileFingerprint
-  });
-  if (input.requestedMode === "final")
-    return full("explicit final full-diff audit requested");
-  if (input.lookupFailure !== undefined) {
-    return full(`stored review state could not be recovered: ${input.lookupFailure}`);
-  }
-  if (input.priorState === undefined)
-    return full("no compatible stored review state was found");
-  const invalid2 = validateReviewState(input.priorState, input.current, input.profileFingerprint);
-  if (invalid2 !== undefined)
-    return full(invalid2);
-  const comparison = input.comparison;
-  if (comparison === undefined)
-    return full("the incremental head comparison was unavailable");
-  if (comparison.baseSha !== input.priorState.reviewedHeadSha || comparison.headSha !== input.current.headSha || comparison.mergeBaseSha !== input.priorState.reviewedHeadSha || comparison.status !== "ahead" && comparison.status !== "identical") {
-    return full("the prior reviewed head is not an ancestor of the current head");
-  }
-  if (comparison.truncated)
-    return full("the incremental comparison exceeded GitHub's file bound");
-  const affectedPaths = new Set(comparison.files.flatMap((file) => file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]));
-  let baseReason = "";
-  if (input.priorState.baseSha !== input.current.baseSha) {
-    const baseComparison = input.baseComparison;
-    if (baseComparison === undefined) {
-      return full("the pull request base changed and its lineage comparison was unavailable");
-    }
-    if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
-      return full("the pull request base changed materially or exceeded the comparison bound");
-    }
-    for (const file of baseComparison.files) {
-      affectedPaths.add(file.path);
-      if (file.previousPath !== undefined)
-        affectedPaths.add(file.previousPath);
-    }
-    baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
-  }
-  const currentPaths = new Set(input.fullFiles.flatMap((file) => file.previousPath === undefined ? [file.path] : [file.path, file.previousPath]));
-  const selectedByPath = new Map;
-  for (const file of comparison.files) {
-    if (currentPaths.has(file.path) || file.previousPath !== undefined && currentPaths.has(file.previousPath)) {
-      selectedByPath.set(file.path, file);
-    }
-  }
-  if (input.priorState.baseSha !== input.current.baseSha) {
-    for (const file of input.fullFiles) {
-      if (affectedPaths.has(file.path) || file.previousPath !== undefined && affectedPaths.has(file.previousPath)) {
-        selectedByPath.set(file.path, file);
-      }
-    }
-  }
-  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  return {
-    mode: "incremental",
-    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
-    files: selectedFiles,
-    affectedPaths: [...affectedPaths].sort(),
-    totalFiles: selectedFiles.length,
-    baselineSha: input.priorState.reviewedHeadSha,
-    priorState: input.priorState,
-    profileFingerprint: input.profileFingerprint
-  };
-};
-
-class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
-}
-var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
-  const source = yield* PullRequestSource;
-  const selectedPaths = new Set(selection.files.map((file) => file.path));
-  return PullRequestSource.of({
-    metadata: source.metadata,
-    changedFiles: exports_Effect.succeed(selection.files),
-    anchorFiles: source.anchorFiles,
-    readFile: (path) => selectedPaths.has(path) ? source.readFile(path) : exports_Effect.fail(ReviewInputViolation.make({
-      input: path,
-      reason: "Path is outside this incremental review range."
-    }))
-  });
-}));
-var computeProfileFingerprint = (signature) => exports_Effect.promise(async () => {
-  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(signature));
-  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-});
-var buildProfileMission = (metadata, files) => ReviewMission.make({
-  repository: metadata.repository,
-  number: metadata.number,
-  title: metadata.title,
-  body: metadata.body,
-  baseRef: metadata.baseRef,
-  headRef: metadata.headRef,
-  changedFileCount: files.length
-});
-
-// packages/pr-review/src/internal/coverage.ts
-var ReviewShape = exports_Schema.Literals(["flat", "fan-out"]);
-
-class FailedReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewUnit")({
-  unitId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32)),
-  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
-}) {
-}
-
-class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewCoverage")({
-  status: exports_Schema.Literals(["complete", "incomplete"]),
-  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
-  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(20))
-}) {
-}
-var toolTrace = (events2) => {
-  const declared = new Map;
-  const succeeded = new Map;
-  const failed = new Map;
-  for (const event of events2) {
-    if (event._tag === "ToolCallDeclared")
-      declared.set(event.toolCallId, event);
-    if (event._tag === "ToolCallSucceeded")
-      succeeded.set(event.toolCallId, event);
-    if (event._tag === "ToolCallFailed")
-      failed.set(event.toolCallId, event);
-  }
-  return { declared, succeeded, failed };
-};
-var sortedUnique = (values3) => [...new Set(values3)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
-var boundedListReason = (label, values3) => {
-  const items = sortedUnique(values3);
-  const prefix = `${label} (${items.length}): `;
-  let rendered = prefix;
-  for (let index2 = 0;index2 < items.length; index2 += 1) {
-    const item = items[index2] ?? "";
-    const separator = index2 === 0 ? "" : ", ";
-    const omitted = items.length - index2 - 1;
-    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
-    if (`${rendered}${separator}${item}${suffix}`.length > 1000) {
-      const omission = `… (+${items.length - index2} more)`;
-      return `${rendered.slice(0, 1000 - omission.length)}${omission}`;
-    }
-    rendered = `${rendered}${separator}${item}`;
-  }
-  return rendered;
-};
-var flatCoverage = (files, totalFiles, trace2) => {
-  const requiredPaths = sortedUnique(files.map((file) => file.path));
-  const reviewed = new Set;
-  const failedPaths = new Set;
-  for (const [toolCallId, declaration] of trace2.declared) {
-    if (declaration.toolName !== "read_file_diff")
-      continue;
-    const query = exports_Schema.decodeUnknownOption(FileDiffQuery)(declaration.parameters);
-    if (exports_Option.isNone(query))
-      continue;
-    if (trace2.succeeded.has(toolCallId))
-      reviewed.add(query.value.path);
-    if (trace2.failed.has(toolCallId))
-      failedPaths.add(query.value.path);
-  }
-  const undiffable = files.filter((file) => file.patch === undefined).map((file) => file.path);
-  const unreviewed = requiredPaths.filter((path) => !reviewed.has(path) || undiffable.includes(path) || failedPaths.has(path));
-  const reasons = [];
-  if (files.length < totalFiles) {
-    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
-  }
-  if (undiffable.length > 0) {
-    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
-  }
-  if (failedPaths.size > 0) {
-    reasons.push(boundedListReason("diff reads failed", failedPaths));
-  }
-  if (unreviewed.length > 0) {
-    reasons.push(boundedListReason("required paths were not successfully reviewed", unreviewed));
-  }
-  return ReviewCoverage.make({
-    status: reasons.length === 0 ? "complete" : "incomplete",
-    requiredPaths,
-    reviewedPaths: sortedUnique(reviewed),
-    unreviewedPaths: sortedUnique(unreviewed),
-    failedUnits: [],
-    reasons
-  });
-};
-var fanOutCoverage = (files, totalFiles, trace2) => {
-  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
-  const declarationsByUnit = new Map;
-  for (const [toolCallId, declaration] of trace2.declared) {
-    if (declaration.toolName !== "delegate_file_review")
-      continue;
-    const request3 = exports_Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-    if (exports_Option.isNone(request3))
-      continue;
-    const declarations = declarationsByUnit.get(request3.value.unitId) ?? [];
-    declarations.push({ id: toolCallId, paths: request3.value.paths });
-    declarationsByUnit.set(request3.value.unitId, declarations);
-  }
-  const reviewed = new Set;
-  const unreviewed = new Set([...plan.undiffablePaths, ...plan.unassignedPaths]);
-  const failedUnits = [];
-  const reasons = [];
-  for (const unit of plan.units) {
-    const declarations = declarationsByUnit.get(unit.unitId) ?? [];
-    const expectedPaths = [...unit.paths];
-    const exact = declarations.filter((declaration) => declaration.paths.length === expectedPaths.length && declaration.paths.every((path, index2) => path === expectedPaths[index2]));
-    const successful = exact.filter((declaration) => {
-      const event = trace2.succeeded.get(declaration.id);
-      if (event === undefined || trace2.failed.has(declaration.id))
-        return false;
-      const result4 = exports_Schema.decodeUnknownOption(FileReviewUnitResult)(event.result);
-      return exports_Option.isSome(result4) && result4.value.unitId === unit.unitId;
-    });
-    if (declarations.length === 1 && exact.length === 1 && successful.length === 1) {
-      for (const path of unit.paths)
-        reviewed.add(path);
-      continue;
-    }
-    for (const path of unit.paths)
-      unreviewed.add(path);
-    const failure = declarations.map((declaration) => trace2.failed.get(declaration.id)).find((event) => event !== undefined);
-    const returnedFailure = declarations.map((declaration) => trace2.succeeded.get(declaration.id)).filter((event) => event !== undefined).map((event) => exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result)).find(exports_Option.isSome);
-    failedUnits.push(FailedReviewUnit.make({
-      unitId: unit.unitId,
-      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 1 ? "UnitAssignedMultipleTimes" : exact.length === 0 ? "UnitAssignmentMismatch" : "UnitDidNotSettleSuccessfully")
-    }));
-  }
-  if (plan.truncated) {
-    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
-  }
-  if (plan.undiffablePaths.length > 0) {
-    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
-  }
-  if (plan.unassignedPaths.length > 0) {
-    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
-  }
-  if (failedUnits.length > 0) {
-    reasons.push(boundedListReason("review units did not complete", failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`)));
-  }
-  return ReviewCoverage.make({
-    status: reasons.length === 0 ? "complete" : "incomplete",
-    requiredPaths: sortedUnique(files.map((file) => file.path)),
-    reviewedPaths: sortedUnique(reviewed),
-    unreviewedPaths: sortedUnique(unreviewed),
-    failedUnits,
-    reasons
-  });
-};
-var assessReviewCoverage = (input) => {
-  const trace2 = toolTrace(input.events);
-  const coverage = input.shape === "fan-out" ? fanOutCoverage(input.files, input.totalFiles, trace2) : flatCoverage(input.files, input.totalFiles, trace2);
-  if (input.anchorFiles.length >= input.totalAnchorFiles)
-    return coverage;
-  return ReviewCoverage.make({
-    ...coverage,
-    status: "incomplete",
-    reasons: [
-      ...coverage.reasons,
-      `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`
-    ]
-  });
-};
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
@@ -41749,10 +40516,1444 @@ var fetch = /* @__PURE__ */ make56((request3, url2, signal, fiber3) => {
   return send(undefined);
 });
 var layer15 = /* @__PURE__ */ layerMergedContext(/* @__PURE__ */ succeed6(fetch));
+// packages/pr-review/src/internal/effort.ts
+var EFFORT_ALIASES = {
+  low: 0,
+  medium: 0.25,
+  high: 0.5,
+  xhigh: 0.75,
+  max: 1
+};
+var aliasPosition = EFFORT_ALIASES;
+
+class InvalidEffortInput extends exports_Schema.TaggedError()("InvalidEffortInput", {
+  input: exports_Schema.String
+}) {
+  get message() {
+    return `Invalid effort '${this.input}': expected one of ` + `${Object.keys(EFFORT_ALIASES).join(", ")} or a number between 0 and 1.`;
+  }
+}
+var isEffortPosition = (value4) => Number.isFinite(value4) && value4 >= 0 && value4 <= 1;
+var parseEffortPosition = (raw2) => {
+  const normalized = raw2.trim().toLowerCase();
+  const named = aliasPosition[normalized];
+  if (named !== undefined)
+    return named;
+  if (normalized === "")
+    return;
+  const numeric = Number(normalized);
+  return isEffortPosition(numeric) ? numeric : undefined;
+};
+var resolveEffortRung = (position, rungs) => {
+  const clamped = Math.min(1, Math.max(0, position));
+  let selected = rungs[0];
+  for (const rung of rungs) {
+    if (EFFORT_ALIASES[rung] <= clamped)
+      selected = rung;
+  }
+  return selected;
+};
+
+// packages/pr-review/src/internal/diff.ts
+var ChangedPath = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512));
+var ChangedFileStatus = exports_Schema.Literals([
+  "added",
+  "removed",
+  "modified",
+  "renamed",
+  "copied",
+  "changed",
+  "unchanged"
+]);
+
+class ChangedFile extends exports_Schema.Class("@effect-agent/pr-review/ChangedFile")({
+  path: ChangedPath,
+  status: ChangedFileStatus,
+  additions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  deletions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  previousPath: exports_Schema.optionalKey(ChangedPath),
+  patch: exports_Schema.optionalKey(exports_Schema.String)
+}) {
+}
+var HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+var parsePatch = (patch3) => {
+  const lines = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const raw2 of patch3.split(`
+`)) {
+    const header = HUNK_HEADER.exec(raw2);
+    if (header !== null) {
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk)
+      continue;
+    if (raw2.startsWith("+")) {
+      lines.push({ kind: "add", oldLine: undefined, newLine, text: raw2.slice(1) });
+      newLine += 1;
+    } else if (raw2.startsWith("-")) {
+      lines.push({ kind: "del", oldLine, newLine: undefined, text: raw2.slice(1) });
+      oldLine += 1;
+    } else if (raw2.startsWith(" ") || raw2 === "") {
+      lines.push({ kind: "context", oldLine, newLine, text: raw2.slice(1) });
+      oldLine += 1;
+      newLine += 1;
+    } else if (raw2.startsWith("\\")) {} else {
+      inHunk = false;
+    }
+  }
+  return lines;
+};
+var commentableLines = (patch3) => {
+  const lines = new Set;
+  for (const line of parsePatch(patch3)) {
+    if (line.newLine !== undefined)
+      lines.add(line.newLine);
+  }
+  return lines;
+};
+var annotatePatch = (patch3) => {
+  const output = [];
+  let oldLine = 0;
+  let newLine = 0;
+  let inHunk = false;
+  for (const raw2 of patch3.split(`
+`)) {
+    const header = HUNK_HEADER.exec(raw2);
+    if (header !== null) {
+      oldLine = Number(header[1]);
+      newLine = Number(header[2]);
+      inHunk = true;
+      output.push(raw2);
+      continue;
+    }
+    if (!inHunk)
+      continue;
+    if (raw2.startsWith("+")) {
+      output.push(`R${newLine} + ${raw2.slice(1)}`);
+      newLine += 1;
+    } else if (raw2.startsWith("-")) {
+      output.push(`      - ${raw2.slice(1)}`);
+      oldLine += 1;
+    } else if (raw2.startsWith(" ") || raw2 === "") {
+      output.push(`R${newLine}   ${raw2.slice(1)}`);
+      oldLine += 1;
+      newLine += 1;
+    } else if (raw2.startsWith("\\")) {
+      output.push(`        ${raw2}`);
+    } else {
+      inHunk = false;
+    }
+  }
+  return output.join(`
+`);
+};
+
+// packages/pr-review/src/internal/source.ts
+var MAX_FILE_CHARS = 200000;
+var MAX_CHANGED_FILES = 300;
+
+class PullRequestMetadata extends exports_Schema.Class("@effect-agent/pr-review/PullRequestMetadata")({
+  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  number: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  title: exports_Schema.String.check(exports_Schema.isMaxLength(400)),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(20000)),
+  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  baseSha: exports_Schema.optionalKey(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64))),
+  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  headSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
+  totalChangedFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+}) {
+}
+
+class PullRequestSourceFailure extends exports_Schema.TaggedError()("PullRequestSourceFailure", {
+  operation: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Pull-request source operation '${this.operation}' failed: ${this.reason}`;
+  }
+}
+
+class ReviewInputViolation extends exports_Schema.TaggedError()("ReviewInputViolation", {
+  input: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Rejected review input '${this.input}': ${this.reason}`;
+  }
+}
+var BACKSLASH = String.fromCharCode(92);
+var normalizeRepoRelativePath = (path) => {
+  const fail14 = (reason) => exports_Effect.fail(ReviewInputViolation.make({ input: path, reason }));
+  if (path.length === 0 || path.length > 512) {
+    return fail14("Path length is out of bounds.");
+  }
+  if (path.includes(BACKSLASH)) {
+    return fail14("Path contains a forbidden backslash.");
+  }
+  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) {
+    return fail14("Path must be repository-relative, not absolute.");
+  }
+  const segments = path.split("/");
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === "..") {
+      return fail14("Path segments must not be empty, '.', or '..'.");
+    }
+  }
+  return exports_Effect.succeed(segments.join("/"));
+};
+
+class PullRequestSource extends exports_Context.Service()("@effect-agent/pr-review/PullRequestSource") {
+}
+
+// packages/pr-review/src/internal/review-agent.ts
+var MAX_FINDINGS = 20;
+var MAX_CONCERNS = 10;
+var MAX_PATCH_CHARS = 60000;
+var MAX_SLICE_LINES = 1000;
+var DEFAULT_SLICE_LINES = 400;
+
+class ChangedFileSummary extends exports_Schema.Class("@effect-agent/pr-review/ChangedFileSummary")({
+  path: ChangedPath,
+  status: ChangedFileStatus,
+  additions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  deletions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  hasTextualDiff: exports_Schema.Boolean
+}) {
+}
+
+class ChangedFilesView extends exports_Schema.Class("@effect-agent/pr-review/ChangedFilesView")({
+  totalFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  truncated: exports_Schema.Boolean,
+  files: exports_Schema.Array(ChangedFileSummary).check(exports_Schema.isMaxLength(300))
+}) {
+}
+
+class ListChangedFilesQuery extends exports_Schema.Class("@effect-agent/pr-review/ListChangedFilesQuery")({
+  scope: exports_Schema.Literal("all")
+}) {
+}
+var ListChangedFiles = exports_Tool.make("list_changed_files", {
+  description: "List every file changed by this pull request with its status, line counts, and whether a textual diff is available.",
+  parameters: ListChangedFilesQuery,
+  success: ChangedFilesView,
+  failure: PullRequestSourceFailure,
+  failureMode: "error",
+  dependencies: [PullRequestSource]
+}).annotate(ToolExecutionClass, "readonly");
+
+class FileDiffQuery extends exports_Schema.Class("@effect-agent/pr-review/FileDiffQuery")({
+  path: ChangedPath
+}) {
+}
+
+class FileDiffView extends exports_Schema.Class("@effect-agent/pr-review/FileDiffView")({
+  path: ChangedPath,
+  status: ChangedFileStatus,
+  annotatedPatch: exports_Schema.String,
+  truncated: exports_Schema.Boolean
+}) {
+}
+var ReadFileDiff = exports_Tool.make("read_file_diff", {
+  description: "Read the annotated unified diff of one changed file. Lines marked R<number> exist in the new version and are the only valid finding anchors.",
+  parameters: FileDiffQuery,
+  success: FileDiffView,
+  failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
+  failureMode: "return",
+  dependencies: [PullRequestSource]
+}).annotate(ToolExecutionClass, "readonly");
+
+class FileSliceQuery extends exports_Schema.Class("@effect-agent/pr-review/FileSliceQuery")({
+  path: ChangedPath,
+  startLine: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0))),
+  maxLines: exports_Schema.optionalKey(exports_Schema.Int.check(exports_Schema.isGreaterThan(0)).check(exports_Schema.isLessThanOrEqualTo(MAX_SLICE_LINES)))
+}) {
+}
+
+class FileSlice extends exports_Schema.Class("@effect-agent/pr-review/FileSlice")({
+  path: ChangedPath,
+  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  totalLines: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  content: exports_Schema.String
+}) {
+}
+var ReadFile = exports_Tool.make("read_file", {
+  description: "Read a numbered slice of the NEW (head) version of one changed file, for context around the diff. Only files in the changeset are readable.",
+  parameters: FileSliceQuery,
+  success: FileSlice,
+  failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
+  failureMode: "return",
+  dependencies: [PullRequestSource]
+}).annotate(ToolExecutionClass, "readonly");
+var ReviewToolkit = exports_Toolkit.make(ListChangedFiles, ReadFileDiff, ReadFile);
+var listChangedFilesHandler = (_query) => exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const files = yield* source.changedFiles;
+  const metadata = yield* source.metadata;
+  return ChangedFilesView.make({
+    totalFiles: metadata.totalChangedFiles,
+    truncated: files.length < metadata.totalChangedFiles,
+    files: files.map((file2) => ChangedFileSummary.make({
+      path: file2.path,
+      status: file2.status,
+      additions: file2.additions,
+      deletions: file2.deletions,
+      hasTextualDiff: file2.patch !== undefined
+    }))
+  });
+});
+var readFileDiffHandler = (query) => exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const relative = yield* normalizeRepoRelativePath(query.path);
+  const files = yield* source.changedFiles;
+  const file2 = files.find((candidate) => candidate.path === relative);
+  if (file2 === undefined) {
+    return yield* ReviewInputViolation.make({
+      input: relative,
+      reason: "Path is not part of this pull request's changeset."
+    });
+  }
+  const annotated = file2.patch === undefined ? "" : annotatePatch(file2.patch);
+  const truncated = annotated.length > MAX_PATCH_CHARS;
+  return FileDiffView.make({
+    path: file2.path,
+    status: file2.status,
+    annotatedPatch: truncated ? `${annotated.slice(0, MAX_PATCH_CHARS)}
+[diff truncated]` : annotated,
+    truncated
+  });
+});
+var readFileHandler = (query) => exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const relative = yield* normalizeRepoRelativePath(query.path);
+  const content = yield* source.readFile(relative);
+  const lines = content.split(`
+`);
+  const startLine = query.startLine ?? 1;
+  const maxLines = query.maxLines ?? DEFAULT_SLICE_LINES;
+  if (startLine > lines.length) {
+    return yield* ReviewInputViolation.make({
+      input: `${relative}:${startLine}`,
+      reason: `startLine is beyond the end of the file (${lines.length} lines).`
+    });
+  }
+  const slice = lines.slice(startLine - 1, startLine - 1 + maxLines);
+  const endLine = startLine + slice.length - 1;
+  return FileSlice.make({
+    path: relative,
+    startLine,
+    endLine,
+    totalLines: lines.length,
+    content: slice.map((text2, index2) => `${String(startLine + index2).padStart(5)}  ${text2}`).join(`
+`)
+  });
+});
+var ReviewToolkitLayer = ReviewToolkit.toLayer({
+  list_changed_files: listChangedFilesHandler,
+  read_file_diff: readFileDiffHandler,
+  read_file: readFileHandler
+});
+
+class ReviewMission extends exports_Schema.Class("@effect-agent/pr-review/ReviewMission")({
+  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  number: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  title: exports_Schema.String.check(exports_Schema.isMaxLength(400)),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(20000)),
+  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  changedFileCount: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+}) {
+}
+var FindingSeverity = exports_Schema.Literals(["blocking", "important", "nit"]);
+
+class ReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/ReviewFinding")({
+  path: ChangedPath,
+  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000)),
+  suggestion: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(2000)))
+}) {
+}
+var ReviewVerdict = exports_Schema.Literals(["approve", "comment", "request-changes"]);
+
+class ReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/ReviewConcern")({
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000))
+}) {
+}
+
+class CodeReview extends exports_Schema.Class("@effect-agent/pr-review/CodeReview")({
+  summary: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(4000)),
+  verdict: ReviewVerdict,
+  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_FINDINGS)),
+  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CONCERNS)))
+}) {
+}
+var resolveGuidance = (guidance, mission) => {
+  if (guidance === undefined)
+    return [];
+  const value4 = typeof guidance === "function" ? guidance(mission) : guidance;
+  const lines = typeof value4 === "string" ? [value4] : value4;
+  return lines.filter((line) => line.length > 0);
+};
+var clampMaxFindings = (maxFindings) => maxFindings === undefined ? MAX_FINDINGS : Math.min(MAX_FINDINGS, Math.max(1, Math.trunc(maxFindings)));
+var makeReviewInstructions = (options3 = {}) => (mission) => {
+  const maxFindings = clampMaxFindings(options3.maxFindings);
+  return [
+    `You are a senior code reviewer for pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
+    mission.body.length > 0 ? `Author description:
+${mission.body}` : "The author provided no description.",
+    ...resolveGuidance(options3.guidance, mission),
+    "Work in this order:",
+    "1. Call list_changed_files once to see the changeset.",
+    "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+    "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
+    "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
+    "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
+    "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
+    "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
+    '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
+    '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>}.',
+    `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
+    'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.'
+  ].join(`
+`);
+};
+var reviewInstructions = makeReviewInstructions();
+var defaultReviewPolicy = AgentPolicy.make({
+  maxTurns: 12,
+  maxToolCalls: 24,
+  maxDuration: "8 minutes",
+  toolConcurrency: 2,
+  tokenBudget: 300000,
+  contextTokenLimit: 150000,
+  onExhaustion: "final-answer"
+});
+var PullRequestReviewer = Agent.define("pr-reviewer", {
+  input: ReviewMission,
+  output: CodeReview,
+  instructions: reviewInstructions,
+  toolkit: ReviewToolkit,
+  policy: defaultReviewPolicy,
+  description: "Review one pull request read-only: list the changeset, read annotated diffs and head-file context, and return a structured, line-anchored code review.",
+  metadata: { deploymentClass: "E", surface: "read-only" }
+});
+
+// packages/pr-review/src/internal/review-units.ts
+var MAX_REVIEW_UNITS = 8;
+var MAX_UNIT_FILES = 12;
+var UNIT_CHANGED_LINE_BUDGET = 800;
+var FILE_OVERHEAD_LINES = 20;
+var MAX_MERGED_FINDINGS = 20;
+var ReviewUnitId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32));
+
+class ReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/ReviewUnit")({
+  unitId: ReviewUnitId,
+  paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES)),
+  changedLines: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+}) {
+}
+
+class ReviewUnitPlan extends exports_Schema.Class("@effect-agent/pr-review/ReviewUnitPlan")({
+  totalFiles: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  truncated: exports_Schema.Boolean,
+  units: exports_Schema.Array(ReviewUnit).check(exports_Schema.isMaxLength(MAX_REVIEW_UNITS)),
+  undiffablePaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300)),
+  unassignedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300))
+}) {
+}
+var fileCost = (file2) => file2.additions + file2.deletions + FILE_OVERHEAD_LINES;
+var unitOf = (index2, files) => ReviewUnit.make({
+  unitId: `unit-${String(index2 + 1).padStart(3, "0")}`,
+  paths: files.map((file2) => file2.path),
+  changedLines: files.reduce((total, file2) => total + file2.additions + file2.deletions, 0)
+});
+var planReviewUnits = (files, options3) => {
+  const ordered = [...files].sort((left, right) => left.path < right.path ? -1 : 1);
+  const diffable = ordered.filter((file2) => file2.patch !== undefined);
+  const undiffable = ordered.filter((file2) => file2.patch === undefined);
+  const groups = [];
+  const unassigned = [];
+  let current = [];
+  let currentCost = 0;
+  for (const file2 of diffable) {
+    const cost = fileCost(file2);
+    const wouldOverflow = current.length >= MAX_UNIT_FILES || current.length > 0 && currentCost + cost > UNIT_CHANGED_LINE_BUDGET;
+    if (wouldOverflow) {
+      groups.push(current);
+      current = [];
+      currentCost = 0;
+    }
+    if (groups.length >= MAX_REVIEW_UNITS) {
+      unassigned.push(file2);
+      continue;
+    }
+    current.push(file2);
+    currentCost += cost;
+  }
+  if (current.length > 0 && groups.length < MAX_REVIEW_UNITS) {
+    groups.push(current);
+  }
+  return ReviewUnitPlan.make({
+    totalFiles: files.length,
+    truncated: files.length < options3.totalChangedFiles,
+    units: groups.map((group2, index2) => unitOf(index2, group2)),
+    undiffablePaths: undiffable.map((file2) => file2.path),
+    unassignedPaths: unassigned.map((file2) => file2.path)
+  });
+};
+var severityRank = {
+  blocking: 0,
+  important: 1,
+  nit: 2
+};
+var anchorKey = (finding) => `${finding.path} ${finding.startLine} ${finding.endLine}`;
+var rankAndDedupeFindings = (findings) => {
+  const byAnchor = new Map;
+  for (const finding of findings) {
+    const key = anchorKey(finding);
+    const existing = byAnchor.get(key);
+    if (existing === undefined || severityRank[finding.severity] < severityRank[existing.severity]) {
+      byAnchor.set(key, finding);
+    }
+  }
+  return [...byAnchor.values()].sort((left, right) => {
+    const bySeverity = severityRank[left.severity] - severityRank[right.severity];
+    if (bySeverity !== 0)
+      return bySeverity;
+    if (left.path !== right.path)
+      return left.path < right.path ? -1 : 1;
+    return left.startLine - right.startLine;
+  }).slice(0, MAX_MERGED_FINDINGS);
+};
+
+// packages/pr-review/src/internal/fan-out.ts
+var MAX_CHILD_FINDINGS = 8;
+var MAX_CHILD_CONCERNS = 3;
+var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
+var FileReviewToolkit = exports_Toolkit.make(ReadFileDiff, ReadFile);
+var FileReviewToolkitLayer = FileReviewToolkit.toLayer({
+  read_file_diff: readFileDiffHandler,
+  read_file: readFileHandler
+});
+var UnitPaths = exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES));
+
+class FileReviewBrief extends exports_Schema.Class("@effect-agent/pr-review/FileReviewBrief")({
+  unitId: ReviewUnitId,
+  paths: UnitPaths,
+  focus: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))
+}) {
+}
+
+class FileReviewReport extends exports_Schema.Class("@effect-agent/pr-review/FileReviewReport")({
+  unitId: ReviewUnitId,
+  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS)),
+  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CHILD_CONCERNS)))
+}) {
+}
+var staticGuidanceLines = (guidance) => {
+  if (guidance === undefined)
+    return [];
+  const lines = typeof guidance === "string" ? [guidance] : guidance;
+  return lines.filter((line) => line.length > 0);
+};
+var makeFileReviewerInstructions = (options3 = {}) => (brief) => [
+  `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
+  ...staticGuidanceLines(options3.guidance),
+  "Work in this order:",
+  "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+  "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
+  "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
+  "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
+  "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
+  `4. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"unitId": ${JSON.stringify(brief.unitId)}, "findings": [{"path": <string, a file in your unit>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for concerns about YOUR unit's files with no valid line anchor (a missing cleanup, a coverage gap the diff implies, sequencing the diff leaves open) — never duplicate a finding here>}.`,
+  `Report at most ${MAX_CHILD_FINDINGS} findings and at most ${MAX_CHILD_CONCERNS} concerns; prefer the most important ones. An empty findings array is a valid report. Never report on files outside your unit. Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.`
+].join(`
+`);
+var fileReviewerInstructions = makeFileReviewerInstructions();
+var defaultFileReviewerPolicy = AgentPolicy.make({
+  maxTurns: 8,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
+  maxDuration: "4 minutes",
+  toolConcurrency: 2,
+  tokenBudget: 200000,
+  contextTokenLimit: 150000,
+  onExhaustion: "fail"
+});
+
+class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
+  unitId: ReviewUnitId,
+  paths: UnitPaths
+}) {
+}
+
+class FileReviewUnitResult extends exports_Schema.Class("@effect-agent/pr-review/FileReviewUnitResult")({
+  unitId: ReviewUnitId,
+  findings: exports_Schema.Array(ReviewFinding).check(exports_Schema.isMaxLength(MAX_CHILD_FINDINGS)),
+  concerns: exports_Schema.optionalKey(exports_Schema.Array(ReviewConcern).check(exports_Schema.isMaxLength(MAX_CHILD_CONCERNS)))
+}) {
+}
+
+class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitFailed", {
+  childErrorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
+  message: exports_Schema.String.check(exports_Schema.isMaxLength(400))
+}) {
+}
+var fileReviewPolicy = SubagentPolicy.make({
+  maxChildren: MAX_REVIEW_UNITS,
+  maxConcurrency: 3,
+  maxTurns: 8,
+  maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
+  maxDuration: "4 minutes"
+});
+var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
+var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
+  childErrorTag: failure._tag,
+  message: (failure.message ?? "").slice(0, 400)
+});
+
+class ListReviewUnitsQuery extends exports_Schema.Class("@effect-agent/pr-review/ListReviewUnitsQuery")({
+  scope: exports_Schema.Literal("all")
+}) {
+}
+var ListReviewUnits = exports_Tool.make("list_review_units", {
+  description: "List this pull request's changeset grouped into bounded review units (size-budgeted, directory-affine), plus the files no unit can cover.",
+  parameters: ListReviewUnitsQuery,
+  success: ReviewUnitPlan,
+  failure: PullRequestSourceFailure,
+  failureMode: "error",
+  dependencies: [PullRequestSource]
+}).annotate(ToolExecutionClass, "readonly");
+var FanOutCoordinatorToolkit = exports_Toolkit.make(ListReviewUnits);
+var FanOutCoordinatorToolkitLayer = FanOutCoordinatorToolkit.toLayer({
+  list_review_units: () => exports_Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const files = yield* source.changedFiles;
+    const metadata = yield* source.metadata;
+    return planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
+  })
+});
+var makeFanOutReviewInstructions = (options3 = {}) => (mission) => {
+  const maxFindings = clampMaxFindings(options3.maxFindings);
+  return [
+    `You coordinate the review of pull request #${mission.number} ("${mission.title}") in ${mission.repository}, merging ${mission.headRef} into ${mission.baseRef}. It changes ${mission.changedFileCount} file(s).`,
+    mission.body.length > 0 ? `Author description:
+${mission.body}` : "The author provided no description.",
+    ...staticGuidanceLines(options3.guidance),
+    "Work in this order:",
+    "1. Call list_review_units once to get the planned review units.",
+    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
+    `3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan's undiffablePaths and unassignedPaths must also be named as not reviewed when present.`,
+    `4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
+    `5. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
+    '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>}. Copy findings and concerns verbatim from the delegation results; never invent or edit anchors.',
+    'Use verdict "request-changes" only when at least one finding or concern is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.'
+  ].join(`
+`);
+};
+var fanOutReviewInstructions = makeFanOutReviewInstructions();
+var defaultFanOutPolicy = AgentPolicy.make({
+  maxTurns: 6,
+  maxToolCalls: 1 + MAX_REVIEW_UNITS,
+  maxDuration: "15 minutes",
+  toolConcurrency: 3,
+  repeatedFailureLimit: 3,
+  tokenBudget: 300000,
+  contextTokenLimit: 150000,
+  onExhaustion: "final-answer"
+});
+var makeFileReviewerDefinition = (options3 = {}) => Agent.define("pr-file-reviewer", {
+  input: FileReviewBrief,
+  output: FileReviewReport,
+  instructions: makeFileReviewerInstructions(options3),
+  toolkit: FileReviewToolkit,
+  policy: defaultFileReviewerPolicy,
+  description: "Review one bounded unit of a pull request's changeset read-only and return line-anchored findings for exactly those files.",
+  metadata: { deploymentClass: "E", surface: "read-only" }
+});
+var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review", {
+  description: delegationDescription,
+  target: child,
+  parameters: FileReviewRequest,
+  success: FileReviewUnitResult,
+  failure: FileReviewUnitFailed,
+  failureMode: "return",
+  prepareInput: (request3) => exports_Effect.succeed(FileReviewBrief.make({
+    unitId: request3.unitId,
+    paths: request3.paths,
+    focus: "defects-first: correctness, security, concurrency, resources, error handling"
+  })),
+  projectResult: (report2) => exports_Effect.succeed(FileReviewUnitResult.make({
+    unitId: report2.unitId,
+    findings: report2.findings,
+    ...report2.concerns !== undefined ? { concerns: report2.concerns } : {}
+  })),
+  policy: fileReviewPolicy
+});
+var delegationToolFor = (delegation) => delegation.tool.annotate(ToolExecutionClass, "readonly");
+var makeFanOutReviewerDefinition = (options3, delegation) => Agent.define("pr-fanout-reviewer", {
+  input: ReviewMission,
+  output: CodeReview,
+  instructions: makeFanOutReviewInstructions(options3),
+  toolkit: exports_Toolkit.make(ListReviewUnits, delegationToolFor(delegation)),
+  policy: defaultFanOutPolicy,
+  description: "Coordinate one pull-request review by fanning bounded per-unit file reviews out to delegated children and merging their findings into one structured review.",
+  metadata: { deploymentClass: "E", surface: "read-only", delegation: "S1-attached" }
+});
+var makeFanOutReviewSuite = (options3 = {}) => {
+  const child = makeFileReviewerDefinition({ guidance: options3.guidance });
+  const delegation = makeFileReviewDelegation(child);
+  return {
+    child,
+    parent: makeFanOutReviewerDefinition(options3, delegation),
+    delegation
+  };
+};
+var defaultSuite = makeFanOutReviewSuite();
+var FileReviewer = defaultSuite.child;
+var FanOutReviewer = defaultSuite.parent;
+var fileReviewDelegation = defaultSuite.delegation;
+var DelegateFileReview = delegationToolFor(fileReviewDelegation);
+var FanOutReviewToolkit = FanOutReviewer.toolkit;
+var FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
+var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.layer(delegation, childBinding, {
+  mapChildFailure: mapFileReviewChildFailure
+});
+var fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);
+
+// packages/pr-review/src/internal/fingerprint.ts
+var MARKER_PREFIX = "<!-- effect-agent-pr-review fingerprint=sha256:";
+var MARKER_SUFFIX = " -->";
+var MARKER_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:([0-9a-f]{64}) -->/g;
+var renderFingerprintMarker = (fingerprint) => `${MARKER_PREFIX}${fingerprint}${MARKER_SUFFIX}`;
+var FINGERPRINT_MARKER_LENGTH = renderFingerprintMarker("0".repeat(64)).length;
+var extractFingerprint = (body) => {
+  let last3;
+  for (const match9 of body.matchAll(MARKER_PATTERN)) {
+    last3 = match9[1];
+  }
+  return last3;
+};
+var sha256Hex = (text2) => exports_Effect.promise(async () => {
+  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text2));
+  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+});
+var FIELD = "\x00";
+var RECORD = "\x01";
+var SECTION = "\x02";
+var canonicalChangeset = (files) => files.map((file2) => `${file2.path}${FIELD}${file2.status}${FIELD}${String(file2.additions)}${FIELD}${String(file2.deletions)}${FIELD}${file2.patch ?? ""}`).sort().join(RECORD);
+var computeChangesetFingerprint = (files, signature) => sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
+
+// packages/pr-review/src/internal/ignore.ts
+var REGEX_SPECIALS = /[.+^${}()|[\]\\]/g;
+var CROSSING_SLASH = "\x00";
+var CROSSING = "\x01";
+var globToRegExpSource = (pattern) => pattern.replace(REGEX_SPECIALS, String.raw`\$&`).replaceAll("**/", CROSSING_SLASH).replaceAll("**", CROSSING).replaceAll("*", "[^/]*").replaceAll("?", "[^/]").replaceAll(CROSSING_SLASH, "(?:.*/)?").replaceAll(CROSSING, ".*");
+var compileIgnoreGlobs = (patterns) => {
+  if (patterns.length === 0)
+    return () => false;
+  const expressions = patterns.map((pattern) => new RegExp(`^(?:${globToRegExpSource(pattern)})$`));
+  return (path) => expressions.some((expression) => expression.test(path));
+};
+var ignoringPullRequestSourceLayer = (patterns) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const ignored = compileIgnoreGlobs(patterns);
+  const changedFiles = source.changedFiles.pipe(exports_Effect.map((files) => files.filter((file2) => !ignored(file2.path))));
+  const anchorFiles = source.anchorFiles.pipe(exports_Effect.map((files) => files.filter((file2) => !ignored(file2.path))));
+  const metadata = exports_Effect.gen(function* () {
+    const [meta, files] = yield* exports_Effect.all([source.metadata, source.anchorFiles]);
+    const ignoredCount = files.filter((file2) => ignored(file2.path)).length;
+    return PullRequestMetadata.make({
+      ...meta,
+      totalChangedFiles: Math.max(0, meta.totalChangedFiles - ignoredCount)
+    });
+  });
+  return PullRequestSource.of({
+    metadata,
+    changedFiles,
+    anchorFiles,
+    readFile: (path) => ignored(path) ? exports_Effect.fail(ReviewInputViolation.make({
+      input: path,
+      reason: "Path is excluded from this review by configuration."
+    })) : source.readFile(path)
+  });
+}));
+
+// packages/pr-review/src/internal/review-state.ts
+var ReviewMode = exports_Schema.Literals(["incremental", "final"]);
+var ReviewScopeMode = exports_Schema.Literals(["incremental", "full"]);
+var GitCommitSha = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64), exports_Schema.isPattern(/^[0-9a-f]{40,64}$/));
+var Fingerprint = exports_Schema.String.check(exports_Schema.isPattern(/^[0-9a-f]{64}$/));
+var StoredText = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(800));
+
+class StoredReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewFinding")({
+  path: ChangedPath,
+  startLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  endLine: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: StoredText
+}) {
+}
+
+class StoredReviewConcern extends exports_Schema.Class("@effect-agent/pr-review/StoredReviewConcern")({
+  severity: FindingSeverity,
+  title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
+  body: StoredText
+}) {
+}
+
+class ReviewState extends exports_Schema.Class("@effect-agent/pr-review/ReviewState")({
+  version: exports_Schema.Literal(1),
+  repository: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  pullRequestNumber: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  baseRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  baseSha: GitCommitSha,
+  headRef: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(300)),
+  reviewedHeadSha: GitCommitSha,
+  profileFingerprint: Fingerprint,
+  acceptedScopeFingerprint: Fingerprint,
+  reviewedPathCount: exports_Schema.Int.check(exports_Schema.isBetween({ minimum: 0, maximum: 300 })),
+  unresolvedFindings: exports_Schema.Array(StoredReviewFinding).check(exports_Schema.isMaxLength(20)),
+  unresolvedConcerns: exports_Schema.Array(StoredReviewConcern).check(exports_Schema.isMaxLength(10)),
+  lastReviewMode: ReviewScopeMode
+}) {
+}
+var toStoredFinding = (finding) => StoredReviewFinding.make({
+  path: finding.path,
+  startLine: finding.startLine,
+  endLine: finding.endLine,
+  severity: finding.severity,
+  title: finding.title,
+  body: finding.body.slice(0, 800)
+});
+var fromStoredFinding = (finding) => ReviewFinding.make({
+  path: finding.path,
+  startLine: finding.startLine,
+  endLine: finding.endLine,
+  severity: finding.severity,
+  title: finding.title,
+  body: finding.body
+});
+var toStoredConcern = (concern) => StoredReviewConcern.make({
+  severity: concern.severity,
+  title: concern.title,
+  body: concern.body.slice(0, 800)
+});
+var fromStoredConcern = (concern) => ReviewConcern.make({ severity: concern.severity, title: concern.title, body: concern.body });
+var STATE_MARKER_PREFIX = "<!-- effect-agent-pr-review state-v1:";
+var STATE_MARKER_SUFFIX = " -->";
+var STATE_MARKER_PATTERN = /(?:^|\n)<!-- effect-agent-pr-review state-v1:([A-Za-z0-9+/]+={0,2})\.([0-9a-f]{64}) -->$/;
+var STATE_SIGNATURE_DOMAIN = "effect-agent-pr-review/state-v1\x00";
+var MAX_REVIEW_STATE_MARKER_CHARS = 24000;
+var ReviewStateMarker = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(MAX_REVIEW_STATE_MARKER_CHARS), exports_Schema.isPattern(/^<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->$/)).pipe(exports_Schema.brand("@effect-agent/pr-review/ReviewStateMarker"));
+
+class ReviewStateAuthenticationFailure extends exports_Schema.TaggedError()("ReviewStateAuthenticationFailure", {
+  operation: exports_Schema.Literals(["sign", "verify"]),
+  reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2048))
+}) {
+}
+
+class ReviewStateMarkerTooLarge extends exports_Schema.TaggedError()("ReviewStateMarkerTooLarge", {
+  observedChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  maximumChars: exports_Schema.Int.check(exports_Schema.isGreaterThan(0))
+}) {
+}
+
+class ReviewStateAuthenticator extends exports_Context.Service()("@effect-agent/pr-review/ReviewStateAuthenticator") {
+}
+var authenticationFailure = (operation, cause) => ReviewStateAuthenticationFailure.make({
+  operation,
+  reason: String(cause).slice(0, 2048)
+});
+var hmacKey = (secret, operation) => exports_Effect.tryPromise({
+  try: () => globalThis.crypto.subtle.importKey("raw", new TextEncoder().encode(exports_Redacted.value(secret)), { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]),
+  catch: (cause) => authenticationFailure(operation, cause)
+});
+var signatureBytes = (signature) => {
+  const pairs = signature.match(/../g) ?? [];
+  const buffer3 = new ArrayBuffer(pairs.length);
+  const bytes = new Uint8Array(buffer3);
+  for (let index2 = 0;index2 < pairs.length; index2 += 1) {
+    bytes[index2] = Number.parseInt(pairs[index2] ?? "", 16);
+  }
+  return buffer3;
+};
+var webCryptoReviewStateAuthenticatorLayer = (secret) => exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+  status: "available",
+  unavailableReason: undefined,
+  render: (state) => exports_Effect.gen(function* () {
+    const json2 = yield* exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(ReviewState))(state).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+    const payload = exports_Encoding.encodeBase64(json2);
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    const key = yield* hmacKey(secret, "sign");
+    const signature = yield* exports_Effect.tryPromise({
+      try: () => globalThis.crypto.subtle.sign("HMAC", key, message),
+      catch: (cause) => authenticationFailure("sign", cause)
+    });
+    const hex2 = Array.from(new Uint8Array(signature)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${hex2}${STATE_MARKER_SUFFIX}`;
+    if (marker.length > MAX_REVIEW_STATE_MARKER_CHARS) {
+      return yield* ReviewStateMarkerTooLarge.make({
+        observedChars: marker.length,
+        maximumChars: MAX_REVIEW_STATE_MARKER_CHARS
+      });
+    }
+    return yield* exports_Schema.decodeUnknownEffect(ReviewStateMarker)(marker).pipe(exports_Effect.mapError((cause) => authenticationFailure("sign", cause)));
+  }),
+  extract: (body) => {
+    if (body.length > 60000)
+      return exports_Effect.succeed(exports_Option.none());
+    const match9 = STATE_MARKER_PATTERN.exec(body);
+    const payload = match9?.[1];
+    const signature = match9?.[2];
+    if (payload === undefined || signature === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const marker = `${STATE_MARKER_PREFIX}${payload}.${signature}${STATE_MARKER_SUFFIX}`;
+    if (!exports_Schema.is(ReviewStateMarker)(marker))
+      return exports_Effect.succeed(exports_Option.none());
+    const json2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+    if (json2 === undefined)
+      return exports_Effect.succeed(exports_Option.none());
+    const decoded = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(ReviewState))(json2);
+    if (exports_Option.isNone(decoded))
+      return exports_Effect.succeed(exports_Option.none());
+    const message = new TextEncoder().encode(`${STATE_SIGNATURE_DOMAIN}${payload}`);
+    return exports_Effect.gen(function* () {
+      const key = yield* hmacKey(secret, "verify");
+      const valid = yield* exports_Effect.tryPromise({
+        try: () => globalThis.crypto.subtle.verify("HMAC", key, signatureBytes(signature), message),
+        catch: (cause) => authenticationFailure("verify", cause)
+      });
+      return valid ? exports_Option.some(decoded.value) : exports_Option.none();
+    });
+  }
+}));
+var unavailableReviewStateAuthenticatorLayer = (reason) => {
+  const safeReason = reason === "" ? "review-state authentication is unavailable" : reason;
+  return exports_Layer.succeed(ReviewStateAuthenticator)(ReviewStateAuthenticator.of({
+    status: "unavailable",
+    unavailableReason: safeReason.slice(0, 1000),
+    render: () => exports_Effect.fail(ReviewStateAuthenticationFailure.make({
+      operation: "sign",
+      reason: safeReason.slice(0, 2048)
+    })),
+    extract: () => exports_Effect.succeed(exports_Option.none())
+  }));
+};
+
+class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review/ReviewHeadComparison")({
+  status: exports_Schema.Literals(["ahead", "behind", "diverged", "identical"]),
+  baseSha: GitCommitSha,
+  headSha: GitCommitSha,
+  mergeBaseSha: GitCommitSha,
+  files: exports_Schema.Array(ChangedFile).check(exports_Schema.isMaxLength(300)),
+  truncated: exports_Schema.Boolean
+}) {
+}
+var fullSelection = (input) => ({
+  mode: "full",
+  reason: input.reason,
+  files: input.files,
+  affectedPaths: input.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]),
+  totalFiles: input.totalFiles,
+  baselineSha: undefined,
+  priorState: undefined,
+  profileFingerprint: input.profileFingerprint
+});
+var validateReviewState = (state, current, profileFingerprint) => {
+  if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
+    return "stored state belongs to a different pull request";
+  }
+  if (current.baseSha === undefined)
+    return "the current base commit is unavailable";
+  if (state.baseRef !== current.baseRef)
+    return "the pull request base ref changed";
+  if (state.headRef !== current.headRef)
+    return "the pull request head ref changed";
+  if (state.profileFingerprint !== profileFingerprint) {
+    return "the reviewer profile or model configuration changed";
+  }
+  return;
+};
+var selectReviewRange = (input) => {
+  const full = (reason) => fullSelection({
+    reason,
+    files: input.fullFiles,
+    totalFiles: input.current.totalChangedFiles,
+    profileFingerprint: input.profileFingerprint
+  });
+  if (input.requestedMode === "final")
+    return full("explicit final full-diff audit requested");
+  if (input.lookupFailure !== undefined) {
+    return full(`stored review state could not be recovered: ${input.lookupFailure}`);
+  }
+  if (input.priorState === undefined)
+    return full("no compatible stored review state was found");
+  const invalid2 = validateReviewState(input.priorState, input.current, input.profileFingerprint);
+  if (invalid2 !== undefined)
+    return full(invalid2);
+  const comparison = input.comparison;
+  if (comparison === undefined)
+    return full("the incremental head comparison was unavailable");
+  if (comparison.baseSha !== input.priorState.reviewedHeadSha || comparison.headSha !== input.current.headSha || comparison.mergeBaseSha !== input.priorState.reviewedHeadSha || comparison.status !== "ahead" && comparison.status !== "identical") {
+    return full("the prior reviewed head is not an ancestor of the current head");
+  }
+  if (comparison.truncated)
+    return full("the incremental comparison exceeded GitHub's file bound");
+  const affectedPaths = new Set(comparison.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
+  let baseReason = "";
+  if (input.priorState.baseSha !== input.current.baseSha) {
+    const baseComparison = input.baseComparison;
+    if (baseComparison === undefined) {
+      return full("the pull request base changed and its lineage comparison was unavailable");
+    }
+    if (baseComparison.baseSha !== input.priorState.baseSha || baseComparison.headSha !== input.current.baseSha || baseComparison.mergeBaseSha !== input.priorState.baseSha || baseComparison.status !== "ahead" && baseComparison.status !== "identical" || baseComparison.truncated) {
+      return full("the pull request base changed materially or exceeded the comparison bound");
+    }
+    for (const file2 of baseComparison.files) {
+      affectedPaths.add(file2.path);
+      if (file2.previousPath !== undefined)
+        affectedPaths.add(file2.previousPath);
+    }
+    baseReason = `; base advanced from ${input.priorState.baseSha.slice(0, 7)} and overlapping PR paths were included`;
+  }
+  const currentPaths = new Set(input.fullFiles.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
+  const selectedByPath = new Map;
+  for (const file2 of comparison.files) {
+    if (currentPaths.has(file2.path) || file2.previousPath !== undefined && currentPaths.has(file2.previousPath)) {
+      selectedByPath.set(file2.path, file2);
+    }
+  }
+  if (input.priorState.baseSha !== input.current.baseSha) {
+    for (const file2 of input.fullFiles) {
+      if (affectedPaths.has(file2.path) || file2.previousPath !== undefined && affectedPaths.has(file2.previousPath)) {
+        selectedByPath.set(file2.path, file2);
+      }
+    }
+  }
+  const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
+  return {
+    mode: "incremental",
+    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    files: selectedFiles,
+    affectedPaths: [...affectedPaths].sort(),
+    totalFiles: selectedFiles.length,
+    baselineSha: input.priorState.reviewedHeadSha,
+    priorState: input.priorState,
+    profileFingerprint: input.profileFingerprint
+  };
+};
+
+class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
+}
+var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
+  const source = yield* PullRequestSource;
+  const selectedPaths = new Set(selection.files.map((file2) => file2.path));
+  return PullRequestSource.of({
+    metadata: source.metadata,
+    changedFiles: exports_Effect.succeed(selection.files),
+    anchorFiles: source.anchorFiles,
+    readFile: (path) => selectedPaths.has(path) ? source.readFile(path) : exports_Effect.fail(ReviewInputViolation.make({
+      input: path,
+      reason: "Path is outside this incremental review range."
+    }))
+  });
+}));
+var computeProfileFingerprint = (signature) => exports_Effect.promise(async () => {
+  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(signature));
+  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+});
+var buildProfileMission = (metadata, files) => ReviewMission.make({
+  repository: metadata.repository,
+  number: metadata.number,
+  title: metadata.title,
+  body: metadata.body,
+  baseRef: metadata.baseRef,
+  headRef: metadata.headRef,
+  changedFileCount: files.length
+});
+
+// packages/pr-review/src/internal/coverage.ts
+var ReviewShape = exports_Schema.Literals(["flat", "fan-out"]);
+
+class FailedReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/FailedReviewUnit")({
+  unitId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32)),
+  errorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256))
+}) {
+}
+
+class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/ReviewCoverage")({
+  status: exports_Schema.Literals(["complete", "incomplete"]),
+  requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
+  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
+  reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(20))
+}) {
+}
+var toolTrace = (events2) => {
+  const declared = new Map;
+  const succeeded = new Map;
+  const failed = new Map;
+  for (const event of events2) {
+    if (event._tag === "ToolCallDeclared")
+      declared.set(event.toolCallId, event);
+    if (event._tag === "ToolCallSucceeded")
+      succeeded.set(event.toolCallId, event);
+    if (event._tag === "ToolCallFailed")
+      failed.set(event.toolCallId, event);
+  }
+  return { declared, succeeded, failed };
+};
+var sortedUnique = (values3) => [...new Set(values3)].sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+var boundedListReason = (label, values3) => {
+  const items = sortedUnique(values3);
+  const prefix = `${label} (${items.length}): `;
+  let rendered = prefix;
+  for (let index2 = 0;index2 < items.length; index2 += 1) {
+    const item = items[index2] ?? "";
+    const separator = index2 === 0 ? "" : ", ";
+    const omitted = items.length - index2 - 1;
+    const suffix = omitted === 0 ? "" : ` … (+${omitted} more)`;
+    if (`${rendered}${separator}${item}${suffix}`.length > 1000) {
+      const omission = `… (+${items.length - index2} more)`;
+      return `${rendered.slice(0, 1000 - omission.length)}${omission}`;
+    }
+    rendered = `${rendered}${separator}${item}`;
+  }
+  return rendered;
+};
+var flatCoverage = (files, totalFiles, trace3) => {
+  const requiredPaths = sortedUnique(files.map((file2) => file2.path));
+  const reviewed = new Set;
+  const failedPaths = new Set;
+  for (const [toolCallId, declaration] of trace3.declared) {
+    if (declaration.toolName !== "read_file_diff")
+      continue;
+    const query = exports_Schema.decodeUnknownOption(FileDiffQuery)(declaration.parameters);
+    if (exports_Option.isNone(query))
+      continue;
+    if (trace3.succeeded.has(toolCallId))
+      reviewed.add(query.value.path);
+    if (trace3.failed.has(toolCallId))
+      failedPaths.add(query.value.path);
+  }
+  const undiffable = files.filter((file2) => file2.patch === undefined).map((file2) => file2.path);
+  const unreviewed = requiredPaths.filter((path) => !reviewed.has(path) || undiffable.includes(path) || failedPaths.has(path));
+  const reasons = [];
+  if (files.length < totalFiles) {
+    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
+  }
+  if (undiffable.length > 0) {
+    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
+  }
+  if (failedPaths.size > 0) {
+    reasons.push(boundedListReason("diff reads failed", failedPaths));
+  }
+  if (unreviewed.length > 0) {
+    reasons.push(boundedListReason("required paths were not successfully reviewed", unreviewed));
+  }
+  return ReviewCoverage.make({
+    status: reasons.length === 0 ? "complete" : "incomplete",
+    requiredPaths,
+    reviewedPaths: sortedUnique(reviewed),
+    unreviewedPaths: sortedUnique(unreviewed),
+    failedUnits: [],
+    reasons
+  });
+};
+var fanOutCoverage = (files, totalFiles, trace3) => {
+  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
+  const declarationsByUnit = new Map;
+  for (const [toolCallId, declaration] of trace3.declared) {
+    if (declaration.toolName !== "delegate_file_review")
+      continue;
+    const request3 = exports_Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
+    if (exports_Option.isNone(request3))
+      continue;
+    const declarations = declarationsByUnit.get(request3.value.unitId) ?? [];
+    declarations.push({ id: toolCallId, paths: request3.value.paths });
+    declarationsByUnit.set(request3.value.unitId, declarations);
+  }
+  const reviewed = new Set;
+  const unreviewed = new Set([...plan.undiffablePaths, ...plan.unassignedPaths]);
+  const failedUnits = [];
+  const reasons = [];
+  for (const unit of plan.units) {
+    const declarations = declarationsByUnit.get(unit.unitId) ?? [];
+    const expectedPaths = [...unit.paths];
+    const exact = declarations.filter((declaration) => declaration.paths.length === expectedPaths.length && declaration.paths.every((path, index2) => path === expectedPaths[index2]));
+    const successful = exact.filter((declaration) => {
+      const event = trace3.succeeded.get(declaration.id);
+      if (event === undefined || trace3.failed.has(declaration.id))
+        return false;
+      const result4 = exports_Schema.decodeUnknownOption(FileReviewUnitResult)(event.result);
+      return exports_Option.isSome(result4) && result4.value.unitId === unit.unitId;
+    });
+    if (declarations.length === 1 && exact.length === 1 && successful.length === 1) {
+      for (const path of unit.paths)
+        reviewed.add(path);
+      continue;
+    }
+    for (const path of unit.paths)
+      unreviewed.add(path);
+    const failure = declarations.map((declaration) => trace3.failed.get(declaration.id)).find((event) => event !== undefined);
+    const returnedFailure = declarations.map((declaration) => trace3.succeeded.get(declaration.id)).filter((event) => event !== undefined).map((event) => exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result)).find(exports_Option.isSome);
+    failedUnits.push(FailedReviewUnit.make({
+      unitId: unit.unitId,
+      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 1 ? "UnitAssignedMultipleTimes" : exact.length === 0 ? "UnitAssignmentMismatch" : "UnitDidNotSettleSuccessfully")
+    }));
+  }
+  if (plan.truncated) {
+    reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
+  }
+  if (plan.undiffablePaths.length > 0) {
+    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
+  }
+  if (plan.unassignedPaths.length > 0) {
+    reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
+  }
+  if (failedUnits.length > 0) {
+    reasons.push(boundedListReason("review units did not complete", failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`)));
+  }
+  return ReviewCoverage.make({
+    status: reasons.length === 0 ? "complete" : "incomplete",
+    requiredPaths: sortedUnique(files.map((file2) => file2.path)),
+    reviewedPaths: sortedUnique(reviewed),
+    unreviewedPaths: sortedUnique(unreviewed),
+    failedUnits,
+    reasons
+  });
+};
+var assessReviewCoverage = (input) => {
+  const trace3 = toolTrace(input.events);
+  const coverage = input.shape === "fan-out" ? fanOutCoverage(input.files, input.totalFiles, trace3) : flatCoverage(input.files, input.totalFiles, trace3);
+  if (input.anchorFiles.length >= input.totalAnchorFiles)
+    return coverage;
+  return ReviewCoverage.make({
+    ...coverage,
+    status: "incomplete",
+    reasons: [
+      ...coverage.reasons,
+      `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`
+    ]
+  });
+};
+
+// packages/pr-review/src/internal/retirement.ts
+var PositiveLine = exports_Schema.Int.check(exports_Schema.isGreaterThan(0));
+
+class RetirableReview extends exports_Schema.Class("@effect-agent/pr-review/RetirableReview")({
+  reviewId: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(60000)),
+  commitSha: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64)),
+  authorNodeId: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
+  submittedAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc)
+}) {
+}
+
+class RetirableReviewComment extends exports_Schema.Class("@effect-agent/pr-review/RetirableReviewComment")({
+  nodeId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
+  path: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(500)),
+  startLine: exports_Schema.NullOr(PositiveLine),
+  endLine: exports_Schema.NullOr(PositiveLine),
+  body: exports_Schema.String.check(exports_Schema.isMaxLength(65536))
+}) {
+}
+
+class ReviewRetirementFailure extends exports_Schema.TaggedError()("ReviewRetirementFailure", {
+  operation: exports_Schema.String,
+  reason: exports_Schema.String
+}) {
+  get message() {
+    return `Review retirement operation '${this.operation}' failed: ${this.reason}`;
+  }
+}
+
+class ReviewRetirementHost extends exports_Context.Service()("@effect-agent/pr-review/ReviewRetirementHost") {
+}
+
+class ReviewRetirementReport extends exports_Schema.Class("@effect-agent/pr-review/ReviewRetirementReport")({
+  reviewsRetired: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  findingsResolved: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  commentsMinimized: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  failures: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+}) {
+}
+var findingIdentity = (finding) => `${finding.path}\x00${finding.startLine}\x00${finding.endLine}\x00${finding.title}`;
+var REVIEW_METADATA_PATTERN = /<!-- effect-agent-pr-review metadata\n[\s\S]*?\n-->/g;
+var FINGERPRINT_PATTERN = /<!-- effect-agent-pr-review fingerprint=sha256:[0-9a-f]{64} -->/g;
+var STATE_PATTERN = /<!-- effect-agent-pr-review state-v1:[A-Za-z0-9+/]+={0,2}\.[0-9a-f]{64} -->/g;
+var RETIRED_ORIGINAL_PATTERN = /<!-- effect-agent-pr-review retired-original:start -->\n([\s\S]*?)\n<!-- effect-agent-pr-review retired-original:end -->/;
+var MACHINE_COMMENT_PATTERN = new RegExp(`${REVIEW_METADATA_PATTERN.source}|${FINGERPRINT_PATTERN.source}|${STATE_PATTERN.source}`, "g");
+var VERDICT_CALLOUT_PATTERN = /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
+var INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit)\] ([^\n]+)\*\*$/;
+var MAX_REVIEW_BODY_CHARS = 60000;
+var hasReviewMetadataMarker = (body) => /<!-- effect-agent-pr-review metadata\n/.test(body);
+var machineComments = (body) => Array.from(body.matchAll(MACHINE_COMMENT_PATTERN), (match9) => match9[0]);
+var originalVisibleBody = (body) => {
+  const retired = RETIRED_ORIGINAL_PATTERN.exec(body)?.[1];
+  if (retired !== undefined)
+    return retired;
+  return body.replace(MACHINE_COMMENT_PATTERN, "").trim().replace(VERDICT_CALLOUT_PATTERN, "");
+};
+var findingLocation = (finding) => `${finding.path}:${finding.startLine}${finding.endLine === finding.startLine ? "" : `-${finding.endLine}`}`;
+var renderRetiredBody = (input) => {
+  const shortSha = input.currentState.reviewedHeadSha.slice(0, 7);
+  const comments = machineComments(input.priorBody);
+  const original = originalVisibleBody(input.priorBody);
+  const resolved2 = input.resolvedFindings.length === 0 ? [] : [
+    "### Findings resolved by later review",
+    "",
+    ...input.resolvedFindings.map((finding) => `- \`${findingLocation(finding)}\` ~~${finding.title}~~ · resolved at \`${shortSha}\``),
+    ""
+  ];
+  const prefix = [
+    `> ℹ️ Superseded — ${input.resolvedFindings.length} of ${input.priorState.unresolvedFindings.length} findings resolved at \`${shortSha}\`; see [the latest review](${input.currentReviewUrl}).`,
+    "",
+    "<details>",
+    "<summary>Previous review details</summary>",
+    "",
+    ...resolved2,
+    "<!-- effect-agent-pr-review retired-original:start -->"
+  ];
+  const suffix = [
+    "<!-- effect-agent-pr-review retired-original:end -->",
+    "",
+    "</details>",
+    ...comments.length === 0 ? [] : ["", ...comments]
+  ];
+  const render = (visible) => [...prefix, visible, ...suffix].join(`
+`);
+  if (render(original).length <= MAX_REVIEW_BODY_CHARS)
+    return render(original);
+  const truncationNotice = `
+
+_Original review content truncated during retirement._`;
+  const budget2 = Math.max(0, MAX_REVIEW_BODY_CHARS - render(truncationNotice).length);
+  return render(`${original.slice(0, budget2)}${truncationNotice}`);
+};
+var decideReviewRetirement = (input) => {
+  const current = new Set(input.currentState.unresolvedFindings.map(findingIdentity));
+  const resolvedFindings = input.priorState.unresolvedFindings.filter((finding) => !current.has(findingIdentity(finding)));
+  return {
+    body: renderRetiredBody({ ...input, resolvedFindings }),
+    resolvedFindings,
+    priorFindingCount: input.priorState.unresolvedFindings.length
+  };
+};
+var inlineCommentIdentity = (comment) => {
+  if (comment.startLine === null || comment.endLine === null)
+    return;
+  const firstLine = comment.body.split(`
+`, 1)[0] ?? "";
+  const title = INLINE_FINDING_TITLE_PATTERN.exec(firstLine)?.[1];
+  return title === undefined ? undefined : findingIdentity({
+    path: comment.path,
+    startLine: comment.startLine,
+    endLine: comment.endLine,
+    title
+  });
+};
+var failOpen = (effect2, fallback, message) => effect2.pipe(exports_Effect.catch((error2) => exports_Effect.logWarning(`${message}: ${String(error2)}`).pipe(exports_Effect.as(fallback))));
+var isStrictlyOlderReview = (review, input) => {
+  if (review.submittedAt === null)
+    return false;
+  const submittedAt = exports_DateTime.toEpochMillis(review.submittedAt);
+  const currentSubmittedAt = exports_DateTime.toEpochMillis(input.currentSubmittedAt);
+  return submittedAt < currentSubmittedAt || submittedAt === currentSubmittedAt && review.reviewId < input.currentReviewId;
+};
+var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (input) {
+  const host = yield* ReviewRetirementHost;
+  const authenticator = yield* ReviewStateAuthenticator;
+  if (authenticator.status !== "available") {
+    yield* exports_Effect.logWarning("Skipping stale-review retirement because authenticated review state is unavailable.");
+    return ReviewRetirementReport.make({
+      reviewsRetired: 0,
+      findingsResolved: 0,
+      commentsMinimized: 0,
+      failures: 0
+    });
+  }
+  let failures = 0;
+  let reviewsRetired = 0;
+  let findingsResolved = 0;
+  let commentsMinimized = 0;
+  const reviews = yield* failOpen(host.listReviews, undefined, "Could not list prior reviews");
+  if (reviews === undefined) {
+    return ReviewRetirementReport.make({
+      reviewsRetired,
+      findingsResolved,
+      commentsMinimized,
+      failures: 1
+    });
+  }
+  for (const review of reviews) {
+    if (review.authorNodeId !== input.currentAuthorNodeId || !isStrictlyOlderReview(review, input) || !hasReviewMetadataMarker(review.body)) {
+      continue;
+    }
+    const priorState = yield* failOpen(authenticator.extract(review.body), exports_Option.none(), `Could not authenticate prior review ${review.reviewId}`);
+    if (exports_Option.isNone(priorState))
+      continue;
+    const decision = decideReviewRetirement({
+      priorBody: review.body,
+      priorState: priorState.value,
+      currentState: input.currentState,
+      currentReviewUrl: input.currentReviewUrl
+    });
+    const updated = yield* failOpen(host.updateBody(review.reviewId, decision.body).pipe(exports_Effect.as(true)), false, `Could not retire prior review ${review.reviewId}`);
+    if (updated) {
+      reviewsRetired += 1;
+      findingsResolved += decision.resolvedFindings.length;
+    } else {
+      failures += 1;
+    }
+    if (decision.resolvedFindings.length === 0)
+      continue;
+    const comments = yield* failOpen(host.listComments(review.reviewId), undefined, `Could not list inline comments for prior review ${review.reviewId}`);
+    if (comments === undefined) {
+      failures += 1;
+      continue;
+    }
+    const resolved2 = new Set(decision.resolvedFindings.map(findingIdentity));
+    for (const comment of comments) {
+      const identity3 = inlineCommentIdentity(comment);
+      if (identity3 === undefined || !resolved2.has(identity3))
+        continue;
+      const minimized = yield* failOpen(host.minimizeComment(comment.nodeId).pipe(exports_Effect.as(true)), false, `Could not minimize resolved inline comment ${comment.nodeId}`);
+      if (minimized)
+        commentsMinimized += 1;
+      else
+        failures += 1;
+    }
+  }
+  return ReviewRetirementReport.make({
+    reviewsRetired,
+    findingsResolved,
+    commentsMinimized,
+    failures
+  });
+});
+
 // packages/pr-review/src/internal/github.ts
+var defaultGraphqlUrl = (apiUrl) => apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql");
+
 class GitHubReviewTarget extends exports_Context.Service()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config) {
-    return exports_Layer.succeed(this, GitHubReviewTarget.of(config));
+    return exports_Layer.succeed(this, GitHubReviewTarget.of({
+      ...config,
+      graphqlUrl: config.graphqlUrl ?? defaultGraphqlUrl(config.apiUrl)
+    }));
   }
 }
 
@@ -41781,16 +41982,48 @@ var GitHubFileWire = exports_Schema.Struct({
   previous_filename: exports_Schema.optionalKey(exports_Schema.String)
 });
 var GitHubFilesPageWire = exports_Schema.Array(GitHubFileWire);
+var GitHubActorWire = exports_Schema.Struct({ node_id: exports_Schema.String });
 var GitHubReviewWire = exports_Schema.Struct({
   id: exports_Schema.Int,
-  html_url: exports_Schema.String
+  html_url: exports_Schema.String,
+  user: exports_Schema.NullOr(GitHubActorWire),
+  submitted_at: exports_Schema.NullOr(exports_Schema.String)
 });
+var GitHubRetirableReviewWire = exports_Schema.Struct({
+  id: exports_Schema.Int,
+  body: exports_Schema.NullOr(exports_Schema.String),
+  commit_id: exports_Schema.String,
+  user: exports_Schema.NullOr(GitHubActorWire),
+  submitted_at: exports_Schema.NullOr(exports_Schema.String)
+});
+var GitHubRetirableReviewsPageWire = exports_Schema.Array(GitHubRetirableReviewWire);
+var GitHubReviewCommentWire = exports_Schema.Struct({
+  node_id: exports_Schema.String,
+  path: exports_Schema.String,
+  body: exports_Schema.String,
+  line: exports_Schema.NullOr(exports_Schema.Int),
+  original_line: exports_Schema.NullOr(exports_Schema.Int),
+  start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int)),
+  original_start_line: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Int))
+});
+var GitHubReviewCommentsPageWire = exports_Schema.Array(GitHubReviewCommentWire);
+var GitHubMinimizeCommentWire = exports_Schema.Struct({
+  data: exports_Schema.optionalKey(exports_Schema.NullOr(exports_Schema.Struct({
+    minimizeComment: exports_Schema.NullOr(exports_Schema.Struct({
+      minimizedComment: exports_Schema.NullOr(exports_Schema.Struct({ isMinimized: exports_Schema.Boolean }))
+    }))
+  }))),
+  errors: exports_Schema.optionalKey(exports_Schema.Array(exports_Schema.Struct({ message: exports_Schema.String })))
+});
+var parseGitHubSubmittedAt = (value4) => value4 === null ? null : exports_Option.getOrNull(exports_DateTime.make(value4));
 
 class PublishedReview extends exports_Schema.Class("@effect-agent/pr-review/PublishedReview")({
   reviewId: exports_Schema.Int,
   url: exports_Schema.String,
   event: exports_Schema.String,
-  inlineComments: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0))
+  inlineComments: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  authorNodeId: exports_Schema.NullOr(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200))),
+  submittedAt: exports_Schema.NullOr(exports_Schema.DateTimeUtc)
 }) {
 }
 
@@ -41910,8 +42143,90 @@ var gitHubReviewPublisherLayer = exports_Layer.effect(ReviewPublisher)(exports_E
         reviewId: wire.id,
         url: wire.html_url,
         event: plan.event,
-        inlineComments: plan.comments.length
+        inlineComments: plan.comments.length,
+        authorNodeId: wire.user?.node_id ?? null,
+        submittedAt: parseGitHubSubmittedAt(wire.submitted_at)
       });
+    })
+  });
+}));
+var MAX_RETIREMENT_PAGES = 5;
+var MINIMIZE_REVIEW_COMMENT_MUTATION = `mutation MinimizeReviewComment($subjectId: ID!) {
+  minimizeComment(input: { subjectId: $subjectId, classifier: OUTDATED }) {
+    minimizedComment { isMinimized }
+  }
+}`;
+var gitHubReviewRetirementHostLayer = exports_Layer.effect(ReviewRetirementHost)(exports_Effect.gen(function* () {
+  const target = yield* GitHubReviewTarget;
+  const client = yield* exports_HttpClient.HttpClient;
+  const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+  const asRetirementFailure = (operation) => (error2) => ReviewRetirementFailure.make({
+    operation,
+    reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
+  });
+  const executeRetirement = (operation, request3) => exports_HttpClient.execute(request3).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asRetirementFailure(operation)), exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+  const decodeRetirement = (schema3, operation) => {
+    const decode2 = exports_Schema.decodeUnknownEffect(schema3);
+    return (response) => response.json.pipe(exports_Effect.mapError(asRetirementFailure(operation)), exports_Effect.flatMap((body) => decode2(body).pipe(exports_Effect.mapError(asRetirementFailure(operation)))));
+  };
+  const listPaged = (input) => exports_Effect.gen(function* () {
+    const values3 = [];
+    const perPage = 100;
+    for (let page = 1;page <= MAX_RETIREMENT_PAGES; page += 1) {
+      const response = yield* executeRetirement(input.operation, withCommonHeaders(exports_HttpClientRequest.get(input.url).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.setUrlParams({
+        per_page: String(perPage),
+        page: String(page)
+      })), target.token));
+      const pageValues = yield* input.decode(response);
+      values3.push(...pageValues);
+      if (pageValues.length < perPage)
+        return values3;
+    }
+    return yield* ReviewRetirementFailure.make({
+      operation: input.operation,
+      reason: `history exceeds the bounded ${MAX_RETIREMENT_PAGES * 100}-item lookup`
+    });
+  });
+  return ReviewRetirementHost.of({
+    listReviews: listPaged({
+      operation: "listReviewsForRetirement",
+      url: `${prefix}/reviews`,
+      decode: decodeRetirement(GitHubRetirableReviewsPageWire, "listReviewsForRetirement")
+    }).pipe(exports_Effect.map((reviews) => reviews.map((review) => RetirableReview.make({
+      reviewId: review.id,
+      body: review.body ?? "",
+      commitSha: review.commit_id,
+      authorNodeId: review.user?.node_id ?? null,
+      submittedAt: parseGitHubSubmittedAt(review.submitted_at)
+    })))),
+    listComments: (reviewId) => listPaged({
+      operation: "listReviewCommentsForRetirement",
+      url: `${prefix}/reviews/${reviewId}/comments`,
+      decode: decodeRetirement(GitHubReviewCommentsPageWire, "listReviewCommentsForRetirement")
+    }).pipe(exports_Effect.map((comments) => comments.map((comment) => {
+      const endLine = comment.line ?? comment.original_line;
+      const startLine = comment.start_line ?? comment.original_start_line ?? endLine;
+      return RetirableReviewComment.make({
+        nodeId: comment.node_id,
+        path: comment.path,
+        startLine,
+        endLine,
+        body: comment.body
+      });
+    }))),
+    updateBody: (reviewId, body) => executeRetirement("updateReview", withCommonHeaders(exports_HttpClientRequest.put(`${prefix}/reviews/${reviewId}`).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.bodyJsonUnsafe({ body })), target.token)).pipe(exports_Effect.asVoid),
+    minimizeComment: (nodeId) => exports_Effect.gen(function* () {
+      const response = yield* executeRetirement("minimizeComment", withCommonHeaders(exports_HttpClientRequest.post(target.graphqlUrl).pipe(exports_HttpClientRequest.acceptJson, exports_HttpClientRequest.bodyJsonUnsafe({
+        query: MINIMIZE_REVIEW_COMMENT_MUTATION,
+        variables: { subjectId: nodeId }
+      })), target.token));
+      const wire = yield* decodeRetirement(GitHubMinimizeCommentWire, "minimizeComment")(response);
+      if ((wire.errors?.length ?? 0) > 0 || wire.data?.minimizeComment?.minimizedComment?.isMinimized !== true) {
+        return yield* ReviewRetirementFailure.make({
+          operation: "minimizeComment",
+          reason: wire.errors?.map((error2) => error2.message).join("; ").slice(0, 2048) ?? "GitHub did not confirm comment minimization"
+        });
+      }
     })
   });
 }));
@@ -42614,15 +42929,16 @@ var resolveReviewTarget = exports_Effect.fn("resolveReviewTarget")(function* (op
 });
 var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(function* () {
   const apiUrl = yield* exports_Config.string("GITHUB_API_URL").pipe(exports_Config.withDefault("https://api.github.com"));
+  const graphqlUrl = yield* exports_Config.string("GITHUB_GRAPHQL_URL").pipe(exports_Config.withDefault(apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql")));
   const token = yield* exports_Config.option(exports_Config.redacted("GITHUB_TOKEN"));
   const targetLayer = GitHubReviewTarget.layer({
     apiUrl,
+    graphqlUrl,
     repository: target.repository,
     number: target.number,
     token
   });
-  const deps = exports_Layer.merge(targetLayer, exports_FetchHttpClient.layer);
-  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(deps)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(deps)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(deps)));
+  return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)));
 }));
 
 // node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
@@ -53307,6 +53623,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const reviewMode = yield* exports_Config.literals(["incremental", "final"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("incremental"));
   const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
   const skipUnchanged = yield* exports_Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(exports_Config.withDefault(true));
+  const retireStaleReviews2 = yield* exports_Config.boolean("PR_REVIEW_RETIRE_STALE_REVIEWS").pipe(exports_Config.withDefault(true));
   return {
     provider,
     model: exports_Option.getOrUndefined(model3),
@@ -53321,7 +53638,8 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     maxDurationMinutes,
     reviewMode,
     failOn,
-    skipUnchanged
+    skipUnchanged,
+    retireStaleReviews: retireStaleReviews2
   };
 });
 var MAX_GUIDANCE_FILE_CHARS = 20000;
@@ -53576,6 +53894,20 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
+      if (options3.retireStaleReviews !== false && outcome.state !== undefined) {
+        if (outcome.published.authorNodeId === null || outcome.published.submittedAt === null) {
+          yield* exports_Console.warn("Skipping stale-review retirement because GitHub did not return the posted review's actor and submission time.");
+        } else {
+          const report2 = yield* retireStaleReviews({
+            currentReviewId: outcome.published.reviewId,
+            currentReviewUrl: outcome.published.url,
+            currentAuthorNodeId: outcome.published.authorNodeId,
+            currentSubmittedAt: outcome.published.submittedAt,
+            currentState: outcome.state
+          });
+          yield* exports_Console.log(`Review retirement: ${report2.reviewsRetired} prior review(s), ` + `${report2.findingsResolved} resolved finding(s), ` + `${report2.commentsMinimized} minimized inline comment(s), ` + `${report2.failures} failure(s).`);
+        }
+      }
     }
     const check2 = concludeReviewOutcome(outcome);
     yield* writeActionOutputs(outcomeOutputs(outcome, check2.conclusion));
@@ -53616,6 +53948,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
     failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
+    retireStaleReviews: inputs.retireStaleReviews,
     modelLabel
   };
   if (inputs.provider === "anthropic") {
@@ -53627,7 +53960,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
   return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
-var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_NodeServices.layer)), { disableErrorReporting: true });
+var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_Layer.merge(exports_NodeServices.layer, exports_FetchHttpClient.layer))), { disableErrorReporting: true });
 
 // packages/pr-review/src/internal/action-entry.ts
 var INPUT_TO_ENV = [
@@ -53645,6 +53978,7 @@ var INPUT_TO_ENV = [
   ["INPUT_REVIEW-MODE", "PR_REVIEW_MODE"],
   ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
+  ["INPUT_RETIRE-STALE-REVIEWS", "PR_REVIEW_RETIRE_STALE_REVIEWS"],
   ["INPUT_STATE-SECRET", "PR_REVIEW_STATE_SECRET"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
   ["INPUT_ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY"],

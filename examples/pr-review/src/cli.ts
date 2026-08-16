@@ -8,6 +8,7 @@ import {
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Option, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import { makeExampleReviewer, ReadReviewConventionsLayer } from "./reviewer.ts";
 
@@ -78,7 +79,7 @@ const command = CliCommand.make(
 
 const program = CliCommand.run(command, { version: "0.0.0" }).pipe(
   Effect.scoped,
-  Effect.provide(NodeServices.layer),
+  Effect.provide(Layer.merge(NodeServices.layer, FetchHttpClient.layer)),
 );
 
 NodeRuntime.runMain(program, { disableErrorReporting: true });

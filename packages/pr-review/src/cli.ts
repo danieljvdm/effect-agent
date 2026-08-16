@@ -2,6 +2,7 @@ import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Option, Schema } from "effect";
 import { BudgetExceeded } from "effect-agent";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
+import { FetchHttpClient } from "effect/unstable/http";
 
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
@@ -207,7 +208,7 @@ const program = CliCommand.run(command, { version: "0.0.0" }).pipe(
     ),
   ),
   Effect.scoped,
-  Effect.provide(NodeServices.layer),
+  Effect.provide(Layer.merge(NodeServices.layer, FetchHttpClient.layer)),
 );
 
 NodeRuntime.runMain(program, { disableErrorReporting: true });

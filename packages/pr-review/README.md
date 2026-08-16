@@ -122,6 +122,16 @@ context; a materially changed base lineage falls back to full. Re-running the
 same covered head skips model execution by default while preserving its
 stored blocking/success conclusion.
 
+After a new state-bearing Action review posts, prior marker-bearing bot reviews
+are retired by default: their bodies become collapsed, superseded history,
+resolved findings are struck through, and matching inline comments are
+minimized as outdated. Only strictly older reviews from the same GitHub actor
+are eligible, so copied markers and newer concurrent reviews are untouched.
+The machine-state comments remain byte-identical and terminal, so an edited
+body still participates in incremental state recovery.
+This cosmetic pass is fail-open and can be disabled with the Action input
+`retire-stale-reviews: "false"`.
+
 Authentication is an explicit Effect service supplied by the Action host;
 WebCrypto import/sign/verify failures stay typed. The terminal marker is
 schema-branded and capped at 24,000 characters. If signing fails or state
