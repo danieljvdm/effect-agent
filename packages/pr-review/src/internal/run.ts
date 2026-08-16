@@ -9,7 +9,12 @@ import {
 } from "effect-agent";
 import { type Tool } from "effect/unstable/ai";
 
-import { assessReviewCoverage, ReviewCoverage, type ReviewShape } from "./coverage.ts";
+import {
+  assessReviewCoverage,
+  collectUnitFileSummaries,
+  ReviewCoverage,
+  type ReviewShape,
+} from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
@@ -240,7 +245,32 @@ export const executeReview = <
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
     const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
-    const review = enforceFindingsBound(decoded, clampMaxFindings(options.maxFindings));
+    // Under fan-out, the merged walkthrough must be traceable to the children:
+    // only entries a successfully settled delegation actually reported for its
+    // OWN unit's paths survive (the flat reviewer needs no such check — its
+    // walkthrough carries the same single-agent trust as its findings, and
+    // both stay changeset-validated by planPublication).
+    const verifiedReview =
+      options.reviewShape !== "fan-out" || decoded.walkthrough === undefined
+        ? decoded
+        : (() => {
+            const verified = new Set(
+              collectUnitFileSummaries(events).map(
+                (entry) => `${entry.path}\u0000${entry.summary}`,
+              ),
+            );
+            const walkthrough = decoded.walkthrough.filter((entry) =>
+              verified.has(`${entry.path}\u0000${entry.summary}`),
+            );
+            return CodeReview.make({
+              summary: decoded.summary,
+              verdict: decoded.verdict,
+              findings: decoded.findings,
+              ...(decoded.concerns !== undefined ? { concerns: decoded.concerns } : {}),
+              ...(walkthrough.length > 0 ? { walkthrough } : {}),
+            });
+          })();
+    const review = enforceFindingsBound(verifiedReview, clampMaxFindings(options.maxFindings));
     const usage = yield* budget.snapshot;
     const affectedPaths = new Set(
       executionContext?.affectedPaths ??

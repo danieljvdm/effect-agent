@@ -546,6 +546,38 @@ describe("review presentation", () => {
     expect(estimateReviewEffort([fileOf(2_986)])).toEqual({ score: 5, label: "very large" });
   });
 
+  it("attributes carried-finding prompts to their baseline commit, never the head", () => {
+    const carried = ReviewFinding.make({
+      path: "src/hello.ts",
+      startLine: 2,
+      endLine: 2,
+      severity: "important",
+      title: "Carried finding",
+      body: "Still unresolved from the prior review.",
+    });
+    const baseline = "f".repeat(40);
+    const plan = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      carriedFindings: [carried],
+      baselineSha: baseline,
+    });
+    const block = plan.body.slice(plan.body.indexOf("Prompt for all"));
+    expect(block).toContain("Carried finding");
+    expect(block).toContain(`commit ${baseline.slice(0, 7)}`);
+    // This review's own findings still cite the head they were written at.
+    expect(block).toContain(`commit ${FIXTURE_SHA.slice(0, 7)}`);
+    // Without a known baseline the prompt says so instead of asserting one.
+    const withoutBaseline = planPublication(scriptedReview, files, {
+      applyVerdict: false,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      carriedFindings: [carried],
+    });
+    expect(withoutBaseline.body).toContain("carried from an earlier review of this pull request");
+  });
+
   it("validates walkthrough paths fail-closed, dedupes, and orders by path", () => {
     const entries = [
       WalkthroughEntry.make({ path: "src/hello.ts", summary: "Fixes the constant." }),

@@ -89,9 +89,16 @@ export const AGENT_PROMPT_PREAMBLE =
 /**
  * The copy-paste instruction one finding hands to a coding agent. Derived
  * entirely host-side from the already-validated finding — deterministic
- * templating over untrusted CONTENT, never untrusted STRUCTURE.
+ * templating over untrusted CONTENT, never untrusted STRUCTURE. `writtenAtSha`
+ * is the commit the finding was actually written against — the current head
+ * for this review's findings, the prior baseline for carried ones, and
+ * undefined when that commit is unknown (the prompt then says so instead of
+ * asserting one).
  */
-export const renderAgentPrompt = (finding: ReviewFinding, headSha: string): string => {
+export const renderAgentPrompt = (
+  finding: ReviewFinding,
+  writtenAtSha: string | undefined,
+): string => {
   const lines =
     finding.startLine === finding.endLine
       ? `around line ${finding.startLine}`
@@ -109,7 +116,9 @@ export const renderAgentPrompt = (finding: ReviewFinding, headSha: string): stri
   }
   parts.push(
     "",
-    `The finding was written against commit ${headSha.slice(0, 7)}; re-verify line numbers if the branch has moved since.`,
+    writtenAtSha === undefined
+      ? "The finding was carried from an earlier review of this pull request; re-verify its line numbers against the current diff before applying."
+      : `The finding was written against commit ${writtenAtSha.slice(0, 7)}; re-verify line numbers if the branch has moved since.`,
   );
   return parts.join("\n");
 };
@@ -135,19 +144,23 @@ const renderAgentPromptBlock = (finding: ReviewFinding, headSha: string): string
   );
 
 /**
- * One consolidated copy-paste block covering every finding — anchored and
- * demoted alike, so findings without an inline comment still hand an agent
- * their instruction.
+ * One consolidated copy-paste block covering every finding — anchored,
+ * demoted, and carried alike, so findings without an inline comment still
+ * hand an agent their instruction. Each entry carries the commit IT was
+ * written against, so a carried finding never claims the current head.
  */
 const renderConsolidatedAgentPrompt = (
-  findings: ReadonlyArray<ReviewFinding>,
-  headSha: string,
+  entries: ReadonlyArray<{
+    readonly finding: ReviewFinding;
+    readonly writtenAtSha: string | undefined;
+  }>,
 ): string =>
   agentPromptDetails(
-    `Prompt for all ${countNoun(findings.length, "finding")} with AI agents`,
-    [AGENT_PROMPT_PREAMBLE, ...findings.map((finding) => renderAgentPrompt(finding, headSha))].join(
-      "\n\n---\n\n",
-    ),
+    `Prompt for all ${countNoun(entries.length, "finding")} with AI agents`,
+    [
+      AGENT_PROMPT_PREAMBLE,
+      ...entries.map(({ finding, writtenAtSha }) => renderAgentPrompt(finding, writtenAtSha)),
+    ].join("\n\n---\n\n"),
   );
 
 const renderCommentBody = (finding: ReviewFinding, headSha: string): string => {
@@ -454,8 +467,15 @@ export const planPublication = (
 
   // Every finding — anchored, demoted, and carried — in one copyable block;
   // rendered only when it adds an instruction no single inline comment holds.
-  const promptFindings = [...review.findings, ...(options.carriedFindings ?? [])];
-  const consolidatedPromptWanted = promptFindings.length >= 2 || demoted.length > 0;
+  // Carried findings were written against the prior baseline, not this head.
+  const promptEntries = [
+    ...review.findings.map((finding) => ({ finding, writtenAtSha: options.headSha })),
+    ...(options.carriedFindings ?? []).map((finding) => ({
+      finding,
+      writtenAtSha: options.baselineSha,
+    })),
+  ];
+  const consolidatedPromptWanted = promptEntries.length >= 2 || demoted.length > 0;
 
   const renderHead = (
     concernsKept: number,
@@ -543,7 +563,7 @@ export const planPublication = (
       parts.push(
         "",
         promptsKept
-          ? renderConsolidatedAgentPrompt(promptFindings, options.headSha)
+          ? renderConsolidatedAgentPrompt(promptEntries)
           : "⚠️ Consolidated agent prompt omitted — the body exceeded GitHub's review size cap.",
       );
     }

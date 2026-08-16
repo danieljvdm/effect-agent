@@ -3,7 +3,7 @@ import type { RunEvent } from "effect-agent";
 
 import type { ChangedFile } from "./diff.ts";
 import { FileReviewDelegationFailure, FileReviewRequest, FileReviewUnitResult } from "./fan-out.ts";
-import { FileDiffQuery } from "./review-agent.ts";
+import { FileDiffQuery, type WalkthroughEntry } from "./review-agent.ts";
 import { planReviewUnits } from "./review-units.ts";
 
 // ---------------------------------------------------------------------------
@@ -217,6 +217,36 @@ const fanOutCoverage = (
     failedUnits,
     reasons,
   });
+};
+
+/**
+ * Host-verified per-file summaries from the fan-out run's Tool events: for
+ * every successfully settled delegation, the child-reported `fileSummaries`
+ * whose paths belong to that invocation's requested unit. This is the
+ * declassification check `projectResult` cannot perform itself (it never sees
+ * the request): a child assigned file A cannot smuggle a summary for changed
+ * file B into the merged walkthrough, and a coordinator cannot invent or edit
+ * entries — only exact child-reported, in-unit summaries survive.
+ */
+export const collectUnitFileSummaries = (
+  events: ReadonlyArray<RunEvent>,
+): ReadonlyArray<WalkthroughEntry> => {
+  const trace = toolTrace(events);
+  const entries: Array<WalkthroughEntry> = [];
+  for (const [toolCallId, declaration] of trace.declared) {
+    if (declaration.toolName !== "delegate_file_review") continue;
+    const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
+    if (Option.isNone(request)) continue;
+    const success = trace.succeeded.get(toolCallId);
+    if (success === undefined || trace.failed.has(toolCallId)) continue;
+    const result = Schema.decodeUnknownOption(FileReviewUnitResult)(success.result);
+    if (Option.isNone(result) || result.value.unitId !== request.value.unitId) continue;
+    const assigned = new Set(request.value.paths);
+    for (const entry of result.value.fileSummaries ?? []) {
+      if (assigned.has(entry.path)) entries.push(entry);
+    }
+  }
+  return entries;
 };
 
 /** Assess one settled run without trusting its prose summary or verdict. */

@@ -546,11 +546,17 @@ describe("offline fan-out review run", () => {
     }),
   );
 
-  it.effect("projects child file summaries and renders the merged walkthrough", () =>
+  it.effect("projects child file summaries and renders only unit-verified walkthrough rows", () =>
     Effect.gen(function* () {
       const alphaSummary = WalkthroughEntry.make({
         path: "src/api/alpha.ts",
         summary: "Renames the alpha constant and rewires its export.",
+      });
+      // In the changeset, but OUTSIDE unit-001's briefed paths: a child must
+      // not be able to smuggle a summary for a file it never reviewed.
+      const crossUnitSummary = WalkthroughEntry.make({
+        path: "src/core/gamma.ts",
+        summary: "Smuggled cross-unit summary.",
       });
       const summarizedChildren: ReadonlyArray<OfflineUnitScript> = [
         {
@@ -561,17 +567,22 @@ describe("offline fan-out review run", () => {
             report: FileReviewReport.make({
               unitId: "unit-001",
               findings: [alphaFinding, betaGhostFinding],
-              fileSummaries: [alphaSummary],
+              fileSummaries: [alphaSummary, crossUnitSummary],
             }),
           },
         },
         happyChildren[1] as OfflineUnitScript,
       ];
+      // A coordinator-invented entry: in the changeset, but no child reported it.
+      const inventedSummary = WalkthroughEntry.make({
+        path: "src/core/delta.ts",
+        summary: "Invented by the coordinator.",
+      });
       const walkthroughReview = CodeReview.make({
         summary: "Merged 2 units; the walkthrough carries the alpha summary.",
         verdict: "comment",
         findings: mergedFindings,
-        walkthrough: [alphaSummary],
+        walkthrough: [alphaSummary, crossUnitSummary, inventedSummary],
       });
 
       const result = yield* runOfflineFanOut({
@@ -584,11 +595,15 @@ describe("offline fan-out review run", () => {
       const finalPrompt = result.coordinatorPrompts[2] ?? "";
       expect(finalPrompt).toContain("Renames the alpha constant");
 
-      // The published body renders the merged walkthrough as a collapsed table.
+      // Host verification kept exactly the child-reported, in-unit entry:
+      // the cross-unit smuggle and the coordinator invention are dropped.
+      expect(result.outcome.review.walkthrough).toEqual([alphaSummary]);
       expect(result.outcome.plan.body).toContain("<summary>📝 Walkthrough (1 file)</summary>");
       expect(result.outcome.plan.body).toContain(
         "| `src/api/alpha.ts` | Renames the alpha constant and rewires its export. |",
       );
+      expect(result.outcome.plan.body).not.toContain("Smuggled cross-unit summary.");
+      expect(result.outcome.plan.body).not.toContain("Invented by the coordinator.");
     }),
   );
 

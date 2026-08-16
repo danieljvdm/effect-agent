@@ -75,7 +75,11 @@ deterministic 1–5 review-effort estimate computed from the changeset shape
 alone. Below the summary, a collapsed **📝 Walkthrough** table carries the
 model's one-sentence per-file change summaries — walkthrough paths are
 validated like finding anchors, so entries naming files outside the changeset
-are dropped. Non-anchored `concerns` (deletion plans, rollout sequencing,
+are dropped. Under fan-out the walkthrough is additionally host-verified
+against the delegation Tool events: only summaries a successfully settled
+child actually reported for its own unit's paths survive, so neither a child
+nor the coordinator can smuggle or invent entries. Non-anchored `concerns`
+(deletion plans, rollout sequencing,
 coverage gaps, scope questions — things with no diff line to point at) render
 as severity-tagged sections; demoted findings and findings carried from
 unchanged scope collapse into counted `<details>` sections.
