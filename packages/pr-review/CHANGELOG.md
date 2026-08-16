@@ -1,5 +1,15 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.11
+
+### Patch Changes
+
+- [#79](https://github.com/danieljvdm/effect-agent/pull/79) [`1539616`](https://github.com/danieljvdm/effect-agent/commit/153961639051ec6dae8dcf33b0e44c138f52a790) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Give OpenAI reasoning models enough output-token and wall-clock headroom to
+  finish high-effort delegated reviews instead of leaving fully read units
+  unreviewed with protocol or duration failures.
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.11
+
 ## 0.1.0-beta.10
 
 ### Patch Changes
