@@ -135,7 +135,7 @@ export const fileReviewerInstructions = makeFileReviewerInstructions();
 export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 8,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "4 minutes",
+  maxDuration: "6 minutes",
   toolConcurrency: 2,
   tokenBudget: 200_000,
   // Bound one live prompt independently from cumulative usage. The engine
@@ -201,7 +201,7 @@ export const fileReviewPolicy = SubagentPolicy.make({
   maxConcurrency: 3,
   maxTurns: 8,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "4 minutes",
+  maxDuration: "6 minutes",
 });
 
 const delegationDescription =

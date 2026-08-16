@@ -1,5 +1,5 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
 import {
   Agent,
   AgentSpawner,
@@ -279,6 +279,11 @@ describe("file-reviewer policy", () => {
     expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 2);
     expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
     expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
+  });
+
+  it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
+    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(6 * 60_000);
+    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(6 * 60_000);
   });
 });
 
