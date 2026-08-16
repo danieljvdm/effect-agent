@@ -139,6 +139,10 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "6 minutes",
   toolConcurrency: 2,
+  // Same rationale as the flat reviewer's bound: read refusals are
+  // model-visible results, and one parallel batch of out-of-unit probes must
+  // not kill the child before it has seen a single refusal.
+  repeatedFailureLimit: 12,
   tokenBudget: 200_000,
   // Bound one live prompt independently from cumulative usage. The engine
   // prunes old diff/file results before paying for a summary.

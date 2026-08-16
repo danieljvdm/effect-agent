@@ -7,6 +7,8 @@ import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { readGitHubEvent, resolveReviewTarget, gitHubReviewLayers } from "./internal/github-env.ts";
 import { PriorReviews } from "./internal/github.ts";
+import { compactReviewLoggingLayer } from "./internal/logging.ts";
+import { ReviewProgressReporter } from "./internal/progress.ts";
 import {
   anthropicClientLayer,
   DEFAULT_PROVIDER,
@@ -92,6 +94,7 @@ export interface ResolvedActionInputs {
   readonly failOn: FailOnPolicy;
   readonly skipUnchanged: boolean;
   readonly retireStaleReviews: boolean;
+  readonly progressComment: boolean;
 }
 
 /** Read the PR_REVIEW_* input surface (all optional, all defaulted). */
@@ -135,6 +138,9 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   const retireStaleReviews = yield* Config.boolean("PR_REVIEW_RETIRE_STALE_REVIEWS").pipe(
     Config.withDefault(true),
   );
+  const progressComment = yield* Config.boolean("PR_REVIEW_PROGRESS_COMMENT").pipe(
+    Config.withDefault(true),
+  );
   return {
     provider,
     model: Option.getOrUndefined(model),
@@ -154,6 +160,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     failOn,
     skipUnchanged,
     retireStaleReviews,
+    progressComment,
   } satisfies ResolvedActionInputs;
 });
 
@@ -408,6 +415,13 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     readonly priorReviews?: PriorReviews["Service"] | undefined;
     /** Retire marker-bearing prior reviews after a successful post (default true). */
     readonly retireStaleReviews?: boolean | undefined;
+    /**
+     * Maintain one sticky "review in progress" issue comment, updated in
+     * place when the run settles. Default false here for custom-harness
+     * compatibility; the packaged action enables it by default. Dry runs
+     * (`post: false`) never post progress.
+     */
+    readonly progressComment?: boolean | undefined;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -561,7 +575,37 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         `Reviewing ${target.repository}#${target.number} (${options.post === false ? "dry run" : "posting"})...`,
       );
       const runUrl = yield* resolveRunUrl();
-      const reviewEffect = reviewer.run({ post: options.post ?? true, runUrl });
+      // Progress is a cosmetic, fail-open narration surface: it says a run is
+      // working the moment execution starts and is overwritten in place when
+      // the run settles. It never gates or delays the review itself.
+      const progress =
+        options.progressComment === true && options.post !== false
+          ? Option.some(yield* ReviewProgressReporter)
+          : Option.none<ReviewProgressReporter["Service"]>();
+      if (Option.isSome(progress)) {
+        const source = yield* PullRequestSource;
+        const headMetadata = yield* source.metadata.pipe(Effect.orElseSucceed(() => undefined));
+        yield* progress.value.begin({
+          headSha: headMetadata?.headSha,
+          reviewMode: selection?.mode,
+          reviewReason: selection?.reason,
+          filesInScope: selection?.files.length,
+          modelLabel: options.modelLabel,
+          runUrl,
+        });
+      }
+      const runReview = reviewer.run({ post: options.post ?? true, runUrl });
+      const reviewEffect = Option.isSome(progress)
+        ? runReview.pipe(
+            Effect.tapCause(() =>
+              progress.value.settle({
+                outcome: "failed",
+                runUrl,
+                modelLabel: options.modelLabel,
+              }),
+            ),
+          )
+        : runReview;
       const outcome = yield* selection === undefined
         ? reviewEffect
         : reviewEffect.pipe(
@@ -597,6 +641,17 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         }
       }
       const check = concludeReviewOutcome(outcome);
+      if (Option.isSome(progress)) {
+        yield* progress.value.settle({
+          outcome: "reviewed",
+          conclusion: check.conclusion,
+          verdict: outcome.review.verdict,
+          inlineComments: outcome.plan.comments.length,
+          reviewUrl: outcome.published?.url,
+          runUrl,
+          modelLabel: options.modelLabel,
+        });
+      }
       yield* writeActionOutputs(outcomeOutputs(outcome, check.conclusion));
       yield* writeStepSummary(outcomeSummary(outcome, options.modelLabel, check.conclusion));
       if (check.conclusion !== "success") {
@@ -651,6 +706,7 @@ export const reviewActionProgram = Effect.gen(function* () {
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
     retireStaleReviews: inputs.retireStaleReviews,
+    progressComment: inputs.progressComment,
     modelLabel,
   };
   if (inputs.provider === "anthropic") {
@@ -683,7 +739,9 @@ export const main = (): void =>
         ),
       ),
       Effect.scoped,
-      Effect.provide(Layer.merge(NodeServices.layer, FetchHttpClient.layer)),
+      Effect.provide(
+        Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer, compactReviewLoggingLayer),
+      ),
     ),
     { disableErrorReporting: true },
   );

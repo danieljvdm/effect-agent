@@ -105,7 +105,7 @@ Private development supports one exact Effect v4 version at a time.
 
 - the root Bun catalog pins it exactly and workspace manifests use `catalog:`;
 - all packages upgrade together;
-- `scripts/sync-effect-submodule.ts` checks out the matching `effect@<version>` source tag;
+- `bun run sync:effect` checks out the matching `effect@<version>` source tag in `repos/effect`;
 - public examples are compile-time tests;
 - Tool/Toolkit type inference is checked;
 - Response/Prompt round-trips and provider smoke tests run;

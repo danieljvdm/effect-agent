@@ -159,10 +159,17 @@ the full current PR diff and resets the incremental baseline; normal
   supporting a committed review-profile document via `guidance-file` (this
   repository's own profile lives at `.github/review-guidance.md`)
   (`action/` at the repo root) — `uses` it with an API-key secret and nothing
-  else. For custom reviewers in CI, `@effect-agent/pr-review/action` exports
-  `runReviewAction` (event resolution, typed draft/non-PR skips, bounded range
-  selection, step outputs, and conservative check gate) to harness your own
-  `reviewer.run`.
+  else. While a run executes it maintains one sticky, fail-open "review in
+  progress" comment updated in place with the settled outcome
+  (`progress-comment` input, default on; at-least-once with generation-fenced
+  writes and best-effort duplicate cleanup — strict single-comment behavior
+  comes from a per-PR workflow concurrency group), and its logs render one
+  compact line per event (`log-level` input, default `Info`). For custom reviewers in
+  CI, `@effect-agent/pr-review/action` exports `runReviewAction` (event
+  resolution, typed draft/non-PR skips, bounded range selection, step
+  outputs, and conservative check gate) to harness your own `reviewer.run`;
+  pass `progressComment: true` to opt a custom harness into the sticky
+  progress comment.
 - **CLI**: `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`
   (also exported as the `./cli` entry).
 

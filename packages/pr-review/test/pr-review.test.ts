@@ -43,7 +43,11 @@ import {
   FixturePullRequest,
   fixturePullRequestSourceLayer,
   makeOfflineReviewerModel,
+  makePromptKeyedModel,
+  OFFLINE_LIST_CALL_ID,
   SCRIPTED_TURN_USAGE,
+  scriptedFinalParts,
+  scriptedToolTurn,
 } from "../src/testing.ts";
 
 describe("OpenAI tool schema compatibility", () => {
@@ -844,6 +848,58 @@ describe("offline review run", () => {
       );
       expect(outcome.published).toBeUndefined();
       expect(yield* Ref.get(published)).toHaveLength(0);
+    }),
+  );
+
+  it.effect("survives one parallel batch of out-of-scope read probes", () =>
+    Effect.gen(function* () {
+      // A live model may probe several paths outside the review scope in ONE
+      // batch — e.g. files the PR description names outside an incremental
+      // delta — before any refusal is visible to it. The refusals are typed
+      // tool RESULTS, so more sibling probes than the engine's default
+      // 3-consecutive-failure limit must not abort the run.
+      const PROBE_PREFIX = "probe-";
+      const scripted = yield* makePromptKeyedModel("pr-review-probing", (promptJson) => {
+        if (promptJson.includes(`${PROBE_PREFIX}1`)) {
+          return scriptedFinalParts(JSON.stringify(Schema.encodeSync(CodeReview)(scriptedReview)));
+        }
+        if (promptJson.includes(OFFLINE_LIST_CALL_ID)) {
+          return scriptedToolTurn(
+            ...[1, 2, 3, 4].map(
+              (index) =>
+                ({
+                  type: "tool-call",
+                  id: `${PROBE_PREFIX}${index}`,
+                  name: "read_file_diff",
+                  params: { path: `src/not-in-changeset-${index}.ts` },
+                  providerExecuted: false,
+                }) as const,
+            ),
+          );
+        }
+        return scriptedToolTurn({
+          type: "tool-call",
+          id: OFFLINE_LIST_CALL_ID,
+          name: "list_changed_files",
+          params: { scope: "all" },
+          providerExecuted: false,
+        });
+      });
+      const binding = Agent.withModel(PullRequestReviewer, scripted.model);
+      const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
+      const outcome = yield* executeReview(binding, { post: false, applyVerdict: false }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
+            collectingReviewPublisherLayer(published),
+            IdGenerator.layer,
+          ),
+        ),
+        Effect.scoped,
+      );
+      // list -> probe batch (all refused) -> final: the run settles normally.
+      expect(outcome.review).toEqual(scriptedReview);
+      expect(outcome.turns).toBe(3);
     }),
   );
 

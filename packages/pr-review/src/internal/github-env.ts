@@ -10,6 +10,8 @@ import {
   gitHubReviewPublisherLayer,
   gitHubReviewRetirementHostLayer,
 } from "./github.ts";
+import type { ReviewProgressReporter } from "./progress.ts";
+import { gitHubReviewProgressLayer } from "./progress.ts";
 import type { ReviewRetirementHost } from "./retirement.ts";
 import type { PullRequestSource } from "./source.ts";
 
@@ -110,7 +112,11 @@ export const resolveReviewTarget = Effect.fn("resolveReviewTarget")(function* (o
 export const gitHubReviewLayers = (
   target: ResolvedReviewTarget,
 ): Layer.Layer<
-  PullRequestSource | ReviewPublisher | PriorReviews | ReviewRetirementHost,
+  | PullRequestSource
+  | ReviewPublisher
+  | PriorReviews
+  | ReviewRetirementHost
+  | ReviewProgressReporter,
   Config.ConfigError,
   HttpClient.HttpClient
 > =>
@@ -143,6 +149,7 @@ export const gitHubReviewLayers = (
         gitHubReviewPublisherLayer.pipe(Layer.provide(targetLayer)),
         gitHubPriorReviewsLayer.pipe(Layer.provide(targetLayer)),
         gitHubReviewRetirementHostLayer.pipe(Layer.provide(targetLayer)),
+        gitHubReviewProgressLayer.pipe(Layer.provide(targetLayer)),
       );
     }),
   );
