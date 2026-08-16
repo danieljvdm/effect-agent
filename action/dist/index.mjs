@@ -41406,9 +41406,9 @@ var makeReviewInstructions = (options3 = {}) => (mission) => {
 ${mission.body}` : "The author provided no description.",
     ...resolveGuidance(options3.guidance, mission),
     "Work in this order:",
-    "1. Call list_changed_files once to see the changeset.",
+    "1. Call list_changed_files once to see the changeset. That list is your COMPLETE review scope: in incremental reviews it is deliberately a subset of the pull request's full diff (totalFiles counts the whole pull request), and everything it omits was already reviewed or excluded.",
     "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
-    "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
+    "3. Call read_file when you need surrounding context the diff does not show. ONLY listed files are readable — read_file_diff and read_file both return a failed result for any other path (an import, a neighbor, a file named in the description). Do not request or retry unlisted paths; reason from the visible diffs instead and note the gap honestly in your summary when it matters.",
     "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
     "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
     "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
@@ -41426,6 +41426,7 @@ var defaultReviewPolicy = AgentPolicy.make({
   maxToolCalls: 24,
   maxDuration: "8 minutes",
   toolConcurrency: 2,
+  repeatedFailureLimit: 12,
   tokenBudget: 300000,
   contextTokenLimit: 150000,
   onExhaustion: "final-answer"
@@ -41577,6 +41578,7 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: "6 minutes",
   toolConcurrency: 2,
+  repeatedFailureLimit: 12,
   tokenBudget: 200000,
   contextTokenLimit: 150000,
   onExhaustion: "fail"
