@@ -112,7 +112,11 @@ const MACHINE_COMMENT_PATTERN = new RegExp(
 );
 const VERDICT_CALLOUT_PATTERN =
   /^(?:> \[!(?:CAUTION|IMPORTANT)\]\n> [^\n]*(?:\n> [^\n]*)*|> (?:ℹ️|✅)[^\n]*)\n*/;
-const INLINE_FINDING_TITLE_PATTERN = /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit)\] ([^\n]+)\*\*$/;
+// Accepts both the pre-category first line (`**[⚠️ important] Title**`) and
+// the current one carrying an optional category chip (`… · security]`), so
+// retirement keeps matching inline comments posted by older package versions.
+const INLINE_FINDING_TITLE_PATTERN =
+  /^\*\*\[(?:🛑 blocking|⚠️ important|💅 nit)(?: · [a-z-]+)?\] ([^\n]+)\*\*$/;
 const MAX_REVIEW_BODY_CHARS = 60_000;
 
 /** The host-authored metadata marker is the authority gate for any edit. */

@@ -271,6 +271,24 @@ export class ReviewMission extends Schema.Class<ReviewMission>(
 export const FindingSeverity = Schema.Literals(["blocking", "important", "nit"]);
 export type FindingSeverity = typeof FindingSeverity.Type;
 
+/**
+ * What kind of problem a finding names. Model-claimed like severity — it is a
+ * label for scanning a busy review, never an input to the check conclusion.
+ */
+export const FindingCategory = Schema.Literals([
+  "correctness",
+  "security",
+  "concurrency",
+  "performance",
+  "resources",
+  "error-handling",
+  "testing",
+  "maintainability",
+  "style",
+  "docs",
+]);
+export type FindingCategory = typeof FindingCategory.Type;
+
 export class ReviewFinding extends Schema.Class<ReviewFinding>(
   "@effect-agent/pr-review/ReviewFinding",
 )({
@@ -279,6 +297,8 @@ export class ReviewFinding extends Schema.Class<ReviewFinding>(
   startLine: Schema.Int.check(Schema.isGreaterThan(0)),
   endLine: Schema.Int.check(Schema.isGreaterThan(0)),
   severity: FindingSeverity,
+  /** Optional problem-kind label rendered next to the severity. */
+  category: Schema.optionalKey(FindingCategory),
   title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
   body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
   /** Replacement for exactly lines startLine..endLine; omit when unsure. */
@@ -303,12 +323,32 @@ export class ReviewConcern extends Schema.Class<ReviewConcern>(
   body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
 }) {}
 
+/** The per-entry walkthrough summary bound, and the entries bound (the changeset cap). */
+export const MAX_WALKTHROUGH_SUMMARY_CHARS = 240;
+export const MAX_WALKTHROUGH_ENTRIES = 300;
+
+/**
+ * One reviewed file's one-sentence change summary. Rendered only when the
+ * path is actually part of the changeset — like finding anchors, walkthrough
+ * paths are validated host-side and invented ones are dropped.
+ */
+export class WalkthroughEntry extends Schema.Class<WalkthroughEntry>(
+  "@effect-agent/pr-review/WalkthroughEntry",
+)({
+  path: ChangedPath,
+  summary: Schema.NonEmptyString.check(Schema.isMaxLength(MAX_WALKTHROUGH_SUMMARY_CHARS)),
+}) {}
+
 export class CodeReview extends Schema.Class<CodeReview>("@effect-agent/pr-review/CodeReview")({
   summary: Schema.NonEmptyString.check(Schema.isMaxLength(4_000)),
   verdict: ReviewVerdict,
   findings: Schema.Array(ReviewFinding).check(Schema.isMaxLength(MAX_FINDINGS)),
   /** Non-anchorable concerns; absent when the review raises none. */
   concerns: Schema.optionalKey(Schema.Array(ReviewConcern).check(Schema.isMaxLength(MAX_CONCERNS))),
+  /** Per-file change summaries; absent when the model provides none. */
+  walkthrough: Schema.optionalKey(
+    Schema.Array(WalkthroughEntry).check(Schema.isMaxLength(MAX_WALKTHROUGH_ENTRIES)),
+  ),
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -368,7 +408,8 @@ export const makeReviewInstructions =
       "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
       "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
       '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
-      '6. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>}.',
+      `6. Write a walkthrough: for every file you reviewed, one factual sentence (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars) describing what changed in that file — written for a reader scanning the pull request, never restating the diff line by line. Use only paths from list_changed_files; invented paths are dropped.`,
+      '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>, "walkthrough": <array, OPTIONAL: [{"path": <string, a changed file path>, "summary": <string, the step-6 sentence>}], one entry per reviewed file>}.',
       `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
       'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',
     ].join("\n");

@@ -126,11 +126,16 @@ check on the current head, so a blocking or incomplete final audit prevents
 merge. Removing and reapplying the label requests another explicit audit.
 
 Posted reviews open with a severity callout derived host-side from the
-validated findings, carry non-anchored concerns as body sections, and end
-with a footer naming the selected scope, model, token usage, and workflow
-run. Deliberate full-review fallbacks explain their reason in the body. The
-run also writes a step summary and `conclusion`, `coverage`, `review-mode`,
-and `review-reason` outputs.
+validated findings, followed by a host-derived stats line (changeset size,
+severity tally, deterministic review-effort estimate) and a collapsed
+per-file walkthrough table whose paths are validated against the changeset.
+Non-anchored concerns render as body sections; inline comments carry an
+optional category chip and a collapsed copy-paste "Prompt for AI agents"
+(with a consolidated all-findings variant in the body). Reviews end with a
+footer naming the selected scope, model, token usage, and workflow run.
+Deliberate full-review fallbacks explain their reason in the body. The run
+also writes a step summary and `conclusion`, `coverage`, `review-mode`, and
+`review-reason` outputs.
 
 The check conclusion does not trust the model verdict. Any active blocking
 finding or concern fails the job. Missing required coverage — including an

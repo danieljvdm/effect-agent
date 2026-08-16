@@ -78,12 +78,32 @@ beyond the model-facing render bound remain explicit coverage gaps.
 The body opens with a host-derived callout tier — `[!CAUTION]` when any
 finding is blocking, `[!IMPORTANT]` for important findings, an ℹ️ blockquote
 for nits, `✅` for a clean approval — computed from the validated severities,
-never from model prose. Below the summary, non-anchored `concerns` (deletion
-plans, rollout sequencing, coverage gaps, scope questions — things with no
-diff line to point at) render as severity-tagged sections. The footer names
-the model binding, the observed token usage, and links to the workflow run;
-an invisible metadata comment pins the reviewed head commit so later readers
-know when line callouts have gone stale.
+never from model prose. Directly under it, one host-derived stats line names
+the changeset size (`N files (+adds / −dels)`), the severity tally, and a
+deterministic 1–5 review-effort estimate computed from the changeset shape
+alone. Below the summary, a collapsed **📝 Walkthrough** table carries the
+model's one-sentence per-file change summaries — walkthrough paths are
+validated like finding anchors, so entries naming files outside the changeset
+are dropped. Under fan-out the walkthrough is additionally host-verified
+against the delegation Tool events: only summaries a successfully settled
+child actually reported for its own unit's paths survive, so neither a child
+nor the coordinator can smuggle or invent entries. Non-anchored `concerns`
+(deletion plans, rollout sequencing,
+coverage gaps, scope questions — things with no diff line to point at) render
+as severity-tagged sections; demoted findings and findings carried from
+unchanged scope collapse into counted `<details>` sections.
+
+Each inline comment is headed by its severity plus an optional model-claimed
+category chip (`**[⚠️ important · security] …**`), carries a committable
+GitHub `suggestion` fence when the model provided one, and ends with a
+collapsed **🤖 Prompt for AI agents** — a copy-paste instruction derived
+host-side from the validated finding, opening with a fixed preamble telling
+the receiving agent to treat the finding content as untrusted review data.
+The review body repeats every finding — anchored, demoted, and carried — in
+one consolidated prompt block so nothing needs to be collected by hand. The
+footer names the model binding, the observed token usage, and links to the
+workflow run; an invisible metadata comment pins the reviewed head commit so
+later readers know when line callouts have gone stale.
 
 ## Swap a port
 

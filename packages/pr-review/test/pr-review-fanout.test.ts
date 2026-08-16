@@ -47,6 +47,7 @@ import {
   ReviewFinding,
   ReviewMission,
   ReviewPublicationPlan,
+  WalkthroughEntry,
   defaultFileReviewerPolicy,
   fileReviewPolicy,
 } from "../src/index.ts";
@@ -643,6 +644,67 @@ describe("offline fan-out review run", () => {
       // The published body renders it as a severity-tagged section.
       expect(result.outcome.plan.body).toContain(`### ⚠️ ${gammaConcern.title}`);
       expect(result.outcome.plan.body).toContain(gammaConcern.body);
+    }),
+  );
+
+  it.effect("projects child file summaries and renders only unit-verified walkthrough rows", () =>
+    Effect.gen(function* () {
+      const alphaSummary = WalkthroughEntry.make({
+        path: "src/api/alpha.ts",
+        summary: "Renames the alpha constant and rewires its export.",
+      });
+      // In the changeset, but OUTSIDE unit-001's briefed paths: a child must
+      // not be able to smuggle a summary for a file it never reviewed.
+      const crossUnitSummary = WalkthroughEntry.make({
+        path: "src/core/gamma.ts",
+        summary: "Smuggled cross-unit summary.",
+      });
+      const summarizedChildren: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: {
+            _tag: "findings",
+            report: FileReviewReport.make({
+              unitId: "unit-001",
+              findings: [alphaFinding, betaGhostFinding],
+              fileSummaries: [alphaSummary, crossUnitSummary],
+            }),
+          },
+        },
+        happyChildren[1] as OfflineUnitScript,
+      ];
+      // A coordinator-invented entry: in the changeset, but no child reported it.
+      const inventedSummary = WalkthroughEntry.make({
+        path: "src/core/delta.ts",
+        summary: "Invented by the coordinator.",
+      });
+      const walkthroughReview = CodeReview.make({
+        summary: "Merged 2 units; the walkthrough carries the alpha summary.",
+        verdict: "comment",
+        findings: mergedFindings,
+        walkthrough: [alphaSummary, crossUnitSummary, inventedSummary],
+      });
+
+      const result = yield* runOfflineFanOut({
+        children: summarizedChildren,
+        review: walkthroughReview,
+      });
+
+      // The projection carried the per-file summary across the
+      // declassification boundary: the coordinator's merge turn saw it.
+      const finalPrompt = result.coordinatorPrompts[2] ?? "";
+      expect(finalPrompt).toContain("Renames the alpha constant");
+
+      // Host verification kept exactly the child-reported, in-unit entry:
+      // the cross-unit smuggle and the coordinator invention are dropped.
+      expect(result.outcome.review.walkthrough).toEqual([alphaSummary]);
+      expect(result.outcome.plan.body).toContain("<summary>📝 Walkthrough (1 file)</summary>");
+      expect(result.outcome.plan.body).toContain(
+        "| `src/api/alpha.ts` | Renames the alpha constant and rewires its export. |",
+      );
+      expect(result.outcome.plan.body).not.toContain("Smuggled cross-unit summary.");
+      expect(result.outcome.plan.body).not.toContain("Invented by the coordinator.");
     }),
   );
 
