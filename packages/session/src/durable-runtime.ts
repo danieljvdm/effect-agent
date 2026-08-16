@@ -5,6 +5,7 @@ import {
   DelegationDepth,
   IdGenerator,
   isDelegationToolName,
+  PolicyLimit,
   ReceiptId,
   SubagentParentLink,
   SubmissionId,
@@ -12,6 +13,7 @@ import {
   type Agent,
   type AgentId,
   type AttemptId,
+  type ExhaustedLimit,
   type RunEvent,
   type RunId,
   type TurnId,
@@ -624,8 +626,15 @@ type AttemptOutcome =
       readonly result: PersistedJson;
       /** Set when the Run settled through the final-answer exhaustion resolution (RUN-018). */
       readonly finishReason?: "budget-exhausted";
+      /** The dimension that bound; set exactly alongside `finishReason` (RUN-011). */
+      readonly exhausted?: ExhaustedLimit;
     }
-  | { readonly _tag: "failed"; readonly result: PersistedJson }
+  | {
+      readonly _tag: "failed";
+      readonly result: PersistedJson;
+      /** The typed limit of an `AgentPolicyError` failure; absent otherwise (RUN-011). */
+      readonly policyLimit?: PolicyLimit;
+    }
   | { readonly _tag: "aborted" };
 
 /**
@@ -654,8 +663,13 @@ class CoordinatorHalt {
 
 const ErrorMessage = Schema.Struct({ message: Schema.String });
 const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
+const PolicyFailure = Schema.Struct({
+  _tag: Schema.Literal("AgentPolicyError"),
+  limit: PolicyLimit,
+});
 const decodeErrorMessage = Schema.decodeUnknownOption(ErrorMessage);
 const decodeErrorTag = Schema.decodeUnknownOption(ErrorTag);
+const decodePolicyFailure = Schema.decodeUnknownOption(PolicyFailure);
 
 const errorMessageOf = (error: unknown): string =>
   Option.match(decodeErrorMessage(error), {
@@ -1830,6 +1844,12 @@ const make = Effect.gen(function* () {
       ...(outcome._tag === "completed" && outcome.finishReason !== undefined
         ? { finishReason: outcome.finishReason }
         : {}),
+      ...(outcome._tag === "completed" && outcome.exhausted !== undefined
+        ? { exhausted: outcome.exhausted }
+        : {}),
+      ...(outcome._tag === "failed" && outcome.policyLimit !== undefined
+        ? { policyLimit: outcome.policyLimit }
+        : {}),
     });
     const record = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
     // The envelope was constructed from validated parts, so an encode failure is a defect.
@@ -2608,7 +2628,16 @@ const make = Effect.gen(function* () {
     }).pipe(
       // Two bounded strings always satisfy the canonical persistence limits.
       Effect.orDie,
-      Effect.map((result) => ({ _tag: "failed" as const, result })),
+      Effect.map((result) => ({
+        _tag: "failed" as const,
+        result,
+        // A hard-rail policy failure keeps its typed limit durable (RUN-011):
+        // the bounded message stays diagnostic, never the dimension authority.
+        ...Option.match(decodePolicyFailure(error), {
+          onNone: () => ({}),
+          onSome: ({ limit }) => ({ policyLimit: limit }),
+        }),
+      })),
     );
 
   const halt = <A, R>(
@@ -2876,6 +2905,7 @@ const make = Effect.gen(function* () {
         readonly pendingTurn: { readonly turn: number; readonly turnId: TurnId } | undefined;
         readonly completedOutput: PersistedJson | undefined;
         readonly completedFinishReason: "budget-exhausted" | undefined;
+        readonly completedExhausted: ExhaustedLimit | undefined;
       }
       const stateRef = yield* Ref.make<RunState>({
         baseLen: undefined,
@@ -2884,6 +2914,7 @@ const make = Effect.gen(function* () {
         pendingTurn: undefined,
         completedOutput: undefined,
         completedFinishReason: undefined,
+        completedExhausted: undefined,
       });
       const turnCounter = yield* Ref.make(journal.committedTurns);
       const idGenerator: (typeof IdGenerator)["Service"] = {
@@ -3942,6 +3973,7 @@ const make = Effect.gen(function* () {
       const recordCompleted = (
         output: unknown,
         finishReason: "completed" | "model-stop" | "budget-exhausted",
+        exhausted: ExhaustedLimit | undefined,
       ): Effect.Effect<void, DurableWorkerFailure> =>
         Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
           Effect.mapError(
@@ -3957,6 +3989,9 @@ const make = Effect.gen(function* () {
               ...state,
               completedOutput: result,
               completedFinishReason: finishReason === "budget-exhausted" ? finishReason : undefined,
+              // The pair travels together or not at all (RUN-011 fail-safe): a
+              // divergent event never persists a lone dimension.
+              completedExhausted: finishReason === "budget-exhausted" ? exhausted : undefined,
             })),
           ),
         );
@@ -3975,7 +4010,7 @@ const make = Effect.gen(function* () {
           }
           case "RunCompleted": {
             return commitPendingTurn.pipe(
-              Effect.andThen(recordCompleted(event.output, event.finishReason)),
+              Effect.andThen(recordCompleted(event.output, event.finishReason, event.exhausted)),
             );
           }
           case "RunFailed": {
@@ -4213,6 +4248,9 @@ const make = Effect.gen(function* () {
         ...(state.completedFinishReason === undefined
           ? {}
           : { finishReason: state.completedFinishReason }),
+        ...(state.completedFinishReason === undefined || state.completedExhausted === undefined
+          ? {}
+          : { exhausted: state.completedExhausted }),
       } as RunPhaseOutcome;
     });
 
