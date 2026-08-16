@@ -40577,15 +40577,51 @@ class ChangedFile extends exports_Schema.Class("@effect-agent/pr-review/ChangedF
   reviewHeadContent: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(200000)))
 }) {
 }
-var hasReviewableContent = (file2) => {
+var MAX_REVIEW_CONTENT_CHARS = 220000;
+var renderReviewContent = (file2) => {
   if (file2.patch !== undefined)
-    return false;
-  if (file2.status === "added")
-    return file2.reviewHeadContent !== undefined;
-  if (file2.status === "removed")
-    return file2.reviewBaseContent !== undefined;
-  return file2.reviewBaseContent !== undefined && file2.reviewHeadContent !== undefined;
+    return;
+  const includeBase = file2.status !== "added";
+  const includeHead = file2.status !== "removed";
+  const sections = [
+    "[GitHub omitted the unified diff. B/H lines below are bounded full-file review content, not valid inline-comment anchors. Report defects from this evidence as non-anchored concerns.]"
+  ];
+  let renderedLength = sections[0]?.length ?? 0;
+  const append4 = (part) => {
+    const nextLength = renderedLength + 1 + part.length;
+    if (nextLength > MAX_REVIEW_CONTENT_CHARS)
+      return false;
+    sections.push(part);
+    renderedLength = nextLength;
+    return true;
+  };
+  const appendSide = (side, header, content) => {
+    if (!append4(header))
+      return false;
+    const lines = content.split(`
+`);
+    for (let index2 = 0;index2 < lines.length; index2 += 1) {
+      if (!append4(`${side}${index2 + 1}   ${lines[index2] ?? ""}`))
+        return false;
+    }
+    return true;
+  };
+  if (includeBase) {
+    if (file2.reviewBaseContent === undefined)
+      return;
+    if (!appendSide("B", "[BASE VERSION]", file2.reviewBaseContent))
+      return;
+  }
+  if (includeHead) {
+    if (file2.reviewHeadContent === undefined)
+      return;
+    if (!appendSide("H", "[HEAD VERSION]", file2.reviewHeadContent))
+      return;
+  }
+  return sections.join(`
+`);
 };
+var hasReviewableContent = (file2) => renderReviewContent(file2) !== undefined;
 var isReviewableFile = (file2) => file2.patch !== undefined || hasReviewableContent(file2);
 var HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 var parsePatch = (patch3) => {
@@ -40727,7 +40763,6 @@ class PullRequestSource extends exports_Context.Service()("@effect-agent/pr-revi
 var MAX_FINDINGS = 20;
 var MAX_CONCERNS = 10;
 var MAX_PATCH_CHARS = 60000;
-var MAX_CONTENT_REVIEW_CHARS = 220000;
 var REVIEW_TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024;
 var MAX_SLICE_LINES = 1000;
 var DEFAULT_SLICE_LINES = 400;
@@ -40836,25 +40871,16 @@ var readFileDiffHandler = (query) => exports_Effect.gen(function* () {
       reason: "Path is not part of this pull request's changeset."
     });
   }
-  const reviewMode = file2.patch !== undefined ? "diff" : hasReviewableContent(file2) ? "content" : "unavailable";
-  const annotateContent = (side, content) => content.split(`
-`).map((text2, index2) => `${side}${index2 + 1}   ${text2}`).join(`
-`);
-  const contentEvidence = reviewMode !== "content" ? "" : [
-    "[GitHub omitted the unified diff. B/H lines below are bounded full-file review content, not valid inline-comment anchors. Report defects from this evidence as non-anchored concerns.]",
-    ...file2.reviewBaseContent === undefined ? [] : ["[BASE VERSION]", annotateContent("B", file2.reviewBaseContent)],
-    ...file2.reviewHeadContent === undefined ? [] : ["[HEAD VERSION]", annotateContent("H", file2.reviewHeadContent)]
-  ].join(`
-`);
-  const annotated = file2.patch === undefined ? contentEvidence : annotatePatch(file2.patch);
-  const maximumChars = reviewMode === "content" ? MAX_CONTENT_REVIEW_CHARS : MAX_PATCH_CHARS;
-  const truncated = annotated.length > maximumChars;
+  const contentEvidence = renderReviewContent(file2);
+  const reviewMode = file2.patch !== undefined ? "diff" : contentEvidence !== undefined ? "content" : "unavailable";
+  const annotated = file2.patch === undefined ? contentEvidence ?? "" : annotatePatch(file2.patch);
+  const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
   return FileDiffView.make({
     path: file2.path,
     status: file2.status,
     reviewMode,
-    annotatedPatch: truncated ? `${annotated.slice(0, maximumChars)}
-[review evidence truncated at the bounded tool limit]` : annotated,
+    annotatedPatch: truncated ? `${annotated.slice(0, MAX_PATCH_CHARS)}
+[diff truncated]` : annotated,
     truncated
   });
 });

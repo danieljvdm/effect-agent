@@ -364,6 +364,30 @@ describe("planReviewUnits", () => {
     expect([...plan.undiffablePaths]).toEqual([binary.path]);
   });
 
+  it("keeps fallback evidence beyond the complete render bound unreviewed", () => {
+    const lineHeavyAddition = ChangedFile.make({
+      path: "db/line-heavy.json",
+      status: "added",
+      additions: 100_000,
+      deletions: 0,
+      reviewHeadContent: "x\n".repeat(100_000),
+    });
+    const largeModification = ChangedFile.make({
+      path: "db/large-modified.json",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      reviewBaseContent: "b".repeat(120_000),
+      reviewHeadContent: "h".repeat(120_000),
+    });
+    const plan = planReviewUnits([lineHeavyAddition, largeModification], {
+      totalChangedFiles: 2,
+    });
+
+    expect(plan.units).toEqual([]);
+    expect([...plan.undiffablePaths]).toEqual(["db/large-modified.json", "db/line-heavy.json"]);
+  });
+
   it("is deterministic regardless of input order", () => {
     const shuffled = [...fixtureFiles].reverse();
     expect(planReviewUnits(shuffled, { totalChangedFiles: 5 })).toEqual(
@@ -572,6 +596,7 @@ describe("offline fan-out review run", () => {
       expect(result.outcome.coverage.unreviewedPaths).toEqual([]);
       expect(result.childPrompts.join("\n")).toContain("snapshot-tail");
       expect(result.childPrompts.join("\n")).toContain("not valid inline-comment anchors");
+      expect(result.childPrompts.join("\n")).toContain('"truncated":false');
       expect(result.outcome.plan.body).not.toContain("Incomplete coverage");
     }),
   );

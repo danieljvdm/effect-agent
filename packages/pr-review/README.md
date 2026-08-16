@@ -70,7 +70,8 @@ UTF-8 base/head content: additions require the head, deletions require the
 base, and other changes require both. Reviewers receive that content through
 the ordinary diff-read tool with non-anchorable `B`/`H` line labels and must
 report defects as review-body concerns. Invalid UTF-8, binary NUL content,
-missing sides, and files beyond the read bound remain explicit coverage gaps.
+missing sides, files beyond the per-side read bound, and complete B/H evidence
+beyond the model-facing render bound remain explicit coverage gaps.
 
 ## What a posted review looks like
 
@@ -176,8 +177,10 @@ variables inside Actions.
 ## Bounds, spelled out
 
 Finite `AgentPolicy` on every definition plus run-level `UsageBudgetLimits`
-(tokens, tool calls, cost, duration). Reading a file head version beyond 200k
-characters is refused typed. The changeset surface is bounded at 300 files:
+(tokens, tool calls, cost, duration). Reading either file version beyond 200k
+bytes or characters is refused typed; patchless content is reviewable only
+when its complete B/H rendering fits 220k characters. The changeset surface is
+bounded at 300 files:
 files beyond the bound are not fetched, and the review body reports
 `Reviewed N of M changed files` instead of claiming completeness. Fan-out
 capacity overflow is reported in the review summary, never dropped. Any

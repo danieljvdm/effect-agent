@@ -2,7 +2,13 @@ import { Effect, Schema } from "effect";
 import { Agent, AgentPolicy, ToolExecutionClass, ToolResultBounds } from "effect-agent";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-import { annotatePatch, ChangedFileStatus, ChangedPath, hasReviewableContent } from "./diff.ts";
+import {
+  annotatePatch,
+  ChangedFileStatus,
+  ChangedPath,
+  hasReviewableContent,
+  renderReviewContent,
+} from "./diff.ts";
 import {
   normalizeRepoRelativePath,
   PullRequestSource,
@@ -26,9 +32,6 @@ export const MAX_CONCERNS = 10;
 
 /** Annotated patches larger than this are truncated with an explicit marker. */
 const MAX_PATCH_CHARS = 60_000;
-
-/** Patchless content fallback stays below one ordinary model context window. */
-const MAX_CONTENT_REVIEW_CHARS = 220_000;
 
 /** The encoded Tool result must retain one complete bounded content fallback. */
 export const REVIEW_TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024;
@@ -191,38 +194,22 @@ export const readFileDiffHandler = (query: FileDiffQuery) =>
         reason: "Path is not part of this pull request's changeset.",
       });
     }
+    const contentEvidence = renderReviewContent(file);
     const reviewMode =
       file.patch !== undefined
         ? ("diff" as const)
-        : hasReviewableContent(file)
+        : contentEvidence !== undefined
           ? ("content" as const)
           : ("unavailable" as const);
-    const annotateContent = (side: "B" | "H", content: string): string =>
-      content
-        .split("\n")
-        .map((text, index) => `${side}${index + 1}   ${text}`)
-        .join("\n");
-    const contentEvidence =
-      reviewMode !== "content"
-        ? ""
-        : [
-            "[GitHub omitted the unified diff. B/H lines below are bounded full-file review content, not valid inline-comment anchors. Report defects from this evidence as non-anchored concerns.]",
-            ...(file.reviewBaseContent === undefined
-              ? []
-              : ["[BASE VERSION]", annotateContent("B", file.reviewBaseContent)]),
-            ...(file.reviewHeadContent === undefined
-              ? []
-              : ["[HEAD VERSION]", annotateContent("H", file.reviewHeadContent)]),
-          ].join("\n");
-    const annotated = file.patch === undefined ? contentEvidence : annotatePatch(file.patch);
-    const maximumChars = reviewMode === "content" ? MAX_CONTENT_REVIEW_CHARS : MAX_PATCH_CHARS;
-    const truncated = annotated.length > maximumChars;
+    const annotated =
+      file.patch === undefined ? (contentEvidence ?? "") : annotatePatch(file.patch);
+    const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
     return FileDiffView.make({
       path: file.path,
       status: file.status,
       reviewMode,
       annotatedPatch: truncated
-        ? `${annotated.slice(0, maximumChars)}\n[review evidence truncated at the bounded tool limit]`
+        ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
         : annotated,
       truncated,
     });
