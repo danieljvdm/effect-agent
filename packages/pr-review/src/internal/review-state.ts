@@ -443,9 +443,29 @@ export const selectedPullRequestSourceLayer = (
     Effect.gen(function* () {
       const source = yield* PullRequestSource;
       const selectedPaths = new Set(selection.files.map((file) => file.path));
+      const selectedFiles = source.changedFiles.pipe(
+        Effect.map((fullFiles) => {
+          const fullByPath = new Map(fullFiles.map((file) => [file.path, file] as const));
+          return selection.files.map((file) => {
+            if (file.patch !== undefined) return file;
+            const full = fullByPath.get(file.path);
+            return full === undefined
+              ? file
+              : ChangedFile.make({
+                  ...file,
+                  ...(full.reviewBaseContent === undefined
+                    ? {}
+                    : { reviewBaseContent: full.reviewBaseContent }),
+                  ...(full.reviewHeadContent === undefined
+                    ? {}
+                    : { reviewHeadContent: full.reviewHeadContent }),
+                });
+          });
+        }),
+      );
       return PullRequestSource.of({
         metadata: source.metadata,
-        changedFiles: Effect.succeed(selection.files),
+        changedFiles: selectedFiles,
         anchorFiles: source.anchorFiles,
         readFile: (path) =>
           selectedPaths.has(path)

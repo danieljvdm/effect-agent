@@ -1,8 +1,14 @@
 import { Effect, Schema } from "effect";
-import { Agent, AgentPolicy, ToolExecutionClass } from "effect-agent";
+import { Agent, AgentPolicy, ToolExecutionClass, ToolResultBounds } from "effect-agent";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-import { annotatePatch, ChangedFileStatus, ChangedPath } from "./diff.ts";
+import {
+  annotatePatch,
+  ChangedFileStatus,
+  ChangedPath,
+  hasReviewableContent,
+  renderReviewContent,
+} from "./diff.ts";
 import {
   normalizeRepoRelativePath,
   PullRequestSource,
@@ -27,6 +33,9 @@ export const MAX_CONCERNS = 10;
 /** Annotated patches larger than this are truncated with an explicit marker. */
 const MAX_PATCH_CHARS = 60_000;
 
+/** The encoded Tool result must retain one complete bounded content fallback. */
+export const REVIEW_TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024;
+
 /** One `read_file` slice never exceeds this many lines. */
 const MAX_SLICE_LINES = 1_000;
 const DEFAULT_SLICE_LINES = 400;
@@ -43,6 +52,8 @@ export class ChangedFileSummary extends Schema.Class<ChangedFileSummary>(
   additions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   deletions: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   hasTextualDiff: Schema.Boolean,
+  /** True when a missing patch was recovered as bounded UTF-8 base/head content. */
+  hasReviewableContent: Schema.Boolean,
 }) {}
 
 export class ChangedFilesView extends Schema.Class<ChangedFilesView>(
@@ -82,10 +93,13 @@ export class FileDiffView extends Schema.Class<FileDiffView>(
 )({
   path: ChangedPath,
   status: ChangedFileStatus,
+  reviewMode: Schema.Literals(["diff", "content", "unavailable"]),
   /**
    * The unified diff with explicit RIGHT-side line numbers: `R<n>` marks a
    * line present in the new file version (only those may anchor findings);
-   * `-` marks removed lines. Empty when no textual diff exists.
+   * `-` marks removed lines. For content fallback, `B<n>` and `H<n>`
+   * identify base/head lines for reading only; they are never valid anchors.
+   * Empty only when neither a patch nor bounded textual content exists.
    */
   annotatedPatch: Schema.String,
   truncated: Schema.Boolean,
@@ -98,7 +112,7 @@ export class FileDiffView extends Schema.Class<FileDiffView>(
 // security (the run stays bounded by AgentPolicy regardless).
 export const ReadFileDiff = Tool.make("read_file_diff", {
   description:
-    "Read the annotated unified diff of one changed file. Lines marked R<number> exist in the new version and are the only valid finding anchors.",
+    "Read one changed file's review evidence. A normal unified diff marks valid anchors as R<number>. When GitHub omitted the diff, bounded base/head content is returned with B/H line labels for review but no valid inline anchors.",
   parameters: FileDiffQuery,
   success: FileDiffView,
   failure: Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
@@ -158,6 +172,7 @@ export const listChangedFilesHandler = (_query: ListChangedFilesQuery) =>
           additions: file.additions,
           deletions: file.deletions,
           hasTextualDiff: file.patch !== undefined,
+          hasReviewableContent: hasReviewableContent(file),
         }),
       ),
     });
@@ -179,11 +194,20 @@ export const readFileDiffHandler = (query: FileDiffQuery) =>
         reason: "Path is not part of this pull request's changeset.",
       });
     }
-    const annotated = file.patch === undefined ? "" : annotatePatch(file.patch);
-    const truncated = annotated.length > MAX_PATCH_CHARS;
+    const contentEvidence = renderReviewContent(file);
+    const reviewMode =
+      file.patch !== undefined
+        ? ("diff" as const)
+        : contentEvidence !== undefined
+          ? ("content" as const)
+          : ("unavailable" as const);
+    const annotated =
+      file.patch === undefined ? (contentEvidence ?? "") : annotatePatch(file.patch);
+    const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
     return FileDiffView.make({
       path: file.path,
       status: file.status,
+      reviewMode,
       annotatedPatch: truncated
         ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
         : annotated,
@@ -337,7 +361,7 @@ export const makeReviewInstructions =
       ...resolveGuidance(options.guidance, mission),
       "Work in this order:",
       "1. Call list_changed_files once to see the changeset.",
-      "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+      "2. Call read_file_diff for every file you review. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
       "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
       "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
       "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
@@ -363,6 +387,7 @@ export const defaultReviewPolicy = AgentPolicy.make({
   // Keep enough output/summary headroom for the 200k-class provider window;
   // tool-heavy histories prune before the engine spends a summarization call.
   contextTokenLimit: 150_000,
+  toolResultBounds: ToolResultBounds.make({ maxBytes: REVIEW_TOOL_RESULT_MAX_BYTES }),
   // Budget soft landing (RUN-018): an exhausted reviewer returns its partial
   // review on one final tool-free turn instead of failing the whole run.
   onExhaustion: "final-answer",

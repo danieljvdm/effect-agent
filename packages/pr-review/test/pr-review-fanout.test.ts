@@ -192,6 +192,7 @@ const runOfflineFanOut = (script: {
   readonly children: ReadonlyArray<OfflineUnitScript>;
   readonly review: CodeReview;
   readonly unitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
+  readonly sourceFixture?: FixturePullRequest | undefined;
 }) =>
   Effect.gen(function* () {
     const coordinator = yield* makeOfflineFanOutCoordinatorModel({
@@ -202,7 +203,7 @@ const runOfflineFanOut = (script: {
     const parentBinding = Agent.withModel(FanOutReviewer, coordinator.model);
     const childBinding = Agent.withModel(FileReviewer, children.model);
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
-    const sourceLayer = fixturePullRequestSourceLayer(fixture);
+    const sourceLayer = fixturePullRequestSourceLayer(script.sourceFixture ?? fixture);
     const childSupportLayer = Layer.mergeAll(
       FileReviewToolkitLayer,
       SubagentReservationsMemoryLive,
@@ -341,6 +342,50 @@ describe("planReviewUnits", () => {
     expect(plan.units[1]?.changedLines).toBe(300);
     expect([...plan.undiffablePaths]).toEqual(["assets/logo.png"]);
     expect(plan.unassignedPaths).toHaveLength(0);
+  });
+
+  it("assigns patchless files recovered as bounded text and keeps binaries unreviewed", () => {
+    const snapshot = ChangedFile.make({
+      path: "db/snapshot.json",
+      status: "added",
+      additions: 1,
+      deletions: 0,
+      reviewHeadContent: '{"version":"7","tables":{}}',
+    });
+    const binary = ChangedFile.make({
+      path: "assets/logo.png",
+      status: "added",
+      additions: 0,
+      deletions: 0,
+    });
+    const plan = planReviewUnits([snapshot, binary], { totalChangedFiles: 2 });
+
+    expect(plan.units.flatMap((unit) => [...unit.paths])).toEqual([snapshot.path]);
+    expect([...plan.undiffablePaths]).toEqual([binary.path]);
+  });
+
+  it("keeps fallback evidence beyond the complete render bound unreviewed", () => {
+    const lineHeavyAddition = ChangedFile.make({
+      path: "db/line-heavy.json",
+      status: "added",
+      additions: 100_000,
+      deletions: 0,
+      reviewHeadContent: "x\n".repeat(100_000),
+    });
+    const largeModification = ChangedFile.make({
+      path: "db/large-modified.json",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      reviewBaseContent: "b".repeat(120_000),
+      reviewHeadContent: "h".repeat(120_000),
+    });
+    const plan = planReviewUnits([lineHeavyAddition, largeModification], {
+      totalChangedFiles: 2,
+    });
+
+    expect(plan.units).toEqual([]);
+    expect([...plan.undiffablePaths]).toEqual(["db/large-modified.json", "db/line-heavy.json"]);
   });
 
   it("is deterministic regardless of input order", () => {
@@ -498,6 +543,62 @@ describe("offline fan-out review run", () => {
         expect(finalPrompt).toContain(alphaFinding.title);
         expect(finalPrompt).toContain(gammaFinding.title);
       }),
+  );
+
+  it.effect("reviews a patchless generated text file through bounded head content", () =>
+    Effect.gen(function* () {
+      const snapshotPath = "packages/db/migrations/next/snapshot.json";
+      const snapshotContent = `{"version":"7","payload":"${"x".repeat(142_900)}","tail":"snapshot-tail"}`;
+      const snapshotFixture = FixturePullRequest.make({
+        metadata: PullRequestMetadata.make({
+          repository: "acme/widgets",
+          number: 203,
+          title: "Add generated migration snapshot",
+          body: "",
+          baseRef: "main",
+          headRef: "feature/migration",
+          headSha: FIXTURE_SHA,
+          totalChangedFiles: 1,
+        }),
+        files: [
+          FixtureFile.make({
+            file: ChangedFile.make({
+              path: snapshotPath,
+              status: "added",
+              additions: 1,
+              deletions: 0,
+            }),
+            headContent: snapshotContent,
+          }),
+        ],
+      });
+      const cleanReport = FileReviewReport.make({ unitId: "unit-001", findings: [] });
+      const cleanReview = CodeReview.make({
+        summary: "Reviewed the generated snapshot through bounded head content.",
+        verdict: "approve",
+        findings: [],
+      });
+
+      const result = yield* runOfflineFanOut({
+        sourceFixture: snapshotFixture,
+        unitCalls: [{ unitId: "unit-001", paths: [snapshotPath] }],
+        children: [
+          {
+            unitId: "unit-001",
+            diffPath: snapshotPath,
+            outcome: { _tag: "findings", report: cleanReport },
+          },
+        ],
+        review: cleanReview,
+      });
+
+      expect(result.outcome.coverage.status).toBe("complete");
+      expect(result.outcome.coverage.unreviewedPaths).toEqual([]);
+      expect(result.childPrompts.join("\n")).toContain("snapshot-tail");
+      expect(result.childPrompts.join("\n")).toContain("not valid inline-comment anchors");
+      expect(result.childPrompts.join("\n")).toContain('"truncated":false');
+      expect(result.outcome.plan.body).not.toContain("Incomplete coverage");
+    }),
   );
 
   it.effect("projects child concerns to the coordinator and renders them as body sections", () =>

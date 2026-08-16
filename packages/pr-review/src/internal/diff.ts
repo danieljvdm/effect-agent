@@ -31,7 +31,66 @@ export class ChangedFile extends Schema.Class<ChangedFile>("@effect-agent/pr-rev
   previousPath: Schema.optionalKey(ChangedPath),
   /** Unified-diff hunks; absent for binary or oversized files. */
   patch: Schema.optionalKey(Schema.String),
+  /**
+   * Bounded UTF-8 content used only when the provider omitted `patch`.
+   * Modified files require both sides; additions require head content and
+   * deletions require base content. These values are review evidence, never
+   * GitHub inline-comment anchors.
+   */
+  reviewBaseContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200_000))),
+  reviewHeadContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200_000))),
 }) {}
+
+/** Complete rendered fallback evidence must fit one ordinary model context. */
+export const MAX_REVIEW_CONTENT_CHARS = 220_000;
+
+/**
+ * Render complete patchless evidence, or refuse it when a required side is
+ * absent or B/H annotation would exceed the model-facing bound. Callers use
+ * this same value for planning and tool output so truncated fallback evidence
+ * can never count as complete coverage.
+ */
+export const renderReviewContent = (file: ChangedFile): string | undefined => {
+  if (file.patch !== undefined) return undefined;
+  const includeBase = file.status !== "added";
+  const includeHead = file.status !== "removed";
+  const sections: Array<string> = [
+    "[GitHub omitted the unified diff. B/H lines below are bounded full-file review content, not valid inline-comment anchors. Report defects from this evidence as non-anchored concerns.]",
+  ];
+  let renderedLength = sections[0]?.length ?? 0;
+  const append = (part: string): boolean => {
+    const nextLength = renderedLength + 1 + part.length;
+    if (nextLength > MAX_REVIEW_CONTENT_CHARS) return false;
+    sections.push(part);
+    renderedLength = nextLength;
+    return true;
+  };
+  const appendSide = (side: "B" | "H", header: string, content: string): boolean => {
+    if (!append(header)) return false;
+    const lines = content.split("\n");
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!append(`${side}${index + 1}   ${lines[index] ?? ""}`)) return false;
+    }
+    return true;
+  };
+  if (includeBase) {
+    if (file.reviewBaseContent === undefined) return undefined;
+    if (!appendSide("B", "[BASE VERSION]", file.reviewBaseContent)) return undefined;
+  }
+  if (includeHead) {
+    if (file.reviewHeadContent === undefined) return undefined;
+    if (!appendSide("H", "[HEAD VERSION]", file.reviewHeadContent)) return undefined;
+  }
+  return sections.join("\n");
+};
+
+/** Whether complete patchless evidence fits the model-facing review bound. */
+export const hasReviewableContent = (file: ChangedFile): boolean =>
+  renderReviewContent(file) !== undefined;
+
+/** Whether the reviewer has either a real patch or bounded textual fallback evidence. */
+export const isReviewableFile = (file: ChangedFile): boolean =>
+  file.patch !== undefined || hasReviewableContent(file);
 
 /** One parsed line of a unified diff, with both coordinate systems. */
 export interface PatchLine {
