@@ -3,6 +3,7 @@ import type { HttpClient } from "effect/unstable/http";
 
 import type { PriorReviews, ReviewPublisher } from "./github.ts";
 import {
+  DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN,
   GitHubReviewTarget,
   gitHubPriorReviewsLayer,
   gitHubPullRequestSourceLayer,
@@ -102,8 +103,9 @@ export const resolveReviewTarget = Effect.fn("resolveReviewTarget")(function* (o
 
 /**
  * Build the GitHub source and publisher Layers for one resolved target,
- * reading GITHUB_API_URL and GITHUB_TOKEN from configuration. The returned
- * Layer is the complete GitHub side of a review run.
+ * reading GITHUB_API_URL, GITHUB_TOKEN, and PR_REVIEW_AUTHOR_LOGIN from
+ * configuration. The returned Layer is the complete GitHub side of a review
+ * run.
  */
 export const gitHubReviewLayers = (
   target: ResolvedReviewTarget,
@@ -125,12 +127,16 @@ export const gitHubReviewLayers = (
         ),
       );
       const token = yield* Config.option(Config.redacted("GITHUB_TOKEN"));
+      const reviewAuthorLogin = yield* Config.nonEmptyString("PR_REVIEW_AUTHOR_LOGIN").pipe(
+        Config.withDefault(DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN),
+      );
       const targetLayer = GitHubReviewTarget.layer({
         apiUrl,
         graphqlUrl,
         repository: target.repository,
         number: target.number,
         token,
+        reviewAuthorLogin,
       });
       return Layer.mergeAll(
         gitHubPullRequestSourceLayer.pipe(Layer.provide(targetLayer)),

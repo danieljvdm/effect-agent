@@ -41947,12 +41947,14 @@ var retireStaleReviews = exports_Effect.fn("retireStaleReviews")(function* (inpu
 
 // packages/pr-review/src/internal/github.ts
 var defaultGraphqlUrl = (apiUrl) => apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql");
+var DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN = "github-actions[bot]";
 
 class GitHubReviewTarget extends exports_Context.Service()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config) {
     return exports_Layer.succeed(this, GitHubReviewTarget.of({
       ...config,
-      graphqlUrl: config.graphqlUrl ?? defaultGraphqlUrl(config.apiUrl)
+      graphqlUrl: config.graphqlUrl ?? defaultGraphqlUrl(config.apiUrl),
+      reviewAuthorLogin: config.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN
     }));
   }
 }
@@ -42261,6 +42263,7 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
   const target = yield* GitHubReviewTarget;
   const client = yield* exports_HttpClient.HttpClient;
   const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+  const reviewAuthorLogin = target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN;
   const decodePage = exports_Schema.decodeUnknownEffect(GitHubPriorReviewsPageWire);
   const asLookupFailure = (error2) => PriorReviewLookupFailure.make({
     reason: `${error2._tag}: ${error2.message ?? "request failed"}`.slice(0, 2048)
@@ -42276,8 +42279,9 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
       })), target.token)).pipe(exports_Effect.flatMap(exports_HttpClientResponse.filterStatusOk), exports_Effect.mapError(asLookupFailure));
       const wires = yield* response.json.pipe(exports_Effect.mapError(asLookupFailure), exports_Effect.flatMap((body) => decodePage(body).pipe(exports_Effect.mapError(asLookupFailure))));
       for (const wire of wires) {
-        if (wire.user?.login !== "github-actions[bot]" || wire.user.type !== "Bot")
+        if (wire.user?.login.toLowerCase() !== reviewAuthorLogin.toLowerCase() || wire.user.type !== "Bot") {
           continue;
+        }
         const fingerprint = extractFingerprint(wire.body ?? "");
         if (fingerprint !== undefined)
           latest = exports_Option.some(fingerprint);
@@ -42931,12 +42935,14 @@ var gitHubReviewLayers = (target) => exports_Layer.unwrap(exports_Effect.gen(fun
   const apiUrl = yield* exports_Config.string("GITHUB_API_URL").pipe(exports_Config.withDefault("https://api.github.com"));
   const graphqlUrl = yield* exports_Config.string("GITHUB_GRAPHQL_URL").pipe(exports_Config.withDefault(apiUrl === "https://api.github.com" ? "https://api.github.com/graphql" : apiUrl.replace(/\/api\/v3$/, "/api/graphql")));
   const token = yield* exports_Config.option(exports_Config.redacted("GITHUB_TOKEN"));
+  const reviewAuthorLogin = yield* exports_Config.nonEmptyString("PR_REVIEW_AUTHOR_LOGIN").pipe(exports_Config.withDefault(DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN));
   const targetLayer = GitHubReviewTarget.layer({
     apiUrl,
     graphqlUrl,
     repository: target.repository,
     number: target.number,
-    token
+    token,
+    reviewAuthorLogin
   });
   return exports_Layer.mergeAll(gitHubPullRequestSourceLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewPublisherLayer.pipe(exports_Layer.provide(targetLayer)), gitHubPriorReviewsLayer.pipe(exports_Layer.provide(targetLayer)), gitHubReviewRetirementHostLayer.pipe(exports_Layer.provide(targetLayer)));
 }));
@@ -53980,6 +53986,7 @@ var INPUT_TO_ENV = [
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
   ["INPUT_RETIRE-STALE-REVIEWS", "PR_REVIEW_RETIRE_STALE_REVIEWS"],
   ["INPUT_STATE-SECRET", "PR_REVIEW_STATE_SECRET"],
+  ["INPUT_REVIEW-AUTHOR", "PR_REVIEW_AUTHOR_LOGIN"],
   ["INPUT_OPENAI-API-KEY", "OPENAI_API_KEY"],
   ["INPUT_ANTHROPIC-API-KEY", "ANTHROPIC_API_KEY"],
   ["INPUT_GITHUB-TOKEN", "GITHUB_TOKEN"]

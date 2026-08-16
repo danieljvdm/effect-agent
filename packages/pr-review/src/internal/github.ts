@@ -39,6 +39,8 @@ const defaultGraphqlUrl = (apiUrl: string): string =>
     : apiUrl.replace(/\/api\/v3$/, "/api/graphql");
 
 /** Which pull request to review and how to reach the API. */
+export const DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN = "github-actions[bot]";
+
 export class GitHubReviewTarget extends Context.Service<
   GitHubReviewTarget,
   {
@@ -51,6 +53,8 @@ export class GitHubReviewTarget extends Context.Service<
     readonly number: number;
     /** Absent token means unauthenticated reads (public repositories only). */
     readonly token: Option.Option<Redacted.Redacted<string>>;
+    /** Bot login expected to author reviews posted with this target's token. */
+    readonly reviewAuthorLogin?: string | undefined;
   }
 >()("@effect-agent/pr-review/GitHubReviewTarget") {
   static layer(config: {
@@ -59,12 +63,14 @@ export class GitHubReviewTarget extends Context.Service<
     readonly repository: string;
     readonly number: number;
     readonly token: Option.Option<Redacted.Redacted<string>>;
+    readonly reviewAuthorLogin?: string | undefined;
   }): Layer.Layer<GitHubReviewTarget> {
     return Layer.succeed(
       this,
       GitHubReviewTarget.of({
         ...config,
         graphqlUrl: config.graphqlUrl ?? defaultGraphqlUrl(config.apiUrl),
+        reviewAuthorLogin: config.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN,
       }),
     );
   }
@@ -642,6 +648,7 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
     const target = yield* GitHubReviewTarget;
     const client = yield* HttpClient.HttpClient;
     const prefix = `${target.apiUrl}/repos/${target.repository}/pulls/${target.number}`;
+    const reviewAuthorLogin = target.reviewAuthorLogin ?? DEFAULT_GITHUB_REVIEW_AUTHOR_LOGIN;
     const decodePage = Schema.decodeUnknownEffect(GitHubPriorReviewsPageWire);
     const asLookupFailure = (error: { readonly _tag: string; readonly message?: string }) =>
       PriorReviewLookupFailure.make({
@@ -673,10 +680,16 @@ export const gitHubPriorReviewsLayer: Layer.Layer<
             Effect.flatMap((body) => decodePage(body).pipe(Effect.mapError(asLookupFailure))),
           );
           for (const wire of wires) {
-            // State controls what required scope may be omitted. The author gate
-            // rejects user prose; the terminal marker is additionally HMAC
-            // authenticated so another bot workflow or model text cannot forge it.
-            if (wire.user?.login !== "github-actions[bot]" || wire.user.type !== "Bot") continue;
+            // State controls what required scope may be omitted. Match the bot
+            // identity that posts with this target's token; the terminal marker
+            // is additionally HMAC authenticated so another workflow or model
+            // text cannot forge it.
+            if (
+              wire.user?.login.toLowerCase() !== reviewAuthorLogin.toLowerCase() ||
+              wire.user.type !== "Bot"
+            ) {
+              continue;
+            }
             const fingerprint = extractFingerprint(wire.body ?? "");
             if (fingerprint !== undefined) latest = Option.some(fingerprint);
             if (Option.isSome(authenticator)) {

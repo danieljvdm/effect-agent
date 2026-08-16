@@ -26,6 +26,8 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET }}
+          # Set when github-token is a custom GitHub App token:
+          # review-author: kommunikasie[bot]
           # or: provider: anthropic + anthropic-api-key
           effort: high # low..max or a number in [0,1], per-provider ladder
           guidance-file: .github/review-guidance.md # committed review profile
@@ -65,11 +67,13 @@ head is no longer an ancestor, a comparison is unavailable or truncated, or
 the base lineage changed materially. `skip-unchanged: "true"` (the default)
 avoids model execution when the same head was already covered, but preserves
 the stored blocking or successful conclusion.
-Only terminal markers authored by the default `github-actions[bot]` identity,
+Only terminal markers authored by the configured `review-author` identity,
 authenticated with the same stable `state-secret`, and pinned to the review's
-commit may narrow scope. Missing or rotated secrets, user-authored marker text,
-and custom-token review authors safely force a full review. Prefer a dedicated
-secret; do not expose it to the model or derive it from pull-request content.
+commit may narrow scope. The author defaults to `github-actions[bot]`; when
+`github-token` belongs to a custom GitHub App, set `review-author` to
+`<app-slug>[bot]`. Missing or rotated secrets, user-authored marker text, and
+author/token mismatches safely force a full review. Prefer a dedicated secret;
+do not expose it to the model or derive it from pull-request content.
 The authenticated marker itself is capped at 24,000 characters. Signing or
 size failures omit state, render a bounded warning, and force the next run to
 review fully instead of posting continuity data that cannot be recovered.

@@ -19,6 +19,12 @@ inputs:
     description: "Token with pull-requests: write on this repository."
     required: false
     default: ${{ github.token }}
+  review-author:
+    description: >-
+      GitHub bot login that authors reviews posted with github-token. Set this
+      to '<app-slug>[bot]' when using a custom GitHub App token.
+    required: false
+    default: "github-actions[bot]"
   state-secret:
     description: >-
       Stable secret used only to HMAC-authenticate incremental review state.
