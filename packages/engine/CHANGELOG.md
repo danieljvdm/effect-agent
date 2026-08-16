@@ -1,5 +1,20 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.9
+
+### Patch Changes
+
+- [#66](https://github.com/danieljvdm/effect-agent/pull/66) [`91ff50d`](https://github.com/danieljvdm/effect-agent/commit/91ff50df5480a0ccdfb8e0a00db39a1576e6c34b) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Harden context economics per the reviewer's second pass: the cost budget is
+  enforced even when a token breach soft-lands the same response; tool results
+  that cannot serialize become a bounded `UnserializableToolResult` sentinel
+  instead of passing through unbounded; recovery re-seeds spend and derives
+  token-exhaustion state (fail mode rejects an already-over-budget resume before
+  any model call); compaction summarizer usage is staged into the canonical
+  turn record; staged usage is validated as non-negative finite integers; and a
+  provider-only breaching stop settles honestly as budget-exhausted.
+- Updated dependencies [[`91ff50d`](https://github.com/danieljvdm/effect-agent/commit/91ff50df5480a0ccdfb8e0a00db39a1576e6c34b)]:
+  - @effect-agent/core@0.1.0-beta.9
+
 ## 0.1.0-beta.8
 
 ### Patch Changes

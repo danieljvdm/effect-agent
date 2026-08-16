@@ -27,6 +27,7 @@
     "budget-extension",
     "budget-soft-landing",
     "context-economics",
+    "context-review-fixes",
     "delegation-containment",
     "effect-agent-umbrella",
     "efficient-pr-review",
@@ -38,6 +39,7 @@
     "pr-review-guidance-file",
     "pr-review-incremental-continuity",
     "pr-review-package",
-    "pr-review-skip-unchanged"
+    "pr-review-skip-unchanged",
+    "retire-stale-reviews"
   ]
 }
