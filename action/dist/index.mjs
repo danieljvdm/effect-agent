@@ -41083,7 +41083,7 @@ var fileReviewerInstructions = makeFileReviewerInstructions();
 var defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 8,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "4 minutes",
+  maxDuration: "6 minutes",
   toolConcurrency: 2,
   tokenBudget: 200000,
   contextTokenLimit: 150000,
@@ -41113,7 +41113,7 @@ var fileReviewPolicy = SubagentPolicy.make({
   maxConcurrency: 3,
   maxTurns: 8,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "4 minutes"
+  maxDuration: "6 minutes"
 });
 var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
 var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
@@ -53564,7 +53564,7 @@ var PROVIDER_EFFORT_RUNGS = {
   anthropic: ["low", "medium", "high"]
 };
 var makeOpenAiReviewModel = (model3, effort) => exports_OpenAiLanguageModel.model(model3 ?? DEFAULT_MODEL.openai, {
-  max_output_tokens: 8000,
+  max_output_tokens: 32000,
   store: false,
   strictJsonSchema: true,
   ...effort === undefined ? {} : { reasoning: { effort: resolveEffortRung(effort, PROVIDER_EFFORT_RUNGS.openai) } }
