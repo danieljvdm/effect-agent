@@ -40572,9 +40572,21 @@ class ChangedFile extends exports_Schema.Class("@effect-agent/pr-review/ChangedF
   additions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
   deletions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
   previousPath: exports_Schema.optionalKey(ChangedPath),
-  patch: exports_Schema.optionalKey(exports_Schema.String)
+  patch: exports_Schema.optionalKey(exports_Schema.String),
+  reviewBaseContent: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(200000))),
+  reviewHeadContent: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(200000)))
 }) {
 }
+var hasReviewableContent = (file2) => {
+  if (file2.patch !== undefined)
+    return false;
+  if (file2.status === "added")
+    return file2.reviewHeadContent !== undefined;
+  if (file2.status === "removed")
+    return file2.reviewBaseContent !== undefined;
+  return file2.reviewBaseContent !== undefined && file2.reviewHeadContent !== undefined;
+};
+var isReviewableFile = (file2) => file2.patch !== undefined || hasReviewableContent(file2);
 var HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
 var parsePatch = (patch3) => {
   const lines = [];
@@ -40715,6 +40727,8 @@ class PullRequestSource extends exports_Context.Service()("@effect-agent/pr-revi
 var MAX_FINDINGS = 20;
 var MAX_CONCERNS = 10;
 var MAX_PATCH_CHARS = 60000;
+var MAX_CONTENT_REVIEW_CHARS = 220000;
+var REVIEW_TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024;
 var MAX_SLICE_LINES = 1000;
 var DEFAULT_SLICE_LINES = 400;
 
@@ -40723,7 +40737,8 @@ class ChangedFileSummary extends exports_Schema.Class("@effect-agent/pr-review/C
   status: ChangedFileStatus,
   additions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
   deletions: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  hasTextualDiff: exports_Schema.Boolean
+  hasTextualDiff: exports_Schema.Boolean,
+  hasReviewableContent: exports_Schema.Boolean
 }) {
 }
 
@@ -40755,12 +40770,13 @@ class FileDiffQuery extends exports_Schema.Class("@effect-agent/pr-review/FileDi
 class FileDiffView extends exports_Schema.Class("@effect-agent/pr-review/FileDiffView")({
   path: ChangedPath,
   status: ChangedFileStatus,
+  reviewMode: exports_Schema.Literals(["diff", "content", "unavailable"]),
   annotatedPatch: exports_Schema.String,
   truncated: exports_Schema.Boolean
 }) {
 }
 var ReadFileDiff = exports_Tool.make("read_file_diff", {
-  description: "Read the annotated unified diff of one changed file. Lines marked R<number> exist in the new version and are the only valid finding anchors.",
+  description: "Read one changed file's review evidence. A normal unified diff marks valid anchors as R<number>. When GitHub omitted the diff, bounded base/head content is returned with B/H line labels for review but no valid inline anchors.",
   parameters: FileDiffQuery,
   success: FileDiffView,
   failure: exports_Schema.Union([PullRequestSourceFailure, ReviewInputViolation]),
@@ -40804,7 +40820,8 @@ var listChangedFilesHandler = (_query) => exports_Effect.gen(function* () {
       status: file2.status,
       additions: file2.additions,
       deletions: file2.deletions,
-      hasTextualDiff: file2.patch !== undefined
+      hasTextualDiff: file2.patch !== undefined,
+      hasReviewableContent: hasReviewableContent(file2)
     }))
   });
 });
@@ -40819,13 +40836,25 @@ var readFileDiffHandler = (query) => exports_Effect.gen(function* () {
       reason: "Path is not part of this pull request's changeset."
     });
   }
-  const annotated = file2.patch === undefined ? "" : annotatePatch(file2.patch);
-  const truncated = annotated.length > MAX_PATCH_CHARS;
+  const reviewMode = file2.patch !== undefined ? "diff" : hasReviewableContent(file2) ? "content" : "unavailable";
+  const annotateContent = (side, content) => content.split(`
+`).map((text2, index2) => `${side}${index2 + 1}   ${text2}`).join(`
+`);
+  const contentEvidence = reviewMode !== "content" ? "" : [
+    "[GitHub omitted the unified diff. B/H lines below are bounded full-file review content, not valid inline-comment anchors. Report defects from this evidence as non-anchored concerns.]",
+    ...file2.reviewBaseContent === undefined ? [] : ["[BASE VERSION]", annotateContent("B", file2.reviewBaseContent)],
+    ...file2.reviewHeadContent === undefined ? [] : ["[HEAD VERSION]", annotateContent("H", file2.reviewHeadContent)]
+  ].join(`
+`);
+  const annotated = file2.patch === undefined ? contentEvidence : annotatePatch(file2.patch);
+  const maximumChars = reviewMode === "content" ? MAX_CONTENT_REVIEW_CHARS : MAX_PATCH_CHARS;
+  const truncated = annotated.length > maximumChars;
   return FileDiffView.make({
     path: file2.path,
     status: file2.status,
-    annotatedPatch: truncated ? `${annotated.slice(0, MAX_PATCH_CHARS)}
-[diff truncated]` : annotated,
+    reviewMode,
+    annotatedPatch: truncated ? `${annotated.slice(0, maximumChars)}
+[review evidence truncated at the bounded tool limit]` : annotated,
     truncated
   });
 });
@@ -40915,7 +40944,7 @@ ${mission.body}` : "The author provided no description.",
     ...resolveGuidance(options3.guidance, mission),
     "Work in this order:",
     "1. Call list_changed_files once to see the changeset.",
-    "2. Call read_file_diff for every file you review. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+    "2. Call read_file_diff for every file you review. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
     "3. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap honestly in your summary when it matters.",
     "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
     "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
@@ -40936,6 +40965,7 @@ var defaultReviewPolicy = AgentPolicy.make({
   toolConcurrency: 2,
   tokenBudget: 300000,
   contextTokenLimit: 150000,
+  toolResultBounds: ToolResultBounds.make({ maxBytes: REVIEW_TOOL_RESULT_MAX_BYTES }),
   onExhaustion: "final-answer"
 });
 var PullRequestReviewer = Agent.define("pr-reviewer", {
@@ -40971,7 +41001,11 @@ class ReviewUnitPlan extends exports_Schema.Class("@effect-agent/pr-review/Revie
   unassignedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300))
 }) {
 }
-var fileCost = (file2) => file2.additions + file2.deletions + FILE_OVERHEAD_LINES;
+var fileCost = (file2) => {
+  const contentChars = (file2.reviewBaseContent?.length ?? 0) + (file2.reviewHeadContent?.length ?? 0);
+  const contentWeight = Math.ceil(contentChars / 200);
+  return file2.additions + file2.deletions + contentWeight + FILE_OVERHEAD_LINES;
+};
 var unitOf = (index2, files) => ReviewUnit.make({
   unitId: `unit-${String(index2 + 1).padStart(3, "0")}`,
   paths: files.map((file2) => file2.path),
@@ -40979,13 +41013,13 @@ var unitOf = (index2, files) => ReviewUnit.make({
 });
 var planReviewUnits = (files, options3) => {
   const ordered = [...files].sort((left, right) => left.path < right.path ? -1 : 1);
-  const diffable = ordered.filter((file2) => file2.patch !== undefined);
-  const undiffable = ordered.filter((file2) => file2.patch === undefined);
+  const reviewable = ordered.filter(isReviewableFile);
+  const undiffable = ordered.filter((file2) => !isReviewableFile(file2));
   const groups = [];
   const unassigned = [];
   let current = [];
   let currentCost = 0;
-  for (const file2 of diffable) {
+  for (const file2 of reviewable) {
     const cost = fileCost(file2);
     const wouldOverflow = current.length >= MAX_UNIT_FILES || current.length > 0 && currentCost + cost > UNIT_CHANGED_LINE_BUDGET;
     if (wouldOverflow) {
@@ -41070,7 +41104,7 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => [
   `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
   ...staticGuidanceLines(options3.guidance),
   "Work in this order:",
-  "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+  "1. Call read_file_diff for every file in your unit. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
   "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
   "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
   "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
@@ -41087,6 +41121,7 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   toolConcurrency: 2,
   tokenBudget: 200000,
   contextTokenLimit: 150000,
+  toolResultBounds: ToolResultBounds.make({ maxBytes: REVIEW_TOOL_RESULT_MAX_BYTES }),
   onExhaustion: "fail"
 });
 
@@ -41250,7 +41285,7 @@ var sha256Hex = (text2) => exports_Effect.promise(async () => {
 var FIELD = "\x00";
 var RECORD = "\x01";
 var SECTION = "\x02";
-var canonicalChangeset = (files) => files.map((file2) => `${file2.path}${FIELD}${file2.status}${FIELD}${String(file2.additions)}${FIELD}${String(file2.deletions)}${FIELD}${file2.patch ?? ""}`).sort().join(RECORD);
+var canonicalChangeset = (files) => files.map((file2) => `${file2.path}${FIELD}${file2.status}${FIELD}${String(file2.additions)}${FIELD}${String(file2.deletions)}${FIELD}${file2.patch ?? ""}${FIELD}${file2.reviewBaseContent ?? ""}${FIELD}${file2.reviewHeadContent ?? ""}`).sort().join(RECORD);
 var computeChangesetFingerprint = (files, signature) => sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
 
 // packages/pr-review/src/internal/ignore.ts
@@ -41559,9 +41594,22 @@ class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr
 var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const selectedPaths = new Set(selection.files.map((file2) => file2.path));
+  const selectedFiles = source.changedFiles.pipe(exports_Effect.map((fullFiles) => {
+    const fullByPath = new Map(fullFiles.map((file2) => [file2.path, file2]));
+    return selection.files.map((file2) => {
+      if (file2.patch !== undefined)
+        return file2;
+      const full = fullByPath.get(file2.path);
+      return full === undefined ? file2 : ChangedFile.make({
+        ...file2,
+        ...full.reviewBaseContent === undefined ? {} : { reviewBaseContent: full.reviewBaseContent },
+        ...full.reviewHeadContent === undefined ? {} : { reviewHeadContent: full.reviewHeadContent }
+      });
+    });
+  }));
   return PullRequestSource.of({
     metadata: source.metadata,
-    changedFiles: exports_Effect.succeed(selection.files),
+    changedFiles: selectedFiles,
     anchorFiles: source.anchorFiles,
     readFile: (path) => selectedPaths.has(path) ? source.readFile(path) : exports_Effect.fail(ReviewInputViolation.make({
       input: path,
@@ -41648,14 +41696,14 @@ var flatCoverage = (files, totalFiles, trace3) => {
     if (trace3.failed.has(toolCallId))
       failedPaths.add(query.value.path);
   }
-  const undiffable = files.filter((file2) => file2.patch === undefined).map((file2) => file2.path);
+  const undiffable = files.filter((file2) => !isReviewableFile(file2)).map((file2) => file2.path);
   const unreviewed = requiredPaths.filter((path) => !reviewed.has(path) || undiffable.includes(path) || failedPaths.has(path));
   const reasons = [];
   if (files.length < totalFiles) {
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (undiffable.length > 0) {
-    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
+    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", undiffable));
   }
   if (failedPaths.size > 0) {
     reasons.push(boundedListReason("diff reads failed", failedPaths));
@@ -41718,7 +41766,7 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (plan.undiffablePaths.length > 0) {
-    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
+    reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", plan.undiffablePaths));
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
@@ -42095,20 +42143,31 @@ var gitHubPullRequestSourceLayer = exports_Layer.effect(PullRequestSource)(expor
     return all6;
   });
   const metadata = yield* exports_Effect.cached(fetchMetadata.pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client)));
-  const changedFiles = yield* exports_Effect.cached(fetchFiles.pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client)));
-  const readFile3 = (path) => exports_Effect.gen(function* () {
+  const rawFiles = yield* exports_Effect.cached(fetchFiles.pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client)));
+  const readRepositoryFile = (path, ref) => exports_Effect.gen(function* () {
     const relative = yield* normalizeRepoRelativePath(path);
-    const files = yield* changedFiles;
-    if (!files.some((file2) => file2.path === relative)) {
+    const encodedPath = relative.split("/").map(encodeURIComponent).join("/");
+    const response = yield* executeOk("readFile", withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/contents/${encodedPath}`).pipe(exports_HttpClientRequest.accept("application/vnd.github.raw+json"), exports_HttpClientRequest.setUrlParams({ ref })), target.token)).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
+    const buffer3 = yield* response.arrayBuffer.pipe(exports_Effect.mapError(failWith("readFile")));
+    if (buffer3.byteLength > MAX_FILE_CHARS) {
       return yield* ReviewInputViolation.make({
         input: relative,
-        reason: "Path is not part of this pull request's changeset."
+        reason: `File is larger than the ${MAX_FILE_CHARS}-byte read bound.`
       });
     }
-    const head3 = yield* metadata;
-    const encodedPath = relative.split("/").map(encodeURIComponent).join("/");
-    const response = yield* executeOk("readFile", withCommonHeaders(exports_HttpClientRequest.get(`${target.apiUrl}/repos/${target.repository}/contents/${encodedPath}`).pipe(exports_HttpClientRequest.accept("application/vnd.github.raw+json"), exports_HttpClientRequest.setUrlParams({ ref: head3.headSha })), target.token)).pipe(exports_Effect.provideService(exports_HttpClient.HttpClient, client));
-    const text2 = yield* response.text.pipe(exports_Effect.mapError(failWith("readFile")));
+    const text2 = yield* exports_Effect.try({
+      try: () => new TextDecoder("utf-8", { fatal: true }).decode(buffer3),
+      catch: () => ReviewInputViolation.make({
+        input: relative,
+        reason: "File is not valid UTF-8 text."
+      })
+    });
+    if (text2.includes("\x00")) {
+      return yield* ReviewInputViolation.make({
+        input: relative,
+        reason: "File contains binary NUL bytes."
+      });
+    }
     if (text2.length > MAX_FILE_CHARS) {
       return yield* ReviewInputViolation.make({
         input: relative,
@@ -42116,6 +42175,36 @@ var gitHubPullRequestSourceLayer = exports_Layer.effect(PullRequestSource)(expor
       });
     }
     return text2;
+  });
+  const changedFiles = yield* exports_Effect.cached(exports_Effect.gen(function* () {
+    const [files, pullRequest] = yield* exports_Effect.all([rawFiles, metadata]);
+    return yield* exports_Effect.forEach(files, (file2) => {
+      if (file2.patch !== undefined)
+        return exports_Effect.succeed(file2);
+      const basePath = file2.previousPath ?? file2.path;
+      const base2 = file2.status === "added" ? exports_Effect.succeed(exports_Option.none()) : readRepositoryFile(basePath, pullRequest.baseSha ?? pullRequest.baseRef).pipe(exports_Effect.option);
+      const head3 = file2.status === "removed" ? exports_Effect.succeed(exports_Option.none()) : readRepositoryFile(file2.path, pullRequest.headSha).pipe(exports_Effect.option);
+      return exports_Effect.all({ base: base2, head: head3 }).pipe(exports_Effect.map(({ base: base3, head: head4 }) => ChangedFile.make({
+        ...file2,
+        ...exports_Option.isSome(base3) ? { reviewBaseContent: base3.value } : {},
+        ...exports_Option.isSome(head4) ? { reviewHeadContent: head4.value } : {}
+      })));
+    }, { concurrency: 4 });
+  }));
+  const readFile3 = (path) => exports_Effect.gen(function* () {
+    const relative = yield* normalizeRepoRelativePath(path);
+    const files = yield* changedFiles;
+    const file2 = files.find((candidate) => candidate.path === relative);
+    if (file2 === undefined) {
+      return yield* ReviewInputViolation.make({
+        input: relative,
+        reason: "Path is not part of this pull request's changeset."
+      });
+    }
+    if (file2.reviewHeadContent !== undefined)
+      return file2.reviewHeadContent;
+    const head3 = yield* metadata;
+    return yield* readRepositoryFile(relative, head3.headSha);
   });
   return PullRequestSource.of({ metadata, changedFiles, anchorFiles: changedFiles, readFile: readFile3 });
 }));
@@ -42435,7 +42524,7 @@ var anchorViolation = (finding, files) => {
   if (file2 === undefined)
     return "path is not part of the changeset";
   if (file2.patch === undefined)
-    return "file has no textual diff";
+    return "file has no anchorable textual diff";
   if (finding.endLine < finding.startLine)
     return "endLine precedes startLine";
   if (finding.endLine - finding.startLine + 1 > 100)

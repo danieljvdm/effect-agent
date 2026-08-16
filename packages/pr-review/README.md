@@ -64,6 +64,14 @@ ephemeral delegation) merged under the same output contract and the same
 publication path; the shared `guidance` and `maxFindings` shape the
 coordinator's merge as well as the children.
 
+GitHub may omit the `patch` field for large textual files as well as binary
+files. The GitHub source recovers a missing patch by reading bounded, strict
+UTF-8 base/head content: additions require the head, deletions require the
+base, and other changes require both. Reviewers receive that content through
+the ordinary diff-read tool with non-anchorable `B`/`H` line labels and must
+report defects as review-body concerns. Invalid UTF-8, binary NUL content,
+missing sides, and files beyond the read bound remain explicit coverage gaps.
+
 ## What a posted review looks like
 
 The body opens with a host-derived callout tier — `[!CAUTION]` when any
@@ -174,5 +182,6 @@ files beyond the bound are not fetched, and the review body reports
 `Reviewed N of M changed files` instead of claiming completeness. Fan-out
 capacity overflow is reported in the review summary, never dropped. Any
 blocking active finding fails the Action check. Any required-file coverage
-gap — undiffable/unassigned paths, failed units (including policy exhaustion),
-truncation, or coordinator/run failure — is non-success rather than green.
+gap — paths with neither a patch nor bounded textual fallback, unassigned
+paths, failed units (including policy exhaustion), truncation, or
+coordinator/run failure — is non-success rather than green.

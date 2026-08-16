@@ -4,8 +4,10 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import {
   GitHubReviewTarget,
+  gitHubPullRequestSourceLayer,
   gitHubPriorReviewsLayer,
   PriorReviews,
+  PullRequestSource,
   renderFingerprintMarker,
   ReviewState,
   ReviewStateAuthenticator,
@@ -95,6 +97,96 @@ describe("GitHub prior reviews", () => {
 
       expect(Option.getOrUndefined(result.fingerprint)).toBe(FINGERPRINT);
       expect(Option.getOrUndefined(result.state)).toEqual(reviewState);
+    }),
+  );
+});
+
+describe("GitHub pull-request source", () => {
+  it.effect("recovers omitted text patches without treating binary content as reviewable", () =>
+    Effect.gen(function* () {
+      const baseSha = "1".repeat(40);
+      const headSha = "2".repeat(40);
+      const snapshot = '{"version":"7","tables":{"widgets":{"columns":{"id":"uuid"}}}}';
+      const client = HttpClient.make((request, url) => {
+        if (url.pathname === "/repos/acme/widgets/pulls/30") {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify({
+                  number: 30,
+                  title: "Add generated schema state",
+                  body: "",
+                  changed_files: 2,
+                  base: { ref: "main", sha: baseSha },
+                  head: { ref: "feature/schema", sha: headSha },
+                }),
+                { status: 200, headers: { "Content-Type": "application/json" } },
+              ),
+            ),
+          );
+        }
+        if (url.pathname === "/repos/acme/widgets/pulls/30/files") {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(
+                JSON.stringify([
+                  {
+                    filename: "db/snapshot.json",
+                    status: "added",
+                    additions: 1,
+                    deletions: 0,
+                  },
+                  {
+                    filename: "assets/logo.png",
+                    status: "added",
+                    additions: 0,
+                    deletions: 0,
+                  },
+                ]),
+                { status: 200, headers: { "Content-Type": "application/json" } },
+              ),
+            ),
+          );
+        }
+        if (url.pathname === "/repos/acme/widgets/contents/db/snapshot.json") {
+          expect(url.searchParams.get("ref")).toBe(headSha);
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response(snapshot, { status: 200 })),
+          );
+        }
+        if (url.pathname === "/repos/acme/widgets/contents/assets/logo.png") {
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00]), { status: 200 }),
+            ),
+          );
+        }
+        return Effect.die(new Error(`Unexpected request: ${url}`));
+      });
+      const dependencies = Layer.merge(
+        GitHubReviewTarget.layer({
+          apiUrl: "https://api.github.test",
+          repository: "acme/widgets",
+          number: 30,
+          token: Option.none(),
+        }),
+        Layer.succeed(HttpClient.HttpClient)(client),
+      );
+      const sourceLayer = gitHubPullRequestSourceLayer.pipe(Layer.provide(dependencies));
+      const files = yield* Effect.gen(function* () {
+        const source = yield* PullRequestSource;
+        return yield* source.changedFiles;
+      }).pipe(Effect.provide(sourceLayer));
+
+      expect(files.find((file) => file.path === "db/snapshot.json")?.reviewHeadContent).toBe(
+        snapshot,
+      );
+      expect(
+        files.find((file) => file.path === "assets/logo.png")?.reviewHeadContent,
+      ).toBeUndefined();
     }),
   );
 });

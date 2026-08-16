@@ -313,21 +313,13 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
     const metadata = yield* Effect.cached(
       fetchMetadata.pipe(Effect.provideService(HttpClient.HttpClient, client)),
     );
-    const changedFiles = yield* Effect.cached(
+    const rawFiles = yield* Effect.cached(
       fetchFiles.pipe(Effect.provideService(HttpClient.HttpClient, client)),
     );
 
-    const readFile = (path: string) =>
+    const readRepositoryFile = (path: string, ref: string) =>
       Effect.gen(function* () {
         const relative = yield* normalizeRepoRelativePath(path);
-        const files = yield* changedFiles;
-        if (!files.some((file) => file.path === relative)) {
-          return yield* ReviewInputViolation.make({
-            input: relative,
-            reason: "Path is not part of this pull request's changeset.",
-          });
-        }
-        const head = yield* metadata;
         const encodedPath = relative.split("/").map(encodeURIComponent).join("/");
         const response = yield* executeOk(
           "readFile",
@@ -336,12 +328,32 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
               `${target.apiUrl}/repos/${target.repository}/contents/${encodedPath}`,
             ).pipe(
               HttpClientRequest.accept("application/vnd.github.raw+json"),
-              HttpClientRequest.setUrlParams({ ref: head.headSha }),
+              HttpClientRequest.setUrlParams({ ref }),
             ),
             target.token,
           ),
         ).pipe(Effect.provideService(HttpClient.HttpClient, client));
-        const text = yield* response.text.pipe(Effect.mapError(failWith("readFile")));
+        const buffer = yield* response.arrayBuffer.pipe(Effect.mapError(failWith("readFile")));
+        if (buffer.byteLength > MAX_FILE_CHARS) {
+          return yield* ReviewInputViolation.make({
+            input: relative,
+            reason: `File is larger than the ${MAX_FILE_CHARS}-byte read bound.`,
+          });
+        }
+        const text = yield* Effect.try({
+          try: () => new TextDecoder("utf-8", { fatal: true }).decode(buffer),
+          catch: () =>
+            ReviewInputViolation.make({
+              input: relative,
+              reason: "File is not valid UTF-8 text.",
+            }),
+        });
+        if (text.includes("\u0000")) {
+          return yield* ReviewInputViolation.make({
+            input: relative,
+            reason: "File contains binary NUL bytes.",
+          });
+        }
         if (text.length > MAX_FILE_CHARS) {
           return yield* ReviewInputViolation.make({
             input: relative,
@@ -349,6 +361,55 @@ export const gitHubPullRequestSourceLayer: Layer.Layer<
           });
         }
         return text;
+      });
+
+    const changedFiles = yield* Effect.cached(
+      Effect.gen(function* () {
+        const [files, pullRequest] = yield* Effect.all([rawFiles, metadata]);
+        return yield* Effect.forEach(
+          files,
+          (file) => {
+            if (file.patch !== undefined) return Effect.succeed(file);
+            const basePath = file.previousPath ?? file.path;
+            const base =
+              file.status === "added"
+                ? Effect.succeed(Option.none<string>())
+                : readRepositoryFile(basePath, pullRequest.baseSha ?? pullRequest.baseRef).pipe(
+                    Effect.option,
+                  );
+            const head =
+              file.status === "removed"
+                ? Effect.succeed(Option.none<string>())
+                : readRepositoryFile(file.path, pullRequest.headSha).pipe(Effect.option);
+            return Effect.all({ base, head }).pipe(
+              Effect.map(({ base, head }) =>
+                ChangedFile.make({
+                  ...file,
+                  ...(Option.isSome(base) ? { reviewBaseContent: base.value } : {}),
+                  ...(Option.isSome(head) ? { reviewHeadContent: head.value } : {}),
+                }),
+              ),
+            );
+          },
+          { concurrency: 4 },
+        );
+      }),
+    );
+
+    const readFile = (path: string) =>
+      Effect.gen(function* () {
+        const relative = yield* normalizeRepoRelativePath(path);
+        const files = yield* changedFiles;
+        const file = files.find((candidate) => candidate.path === relative);
+        if (file === undefined) {
+          return yield* ReviewInputViolation.make({
+            input: relative,
+            reason: "Path is not part of this pull request's changeset.",
+          });
+        }
+        if (file.reviewHeadContent !== undefined) return file.reviewHeadContent;
+        const head = yield* metadata;
+        return yield* readRepositoryFile(relative, head.headSha);
       });
 
     return PullRequestSource.of({ metadata, changedFiles, anchorFiles: changedFiles, readFile });

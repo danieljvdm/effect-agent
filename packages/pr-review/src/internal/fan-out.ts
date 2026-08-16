@@ -6,6 +6,7 @@ import {
   SubagentPolicy,
   SubagentRuntime,
   ToolExecutionClass,
+  ToolResultBounds,
   type RuntimeBinding,
 } from "effect-agent";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -19,6 +20,7 @@ import {
   ReadFileDiff,
   readFileDiffHandler,
   readFileHandler,
+  REVIEW_TOOL_RESULT_MAX_BYTES,
   ReviewConcern,
   ReviewFinding,
   ReviewMission,
@@ -120,7 +122,7 @@ export const makeFileReviewerInstructions =
       `You are a code reviewer for one unit of a pull request: unit ${brief.unitId}, covering exactly these changed files: ${brief.paths.join(", ")}. Focus: ${brief.focus}.`,
       ...staticGuidanceLines(options.guidance),
       "Work in this order:",
-      "1. Call read_file_diff for every file in your unit. In its output, only lines marked R<number> exist in the new version; those numbers are the only valid values for startLine and endLine. Never anchor a finding to a removed (-) line.",
+      "1. Call read_file_diff for every file in your unit. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
       "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
       "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
       "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
@@ -141,6 +143,7 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   // Bound one live prompt independently from cumulative usage. The engine
   // prunes old diff/file results before paying for a summary.
   contextTokenLimit: 150_000,
+  toolResultBounds: ToolResultBounds.make({ maxBytes: REVIEW_TOOL_RESULT_MAX_BYTES }),
   // Typed exhaustion, deliberately NOT the final-answer soft landing: a
   // review is a coverage claim, and a child whose reads were rejected could
   // still emit schema-valid findings — laundering budget exhaustion into

@@ -31,7 +31,27 @@ export class ChangedFile extends Schema.Class<ChangedFile>("@effect-agent/pr-rev
   previousPath: Schema.optionalKey(ChangedPath),
   /** Unified-diff hunks; absent for binary or oversized files. */
   patch: Schema.optionalKey(Schema.String),
+  /**
+   * Bounded UTF-8 content used only when the provider omitted `patch`.
+   * Modified files require both sides; additions require head content and
+   * deletions require base content. These values are review evidence, never
+   * GitHub inline-comment anchors.
+   */
+  reviewBaseContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200_000))),
+  reviewHeadContent: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(200_000))),
 }) {}
+
+/** Whether a patchless file carries the complete bounded sides needed for review. */
+export const hasReviewableContent = (file: ChangedFile): boolean => {
+  if (file.patch !== undefined) return false;
+  if (file.status === "added") return file.reviewHeadContent !== undefined;
+  if (file.status === "removed") return file.reviewBaseContent !== undefined;
+  return file.reviewBaseContent !== undefined && file.reviewHeadContent !== undefined;
+};
+
+/** Whether the reviewer has either a real patch or bounded textual fallback evidence. */
+export const isReviewableFile = (file: ChangedFile): boolean =>
+  file.patch !== undefined || hasReviewableContent(file);
 
 /** One parsed line of a unified diff, with both coordinate systems. */
 export interface PatchLine {

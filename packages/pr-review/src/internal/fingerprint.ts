@@ -57,7 +57,7 @@ const canonicalChangeset = (files: ReadonlyArray<ChangedFile>): string =>
   files
     .map(
       (file) =>
-        `${file.path}${FIELD}${file.status}${FIELD}${String(file.additions)}${FIELD}${String(file.deletions)}${FIELD}${file.patch ?? ""}`,
+        `${file.path}${FIELD}${file.status}${FIELD}${String(file.additions)}${FIELD}${String(file.deletions)}${FIELD}${file.patch ?? ""}${FIELD}${file.reviewBaseContent ?? ""}${FIELD}${file.reviewHeadContent ?? ""}`,
     )
     .sort()
     .join(RECORD);

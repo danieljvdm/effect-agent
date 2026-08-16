@@ -2,6 +2,7 @@ import { Option, Schema } from "effect";
 import type { RunEvent } from "effect-agent";
 
 import type { ChangedFile } from "./diff.ts";
+import { isReviewableFile } from "./diff.ts";
 import { FileReviewDelegationFailure, FileReviewRequest, FileReviewUnitResult } from "./fan-out.ts";
 import { FileDiffQuery } from "./review-agent.ts";
 import { planReviewUnits } from "./review-units.ts";
@@ -95,7 +96,7 @@ const flatCoverage = (
     if (trace.succeeded.has(toolCallId)) reviewed.add(query.value.path);
     if (trace.failed.has(toolCallId)) failedPaths.add(query.value.path);
   }
-  const undiffable = files.filter((file) => file.patch === undefined).map((file) => file.path);
+  const undiffable = files.filter((file) => !isReviewableFile(file)).map((file) => file.path);
   const unreviewed = requiredPaths.filter(
     (path) => !reviewed.has(path) || undiffable.includes(path) || failedPaths.has(path),
   );
@@ -104,7 +105,9 @@ const flatCoverage = (
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (undiffable.length > 0) {
-    reasons.push(boundedListReason("required paths have no textual diff", undiffable));
+    reasons.push(
+      boundedListReason("required paths have no reviewable diff or bounded text", undiffable),
+    );
   }
   if (failedPaths.size > 0) {
     reasons.push(boundedListReason("diff reads failed", failedPaths));
@@ -196,7 +199,12 @@ const fanOutCoverage = (
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
   if (plan.undiffablePaths.length > 0) {
-    reasons.push(boundedListReason("required paths have no textual diff", plan.undiffablePaths));
+    reasons.push(
+      boundedListReason(
+        "required paths have no reviewable diff or bounded text",
+        plan.undiffablePaths,
+      ),
+    );
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
