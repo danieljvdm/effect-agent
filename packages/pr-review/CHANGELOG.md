@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.9
+
+### Minor Changes
+
+- [#75](https://github.com/danieljvdm/effect-agent/pull/75) [`dcea6cb`](https://github.com/danieljvdm/effect-agent/commit/dcea6cb50ff2835bd72446202742029c35c321bb) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Retire prior marker-bearing bot reviews after a newer review posts: supersede and collapse their bodies, strike findings resolved by the newest authenticated state, minimize matching inline comments as outdated, and keep cosmetic retirement failures fail-open.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.9
+
 ## 0.1.0-beta.8
 
 ### Patch Changes
