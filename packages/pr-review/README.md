@@ -173,6 +173,19 @@ and with a bounded warning, so the next run safely performs a full review.
 the full current PR diff and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
 
+## Head-bound remediation handoffs
+
+`makeReviewHandoff` derives a versioned, immutable handoff from a settled `CodeReview`. It binds
+the repository, PR number, exact reviewed head, profile and review fingerprints, and every active
+blocking/important finding under a stable head-bound identity. Invalid or incomplete review
+coverage is rejected, and suggestions remain untrusted evidence. A host-provided
+`ReviewHandoffAuthenticator` signs and verifies the bounded payload with HMAC-SHA256.
+
+This surface does not add a mutating reviewer Tool or publication authority. The reviewer remains
+read-only. `examples/pr-remediation` demonstrates how a distinct implementation Agent consumes the
+authenticated handoff while deterministic host Effect code owns attempt admission, worktree
+scope, patch/check validation, atomic head publication, and fresh re-review.
+
 ## Hosts
 
 - **GitHub Actions**: the repository ships a prebuilt node-runtime action

@@ -179,6 +179,28 @@ and maximum row, column, cell, and encoded-byte bounds. A raw `SELECT` prefix ch
 read-only enforcement. The adapter fails typed when it cannot prove or enforce the configured
 policy.
 
+### 9.1 Pull-request remediation authority
+
+Automated remediation must keep review, implementation, and publication authority separate. The
+packaged reviewer remains read-only and may produce only a bounded, Schema-validated handoff. That
+handoff is authenticated and binds repository, PR number, exact reviewed head, review/profile
+fingerprints, and stable identities for the selected blocking/important findings. Finding text and
+suggestions are untrusted evidence, never executable patches.
+
+A separate implementation Agent may receive only explicit capabilities for a scoped worktree:
+bounded reads/searches, path-jailed edits, patch inspection, and requests for named host-configured
+checks. It receives no GitHub token, provider secret, unrestricted process/shell, or publishing
+Tool. Deterministic host Effect code independently enforces one attempt per reviewed head, validates
+finding accounting, changed paths, patch digest, and required check results, and publishes only by
+an atomic compare-and-swap against the still-current reviewed head. The implementer cannot grade or
+publish its own settlement, and publication must be followed by a fresh reviewer invocation.
+
+The current `examples/pr-remediation` adapter is explicitly trusted-local and unisolated. It is not
+an enabled workflow and must not execute untrusted PR code in a process holding credentials or
+provider secrets. A production adapter needs genuine runtime isolation for repository checks,
+authenticated trigger/provenance checks, secret-free check environments, and equivalent head-bound
+publication fencing.
+
 ## 10. Supply chain
 
 - exact dependency versions for prerelease Effect packages;

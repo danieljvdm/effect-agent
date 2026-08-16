@@ -1,0 +1,23 @@
+{
+  "name": "@effect-agent/example-pr-remediation",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vp pack",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "vp test --passWithNoTests"
+  },
+  "dependencies": {
+    "@effect-agent/pr-review": "workspace:*",
+    "@effect/platform-node": "catalog:",
+    "effect": "catalog:",
+    "effect-agent": "workspace:*"
+  },
+  "devDependencies": {
+    "@effect/vitest": "catalog:",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

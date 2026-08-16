@@ -14,6 +14,10 @@ deployment may claim ephemeral, persistent, or durable behavior.
 - no recovery promise after process loss;
 - suitable for libraries, scripts, tests, and request-scoped agents.
 
+The `examples/pr-remediation` loop is class E trusted-local evidence. Its one-attempt policy is
+process-local, its worktree is scoped to one run, and its branch update is locally compare-and-swap
+fenced. It makes no restart-recovery, hosted publication, or untrusted-code isolation claim.
+
 ### Class P — Persistent
 
 - canonical conversation and session data survives process restart;

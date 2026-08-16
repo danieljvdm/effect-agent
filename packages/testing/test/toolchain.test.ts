@@ -96,6 +96,7 @@ const providerConsumingPackages = new Set<string>(["pr-review"]);
 const exampleNames = [
   "code-mode-cloudflare",
   "demo",
+  "pr-remediation",
   "pr-review",
   "providers",
   "repo-ops",
@@ -1763,10 +1764,14 @@ Exercise the generated release verifier.
       const providers = yield* readManifest(`${repositoryRoot}/examples/providers/package.json`);
       const repoOps = yield* readManifest(`${repositoryRoot}/examples/repo-ops/package.json`);
       const prReview = yield* readManifest(`${repositoryRoot}/examples/pr-review/package.json`);
+      const prRemediation = yield* readManifest(
+        `${repositoryRoot}/examples/pr-remediation/package.json`,
+      );
       const demoDependencies = manifestDependencies(demo);
       const providerDependencies = manifestDependencies(providers);
       const repoOpsDependencies = manifestDependencies(repoOps);
       const prReviewDependencies = manifestDependencies(prReview);
+      const prRemediationDependencies = manifestDependencies(prRemediation);
 
       expect(demo.name).toBe("@effect-agent/example-demo");
       expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
@@ -1815,6 +1820,21 @@ Exercise the generated release verifier.
       expect(prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
       );
+      // The remediation proof stays a private leaf. It consumes the packaged
+      // read-only reviewer and the public Agent runtime, but receives no
+      // provider adapter or Cloudflare/GitHub deployment dependency.
+      expect(prRemediation.name).toBe("@effect-agent/example-pr-remediation");
+      expect(prRemediation.private).toBe(true);
+      expect(prRemediation.dependencies?.["@effect-agent/pr-review"]).toBe("workspace:*");
+      expect(prRemediation.dependencies?.["effect-agent"]).toBe("workspace:*");
+      expect(prRemediation.dependencies?.effect).toBe("catalog:");
+      expect(prRemediationDependencies).not.toContain("wrangler");
+      expect(
+        prRemediationDependencies.some((dependency) => dependency.startsWith("@effect/ai-")),
+      ).toBe(false);
+      expect(
+        prRemediationDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
+      ).toBe(false);
 
       // The Code Mode Cloudflare demo is the one example that legitimately
       // deploys to Cloudflare (D-035, ADR-0017): it consumes the Dynamic

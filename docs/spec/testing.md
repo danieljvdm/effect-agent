@@ -219,6 +219,19 @@ behavior; typed handler failures stay typed; approval or policy denial prevents 
 budget exhaustion prevents the next call; sequential identities are deterministic; and
 non-allowlisted or sanitized-name collision cases fail closed.
 
+## 8.2 Pull-request remediation evidence
+
+The private `examples/pr-remediation` leaf runs the complete loop against deterministic scripted
+reviewer and implementer Models and a real temporary Git repository. Its ordinary offline suite
+proves an authenticated exact-head handoff, a separate bounded implementation Agent, host-collected
+patch/check validation, an atomic head update, and a fresh reviewer over the produced head.
+
+The same suite rejects path traversal, failed independently rerun checks, and a branch head moved
+during implementation; it also proves that interruption releases the scoped worktree and that one
+explicit trigger admits at most one implementation attempt for a reviewed head. These tests are
+security evidence for the local orchestration contract, not evidence that the local check runner
+isolates untrusted code.
+
 ## 9. Compatibility tests
 
 The suite tests:
@@ -351,3 +364,6 @@ No durability milestone is complete while its crash tests are skipped.
   advertised schemas, tools) — never from test-known expected values — so offline suites catch
   model-visible contract information missing from the request that a scripted model would
   fabricate away.
+- **TEST-017**: The trusted-local PR remediation proof deterministically covers success, invalid
+  edits, failed host checks, stale-head publication fencing, interruption cleanup, one-attempt
+  admission, and fresh re-review.

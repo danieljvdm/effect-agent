@@ -9,6 +9,7 @@ export * from "./internal/fan-out.ts";
 export * from "./internal/fingerprint.ts";
 export * from "./internal/github.ts";
 export * from "./internal/github-env.ts";
+export * from "./internal/handoff.ts";
 export * from "./internal/ignore.ts";
 export * from "./internal/logging.ts";
 export * from "./internal/profiles.ts";
