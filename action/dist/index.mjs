@@ -28913,17 +28913,18 @@ class AgentOutputError extends exports_Schema.TaggedError()("AgentOutputError", 
   message: exports_Schema.String
 }) {
 }
+var PolicyLimit = exports_Schema.Literals([
+  "turns",
+  "tool-calls",
+  "duration",
+  "usage",
+  "tokens",
+  "cost",
+  "repeated-failures"
+]);
 
 class AgentPolicyError extends exports_Schema.TaggedError()("AgentPolicyError", {
-  limit: exports_Schema.Literals([
-    "turns",
-    "tool-calls",
-    "duration",
-    "usage",
-    "tokens",
-    "cost",
-    "repeated-failures"
-  ]),
+  limit: PolicyLimit,
   message: exports_Schema.String
 }) {
 }

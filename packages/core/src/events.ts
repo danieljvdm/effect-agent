@@ -137,9 +137,11 @@ export class CompactionPerformed extends Schema.TaggedClass<CompactionPerformed>
 /**
  * Dimension that bound when a Run settled through the final-answer resolution
  * (RUN-018; the token dimension per RUN-025). This is the exhausted marker
- * the re-delegation grant flow (RUN-021) consumes.
+ * the re-delegation grant flow (RUN-021) consumes and the durable
+ * `SubmissionSettled` record persists (RUN-011).
  */
-const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"]);
+export const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"]);
+export type ExhaustedLimit = typeof ExhaustedLimit.Type;
 
 /**
  * Successful terminal event carrying Schema-compatible output and the completed turn count.

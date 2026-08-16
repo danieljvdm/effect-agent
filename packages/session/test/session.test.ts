@@ -352,6 +352,77 @@ describe("phase 4 durable canonical payloads", () => {
     }
   });
 
+  it("RUN-011: round-trips typed budget metadata and decodes legacy settlements without it", () => {
+    const payloads = [
+      // A completed soft landing persists the finishReason with its typed dimension.
+      {
+        ...encodedSubmissionSettled,
+        finishReason: "budget-exhausted",
+        exhausted: "tool-calls",
+      } as const,
+      // A hard-rail policy failure persists the typed limit beside the bounded projection.
+      {
+        ...encodedSubmissionSettled,
+        outcome: "failed",
+        result: { errorTag: "AgentPolicyError", message: "Agent exceeded its 100 token budget" },
+        policyLimit: "tokens",
+      } as const,
+      // Histories persisted before the dimension became durable carry the finishReason alone.
+      { ...encodedSubmissionSettled, finishReason: "budget-exhausted" } as const,
+    ];
+    for (const [index, payload] of payloads.entries()) {
+      const record = decodeRecord(`record-run011-${index}`, payload);
+      expect(record.schemaVersion).toBe(1);
+      const encoded = Schema.encodeSync(RecordEnvelope)(record);
+      expect(encoded.payload).toEqual(payload);
+      expect(Schema.decodeUnknownSync(RecordEnvelope)(encoded)).toEqual(record);
+    }
+  });
+
+  it("RUN-011: rejects budget metadata on the wrong settlement family", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-run011-invalid",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-07-29T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const policyFailureResult = {
+      errorTag: "AgentPolicyError",
+      message: "Agent exceeded its 100 token budget",
+    };
+    const failures: ReadonlyArray<unknown> = [
+      { ...encodedSubmissionSettled, outcome: "failed", finishReason: "budget-exhausted" },
+      { ...encodedSubmissionSettled, exhausted: "turns" },
+      { ...encodedSubmissionSettled, outcome: "failed", exhausted: "tokens" },
+      { ...encodedSubmissionSettled, policyLimit: "duration", result: policyFailureResult },
+      {
+        ...encodedSubmissionSettled,
+        outcome: "aborted",
+        policyLimit: "cost",
+        result: policyFailureResult,
+      },
+      { ...encodedSubmissionSettled, finishReason: "budget-exhausted", exhausted: "duration" },
+      { ...encodedSubmissionSettled, outcome: "failed", policyLimit: "context" },
+      // A policyLimit contradicting the recorded failure projection is not audit truth.
+      {
+        ...encodedSubmissionSettled,
+        outcome: "failed",
+        policyLimit: "tokens",
+        result: { errorTag: "ModelProtocolError", message: "not a policy failure" },
+      },
+      // A policyLimit without any recorded failure projection fails closed too.
+      (() => {
+        const { result: _result, ...withoutResult } = encodedSubmissionSettled;
+        return { ...withoutResult, outcome: "failed", policyLimit: "tokens" };
+      })(),
+    ];
+    for (const payload of failures) {
+      expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
+    }
+  });
+
   it("reduces settlements and abort requests while model responses only advance the sequence", () => {
     const created = decodeEnvelope(
       1,
