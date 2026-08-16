@@ -149,7 +149,7 @@ const inwardPackageNames = [
   "storage-memory",
   "storage-sqlite",
 ] as const;
-const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do"]);
+const cloudflareOnlyDependencies = new Set(["@effect/sql-sqlite-do", "@effect/sql-d1"]);
 const dependencySections = [
   "dependencies",
   "devDependencies",
@@ -1695,6 +1695,22 @@ Exercise the generated release verifier.
         ).toEqual([]);
       }
 
+      // The Cloudflare-only SQL clients stay confined to the two Cloudflare
+      // packages across EVERY framework package, not just the inward set —
+      // an outward package (platform-node, pr-review, testing, the umbrella)
+      // adding them would also breach platform confinement.
+      for (const packageName of packageNames) {
+        if (cloudflarePackageNames.includes(packageName)) continue;
+        const manifest = yield* readManifest(
+          `${repositoryRoot}/packages/${packageName}/package.json`,
+        );
+        expect(
+          manifestDependencies(manifest).filter((dependency) =>
+            cloudflareOnlyDependencies.has(dependency),
+          ),
+        ).toEqual([]);
+      }
+
       // The confinement side: every workspace consumer of the Durable Object
       // SqlClient is one of the two Cloudflare packages, catalog-pinned.
       for (const packageName of cloudflarePackageNames) {
@@ -1780,6 +1796,7 @@ Exercise the generated release verifier.
       expect(demo.dependencies?.effect).toBe("catalog:");
       expect(root.catalog?.["@effect/ai-openai"]).toBe(root.catalog?.effect);
       expect(root.catalog?.["@effect/ai-anthropic"]).toBe(root.catalog?.effect);
+      expect(root.catalog?.["@effect/sql-d1"]).toBe(root.catalog?.effect);
       expect(demoDependencies).not.toContain("wrangler");
       expect(demoDependencies.some((dependency) => dependency.startsWith("@cloudflare/"))).toBe(
         false,
@@ -1832,7 +1849,7 @@ Exercise the generated release verifier.
         "workspace:*",
       );
       expect(codeModeCloudflare.dependencies?.["@effect-agent/capabilities"]).toBe("workspace:*");
-      expect(codeModeCloudflare.dependencies?.["@effect/sql-sqlite-do"]).toBe("catalog:");
+      expect(codeModeCloudflare.dependencies?.["@effect/sql-d1"]).toBe("catalog:");
       expect(codeModeCloudflare.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
       expect(codeModeCloudflare.dependencies?.effect).toBe("catalog:");
       expect(codeModeCloudflare.devDependencies?.["@cloudflare/workers-types"]).toBe("catalog:");

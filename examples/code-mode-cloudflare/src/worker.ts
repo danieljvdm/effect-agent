@@ -1,270 +1,470 @@
-import { IdGenerator } from "@effect-agent/core";
-import { AgentRuntime } from "@effect-agent/engine";
+import { ConversationId } from "@effect-agent/core";
 import {
+  CloudflareConversationClient,
   CodeModeHostEntrypoint,
-  dynamicWorkerCodeExecutorLayer,
+  ConversationObjectNamespace,
   dynamicWorkerImplementation,
   type CodeModeHostStub,
+  type ConversationObjectRpc,
 } from "@effect-agent/platform-cloudflare";
-import { Effect, Layer, Stream } from "effect";
+import {
+  IdempotencyKey,
+  Principal,
+  type CanonicalRecordEnvelope,
+  type CanonicalSequence,
+  type DefinitionDigests,
+} from "@effect-agent/session";
+import { Cause, Context, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { Worker, WorkerEnvironment } from "effect-cf";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { codeModeHandlersLayer } from "./agent.ts";
-import { liveAgent, scriptedAgent, scriptedWriteProbeAgent } from "./profiles.ts";
-import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
+import { codeModeAgent } from "./agent.ts";
+import {
+  cteProbeDigests,
+  InvoiceAgentConversationObject,
+  liveDigests,
+  scriptedDigests,
+  writeProbeDigests,
+} from "./conversation.ts";
+import { invoiceDbSqlLayer, seedInvoices } from "./db.ts";
 
 /**
- * The demo Worker: it answers a natural-language question about the invoice
- * warehouse by running a Code Mode Agent. The model writes one JavaScript
- * program; the program executes in an isolated Cloudflare Dynamic Worker
- * (`globalOutbound: null`, no ambient authority) and reaches the warehouse
- * only through the brokered `warehouse.query` method, which runs a read-only
- * SQL query against a SQLite-backed Durable Object. Deployment class E: the
- * Agent runs ephemerally; the Durable Object is the warehouse data store, not
- * a Conversation store.
+ * The demo Worker is a thin client of the DC assembly (the Durable Cloudflare
+ * assembly: Conversation Objects over Durable Object SQLite): it
+ * authenticates the request, submits the question to the Conversation Object
+ * — every step lands in the DC assembly's append-only canonical log and an
+ * alarm drives the Run to settlement — awaits the settlement, and reads the
+ * log back to build the Code Mode receipt. Models and tool handlers live
+ * INSIDE the Object, wired from its own env bindings; the Worker submits only
+ * a definition plus digests.
  *
- * `WarehouseObject` and `CodeModeHostEntrypoint` are exported for the Worker
- * runtime; the host entrypoint is bound to itself as `CODE_MODE_HOST` (see
- * wrangler.jsonc), matching the production `ctx.exports.CodeModeHostEntrypoint()`
- * seam.
+ * `InvoiceAgentConversationObject` and `CodeModeHostEntrypoint` are exported
+ * for the Worker runtime; the host entrypoint is bound to itself as
+ * `CODE_MODE_HOST` (see wrangler.jsonc), matching the production
+ * `ctx.exports.CodeModeHostEntrypoint()` seam.
  */
-export { WarehouseObject, CodeModeHostEntrypoint };
+export { InvoiceAgentConversationObject, CodeModeHostEntrypoint };
 
-interface WorkerEnv {
-  readonly WAREHOUSE: DurableObjectNamespace<WarehouseObject>;
-  readonly LOADER: WorkerLoader;
-  readonly CODE_MODE_HOST: CodeModeHostStub;
-  readonly OPENAI_API_KEY?: string;
-  /**
-   * Optional shared secret. When set, `/ask` requires a matching
-   * `Authorization: Bearer <token>` header — set it whenever `OPENAI_API_KEY`
-   * is deployed so the paid live endpoint cannot be driven anonymously.
-   */
-  readonly DEMO_AUTH_TOKEN?: string;
+declare global {
+  namespace Cloudflare {
+    interface Env {
+      readonly AGENTS: DurableObjectNamespace<ConversationObjectRpc & Rpc.DurableObjectBranded>;
+      readonly DB: D1Database;
+      readonly LOADER: WorkerLoader;
+      readonly CODE_MODE_HOST: CodeModeHostStub;
+      readonly OPENAI_API_KEY?: string;
+      /**
+       * Optional shared secret. When set, `/ask` requires a matching
+       * `Authorization: Bearer <token>` header — set it whenever
+       * `OPENAI_API_KEY` is deployed so the paid live endpoint cannot be
+       * driven anonymously.
+       */
+      readonly DEMO_AUTH_TOKEN?: string;
+    }
+  }
 }
 
-interface AskResult {
-  readonly answer: string;
-  /**
-   * Evidence that the answer came from Code Mode: the tool the model called,
-   * how many times, the JavaScript program it actually wrote, and the isolated
-   * executor that ran it — plus the program's returned value and console logs.
-   */
-  readonly codeMode: {
-    readonly used: boolean;
-    readonly tool: string;
-    readonly executor: string;
-    readonly calls: number;
-    readonly program?: string;
-    readonly result?: unknown;
-    readonly logs?: ReadonlyArray<unknown>;
-  };
-  readonly profile: "scripted" | "openai";
-}
+const decodeConversationId = Schema.decodeSync(ConversationId);
+const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
+const demoPrincipal = Schema.decodeSync(Principal)("code-mode-demo");
 
 /**
- * Both profiles' bindings share one definition and both models resolve to a
- * bare `LanguageModel` with no residual requirements, so they are the same
- * runtime binding shape; the live binding is cast to the scripted one to
- * avoid threading two Model types through one function (a known type trap).
+ * Identifier authority as an owned service: business logic never touches
+ * ambient randomness — the capability is provided at the Worker composition
+ * root, so the authority and requirement stay visible.
  */
-type DemoBinding = typeof scriptedAgent;
+class DemoIdentifiers extends Context.Service<
+  DemoIdentifiers,
+  {
+    readonly nextConversationId: Effect.Effect<ConversationId>;
+    readonly nextIdempotencyKey: Effect.Effect<IdempotencyKey>;
+  }
+>()("@effect-agent/example-code-mode-cloudflare/DemoIdentifiers") {}
+
+const demoIdentifiersLayer = Layer.succeed(DemoIdentifiers)({
+  nextConversationId: Effect.sync(() =>
+    decodeConversationId(`conversation-${crypto.randomUUID()}`),
+  ),
+  nextIdempotencyKey: Effect.sync(() => decodeIdempotencyKey(crypto.randomUUID())),
+});
+
+const DEFAULT_QUESTION = "Which customers have more than $10,000 in revenue?";
+
+/** The logical request body, decoded ONCE at the HTTP boundary. */
+const AskRequestBody = Schema.Struct({
+  question: Schema.optionalKey(Schema.String),
+});
+const decodeAskRequestBody = Schema.decodeUnknownOption(AskRequestBody);
+
+const MAX_BODY_BYTES = 64 * 1024;
+
+class BodyTooLarge extends Schema.TaggedError<BodyTooLarge>()("BodyTooLarge", {}) {}
 
 /**
- * A `run_javascript` tool call's parameters are UNTRUSTED model output
- * (`Schema.Json` — possibly `null`, a primitive, or an array), so extract the
- * program source defensively rather than dereferencing a cast. Returning
- * `undefined` on anything unexpected keeps the observer from turning a
- * malformed declaration into a defect that aborts the request; the engine
- * still handles the actual (in)valid tool call through its typed channel.
- *
- * This reads the raw declared parameters for a display-only evidence field. No
- * engine event currently carries the DECODED tool input (`ToolCallStarted`
- * has none; `ToolCallDeclared` is raw), and the Code Mode input schema applies
- * no transform (raw `code` === executed source), so the raw value is faithful
- * here. A fully general "executed program" would need the engine to surface
- * the decoded input as an event.
+ * Read the request body through a size-limited stream: the bound is enforced
+ * on bytes ACTUALLY consumed, so chunked requests without (or with forged)
+ * `Content-Length` cannot buffer past `MAX_BODY_BYTES`. Malformed bodies fall
+ * to the default question; only oversize is a typed failure (413 at the edge).
  */
-const programSourceOf = (parameters: unknown): string | undefined => {
-  if (typeof parameters === "object" && parameters !== null && "code" in parameters) {
-    const code = (parameters as Record<string, unknown>).code;
-    return typeof code === "string" ? code : undefined;
-  }
-  return undefined;
-};
-
-/** The `run_javascript` success value is `{ result, logs }` — read it safely. */
-const successOutcomeOf = (
-  value: unknown,
-): { readonly result: unknown; readonly logs: ReadonlyArray<unknown> } => {
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    return { result: record.result, logs: Array.isArray(record.logs) ? record.logs : [] };
-  }
-  return { result: undefined, logs: [] };
-};
-
-/** Run one bound agent to an `AskResult`. */
-const runBound = (
-  env: WorkerEnv,
-  agent: DemoBinding,
-  question: string,
-  tenant: string,
-  profile: AskResult["profile"],
-): Effect.Effect<AskResult> => {
-  // The Code Mode handler needs the warehouse service and the executor
-  // provided INTO it (its handler runs with the captured construction
-  // context); the Run additionally needs IdGenerator.
-  const layers = Layer.mergeAll(
-    codeModeHandlersLayer.pipe(
-      Layer.provide(warehouseLayer(env.WAREHOUSE, tenant)),
-      Layer.provide(
-        dynamicWorkerCodeExecutorLayer({ loader: env.LOADER, hostStub: env.CODE_MODE_HOST }),
-      ),
-    ),
-    IdGenerator.layer,
-  );
-  return Effect.gen(function* () {
-    // Stream the Run and correlate each `run_javascript` call's declared
-    // program with the SAME call's success BY tool-call id, so the reported
-    // program always matches the execution that produced the reported result
-    // (a multi-call model can otherwise interleave a failed declaration with an
-    // earlier call's result). `used` reflects a real successful execution, not
-    // merely a declaration.
-    const declaredPrograms = new Map<string, string | undefined>();
-    const successes = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
-    let answer = "";
-    let completed = false;
-    // Expected Run failures become defects at this HTTP boundary: `runPromise`
-    // rejects and the fetch handler answers 500 instead of fabricating a 200.
-    yield* AgentRuntime.stream(agent, { question }).pipe(
-      Stream.runForEach((event) =>
-        Effect.sync(() => {
-          if (event._tag === "ToolCallDeclared" && event.toolName === "run_javascript") {
-            declaredPrograms.set(event.toolCallId, programSourceOf(event.parameters));
-          }
-          if (event._tag === "ToolCallSucceeded" && event.toolName === "run_javascript") {
-            successes.set(event.toolCallId, successOutcomeOf(event.result));
-          }
-          if (event._tag === "RunCompleted") {
-            completed = true;
-            const output = event.output as { readonly answer?: unknown };
-            if (typeof output.answer === "string") {
-              answer = output.answer;
-            }
-          }
-        }),
-      ),
-      Effect.provide(layers),
-      Effect.scoped,
-      Effect.orDie,
-    );
-    // A Run that ended without emitting RunCompleted (e.g. it hit a policy
-    // limit) is NOT a success — surface it as a defect so `runPromise` rejects
-    // and the fetch handler returns 500, rather than a 200 with an empty answer.
-    if (!completed) {
-      return yield* Effect.die(new Error("the agent run did not complete"));
-    }
-    // Claim a single program/result ONLY when exactly one run_javascript call
-    // succeeded (with a matching declaration) — never arbitrarily pick among
-    // several, and never assert provenance for a run that used zero or multiple
-    // calls. `used` and `calls` stay honest either way; ambiguous runs simply
-    // do not attach a single program/result to the answer.
-    const successIds = [...successes.keys()];
-    const soleId =
-      successIds.length === 1 && declaredPrograms.has(successIds[0]) ? successIds[0] : undefined;
-    const executed = soleId === undefined ? undefined : successes.get(soleId);
-    return {
-      answer,
-      codeMode: {
-        used: successes.size > 0,
-        tool: "run_javascript",
-        executor: dynamicWorkerImplementation.identity,
-        calls: declaredPrograms.size,
-        program: soleId === undefined ? undefined : declaredPrograms.get(soleId),
-        result: executed?.result,
-        logs: executed?.logs,
-      },
-      profile,
-    };
-  });
-};
-
-const runAsk = (
-  env: WorkerEnv,
-  question: string,
-  tenant: string,
-  probe: string | null,
-): Effect.Effect<AskResult> => {
-  if (env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0) {
-    return runBound(
-      env,
-      liveAgent(env.OPENAI_API_KEY) as unknown as DemoBinding,
-      question,
-      tenant,
-      "openai",
-    );
-  }
-  const agent = probe === "write" ? scriptedWriteProbeAgent : scriptedAgent;
-  return runBound(env, agent, question, tenant, "scripted");
-};
-
-export default {
-  async fetch(request: Request, env: WorkerEnv): Promise<Response> {
-    const url = new URL(request.url);
-    if (url.pathname !== "/ask") {
-      return new Response(
-        "POST /ask { question } — Code Mode over a SQLite Durable Object warehouse",
-        { status: url.pathname === "/" ? 200 : 404 },
-      );
-    }
-    if (request.method !== "POST") {
-      return Response.json({ error: "POST required" }, { status: 405 });
-    }
-    const liveMode = env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0;
-    const authToken = env.DEMO_AUTH_TOKEN;
-    const hasAuthToken = authToken !== undefined && authToken.length > 0;
-    // Fail CLOSED on the paid path: if the live model is enabled but no shared
-    // secret is configured, refuse rather than serve paid inference to
-    // anonymous callers. The offline scripted default needs no secret.
-    if (liveMode && !hasAuthToken) {
-      return Response.json(
-        { error: "server misconfigured: DEMO_AUTH_TOKEN must be set when OPENAI_API_KEY is" },
-        { status: 503 },
-      );
-    }
-    // When a shared secret is configured, require a matching bearer token.
-    if (hasAuthToken && request.headers.get("authorization") !== `Bearer ${authToken}`) {
-      return Response.json({ error: "unauthorized" }, { status: 401 });
-    }
-    let question = "Which customers have more than $10,000 in revenue?";
-    try {
-      const body = (await request.json()) as { readonly question?: unknown };
-      if (typeof body.question === "string" && body.question.trim().length > 0) {
-        // Bound the question so an oversized body cannot drive an unbounded prompt.
-        question = body.question.slice(0, 2_000);
+const readQuestion = (request: Request): Effect.Effect<string, BodyTooLarge> =>
+  Effect.tryPromise(async () => {
+    const reader = request.body?.getReader();
+    if (reader === undefined) return "";
+    const chunks: Array<Uint8Array> = [];
+    let received = 0;
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      received += chunk.value.byteLength;
+      if (received > MAX_BODY_BYTES) {
+        await reader.cancel();
+        throw new BodyTooLarge();
       }
-    } catch {
-      // fall back to the default question
+      chunks.push(chunk.value);
     }
-    // The tenant addresses a Durable Object, so reject anything that is not a
-    // short, safe identifier rather than minting an arbitrary Object.
-    const tenant = url.searchParams.get("tenant") ?? "acme";
-    if (!isValidTenant(tenant)) {
-      return Response.json({ error: "tenant must match /^[a-z0-9-]{1,32}$/" }, { status: 400 });
+    const merged = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
     }
-    try {
-      const result = await Effect.runPromise(
-        runAsk(env, question, tenant, url.searchParams.get("probe")),
-      );
-      return Response.json(result);
-    } catch (cause) {
-      return Response.json(
-        { error: cause instanceof Error ? cause.message : String(cause) },
-        { status: 500 },
-      );
-    }
-  },
+    return new TextDecoder().decode(merged);
+  }).pipe(
+    Effect.map((textBody) => {
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(textBody);
+      } catch {
+        return DEFAULT_QUESTION;
+      }
+      const body = decodeAskRequestBody(parsed);
+      const question = body._tag === "Some" ? body.value.question : undefined;
+      return typeof question === "string" && question.trim().length > 0
+        ? // Bound the question so an oversized body cannot drive an unbounded prompt.
+          question.slice(0, 2_000)
+        : DEFAULT_QUESTION;
+    }),
+    Effect.catch((error) =>
+      error.cause instanceof BodyTooLarge
+        ? Effect.fail(new BodyTooLarge())
+        : Effect.succeed(DEFAULT_QUESTION),
+    ),
+  );
+
+/** Which registered binding should serve this request. */
+const digestsFor = (probe: string | null, live: boolean): DefinitionDigests => {
+  if (live) return liveDigests;
+  if (probe === "write") return writeProbeDigests;
+  if (probe === "cte") return cteProbeDigests;
+  return scriptedDigests;
 };
 
-// Re-exported so a consumer can compose the warehouse service directly.
-export { Warehouse };
+const payloadOf = (
+  envelope: CanonicalRecordEnvelope,
+): { readonly _tag: string } & Record<string, unknown> =>
+  envelope.record.payload as unknown as { readonly _tag: string } & Record<string, unknown>;
+
+// ---------------------------------------------------------------------------
+// Receipt extraction: model output is UNTRUSTED, so every step of the durable
+// log that originated with the model is Schema-decoded fail-closed before it
+// contributes to provenance. Duplicate or malformed ids disqualify
+// single-program attribution rather than silently colliding.
+// ---------------------------------------------------------------------------
+
+const EncodedPrompt = Schema.Struct({ content: Schema.Array(Schema.Unknown) });
+const decodeEncodedPrompt = Schema.decodeUnknownOption(EncodedPrompt);
+
+const PromptMessage = Schema.Struct({ content: Schema.Unknown });
+const decodePromptMessage = Schema.decodeUnknownOption(PromptMessage);
+
+const ToolCallPart = Schema.Struct({
+  type: Schema.Literal("tool-call"),
+  id: Schema.String,
+  name: Schema.String,
+  params: Schema.optionalKey(Schema.Unknown),
+});
+const decodeToolCallPart = Schema.decodeUnknownOption(ToolCallPart);
+
+const CodeParams = Schema.Struct({ code: Schema.String });
+const decodeCodeParams = Schema.decodeUnknownOption(CodeParams);
+
+const SettledValue = Schema.Struct({
+  result: Schema.optionalKey(Schema.Unknown),
+  logs: Schema.optionalKey(Schema.Array(Schema.Unknown)),
+});
+const decodeSettledValue = Schema.decodeUnknownOption(SettledValue);
+
+const AnswerOutput = Schema.Struct({ answer: Schema.String });
+const decodeAnswerOutput = Schema.decodeUnknownOption(AnswerOutput);
+
+/**
+ * Build the Code Mode receipt from the canonical log. Readonly tools write no
+ * `ToolCallPrepared` records (those guard uncertain-class external effects),
+ * so the model's program comes from the committed Turn messages in
+ * `ModelResponseRecorded`, its outcome from the matching `ToolCallSettled`,
+ * and the answer from `SubmissionSettled.result`. Exactly-one successful call
+ * with a unique, well-formed id attaches a single program/result; ambiguous
+ * runs stay honest with counts only.
+ */
+const receiptFromRecords = (records: ReadonlyArray<CanonicalRecordEnvelope>) => {
+  const declared = new Map<string, string | undefined>();
+  const settled = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
+  const duplicateIds = new Set<string>();
+  let declaredCalls = 0;
+  let answer = "";
+  for (const envelope of records) {
+    const payload = payloadOf(envelope);
+    if (payload._tag === "ModelResponseRecorded") {
+      const prompt = decodeEncodedPrompt(payload.messages);
+      if (prompt._tag !== "Some") continue;
+      for (const rawMessage of prompt.value.content) {
+        const message = decodePromptMessage(rawMessage);
+        if (message._tag !== "Some" || !Array.isArray(message.value.content)) continue;
+        for (const rawPart of message.value.content) {
+          const part = decodeToolCallPart(rawPart);
+          if (part._tag !== "Some" || part.value.name !== "run_javascript") continue;
+          declaredCalls += 1;
+          if (declared.has(part.value.id)) duplicateIds.add(part.value.id);
+          const params = decodeCodeParams(part.value.params);
+          declared.set(part.value.id, params._tag === "Some" ? params.value.code : undefined);
+        }
+      }
+    }
+    if (
+      payload._tag === "ToolCallSettled" &&
+      payload.toolName === "run_javascript" &&
+      payload.isFailure !== true &&
+      typeof payload.toolCallId === "string"
+    ) {
+      if (settled.has(payload.toolCallId)) duplicateIds.add(payload.toolCallId);
+      const value = decodeSettledValue(payload.result);
+      settled.set(payload.toolCallId, {
+        result: value._tag === "Some" ? value.value.result : undefined,
+        logs: value._tag === "Some" ? (value.value.logs ?? []) : [],
+      });
+    }
+    if (payload._tag === "SubmissionSettled") {
+      const output = decodeAnswerOutput(payload.result);
+      if (output._tag === "Some") {
+        answer = output.value.answer;
+      }
+    }
+  }
+  const settledIds = [...settled.keys()];
+  const soleId =
+    settledIds.length === 1 && declared.has(settledIds[0]) && !duplicateIds.has(settledIds[0])
+      ? settledIds[0]
+      : undefined;
+  const executed = soleId === undefined ? undefined : settled.get(soleId);
+  return {
+    answer,
+    codeMode: {
+      used: settled.size > 0,
+      tool: "run_javascript",
+      executor: dynamicWorkerImplementation.identity,
+      calls: declaredCalls,
+      program: soleId === undefined ? undefined : declared.get(soleId),
+      result: executed?.result,
+      logs: executed?.logs,
+    },
+    records: records.map((envelope) => payloadOf(envelope)._tag),
+  };
+};
+
+// ---------------------------------------------------------------------------
+// Streaming: the canonical-log tail as a scoped Effect Stream. Polling uses
+// the owned Clock (`Effect.sleep`), inactivity ends through `Stream.timeout`,
+// read failures terminate the stream with a stable error record, and the
+// ReadableStream bridge propagates consumer cancellation as fiber
+// interruption — no naked timers, no wall-clock reads, no orphaned polls.
+// ---------------------------------------------------------------------------
+
+const encoder = new TextEncoder();
+
+const line = (value: unknown): Uint8Array => encoder.encode(`${JSON.stringify(value)}\n`);
+
+const streamCanonicalLog = (
+  conversationId: ConversationId,
+  liveMode: boolean,
+): Effect.Effect<ReadableStream<Uint8Array>, never, CloudflareConversationClient> =>
+  Effect.gen(function* () {
+    const client = yield* CloudflareConversationClient;
+    const seen: Array<CanonicalRecordEnvelope> = [];
+
+    const pages = Stream.unfold(undefined as CanonicalSequence | undefined, (after) =>
+      Effect.gen(function* () {
+        for (;;) {
+          const page = yield* client.readPage(conversationId, { afterSequence: after });
+          if (page.length > 0) {
+            return [page, page[page.length - 1].sequence] as const;
+          }
+          yield* Effect.sleep("100 millis");
+        }
+      }),
+    );
+
+    const lines = pages.pipe(
+      Stream.flatMap((page) => Stream.fromIterable(page)),
+      Stream.takeUntil((envelope) => payloadOf(envelope)._tag === "SubmissionSettled"),
+      // Inactivity bound: if no record commits for this long, end the tail.
+      Stream.timeout("120 seconds"),
+      Stream.tap((envelope) => Effect.sync(() => seen.push(envelope))),
+      Stream.map((envelope) =>
+        line({ sequence: envelope.sequence, record: payloadOf(envelope)._tag }),
+      ),
+      Stream.concat(
+        Stream.fromEffect(
+          Effect.sync(() => {
+            const last = seen[seen.length - 1];
+            const settledRun = last !== undefined && payloadOf(last)._tag === "SubmissionSettled";
+            return settledRun
+              ? line({
+                  done: true,
+                  conversationId,
+                  outcome: payloadOf(last).outcome,
+                  ...receiptFromRecords(seen),
+                  profile: liveMode ? "openai" : "scripted",
+                })
+              : line({ error: "timed out waiting for settlement" });
+          }),
+        ),
+      ),
+      // A TYPED read failure is not "no records yet": log it server-side and
+      // terminate the stream with a stable error record. Defects and
+      // interruption propagate untouched.
+      Stream.catch((error) =>
+        Stream.fromEffect(
+          Effect.sync(() => {
+            console.error("canonical log observation failed", error);
+            return line({ error: "observation failed" });
+          }),
+        ),
+      ),
+    );
+
+    return yield* Stream.toReadableStreamEffect(lines);
+  });
+
+const askHandler = Effect.gen(function* () {
+  const request = yield* Worker.NativeRequest;
+  const env = yield* WorkerEnvironment;
+  const url = new URL(request.url);
+  if (url.pathname !== "/ask") {
+    return new Response(
+      "POST /ask { question } — durable Code Mode runs on a Conversation Object over D1",
+      { status: url.pathname === "/" ? 200 : 404 },
+    );
+  }
+  if (request.method !== "POST") {
+    return Response.json({ error: "POST required" }, { status: 405 });
+  }
+  // Early rejection when the client declares an oversized body; the REAL
+  // bound is enforced on consumed bytes inside `readQuestion`.
+  const declaredLength = Number(request.headers.get("content-length") ?? "0");
+  if (!Number.isFinite(declaredLength) || declaredLength > MAX_BODY_BYTES) {
+    return Response.json({ error: "request body too large" }, { status: 413 });
+  }
+  const liveMode = env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0;
+  const authToken = env.DEMO_AUTH_TOKEN;
+  const hasAuthToken = authToken !== undefined && authToken.length > 0;
+  // Fail CLOSED on the paid path: if the live model is enabled but no shared
+  // secret is configured, refuse rather than serve paid inference to
+  // anonymous callers. The offline scripted default needs no secret.
+  if (liveMode && !hasAuthToken) {
+    return Response.json(
+      { error: "server misconfigured: DEMO_AUTH_TOKEN must be set when OPENAI_API_KEY is" },
+      { status: 503 },
+    );
+  }
+  // When a shared secret is configured, require a matching bearer token.
+  if (hasAuthToken && request.headers.get("authorization") !== `Bearer ${authToken}`) {
+    return Response.json({ error: "unauthorized" }, { status: 401 });
+  }
+  const questionOutcome = yield* readQuestion(request).pipe(Effect.exit);
+  if (Exit.isFailure(questionOutcome)) {
+    return Response.json({ error: "request body too large" }, { status: 413 });
+  }
+  const question = questionOutcome.value;
+
+  // Idempotent seed over the root-provided D1 SqlClient: a persistence
+  // failure is EXPECTED — log the cause server-side, answer a generic 503.
+  const seeded = yield* seedInvoices.pipe(Effect.exit);
+  if (Exit.isFailure(seeded)) {
+    console.error("invoice database seed failed", Cause.squash(seeded.cause));
+    return Response.json({ error: "invoice database unavailable" }, { status: 503 });
+  }
+
+  const identifiers = yield* DemoIdentifiers;
+  const conversationId = yield* identifiers.nextConversationId;
+  const submitOptions = {
+    conversationId,
+    principal: demoPrincipal,
+    idempotencyKey: yield* identifiers.nextIdempotencyKey,
+    definitions: digestsFor(url.searchParams.get("probe"), liveMode),
+  };
+
+  // Streaming mode (`?stream=1`, curl -N): submit, then emit one NDJSON line
+  // per canonical record AS IT COMMITS, closing with the receipt once
+  // `SubmissionSettled` lands. The observer is optional by construction — the
+  // durable run does not depend on anyone watching it.
+  if (url.searchParams.get("stream") === "1") {
+    const client = yield* CloudflareConversationClient;
+    const submitted = yield* client
+      .submit({ definition: codeModeAgent }, { question }, submitOptions)
+      .pipe(Effect.exit);
+    if (Exit.isFailure(submitted)) {
+      console.error("durable submit failed", Cause.squash(submitted.cause));
+      return Response.json({ error: "the durable run failed" }, { status: 500 });
+    }
+    const body = yield* streamCanonicalLog(conversationId, liveMode);
+    return new Response(body, {
+      headers: { "content-type": "application/x-ndjson", "cache-control": "no-cache" },
+    });
+  }
+
+  const outcome = yield* Effect.gen(function* () {
+    const client = yield* CloudflareConversationClient;
+    const receipt = yield* client.submit(
+      { definition: codeModeAgent },
+      { question },
+      submitOptions,
+    );
+    const settlement = yield* client.awaitSettlement(receipt);
+    const records = yield* client.readAll(conversationId);
+    return { settlement, records };
+  }).pipe(Effect.exit);
+
+  if (Exit.isSuccess(outcome)) {
+    const { settlement, records } = outcome.value;
+    return Response.json({
+      conversationId,
+      outcome: settlement.outcome,
+      ...receiptFromRecords(records),
+      profile: liveMode ? "openai" : "scripted",
+    });
+  }
+  // Never expose internal causes to callers: log server-side, answer generic.
+  console.error("durable run failed", Cause.squash(outcome.cause));
+  return Response.json({ error: "the durable run failed" }, { status: 500 });
+});
+
+const clientLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    return CloudflareConversationClient.layer.pipe(
+      Layer.provide(ConversationObjectNamespace.layer(env.AGENTS)),
+    );
+  }),
+);
+
+/** D1 `SqlClient` for the Worker-side seed, provided at the composition root. */
+const seedSqlLayer: Layer.Layer<SqlClient.SqlClient, never, WorkerEnvironment> = Layer.unwrap(
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    return invoiceDbSqlLayer(env.DB);
+  }),
+);
+
+export default Worker.make(Layer.mergeAll(clientLayer, seedSqlLayer, demoIdentifiersLayer), {
+  fetch: askHandler,
+});

@@ -4,11 +4,28 @@
   "main": "src/worker.ts",
   "compatibility_date": "2025-05-01",
   "compatibility_flags": ["nodejs_compat", "experimental"],
-  // The SQLite-backed warehouse Durable Object the read-only SQL tool queries.
+  // The DC assembly agent host: the real Conversation Object. Every question
+  // becomes a Run recorded in its append-only canonical log (SQLite storage).
   "durable_objects": {
-    "bindings": [{ "name": "WAREHOUSE", "class_name": "WarehouseObject" }],
+    "bindings": [{ "name": "AGENTS", "class_name": "InvoiceAgentConversationObject" }],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WarehouseObject"] }],
+  "migrations": [
+    // v1 shipped the retired WarehouseObject; migrations are append-only, so
+    // the DC-assembly rebuild lands as v2 (register the Conversation Object,
+    // delete the retired class) rather than rewriting v1.
+    { "tag": "v1", "new_sqlite_classes": ["WarehouseObject"] },
+    {
+      "tag": "v2",
+      "new_sqlite_classes": ["InvoiceAgentConversationObject"],
+      "deleted_classes": ["WarehouseObject"],
+    },
+  ],
+  // The invoice data lives in a plain D1 database; the read-only SQL tool is
+  // Effect SQL over this binding. (database_id is a placeholder for local dev;
+  // point it at a real D1 database to deploy.)
+  "d1_databases": [
+    { "binding": "DB", "database_name": "invoices", "database_id": "invoices-local" },
+  ],
   // The Worker Loader binding the Dynamic Worker Code Mode executor loads
   // generated programs through (currently beta).
   "worker_loaders": [{ "binding": "LOADER" }],

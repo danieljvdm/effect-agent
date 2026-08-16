@@ -3,15 +3,16 @@ import { Agent, AgentPolicy } from "@effect-agent/core";
 import { ToolExecutionClass } from "@effect-agent/engine";
 import { Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { Warehouse } from "./warehouse-object.ts";
+import { runReadOnlyQuery } from "./db.ts";
 
 /**
- * The read-only SQL warehouse Tool (plan §8.3): a native Effect AI Tool built
- * over the application-owned `Warehouse` service, annotated `readonly`. Its
- * result is Schema-bounded JSON; the executor never sees the connection.
+ * The read-only SQL Tool: a native Effect AI Tool whose handler runs one
+ * allowlisted statement through the Effect `SqlClient` over the D1 binding.
+ * Its result is Schema-bounded JSON; the executor never sees the binding.
  */
-export const warehouseQueryTool = Tool.make("query_warehouse", {
+export const invoiceQueryTool = Tool.make("query_invoices", {
   description:
     "Run one read-only SQL statement over the curated `invoice_summary` view (columns: customer TEXT, region TEXT, revenue INTEGER, created_at TEXT). Use ? placeholders with the parameters array; one statement per call. Oversized results return truncated: true.",
   parameters: Schema.Struct({
@@ -29,30 +30,30 @@ export const warehouseQueryTool = Tool.make("query_warehouse", {
     truncated: Schema.Boolean,
   }),
   failure: Schema.Struct({
-    _tag: Schema.Literal("WarehouseQueryDenied"),
+    _tag: Schema.Literal("InvoiceQueryDenied"),
     reason: Schema.String,
   }),
 }).annotate(ToolExecutionClass, "readonly");
 
-const warehouseToolkit = Toolkit.make(warehouseQueryTool);
+const invoiceToolkit = Toolkit.make(invoiceQueryTool);
 
-/** Handler Layer binding the Tool to the tenant-scoped read-only DO service. */
-export const warehouseHandlersLayer: Layer.Layer<
-  Tool.HandlersFor<{ readonly query_warehouse: typeof warehouseQueryTool }>,
+/** Handler Layer: the tool is effect SQL over D1, denials stay typed. */
+export const invoiceHandlersLayer: Layer.Layer<
+  Tool.HandlersFor<{ readonly query_invoices: typeof invoiceQueryTool }>,
   never,
-  Warehouse
-> = warehouseToolkit.toLayer(
+  SqlClient.SqlClient
+> = invoiceToolkit.toLayer(
   Effect.gen(function* () {
-    const warehouse = yield* Warehouse;
+    const sql = yield* SqlClient.SqlClient;
     return {
-      query_warehouse: ({
-        sql,
+      query_invoices: ({
+        sql: text,
         parameters,
       }: {
         readonly sql: string;
         readonly parameters?: ReadonlyArray<string | number | boolean | null> | undefined;
       }) =>
-        warehouse.query(sql, parameters ?? []).pipe(
+        runReadOnlyQuery(text, parameters ?? []).pipe(
           Effect.flatMap((outcome) =>
             outcome.ok
               ? Effect.succeed({
@@ -62,10 +63,11 @@ export const warehouseHandlersLayer: Layer.Layer<
                   truncated: outcome.truncated,
                 })
               : Effect.fail({
-                  _tag: "WarehouseQueryDenied" as const,
+                  _tag: "InvoiceQueryDenied" as const,
                   reason: outcome.reason ?? "denied",
                 }),
           ),
+          Effect.provideService(SqlClient.SqlClient, sql),
         ),
     };
   }),
@@ -73,23 +75,23 @@ export const warehouseHandlersLayer: Layer.Layer<
 
 /**
  * The Code Mode capability: one native `run_javascript` Tool whose
- * `warehouse.query` sandbox global routes to the read-only SQL Tool. The
+ * `invoices.query` sandbox global routes to the read-only SQL Tool. The
  * model writes a bounded JavaScript program that queries and shapes the data;
  * the program runs in an isolated Dynamic Worker.
  */
 export const codeMode = CodeMode.make("run_javascript", {
   description:
-    "Write bounded JavaScript to answer questions about the invoice warehouse. Query the data, filter/aggregate it locally, and return one small JSON answer.",
-  tools: { warehouse: { query: warehouseQueryTool } },
+    "Write bounded JavaScript to answer questions about the invoice data. Query the data, filter/aggregate it locally, and return one small JSON answer.",
+  tools: { invoices: { query: invoiceQueryTool } },
 });
 
-export const codeModeAgent = Agent.define("warehouse-analyst", {
+export const codeModeAgent = Agent.define("invoice-analyst", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({ answer: Schema.String }),
   instructions: [
     "You answer questions about invoice data.",
-    "First call run_javascript exactly once with a program that queries the warehouse (via warehouse.query) and computes the answer in code.",
-    "The warehouse exposes a read-only `invoice_summary` table (columns: customer TEXT, region TEXT, revenue INTEGER, created_at TEXT).",
+    "Answer by calling run_javascript exactly once with a program that computes the answer in code. When the question needs invoice data, query it via invoices.query; otherwise just compute the answer directly — do not issue pointless queries.",
+    "The database exposes a read-only `invoice_summary` table (columns: customer TEXT, region TEXT, revenue INTEGER, created_at TEXT). `region` values are lowercase codes: emea | amer | apac.",
     "After the program returns, respond with only a JSON object of exactly this shape, no prose:",
     '{"answer": "<one concise sentence answering the question>"}',
   ].join("\n"),
@@ -103,4 +105,4 @@ export const codeModeAgent = Agent.define("warehouse-analyst", {
 });
 
 /** The composed handler Layer, minus the `CodeExecutor` (supplied by the host). */
-export const codeModeHandlersLayer = codeMode.handlers.pipe(Layer.provide(warehouseHandlersLayer));
+export const codeModeHandlersLayer = codeMode.handlers.pipe(Layer.provide(invoiceHandlersLayer));
