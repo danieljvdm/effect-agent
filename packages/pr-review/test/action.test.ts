@@ -167,6 +167,9 @@ describe("resolveActionInputs", () => {
 const EVENT_PATH = "/tmp/github-event.json";
 const OUTPUT_PATH = "/tmp/github-output";
 
+/** Typed stand-in for a reviewer-run failure in the progress-settle test. */
+class ModelUnavailable extends Schema.TaggedError<ModelUnavailable>()("ModelUnavailable", {}) {}
+
 const fakeOutcome = (
   verdict: ReviewVerdict,
   options: {
@@ -429,7 +432,7 @@ describe("runReviewAction", () => {
         }),
       );
       const exit = yield* runReviewAction(
-        { run: () => Effect.fail(new Error("model unavailable")) },
+        { run: () => Effect.fail(ModelUnavailable.make({})) },
         { progressComment: true },
       ).pipe(Effect.provide(harness.layer), Effect.exit);
       expect(Exit.isFailure(exit)).toBe(true);
