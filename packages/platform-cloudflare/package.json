@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/platform-cloudflare",
-  "version": "0.1.0-beta.11",
+  "version": "0.1.0-beta.12",
   "description": "Class DC layer assembly for Effect Agent: SQLite-backed Conversation Durable Objects with alarm-driven recovery.",
   "license": "MIT",
   "repository": {

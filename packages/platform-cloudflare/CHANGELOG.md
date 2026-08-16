@@ -1,5 +1,17 @@
 # @effect-agent/platform-cloudflare
 
+## 0.1.0-beta.12
+
+### Patch Changes
+
+- [#81](https://github.com/danieljvdm/effect-agent/pull/81) [`51bc32b`](https://github.com/danieljvdm/effect-agent/commit/51bc32b982abc21412c55d61064be5ec6fa1664f) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Publish `effect-cf` as a compatible host-owned peer and update the workspace integration to 0.27.0, avoiding consumer overrides and duplicate Effect service identities.
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.12
+  - @effect-agent/sandbox@0.1.0-beta.12
+  - @effect-agent/session@0.1.0-beta.12
+  - @effect-agent/storage-cloudflare@0.1.0-beta.12
+
 ## 0.1.0-beta.11
 
 ### Patch Changes
