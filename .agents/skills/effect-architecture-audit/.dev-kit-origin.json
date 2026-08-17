@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "effect-architecture-audit",
+  "name": "effect-architecture-audit",
+  "baseDigest": "sha256:e1ce793618ab672bb4213e415e0e02860acbb0ae81e06f421d857ac94231610e",
+  "source": {
+    "type": "bundled",
+    "version": "0.17.0"
+  }
+}

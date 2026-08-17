@@ -254,32 +254,28 @@ transform-mode workers).
 
 ## Post-install setup
 
-`bun install` runs `dev-kit apply` (the root `postinstall` script), which converges the committed
-contributor-skill copies, the `repos/effect` source checkout at the exact installed
-`effect@<version>` tag, the repository's `.vite-hooks` dispatcher, and the Effect-patched
-TypeScript compiler, in that order.
+`bun install` runs `vp config --no-agent --hooks-dir .vite-hooks` (the root `prepare` script),
+which materializes the repository's `.vite-hooks` Git hook dispatcher. It does not touch the
+Effect source checkout or the compiler patch; those are separate, explicit steps.
 
-The Effect source task is fail-closed and stops the whole apply when its destination is not a
-usable checkout. `repos/effect` is a tracked submodule, so in a fresh linked worktree (or any
-non-recursive clone) it starts as an empty tracked directory, the task refuses it, and postinstall
-aborts BEFORE the compiler patch — leaving plain `tsc` in place and local checks weaker than CI.
-Initialize the submodule before the first install:
+`repos/effect` is a tracked Git submodule. `bun run sync:effect` (`scripts/sync-effect-source.ts`)
+initializes it on first use (`git submodule update --init`, which checks out the tree's currently
+committed gitlink) and then moves the working checkout to the exact tag of the installed `effect`
+npm package, fetching only that tag. Moving it away from the committed gitlink intentionally
+leaves the submodule modified in `git status` until a maintainer commits the pointer bump (see "To
+upgrade Effect" below). A fresh linked worktree (or any non-recursive clone) starts with
+`repos/effect` as an empty tracked directory; `bun run sync:effect` initializes it automatically,
+so a manual `git submodule update --init repos/effect` first is only needed to populate the
+checkout without also moving it to the installed version's tag.
 
-```sh
-git submodule update --init repos/effect
-bun install
-```
+`bun run patch:tsgo` (`scripts/patch-effect-tsgo.ts`) applies the Effect TypeScript-Go compiler
+patch standalone, verifying the installed `@effect/tsgo` and `typescript` versions are the exact
+pinned pair before patching.
 
-`bun run patch:tsgo` (`dev-kit tsgo patch`) applies the compiler patch standalone, and
-`bun run sync:effect` (`dev-kit effect sync --path repos/effect`) syncs only the Effect checkout —
-the explicit `--path` matters, because the bare command defaults to `.repos/effect` and would
-create a duplicate clone.
-
-CI installs with lifecycle scripts suppressed, verifies the locked Dev Kit outputs, and then runs
-`bun run patch:tsgo` explicitly in every job that checks, tests, or builds TypeScript. This preserves
-the postinstall compiler invariant without cloning the Effect source checkout. Local development
-keeps the checkout because implementation agents often need to verify current Effect v4 and Effect
-AI behavior.
+CI installs with lifecycle scripts suppressed and then runs `bun run patch:tsgo` explicitly in
+every job that checks, tests, or builds TypeScript. This preserves the compiler-patch invariant
+without cloning the Effect source checkout. Local development keeps the checkout because
+implementation agents often need to verify current Effect v4 and Effect AI behavior.
 
 Known workaround: the `preferTypedSchemaDecoder` language-service rule is set to `"off"` in
 `tsconfig.base.json` because `@effect/tsgo` `0.33.0` nil-panics in that rule
@@ -310,12 +306,13 @@ To upgrade Effect:
 
 ## Contributor agent skills
 
-Contributor skills are managed by [`@danieljvdm/dev-kit`](https://github.com/danieljvdm/dev-kit)
-from `dev-kit.jsonc` (currently the `dev-kit`, `effect-ts`, `testing`, and `cloudflare`
-selections). `dev-kit apply` runs on postinstall and converges the committed copies in
-`.agents/skills` plus the `.claude/skills` symlinks; `dev-kit.lock.json` records the exact
-resolution, and CI verifies it with `dev-kit apply --locked` after a script-suppressed frozen
-install. Use the `dev-kit` skill before changing managed outputs.
+Contributor skills under `.agents/skills` (symlinked from `.claude/skills`) are repo-owned copies
+from the [`@danieljvdm/dev-kit`](https://github.com/danieljvdm/dev-kit) catalog, each tracked by
+its own `.dev-kit-origin.json` receipt instead of a shared manifest or lockfile. Check for upstream
+updates with `bunx @danieljvdm/dev-kit@latest skills status`; fast-forward an unmodified skill with
+`skills update <name>`, which leaves a locally edited copy for an agent merge instead of
+overwriting it. Add a new skill from the approved catalog with `skills add <name>`. Use the
+`dev-kit` skill before changing these outputs.
 
 These are contributor instructions. They are not the runtime Skill abstraction described in the
 product specification and must not be imported by a framework package.

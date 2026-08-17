@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "selector": "durable-objects",
+  "name": "durable-objects",
+  "baseDigest": "sha256:533bfa75d2074cf6ac30ab77854a665465318dd0540ff4bdbb9c5f4ef8acfb38",
+  "source": {
+    "type": "git",
+    "source": "cloudflare-skills",
+    "repository": "https://github.com/cloudflare/skills.git",
+    "resolved": "30553f89ae1ef1e3c2917cd09d72dac992bb4e9a"
+  }
+}

@@ -1,4 +1,4 @@
 interface:
   display_name: "Dev Kit"
-  short_description: "Configure and apply portable project tooling"
-  default_prompt: "Use $dev-kit to configure and safely apply this project's development toolkit."
+  short_description: "Build an agent-ready TypeScript repository"
+  default_prompt: "Use $dev-kit to set up this repository from my requirements and leave every result repo-owned."

@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "build-effect-apis",
+  "name": "build-effect-apis",
+  "baseDigest": "sha256:27c7d684334598d0da9858c5e8bd6bd274db20bf33269b0b9286a50d1613e649",
+  "source": {
+    "type": "bundled",
+    "version": "0.17.0"
+  }
+}

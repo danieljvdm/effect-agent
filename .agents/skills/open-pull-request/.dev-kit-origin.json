@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "open-pull-request",
+  "name": "open-pull-request",
+  "baseDigest": "sha256:14596520a07ccfdb3743dfa826d8b3de8605f3e8205dcdcce70396acab9ed6b1",
+  "source": {
+    "type": "bundled",
+    "version": "0.17.0"
+  }
+}
