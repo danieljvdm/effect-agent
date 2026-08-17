@@ -219,6 +219,16 @@ behavior; typed handler failures stay typed; approval or policy denial prevents 
 budget exhaustion prevents the next call; sequential identities are deterministic; and
 non-allowlisted or sanitized-name collision cases fail closed.
 
+## 8.2 Pull-request work-order evidence
+
+The private `examples/pr-work-orders` leaf runs one work order against a
+deterministic scripted implementer and a real temporary Git repository. It
+proves explicit dispatch, a jailed implementation Agent, host-collected
+patch/check validation, one attempt per work-order key, atomic head update,
+non-publication settlements, interruption cleanup, and typed release failure.
+These tests are evidence for the local host contract, not for check isolation.
+See [pull-request work orders](pr-work-orders.md).
+
 ## 9. Compatibility tests
 
 The suite tests:
@@ -351,3 +361,6 @@ No durability milestone is complete while its crash tests are skipped.
   advertised schemas, tools) — never from test-known expected values — so offline suites catch
   model-visible contract information missing from the request that a scripted model would
   fabricate away.
+- **TEST-017**: The trusted-local work-order proof covers success, non-publication
+  settlements, path escape, false check claims, failed host checks, stale-head
+  publication fencing, typed/interrupted cleanup, and one-attempt admission.
