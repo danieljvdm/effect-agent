@@ -18,6 +18,7 @@ import {
   applyCompaction,
   ApprovalAudit,
   ApprovalAuditMemoryLive,
+  ApprovalAdapterError,
   ApprovalApproved,
   ApprovalDecisionMismatch,
   ApprovalDenied,
@@ -655,6 +656,47 @@ describe("capability contracts", () => {
     );
   });
 
+  it.effect("rejects an unrepresentable approval deadline as a typed adapter failure", () => {
+    let callbackInvoked = false;
+    const hook = toRunApprovalHook({
+      expiresInMillis: Number.MAX_SAFE_INTEGER,
+      risk: "high",
+      denial: "terminal",
+      actionSummary: () => {
+        callbackInvoked = true;
+        return "must not run";
+      },
+      resourceTargets: () => [],
+    });
+    return Effect.gen(function* () {
+      const error = yield* hook
+        .request({
+          request: Response.toolApprovalRequestPart({
+            approvalId: "approval-unrepresentable-deadline",
+            toolCallId,
+          }),
+          conversationId,
+          runId,
+          turnId,
+          toolCallId,
+          toolName: "holdItinerary",
+          parameters: {},
+        })
+        .pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(ApprovalAdapterError);
+      expect(callbackInvoked).toBe(false);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          StructuralRedactorLive,
+          ApprovalAuditMemoryLive,
+          Layer.succeed(ApprovalResolver)({ request: () => Effect.never }),
+        ),
+      ),
+    );
+  });
+
   it.effect("atomically rejects hierarchical consumption across every ancestor", () =>
     Effect.gen(function* () {
       const globalBudget = yield* makeUsageBudgetRoot(
@@ -992,6 +1034,26 @@ describe("capability contracts", () => {
           "Original last",
         ]);
       }).pipe(Effect.provide(Layer.mergeAll(EphemeralConversationsLive, NodeCrypto.layer))),
+  );
+
+  it.effect("uniformly bounds oversized system history during model-context projection", () =>
+    Effect.gen(function* () {
+      const conversations = yield* EphemeralConversations;
+      yield* conversations.create(conversationId);
+      const snapshot = yield* conversations.append(
+        conversationId,
+        ConversationAppend.make({
+          message: textMessage("system", "x".repeat(70 * 1024)),
+        }),
+      );
+
+      const context = yield* prepareModelContext(snapshot);
+
+      expect(context.messages).toHaveLength(1);
+      expect(context.messages[0]?.role).toBe("system");
+      expect(context.messages[0]?.content).toHaveLength(64 * 1024);
+      expect(context.source).toEqual(snapshot);
+    }).pipe(Effect.provide(EphemeralConversationsLive)),
   );
 
   it.effect("keeps transform-synthesized and partially covered model-view messages visible", () =>

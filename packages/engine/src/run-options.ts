@@ -13,7 +13,11 @@ import type {
 import type { Effect } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
-import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
+import type {
+  RunStepHook,
+  ToolExecutionClassValue,
+  ToolExecutionKindValue,
+} from "./durable-step.ts";
 
 /** Number of queued inputs consumed at one documented Turn seam. */
 export type CommandDrainPolicy = "one" | "all";
@@ -141,8 +145,9 @@ export interface RunBudgetHook<Error = never, Requirements = never> {
 /**
  * One application Tool Call of a completed Turn as the durable runtime sees
  * it: stable identity, the encoded (wire-form) parameters exactly as official
- * history carries them, and the Tool's declared execution class (fail-closed
- * `"uncertain"` for unannotated Tools).
+ * history carries them, the Tool's declared execution class (fail-closed
+ * `"uncertain"` for unannotated Tools), and its authoritative execution kind
+ * (`"application"` unless explicitly annotated as `"delegation"`).
  */
 export interface RunToolCallDescriptor {
   readonly toolCallId: ToolCallId;
@@ -150,6 +155,7 @@ export interface RunToolCallDescriptor {
   /** Encoded JSON parameters — the same value official history and canonical records carry. */
   readonly parameters: unknown;
   readonly executionClass: ToolExecutionClassValue;
+  readonly executionKind: ToolExecutionKindValue;
 }
 
 /**

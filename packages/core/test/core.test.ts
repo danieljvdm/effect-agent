@@ -1,4 +1,4 @@
-import { Duration, Effect, Encoding, Schema } from "effect";
+import { Crypto, Duration, Effect, Encoding, Layer, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -366,7 +366,20 @@ describe("core schemas", () => {
     ).toThrow();
   });
 
-  it("mints valid, distinct branded identities from the default IdGenerator Layer", () => {
+  it("derives branded identities from an explicitly provided Crypto authority", () => {
+    let counter = 0;
+    const cryptoLayer = Layer.succeed(
+      Crypto.Crypto,
+      Crypto.make({
+        randomBytes: (size) => {
+          const bytes = new Uint8Array(size);
+          bytes[0] = counter;
+          counter += 1;
+          return bytes;
+        },
+        digest: (_algorithm, data) => Effect.succeed(data),
+      }),
+    );
     const program = Effect.gen(function* () {
       const ids = yield* IdGenerator;
       return {
@@ -375,7 +388,7 @@ describe("core schemas", () => {
         run: yield* ids.nextRunId,
         turn: yield* ids.nextTurnId,
       };
-    }).pipe(Effect.provide(IdGenerator.layer));
+    }).pipe(Effect.provide(IdGenerator.layer.pipe(Layer.provide(cryptoLayer))));
     const { firstConversation, secondConversation, run, turn } = Effect.runSync(program);
 
     expect(Schema.decodeSync(ConversationId)(firstConversation)).toBe(firstConversation);
@@ -594,12 +607,18 @@ describe("context-economics errors and events", () => {
     } satisfies typeof RunCompleted.Encoded;
 
     expect(Schema.decodeSync(RunCompleted)(encodedRun).exhausted).toBeUndefined();
+    expect(Schema.decodeUnknownExit(RunEvent)({ ...encodedRun, exhausted: "tokens" })._tag).toBe(
+      "Failure",
+    );
+    expect(Schema.decodeUnknownExit(RunEvent)({ ...encodedRun, exhausted: "duration" })._tag).toBe(
+      "Failure",
+    );
     expect(
-      Schema.decodeUnknownSync(RunEvent)({ ...encodedRun, exhausted: "tokens" }),
-    ).toMatchObject({ _tag: "RunCompleted", exhausted: "tokens" });
-    expect(() =>
-      Schema.decodeUnknownSync(RunEvent)({ ...encodedRun, exhausted: "duration" }),
-    ).toThrow();
+      Schema.decodeUnknownExit(RunEvent)({
+        ...encodedRun,
+        finishReason: "budget-exhausted",
+      })._tag,
+    ).toBe("Failure");
 
     const encodedChild = {
       _tag: "SubagentCompleted",
@@ -617,7 +636,7 @@ describe("context-economics errors and events", () => {
       targetAgentId: "research-specialist",
       depth: 1,
       turns: 2,
-      finishReason: "completed",
+      finishReason: "budget-exhausted",
       exhausted: "turns",
     } satisfies typeof SubagentCompleted.Encoded;
 
@@ -625,5 +644,17 @@ describe("context-economics errors and events", () => {
       _tag: "SubagentCompleted",
       exhausted: "turns",
     });
+    expect(
+      Schema.decodeUnknownExit(RunEvent)({
+        ...encodedChild,
+        finishReason: "model-stop",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(RunEvent)({
+        ...encodedChild,
+        exhausted: undefined,
+      })._tag,
+    ).toBe("Failure");
   });
 });

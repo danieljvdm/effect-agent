@@ -11,13 +11,21 @@ import {
 } from "@effect-agent/core";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Context, DateTime, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import {
+  LanguageModel,
+  Model,
+  type Prompt,
+  type Response,
+  Tool,
+  Toolkit,
+} from "effect/unstable/ai";
 
 import {
   AgentRuntime,
   DurableStep,
   DurableStepError,
   ToolExecutionClass,
+  ToolExecutionKind,
   type RunDurabilityHook,
   type RunStepHook,
   type RunTurnResponseCommit,
@@ -485,7 +493,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       const Book = Tool.make("book", {
         parameters: Schema.Struct({ ref: Schema.String }),
         success: Schema.String,
-      });
+      }).annotate(ToolExecutionKind, "delegation");
       const tools = Toolkit.make(Search, Book);
       const definition = Agent.define("readonly-skip", {
         input: Schema.Struct({ question: Schema.String }),
@@ -525,6 +533,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       expect(yield* Ref.get(marks)).toEqual(["commit-response"]);
       const readonlyCommit = (yield* Ref.get(commits))[0];
       expect(readonlyCommit.calls.map((call) => call.executionClass)).toEqual(["readonly"]);
+      expect(readonlyCommit.calls.map((call) => call.executionKind)).toEqual(["application"]);
 
       // A mixed batch prepares only the non-readonly calls.
       yield* Ref.set(marks, []);
@@ -561,6 +570,10 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       expect(mixedCommit.calls.map((call) => [call.toolCallId, call.executionClass])).toEqual([
         ["search-2", "readonly"],
         ["book-1", "uncertain"],
+      ]);
+      expect(mixedCommit.calls.map((call) => [call.toolCallId, call.executionKind])).toEqual([
+        ["search-2", "application"],
+        ["book-1", "delegation"],
       ]);
     }),
   );

@@ -9,7 +9,7 @@ import {
   SandboxImplementation,
 } from "@effect-agent/sandbox";
 import { describe, expect, it, layer } from "@effect/vitest";
-import { Context, Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Context, Duration, Effect, Encoding, Layer, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import { CodeMode, CodeModeFailure, CodeModeSuccess } from "../src/index.ts";
@@ -213,6 +213,14 @@ interface ScenarioOutcome {
   readonly queryCalls: number;
 }
 
+const encodedEnvelopeBytes = (value: unknown): number => {
+  const encoded =
+    typeof value === "object" && value !== null && "_tag" in value
+      ? Schema.encodeSync(CodeModeFailure)(Schema.decodeUnknownSync(CodeModeFailure)(value))
+      : Schema.encodeSync(CodeModeSuccess)(Schema.decodeUnknownSync(CodeModeSuccess)(value));
+  return Encoding.encodeHex(JSON.stringify(encoded)).length / 2;
+};
+
 const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number }) =>
   Effect.gen(function* () {
     const definition = CodeMode.make("run_javascript", {
@@ -379,7 +387,16 @@ layer(identifiers)("CAP-016 Code Mode handler through a scripted executor", (it)
         };
         expect(value.logs.length).toBeLessThan(40);
         expect(value.logs.at(-1)).toContain("logs truncated");
+        expect(encodedEnvelopeBytes(value)).toBeLessThanOrEqual(1_024);
       }),
+  );
+
+  it.effect("CAP-016 bounds the complete Schema-encoded failure envelope", () =>
+    Effect.gen(function* () {
+      const outcome = yield* runWithCode("THROW", { maxEgressBytes: 256 });
+      expect(outcome.toolResults[0].isFailure).toBe(true);
+      expect(encodedEnvelopeBytes(outcome.toolResults[0].result)).toBeLessThanOrEqual(256);
+    }),
   );
 });
 

@@ -28,9 +28,9 @@ finalization.
 
 ## Exercise the public runtime
 
-Tests provide the same Layers a real application would provide, swapping the default
-`IdGenerator.layer` (random Web Crypto UUIDs) for a deterministic Ref-counter Layer so
-identities are stable across runs:
+Tests provide the same Layers a real application would provide, swapping the production
+crypto-backed `IdGenerator.layer` for a deterministic Ref-counter Layer so identities are stable
+across runs:
 
 ```ts
 import { Effect, Layer, Ref, Schema } from "effect";

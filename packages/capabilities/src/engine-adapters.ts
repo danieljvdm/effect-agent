@@ -10,7 +10,7 @@ import type {
   RunOptions,
   RunSchedulingHook,
 } from "@effect-agent/engine";
-import { Clock, DateTime, Effect, Schema } from "effect";
+import { Clock, DateTime, Effect, Option, Schema } from "effect";
 import type { Prompt } from "effect/unstable/ai";
 
 import {
@@ -94,6 +94,12 @@ export const toRunApprovalHook = (
         ),
       );
       const now = yield* Clock.currentTimeMillis;
+      const expiresAt = DateTime.make(now + validatedPolicy.expiresInMillis);
+      if (Option.isNone(expiresAt)) {
+        return yield* ApprovalAdapterError.make({
+          message: "Approval adapter policy produces a deadline outside the supported date range",
+        });
+      }
       const metadata = yield* Effect.try({
         try: () => ({
           actionSummary: policy.actionSummary(engineRequest),
@@ -113,9 +119,7 @@ export const toRunApprovalHook = (
         actionSummary: metadata.actionSummary,
         resourceTargets: metadata.resourceTargets,
         risk: validatedPolicy.risk,
-        expiresAt: DateTime.formatIso(
-          DateTime.toUtc(DateTime.makeUnsafe(now + validatedPolicy.expiresInMillis)),
-        ),
+        expiresAt: DateTime.formatIso(DateTime.toUtc(expiresAt.value)),
         denial: validatedPolicy.denial,
       }).pipe(
         Effect.mapError((error) =>

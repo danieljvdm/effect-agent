@@ -1,14 +1,6 @@
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Effect, Layer, Schema } from "effect";
 
 import { ConversationId, RunId, TurnId } from "./identifiers.ts";
-
-/**
- * Web Crypto is a standard runtime global on every supported platform
- * (Node.js >= 20, edge workers, browsers). Core compiles without platform
- * type libraries, so the one standard member used here is declared locally
- * instead of importing DOM or Node types.
- */
-declare const crypto: { readonly randomUUID: () => string };
 
 /** Replaceable authority for creating runtime identities, including deterministic test IDs. */
 export class IdGenerator extends Context.Service<
@@ -23,19 +15,24 @@ export class IdGenerator extends Context.Service<
   }
 >()("@effect-agent/core/IdGenerator") {
   /**
-   * Default identity authority backed by Web Crypto's `randomUUID`, which is
-   * available without a platform import on Node.js >= 20, edge workers, and
-   * browsers. Tests that need deterministic identities replace this Layer.
+   * Default identity authority derived from Effect's platform-neutral Crypto
+   * port. Composition roots provide the host Crypto implementation; tests
+   * that need deterministic identities may replace either port.
    */
-  static readonly layer: Layer.Layer<IdGenerator> = Layer.succeed(IdGenerator, {
-    nextConversationId: Effect.sync(() => `conversation-${crypto.randomUUID()}`).pipe(
-      Effect.map(Schema.decodeSync(ConversationId)),
-    ),
-    nextRunId: Effect.sync(() => `run-${crypto.randomUUID()}`).pipe(
-      Effect.map(Schema.decodeSync(RunId)),
-    ),
-    nextTurnId: Effect.sync(() => `turn-${crypto.randomUUID()}`).pipe(
-      Effect.map(Schema.decodeSync(TurnId)),
-    ),
-  });
+  static readonly layer: Layer.Layer<IdGenerator, never, Crypto.Crypto> = Layer.effect(
+    IdGenerator,
+    Effect.gen(function* () {
+      const crypto = yield* Crypto.Crypto;
+      const randomUuid = crypto.randomUUIDv4.pipe(Effect.orDie);
+      return {
+        nextConversationId: randomUuid.pipe(
+          Effect.map((uuid) => Schema.decodeSync(ConversationId)(`conversation-${uuid}`)),
+        ),
+        nextRunId: randomUuid.pipe(Effect.map((uuid) => Schema.decodeSync(RunId)(`run-${uuid}`))),
+        nextTurnId: randomUuid.pipe(
+          Effect.map((uuid) => Schema.decodeSync(TurnId)(`turn-${uuid}`)),
+        ),
+      };
+    }),
+  );
 }

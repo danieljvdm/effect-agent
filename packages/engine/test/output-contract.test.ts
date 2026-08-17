@@ -464,6 +464,33 @@ layer(identifiers)("RUN-028 model-visible output contract", (it) => {
     return Effect.void;
   });
 
+  it.effect("projects hostile output-contract rendering failures without invoking them", () => {
+    const definition = Agent.define("contract-hostile", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Answer.",
+      toolkit: Toolkit.empty,
+      policy,
+    });
+    const hostileCause = new Proxy(
+      {},
+      {
+        get: () => {
+          throw new Error("hostile cause access");
+        },
+      },
+    );
+    const hostileOutput = new Proxy(definition.output, {
+      get: () => {
+        throw hostileCause;
+      },
+    });
+    const contract = outputSchemaContract({ ...definition, output: hostileOutput });
+
+    expect(contract).toEqual({ _tag: "unrenderable", reason: "Unknown failure" });
+    return Effect.void;
+  });
+
   it.effect("inserts after the last system message, extending the last contiguous block", () => {
     const contract = "contract-text";
     const system = (content: string) => Prompt.makeMessage("system", { content });

@@ -26,6 +26,7 @@ import {
   SubagentDurability,
   SubagentDurabilityError,
   ToolCallWaiting,
+  ToolExecutionKind,
 } from "@effect-agent/engine";
 import { describe, expect, it, layer } from "@effect/vitest";
 import {
@@ -1901,6 +1902,10 @@ describe("Subagent.define", () => {
     expect(researchDelegation.grant.allowedToolNames).toEqual([]);
     expect(researchDelegation.grant.maxDepth).toBe(1);
     expect(Object.isFrozen(researchDelegation)).toBe(true);
+  });
+
+  it("annotates declared Subagent Tools with the delegation execution kind", () => {
+    expect(Context.get(researchDelegation.tool.annotations, ToolExecutionKind)).toBe("delegation");
   });
 
   it("derives caps and allocation from the delegation policy", () => {

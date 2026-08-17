@@ -88,6 +88,22 @@ export class CodeModeFailure extends Schema.TaggedError<CodeModeFailure>()("Code
   thrown: Schema.optionalKey(Schema.Json),
 }) {}
 
+const encodedSuccessByteLength = (value: CodeModeSuccess): number | undefined => {
+  try {
+    return encodedJsonByteLength(Schema.encodeSync(CodeModeSuccess)(value));
+  } catch {
+    return undefined;
+  }
+};
+
+const encodedFailureByteLength = (value: CodeModeFailure): number | undefined => {
+  try {
+    return encodedJsonByteLength(Schema.encodeSync(CodeModeFailure)(value));
+  } catch {
+    return undefined;
+  }
+};
+
 /** The namespace-record shape accepted by `CodeMode.make`. */
 export type CodeModeNamespaces = Record<string, Record<string, Tool.Any>>;
 
@@ -357,55 +373,58 @@ const renderDeclarations = (methods: ReadonlyArray<ResolvedMethod>): string => {
 const truncationMarker = "… logs truncated by the egress budget";
 const MAX_EGRESS_LOG_LINE_CHARACTERS = 16_000;
 
-/**
- * Budget charge of one log line as it actually crosses to the model: the
- * JSON-encoded string (quotes, escapes) plus one array separator. Charging
- * raw UTF-8 would undercount model-visible bytes for escape-heavy content.
- */
-const encodedLogLineBytes = (line: string): number => {
-  try {
-    return utf8ByteLength(JSON.stringify(line)) + 1;
-  } catch {
-    return Number.MAX_SAFE_INTEGER;
-  }
-};
-
-const budgetedLogs = (
-  logs: ReadonlyArray<string>,
-  remainingBytes: number,
-): ReadonlyArray<string> => {
-  const kept: Array<string> = [];
-  let used = 0;
-  let truncated = false;
-  for (const raw of logs) {
-    // Per-line cap keeps every kept line inside the BoundedLogLine schema.
-    const line =
+const boundedLogs = (logs: ReadonlyArray<string>): ReadonlyArray<string> =>
+  logs
+    .slice(0, 4_096)
+    .map((raw) =>
       raw.length > MAX_EGRESS_LOG_LINE_CHARACTERS
         ? `${raw.slice(0, MAX_EGRESS_LOG_LINE_CHARACTERS - 1)}…`
-        : raw;
-    const bytes = encodedLogLineBytes(line);
-    if (kept.length >= 4_096 || used + bytes > remainingBytes) {
-      truncated = true;
-      break;
-    }
-    kept.push(line);
-    used += bytes;
+        : raw,
+    );
+
+/** Fit logs against the fully Schema-encoded envelope, including tags and JSON escaping. */
+const budgetedEnvelopeLogs = <A>(
+  logs: ReadonlyArray<string>,
+  maxEgressBytes: number,
+  makeEnvelope: (logs: ReadonlyArray<string>) => A,
+  encodedEnvelopeByteLength: (value: A) => number | undefined,
+): ReadonlyArray<string> => {
+  const normalized = boundedLogs(logs);
+  if (
+    logs.length <= 4_096 &&
+    (encodedEnvelopeByteLength(makeEnvelope(normalized)) ?? Number.MAX_SAFE_INTEGER) <=
+      maxEgressBytes
+  ) {
+    return normalized;
   }
-  if (truncated) {
-    // Truncation is never silent: drop kept lines from the end until the
-    // marker itself fits inside the budget.
-    const markerBytes = encodedLogLineBytes(truncationMarker);
-    while (kept.length > 0 && used + markerBytes > remainingBytes) {
-      used -= encodedLogLineBytes(kept.pop() ?? "");
-    }
-    if (markerBytes <= remainingBytes) {
-      kept.push(truncationMarker);
+
+  // At most 4,095 source lines can accompany the marker while satisfying the
+  // public BoundedLogs schema. Binary search keeps envelope encoding O(log n).
+  let lower = 0;
+  let upper = Math.min(normalized.length, 4_095);
+  let best: ReadonlyArray<string> = [];
+  while (lower <= upper) {
+    const count = Math.floor((lower + upper) / 2);
+    const candidate = [...normalized.slice(0, count), truncationMarker];
+    const bytes = encodedEnvelopeByteLength(makeEnvelope(candidate));
+    if (bytes !== undefined && bytes <= maxEgressBytes) {
+      best = candidate;
+      lower = count + 1;
+    } else {
+      upper = count - 1;
     }
   }
-  return kept;
+  return best;
 };
 
-const boundedMessage = (message: string): string => message.slice(0, maxFailureTextLength);
+const boundedMessage = (message: string): string => {
+  let bounded = "";
+  for (const character of message) {
+    if (bounded.length + character.length > maxFailureTextLength) break;
+    bounded += character;
+  }
+  return bounded;
+};
 
 const executionFailureMessage = (error: CodeExecutionError): string => {
   switch (error._tag) {
@@ -424,25 +443,68 @@ const executionFailureMessage = (error: CodeExecutionError): string => {
   }
 };
 
-/** UTF-8-aware truncation so a message can never exceed the aggregate budget. */
-const truncateToUtf8Bytes = (value: string, maxBytes: number): string => {
-  if (utf8ByteLength(value) <= maxBytes) {
-    return value;
-  }
-  let output = "";
-  let used = 0;
-  for (const character of value) {
-    const bytes = utf8ByteLength(character);
-    if (used + bytes + 3 > maxBytes) {
-      break;
-    }
-    output += character;
-    used += bytes;
-  }
-  return `${output}…`;
-};
-
 type EgressRedactor = NonNullable<CodeModeOptions<CodeModeNamespaces>["redactEgress"]>;
+
+const budgetedFailure = (
+  errorTag: string,
+  rawMessage: string,
+  logs: ReadonlyArray<string>,
+  candidateThrown: Schema.Json | undefined,
+  maxEgressBytes: number,
+): CodeModeFailure => {
+  const characters = Array.from(boundedMessage(rawMessage));
+  const makeMessage = (count: number): string =>
+    count >= characters.length ? characters.join("") : `${characters.slice(0, count).join("")}…`;
+  const makeEnvelope = (
+    message: string,
+    envelopeLogs: ReadonlyArray<string>,
+    thrown: Schema.Json | undefined,
+  ): CodeModeFailure =>
+    CodeModeFailure.make({
+      errorTag,
+      message,
+      logs: envelopeLogs,
+      ...(thrown === undefined ? {} : { thrown }),
+    });
+
+  const fullMessage = makeMessage(characters.length);
+  let message = fullMessage;
+  if (
+    (encodedFailureByteLength(makeEnvelope(fullMessage, [], undefined)) ??
+      Number.MAX_SAFE_INTEGER) > maxEgressBytes
+  ) {
+    let lower = 0;
+    let upper = Math.max(0, characters.length - 1);
+    message = "";
+    while (lower <= upper) {
+      const count = Math.floor((lower + upper) / 2);
+      const candidateMessage = makeMessage(count);
+      const bytes = encodedFailureByteLength(makeEnvelope(candidateMessage, [], undefined));
+      if (bytes !== undefined && bytes <= maxEgressBytes) {
+        message = candidateMessage;
+        lower = count + 1;
+      } else {
+        upper = count - 1;
+      }
+    }
+  }
+
+  const thrown =
+    candidateThrown !== undefined &&
+    (encodedFailureByteLength(makeEnvelope(message, [], candidateThrown)) ??
+      Number.MAX_SAFE_INTEGER) <= maxEgressBytes
+      ? candidateThrown
+      : undefined;
+  const envelopeWithLogs = (envelopeLogs: ReadonlyArray<string>) =>
+    makeEnvelope(message, envelopeLogs, thrown);
+  const fittedLogs = budgetedEnvelopeLogs(
+    logs,
+    maxEgressBytes,
+    envelopeWithLogs,
+    encodedFailureByteLength,
+  );
+  return envelopeWithLogs(fittedLogs);
+};
 
 /**
  * The failure half of the aggregate egress policy (CAP-016): the configured
@@ -460,11 +522,7 @@ const failureEgress = (
       error._tag === "ToolBrokerUnavailableError" ||
       error._tag === "ToolBrokerConfigurationError"
     ) {
-      return CodeModeFailure.make({
-        errorTag: error._tag,
-        message: truncateToUtf8Bytes(boundedMessage(error.message), maxEgressBytes),
-        logs: [],
-      });
+      return budgetedFailure(error._tag, error.message, [], undefined, maxEgressBytes);
     }
     let logs: ReadonlyArray<string> = "logs" in error ? error.logs : [];
     let candidateThrown = error._tag === "CodeProgramFailedError" ? error.thrown : undefined;
@@ -473,30 +531,13 @@ const failureEgress = (
       logs = redacted.logs;
       candidateThrown = candidateThrown === undefined ? undefined : redacted.result;
     }
-    const message = truncateToUtf8Bytes(
-      boundedMessage(executionFailureMessage(error)),
+    return budgetedFailure(
+      error._tag,
+      executionFailureMessage(error),
+      logs,
+      candidateThrown,
       maxEgressBytes,
     );
-    const messageBytes = utf8ByteLength(message);
-    // `thrown` is included only when it fits TOGETHER with the message inside
-    // the aggregate budget, and it reduces the log allowance only when it is
-    // actually included.
-    const candidateBytes =
-      candidateThrown === undefined ? undefined : encodedJsonByteLength(candidateThrown);
-    const includeThrown =
-      candidateThrown !== undefined &&
-      candidateBytes !== undefined &&
-      messageBytes + candidateBytes <= maxEgressBytes;
-    const remaining = Math.max(
-      0,
-      maxEgressBytes - messageBytes - (includeThrown ? (candidateBytes ?? 0) : 0),
-    );
-    return CodeModeFailure.make({
-      errorTag: error._tag,
-      message,
-      logs: budgetedLogs(logs, remaining),
-      ...(includeThrown ? { thrown: candidateThrown } : {}),
-    });
   });
 
 // ---------------------------------------------------------------------------
@@ -675,18 +716,23 @@ const make = <const Name extends string, Namespaces extends CodeModeNamespaces>(
       if (options.redactEgress !== undefined) {
         egress = yield* options.redactEgress(egress);
       }
-      const resultBytes = encodedJsonByteLength(egress.result);
-      if (resultBytes === undefined || resultBytes > maxEgressBytes) {
-        return yield* CodeModeFailure.make({
-          errorTag: "CodeModeEgressExceeded",
-          message: `The program result of ${resultBytes ?? "unencodable"} bytes exceeds the ${maxEgressBytes}-byte model-visible egress budget; return a smaller value`,
-          logs: budgetedLogs(egress.logs, Math.max(0, maxEgressBytes - 256)),
-        });
+      const withoutLogs = CodeModeSuccess.make({ result: egress.result, logs: [] });
+      const envelopeBytes = encodedSuccessByteLength(withoutLogs);
+      if (envelopeBytes === undefined || envelopeBytes > maxEgressBytes) {
+        const resultBytes = encodedJsonByteLength(egress.result);
+        return yield* budgetedFailure(
+          "CodeModeEgressExceeded",
+          `The program result of ${resultBytes ?? "unencodable"} bytes exceeds the ${maxEgressBytes}-byte model-visible egress budget; return a smaller value`,
+          egress.logs,
+          undefined,
+          maxEgressBytes,
+        );
       }
-      return CodeModeSuccess.make({
-        result: egress.result,
-        logs: budgetedLogs(egress.logs, maxEgressBytes - resultBytes),
-      });
+      const makeEnvelope = (logs: ReadonlyArray<string>) =>
+        CodeModeSuccess.make({ result: egress.result, logs });
+      return makeEnvelope(
+        budgetedEnvelopeLogs(egress.logs, maxEgressBytes, makeEnvelope, encodedSuccessByteLength),
+      );
     });
 
   const build = Effect.gen(function* () {

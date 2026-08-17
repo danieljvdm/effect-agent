@@ -1,5 +1,5 @@
 import {
-  Agent,
+  type Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
@@ -12,6 +12,7 @@ import {
   BudgetWarning,
   unserializableToolResult,
   CompactionPerformed,
+  CompletionMetadata,
   ContextOverflowError,
   ConversationId,
   type Definition,
@@ -59,7 +60,6 @@ import {
   Effect,
   Exit,
   Fiber,
-  Layer,
   Metric,
   Option,
   PubSub,
@@ -68,7 +68,7 @@ import {
   Scope,
   Semaphore,
   Stream,
-  Take,
+  type Take,
 } from "effect";
 import {
   AiError,
@@ -76,7 +76,7 @@ import {
   type Model,
   Prompt,
   Response,
-  Tool,
+  type Tool,
   type Toolkit,
 } from "effect/unstable/ai";
 
@@ -85,6 +85,7 @@ import {
   boundedJsonSnapshot,
   type BoundedJsonSnapshot,
 } from "./provider-result-staging-internal.ts";
+import { safeDiagnostic } from "./safe-diagnostic-internal.ts";
 import {
   annotateToolSpanTerminalOutcome,
   emitThenAfter,
@@ -165,6 +166,7 @@ import {
   DurableStep,
   DurableStepError,
   getToolExecutionClass,
+  getToolExecutionKind,
   type DurableStepService,
   type RunStepHook,
   type RunStepKey,
@@ -216,15 +218,16 @@ import {
 
 /** Schema factory for the terminal value produced by reducing a completed agent event stream. */
 export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
-  Schema.Struct({
-    output,
-    conversationId: ConversationId,
-    runId: RunId,
-    turns: Schema.Int.check(Schema.isGreaterThan(0)),
-    finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-    /** Dimension that bound when the Run settled budget-exhausted (RUN-025; the grant-flow marker). */
-    exhausted: Schema.optionalKey(Schema.Literals(["tokens", "tool-calls", "turns"])),
-  });
+  CompletionMetadata.mapFields(
+    (fields) => ({
+      output,
+      conversationId: ConversationId,
+      runId: RunId,
+      turns: Schema.Int.check(Schema.isGreaterThan(0)),
+      ...fields,
+    }),
+    { unsafePreserveChecks: true },
+  );
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
 export type AgentResult<Output> = ReturnType<
@@ -1367,6 +1370,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
                           toolName: call.name,
                           parameters: call.nativeHandlerParams,
                           executionClass,
+                          executionKind: getToolExecutionKind(call.tool),
                         } satisfies RunToolCallDescriptor,
                       ];
                 });
@@ -1479,12 +1483,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         return stream.pipe(Stream.concat(next));
       }, Stream.empty);
 
-      // This batch's live sink. The queue is unbounded and drained by the
-      // Run's own stream below, matching the Run's existing buffering:
-      // emission never blocks a handler and no external observer can
-      // backpressure the batch. Emitting after the batch settled fails closed
-      // with `RunEventSinkClosedError`.
-      const sinkQueue = yield* Queue.unbounded<SubagentEventPayload, Cause.Done>();
+      // This batch's live sink is bounded and drained by the Run's own stream
+      // below. A producer that outruns the local semantic-event consumer is
+      // backpressured at this owned seam; events are never dropped. Emitting
+      // after the batch settled fails closed with `RunEventSinkClosedError`.
+      const sinkQueue = yield* Queue.bounded<SubagentEventPayload, Cause.Done>(256);
       const batchSink: RunEventSinkService = {
         emit: (payload) =>
           Queue.offer(sinkQueue, payload).pipe(
@@ -1577,20 +1580,9 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
     }),
   );
 
-const ErrorMessage = Schema.Struct({ message: Schema.String });
-const ErrorTag = Schema.Struct({ _tag: Schema.NonEmptyString });
+const errorMessage = (error: unknown): string => safeDiagnostic(error).message;
 
-const errorMessage = (error: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(ErrorMessage)(error), {
-    onNone: () => String(error),
-    onSome: ({ message }) => message,
-  });
-
-const errorTag = (error: unknown): string =>
-  Option.match(Schema.decodeUnknownOption(ErrorTag)(error), {
-    onNone: () => "UnknownError",
-    onSome: ({ _tag }) => _tag,
-  });
+const errorTag = (error: unknown): string => safeDiagnostic(error).errorTag;
 
 const schedulingConcurrency = (
   configured: number,
@@ -2630,6 +2622,7 @@ const eventsForPart = Effect.fnUntraced(function* <Tools extends Record<string, 
           toolName: part.name,
           parameters,
           executionClass: getToolExecutionClass(tool),
+          executionKind: getToolExecutionKind(tool),
         });
       }
       const declared = ToolCallDeclared.make({
@@ -3748,6 +3741,7 @@ const makeResumeTurn = <
           toolName: call.name,
           parameters,
           executionClass: getToolExecutionClass(tool),
+          executionKind: getToolExecutionKind(tool),
         });
       }
       const settledIds = new Set<string>();
@@ -4226,17 +4220,34 @@ const run = Effect.fn("AgentRuntime.run")(function* <
  * completion.
  *
  * `observe` is a live multicast subscription: each subscription replays every
- * event the Run has already emitted, follows subsequent events as they occur,
- * and ends once the Run settles. Events are never dropped for a slow
- * subscriber, and publishing never blocks the Run. `events` remains the
- * complete replay, available after settlement. Both belong to the `start`
- * Scope; observing after that Scope closes interrupts the observer.
+ * retained event, follows subsequent events as they occur, and ends once the
+ * Run settles. Events are never dropped for a slow subscriber, and publishing
+ * never blocks the Run. If the documented replay bound is reached, `await`
+ * fails with `RunEventBufferOverflow`; the retained prefix remains available
+ * through `events` and `observe`. Both belong to the `start` Scope; observing
+ * after that Scope closes interrupts the observer.
  */
 export interface DetachedRun<Output, Error> {
   readonly await: Effect.Effect<AgentResult<Output>, Error>;
   readonly events: Effect.Effect<ReadonlyArray<RunEvent>>;
   readonly observe: Stream.Stream<RunEvent>;
 }
+
+/** Maximum semantic events retained and replayed by one detached Run. */
+export const MAX_DETACHED_RUN_EVENTS = 4_096;
+
+/**
+ * Typed failure raised by `AgentRuntime.start` before detached event capture
+ * could exceed its documented bound. The first `maxEvents` remain available
+ * through both `events` and `observe`; no event is silently dropped.
+ */
+export class RunEventBufferOverflow extends Schema.TaggedError<RunEventBufferOverflow>()(
+  "RunEventBufferOverflow",
+  {
+    maxEvents: Schema.Int.check(Schema.isGreaterThan(0)),
+    message: Schema.String,
+  },
+) {}
 
 const start = Effect.fn("AgentRuntime.start")(function* <
   InputSchema extends Schema.Top,
@@ -4267,7 +4278,7 @@ const start = Effect.fn("AgentRuntime.start")(function* <
 ): Effect.fn.Return<
   DetachedRun<
     Agent.Output<typeof agent>,
-    AgentRuntimeFailure<typeof agent, HookError, InstructionError>
+    AgentRuntimeFailure<typeof agent, HookError, InstructionError> | RunEventBufferOverflow
   >,
   never,
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
@@ -4277,12 +4288,11 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   // it after the fiber settles, so a plain array avoids the quadratic cost of
   // copying an immutable Ref array per event.
   const captured: Array<RunEvent> = [];
-  // The unbounded replay window keeps `observe` subscriptions live without
-  // backpressuring the Run: it retains references to the same events as
-  // `captured`, replays them to subscribers that attach mid-Run or after
-  // settlement, and the terminal `Exit.void` Take ends every subscription.
-  const pubsub = yield* PubSub.unbounded<Take.Take<RunEvent>>({
-    replay: Number.MAX_SAFE_INTEGER,
+  // Capacity admits the complete bounded replay plus its terminal Take. A
+  // subscriber that never consumes therefore cannot backpressure completion.
+  const pubsub = yield* PubSub.bounded<Take.Take<RunEvent>>({
+    capacity: MAX_DETACHED_RUN_EVENTS + 1,
+    replay: MAX_DETACHED_RUN_EVENTS + 1,
   });
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(
@@ -4290,6 +4300,14 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     stream(agent, input, options).pipe(
       Stream.tap((event) =>
         Effect.suspend(() => {
+          if (captured.length >= MAX_DETACHED_RUN_EVENTS) {
+            return Effect.fail(
+              RunEventBufferOverflow.make({
+                maxEvents: MAX_DETACHED_RUN_EVENTS,
+                message: `Detached Run exceeded its ${MAX_DETACHED_RUN_EVENTS} semantic event replay limit`,
+              }),
+            );
+          }
           captured.push(event);
           return PubSub.publish(pubsub, [event]);
         }),
@@ -5228,7 +5246,7 @@ const spawnWithParent = (parent: AgentSpawnerParent, depth: number) =>
   ): Effect.fn.Return<
     SpawnedChildRun<
       Agent.Output<typeof binding>,
-      AgentRuntimeFailure<typeof binding, HookError, InstructionError>
+      AgentRuntimeFailure<typeof binding, HookError, InstructionError> | RunEventBufferOverflow
     >,
     never,
     | Scope.Scope
@@ -5292,9 +5310,6 @@ const makeAgentSpawner = (parent: AgentSpawnerParent, depth: number): AgentSpawn
   spawn: spawnWithParent(parent, depth),
 });
 
-/** Bound applied to the rendered defect message of `withTerminalDefectEvent` (SEC-013). */
-const DEFECT_MESSAGE_LIMIT = 2_048;
-
 /**
  * Opt-in boundary combinator (P7 §7(h), decision point 8): the engine keeps defects as
  * defects — `RunFailed` covers EXPECTED failures only, and a defect still fails the event
@@ -5342,7 +5357,7 @@ export const withTerminalDefectEvent = <E, R>(
               sequence: base.sequence + 1,
               timestamp,
               errorTag: "Defect",
-              message: errorMessage(Cause.squash(cause)).slice(0, DEFECT_MESSAGE_LIMIT),
+              message: errorMessage(Cause.squash(cause)),
             });
           }),
         );
@@ -5356,11 +5371,10 @@ export const withTerminalDefectEvent = <E, R>(
  * event stream exposed by `stream`.
  *
  * The bound Model is provided locally; all remaining requirements stay visible
- * in the returned Effect or Stream. `layer` is empty because this interpreter
- * owns no shared runtime state.
+ * in the returned Effect or Stream. This interpreter owns no shared runtime
+ * state and therefore exposes no Layer.
  */
 export const AgentRuntime = {
-  layer: Layer.empty,
   run,
   start,
   stream,

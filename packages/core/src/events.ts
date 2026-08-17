@@ -144,26 +144,49 @@ export const ExhaustedLimit = Schema.Literals(["tokens", "tool-calls", "turns"])
 export type ExhaustedLimit = typeof ExhaustedLimit.Type;
 
 /**
+ * Shared terminal completion metadata. Budget exhaustion is an atomic
+ * discriminator: its limiting dimension is required for
+ * `"budget-exhausted"` and forbidden for every other finish reason.
+ */
+export const CompletionMetadata = Schema.Struct({
+  finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  exhausted: Schema.optionalKey(ExhaustedLimit),
+}).check(
+  Schema.makeFilter((completion) => {
+    const isBudgetExhausted = completion.finishReason === "budget-exhausted";
+    const hasExhaustedLimit = completion.exhausted !== undefined;
+    return isBudgetExhausted === hasExhaustedLimit
+      ? undefined
+      : {
+          path: ["exhausted"],
+          issue: 'exhausted must be present exactly when finishReason is "budget-exhausted"',
+        };
+  }),
+);
+export type CompletionMetadata = typeof CompletionMetadata.Type;
+
+/**
  * Successful terminal event carrying Schema-compatible output and the completed turn count.
  * `"budget-exhausted"` marks a Run that settled through the policy's final-answer resolution
  * after Turn, Tool Call, or token exhaustion — never a plain `"model-stop"` (RUN-011); its
  * `turns` count may exceed `maxTurns` by the single grace Turn, and `exhausted` names the
  * dimension that bound.
  *
- * Invariant: `exhausted` is present exactly when `finishReason` is
- * `"budget-exhausted"`. A Schema-level discriminated union would break union
- * member identity (the same constraint recorded for `CompactionCreated`'s
- * summary-iff-summarize rule), so the pairing is enforced at every engine
- * construction site and pinned by engine tests; consumers treat a divergent
- * pair fail-safe as not exhausted.
+ * The shared `CompletionMetadata` Schema rejects divergent finish/exhaustion
+ * pairs at every decode boundary.
  */
-export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
-  ...RunEventBase,
-  output: Schema.Json,
-  turns: Schema.Int.check(Schema.isGreaterThan(0)),
-  finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-  exhausted: Schema.optionalKey(ExhaustedLimit),
-}) {}
+export class RunCompleted extends Schema.TaggedClass<RunCompleted>()(
+  "RunCompleted",
+  CompletionMetadata.mapFields(
+    (fields) => ({
+      ...RunEventBase,
+      output: Schema.Json,
+      turns: Schema.Int.check(Schema.isGreaterThan(0)),
+      ...fields,
+    }),
+    { unsafePreserveChecks: true },
+  ),
+) {}
 
 /** Terminal event for a run that failed with an expected error. */
 export class RunFailed extends Schema.TaggedClass<RunFailed>()("RunFailed", {
@@ -217,18 +240,20 @@ export class SubagentProgress extends Schema.TaggedClass<SubagentProgress>()("Su
 
 /**
  * Records the child run's successful terminal outcome before the parent join.
- * Same invariant as `RunCompleted`: `exhausted` is present exactly when
- * `finishReason` is `"budget-exhausted"` (the pair travels verbatim from the
- * child's terminal event); consumers treat a divergent pair fail-safe.
+ * Same Schema-enforced invariant as `RunCompleted`: `exhausted` is present
+ * exactly when `finishReason` is `"budget-exhausted"` (the pair travels
+ * verbatim from the child's terminal event).
  */
 export class SubagentCompleted extends Schema.TaggedClass<SubagentCompleted>()(
   "SubagentCompleted",
-  {
-    ...SubagentEventBase,
-    turns: Schema.Int.check(Schema.isGreaterThan(0)),
-    finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-    exhausted: Schema.optionalKey(ExhaustedLimit),
-  },
+  CompletionMetadata.mapFields(
+    (fields) => ({
+      ...SubagentEventBase,
+      turns: Schema.Int.check(Schema.isGreaterThan(0)),
+      ...fields,
+    }),
+    { unsafePreserveChecks: true },
+  ),
 ) {}
 
 /** Records the child run's expected terminal failure using safe, serializable diagnostics. */

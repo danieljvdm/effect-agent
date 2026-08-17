@@ -34,6 +34,23 @@ export const ToolExecutionClass = Context.Reference<ToolExecutionClassValue>(
 export const getToolExecutionClass = (tool: Tool.Any): ToolExecutionClassValue =>
   Context.get(tool.annotations, ToolExecutionClass);
 
+/** Authoritative semantic kind of one declared Tool execution. */
+export type ToolExecutionKindValue = "application" | "delegation";
+
+/**
+ * Effect AI Tool annotation used to distinguish ordinary application Tools
+ * from framework delegation Tools without inferring semantics from names.
+ * Unannotated Tools are ordinary application executions.
+ */
+export const ToolExecutionKind = Context.Reference<ToolExecutionKindValue>(
+  "@effect-agent/engine/ToolExecutionKind",
+  { defaultValue: () => "application" },
+);
+
+/** Read a Tool's authoritative execution kind, defaulting to `"application"`. */
+export const getToolExecutionKind = (tool: Tool.Any): ToolExecutionKindValue =>
+  Context.get(tool.annotations, ToolExecutionKind);
+
 /** Stable identity of one Step within one Tool Call: `(toolCallId, stepName)`. */
 export interface RunStepKey {
   readonly toolCallId: ToolCallId;

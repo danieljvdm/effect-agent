@@ -13,6 +13,11 @@ AgentRuntime.run(agentBinding, input): Effect<AgentResult, RunFailure, R | Scope
 
 `run` MUST NOT implement a separate loop. Golden tests compare its result to reducing `stream`.
 
+The interpreter is a stateless value and exposes no no-op Layer. Runtime identity remains an
+explicit `IdGenerator` requirement. Core's convenience `IdGenerator.layer` derives that port from
+Effect's platform-neutral `Crypto.Crypto` service; a composition root must provide the host Crypto
+Layer (or provide its own `IdGenerator`). Core never reads ambient WebCrypto globals.
+
 ## 2. Run lifecycle
 
 Ephemeral lifecycle:
@@ -144,6 +149,9 @@ The default is bounded parallel execution owned by the engine.
   stricter limits;
 - a Run or Tool may require sequential execution;
 - calls start in declaration order where scheduling permits;
+- each Tool carries an authoritative `ToolExecutionKind` annotation (`"application"` by default,
+  `"delegation"` only when explicitly declared); durable call descriptors persist that value and
+  never infer delegation from a Tool name;
 - progress and completion may be observed in actual completion order;
 - final Tool results commit in original declaration order;
 - the next model request never sees a partial Tool batch.
@@ -372,15 +380,27 @@ exported `withTerminalDefectEvent` combinator, whose contract is:
 - identity fields come from the last event already streamed; a defect before the first event is
   rethrown without an event, because the helper never fabricates Run identities.
 
+All engine diagnostics use one total, bounded projection. Schema reads are guarded and object
+stringification is never invoked, so throwing getters, hostile proxies, and unusual thrown values
+cannot replace the original failure Cause with a diagnostic defect. The output-contract fallback
+uses the same projection.
+
 ## 11. Backpressure
 
-Local `stream` uses a bounded queue:
+Local semantic event seams are bounded:
 
-- default strategy: suspend producer at semantic event seams;
+- a Tool batch's engine-owned `RunEventSink` suspends its producer when its local bounded queue is
+  full; it never drops semantic events;
 - text delta coalescing MAY reduce volume;
 - semantic terminal events are never dropped;
 - disconnecting/interrupting the sole ephemeral consumer interrupts the Run unless execution was
   explicitly detached.
+
+`AgentRuntime.start` retains and replays at most 4096 semantic events. Its bounded replay channel
+has one additional slot for the terminal signal, so even an observer that never consumes cannot
+backpressure Run completion. Before event 4097 could be retained, `await` fails typed with
+`RunEventBufferOverflow`; the exact 4096-event prefix remains available through `events` and
+`observe`. Overflow is explicit and no event is silently evicted.
 
 Durable transports observe from the journal/projection and do not own execution liveness.
 
@@ -413,10 +433,10 @@ core event minus `eventVersion`, `runId`, `conversationId`, `agentId`,
 `sequence`, `timestamp`, and `turnId`); the engine stamps those fields through
 the same `eventBase` path as every other event, so the base identity and the
 emitting batch's Turn are authoritative and the Run sequence stays monotonic.
-Each Tool batch owns one sink backed by an unbounded queue drained by the
-Run's own stream — consistent with the Run's existing buffering, the Run
-stream is the only consumer, so no external observer can backpressure the
-batch. Sink events surface inside the batch, and the batch settles (including
+Each Tool batch owns one sink backed by a bounded queue drained by the Run's
+own stream. The Run stream is the only consumer, so queue saturation
+backpressures the emitting handler at the semantic seam and never drops an
+event. Sink events surface inside the batch, and the batch settles (including
 by failure) only after already-emitted events have surfaced. Emission after
 the batch settled, or outside any Tool batch, fails closed with the typed
 `RunEventSinkClosedError`.
@@ -493,8 +513,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   `SubmissionSettled` record; `onExhaustion: "fail"` fails typed before any successful stop,
   and a Run failed by `AgentPolicyError` settles with the typed `limit` preserved as the
   durable record's `policyLimit`. Consumers never reconstruct either dimension from message
-  text. The metadata is family-bound fail-closed: `exhausted` decodes only alongside
-  `finishReason: "budget-exhausted"` on a `completed` settlement, `policyLimit` only on a
+  text. The metadata is family-bound fail-closed: the shared completion Schema used by
+  `RunCompleted`, `SubagentCompleted`, and `AgentResult` requires `exhausted` exactly when
+  `finishReason` is `"budget-exhausted"`; `policyLimit` appears only on a
   `failed` settlement whose recorded failure projection is the `AgentPolicyError` it names, and
   histories persisted before the dimensions became durable decode with the metadata absent.
 - **RUN-012:** Provider SDK types do not enter Conversation records; Effect AI Prompt and Response
@@ -557,3 +578,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   derivation, applied after context preparation and never entered into official history; a
   Definition whose output Schema cannot be derived runs with the documented fallback and a
   diagnostic, never a silent difference.
+- **RUN-029:** Detached execution retains and replays at most 4096 semantic events; reaching the
+  bound fails `await` typed before another event is retained, preserves the exact retained prefix,
+  and cannot be blocked by a slow observer.
+- **RUN-030:** Durable Tool descriptors carry the authoritative `ToolExecutionKind` annotation;
+  unannotated Tools are `"application"`, delegation is explicit, and neither the engine nor a
+  durable coordinator infers kind from Tool names.

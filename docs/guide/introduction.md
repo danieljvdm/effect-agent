@@ -19,6 +19,7 @@ Effect program.
 
 ```ts [calculator-agent.ts]
 import { OpenAiClient, OpenAiLanguageModel } from "@effect/ai-openai";
+import { NodeCrypto } from "@effect/platform-node";
 import { Agent, AgentPolicy, IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import { Config, Effect, Layer, Schema } from "effect";
@@ -63,7 +64,8 @@ const OpenAiLive = OpenAiClient.layerConfig({
   apiKey: Config.redacted("OPENAI_API_KEY"),
 }).pipe(Layer.provide(FetchHttpClient.layer));
 
-const AppLive = Layer.mergeAll(CalculatorLive, IdGenerator.layer, OpenAiLive);
+const IdGeneratorLive = IdGenerator.layer.pipe(Layer.provide(NodeCrypto.layer));
+const AppLive = Layer.mergeAll(CalculatorLive, IdGeneratorLive, OpenAiLive);
 
 // 5. The Agent is still an Effect until the application entrypoint runs it.
 const program = AgentRuntime.run(CalculatorAgent, {
@@ -79,8 +81,9 @@ void Effect.runPromise(program);
 
 `Definition` contains the immutable Agent configuration. `CalculatorLive` supplies Tool behavior,
 `CalculatorAgent` fixes the Model selection, and `AppLive` provides the runtime dependencies.
-`IdGenerator.layer` is the framework's default Web Crypto identity authority; the
-[testing guide](./testing) replaces it with deterministic IDs. The result remains an `Effect`
+`IdGenerator.layer` derives identity generation from Effect's platform-neutral `Crypto` service;
+this Node entrypoint supplies `NodeCrypto.layer`, while the [testing guide](./testing) replaces the
+whole identity port with deterministic IDs. The result remains an `Effect`
 until the application entrypoint executes it:
 
 ```ts

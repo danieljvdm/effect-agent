@@ -10,7 +10,7 @@ finite policy, and an explicit Model Binding. This page builds one from scratch.
 publish to npm on the opt-in `beta` dist-tag:
 
 ```sh
-npm install @effect-agent/core@beta @effect-agent/engine@beta effect
+npm install @effect-agent/core@beta @effect-agent/engine@beta @effect/platform-node effect
 ```
 
 ## 1. Model the boundary
@@ -122,7 +122,8 @@ requirements join the Run's `R`.
 ## 5. Interpret the Binding
 
 ```ts
-import { Effect } from "effect";
+import { NodeCrypto } from "@effect/platform-node";
+import { Effect, Layer } from "effect";
 import { IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 
@@ -132,15 +133,16 @@ const program = AgentRuntime.run(Triage, {
 }).pipe(
   Effect.provide(TriageToolkitLive),
   Effect.provide(IssueRepoLive),
-  Effect.provide(IdGenerator.layer),
+  Effect.provide(IdGenerator.layer.pipe(Layer.provide(NodeCrypto.layer))),
   Effect.provide(OpenAiClientLive),
   Effect.scoped,
 );
 ```
 
 `IssueRepoLive` and `OpenAiClientLive` are application Layers whose exact construction is
-intentionally outside the Definition. `IdGenerator.layer` is the framework's default identity
-authority backed by Web Crypto's `randomUUID`; tests replace it with a deterministic Layer.
+intentionally outside the Definition. `IdGenerator.layer` derives the framework identity port from
+Effect's platform-neutral `Crypto` service; this Node entrypoint supplies `NodeCrypto.layer`, while
+tests replace the whole identity port with a deterministic Layer.
 
 ::: tip Deterministic first
 The repository's ordinary tests bind the same Definitions to `ScriptedModel`, not a live provider.

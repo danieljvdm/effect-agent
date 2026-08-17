@@ -1,6 +1,8 @@
 import type { Agent } from "@effect-agent/core";
 import { Prompt, Tool } from "effect/unstable/ai";
 
+import { safeDiagnostic } from "./safe-diagnostic-internal.ts";
+
 /**
  * Model-visible final-output contract (RUN-028).
  *
@@ -59,7 +61,7 @@ export const outputSchemaContract = (definition: Agent.AnyDefinition): OutputCon
   } catch (cause) {
     return {
       _tag: "unrenderable",
-      reason: cause instanceof Error ? cause.message : String(cause),
+      reason: safeDiagnostic(cause).message,
     };
   }
 };

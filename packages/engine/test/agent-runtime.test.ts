@@ -45,7 +45,10 @@ import {
 } from "effect/unstable/ai";
 
 import {
+  AgentResultSchema,
   AgentRuntime,
+  MAX_DETACHED_RUN_EVENTS,
+  RunEventBufferOverflow,
   ToolExecutionClass,
   withTerminalDefectEvent,
   type RunBudgetHook,
@@ -258,6 +261,37 @@ const renderedLogMessage = (message: unknown): string =>
   Array.isArray(message) ? message.join(" ") : String(message);
 
 layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
+  it("rejects divergent completion metadata at the reduced-result boundary", () => {
+    const schema = AgentResultSchema(Schema.Struct({ answer: Schema.String }));
+    const base = {
+      output: { answer: "done" },
+      conversationId: "conversation-1",
+      runId: "run-1",
+      turns: 1,
+    };
+
+    expect(
+      Schema.decodeUnknownExit(schema)({
+        ...base,
+        finishReason: "budget-exhausted",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(schema)({
+        ...base,
+        finishReason: "model-stop",
+        exhausted: "turns",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownSync(schema)({
+        ...base,
+        finishReason: "budget-exhausted",
+        exhausted: "turns",
+      }),
+    ).toMatchObject({ finishReason: "budget-exhausted", exhausted: "turns" });
+  });
+
   it.effect("preserves official prior history as the exact prefix of a new Run", () => {
     const priorHistory = Prompt.fromMessages([
       Prompt.makeMessage("system", { content: "Original conversation instructions." }),
@@ -4952,6 +4986,31 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
+  it.effect("fails detached runs before their complete replay can exceed its bound", () =>
+    Effect.gen(function* () {
+      const parts: Array<Response.StreamPartEncoded> = [
+        { type: "text-start", id: "answer" },
+        ...Array.from({ length: MAX_DETACHED_RUN_EVENTS + 1 }, () => ({
+          type: "text-delta" as const,
+          id: "answer",
+          delta: "x",
+        })),
+      ];
+      const detached = yield* AgentRuntime.start(makeAgent(parts), {
+        question: "overflow deterministically",
+      });
+      const exit = yield* detached.await.pipe(Effect.exit);
+
+      const failure = failureFrom(exit);
+      expect(failure).toBeInstanceOf(RunEventBufferOverflow);
+      if (failure instanceof RunEventBufferOverflow) {
+        expect(failure.maxEvents).toBe(MAX_DETACHED_RUN_EVENTS);
+      }
+      expect(yield* detached.events).toHaveLength(MAX_DETACHED_RUN_EVENTS);
+      expect(yield* detached.observe.pipe(Stream.runCollect)).toHaveLength(MAX_DETACHED_RUN_EVENTS);
+    }),
+  );
+
   it.effect(
     "delivers live events to an observer attached mid-run and replays after settlement",
     () =>
@@ -6001,6 +6060,13 @@ layer(identifiers)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) 
   it.effect("a defect appends one bounded terminal RunFailed and rethrows the original cause", () =>
     Effect.gen(function* () {
       const events = yield* Ref.make<ReadonlyArray<RunEvent>>([]);
+      const diagnostic = "x".repeat(4_096);
+      const defect = {
+        message: diagnostic,
+        toString: () => {
+          throw new Error("hostile diagnostic access");
+        },
+      };
       const model = Model.make(
         "scripted",
         "defect-boundary",
@@ -6014,7 +6080,7 @@ layer(identifiers)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) 
                   { type: "text-start", id: "answer" },
                   { type: "text-delta", id: "answer", delta: "partial" },
                 ]),
-                Stream.fromEffect(Effect.die(new Error("the supplier catalog crashed"))),
+                Stream.fromEffect(Effect.die(defect)),
               ),
           }),
         ),
@@ -6034,6 +6100,7 @@ layer(identifiers)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) 
       expect(Exit.isFailure(exit)).toBe(true);
       if (Exit.isFailure(exit)) {
         expect(Cause.hasDies(exit.cause)).toBe(true);
+        expect(Cause.squash(exit.cause)).toBe(defect);
       }
 
       const observed = yield* Ref.get(events);
@@ -6043,7 +6110,7 @@ layer(identifiers)("RUN-004 withTerminalDefectEvent boundary (P7 §7(h))", (it) 
       expect(terminal?._tag).toBe("RunFailed");
       if (terminal?._tag === "RunFailed") {
         expect(terminal.errorTag).toBe("Defect");
-        expect(terminal.message).toContain("the supplier catalog crashed");
+        expect(terminal.message).toBe("x".repeat(2_048));
         // Identity comes from the already-streamed events, one sequence later.
         const previous = observed.at(-2);
         expect(previous).toBeDefined();

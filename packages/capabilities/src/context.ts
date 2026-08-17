@@ -5,6 +5,7 @@ import type { Prompt } from "effect/unstable/ai";
 import { ConversationMessage, ConversationSnapshot, ConversationText } from "./conversation.ts";
 
 const MAX_CONTEXT_MESSAGES = 1_024;
+const MAX_CONTEXT_MESSAGE_CHARACTERS = 64 * 1024;
 const MAX_CONTEXT_MESSAGE_BYTES = 4 * 1024 * 1024;
 const MAX_SOURCE_SEQUENCES = 1_024;
 const MAX_RETAINED_FACTS = 256;
@@ -133,24 +134,36 @@ export class ContextCompactor extends Context.Service<
 >()("@effect-agent/capabilities/ContextCompactor") {}
 
 const messageText = (message: Prompt.Message): string => {
-  if (message.role === "system") return message.content;
-  const content = message.content
-    .map((part) => {
-      if (part.type === "text" || part.type === "reasoning") return part.text;
-      return `[${part.type}]`;
-    })
-    .join("\n");
-  return content.slice(0, 64 * 1024);
+  const content =
+    message.role === "system"
+      ? message.content
+      : message.content
+          .map((part) => {
+            if (part.type === "text" || part.type === "reasoning") return part.text;
+            return `[${part.type}]`;
+          })
+          .join("\n");
+  return content.slice(0, MAX_CONTEXT_MESSAGE_CHARACTERS);
 };
 
-const asModelMessages = (snapshot: ConversationSnapshot): ReadonlyArray<ModelContextMessage> =>
-  snapshot.messages.map((entry) =>
-    ModelContextMessage.make({
-      role: entry.message.role,
-      content: messageText(entry.message),
-      sourceSequences: [entry.sequence],
-    }),
-  );
+const asModelMessages = (
+  snapshot: ConversationSnapshot,
+): Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError> =>
+  Effect.try({
+    try: () =>
+      snapshot.messages.map((entry) =>
+        ModelContextMessage.make({
+          role: entry.message.role,
+          content: messageText(entry.message),
+          sourceSequences: [entry.sequence],
+        }),
+      ),
+    catch: () =>
+      ContextTransformError.make({
+        transformId: "source-projection",
+        message: "Authoritative history could not be projected into the bounded model view",
+      }),
+  });
 
 const validateModelView = (
   messages: ReadonlyArray<ModelContextMessage>,
@@ -187,7 +200,9 @@ export const prepareModelContext = (
           Effect.flatMap(transform.apply),
           Effect.flatMap((transformed) => validateModelView(transformed, transform.id)),
         ),
-      Effect.succeed(asModelMessages(snapshot)),
+      asModelMessages(snapshot).pipe(
+        Effect.flatMap((messages) => validateModelView(messages, "source-projection")),
+      ),
     )
     .pipe(
       Effect.map((messages) =>

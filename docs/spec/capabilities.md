@@ -121,7 +121,9 @@ An approval request includes:
 
 An approval provider may be interactive, policy-based, remote, or test-controlled.
 Approval decisions are canonical audit events. A timeout is a denial unless the
-configured policy explicitly says otherwise.
+configured policy explicitly says otherwise. Approval adapter durations are Schema-validated and
+must also produce a representable `DateTime`; an unsupported deadline fails with typed
+`ApprovalAdapterError` before policy metadata callbacks or resolver invocation.
 
 On the durable runtime, an unresolved approval is a **durable suspension**: the
 canonical approval request record is the safe boundary (durability §8), ownership ends, and the
@@ -172,6 +174,11 @@ Requirements:
 - secrets excluded by policy must not enter the summary.
 
 Compaction quality is evaluated separately from persistence correctness.
+
+The initial source projection applies the same bounded text projection to system, user, assistant,
+and Tool messages. A valid oversized source message is truncated only in the disposable model
+view; source history remains unchanged, and projection/construction failures use the typed
+`ContextTransformError` channel rather than synchronously throwing.
 
 ## 7. Skills
 
@@ -290,23 +297,32 @@ enforce; an `unisolated` executor is never a security boundary. Interruption clo
 and every transport or resource owned by the pass.
 
 The final result, captured logs, and thrown values form one model-visible egress surface under a
-single aggregate byte budget and redaction policy. Intermediate Tool results never leave the
-pass implicitly — not through telemetry, canonical records, or declarations. In deployment class
-`E`, inner calls produce no Canonical Records: the Conversation Log carries only the outer Tool
-Call and its bounded final result, with inner-call evidence in telemetry counts and host-Tool
-audit metadata. Code Mode claims deployment class `E` only; the `DN` and `DC` assemblies make
-no Code Mode claim until this specification says otherwise.
+single aggregate byte budget and redaction policy. The byte charge is computed after redaction over
+the complete Schema-encoded `CodeModeSuccess` or `CodeModeFailure` envelope, including tags, field
+names, array syntax, and JSON escaping. Intermediate Tool results never leave the pass implicitly —
+not through telemetry, canonical records, or declarations. In deployment class `E`, inner calls
+produce no Canonical Records: the Conversation Log carries only the outer Tool Call and its bounded
+final result, with inner-call evidence in telemetry counts and host-Tool audit metadata. Code Mode
+claims deployment class `E` only; the `DN` and `DC` assemblies make no Code Mode claim until this
+specification says otherwise.
 
 ## 10. Subagents
 
 The proposed Subagent capability is specified in [subagents.md](./subagents.md). It uses declared
 Effect AI Tools for attached delegation: the parent retains conversational control, each invocation
-owns a fresh child Conversation, child context and authority are explicit, and the parent joins one
-Schema-validated result.
+owns a fresh child Conversation, child context and structural delegation bounds are explicit, and
+the parent joins one Schema-validated result. Each generated Tool is explicitly annotated with
+execution kind `delegation`; downstream runtimes do not infer authority or execution kind from its
+name.
 
 An ephemeral child uses structured concurrency and belongs to its parent Scope. A durable child is
 a separate accepted Submission with immutable parent linkage and independent Attempt ownership.
-The full proposed authority model is not yet implemented.
+`SubagentGrant` is currently a compatibility name for a structural ceiling containing only allowed
+child Tool names and the fixed depth-one bound. It is not a Principal/Tenant/resource grant and
+does not authorize child actions. Durable child admission is authorized by the session-owned host
+policy seam; Tool, MCP, sandbox, secret, artifact, and model operations remain authorized by the
+adapters that own those actions. A complete shared authority model has not been designed or
+implemented, and capabilities does not claim per-action reauthorization.
 
 ## 11. Persistent agent state
 

@@ -16,6 +16,7 @@ import {
   AgentSpawner,
   type AgentSpawnerParent,
   type RunBudgetHook,
+  type RunEventBufferOverflow,
   RunEventSink,
   type RunSubagentChildIdentity,
   type RunSubagentDigests,
@@ -28,6 +29,7 @@ import {
   type SubagentEventBasePayload,
   type SubagentEventPayload,
   ToolCallWaiting,
+  ToolExecutionKind,
 } from "@effect-agent/engine";
 import { Clock, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -98,10 +100,10 @@ export class SubagentPolicy extends Schema.Class<SubagentPolicy>(
 }
 
 /**
- * S1 fail-closed authority ceiling skeleton (spec/subagents.md §6). The full
- * grant model (MCP methods, sandbox rights, secret handles, model classes,
- * per-action reauthorization inputs) is deferred to a later slice; S1 checks
- * allowed child Tool names and the delegation-depth ceiling at preflight.
+ * Structural delegation ceiling for child Tool names and depth. Despite its
+ * compatibility name, this is not a Principal/Tenant/resource authorization
+ * grant and does not authorize Tool, MCP, sandbox, secret, or model actions.
+ * Those decisions remain with child admission and the action-owning adapters.
  */
 export class SubagentGrant extends Schema.Class<SubagentGrant>(
   "@effect-agent/capabilities/SubagentGrant",
@@ -431,9 +433,10 @@ export interface SubagentDefineOptions<
   /** Finite delegation bounds reserved for every invocation (SUB-009). */
   readonly policy: SubagentPolicy;
   /**
-   * Authority ceiling for the child (spec/subagents.md §6). Defaults to
-   * exactly the target's declared Tool names at depth ceiling one; a narrower
-   * grant fails preflight closed because S1 cannot shrink the child Toolkit.
+   * Structural child Tool-name/depth ceiling. Defaults to exactly the target's
+   * declared Tool names at depth ceiling one; a narrower ceiling fails
+   * preflight closed because S1/S2 cannot shrink the child Toolkit. This value
+   * is not an action authorization grant.
    */
   readonly grant?: SubagentGrant | undefined;
   /**
@@ -446,9 +449,9 @@ export interface SubagentDefineOptions<
 /**
  * An immutable Delegation Definition: one target Agent Definition exposed to
  * a parent as one Effect AI Tool with explicit projections, policy, and
- * authority ceiling (spec/subagents.md §3). It owns no acquired resources and
- * is not executable until `SubagentRuntime.layer` pairs it with an explicit
- * child Binding.
+ * structural delegation ceiling (spec/subagents.md §3). It owns no acquired
+ * resources and is not executable until `SubagentRuntime.layer` pairs it with
+ * an explicit child Binding.
  */
 export interface SubagentDelegation<
   Name extends string,
@@ -683,6 +686,7 @@ const define: SubagentDefine = <
   // this assertion bridges only that limitation and crosses no schema
   // boundary (the schemas above are constructed per mode, never reinterpreted).
   const tool = (failureMode === "return" ? returnModeTool : errorModeTool)
+    .annotate(ToolExecutionKind, "delegation")
     .addDependency(AgentSpawner)
     .addDependency(RunEventSink)
     .addDependency(SubagentDurability)
@@ -788,21 +792,23 @@ export type SubagentChildRunFailure<
   ModelRequires,
   InstructionError = InstructionErrorOf<TargetInstructions, TargetInput["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<TargetInstructions, TargetInput["Type"]>,
-> = AgentRuntimeFailure<
-  RuntimeBinding<
-    TargetInput,
-    TargetOutput,
-    TargetInstructions,
-    TargetTools,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    InstructionError,
-    InstructionRequirements
-  >,
-  never,
-  InstructionError
->;
+> =
+  | AgentRuntimeFailure<
+      RuntimeBinding<
+        TargetInput,
+        TargetOutput,
+        TargetInstructions,
+        TargetTools,
+        Provider,
+        ModelProvides,
+        ModelRequires,
+        InstructionError,
+        InstructionRequirements
+      >,
+      never,
+      InstructionError
+    >
+  | RunEventBufferOverflow;
 
 /**
  * Construction requirements of one `SubagentRuntime.layer`: the child
@@ -1299,7 +1305,7 @@ const layer = <
       ).pipe(Effect.orDie);
 
       // Preflight (spec/subagents.md §8 step 2, SUB-029): depth ceiling,
-      // nested delegation in the child Toolkit, and the grant ceiling all
+      // nested delegation in the child Toolkit, and the structural ceiling all
       // fail closed before any reservation or child identity exists.
       if (spawner.depth + 1 > delegation.grant.maxDepth) {
         return yield* prestartDenied(
@@ -1317,7 +1323,7 @@ const layer = <
         if (!delegation.grant.allowedToolNames.includes(childToolName)) {
           return yield* prestartDenied(
             "grant-violation",
-            `Child Tool ${childToolName} is outside the delegation grant ceiling`,
+            `Child Tool ${childToolName} is outside the structural delegation ceiling`,
           );
         }
       }
@@ -1591,9 +1597,10 @@ const layer = <
         );
       }
 
-      // Preflight re-runs on every Attempt, including batch resume (SUB-026
-      // per-action reauthorization): a narrowed or revoked grant denies the
-      // next action typed before any establishment replay.
+      // The structural name/depth preflight re-runs on every Attempt,
+      // including batch resume. Durable child-admission authorization belongs
+      // to session; later Tool/MCP/sandbox actions remain authorized by their
+      // owning adapters rather than by this compatibility-named grant.
       const depth = spawner.depth + 1;
       if (depth > delegation.grant.maxDepth) {
         return yield* prestartDenied(
@@ -1611,7 +1618,7 @@ const layer = <
         if (!delegation.grant.allowedToolNames.includes(childToolName)) {
           return yield* prestartDenied(
             "grant-violation",
-            `Child Tool ${childToolName} is outside the delegation grant ceiling`,
+            `Child Tool ${childToolName} is outside the structural delegation ceiling`,
           );
         }
       }
