@@ -807,6 +807,20 @@ describe("SubmissionLedger port schemas", () => {
       })._tag,
     ).toBe("Failure");
     expect(
+      Schema.decodeUnknownExit(Settlement)({
+        submissionId: "submission-1",
+        settlementId: "settlement:submission-1",
+        receiptId: "receipt-1",
+        outcome: "failed",
+        failure: {
+          errorTag: "AgentOutputError",
+          message: "invalid output",
+          cause: { secret: "must-not-cross-boundary" },
+        },
+        settledAt: "2026-08-12T00:01:00.000Z",
+      })._tag,
+    ).toBe("Failure");
+    expect(
       Schema.decodeUnknownExit(SettlementReservation)({
         ...encodedReservation,
         outcome: "unknown",

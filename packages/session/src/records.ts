@@ -73,7 +73,12 @@ const SettlementFailureMessage = Schema.String.check(Schema.isMaxLength(16 * 102
 export const SettlementFailureDiagnostic = Schema.Struct({
   errorTag: SettlementFailureTag,
   message: SettlementFailureMessage,
-});
+}).pipe(
+  Schema.annotate({
+    identifier: "@effect-agent/session/SettlementFailureDiagnostic",
+    parseOptions: { onExcessProperty: "error" },
+  }),
+);
 export type SettlementFailureDiagnostic = typeof SettlementFailureDiagnostic.Type;
 
 /** Positive canonical (Run-relative, Attempt-independent) Turn number. */
@@ -465,12 +470,7 @@ const RawSubmissionSettled = Schema.Struct({
 const isPolicyFailureProjection = Schema.is(
   Schema.Struct({ errorTag: Schema.Literal("AgentPolicyError") }),
 );
-const isSettlementFailureDiagnosticSchema = Schema.is(SettlementFailureDiagnostic);
-const isSettlementFailureDiagnostic = (input: unknown): input is SettlementFailureDiagnostic =>
-  isSettlementFailureDiagnosticSchema(input) &&
-  Object.keys(input).length === 2 &&
-  Object.hasOwn(input, "errorTag") &&
-  Object.hasOwn(input, "message");
+const isSettlementFailureDiagnostic = Schema.is(SettlementFailureDiagnostic);
 
 const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): boolean =>
   (settled.finishReason === undefined || settled.outcome === "completed") &&
