@@ -52,12 +52,13 @@ jobs:
           # A dedicated secret is preferred. The provider credential is a
           # stable workflow-only fallback and is never sent to the reviewer as state.
           state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET || secrets.OPENAI_API_KEY }}
-          # Routine incremental deltas use one flat reviewer. Reserve fan-out
-          # for the explicit full-diff audit instead of multiplying model calls
-          # across every corrective push.
-          fan-out: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'true' || 'false' }}
+          # Keep one fan-out review profile across initial, incremental, and
+          # final runs. A flat review cannot completely cover a large initial
+          # scope within its tool-call bound, and switching topology later
+          # invalidates the authenticated incremental-review baseline.
+          fan-out: "true"
           # Medium is the routine-review default. The deliberate full-diff
-          # audit gets high effort together with fan-out.
+          # audit gets high effort without changing the review topology.
           effort: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}
           # Bound pathological fan-out runs below the package's 15-minute
           # ceiling while leaving headroom under the 20-minute runner timeout.
