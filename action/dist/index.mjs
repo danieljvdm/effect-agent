@@ -2415,6 +2415,14 @@ var map3 = /* @__PURE__ */ dual(2, (self, f) => {
   }
   return out;
 });
+var mapEntries = /* @__PURE__ */ dual(2, (self, f) => {
+  const out = {};
+  for (const key of keys(self)) {
+    const [k, b] = f(self[key], key);
+    assignProperty(out, k, b);
+  }
+  return out;
+});
 var keys = (self) => Object.keys(self);
 var isSubrecordBy = (equivalence) => dual(2, (self, that) => {
   for (const key of keys(self)) {
@@ -22665,18 +22673,207 @@ function unescapeToken(token) {
 }
 
 // node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonSchema.js
+var exports_JsonSchema = {};
+__export(exports_JsonSchema, {
+  toMultiDocumentOpenApi3_1: () => toMultiDocumentOpenApi3_1,
+  toDocumentDraft07: () => toDocumentDraft07,
+  toDocumentDraft04: () => toDocumentDraft04,
+  sanitizeOpenApiComponentsSchemasKey: () => sanitizeOpenApiComponentsSchemasKey,
+  rewriteRefs: () => rewriteRefs,
+  resolveTopLevel$ref: () => resolveTopLevel$ref,
+  resolve$ref: () => resolve$ref,
+  fromSchemaOpenApi3_1: () => fromSchemaOpenApi3_1,
+  fromSchemaOpenApi3_0: () => fromSchemaOpenApi3_0,
+  fromSchemaDraft2020_12: () => fromSchemaDraft2020_12,
+  fromSchemaDraft07: () => fromSchemaDraft07,
+  VALID_OPEN_API_COMPONENTS_SCHEMAS_KEY_REGEXP: () => VALID_OPEN_API_COMPONENTS_SCHEMAS_KEY_REGEXP,
+  META_SCHEMA_URI_DRAFT_2020_12: () => META_SCHEMA_URI_DRAFT_2020_12,
+  META_SCHEMA_URI_DRAFT_07: () => META_SCHEMA_URI_DRAFT_07,
+  META_SCHEMA_URI_DRAFT_04: () => META_SCHEMA_URI_DRAFT_04
+});
+var META_SCHEMA_URI_DRAFT_04 = "http://json-schema.org/draft-04/schema#";
+var META_SCHEMA_URI_DRAFT_07 = "http://json-schema.org/draft-07/schema#";
+var META_SCHEMA_URI_DRAFT_2020_12 = "https://json-schema.org/draft/2020-12/schema";
+var RE_DEFINITIONS = /^#\/definitions(?=\/|$)/;
 var RE_DEFS = /^#\/\$defs(?=\/|$)/;
+var RE_COMPONENTS_SCHEMAS = /^#\/components\/schemas(?=\/|$)/;
 var DRAFT_04_COPY_KEYWORDS = /* @__PURE__ */ new Set(["$ref", "type", "required", "enum", "title", "description", "default", "format", "pattern", "minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties", "multipleOf", "uniqueItems"]);
 var DRAFT_07_COPY_KEYWORDS = /* @__PURE__ */ new Set([...DRAFT_04_COPY_KEYWORDS, "const", "examples", "readOnly", "writeOnly", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"]);
+var DRAFT_04_SINGLE_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set(["not"]);
 var DRAFT_07_SINGLE_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set(["not", "additionalProperties", "propertyNames"]);
 var MAP_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set(["properties", "patternProperties"]);
 var ARRAY_SUBSCHEMA_KEYWORDS = /* @__PURE__ */ new Set(["allOf", "anyOf", "oneOf"]);
+function fromSchemaDraft07(js) {
+  let definitions;
+  const schema = walk(js, true);
+  return {
+    dialect: "draft-2020-12",
+    schema,
+    definitions: definitions ?? {}
+  };
+  function walk(node, isRoot) {
+    if (Array.isArray(node))
+      return node.map(walkNested);
+    if (!isObject(node))
+      return node;
+    const out = {};
+    let prefixItems = undefined;
+    let additionalItems = undefined;
+    for (const k of Object.keys(node)) {
+      const v = node[k];
+      if (k === "$ref") {
+        out.$ref = typeof v === "string" ? v.replace(RE_DEFINITIONS, "#/$defs") : v;
+        continue;
+      }
+      if (DRAFT_07_COPY_KEYWORDS.has(k)) {
+        out[k] = v;
+        continue;
+      }
+      if (rewriteSubschemaKeyword(out, k, v, walkNested, DRAFT_07_SINGLE_SUBSCHEMA_KEYWORDS))
+        continue;
+      switch (k) {
+        case "definitions": {
+          const mapped = mapObject(v, walkNested);
+          if (isRoot) {
+            definitions = mapped;
+          } else {
+            out.definitions = mapped ?? v;
+          }
+          break;
+        }
+        case "items":
+          prefixItems = v;
+          break;
+        case "additionalItems":
+          additionalItems = v;
+          break;
+        default:
+          break;
+      }
+    }
+    if (prefixItems !== undefined) {
+      if (Array.isArray(prefixItems)) {
+        out.prefixItems = prefixItems.map(walkNested);
+        if (additionalItems !== undefined)
+          out.items = walkNested(additionalItems);
+      } else {
+        out.items = walkNested(prefixItems);
+      }
+    }
+    return out;
+  }
+  function walkNested(node) {
+    return walk(node, false);
+  }
+}
+function fromSchemaDraft2020_12(js) {
+  const {
+    $defs,
+    ...schema
+  } = js;
+  return {
+    dialect: "draft-2020-12",
+    schema,
+    definitions: isObject($defs) ? $defs : {}
+  };
+}
+function fromSchemaOpenApi3_1(js) {
+  const schema = rewriteRefs(js, (ref) => ref.replace(RE_COMPONENTS_SCHEMAS, "#/$defs"));
+  return fromSchemaDraft2020_12(schema);
+}
+function fromSchemaOpenApi3_0(schema) {
+  const normalized = normalizeOpenApi3_0ToDraft07(schema);
+  return fromSchemaDraft07(normalized);
+}
 function toDocumentDraft07(document) {
   return {
     dialect: "draft-07",
     schema: toSchemaDraft07(document.schema),
     definitions: map3(document.definitions, toSchemaDraft07)
   };
+}
+function toDocumentDraft04(document) {
+  const draft07 = toDocumentDraft07(document);
+  return {
+    dialect: "draft-04",
+    schema: toSchemaDraft04(draft07.schema),
+    definitions: map3(draft07.definitions, toSchemaDraft04)
+  };
+}
+function toSchemaDraft04(schema) {
+  return walk(schema);
+  function walk(node) {
+    if (node === true)
+      return {};
+    if (node === false)
+      return {
+        not: {}
+      };
+    if (Array.isArray(node))
+      return node.map(walk);
+    if (!isObject(node))
+      return node;
+    const src = node;
+    const out = {};
+    let hasConst = false;
+    let constValue = undefined;
+    for (const k of Object.keys(src)) {
+      const v = src[k];
+      if (DRAFT_04_COPY_KEYWORDS.has(k)) {
+        out[k] = v;
+        continue;
+      }
+      if (rewriteSubschemaKeyword(out, k, v, walk, DRAFT_04_SINGLE_SUBSCHEMA_KEYWORDS))
+        continue;
+      switch (k) {
+        case "const":
+          hasConst = true;
+          constValue = v;
+          break;
+        case "minimum":
+        case "maximum":
+        case "exclusiveMinimum":
+        case "exclusiveMaximum":
+          break;
+        case "additionalProperties":
+        case "additionalItems":
+          out[k] = typeof v === "boolean" ? v : walk(v);
+          break;
+        case "items":
+          out.items = Array.isArray(v) ? v.map(walk) : walk(v);
+          break;
+        default:
+          break;
+      }
+    }
+    convertExclusiveBound(src, out, "minimum", "exclusiveMinimum", (bound, exclusive) => bound > exclusive);
+    convertExclusiveBound(src, out, "maximum", "exclusiveMaximum", (bound, exclusive) => bound < exclusive);
+    if (hasConst) {
+      const constSchema = {
+        enum: [constValue]
+      };
+      if (Object.hasOwn(src, "enum")) {
+        out.allOf = Array.isArray(out.allOf) ? [...out.allOf, constSchema] : [constSchema];
+      } else {
+        out.enum = constSchema.enum;
+      }
+    }
+    return out;
+  }
+}
+function convertExclusiveBound(src, out, boundKey, exclusiveKey, isBoundStricter) {
+  const bound = src[boundKey];
+  const exclusive = src[exclusiveKey];
+  if (typeof exclusive === "number") {
+    if (typeof bound === "number" && isBoundStricter(bound, exclusive)) {
+      out[boundKey] = bound;
+    } else {
+      out[boundKey] = exclusive;
+      out[exclusiveKey] = true;
+    }
+  } else if (bound !== undefined) {
+    out[boundKey] = bound;
+  }
 }
 function toSchemaDraft07(schema) {
   return transformSchema(schema, (src) => {
@@ -22727,6 +22924,50 @@ function toSchemaDraft07(schema) {
     }
     return out;
   });
+}
+function toMultiDocumentOpenApi3_1(multiDocument) {
+  const definitionKeys = Object.keys(multiDocument.definitions);
+  const keyMap2 = new Map;
+  const usedKeys = new Set(definitionKeys.filter((key) => VALID_OPEN_API_COMPONENTS_SCHEMAS_KEY_REGEXP.test(key)));
+  const invalidKeys = definitionKeys.filter((key) => !VALID_OPEN_API_COMPONENTS_SCHEMAS_KEY_REGEXP.test(key)).sort().map((key) => [key, sanitizeOpenApiComponentsSchemasKey(key)]);
+  for (const [key, base2] of invalidKeys) {
+    if (usedKeys.has(base2))
+      continue;
+    usedKeys.add(base2);
+    keyMap2.set(key, base2);
+  }
+  for (const [key, base2] of invalidKeys) {
+    if (keyMap2.has(key))
+      continue;
+    let candidate;
+    let suffix = 0;
+    do
+      candidate = `${base2}_${++suffix}`;
+    while (usedKeys.has(candidate));
+    usedKeys.add(candidate);
+    keyMap2.set(key, candidate);
+  }
+  function rewrite(schema) {
+    return rewriteRefs(schema, ($ref) => {
+      if (!$ref.startsWith("#/$defs/"))
+        return $ref;
+      const path = $ref.slice("#/$defs/".length);
+      const separatorIndex = path.indexOf("/");
+      const token = separatorIndex === -1 ? path : path.slice(0, separatorIndex);
+      const rest = separatorIndex === -1 ? "" : path.slice(separatorIndex);
+      const key = keyMap2.get(unescapeToken(token)) ?? token;
+      return `#/components/schemas/${key}${rest}`;
+    });
+  }
+  return {
+    dialect: "openapi-3.1",
+    schemas: map4(multiDocument.schemas, rewrite),
+    definitions: mapEntries(multiDocument.definitions, (definition, key) => [keyMap2.get(key) ?? key, rewrite(definition)])
+  };
+}
+var VALID_OPEN_API_COMPONENTS_SCHEMAS_KEY_REGEXP = /^[a-zA-Z0-9.\-_]+$/;
+function sanitizeOpenApiComponentsSchemasKey(s) {
+  return s.length === 0 ? "_" : s.replace(/[^a-zA-Z0-9._-]/gu, "_");
 }
 function transformSchema(node, transform3) {
   return walk(node);
@@ -22779,6 +23020,97 @@ function rewriteSchemaRef(schema, rewrite) {
 }
 function mapObject(value2, f) {
   return isObject(value2) ? map3(value2, f) : undefined;
+}
+function rewriteSubschemaKeyword(out, key, value2, rewrite, singleKeywords) {
+  if (MAP_SUBSCHEMA_KEYWORDS.has(key)) {
+    out[key] = mapObject(value2, rewrite) ?? value2;
+    return true;
+  }
+  if (ARRAY_SUBSCHEMA_KEYWORDS.has(key)) {
+    out[key] = Array.isArray(value2) ? value2.map(rewrite) : value2;
+    return true;
+  }
+  if (!singleKeywords.has(key))
+    return false;
+  out[key] = rewrite(value2);
+  return true;
+}
+function normalizeOpenApi3_0ToDraft07(node) {
+  if (Array.isArray(node))
+    return node.map(normalizeOpenApi3_0ToDraft07);
+  if (!isObject(node))
+    return node;
+  const src = node;
+  let out = {};
+  for (const k of Object.keys(src)) {
+    const v = src[k];
+    if (k === "$ref" && typeof v === "string") {
+      assignProperty(out, k, v.replace(RE_COMPONENTS_SCHEMAS, "#/definitions"));
+    } else if (k === "example") {
+      if (src.examples === undefined) {
+        out.examples = [v];
+      }
+    } else if (Array.isArray(v) || isObject(v)) {
+      assignProperty(out, k, normalizeOpenApi3_0ToDraft07(v));
+    } else {
+      assignProperty(out, k, v);
+    }
+  }
+  out = adjustExclusivity(out);
+  if (out.nullable === true) {
+    out = applyNullable(out);
+  }
+  delete out.nullable;
+  return out;
+}
+function adjustExclusivity(node) {
+  return adjustExclusiveBound(adjustExclusiveBound(node, "minimum", "exclusiveMinimum"), "maximum", "exclusiveMaximum");
+}
+function adjustExclusiveBound(node, boundKey, exclusiveKey) {
+  const exclusive = node[exclusiveKey];
+  if (typeof exclusive !== "boolean")
+    return node;
+  const out = {
+    ...node
+  };
+  if (exclusive && typeof node[boundKey] === "number") {
+    out[exclusiveKey] = node[boundKey];
+    delete out[boundKey];
+  } else {
+    delete out[exclusiveKey];
+  }
+  return out;
+}
+function applyNullable(node) {
+  if (Array.isArray(node.enum)) {
+    return widenType({
+      ...node,
+      enum: node.enum.includes(null) ? node.enum : [...node.enum, null]
+    });
+  }
+  if (node.type !== undefined)
+    return widenType(node);
+  if (node.const === null)
+    return node;
+  return {
+    anyOf: [node, {
+      type: "null"
+    }]
+  };
+}
+function widenType(node) {
+  const t = node.type;
+  if (typeof t === "string")
+    return t === "null" ? node : {
+      ...node,
+      type: [t, "null"]
+    };
+  if (Array.isArray(t))
+    return t.includes("null") ? node : {
+      ...node,
+      type: [...t, "null"]
+    };
+  return node;
 }
 function resolve$ref($ref, definitions) {
   const tokens = $ref.split("/");
@@ -38794,6 +39126,13 @@ class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpD
 class McpConnector extends exports_Context.Service()("@effect-agent/capabilities/McpConnector") {
 }
 var encodedBytes3 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var flattenTopLevelRef = (schema3) => {
+  const ref = schema3["$ref"];
+  const defs = schema3["$defs"];
+  if (typeof ref !== "string" || defs === undefined)
+    return schema3;
+  return exports_JsonSchema.resolve$ref(ref, defs) ?? schema3;
+};
 var canonicalJson = (value4) => {
   if (value4 === null || typeof value4 === "string" || typeof value4 === "boolean" || typeof value4 === "number") {
     return value4;
@@ -38874,10 +39213,10 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
   })).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0);
   const toolkitSchemas = yield* exports_Effect.try({
     try: () => Object.values(server.toolkit.tools).map((tool) => {
-      const outputSchema = exports_Tool.getJsonSchemaFromSchema(tool.successSchema);
+      const outputSchema = flattenTopLevelRef(exports_Tool.getJsonSchemaFromSchema(tool.successSchema));
       return {
         name: tool.name,
-        inputSchema: exports_Tool.getJsonSchema(tool),
+        inputSchema: flattenTopLevelRef(exports_Tool.getJsonSchema(tool)),
         ...outputSchema.type === "object" ? { outputSchema } : {}
       };
     }).sort((left, right) => left.name < right.name ? -1 : left.name > right.name ? 1 : 0),
