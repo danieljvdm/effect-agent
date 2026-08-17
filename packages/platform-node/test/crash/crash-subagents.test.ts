@@ -380,7 +380,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "kill after the precommitted parent wake and child finalize: recovery resumes without replaying the wake",
+      "kill after the precommitted parent wake and child finalize: recovery replays the wake idempotently",
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
@@ -423,10 +423,10 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === ids.parent,
                 );
-                // Recovery resumes from the already-committed child result. It does not need a
-                // scan-seeded `ResumeWaitingParent` repair for newly written data.
-                expect(report?.decision._tag).toBe("ResumeFromTurnBoundary");
-                expect(report?.disposition).toBe("deferred");
+                // The parent wake was already committed before the kill. Recovery still repairs
+                // the open canonical delegation through the same idempotent wake operation.
+                expect(report?.decision._tag).toBe("ResumeWaitingParent");
+                expect(report?.disposition).toBe("repaired");
                 expect((yield* submissionSnapshot(ids.parent)).state).toBe("input-applied");
 
                 const settlements = yield* drive(conversation);
