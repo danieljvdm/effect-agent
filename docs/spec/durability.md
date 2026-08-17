@@ -352,6 +352,23 @@ A recovery worker:
 Recovery policy is pure where possible and testable against a finite persisted
 snapshot.
 
+One `runRecovery` pass consumes the ledger's `(ConversationId, queue sequence)` order in
+contiguous Conversation groups. Before repairing any Submission in a group, it captures that
+Conversation's strongly consistent tail sequence `T` and reads exactly the canonical prefix
+`1..T` in pages of at most 1,024 records. Classification reads are therefore bounded to one tail
+inspection plus `ceil(T / 1024)` canonical-store page requests for the Conversation, independent
+of its nonterminal Submission count. Every page must exactly cover the requested contiguous
+sequence; a short page or gap fails as a typed `ConversationStoreError` before the group mutates.
+
+The prefix is a pass-scoped snapshot, not a second authority or a resident cache. The runtime's
+canonical-history working set is `O(T)` envelopes for at most one Conversation while processing
+its group. It releases that prefix before reading the next Conversation and retains nothing across
+interruption, restart, or the next pass. A concurrent append receives a sequence above `T` and is
+classified on the next pass. When a repair mutation must distinguish a racing append before it
+writes (for example canonical input apply), it reads only the newly committed suffix after the
+captured prefix rather than rereading history from sequence zero. Canonical storage remains
+authoritative for every repair and later pass.
+
 ## 15. Crash-point matrix
 
 | Crash point                                                   | Durable state                                                     | Recovery                                          |
