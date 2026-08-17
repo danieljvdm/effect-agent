@@ -94,13 +94,13 @@ need.
 | Checks          | the detached worktree, host-configured checks | GitHub write token, model-provider secret           |
 | Publisher       | GitHub write token, host-validated artifacts  | model-provider secret, unrestricted worktree access |
 
-The publisher receives only the host-validated patch plus independently owned
-publisher configuration for the digest, allowed paths, required-check
-evidence, work-order identity, and expected `headSha`. It compares every
-identity field to that configuration, derives every affected source and
-destination path from a fail-closed parse of the patch, and rejects any
-non-empty patch whose complete path set cannot be proven and checked against
-the allowlist. It re-reads the pull-request head and updates the ref only
+The publisher process acquires the GitHub write token and independently owned
+expected identity itself. Ingress sends only the host-validated patch and
+trust envelope over IPC and has no capability to provide or inspect publisher
+credentials or configuration. The publisher compares every identity field to
+its own configuration, derives every affected source and destination path
+from a fail-closed parse of the patch, and rejects any non-empty patch whose
+complete path set cannot be proven and checked against the allowlist. It re-reads the pull-request head and updates the ref only
 through an atomic compare-and-swap that still names that SHA. A lost race is
 `StalePullRequestHead`. A successful update followed by a cleanup failure
 reports publication uncertainty and the observed head. No exactly-once

@@ -3,16 +3,18 @@ import { Context, Effect, type FileSystem, Layer, type Path, Schema, type Scope 
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
-  GITHUB_WRITE_TOKEN_ENV,
   IsolatedPublishWorkerRequest,
   IsolationViolation,
   type PublisherRequest,
-  type PublisherTrust,
   PublisherVerificationFailure,
   PublicationUncertainty,
 } from "./contracts.ts";
 import { spawnIsolatedWorker } from "./isolation.ts";
-import { PUBLISH_FAILPOINT_ENV, type PublishFailpointLocation } from "./worker-contracts.ts";
+import {
+  PUBLISH_FAILPOINT_ENV,
+  PUBLISHER_STATE_DIR_ENV,
+  type PublishFailpointLocation,
+} from "./worker-contracts.ts";
 
 const PublisherWorkerOutcome = Schema.Union([
   Schema.TaggedStruct("published", {
@@ -41,8 +43,6 @@ export class IsolatedPublisher extends Context.Service<
 >()("@effect-agent/example-pr-work-order-ingress/IsolatedPublisher") {
   static readonly layer = (options: {
     readonly stateDir: string;
-    readonly writeToken?: string | undefined;
-    readonly expected: PublisherTrust;
     readonly failpoint?: PublishFailpointLocation | undefined;
   }) =>
     Layer.succeed(
@@ -55,13 +55,9 @@ export class IsolatedPublisher extends Context.Service<
               request: IsolatedPublishWorkerRequest.make({
                 patch: request.patch,
                 trust: request.trust,
-                expected: options.expected,
-                stateDir: options.stateDir,
               }),
               env: {
-                ...(options.writeToken === undefined
-                  ? {}
-                  : { [GITHUB_WRITE_TOKEN_ENV]: options.writeToken }),
+                [PUBLISHER_STATE_DIR_ENV]: options.stateDir,
                 ...(options.failpoint === undefined
                   ? {}
                   : { [PUBLISH_FAILPOINT_ENV]: options.failpoint }),

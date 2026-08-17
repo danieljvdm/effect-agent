@@ -9,6 +9,9 @@ import {
   IsolatedCheckRequest,
   IsolatedPublishWorkerRequest,
   PUBLISH_FAILPOINT_ENV,
+  PUBLISHER_EXPECTED_FILE,
+  PUBLISHER_STATE_DIR_ENV,
+  PublisherTrust,
 } from "./worker-contracts.ts";
 
 const WRITE_TOKEN = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
@@ -34,14 +37,24 @@ const requestText = (() => {
   }
 })();
 
-const decodeRequest = <A>(schema: Schema.Codec<A, string>) => {
-  if (requestText === undefined) return undefined;
+const decodeText = <A>(schema: Schema.Codec<A, string>, text: string | undefined) => {
+  if (text === undefined) return undefined;
   try {
-    return Schema.decodeUnknownSync(schema)(requestText);
+    return Schema.decodeUnknownSync(schema)(text);
   } catch {
     return undefined;
   }
 };
+
+const readOwnedFile = (file: string) => {
+  try {
+    return readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+};
+
+const decodeRequest = <A>(schema: Schema.Codec<A, string>) => decodeText(schema, requestText);
 
 const headerPath = (line: string, side: string) => {
   const body = line.slice(4).split("\t", 1)[0] ?? "";
@@ -124,10 +137,7 @@ const sameChecks = (
       check.summary === right[index]?.summary,
   );
 
-const sameIdentity = (
-  trust: IsolatedPublishWorkerRequest["trust"],
-  expected: IsolatedPublishWorkerRequest["expected"],
-) =>
+const sameIdentity = (trust: IsolatedPublishWorkerRequest["trust"], expected: PublisherTrust) =>
   trust.workOrderId === expected.workOrderId &&
   trust.workOrderDigest === expected.workOrderDigest &&
   trust.repository === expected.repository &&
@@ -192,7 +202,25 @@ if (role === "publish") {
       reason: "publisher process inherited a model-provider secret",
     });
   }
-  const { patch, trust, expected, stateDir } = request;
+  const { patch, trust } = request;
+  const stateDir = process.env[PUBLISHER_STATE_DIR_ENV];
+  if (stateDir === undefined || stateDir.length === 0) {
+    fail({
+      _tag: "IsolationViolation",
+      process: "publish",
+      reason: "publisher process has no independently owned state directory",
+    });
+  }
+  const expected =
+    decodeText(
+      Schema.fromJsonString(PublisherTrust),
+      readOwnedFile(`${stateDir}/${PUBLISHER_EXPECTED_FILE}`),
+    ) ??
+    fail({
+      _tag: "IsolationViolation",
+      process: "publish",
+      reason: "publisher process could not decode independently owned expected identity",
+    });
   if (!sameIdentity(trust, expected)) {
     fail({
       _tag: "PublisherVerificationFailure",

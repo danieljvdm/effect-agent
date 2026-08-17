@@ -112,10 +112,6 @@ const defaultTrustFields = {
 
 const typedPublish = IsolatedPublisher.layer({
   stateDir: "/tmp",
-  expected: PublisherTrust.make({
-    ...defaultTrustFields,
-    requiredChecks: [...defaultTrustFields.requiredChecks],
-  }),
 }).pipe(
   Layer.build,
   Effect.flatMap(() =>
@@ -693,18 +689,20 @@ describe("PR work-order ingress", () => {
           const path = yield* Path.Path;
           const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-" });
           yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
-          const publish = (request: PublisherRequest, expected?: PublisherTrust) =>
-            Effect.gen(function* () {
-              const publisher = yield* IsolatedPublisher;
-              return yield* publisher.publish(request);
-            }).pipe(
-              Effect.provide(
-                IsolatedPublisher.layer({
-                  stateDir,
-                  expected: expected ?? request.trust,
-                }),
+          const writeExpected = (trust: PublisherTrust) =>
+            Schema.encodeEffect(Schema.fromJsonString(PublisherTrust))(trust).pipe(
+              Effect.flatMap((text) =>
+                fs.writeFileString(path.join(stateDir, "expected.json"), text),
               ),
-              Effect.flip,
+            );
+          const publish = (request: PublisherRequest, expected?: PublisherTrust) =>
+            writeExpected(expected ?? request.trust).pipe(
+              Effect.andThen(
+                Effect.gen(function* () {
+                  const publisher = yield* IsolatedPublisher;
+                  return yield* publisher.publish(request);
+                }).pipe(Effect.provide(IsolatedPublisher.layer({ stateDir })), Effect.flip),
+              ),
             );
           const digest = yield* publish(
             publisherRequest({
@@ -759,6 +757,11 @@ describe("PR work-order ingress", () => {
           const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-lock-" });
           yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
           const request = publisherRequest();
+          yield* Schema.encodeEffect(Schema.fromJsonString(PublisherTrust))(request.trust).pipe(
+            Effect.flatMap((text) =>
+              fs.writeFileString(path.join(stateDir, "expected.json"), text),
+            ),
+          );
           const result = yield* Effect.gen(function* () {
             const publisher = yield* IsolatedPublisher;
             return yield* publisher.publish(request);
@@ -766,7 +769,6 @@ describe("PR work-order ingress", () => {
             Effect.provide(
               IsolatedPublisher.layer({
                 stateDir,
-                expected: request.trust,
                 failpoint: "lock-release",
               }),
             ),

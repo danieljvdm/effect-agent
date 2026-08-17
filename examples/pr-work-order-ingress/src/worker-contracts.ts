@@ -46,8 +46,6 @@ export class IsolatedPublishWorkerRequest extends Schema.Class<IsolatedPublishWo
 )({
   patch: Schema.String.check(Schema.isMaxLength(1_000_000)),
   trust: PublisherTrust,
-  expected: PublisherTrust,
-  stateDir: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
 }) {}
 
 export const PublishFailpointLocation = Schema.Literals([
@@ -60,3 +58,5 @@ export const PublishFailpointLocation = Schema.Literals([
 export type PublishFailpointLocation = typeof PublishFailpointLocation.Type;
 
 export const PUBLISH_FAILPOINT_ENV = "EFFECT_AGENT_PUBLISH_FAILPOINT";
+export const PUBLISHER_STATE_DIR_ENV = "EFFECT_AGENT_PUBLISHER_STATE_DIR";
+export const PUBLISHER_EXPECTED_FILE = "expected.json";
