@@ -1,3 +1,4 @@
+import { OperationDenied } from "@effect-agent/session";
 import { Effect } from "effect";
 
 import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
@@ -73,7 +74,40 @@ const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
   });
 
 /** The eviction/alarm/chaos suites' Conversation Object. */
-export class TestConversationObject extends makeConversationObjectClass(baseOptions) {}
+const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
+const progressIncarnations = new WeakMap<DurableObjectState, number>();
+let nextProgressIncarnation = 0;
+
+const progressIncarnation = (ctx: DurableObjectState): number => {
+  const existing = progressIncarnations.get(ctx);
+  if (existing !== undefined) return existing;
+  const created = ++nextProgressIncarnation;
+  progressIncarnations.set(ctx, created);
+  return created;
+};
+
+export class TestConversationObject extends makeConversationObjectClass(baseOptions) {
+  override async awaitProgressEncoded(encoded: unknown): Promise<unknown> {
+    progressIncarnation(this.ctx);
+    progressWaiterCounts.set(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);
+    try {
+      return await super.awaitProgressEncoded(encoded);
+    } finally {
+      progressWaiterCounts.set(
+        this.ctx,
+        Math.max(0, (progressWaiterCounts.get(this.ctx) ?? 1) - 1),
+      );
+    }
+  }
+
+  progressWaiterCount(): number {
+    return progressWaiterCounts.get(this.ctx) ?? 0;
+  }
+
+  progressIncarnation(): number {
+    return progressIncarnation(this.ctx);
+  }
+}
 
 /** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
 export class LimitedConversationObject extends makeConversationObjectClass({
@@ -88,6 +122,25 @@ export class TinyDatabaseConversationObject extends makeConversationObjectClass(
   ...baseOptions,
   namespaceBinding: "TINYDB",
   maxDatabaseBytes: 1,
+}) {}
+
+/** Fail-closed authorization fixture for host-protocol error-tag fidelity. */
+export class DeniedConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "DENIED",
+  operationAuthorizer: {
+    authorize: (request) =>
+      Effect.fail(
+        OperationDenied.make({
+          operation: request.operation,
+          reason: "denied by the #94 Cloudflare fixture",
+          ...(request.conversationId === undefined
+            ? {}
+            : { conversationId: request.conversationId }),
+          ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
+        }),
+      ),
+  },
 }) {}
 
 /** Callback-form Binding capture probe. */

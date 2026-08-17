@@ -5,9 +5,11 @@ import {
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   ProducerId,
+  operationAuthorizerLayer,
   ToolReconciler,
   type ConversationStore,
   type DurableRuntimeFailpointHandler,
+  type OperationAuthorizerService,
   type ResolvedBinding,
   type SubmissionLedger,
   type WakeScheduler,
@@ -45,6 +47,7 @@ import {
   CloudflareDurableRuntimeConfigValue,
   CloudflarePlatformConfigError,
 } from "./config.ts";
+import { ProgressWaitRegistry } from "./progress-wait.ts";
 import { conversationPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
@@ -98,6 +101,8 @@ export interface CloudflareDurableRuntimeOptions {
   readonly maintenanceFailpoint?:
     | ((ctx: DurableObjectState) => ConversationMaintenanceFailpointHandler)
     | undefined;
+  /** Host-supplied fail-closed authorization policy; defaults to service possession. */
+  readonly operationAuthorizer?: OperationAuthorizerService | undefined;
   /**
    * Reconciliation policy consulted for open ordinary Tool Calls before an Unknown Outcome
    * is recorded (durability §10, DUR-009). Defaults to the fail-closed
@@ -152,7 +157,8 @@ export type CloudflareDurableRuntimeServices =
   | ConversationObjectIdentity
   | DurableAlarmService
   | ConversationMaintenance
-  | ConversationObjectPorts;
+  | ConversationObjectPorts
+  | ProgressWaitRegistry;
 
 /**
  * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
@@ -356,6 +362,10 @@ export class CloudflareDurableRuntime {
                 hit: options.maintenanceFailpoint(ctx),
               });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+        const authorizerLayer =
+          options.operationAuthorizer === undefined
+            ? Layer.empty
+            : operationAuthorizerLayer(options.operationAuthorizer);
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
             resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
@@ -368,6 +378,7 @@ export class CloudflareDurableRuntime {
           cloudflareConfigLayer,
           DurableAlarmService.layer,
           maintenanceFailpointLayer,
+          ProgressWaitRegistry.layer,
         );
 
         const runtimeStack = DurableAgentRuntime.layer.pipe(
@@ -376,7 +387,12 @@ export class CloudflareDurableRuntime {
           Layer.provideMerge(runtimeConfigLayer),
           Layer.provideMerge(bindingResolverLayer),
           Layer.provide(
-            Layer.mergeAll(runtimeFailpointLayer, reconcilerLayer, BrowserCrypto.layer),
+            Layer.mergeAll(
+              runtimeFailpointLayer,
+              reconcilerLayer,
+              authorizerLayer,
+              BrowserCrypto.layer,
+            ),
           ),
           Layer.provideMerge(base),
         );

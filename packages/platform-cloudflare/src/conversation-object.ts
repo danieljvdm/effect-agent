@@ -27,6 +27,7 @@ import {
   SettlementConflict,
   SubmissionLedger,
   SubmissionLookupByKey,
+  WakeScheduler,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
 import type { DurableObject as CloudflareDurableObject } from "cloudflare:workers";
@@ -56,11 +57,15 @@ import {
   HostFailed,
   HostProtocolError,
   ObservedPage,
+  ProgressObserved,
+  ProgressCancelled,
   SettlementReached,
   SubmitSucceeded,
   UnknownResolutionRecorded,
   boundHostDiagnostic,
   decodeAbortCommand,
+  decodeAwaitProgressRequest,
+  decodeCancelProgressRequest,
   decodeApprovalDecisionCommand,
   decodeObservePageRequest,
   decodeReceipt,
@@ -78,6 +83,7 @@ import {
   type CloudflareDurableRuntimeOptions,
   type CloudflareDurableRuntimeServices,
 } from "./layers.ts";
+import { ProgressWaitRegistry } from "./progress-wait.ts";
 
 /**
  * `makeConversationObjectClass(options, observability?)` — the Conversation Durable Object
@@ -279,6 +285,46 @@ const awaitSettlementEndpoint = (
     Effect.flatMap(encodeResponse),
   );
 
+const awaitProgressEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeAwaitProgressRequest(encoded).pipe(
+    Effect.mapError(protocolFailure("The progress request could not be decoded")),
+    Effect.flatMap((request) =>
+      Effect.gen(function* () {
+        const identity = yield* ConversationObjectIdentity;
+        const runtime = yield* DurableAgentRuntime;
+        const registry = yield* ProgressWaitRegistry;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const cancelled = yield* registry.subscribe(request.waiterId);
+            yield* Effect.raceFirst(
+              runtime.awaitProgress(identity.conversationId, request.afterSequence),
+              cancelled,
+            );
+          }),
+        );
+        return ProgressObserved.make();
+      }),
+    ),
+    respond,
+    Effect.flatMap(encodeResponse),
+  );
+
+const cancelProgressEndpoint = (
+  encoded: unknown,
+): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeCancelProgressRequest(encoded).pipe(
+    Effect.mapError(protocolFailure("The progress cancellation could not be decoded")),
+    Effect.flatMap((request) =>
+      Effect.gen(function* () {
+        const registry = yield* ProgressWaitRegistry;
+        yield* registry.cancel(request.waiterId);
+        return ProgressCancelled.make();
+      }),
+    ),
+    respond,
+    Effect.flatMap(encodeResponse),
+  );
+
 const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
   decodeObservePageRequest(encoded).pipe(
     Effect.mapError(protocolFailure("The observe request could not be decoded")),
@@ -289,14 +335,12 @@ const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
         // The same fail-closed authorization seam the runtime's `observe` consults (P7 WP1);
         // the default reference preserves the possession behavior.
         const authorizer = yield* OperationAuthorizer;
-        yield* authorizer
-          .authorize(
-            OperationAuthorizationRequest.make({
-              operation: "observe",
-              conversationId: identity.conversationId,
-            }),
-          )
-          .pipe(Effect.catchTag("OperationDenied", deniedToProtocolFailure));
+        yield* authorizer.authorize(
+          OperationAuthorizationRequest.make({
+            operation: "observe",
+            conversationId: identity.conversationId,
+          }),
+        );
         const records = yield* Stream.runCollect(
           store.read(
             ConversationRead.make({
@@ -330,24 +374,6 @@ const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.flatMap(encodeResponse),
   );
 
-/**
- * The pre-P7 host protocol's failure union does not carry `OperationDenied` (the Worker client
- * predates the authorizer). This assembly always runs the default possession authorizer — no
- * `CloudflareDurableRuntimeOptions` authorizer lever exists yet — so a denial here is
- * unreachable today; if one ever surfaces it degrades to the protocol failure instead of an
- * out-of-contract throw. The four P7 admin entry points below carry `OperationDenied` typed.
- */
-const deniedToProtocolFailure = (
-  denied: OperationDenied,
-): Effect.Effect<never, HostProtocolError> =>
-  Effect.fail(
-    HostProtocolError.make({
-      message: boundHostDiagnostic(
-        `The ${denied.operation} operation was denied: ${denied.reason}`,
-      ),
-    }),
-  );
-
 const resolveApprovalEndpoint = (
   encoded: unknown,
 ): Effect.Effect<unknown, never, EndpointServices> =>
@@ -357,11 +383,7 @@ const resolveApprovalEndpoint = (
       Effect.gen(function* () {
         const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        const intent = yield* maintenance.withMutation(
-          runtime
-            .resolveApproval(command)
-            .pipe(Effect.catchTag("OperationDenied", deniedToProtocolFailure)),
-        );
+        const intent = yield* maintenance.withMutation(runtime.resolveApproval(command));
         return ApprovalRecorded.make({ intent });
       }),
     ),
@@ -378,11 +400,7 @@ const resolveUnknownEndpoint = (
       Effect.gen(function* () {
         const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        const intent = yield* maintenance.withMutation(
-          runtime
-            .resolveUnknown(command)
-            .pipe(Effect.catchTag("OperationDenied", deniedToProtocolFailure)),
-        );
+        const intent = yield* maintenance.withMutation(runtime.resolveUnknown(command));
         return UnknownResolutionRecorded.make({ intent });
       }),
     ),
@@ -599,12 +617,11 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
   });
 
 const wakeEndpoint: Effect.Effect<void, never, EndpointServices> = Effect.gen(function* () {
-  const alarm = yield* DurableAlarmService;
-  // Wake hints are droppable by contract: a failed alarm write is logged and swallowed; the
-  // sender's own alarm/scan pairing (or this Object's next entry point) restores liveness.
-  yield* alarm.scheduleNow.pipe(
-    Effect.catch((error) => Effect.logWarning("ConversationObject.wake dropped", error)),
-  );
+  const identity = yield* ConversationObjectIdentity;
+  const wake = yield* WakeScheduler;
+  // Route the remote hint through this incarnation's scheduler so scoped progress waiters and
+  // the alarm receive the same hint. Delivery remains droppable; canonical storage is authority.
+  yield* wake.notify(identity.conversationId);
 });
 
 const alarmEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices> = Effect.gen(
@@ -659,6 +676,8 @@ const effectCfPlatformLayer = (
 export interface ConversationObjectInstance extends CloudflareDurableObject {
   submitEncoded(encoded: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
+  awaitProgressEncoded(encoded: unknown): Promise<unknown>;
+  cancelProgressEncoded(encoded: unknown): Promise<unknown>;
   observePage(encoded: unknown): Promise<unknown>;
   abortEncoded(encoded: unknown): Promise<unknown>;
   resolveApprovalEncoded(encoded: unknown): Promise<unknown>;
@@ -727,6 +746,8 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
   const rpc = {
     submitEncoded: (encoded: unknown) => submitEndpoint(encoded),
     awaitSettlementEncoded: (encoded: unknown) => awaitSettlementEndpoint(encoded),
+    awaitProgressEncoded: (encoded: unknown) => awaitProgressEndpoint(encoded),
+    cancelProgressEncoded: (encoded: unknown) => cancelProgressEndpoint(encoded),
     observePage: (encoded: unknown) => observePageEndpoint(encoded),
     abortEncoded: (encoded: unknown) => abortEndpoint(encoded),
     resolveApprovalEncoded: (encoded: unknown) => resolveApprovalEndpoint(encoded),

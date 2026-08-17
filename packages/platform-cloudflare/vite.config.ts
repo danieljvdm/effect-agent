@@ -37,6 +37,7 @@ export default defineConfig({
                 CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
+                DENIED: { className: "DeniedConversationObject", useSQLite: true },
                 SUBAGENTS: { className: "SubagentConversationObject", useSQLite: true },
                 DYNAMIC_BINDINGS: {
                   className: "DynamicBindingsConversationObject",

@@ -17,6 +17,7 @@ export * from "./bindings.ts";
 export * from "./config.ts";
 export * from "./alarm.ts";
 export * from "./wake-scheduler.ts";
+export * from "./progress-wait.ts";
 export * from "./transport.ts";
 export * from "./layers.ts";
 export * from "./conversation-object.ts";

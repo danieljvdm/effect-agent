@@ -19,6 +19,7 @@ import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fi
 import type {
   ArrayBindingsConversationObject,
   DynamicBindingsConversationObject,
+  DeniedConversationObject,
   EffectBindingsConversationObject,
   LimitedConversationObject,
   SubagentConversationObject,
@@ -33,6 +34,7 @@ declare global {
       CONVERSATIONS: DurableObjectNamespace<TestConversationObject>;
       LIMITED: DurableObjectNamespace<LimitedConversationObject>;
       TINYDB: DurableObjectNamespace<TinyDatabaseConversationObject>;
+      DENIED: DurableObjectNamespace<DeniedConversationObject>;
       SUBAGENTS: DurableObjectNamespace<SubagentConversationObject>;
       DYNAMIC_BINDINGS: DurableObjectNamespace<DynamicBindingsConversationObject>;
       ARRAY_BINDINGS: DurableObjectNamespace<ArrayBindingsConversationObject>;
@@ -53,6 +55,7 @@ export type TestNamespace =
   | "CONVERSATIONS"
   | "LIMITED"
   | "TINYDB"
+  | "DENIED"
   | "SUBAGENTS"
   | "DYNAMIC_BINDINGS"
   | "ARRAY_BINDINGS"
