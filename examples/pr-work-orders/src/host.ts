@@ -1,4 +1,4 @@
-import { type Crypto, type Duration, Effect, Exit, Ref, Schema } from "effect";
+import { type Crypto, type Duration, Effect, Exit, Option, Ref, Schema } from "effect";
 
 import {
   RequiredCheckFailed,
@@ -65,17 +65,19 @@ const validateReportIdentity = (
   return Effect.void;
 };
 
+const ImplementErrorTag = Schema.Struct({
+  _tag: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
+});
+
 const describeImplementError = (error: unknown): string => {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    typeof error._tag === "string" &&
-    error._tag.length > 0
-  ) {
-    return error._tag.slice(0, 4_096);
+  try {
+    return Option.match(Schema.decodeUnknownOption(ImplementErrorTag)(error), {
+      onNone: () => "implementation failed",
+      onSome: ({ _tag }) => _tag,
+    });
+  } catch {
+    return "implementation failed";
   }
-  return "implementation failed";
 };
 
 export const runWorkOrder = <ImplementRequirements>(options: {
