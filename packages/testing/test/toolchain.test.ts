@@ -889,6 +889,20 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(reviewWorkflow.jobs.review?.if).toBe(
         "${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}",
       );
+      const reviewStep = workflowStep(
+        reviewWorkflow,
+        "review",
+        "Review the pull request and post the validated result",
+      );
+      expect(reviewStep?.with?.["fan-out"]).toBe(
+        "${{ ((github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit') || github.event.pull_request.changed_files > 11) && 'true' || 'false' }}",
+      );
+      expect(reviewStep?.with?.["max-duration-minutes"]).toBe(
+        "${{ ((github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit') || github.event.pull_request.changed_files > 11) && '50' || '10' }}",
+      );
+      expect(reviewStep?.with?.effort).toBe(
+        "${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}",
+      );
 
       expect(releaseWorkflow.on).toEqual({ push: { branches: ["main"] } });
       expect(releaseWorkflow.permissions).toEqual({});

@@ -180,6 +180,11 @@ or any other coverage gap remains explicitly unreviewed and makes the review
 check incomplete; the workflow never converts partial coverage into an
 approval claim.
 
+The included repository workflow also selects fan-out for routine pull
+requests with more than 11 changed files. The flat reviewer's 24-Tool budget
+then remains an honest one-list plus two reads per file envelope instead of
+failing mid-review on a scope it cannot fully cover.
+
 ## Hosts
 
 - **GitHub Actions**: the repository ships a prebuilt node-runtime action
