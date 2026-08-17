@@ -185,15 +185,18 @@ Automated remediation must keep review, implementation, and publication authorit
 packaged reviewer remains read-only and may produce only a bounded, Schema-validated handoff. That
 handoff is authenticated and binds repository, PR number, exact reviewed head, review/profile
 fingerprints, and stable identities for the selected blocking/important findings. Finding text and
-suggestions are untrusted evidence, never executable patches.
+suggestions are untrusted evidence, never executable patches. The handoff builder must require the
+review source snapshot and host publication plan to identify the same exact head.
 
 A separate implementation Agent may receive only explicit capabilities for a scoped worktree:
 bounded reads/searches, path-jailed edits, patch inspection, and requests for named host-configured
 checks. It receives no GitHub token, provider secret, unrestricted process/shell, or publishing
 Tool. Deterministic host Effect code independently enforces one attempt per reviewed head, validates
-finding accounting, changed paths, patch digest, and required check results, and publishes only by
-an atomic compare-and-swap against the still-current reviewed head. The implementer cannot grade or
-publish its own settlement, and publication must be followed by a fresh reviewer invocation.
+finding accounting, changed paths, patch digest, and model-reported check results against the
+check-capability results the host observed. Required checks are then rerun independently, and
+publication occurs only by an atomic compare-and-swap against the still-current reviewed head. The
+implementer cannot grade or publish its own settlement, and publication must be followed by a fresh
+reviewer whose source snapshot and publication plan both identify the published head.
 
 The current `examples/pr-remediation` adapter is explicitly trusted-local and unisolated. It is not
 an enabled workflow and must not execute untrusted PR code in a process holding credentials or

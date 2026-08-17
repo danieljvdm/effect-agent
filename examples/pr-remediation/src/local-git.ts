@@ -5,11 +5,20 @@ import {
   PullRequestMetadata,
   PullRequestSource,
   PullRequestSourceFailure,
-  type ReviewHandoff,
   ReviewInputViolation,
 } from "@effect-agent/pr-review";
-import { FileSystem, Path } from "effect";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import {
+  Context,
+  Crypto,
+  Effect,
+  Encoding,
+  FileSystem,
+  Layer,
+  Path,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import {
@@ -17,6 +26,7 @@ import {
   PatchDigest,
   PatchSnapshot,
   PublishedRemediation,
+  type RemediationCheckResult,
   RemediationTriggerRejected,
   StalePullRequestHead,
   WorkspaceOperationFailure,
@@ -32,6 +42,7 @@ import {
 
 const MAX_FILE_CHARS = 200_000;
 const MAX_PATCH_CHARS = 1_000_000;
+const MAX_GIT_OUTPUT_BYTES = 4_000_000;
 const MAX_SEARCH_RESULTS = 100;
 
 export interface LocalGitPullRequestConfig {
@@ -96,10 +107,37 @@ const localGitLayer = (gitExecutable: string) =>
         return yield* Effect.scoped(
           Effect.gen(function* () {
             const handle = yield* spawner.spawn(command);
-            const [output, exitCode] = yield* Effect.all([
-              handle.all.pipe(Stream.decodeText(), Stream.mkString),
+            const [collected, exitCode] = yield* Effect.all([
+              Stream.runFoldEffect(
+                handle.all,
+                () => ({ size: 0, chunks: [] as Array<Uint8Array> }),
+                (state, chunk) => {
+                  const size = state.size + chunk.length;
+                  if (size > MAX_GIT_OUTPUT_BYTES) {
+                    return WorkspaceOperationFailure.make({
+                      operation,
+                      reason: `git output exceeds the ${MAX_GIT_OUTPUT_BYTES}-byte bound`,
+                    });
+                  }
+                  return Effect.succeed({ size, chunks: [...state.chunks, chunk] });
+                },
+              ),
               handle.exitCode,
             ]);
+            const bytes = new Uint8Array(collected.size);
+            let offset = 0;
+            for (const chunk of collected.chunks) {
+              bytes.set(chunk, offset);
+              offset += chunk.length;
+            }
+            const output = yield* Effect.try({
+              try: () => new TextDecoder("utf-8", { fatal: true }).decode(bytes),
+              catch: () =>
+                WorkspaceOperationFailure.make({
+                  operation,
+                  reason: "git returned output that is not valid UTF-8 text",
+                }),
+            });
             if (Number(exitCode) !== 0) {
               return yield* WorkspaceOperationFailure.make({
                 operation,
@@ -123,15 +161,95 @@ const localGitLayer = (gitExecutable: string) =>
     }),
   );
 
-const sha256 = (text: string): Effect.Effect<PatchDigest> =>
-  Effect.promise(async () => {
-    const bytes = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return Schema.decodeSync(PatchDigest)(
-      Array.from(new Uint8Array(bytes))
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join(""),
+const sha256 = (
+  crypto: Crypto.Crypto,
+  text: string,
+): Effect.Effect<PatchDigest, WorkspaceOperationFailure> =>
+  crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(
+    Effect.map(Encoding.encodeHex),
+    Effect.flatMap(Schema.decodeUnknownEffect(PatchDigest)),
+    Effect.mapError((cause) =>
+      WorkspaceOperationFailure.make({
+        operation: "digest remediation patch",
+        reason: String(cause).slice(0, 4_096),
+      }),
+    ),
+  );
+
+interface GitChange {
+  readonly path: string;
+  readonly status: ChangedFile["status"];
+  readonly previousPath?: string | undefined;
+}
+
+const parseNulFields = (output: string): ReadonlyArray<string> | undefined => {
+  if (output.length === 0) return [];
+  if (!output.endsWith("\0")) return undefined;
+  const fields = output.split("\0");
+  fields.pop();
+  return fields;
+};
+
+const invalidGitChange = (reason: string) =>
+  WorkspaceOperationFailure.make({ operation: "parse changed files", reason });
+
+const parseGitChanges = Effect.fn("LocalGit.parseGitChanges")(function* (output: string) {
+  const fields = parseNulFields(output);
+  if (fields === undefined) {
+    return yield* invalidGitChange("git returned a change list without NUL termination");
+  }
+  const changes: Array<GitChange> = [];
+  let index = 0;
+  while (index < fields.length) {
+    const code = fields[index++];
+    if (code === undefined || code.length === 0) {
+      return yield* invalidGitChange("git returned an empty change status");
+    }
+    if (code.startsWith("R") || code.startsWith("C")) {
+      const previousRaw = fields[index++];
+      const pathRaw = fields[index++];
+      if (previousRaw === undefined || pathRaw === undefined) {
+        return yield* invalidGitChange(`git returned an incomplete ${code} change record`);
+      }
+      const previousPath = yield* normalizeWorkspacePath(previousRaw).pipe(
+        Effect.mapError((failure) => invalidGitChange(failure.reason)),
+      );
+      const path = yield* normalizeWorkspacePath(pathRaw).pipe(
+        Effect.mapError((failure) => invalidGitChange(failure.reason)),
+      );
+      changes.push({
+        path,
+        previousPath,
+        status: code.startsWith("R") ? "renamed" : "copied",
+      });
+      continue;
+    }
+    const pathRaw = fields[index++];
+    if (pathRaw === undefined) {
+      return yield* invalidGitChange(`git returned an incomplete ${code} change record`);
+    }
+    const status =
+      code === "A"
+        ? "added"
+        : code === "D"
+          ? "removed"
+          : code === "M"
+            ? "modified"
+            : code === "T"
+              ? "changed"
+              : undefined;
+    if (status === undefined) {
+      return yield* invalidGitChange(`unsupported git change status '${code}'`);
+    }
+    const path = yield* normalizeWorkspacePath(pathRaw).pipe(
+      Effect.mapError((failure) => invalidGitChange(failure.reason)),
     );
-  });
+    changes.push({ path, status });
+  }
+  return changes.sort((left, right) =>
+    left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
+  );
+});
 
 const decodeSha = (
   operation: string,
@@ -155,21 +273,26 @@ const makeGitAccess = (config: LocalGitPullRequestConfig) =>
     const baseHead = git
       .run(config.repositoryPath, ["rev-parse", config.baseRef], "resolve pull-request base")
       .pipe(Effect.flatMap((output) => decodeSha("resolve pull-request base", output)));
-    const changedPaths = Effect.fn("LocalGit.changedPaths")(function* (
+    const changedFiles = Effect.fn("LocalGit.changedFiles")(function* (
       baseSha: string,
       headSha: string,
     ) {
       const output = yield* git.run(
         config.repositoryPath,
-        ["diff", "--name-only", "--no-ext-diff", `${baseSha}...${headSha}`, "--"],
-        "list changed paths",
+        [
+          "diff",
+          "--name-status",
+          "-z",
+          "--find-renames",
+          "--no-ext-diff",
+          `${baseSha}...${headSha}`,
+          "--",
+        ],
+        "list changed files",
       );
-      return output
-        .split("\n")
-        .filter((path) => path.length > 0)
-        .sort();
+      return yield* parseGitChanges(output);
     });
-    return { git, currentHead, baseHead, changedPaths };
+    return { git, currentHead, baseHead, changedFiles };
   });
 
 export const localGitPullRequestSourceLayer = (
@@ -181,28 +304,51 @@ export const localGitPullRequestSourceLayer = (
       const access = yield* makeGitAccess(config);
       const load = Effect.fn("LocalGitPullRequestSource.load")(function* () {
         const [baseSha, headSha] = yield* Effect.all([access.baseHead, access.currentHead]);
-        const paths = yield* access.changedPaths(baseSha, headSha);
-        const files = yield* Effect.forEach(paths, (path) =>
+        const changes = yield* access.changedFiles(baseSha, headSha);
+        const files = yield* Effect.forEach(changes, (change) =>
           access.git
             .run(
               config.repositoryPath,
-              ["diff", "--unified=80", "--no-ext-diff", `${baseSha}...${headSha}`, "--", path],
-              `read diff for ${path}`,
+              [
+                "diff",
+                "--unified=80",
+                "--no-ext-diff",
+                `${baseSha}...${headSha}`,
+                "--",
+                ...(change.previousPath === undefined
+                  ? [change.path]
+                  : [change.previousPath, change.path]),
+              ],
+              `read diff for ${change.path}`,
             )
             .pipe(
-              Effect.map((patch) =>
-                ChangedFile.make({
-                  path,
-                  status: "modified",
+              Effect.flatMap((patch) => {
+                const textual =
+                  patch.length <= MAX_PATCH_CHARS &&
+                  !patch.includes("GIT binary patch") &&
+                  !/^Binary files .* differ$/m.test(patch);
+                return Schema.decodeUnknownEffect(ChangedFile)({
+                  path: change.path,
+                  status: change.status,
                   additions: patch
                     .split("\n")
                     .filter((line) => line.startsWith("+") && !line.startsWith("+++")).length,
                   deletions: patch
                     .split("\n")
                     .filter((line) => line.startsWith("-") && !line.startsWith("---")).length,
-                  patch,
-                }),
-              ),
+                  ...(change.previousPath === undefined
+                    ? {}
+                    : { previousPath: change.previousPath }),
+                  ...(textual ? { patch } : {}),
+                }).pipe(
+                  Effect.mapError(() =>
+                    WorkspaceOperationFailure.make({
+                      operation: `decode changed file ${change.path}`,
+                      reason: "git returned changed-file evidence outside the supported schema",
+                    }),
+                  ),
+                );
+              }),
             ),
         );
         return { baseSha, headSha, files };
@@ -284,8 +430,10 @@ const makeWorkspace = Effect.fn("LocalGitRemediationHost.makeWorkspace")(functio
   readonly fs: FileSystem.FileSystem;
   readonly pathService: Path.Path;
   readonly git: LocalGit["Service"];
+  readonly crypto: Crypto.Crypto;
 }) {
-  const { fs, git, pathService } = input;
+  const { crypto, fs, git, pathService } = input;
+  const observedChecks = yield* Ref.make<ReadonlyArray<RemediationCheckResult>>([]);
   const realRoot = yield* fs
     .realPath(input.root)
     .pipe(
@@ -399,16 +547,17 @@ const makeWorkspace = Effect.fn("LocalGitRemediationHost.makeWorkspace")(functio
   const inspectPatch = Effect.gen(function* () {
     const changed = yield* git.run(
       realRoot,
-      ["diff", "--name-only", "--no-ext-diff", "HEAD", "--"],
+      ["diff", "--name-only", "-z", "--no-ext-diff", "HEAD", "--"],
       "collect changed paths",
     );
-    const changedPaths = yield* Effect.forEach(
-      changed
-        .split("\n")
-        .filter((item) => item.length > 0)
-        .sort(),
-      normalizeWorkspacePath,
-    ).pipe(
+    const fields = parseNulFields(changed);
+    if (fields === undefined) {
+      return yield* WorkspaceOperationFailure.make({
+        operation: "collect changed paths",
+        reason: "git returned a path list without NUL termination",
+      });
+    }
+    const changedPaths = yield* Effect.forEach([...fields].sort(), normalizeWorkspacePath).pipe(
       Effect.mapError((error) =>
         WorkspaceOperationFailure.make({
           operation: "collect changed paths",
@@ -428,7 +577,7 @@ const makeWorkspace = Effect.fn("LocalGitRemediationHost.makeWorkspace")(functio
       });
     }
     return PatchSnapshot.make({
-      digest: yield* sha256(patch),
+      digest: yield* sha256(crypto, patch),
       changedPaths,
       preview: patch.slice(0, 20_000),
       truncated: patch.length > 20_000,
@@ -442,7 +591,9 @@ const makeWorkspace = Effect.fn("LocalGitRemediationHost.makeWorkspace")(functio
         reason: `unknown host-configured check '${name}'`,
       });
     }
-    return yield* check.run(realRoot);
+    const result = yield* check.run(realRoot);
+    yield* Ref.update(observedChecks, (previous) => [...previous, result]);
+    return result;
   });
   const modelWorkspace: ImplementationWorkspace = {
     readFile,
@@ -451,7 +602,14 @@ const makeWorkspace = Effect.fn("LocalGitRemediationHost.makeWorkspace")(functio
     inspectPatch,
     requestCheck,
   };
-  return { modelWorkspace, inspectPatch, requestCheck, git, realRoot };
+  return {
+    modelWorkspace,
+    inspectPatch,
+    requestCheck,
+    observedChecks: Ref.get(observedChecks),
+    git,
+    realRoot,
+  };
 });
 
 export const localGitRemediationHostLayer = (
@@ -459,13 +617,14 @@ export const localGitRemediationHostLayer = (
 ): Layer.Layer<
   RemediationHost,
   never,
-  FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
+  Crypto.Crypto | FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner
 > =>
   Layer.effect(
     RemediationHost,
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const pathService = yield* Path.Path;
+      const crypto = yield* Crypto.Crypto;
       const access = yield* makeGitAccess(config);
       const checks = new Map(config.checks.map((check) => [check.name, check] as const));
       const authorizeTrigger = Effect.fn("RemediationHost.authorizeTrigger")(function* (trigger) {
@@ -484,142 +643,177 @@ export const localGitRemediationHostLayer = (
           return yield* StalePullRequestHead.make({ expected: trigger.requestedHeadSha, actual });
         }
       });
-      const acquireWorktree = Effect.fn("RemediationHost.acquireWorktree")(function* (
-        handoff: ReviewHandoff,
-      ) {
-        const parent = yield* fs
-          .makeTempDirectoryScoped({ prefix: "effect-agent-remediation-" })
-          .pipe(
+      const withWorktree: RemediationHost["Service"]["withWorktree"] = (handoff, use) =>
+        Effect.acquireUseRelease(
+          fs.makeTempDirectory({ prefix: "effect-agent-remediation-" }).pipe(
             Effect.mapError((error) =>
               WorkspaceOperationFailure.make({
                 operation: "create remediation worktree parent",
                 reason: String(error).slice(0, 4_096),
               }),
             ),
-          );
-        const root = pathService.join(parent, "worktree");
-        const allowedPaths = new Set<string>([
-          ...handoff.findings.map((finding) => finding.path),
-          ...(config.allowedSupportPaths ?? []),
-        ]);
-        yield* Effect.acquireRelease(
-          access.git.run(
-            config.repositoryPath,
-            ["worktree", "add", "--detach", root, handoff.reviewedHeadSha],
-            "acquire remediation worktree",
           ),
-          () =>
-            access.git
-              .run(
-                config.repositoryPath,
-                ["worktree", "remove", "--force", root],
-                "release remediation worktree",
-              )
-              .pipe(
-                Effect.ensuring(config.onWorktreeReleased?.(root) ?? Effect.void),
-                Effect.orDie,
-              ),
-        );
-        yield* config.onWorktreeAcquired?.(root) ?? Effect.void;
-        const workspace = yield* makeWorkspace({
-          root,
-          allowedPaths,
-          checks,
-          fs,
-          pathService,
-          git: access.git,
-        });
-        const commitAndPublish: AcquiredRemediationWorktree["commitAndPublish"] = Effect.fn(
-          "RemediationHost.commitAndPublish",
-        )(function* ({ handoff: expected, patch, checks: checkResults }) {
-          const beforeCommit = yield* access.currentHead;
-          if (beforeCommit !== expected.reviewedHeadSha) {
-            return yield* StalePullRequestHead.make({
-              expected: expected.reviewedHeadSha,
-              actual: beforeCommit,
-            });
-          }
-          yield* workspace.git.run(
-            workspace.realRoot,
-            ["add", "--", ...patch.changedPaths],
-            "stage remediation patch",
-          );
-          const stagedPatch = yield* workspace.git.run(
-            workspace.realRoot,
-            ["diff", "--cached", "--binary", "--full-index", "--no-ext-diff", "HEAD", "--"],
-            "collect staged remediation patch",
-          );
-          const stagedDigest = yield* sha256(stagedPatch);
-          if (stagedDigest !== patch.digest) {
-            return yield* WorkspaceOperationFailure.make({
-              operation: "stage remediation patch",
-              reason: "staged patch digest differs from the host-validated patch",
-            });
-          }
-          yield* workspace.git.run(
-            workspace.realRoot,
-            [
-              "-c",
-              "user.name=effect-agent-remediator",
-              "-c",
-              "user.email=effect-agent-remediator@localhost",
-              "-c",
-              "commit.gpgSign=false",
-              "commit",
-              "-m",
-              config.commitMessage ?? "fix: remediate reviewed findings",
-            ],
-            "commit remediation patch",
-          );
-          const publishedHeadSha = yield* workspace.git
-            .run(workspace.realRoot, ["rev-parse", "HEAD"], "resolve remediation commit")
-            .pipe(Effect.flatMap((output) => decodeSha("resolve remediation commit", output)));
-          const beforePublish = yield* access.currentHead;
-          if (beforePublish !== expected.reviewedHeadSha) {
-            return yield* StalePullRequestHead.make({
-              expected: expected.reviewedHeadSha,
-              actual: beforePublish,
-            });
-          }
-          yield* access.git
-            .run(
-              config.repositoryPath,
-              ["update-ref", config.headRef, publishedHeadSha, expected.reviewedHeadSha],
-              "publish remediation commit",
-            )
-            .pipe(
-              Effect.catchTag("WorkspaceOperationFailure", (failure) =>
+          (parent) => {
+            const root = pathService.join(parent, "worktree");
+            return Effect.acquireUseRelease(
+              access.git
+                .run(
+                  config.repositoryPath,
+                  ["worktree", "add", "--detach", root, handoff.reviewedHeadSha],
+                  "acquire remediation worktree",
+                )
+                .pipe(Effect.as(root)),
+              () =>
                 Effect.gen(function* () {
-                  const actual = yield* access.currentHead;
-                  if (actual === expected.reviewedHeadSha) return yield* failure;
-                  return yield* StalePullRequestHead.make({
-                    expected: expected.reviewedHeadSha,
-                    actual,
+                  yield* config.onWorktreeAcquired?.(root) ?? Effect.void;
+                  const allowedPaths = new Set<string>([
+                    ...handoff.findings.map((finding) => finding.path),
+                    ...(config.allowedSupportPaths ?? []),
+                  ]);
+                  const workspace = yield* makeWorkspace({
+                    root,
+                    allowedPaths,
+                    checks,
+                    fs,
+                    pathService,
+                    git: access.git,
+                    crypto,
+                  });
+                  const commitAndPublish: AcquiredRemediationWorktree["commitAndPublish"] =
+                    Effect.fn("RemediationHost.commitAndPublish")(function* ({
+                      handoff: expected,
+                      patch,
+                      checks: checkResults,
+                    }) {
+                      const beforeCommit = yield* access.currentHead;
+                      if (beforeCommit !== expected.reviewedHeadSha) {
+                        return yield* StalePullRequestHead.make({
+                          expected: expected.reviewedHeadSha,
+                          actual: beforeCommit,
+                        });
+                      }
+                      yield* workspace.git.run(
+                        workspace.realRoot,
+                        ["add", "--", ...patch.changedPaths],
+                        "stage remediation patch",
+                      );
+                      const stagedPatch = yield* workspace.git.run(
+                        workspace.realRoot,
+                        [
+                          "diff",
+                          "--cached",
+                          "--binary",
+                          "--full-index",
+                          "--no-ext-diff",
+                          "HEAD",
+                          "--",
+                        ],
+                        "collect staged remediation patch",
+                      );
+                      const stagedDigest = yield* sha256(crypto, stagedPatch);
+                      if (stagedDigest !== patch.digest) {
+                        return yield* WorkspaceOperationFailure.make({
+                          operation: "stage remediation patch",
+                          reason: "staged patch digest differs from the host-validated patch",
+                        });
+                      }
+                      yield* workspace.git.run(
+                        workspace.realRoot,
+                        [
+                          "-c",
+                          "user.name=effect-agent-remediator",
+                          "-c",
+                          "user.email=effect-agent-remediator@localhost",
+                          "-c",
+                          "commit.gpgSign=false",
+                          "commit",
+                          "-m",
+                          config.commitMessage ?? "fix: remediate reviewed findings",
+                        ],
+                        "commit remediation patch",
+                      );
+                      const publishedHeadSha = yield* workspace.git
+                        .run(
+                          workspace.realRoot,
+                          ["rev-parse", "HEAD"],
+                          "resolve remediation commit",
+                        )
+                        .pipe(
+                          Effect.flatMap((output) =>
+                            decodeSha("resolve remediation commit", output),
+                          ),
+                        );
+                      const beforePublish = yield* access.currentHead;
+                      if (beforePublish !== expected.reviewedHeadSha) {
+                        return yield* StalePullRequestHead.make({
+                          expected: expected.reviewedHeadSha,
+                          actual: beforePublish,
+                        });
+                      }
+                      yield* access.git
+                        .run(
+                          config.repositoryPath,
+                          [
+                            "update-ref",
+                            config.headRef,
+                            publishedHeadSha,
+                            expected.reviewedHeadSha,
+                          ],
+                          "publish remediation commit",
+                        )
+                        .pipe(
+                          Effect.catchTag("WorkspaceOperationFailure", (failure) =>
+                            Effect.gen(function* () {
+                              const actual = yield* access.currentHead;
+                              if (actual === expected.reviewedHeadSha) return yield* failure;
+                              return yield* StalePullRequestHead.make({
+                                expected: expected.reviewedHeadSha,
+                                actual,
+                              });
+                            }),
+                          ),
+                        );
+                      return PublishedRemediation.make({
+                        previousHeadSha: expected.reviewedHeadSha,
+                        publishedHeadSha,
+                        patchDigest: patch.digest,
+                        changedPaths: patch.changedPaths,
+                        checks: checkResults,
+                      });
+                    });
+                  return yield* use({
+                    allowedPaths,
+                    modelWorkspace: workspace.modelWorkspace,
+                    inspectPatch: workspace.inspectPatch,
+                    runCheck: workspace.requestCheck,
+                    observedChecks: workspace.observedChecks,
+                    commitAndPublish,
                   });
                 }),
-              ),
+              () =>
+                access.git
+                  .run(
+                    config.repositoryPath,
+                    ["worktree", "remove", "--force", root],
+                    "release remediation worktree",
+                  )
+                  .pipe(Effect.ensuring(config.onWorktreeReleased?.(root) ?? Effect.void)),
             );
-          return PublishedRemediation.make({
-            previousHeadSha: expected.reviewedHeadSha,
-            publishedHeadSha,
-            patchDigest: patch.digest,
-            changedPaths: patch.changedPaths,
-            checks: checkResults,
-          });
-        });
-        return {
-          allowedPaths,
-          modelWorkspace: workspace.modelWorkspace,
-          inspectPatch: workspace.inspectPatch,
-          runCheck: workspace.requestCheck,
-          commitAndPublish,
-        } satisfies AcquiredRemediationWorktree;
-      });
+          },
+          (parent) =>
+            fs.remove(parent, { recursive: true, force: true }).pipe(
+              Effect.mapError((error) =>
+                WorkspaceOperationFailure.make({
+                  operation: "release remediation worktree parent",
+                  reason: String(error).slice(0, 4_096),
+                }),
+              ),
+            ),
+        );
       return RemediationHost.of({
         requiredChecks: [...config.requiredChecks],
         authorizeTrigger,
-        currentHead: access.currentHead,
-        acquireWorktree,
+        withWorktree,
       });
     }),
   ).pipe(Layer.provide(localGitLayer(config.gitExecutable ?? "/usr/bin/git")));

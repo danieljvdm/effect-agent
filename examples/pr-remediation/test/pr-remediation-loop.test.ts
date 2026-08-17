@@ -2,8 +2,11 @@ import {
   CodeReview,
   GitCommitSha,
   PrReview,
+  PullRequestSource,
   ReviewFinding,
-  type ReviewPublicationPlan,
+  ReviewHandoff,
+  ReviewPublicationPlan,
+  ReviewRunOutcome,
   webCryptoReviewHandoffAuthenticatorLayer,
 } from "@effect-agent/pr-review";
 import {
@@ -37,6 +40,7 @@ import {
   RemediationReport,
   RemediationTrigger,
   type PatchSnapshot,
+  type WorkspaceOperationFailure,
 } from "../src/contracts.ts";
 import { makeImplementationAgent, type RemediationMission } from "../src/implementation-agent.ts";
 import {
@@ -48,8 +52,9 @@ import { runPrRemediationLoop } from "../src/loop.ts";
 import {
   type HostCheck,
   type ImplementationWorkspace,
-  ImplementationWorkspaceService,
+  type ImplementationWorkspaceService,
   RemediationAttemptPolicy,
+  RemediationHost,
 } from "../src/workspace.ts";
 
 const FILE_PATH = "src/value.ts";
@@ -82,6 +87,7 @@ const typedImplementationModel = Model.make(
 );
 const typedImplementationRun = makeImplementationAgent(typedImplementationModel).run;
 type TypedImplementationServices = Effect.Services<ReturnType<typeof typedImplementationRun>>;
+type TypedImplementationError = Effect.Error<ReturnType<typeof typedImplementationRun>>;
 type ModelRequirementProof = Assert<
   Equal<
     Extract<TypedImplementationServices, ImplementationModelRequirement>,
@@ -91,14 +97,29 @@ type ModelRequirementProof = Assert<
 type WorkspaceExcludedProof = Assert<
   Equal<Extract<TypedImplementationServices, ImplementationWorkspaceService>, never>
 >;
+type UnknownErrorExcludedProof = Assert<
+  Equal<unknown extends TypedImplementationError ? true : false, false>
+>;
+type WorkspaceFailureExcludedProof = Assert<
+  Equal<Extract<TypedImplementationError, WorkspaceOperationFailure>, never>
+>;
 
 describe("implementation Agent type proofs", () => {
-  it("keeps model requirements visible while hiding the scoped workspace service", () => {
+  it("keeps model requirements and errors typed while hiding workspace internals", () => {
     const modelRequirementProof: ModelRequirementProof = true;
     const workspaceExcludedProof: WorkspaceExcludedProof = true;
-    expect({ modelRequirementProof, workspaceExcludedProof }).toEqual({
+    const unknownErrorExcludedProof: UnknownErrorExcludedProof = true;
+    const workspaceFailureExcludedProof: WorkspaceFailureExcludedProof = true;
+    expect({
+      modelRequirementProof,
+      workspaceExcludedProof,
+      unknownErrorExcludedProof,
+      workspaceFailureExcludedProof,
+    }).toEqual({
       modelRequirementProof: true,
       workspaceExcludedProof: true,
+      unknownErrorExcludedProof: true,
+      workspaceFailureExcludedProof: true,
     });
   });
 });
@@ -182,6 +203,52 @@ const withFixtureRepository = <A, E, R>(
           repository: "acme/widgets",
           pullRequestNumber: 17,
           title: "Update the exported answer",
+          body: "",
+          baseRef: "refs/heads/main",
+          headRef: "refs/heads/feature",
+          baseRefName: "main",
+          headRefName: "feature",
+        },
+      });
+    }),
+  );
+
+interface SourceFixtureRepository {
+  readonly root: string;
+  readonly config: FixtureRepository["config"];
+}
+
+const withSourceFixtureRepository = <A, E, R>(
+  use: (fixture: SourceFixtureRepository) => Effect.Effect<A, E, R>,
+) =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const parent = yield* fs.makeTempDirectoryScoped({ prefix: "pr-source-test-" });
+      const root = `${parent}/repository`;
+      yield* fs.makeDirectory(`${root}/src`, { recursive: true });
+      yield* runGit(parent, ["init", "repository"]);
+      yield* fs.writeFileString(`${root}/src/old-name.ts`, "export const renamed = true;\n");
+      yield* fs.writeFileString(`${root}/src/removed.ts`, "export const removed = true;\n");
+      yield* runGit(root, ["add", "--", "src/old-name.ts", "src/removed.ts"]);
+      yield* runGit(root, [
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@localhost",
+        "commit",
+        "-m",
+        "source base",
+      ]);
+      yield* runGit(root, ["branch", "-M", "main"]);
+      yield* runGit(root, ["checkout", "-b", "feature"]);
+      return yield* use({
+        root,
+        config: {
+          repositoryPath: root,
+          repository: "acme/source-fixture",
+          pullRequestNumber: 23,
+          title: "Exercise local Git status parsing",
           body: "",
           baseRef: "refs/heads/main",
           headRef: "refs/heads/feature",
@@ -409,6 +476,99 @@ const hostServices = (config: LocalGitRemediationConfig) =>
     webCryptoReviewHandoffAuthenticatorLayer(Redacted.make("offline-handoff-secret")),
   );
 
+describe("local Git pull-request source", () => {
+  it.effect(
+    "preserves added, removed, renamed, and binary change semantics",
+    () =>
+      withSourceFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.rename(`${fixture.root}/src/old-name.ts`, `${fixture.root}/src/new-name.ts`);
+          yield* fs.remove(`${fixture.root}/src/removed.ts`);
+          yield* fs.writeFileString(`${fixture.root}/src/added.ts`, "export const added = true;\n");
+          yield* fs.writeFile(`${fixture.root}/src/binary.dat`, new Uint8Array([0, 1, 2, 3]));
+          yield* runGit(fixture.root, ["add", "--all", "--", "src"]);
+          yield* runGit(fixture.root, [
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@localhost",
+            "commit",
+            "-m",
+            "exercise statuses",
+          ]);
+          const files = yield* Effect.gen(function* () {
+            const source = yield* PullRequestSource;
+            return yield* source.changedFiles;
+          }).pipe(Effect.provide(localGitPullRequestSourceLayer(fixture.config)));
+
+          expect(
+            files.map(({ path, previousPath, status, patch }) => ({
+              path,
+              previousPath,
+              status,
+              hasPatch: patch !== undefined,
+            })),
+          ).toEqual([
+            {
+              path: "src/added.ts",
+              previousPath: undefined,
+              status: "added",
+              hasPatch: true,
+            },
+            {
+              path: "src/binary.dat",
+              previousPath: undefined,
+              status: "added",
+              hasPatch: false,
+            },
+            {
+              path: "src/new-name.ts",
+              previousPath: "src/old-name.ts",
+              status: "renamed",
+              hasPatch: true,
+            },
+            {
+              path: "src/removed.ts",
+              previousPath: undefined,
+              status: "removed",
+              hasPatch: true,
+            },
+          ]);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
+    "fails closed on a Git path containing control characters",
+    () =>
+      withSourceFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const invalidPath = "src/bad\nname.ts";
+          yield* fs.writeFileString(`${fixture.root}/${invalidPath}`, "export const bad = true;\n");
+          yield* runGit(fixture.root, ["add", "--", invalidPath]);
+          yield* runGit(fixture.root, [
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@localhost",
+            "commit",
+            "-m",
+            "add invalid path",
+          ]);
+          const failure = yield* Effect.gen(function* () {
+            const source = yield* PullRequestSource;
+            return yield* source.changedFiles;
+          }).pipe(Effect.provide(localGitPullRequestSourceLayer(fixture.config)), Effect.flip);
+          expect(failure._tag).toBe("PullRequestSourceFailure");
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+});
+
 describe("PR review -> remediation -> re-review loop", () => {
   it.effect(
     "publishes one host-validated commit at H1 and invokes a fresh reviewer",
@@ -450,6 +610,61 @@ describe("PR review -> remediation -> re-review loop", () => {
   );
 
   it.effect(
+    "rejects a fresh review whose publication plan names a different head",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const reviewer = yield* makeReviewer(fixture.config);
+          const implementer = yield* makeScriptedImplementer("fix");
+          const reviewNumber = yield* Ref.make(0);
+          const failure = yield* runPrRemediationLoop({
+            trigger: triggerFor(fixture),
+            review: () =>
+              Ref.updateAndGet(reviewNumber, (count) => count + 1).pipe(
+                Effect.flatMap((count) =>
+                  reviewer.review().pipe(Effect.map((evidence) => [count, evidence] as const)),
+                ),
+                Effect.map(([count, evidence]) =>
+                  count === 2
+                    ? {
+                        ...evidence,
+                        outcome: ReviewRunOutcome.make({
+                          ...evidence.outcome,
+                          plan: ReviewPublicationPlan.make({
+                            ...evidence.outcome.plan,
+                            commitSha: fixture.h0,
+                          }),
+                        }),
+                      }
+                    : evidence,
+                ),
+              ),
+            implement: implementer.implement,
+          }).pipe(
+            Effect.provide(
+              hostServices({
+                ...fixture.config,
+                checks: [passCheck],
+                requiredChecks: [REQUIRED_CHECK],
+              }),
+            ),
+            Effect.flip,
+          );
+          expect(failure._tag).toBe("RemediationValidationFailure");
+          if (failure._tag === "RemediationValidationFailure") {
+            expect(failure.reason).toBe("reviewed-head-mismatch");
+          }
+          expect(
+            Schema.decodeSync(GitCommitSha)(
+              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
+            ),
+          ).not.toBe(fixture.h0);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
     "rejects a path-escaping edit without publishing",
     () =>
       withFixtureRepository((fixture) =>
@@ -475,6 +690,54 @@ describe("PR review -> remediation -> re-review loop", () => {
             expect(failure.reason).toBe("finding-needs-human");
           }
           expect((yield* implementer.prompts).join("\n")).toContain("WorkspaceViolation");
+          expect(
+            Schema.decodeSync(GitCommitSha)(
+              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
+            ),
+          ).toBe(fixture.h0);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
+    "rejects model-reported check results that differ from host observations",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const reviewer = yield* makeReviewer(fixture.config);
+          const implementer = yield* makeScriptedImplementer("fix");
+          const failure = yield* runPrRemediationLoop({
+            trigger: triggerFor(fixture),
+            review: reviewer.review,
+            implement: (mission, workspace) =>
+              implementer.implement(mission, workspace).pipe(
+                Effect.map((report) =>
+                  RemediationReport.make({
+                    ...report,
+                    checks: report.checks.map((check) =>
+                      RemediationCheckResult.make({
+                        ...check,
+                        summary: "model supplied a different check result",
+                      }),
+                    ),
+                  }),
+                ),
+              ),
+          }).pipe(
+            Effect.provide(
+              hostServices({
+                ...fixture.config,
+                checks: [passCheck],
+                requiredChecks: [REQUIRED_CHECK],
+              }),
+            ),
+            Effect.flip,
+          );
+          expect(failure._tag).toBe("RemediationValidationFailure");
+          if (failure._tag === "RemediationValidationFailure") {
+            expect(failure.reason).toBe("check-results-mismatch");
+          }
           expect(
             Schema.decodeSync(GitCommitSha)(
               (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
@@ -647,6 +910,52 @@ describe("PR review -> remediation -> re-review loop", () => {
               (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
             ),
           ).toBe(fixture.h0);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
+    "returns worktree release failures in the typed error channel",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const acquired = yield* Deferred.make<string>();
+          const handoff = ReviewHandoff.make({
+            version: 1,
+            repository: fixture.config.repository,
+            pullRequestNumber: fixture.config.pullRequestNumber,
+            baseRef: fixture.config.baseRefName ?? fixture.config.baseRef,
+            headRef: fixture.config.headRefName ?? fixture.config.headRef,
+            reviewedHeadSha: fixture.h0,
+            profileFingerprint: "d".repeat(64),
+            reviewFingerprint: "e".repeat(64),
+            verdict: "comment",
+            findings: [],
+          });
+          const failure = yield* Effect.gen(function* () {
+            const host = yield* RemediationHost;
+            return yield* host.withWorktree(handoff, () =>
+              Effect.gen(function* () {
+                const root = yield* Deferred.await(acquired);
+                yield* runGit(fixture.root, ["worktree", "remove", "--force", root]);
+              }),
+            );
+          }).pipe(
+            Effect.provide(
+              localGitRemediationHostLayer({
+                ...fixture.config,
+                checks: [],
+                requiredChecks: [],
+                onWorktreeAcquired: (path) => Deferred.succeed(acquired, path).pipe(Effect.asVoid),
+              }),
+            ),
+            Effect.flip,
+          );
+          expect(failure).toMatchObject({
+            _tag: "WorkspaceOperationFailure",
+            operation: "release remediation worktree",
+          });
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,

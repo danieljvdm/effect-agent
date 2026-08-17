@@ -1,3 +1,4 @@
+import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Redacted, Ref } from "effect";
 
@@ -10,7 +11,8 @@ import {
   PullRequestMetadata,
   ReviewFinding,
   ReviewHandoffAuthenticator,
-  type ReviewPublicationPlan,
+  ReviewPublicationPlan,
+  ReviewRunOutcome,
   webCryptoReviewHandoffAuthenticatorLayer,
 } from "../src/index.ts";
 import {
@@ -100,6 +102,16 @@ describe("review remediation handoff", () => {
         profileFingerprint,
       }).pipe(Effect.flip);
       expect(invalidAnchor._tag).toBe("ReviewHandoffBuildFailure");
+      const movedPlan = yield* makeReviewHandoff({
+        outcome: ReviewRunOutcome.make({
+          ...outcome,
+          plan: ReviewPublicationPlan.make({ ...outcome.plan, commitSha: "c".repeat(40) }),
+        }),
+        metadata: snapshot.metadata,
+        files: snapshot.files,
+        profileFingerprint,
+      }).pipe(Effect.flip);
+      expect(movedPlan._tag).toBe("ReviewHandoffBuildFailure");
 
       const authenticated = yield* Effect.gen(function* () {
         const authenticator = yield* ReviewHandoffAuthenticator;
@@ -117,6 +129,6 @@ describe("review remediation handoff", () => {
       expect(authenticated.verified).toEqual(handoff);
       expect(authenticated.failure._tag).toBe("ReviewHandoffAuthenticationFailure");
       expect(authenticated.envelope.handoff.findings[0]?.id).toBe(handoff.findings[0]?.id);
-    }),
+    }).pipe(Effect.provide(NodeServices.layer)),
   );
 });

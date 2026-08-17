@@ -1,10 +1,9 @@
-import { ReviewHandoff } from "@effect-agent/pr-review";
+import { ReviewHandoff, ReviewHandoffDigest } from "@effect-agent/pr-review";
 import { Effect, Schema } from "effect";
 import { Agent, AgentPolicy, AgentRuntime, IdGenerator, ToolExecutionClass } from "effect-agent";
 import { Toolkit, Tool, type LanguageModel, type Model } from "effect/unstable/ai";
 
 import {
-  PatchDigest,
   PatchSnapshot,
   RemediationCheckResult,
   RemediationReport,
@@ -22,7 +21,7 @@ export class RemediationMission extends Schema.Class<RemediationMission>(
   "@effect-agent/example-pr-remediation/RemediationMission",
 )({
   handoff: ReviewHandoff,
-  handoffDigest: PatchDigest,
+  handoffDigest: ReviewHandoffDigest,
   requiredChecks: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(120))).check(
     Schema.isMaxLength(20),
   ),

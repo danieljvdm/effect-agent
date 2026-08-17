@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Redacted, Schema } from "effect";
+import { Context, Crypto, Effect, Encoding, Layer, Redacted, Schema } from "effect";
 
 import { type ChangedFile } from "./diff.ts";
 import { anchorViolation } from "./render.ts";
@@ -19,6 +19,12 @@ export const ReviewFindingId = Fingerprint.pipe(
   Schema.brand("@effect-agent/pr-review/ReviewFindingId"),
 );
 export type ReviewFindingId = typeof ReviewFindingId.Type;
+
+/** SHA-256 identity of one complete, schema-encoded review handoff. */
+export const ReviewHandoffDigest = Fingerprint.pipe(
+  Schema.brand("@effect-agent/pr-review/ReviewHandoffDigest"),
+);
+export type ReviewHandoffDigest = typeof ReviewHandoffDigest.Type;
 
 /**
  * One host-selected, anchor-validated finding handed to a distinct
@@ -70,6 +76,13 @@ export class ReviewHandoffBuildFailure extends Schema.TaggedError<ReviewHandoffB
   },
 ) {}
 
+export class ReviewHandoffDigestFailure extends Schema.TaggedError<ReviewHandoffDigestFailure>()(
+  "ReviewHandoffDigestFailure",
+  {
+    reason: Schema.NonEmptyString.check(Schema.isMaxLength(2_048)),
+  },
+) {}
+
 export class ReviewHandoffAuthenticationFailure extends Schema.TaggedError<ReviewHandoffAuthenticationFailure>()(
   "ReviewHandoffAuthenticationFailure",
   {
@@ -87,13 +100,17 @@ const authenticationFailure = (
     reason: String(cause).slice(0, 2_048) || "handoff authentication failed",
   });
 
-const sha256Hex = (text: string): Effect.Effect<string> =>
-  Effect.promise(async () => {
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  });
+const sha256Hex = Effect.fn("ReviewHandoff.sha256Hex")(function* (text: string) {
+  const crypto = yield* Crypto.Crypto;
+  const digest = yield* crypto.digest("SHA-256", new TextEncoder().encode(text)).pipe(
+    Effect.mapError((cause) =>
+      ReviewHandoffDigestFailure.make({
+        reason: String(cause).slice(0, 2_048) || "handoff digest failed",
+      }),
+    ),
+  );
+  return Encoding.encodeHex(digest);
+});
 
 const encodeHandoff = (handoff: ReviewHandoff): Effect.Effect<string> =>
   Effect.sync(() => Schema.encodeSync(Schema.fromJsonString(ReviewHandoff))(handoff));
@@ -122,8 +139,16 @@ const importHmacKey = (secret: Redacted.Redacted<string>, operation: "sign" | "v
   });
 
 /** SHA-256 identity of the complete schema-encoded handoff. */
-export const computeReviewHandoffDigest = (handoff: ReviewHandoff): Effect.Effect<string> =>
-  encodeHandoff(handoff).pipe(Effect.flatMap(sha256Hex));
+export const computeReviewHandoffDigest = Effect.fn("computeReviewHandoffDigest")(function* (
+  handoff: ReviewHandoff,
+) {
+  const encoded = yield* encodeHandoff(handoff);
+  return yield* Schema.decodeUnknownEffect(ReviewHandoffDigest)(yield* sha256Hex(encoded)).pipe(
+    Effect.mapError(() =>
+      ReviewHandoffDigestFailure.make({ reason: "SHA-256 returned an invalid handoff digest" }),
+    ),
+  );
+});
 
 const findingMaterial = Schema.Struct({
   repository: Schema.String,
@@ -157,7 +182,11 @@ const toHandoffFinding = Effect.fn("ReviewHandoff.toHandoffFinding")(function* (
     ...(finding.suggestion === undefined ? {} : { suggestion: finding.suggestion }),
   };
   const encoded = Schema.encodeSync(Schema.fromJsonString(findingMaterial))(material);
-  const id = Schema.decodeSync(ReviewFindingId)(yield* sha256Hex(encoded));
+  const id = yield* Schema.decodeUnknownEffect(ReviewFindingId)(yield* sha256Hex(encoded)).pipe(
+    Effect.mapError(() =>
+      ReviewHandoffDigestFailure.make({ reason: "SHA-256 returned an invalid finding identity" }),
+    ),
+  );
   return Object.freeze(
     ReviewHandoffFinding.make({
       id,
@@ -204,6 +233,18 @@ export const makeReviewHandoff = Effect.fn("makeReviewHandoff")(function* (input
       ReviewHandoffBuildFailure.make({ reason: "the reviewed head is not a valid commit SHA" }),
     ),
   );
+  const plannedHeadSha = yield* Schema.decodeUnknownEffect(GitCommitSha)(
+    input.outcome.plan.commitSha,
+  ).pipe(
+    Effect.mapError(() =>
+      ReviewHandoffBuildFailure.make({ reason: "the review plan head is not a valid commit SHA" }),
+    ),
+  );
+  if (plannedHeadSha !== reviewedHeadSha) {
+    return yield* ReviewHandoffBuildFailure.make({
+      reason: "review outcome and source metadata name different reviewed heads",
+    });
+  }
   const profileFingerprint = yield* Schema.decodeUnknownEffect(Fingerprint)(
     input.profileFingerprint,
   ).pipe(
@@ -230,7 +271,15 @@ export const makeReviewHandoff = Effect.fn("makeReviewHandoff")(function* (input
     verdict: input.outcome.review.verdict,
     findings,
   });
-  const reviewFingerprint = Schema.decodeSync(Fingerprint)(yield* sha256Hex(fingerprintJson));
+  const reviewFingerprint = yield* Schema.decodeUnknownEffect(Fingerprint)(
+    yield* sha256Hex(fingerprintJson),
+  ).pipe(
+    Effect.mapError(() =>
+      ReviewHandoffDigestFailure.make({
+        reason: "SHA-256 returned an invalid review fingerprint",
+      }),
+    ),
+  );
   const handoff = ReviewHandoff.make({
     version: 1,
     repository: input.metadata.repository,
@@ -263,7 +312,7 @@ export class ReviewHandoffAuthenticator extends Context.Service<
 export const webCryptoReviewHandoffAuthenticatorLayer = (secret: Redacted.Redacted<string>) =>
   Layer.effect(
     ReviewHandoffAuthenticator,
-    Effect.gen(function* () {
+    Effect.sync(() => {
       const sign = Effect.fn("ReviewHandoffAuthenticator.sign")(function* (handoff: ReviewHandoff) {
         const encoded = yield* encodeHandoff(handoff).pipe(
           Effect.mapError((cause) => authenticationFailure("sign", cause)),

@@ -1,6 +1,7 @@
 import {
   GitCommitSha,
   ReviewFindingId,
+  ReviewHandoffDigest,
   ReviewHandoffEnvelope,
   ReviewRunOutcome,
 } from "@effect-agent/pr-review";
@@ -104,7 +105,7 @@ export class FindingResolution extends Schema.Class<FindingResolution>(
 export class RemediationReport extends Schema.Class<RemediationReport>(
   "@effect-agent/example-pr-remediation/RemediationReport",
 )({
-  handoffDigest: PatchDigest,
+  handoffDigest: ReviewHandoffDigest,
   reviewedHeadSha: GitCommitSha,
   resolutions: Schema.Array(FindingResolution).check(Schema.isMaxLength(20)),
   changedPaths: Schema.Array(WorkspacePath).check(Schema.isMaxLength(100)),
@@ -121,6 +122,7 @@ export const RemediationValidationReason = Schema.Literals([
   "changed-paths-mismatch",
   "path-not-allowed",
   "patch-digest-mismatch",
+  "check-results-mismatch",
   "empty-patch",
   "check-mutated-patch",
 ]);
@@ -177,7 +179,11 @@ export const normalizeWorkspacePath = (
   if (path.length === 0 || path.length > 512) {
     return Effect.fail(fail("path length is out of bounds"));
   }
-  if (path.includes("\0") || path.includes("\\")) {
+  const hasControlCharacter = [...path].some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
+  if (hasControlCharacter || path.includes("\\")) {
     return Effect.fail(fail("path contains a forbidden character"));
   }
   if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) {

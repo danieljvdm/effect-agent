@@ -1,16 +1,16 @@
 import { type ReviewHandoff } from "@effect-agent/pr-review";
-import { Context, Effect, Layer, Ref, Schema, type Scope } from "effect";
+import { Context, Effect, Layer, Ref, Schema } from "effect";
 
 import {
-  PatchSnapshot,
-  PublishedRemediation,
   RemediationAttemptAlreadyClaimed,
-  RemediationCheckResult,
+  type PatchSnapshot,
+  type PublishedRemediation,
+  type RemediationCheckResult,
   type RemediationReport,
   type RemediationTrigger,
   type RemediationTriggerRejected,
   type StalePullRequestHead,
-  WorkspaceOperationFailure,
+  type WorkspaceOperationFailure,
   type WorkspaceViolation,
 } from "./contracts.ts";
 
@@ -57,6 +57,8 @@ export interface AcquiredRemediationWorktree {
   readonly runCheck: (
     name: string,
   ) => Effect.Effect<RemediationCheckResult, WorkspaceOperationFailure>;
+  /** Check results actually returned by host capabilities during model execution. */
+  readonly observedChecks: Effect.Effect<ReadonlyArray<RemediationCheckResult>>;
   readonly commitAndPublish: (input: {
     readonly handoff: ReviewHandoff;
     readonly report: RemediationReport;
@@ -75,10 +77,10 @@ export class RemediationHost extends Context.Service<
       void,
       RemediationTriggerRejected | StalePullRequestHead | WorkspaceOperationFailure
     >;
-    readonly currentHead: Effect.Effect<string, WorkspaceOperationFailure>;
-    readonly acquireWorktree: (
+    readonly withWorktree: <A, E, R>(
       handoff: ReviewHandoff,
-    ) => Effect.Effect<AcquiredRemediationWorktree, WorkspaceOperationFailure, Scope.Scope>;
+      use: (worktree: AcquiredRemediationWorktree) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | WorkspaceOperationFailure, R>;
   }
 >()("@effect-agent/example-pr-remediation/RemediationHost") {}
 

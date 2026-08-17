@@ -11,8 +11,8 @@ import { Effect, Schema } from "effect";
 
 import {
   NoRemediationFindings,
-  PatchDigest,
   PrRemediationLoopOutcome,
+  type RemediationCheckResult,
   RemediationValidationFailure,
   RequiredCheckFailed,
   StalePullRequestHead,
@@ -39,6 +39,21 @@ const sorted = (values: Iterable<string>): ReadonlyArray<string> =>
 const exactSet = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
   left.length === right.length &&
   sorted(new Set(left)).join("\0") === sorted(new Set(right)).join("\0");
+
+const exactChecks = (
+  reported: ReadonlyArray<RemediationCheckResult>,
+  observed: ReadonlyArray<RemediationCheckResult>,
+): boolean =>
+  reported.length === observed.length &&
+  reported.every((check, index) => {
+    const actual = observed[index];
+    return (
+      actual !== undefined &&
+      check.name === actual.name &&
+      check.status === actual.status &&
+      check.summary === actual.summary
+    );
+  });
 
 /**
  * Deterministic host workflow: review H0, authenticate the handoff, run one
@@ -93,17 +108,14 @@ export const runPrRemediationLoop = <
     const built = yield* makeReviewHandoff(initial);
     const envelope = yield* authenticator.sign(built);
     const handoff = yield* authenticator.verify(envelope);
-    const handoffDigest = Schema.decodeSync(PatchDigest)(
-      yield* computeReviewHandoffDigest(handoff),
-    );
+    const handoffDigest = yield* computeReviewHandoffDigest(handoff);
     if (handoff.findings.length === 0) {
       return yield* NoRemediationFindings.make({ reviewedHeadSha: handoff.reviewedHeadSha });
     }
     yield* attempts.claim(handoff);
 
-    const { publication, report } = yield* Effect.scoped(
+    const { publication, report } = yield* host.withWorktree(handoff, (worktree) =>
       Effect.gen(function* () {
-        const worktree = yield* host.acquireWorktree(handoff);
         const report = yield* options.implement(
           RemediationMission.make({
             handoff,
@@ -112,6 +124,13 @@ export const runPrRemediationLoop = <
           }),
           worktree.modelWorkspace,
         );
+        const observedChecks = yield* worktree.observedChecks;
+        if (!exactChecks(report.checks, observedChecks)) {
+          return yield* RemediationValidationFailure.make({
+            reason: "check-results-mismatch",
+            detail: "model-reported checks differ from host-observed check capability results",
+          });
+        }
         if (report.handoffDigest !== handoffDigest) {
           return yield* RemediationValidationFailure.make({
             reason: "handoff-digest-mismatch",
@@ -196,7 +215,8 @@ export const runPrRemediationLoop = <
     if (
       fresh.metadata.repository !== options.trigger.repository ||
       fresh.metadata.number !== options.trigger.pullRequestNumber ||
-      fresh.metadata.headSha !== publication.publishedHeadSha
+      fresh.metadata.headSha !== publication.publishedHeadSha ||
+      fresh.outcome.plan.commitSha !== publication.publishedHeadSha
     ) {
       return yield* RemediationValidationFailure.make({
         reason: "reviewed-head-mismatch",

@@ -224,10 +224,13 @@ non-allowlisted or sanitized-name collision cases fail closed.
 The private `examples/pr-remediation` leaf runs the complete loop against deterministic scripted
 reviewer and implementer Models and a real temporary Git repository. Its ordinary offline suite
 proves an authenticated exact-head handoff, a separate bounded implementation Agent, host-collected
-patch/check validation, an atomic head update, and a fresh reviewer over the produced head.
+patch/check validation (including comparison with host-observed check Tool results), an atomic head
+update, and a fresh reviewer whose source and publication plan name the produced head.
 
-The same suite rejects path traversal, failed independently rerun checks, and a branch head moved
-during implementation; it also proves that interruption releases the scoped worktree and that one
+The same suite rejects path traversal, false model check claims, failed independently rerun checks,
+inconsistent review provenance, and a branch head moved during implementation. Real-Git rows cover
+NUL-delimited add/remove/rename records, binary evidence, and control-character paths. It also
+proves that interruption releases the scoped worktree, release failures remain typed, and one
 explicit trigger admits at most one implementation attempt for a reviewed head. These tests are
 security evidence for the local orchestration contract, not evidence that the local check runner
 isolates untrusted code.
@@ -365,5 +368,6 @@ No durability milestone is complete while its crash tests are skipped.
   model-visible contract information missing from the request that a scripted model would
   fabricate away.
 - **TEST-017**: The trusted-local PR remediation proof deterministically covers success, invalid
-  edits, failed host checks, stale-head publication fencing, interruption cleanup, one-attempt
+  edits, false check claims, failed host checks, review/publication head consistency, real-Git
+  status and path parsing, stale-head publication fencing, typed/interrupted cleanup, one-attempt
   admission, and fresh re-review.
