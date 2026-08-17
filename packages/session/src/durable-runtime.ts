@@ -836,7 +836,13 @@ const make = Effect.gen(function* () {
       settlement.outcome !== "completed" ||
       payload.runDisposition === undefined
     ) {
-      return settlement;
+      return Settlement.make({
+        submissionId: settlement.submissionId,
+        settlementId: settlement.settlementId,
+        receiptId: settlement.receiptId,
+        outcome: settlement.outcome,
+        settledAt: settlement.settledAt,
+      });
     }
     return Settlement.make({
       submissionId: settlement.submissionId,

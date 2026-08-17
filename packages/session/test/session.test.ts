@@ -446,21 +446,29 @@ describe("phase 4 durable canonical payloads", () => {
       payload,
     });
     const failures: ReadonlyArray<unknown> = [
-      { ...encodedSubmissionSettled, outcome: "failed", runDisposition: "not-final" },
-      { ...encodedSubmissionSettled, outcome: "aborted", runDisposition: "not-final" },
+      {
+        ...encodedSubmissionSettled,
+        outcome: "failed",
+        runDisposition: "application-complete",
+      },
+      {
+        ...encodedSubmissionSettled,
+        outcome: "aborted",
+        runDisposition: "application-complete",
+      },
       {
         ...encodedSubmissionSettled,
         finishReason: "budget-exhausted",
         exhausted: "turns",
-        runDisposition: "not-final",
+        runDisposition: "application-complete",
       },
       (() => {
         const { runId: _runId, ...withoutRun } = encodedSubmissionSettled;
-        return { ...withoutRun, runDisposition: "not-final" };
+        return { ...withoutRun, runDisposition: "application-complete" };
       })(),
       (() => {
         const { result: _result, ...withoutResult } = encodedSubmissionSettled;
-        return { ...withoutResult, runDisposition: "not-final" };
+        return { ...withoutResult, runDisposition: "application-complete" };
       })(),
     ];
 

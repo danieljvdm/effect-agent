@@ -253,6 +253,42 @@ const baseLayer = Layer.mergeAll(
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
 
+const untrustedSettlementLedgerLayer = Layer.effect(
+  SubmissionLedger,
+  Effect.gen(function* () {
+    const inner = yield* SubmissionLedger;
+    return SubmissionLedger.of({
+      ...inner,
+      finalizeSettlement: (request) =>
+        inner.finalizeSettlement(request).pipe(
+          Effect.map((settlement) =>
+            Settlement.make({
+              submissionId: settlement.submissionId,
+              settlementId: settlement.settlementId,
+              receiptId: settlement.receiptId,
+              outcome: settlement.outcome,
+              runDisposition: "unverified-ledger-disposition",
+              settledAt: settlement.settledAt,
+            }),
+          ),
+        ),
+    });
+  }),
+).pipe(Layer.provide(MemorySubmissionLedgerLive));
+
+const untrustedSettlementBaseLayer = Layer.mergeAll(
+  untrustedSettlementLedgerLayer,
+  MemoryConversationStoreLive,
+  WakeScheduler.layerNoop,
+  DurableRuntimeFailpoint.layerTest,
+  ToolReconciler.uncertain,
+  configLayer,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+const untrustedSettlementTestLayer = DurableAgentRuntime.layer.pipe(
+  Layer.provideMerge(untrustedSettlementBaseLayer),
+);
+
 class ProgressWaitTestControl extends Context.Service<
   ProgressWaitTestControl,
   {
@@ -683,6 +719,41 @@ layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
       const exit = yield* Effect.exit(runtime.awaitProgress(missing, ZERO_SEQUENCE));
       expect(failureTag(exit)).toBe("ConversationNotMaterialized");
       expect(yield* Ref.get(control.active)).toBe(0);
+    }),
+  );
+});
+
+layer(untrustedSettlementTestLayer)("RUN-029 canonical settlement authority", (it) => {
+  it.effect("drops a ledger-only disposition when canonical proof fails", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() =>
+        finalParts('{"answer":"done","runDisposition":"invalid-disposition"}'),
+      );
+      const agent = Agent.withModel(dispositionDefinition, scripted.model);
+      const conversation = "conversation-unverified-ledger-disposition";
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "done?" },
+        submitOptions(conversation, "unverified-ledger-disposition-1"),
+      );
+
+      const processed = yield* runtime.processConversation(
+        agent,
+        decodeConversationId(conversation),
+      );
+      expect(processed[0]?.outcome).toBe("failed");
+      expect(processed[0]?.runDisposition).toBeUndefined();
+
+      const settlement = yield* runtime.awaitSettlement(receipt);
+      expect(settlement.outcome).toBe("failed");
+      expect(settlement.runDisposition).toBeUndefined();
+
+      const settled = (yield* readLog(conversation)).at(-1)?.record.payload;
+      expect(settled?._tag).toBe("SubmissionSettled");
+      if (settled?._tag === "SubmissionSettled") {
+        expect(settled.runDisposition).toBeUndefined();
+      }
     }),
   );
 });
