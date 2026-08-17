@@ -181,67 +181,55 @@ const sameSelectedFiles = (
     return candidate !== undefined && sameSelectedFileIdentity(file, candidate);
   });
 
-const validateSelection = (input: {
+const validateSelection = Effect.fn("validateSelection")(function* (input: {
   readonly selection: ReviewSelection;
   readonly files: ReadonlyArray<ChangedFile>;
   readonly anchorFiles: ReadonlyArray<ChangedFile>;
   readonly metadata: PullRequestMetadata;
-}): Effect.Effect<ReviewSelection, ReviewSelectionViolation> => {
+}) {
   const { selection, files, anchorFiles, metadata } = input;
-  const sealed = selectedReviewRangeFor(selection, metadata);
-  if (sealed === undefined) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection was not created by the host range selector",
-      }),
-    );
+  const verified = yield* selectedReviewRangeFor(selection, metadata);
+  if (verified === undefined) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection was not created by the host range selector",
+    });
   }
-  if (!sameSelectedFiles(sealed.files, files)) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection evidence does not match the model-visible source range",
-      }),
-    );
+  if (!sameSelectedFiles(verified.files, files)) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection evidence does not match the model-visible source range",
+    });
   }
-  if (sealed.mode === "incremental" && sealed.totalFiles !== files.length) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection total does not match the model-visible source range",
-      }),
-    );
+  if (verified.mode === "incremental" && verified.totalFiles !== files.length) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection total does not match the model-visible source range",
+    });
   }
   const anchorPaths = new Set(anchorFiles.map((file) => file.path));
   if (files.some((file) => !anchorPaths.has(file.path))) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection contains a path outside the current pull-request source",
-      }),
-    );
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection contains a path outside the current pull-request source",
+    });
   }
   if (
-    sealed.mode === "full" &&
-    (sealed.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))
+    verified.mode === "full" &&
+    (verified.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))
   ) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "full review selection does not cover the current pull-request source",
-      }),
-    );
+    return yield* ReviewSelectionViolation.make({
+      reason: "full review selection does not cover the current pull-request source",
+    });
   }
   if (
-    sealed.mode === "incremental" &&
-    (sealed.priorState === undefined ||
-      sealed.baselineSha !== sealed.priorState.reviewedHeadSha ||
-      sealed.profileFingerprint !== sealed.priorState.profileFingerprint)
+    verified.mode === "incremental" &&
+    (verified.priorState === undefined ||
+      verified.baselineSha !== verified.priorState.reviewedHeadSha ||
+      verified.profileFingerprint !== verified.priorState.profileFingerprint)
   ) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "incremental review selection is not bound to its authenticated prior state",
-      }),
-    );
+    return yield* ReviewSelectionViolation.make({
+      reason: "incremental review selection is not bound to its authenticated prior state",
+    });
   }
-  return Effect.succeed(sealed);
-};
+  return verified;
+});
 
 /** Build the mission one review run frames from the source's snapshot. */
 export const buildReviewMission = (

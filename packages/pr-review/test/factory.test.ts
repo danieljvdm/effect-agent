@@ -16,6 +16,8 @@ import {
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewPublisher,
+  type ReviewSelectionAuthority,
+  reviewSelectionAuthorityLayer,
   type RunReviewOptions,
   type ReviewSelection,
   ReviewState,
@@ -170,6 +172,7 @@ const runFactoryReviewer = <E, R>(
         Layer.mergeAll(
           fixturePullRequestSourceLayer(fixture),
           collectingReviewPublisherLayer(published),
+          reviewSelectionAuthorityLayer,
           unavailableReviewStateAuthenticatorLayer("offline factory test"),
         ),
       ),
@@ -293,6 +296,7 @@ describe("PrReview.make", () => {
             Layer.mergeAll(
               fixturePullRequestSourceLayer(fixture),
               collectingReviewPublisherLayer(ignoredPublished),
+              reviewSelectionAuthorityLayer,
               unavailableReviewStateAuthenticatorLayer("offline factory test"),
               NodeCrypto.layer,
             ),
@@ -391,6 +395,7 @@ describe("PrReview.make", () => {
               fixturePullRequestSourceLayer(fixture),
               collectingReviewPublisherLayer(published),
               guidelinesLayer,
+              reviewSelectionAuthorityLayer,
               unavailableReviewStateAuthenticatorLayer("offline factory test"),
             ),
           ),
@@ -458,6 +463,9 @@ type ExplicitSelectionProof = Assert<
 type StateAuthenticatorVisibleProof = Assert<
   Equal<Extract<PlainServices, ReviewStateAuthenticator>, ReviewStateAuthenticator>
 >;
+type SelectionAuthorityVisibleProof = Assert<
+  Equal<Extract<PlainServices, ReviewSelectionAuthority>, ReviewSelectionAuthority>
+>;
 // An extra tool's handler is the caller's dependency, visible in `R` — and
 // absent when no extra tool is configured.
 type ExtraHandlerProof = Assert<
@@ -481,6 +489,7 @@ describe("factory type proofs", () => {
     const fanOutCryptoVisibleProof: FanOutCryptoVisibleProof = true;
     const explicitSelectionProof: ExplicitSelectionProof = true;
     const stateAuthenticatorVisibleProof: StateAuthenticatorVisibleProof = true;
+    const selectionAuthorityVisibleProof: SelectionAuthorityVisibleProof = true;
     const extraHandlerProof: ExtraHandlerProof = true;
     const plainHandlerExcludedProof: PlainHandlerExcludedProof = true;
     expect([
@@ -493,9 +502,10 @@ describe("factory type proofs", () => {
       fanOutCryptoVisibleProof,
       explicitSelectionProof,
       stateAuthenticatorVisibleProof,
+      selectionAuthorityVisibleProof,
       extraHandlerProof,
       plainHandlerExcludedProof,
-    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
+    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true]);
   });
 });
 

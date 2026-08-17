@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import { Effect, Exit, Layer, Ref, Schema } from "effect";
 import { Agent, IdGenerator, RunEvent } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
@@ -34,6 +34,7 @@ import {
   ReviewFinding,
   ReviewHeadComparison,
   ReviewPublicationPlan,
+  reviewSelectionAuthorityLayer,
   ReviewState,
   ReviewToolkitLayer,
   StoredReviewFinding,
@@ -1051,7 +1052,7 @@ describe("concerns, metadata, and footer", () => {
 // live model.
 // ---------------------------------------------------------------------------
 
-describe("offline review run", () => {
+layer(reviewSelectionAuthorityLayer)("offline review run", (it) => {
   it.effect("reviews the fixture pull request end-to-end and publishes the validated plan", () =>
     Effect.gen(function* () {
       const scripted = yield* makeOfflineReviewerModel({
@@ -1067,6 +1068,7 @@ describe("offline review run", () => {
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
+            reviewSelectionAuthorityLayer,
             testIdGeneratorLayer,
             unavailableReviewStateAuthenticatorLayer("offline review test"),
           ),
@@ -1255,7 +1257,7 @@ describe("offline review run", () => {
         unresolvedConcerns: [],
         lastReviewMode: "full",
       });
-      const selection = selectReviewRange({
+      const selection = yield* selectReviewRange({
         requestedMode: "incremental",
         current: metadata,
         fullFiles: [unchangedFile, correctiveFile],
@@ -1343,7 +1345,7 @@ describe("offline review run", () => {
           // The adapter's visible list is bounded below GitHub's total.
           totalChangedFiles: 2,
         });
-        const selection = selectReviewRange({
+        const selection = yield* selectReviewRange({
           requestedMode: "final",
           current: metadata,
           fullFiles: [file],
@@ -1418,7 +1420,7 @@ describe("offline review run", () => {
           headSha,
           totalChangedFiles: 1,
         });
-        const selection = selectReviewRange({
+        const selection = yield* selectReviewRange({
           requestedMode: "final",
           current: metadata,
           fullFiles: [stale],
@@ -1490,6 +1492,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
               collectingReviewPublisherLayer(published),
               openAiClientLayer,
+              reviewSelectionAuthorityLayer,
               testIdGeneratorLayer,
               unavailableReviewStateAuthenticatorLayer("live review test"),
             ),

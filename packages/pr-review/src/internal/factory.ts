@@ -140,11 +140,12 @@ const provideSelection = <A, E, R>(
 ) =>
   selection === undefined
     ? effect
-    : effect.pipe(
-        Effect.provide(
-          selectedPullRequestSourceLayer(sealedReviewSelection(selection) ?? selection),
-        ),
-      );
+    : Effect.gen(function* () {
+        const sealed = yield* sealedReviewSelection(selection);
+        return yield* effect.pipe(
+          Effect.provide(selectedPullRequestSourceLayer(sealed ?? selection)),
+        );
+      });
 
 /**
  * The changeset fingerprint of what this reviewer WOULD review right now:

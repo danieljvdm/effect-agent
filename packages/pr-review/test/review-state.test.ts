@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { expect, layer } from "@effect/vitest";
 import { Effect, Option, Redacted } from "effect";
 
 import * as publicApi from "../src/index.ts";
@@ -6,6 +6,7 @@ import {
   ChangedFile,
   PullRequestMetadata,
   ReviewHeadComparison,
+  reviewSelectionAuthorityLayer,
   ReviewState,
   ReviewStateAuthenticator,
   StoredReviewFinding,
@@ -92,32 +93,55 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
     ...overrides,
   });
 
-describe("review state", () => {
-  it("does not export the host-only range-selection issuer", () => {
+layer(reviewSelectionAuthorityLayer)("review state", (it) => {
+  it("exposes selection issuance only through explicit host authority", () => {
     expect("selectReviewRange" in publicApi).toBe(false);
     expect("selectedReviewRangeFor" in publicApi).toBe(false);
     expect("sealedReviewSelection" in publicApi).toBe(false);
+    expect("ReviewSelectionAuthority" in publicApi).toBe(true);
+    expect("reviewSelectionAuthorityLayer" in publicApi).toBe(true);
   });
 
-  it("invalidates a sealed selection when an aliased source array changes after selection", () => {
-    const fullFiles = [acceptedFile, correctiveFile];
-    const selection = selectReviewRange({
-      requestedMode: "final",
-      current: metadata,
-      fullFiles,
-      profileFingerprint: PROFILE_FINGERPRINT,
-      priorState: undefined,
-      comparison: undefined,
-    });
+  it.effect(
+    "invalidates a sealed selection when an aliased source array changes after selection",
+    () =>
+      Effect.gen(function* () {
+        const fullFiles = [acceptedFile, correctiveFile];
+        const selection = yield* selectReviewRange({
+          requestedMode: "final",
+          current: metadata,
+          fullFiles,
+          profileFingerprint: PROFILE_FINGERPRINT,
+          priorState: undefined,
+          comparison: undefined,
+        });
 
-    expect(selectedReviewRangeFor(selection, metadata)?.files.map((file) => file.path)).toEqual([
-      "src/accepted.ts",
-      "src/corrective.ts",
-    ]);
-    fullFiles[0] = correctiveFile;
+        expect(
+          (yield* selectedReviewRangeFor(selection, metadata))?.files.map((file) => file.path),
+        ).toEqual(["src/accepted.ts", "src/corrective.ts"]);
+        fullFiles[0] = correctiveFile;
 
-    expect(selectedReviewRangeFor(selection, metadata)).toBeUndefined();
-  });
+        expect(yield* selectedReviewRangeFor(selection, metadata)).toBeUndefined();
+      }),
+  );
+
+  it.effect("does not share selection authority across host compositions", () =>
+    Effect.gen(function* () {
+      const selection = yield* selectReviewRange({
+        requestedMode: "final",
+        current: metadata,
+        fullFiles: [acceptedFile, correctiveFile],
+        profileFingerprint: PROFILE_FINGERPRINT,
+        priorState: undefined,
+        comparison: undefined,
+      }).pipe(Effect.provide(reviewSelectionAuthorityLayer));
+
+      const resolved = yield* selectedReviewRangeFor(selection, metadata).pipe(
+        Effect.provide(reviewSelectionAuthorityLayer),
+      );
+      expect(resolved).toBeUndefined();
+    }),
+  );
 
   it.effect("authenticates only a terminal schema-validated review-body marker", () =>
     Effect.gen(function* () {
@@ -181,91 +205,101 @@ describe("review state", () => {
     }),
   );
 
-  it("reviews only the corrective delta and preserves unchanged prior scope", () => {
-    const selection = select();
-    expect(selection.mode).toBe("incremental");
-    expect(selection.baselineSha).toBe(REVIEWED_HEAD_SHA);
-    expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
-    expect(selection.files.map((file) => file.path)).not.toContain("src/accepted.ts");
-    expect(selection.priorState?.unresolvedFindings).toEqual([unresolvedFinding]);
-    expect(selection.reason).toContain(REVIEWED_HEAD_SHA.slice(0, 7));
-  });
+  it.effect("reviews only the corrective delta and preserves unchanged prior scope", () =>
+    Effect.gen(function* () {
+      const selection = yield* select();
+      expect(selection.mode).toBe("incremental");
+      expect(selection.baselineSha).toBe(REVIEWED_HEAD_SHA);
+      expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
+      expect(selection.files.map((file) => file.path)).not.toContain("src/accepted.ts");
+      expect(selection.priorState?.unresolvedFindings).toEqual([unresolvedFinding]);
+      expect(selection.reason).toContain(REVIEWED_HEAD_SHA.slice(0, 7));
+    }),
+  );
 
-  it("falls back to the full diff when state is missing or incompatible", () => {
-    const missing = select({ priorState: undefined, comparison: undefined });
-    expect(missing.mode).toBe("full");
-    expect(missing.reason).toContain("no compatible stored review state");
+  it.effect("falls back to the full diff when state is missing or incompatible", () =>
+    Effect.gen(function* () {
+      const missing = yield* select({ priorState: undefined, comparison: undefined });
+      expect(missing.mode).toBe("full");
+      expect(missing.reason).toContain("no compatible stored review state");
 
-    const wrongProfile = select({ profileFingerprint: "c".repeat(64) });
-    expect(wrongProfile.mode).toBe("full");
-    expect(wrongProfile.reason).toContain("profile or model configuration changed");
+      const wrongProfile = yield* select({ profileFingerprint: "c".repeat(64) });
+      expect(wrongProfile.mode).toBe("full");
+      expect(wrongProfile.reason).toContain("profile or model configuration changed");
 
-    const changedBase = select({
-      current: PullRequestMetadata.make({ ...metadata, baseSha: "4".repeat(40) }),
-    });
-    expect(changedBase.mode).toBe("full");
-    expect(changedBase.reason).toContain("base changed");
-  });
+      const changedBase = yield* select({
+        current: PullRequestMetadata.make({ ...metadata, baseSha: "4".repeat(40) }),
+      });
+      expect(changedBase.mode).toBe("full");
+      expect(changedBase.reason).toContain("base changed");
+    }),
+  );
 
-  it("falls back to the full diff for unsafe or incomplete head comparisons", () => {
-    const diverged = select({
-      comparison: ReviewHeadComparison.make({ ...comparison, status: "diverged" }),
-    });
-    expect(diverged.mode).toBe("full");
-    expect(diverged.reason).toContain("not an ancestor");
+  it.effect("falls back to the full diff for unsafe or incomplete head comparisons", () =>
+    Effect.gen(function* () {
+      const diverged = yield* select({
+        comparison: ReviewHeadComparison.make({ ...comparison, status: "diverged" }),
+      });
+      expect(diverged.mode).toBe("full");
+      expect(diverged.reason).toContain("not an ancestor");
 
-    const truncated = select({
-      comparison: ReviewHeadComparison.make({ ...comparison, truncated: true }),
-    });
-    expect(truncated.mode).toBe("full");
-    expect(truncated.reason).toContain("file bound");
+      const truncated = yield* select({
+        comparison: ReviewHeadComparison.make({ ...comparison, truncated: true }),
+      });
+      expect(truncated.mode).toBe("full");
+      expect(truncated.reason).toContain("file bound");
 
-    const unavailable = select({ comparison: undefined });
-    expect(unavailable.mode).toBe("full");
-    expect(unavailable.reason).toContain("comparison was unavailable");
-  });
+      const unavailable = yield* select({ comparison: undefined });
+      expect(unavailable.mode).toBe("full");
+      expect(unavailable.reason).toContain("comparison was unavailable");
+    }),
+  );
 
-  it("keeps an ancestor base advance incremental and includes overlapping PR context", () => {
-    const nextBase = "4".repeat(40);
-    const baseComparison = ReviewHeadComparison.make({
-      status: "ahead",
-      baseSha: BASE_SHA,
-      headSha: nextBase,
-      mergeBaseSha: BASE_SHA,
-      files: [acceptedFile],
-      truncated: false,
-    });
-    const selection = select({
-      current: PullRequestMetadata.make({ ...metadata, baseSha: nextBase }),
-      baseComparison,
-    });
-    expect(selection.mode).toBe("incremental");
-    expect(selection.files.map((file) => file.path)).toEqual([
-      "src/accepted.ts",
-      "src/corrective.ts",
-    ]);
-    expect(selection.reason).toContain("base advanced");
+  it.effect("keeps an ancestor base advance incremental and includes overlapping PR context", () =>
+    Effect.gen(function* () {
+      const nextBase = "4".repeat(40);
+      const baseComparison = ReviewHeadComparison.make({
+        status: "ahead",
+        baseSha: BASE_SHA,
+        headSha: nextBase,
+        mergeBaseSha: BASE_SHA,
+        files: [acceptedFile],
+        truncated: false,
+      });
+      const selection = yield* select({
+        current: PullRequestMetadata.make({ ...metadata, baseSha: nextBase }),
+        baseComparison,
+      });
+      expect(selection.mode).toBe("incremental");
+      expect(selection.files.map((file) => file.path)).toEqual([
+        "src/accepted.ts",
+        "src/corrective.ts",
+      ]);
+      expect(selection.reason).toContain("base advanced");
 
-    const rewrittenBase = select({
-      current: PullRequestMetadata.make({ ...metadata, baseSha: nextBase }),
-      baseComparison: ReviewHeadComparison.make({
-        ...baseComparison,
-        status: "diverged",
-        mergeBaseSha: "5".repeat(40),
-      }),
-    });
-    expect(rewrittenBase.mode).toBe("full");
-    expect(rewrittenBase.reason).toContain("changed materially");
-  });
+      const rewrittenBase = yield* select({
+        current: PullRequestMetadata.make({ ...metadata, baseSha: nextBase }),
+        baseComparison: ReviewHeadComparison.make({
+          ...baseComparison,
+          status: "diverged",
+          mergeBaseSha: "5".repeat(40),
+        }),
+      });
+      expect(rewrittenBase.mode).toBe("full");
+      expect(rewrittenBase.reason).toContain("changed materially");
+    }),
+  );
 
-  it("performs a bounded full-diff audit only when final mode is explicit", () => {
-    const selection = select({ requestedMode: "final" });
-    expect(selection.mode).toBe("full");
-    expect(selection.files.map((file) => file.path)).toEqual([
-      "src/accepted.ts",
-      "src/corrective.ts",
-    ]);
-    expect(selection.reason).toBe("explicit final full-diff audit requested");
-    expect(selection.priorState).toBe(undefined);
-  });
+  it.effect("performs a bounded full-diff audit only when final mode is explicit", () =>
+    Effect.gen(function* () {
+      const selection = yield* select({ requestedMode: "final" });
+      expect(selection.mode).toBe("full");
+      expect(selection.files.map((file) => file.path)).toEqual([
+        "src/accepted.ts",
+        "src/corrective.ts",
+      ]);
+      expect(selection.reason).toBe("explicit final full-diff audit requested");
+      expect(selection.priorState).toBe(undefined);
+    }),
+  );
 });

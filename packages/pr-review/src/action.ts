@@ -21,6 +21,8 @@ import {
 import { retireStaleReviews } from "./internal/retirement.ts";
 import {
   ReviewHeadComparison,
+  reviewSelectionAuthorityLayer,
+  type ReviewSelection,
   ReviewStateAuthenticator,
   type ReviewMode,
   type ReviewState,
@@ -436,7 +438,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     // One layer build for state selection AND the run, so both observe
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
-      let selection: ReturnType<typeof selectReviewRange> | undefined;
+      let selection: ReviewSelection | undefined;
       if (reviewer.profileFingerprint !== undefined) {
         // Legacy/custom reviewers expose only the pre-state fingerprint seam.
         // Do not acquire the packaged continuity authority unless this reviewer
@@ -504,7 +506,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             }
           }
         }
-        selection = selectReviewRange({
+        selection = yield* selectReviewRange({
           requestedMode: options.reviewMode ?? "incremental",
           current: metadata,
           fullFiles,
@@ -658,7 +660,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         });
       }
       return { _tag: "Completed", outcome } satisfies ReviewActionResult;
-    }).pipe(Effect.provide(gitHubReviewLayers(target)));
+    }).pipe(Effect.provide(Layer.merge(gitHubReviewLayers(target), reviewSelectionAuthorityLayer)));
   });
 
 /**

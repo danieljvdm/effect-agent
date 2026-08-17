@@ -17,11 +17,9 @@ export * from "./internal/providers.ts";
 export * from "./internal/render.ts";
 export * from "./internal/retirement.ts";
 export * from "./internal/review-agent.ts";
-// Continuity wire schemas and authenticator are public. Range selection is a
-// host-only authority: exposing its issuer would let an arbitrary consumer
-// mint a trusted narrowed scope before `PrReview.run` signs new continuity
-// state. The Action imports that internal selector after recovering the
-// authenticated GitHub state; generic consumers can only run a full source.
+// Continuity wire schemas and host capabilities are public. The packaged
+// Action installs one fresh selection authority around authenticated state
+// recovery, range selection, and the matching reviewer run.
 export {
   GitCommitSha,
   ReviewMode,
@@ -33,6 +31,8 @@ export {
   ReviewStateAuthenticationFailure,
   ReviewStateMarkerTooLarge,
   ReviewStateAuthenticator,
+  ReviewSelectionAuthority,
+  reviewSelectionAuthorityLayer,
   webCryptoReviewStateAuthenticatorLayer,
   unavailableReviewStateAuthenticatorLayer,
   ReviewHeadComparison,
@@ -44,6 +44,7 @@ export type {
   ReviewMode as ReviewModeType,
   ReviewScopeMode as ReviewScopeModeType,
   ReviewSelection,
+  SelectReviewRangeInput,
   ReviewStateMarker as ReviewStateMarkerType,
 } from "./internal/review-state.ts";
 export * from "./internal/review-units.ts";

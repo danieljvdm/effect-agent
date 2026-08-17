@@ -19,6 +19,8 @@ import {
   resolveReviewTarget,
   makeOpenAiReviewModel,
   openAiClientLayer,
+  reviewSelectionAuthorityLayer,
+  unavailableReviewStateAuthenticatorLayer,
 } from "@effect-agent/pr-review";
 
 const reviewer = PrReview.make({ model: makeOpenAiReviewModel() });
@@ -27,7 +29,16 @@ const program = Effect.gen(function* () {
   const target = yield* resolveReviewTarget({ repository: "acme/api", number: 123 });
   return yield* reviewer
     .run({ post: true })
-    .pipe(Effect.provide(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)));
+    .pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          gitHubReviewLayers(target),
+          openAiClientLayer,
+          reviewSelectionAuthorityLayer,
+          unavailableReviewStateAuthenticatorLayer("incremental continuity is not configured"),
+        ),
+      ),
+    );
 });
 ```
 
@@ -168,6 +179,12 @@ WebCrypto import/sign/verify failures stay typed. The terminal marker is
 schema-branded and capped at 24,000 characters. If signing fails or state
 exceeds that bound, the completed review is posted without continuity state
 and with a bounded warning, so the next run safely performs a full review.
+
+Range selection is also explicit host authority. `reviewSelectionAuthorityLayer` is non-memoized,
+so each host composition receives a fresh issuer/verifier; the packaged Action installs one
+instance around authenticated state recovery, source decoration, and review execution. Selection
+validity is therefore scoped to that composition rather than process-wide mutable state, and a
+selection from another composition fails closed.
 
 `review-mode: final` is the explicit bounded merge-readiness audit. It reviews
 the full current PR diff and resets the incremental baseline; normal

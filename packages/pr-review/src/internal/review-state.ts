@@ -303,7 +303,29 @@ interface SelectionBinding {
   readonly snapshot: ReviewSelection;
 }
 
-const selectedRanges = new WeakMap<object, SelectionBinding>();
+export interface SelectReviewRangeInput {
+  readonly requestedMode: ReviewMode;
+  readonly current: PullRequestMetadata;
+  readonly fullFiles: ReadonlyArray<ChangedFile>;
+  readonly profileFingerprint: string;
+  readonly priorState: ReviewState | undefined;
+  readonly comparison: ReviewHeadComparison | undefined;
+  readonly baseComparison?: ReviewHeadComparison | undefined;
+  readonly lookupFailure?: string | undefined;
+}
+
+/** Host-owned authority for issuing and verifying narrowed review scope. */
+export class ReviewSelectionAuthority extends Context.Service<
+  ReviewSelectionAuthority,
+  {
+    readonly select: (input: SelectReviewRangeInput) => Effect.Effect<ReviewSelection>;
+    readonly snapshot: (selection: ReviewSelection) => Effect.Effect<ReviewSelection | undefined>;
+    readonly selectedFor: (
+      selection: ReviewSelection,
+      current: PullRequestMetadata,
+    ) => Effect.Effect<ReviewSelection | undefined>;
+  }
+>()("@effect-agent/pr-review/ReviewSelectionAuthority") {}
 
 const selectionFingerprint = (selection: ReviewSelection): string | undefined => {
   try {
@@ -351,6 +373,7 @@ const selectionSnapshot = (selection: ReviewSelection): ReviewSelection =>
   });
 
 const sealReviewSelection = (
+  selectedRanges: WeakMap<object, SelectionBinding>,
   selection: ReviewSelection,
   source: PullRequestMetadata,
 ): ReviewSelection => {
@@ -374,53 +397,39 @@ const sealReviewSelection = (
 };
 
 /** The immutable selection snapshot, if this object originated at the host range selector. */
-export const sealedReviewSelection = (selection: ReviewSelection): ReviewSelection | undefined =>
-  selectedRanges.get(selection)?.snapshot;
+export const sealedReviewSelection = Effect.fn("sealedReviewSelection")(function* (
+  selection: ReviewSelection,
+) {
+  const authority = yield* ReviewSelectionAuthority;
+  return yield* authority.snapshot(selection);
+});
 
 /** Resolve an unmodified range-selector selection for this exact source snapshot. */
-export const selectedReviewRangeFor = (
+export const selectedReviewRangeFor = Effect.fn("selectedReviewRangeFor")(function* (
   selection: ReviewSelection,
   current: PullRequestMetadata,
-): ReviewSelection | undefined => {
-  const binding = selectedRanges.get(selection);
-  if (binding === undefined) return undefined;
-  const source = binding.source;
-  if (
-    binding.fingerprint === selectionFingerprint(selection) &&
-    source.repository === current.repository &&
-    source.number === current.number &&
-    source.baseRef === current.baseRef &&
-    source.baseSha === current.baseSha &&
-    source.headRef === current.headRef &&
-    source.headSha === current.headSha &&
-    source.totalChangedFiles === current.totalChangedFiles
-  ) {
-    return binding.snapshot;
-  }
-  return undefined;
-};
+) {
+  const authority = yield* ReviewSelectionAuthority;
+  return yield* authority.selectedFor(selection, current);
+});
 
 const fullSelection = (input: {
   readonly reason: string;
   readonly files: ReadonlyArray<ChangedFile>;
   readonly current: PullRequestMetadata;
   readonly profileFingerprint: string;
-}): ReviewSelection =>
-  sealReviewSelection(
-    {
-      mode: "full",
-      reason: input.reason,
-      files: input.files,
-      affectedPaths: input.files.flatMap((file) =>
-        file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-      ),
-      totalFiles: input.current.totalChangedFiles,
-      baselineSha: undefined,
-      priorState: undefined,
-      profileFingerprint: input.profileFingerprint,
-    },
-    input.current,
-  );
+}): ReviewSelection => ({
+  mode: "full",
+  reason: input.reason,
+  files: input.files,
+  affectedPaths: input.files.flatMap((file) =>
+    file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
+  ),
+  totalFiles: input.current.totalChangedFiles,
+  baselineSha: undefined,
+  priorState: undefined,
+  profileFingerprint: input.profileFingerprint,
+});
 
 /**
  * Validate that persisted state belongs to this exact PR/base lineage and the
@@ -444,17 +453,8 @@ export const validateReviewState = (
   return undefined;
 };
 
-/** Pure, deterministic range selection with conservative full-review fallbacks. */
-export const selectReviewRange = (input: {
-  readonly requestedMode: ReviewMode;
-  readonly current: PullRequestMetadata;
-  readonly fullFiles: ReadonlyArray<ChangedFile>;
-  readonly profileFingerprint: string;
-  readonly priorState: ReviewState | undefined;
-  readonly comparison: ReviewHeadComparison | undefined;
-  readonly baseComparison?: ReviewHeadComparison | undefined;
-  readonly lookupFailure?: string | undefined;
-}): ReviewSelection => {
+/** Pure, deterministic range policy with conservative full-review fallbacks. */
+const selectReviewRangeValue = (input: SelectReviewRangeInput): ReviewSelection => {
   const full = (reason: string) =>
     fullSelection({
       reason,
@@ -533,20 +533,55 @@ export const selectReviewRange = (input: {
   const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
-  return sealReviewSelection(
-    {
-      mode: "incremental",
-      reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
-      files: selectedFiles,
-      affectedPaths: [...affectedPaths].sort(),
-      totalFiles: selectedFiles.length,
-      baselineSha: input.priorState.reviewedHeadSha,
-      priorState: input.priorState,
-      profileFingerprint: input.profileFingerprint,
-    },
-    input.current,
-  );
+  return {
+    mode: "incremental",
+    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    files: selectedFiles,
+    affectedPaths: [...affectedPaths].sort(),
+    totalFiles: selectedFiles.length,
+    baselineSha: input.priorState.reviewedHeadSha,
+    priorState: input.priorState,
+    profileFingerprint: input.profileFingerprint,
+  };
 };
+
+/** A non-memoized selection registry scoped to each host composition. */
+export const reviewSelectionAuthorityLayer: Layer.Layer<ReviewSelectionAuthority> = Layer.fresh(
+  Layer.sync(ReviewSelectionAuthority, () => {
+    const selectedRanges = new WeakMap<object, SelectionBinding>();
+    return ReviewSelectionAuthority.of({
+      select: (input) =>
+        Effect.sync(() =>
+          sealReviewSelection(selectedRanges, selectReviewRangeValue(input), input.current),
+        ),
+      snapshot: (selection) => Effect.sync(() => selectedRanges.get(selection)?.snapshot),
+      selectedFor: (selection, current) =>
+        Effect.sync(() => {
+          const binding = selectedRanges.get(selection);
+          if (binding === undefined) return undefined;
+          const source = binding.source;
+          return binding.fingerprint === selectionFingerprint(selection) &&
+            source.repository === current.repository &&
+            source.number === current.number &&
+            source.baseRef === current.baseRef &&
+            source.baseSha === current.baseSha &&
+            source.headRef === current.headRef &&
+            source.headSha === current.headSha &&
+            source.totalChangedFiles === current.totalChangedFiles
+            ? binding.snapshot
+            : undefined;
+        }),
+    });
+  }),
+);
+
+/** Issue one selection through the authority installed by the review host. */
+export const selectReviewRange = Effect.fn("selectReviewRange")(function* (
+  input: SelectReviewRangeInput,
+) {
+  const authority = yield* ReviewSelectionAuthority;
+  return yield* authority.select(input);
+});
 
 /**
  * Decorate the full source with the selected review range. Full anchor files

@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import { Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
 import {
   Agent,
@@ -59,6 +59,7 @@ import {
   ReviewFinding,
   ReviewMission,
   ReviewPublicationPlan,
+  reviewSelectionAuthorityLayer,
   ReviewStateAuthenticator,
   WalkthroughEntry,
   defaultFanOutPolicy,
@@ -240,6 +241,7 @@ const runOfflineFanOut = (script: {
           FanOutCoordinatorToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
           fanOutHandlersLayer(childBinding).pipe(Layer.provide(childSupportLayer)),
           collectingReviewPublisherLayer(published),
+          reviewSelectionAuthorityLayer,
           testIdGeneratorLayer,
           unavailableReviewStateAuthenticatorLayer("offline fan-out test"),
         ),
@@ -534,7 +536,7 @@ describe("rankAndDedupeFindings", () => {
 // the real S1 delegation, toolkits, source port, and publication path.
 // ---------------------------------------------------------------------------
 
-describe("offline fan-out review run", () => {
+layer(reviewSelectionAuthorityLayer)("offline fan-out review run", (it) => {
   const happyChildren: ReadonlyArray<OfflineUnitScript> = [
     {
       unitId: "unit-001",

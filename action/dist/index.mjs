@@ -42177,7 +42177,9 @@ class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review
   truncated: exports_Schema.Boolean
 }) {
 }
-var selectedRanges = new WeakMap;
+
+class ReviewSelectionAuthority extends exports_Context.Service()("@effect-agent/pr-review/ReviewSelectionAuthority") {
+}
 var selectionFingerprint = (selection) => {
   try {
     return JSON.stringify({
@@ -42211,7 +42213,7 @@ var selectionSnapshot = (selection) => freeze({
   priorState: selection.priorState === undefined ? undefined : exports_Schema.decodeUnknownSync(ReviewState)(exports_Schema.encodeSync(ReviewState)(selection.priorState)),
   profileFingerprint: selection.profileFingerprint
 });
-var sealReviewSelection = (selection, source) => {
+var sealReviewSelection = (selectedRanges, selection, source) => {
   const snapshot2 = selectionSnapshot(selection);
   const fingerprint = selectionFingerprint(selection);
   if (fingerprint === undefined)
@@ -42231,18 +42233,15 @@ var sealReviewSelection = (selection, source) => {
   });
   return selection;
 };
-var sealedReviewSelection = (selection) => selectedRanges.get(selection)?.snapshot;
-var selectedReviewRangeFor = (selection, current) => {
-  const binding = selectedRanges.get(selection);
-  if (binding === undefined)
-    return;
-  const source = binding.source;
-  if (binding.fingerprint === selectionFingerprint(selection) && source.repository === current.repository && source.number === current.number && source.baseRef === current.baseRef && source.baseSha === current.baseSha && source.headRef === current.headRef && source.headSha === current.headSha && source.totalChangedFiles === current.totalChangedFiles) {
-    return binding.snapshot;
-  }
-  return;
-};
-var fullSelection = (input) => sealReviewSelection({
+var sealedReviewSelection = exports_Effect.fn("sealedReviewSelection")(function* (selection) {
+  const authority = yield* ReviewSelectionAuthority;
+  return yield* authority.snapshot(selection);
+});
+var selectedReviewRangeFor = exports_Effect.fn("selectedReviewRangeFor")(function* (selection, current) {
+  const authority = yield* ReviewSelectionAuthority;
+  return yield* authority.selectedFor(selection, current);
+});
+var fullSelection = (input) => ({
   mode: "full",
   reason: input.reason,
   files: input.files,
@@ -42251,7 +42250,7 @@ var fullSelection = (input) => sealReviewSelection({
   baselineSha: undefined,
   priorState: undefined,
   profileFingerprint: input.profileFingerprint
-}, input.current);
+});
 var validateReviewState = (state, current, profileFingerprint) => {
   if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
     return "stored state belongs to a different pull request";
@@ -42267,7 +42266,7 @@ var validateReviewState = (state, current, profileFingerprint) => {
   }
   return;
 };
-var selectReviewRange = (input) => {
+var selectReviewRangeValue = (input) => {
   const full = (reason) => fullSelection({
     reason,
     files: input.fullFiles,
@@ -42324,7 +42323,7 @@ var selectReviewRange = (input) => {
     }
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  return sealReviewSelection({
+  return {
     mode: "incremental",
     reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
     files: selectedFiles,
@@ -42333,8 +42332,26 @@ var selectReviewRange = (input) => {
     baselineSha: input.priorState.reviewedHeadSha,
     priorState: input.priorState,
     profileFingerprint: input.profileFingerprint
-  }, input.current);
+  };
 };
+var reviewSelectionAuthorityLayer = exports_Layer.fresh(exports_Layer.sync(ReviewSelectionAuthority, () => {
+  const selectedRanges = new WeakMap;
+  return ReviewSelectionAuthority.of({
+    select: (input) => exports_Effect.sync(() => sealReviewSelection(selectedRanges, selectReviewRangeValue(input), input.current)),
+    snapshot: (selection) => exports_Effect.sync(() => selectedRanges.get(selection)?.snapshot),
+    selectedFor: (selection, current) => exports_Effect.sync(() => {
+      const binding = selectedRanges.get(selection);
+      if (binding === undefined)
+        return;
+      const source = binding.source;
+      return binding.fingerprint === selectionFingerprint(selection) && source.repository === current.repository && source.number === current.number && source.baseRef === current.baseRef && source.baseSha === current.baseSha && source.headRef === current.headRef && source.headSha === current.headSha && source.totalChangedFiles === current.totalChangedFiles ? binding.snapshot : undefined;
+    })
+  });
+}));
+var selectReviewRange = exports_Effect.fn("selectReviewRange")(function* (input) {
+  const authority = yield* ReviewSelectionAuthority;
+  return yield* authority.select(input);
+});
 var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const selectedPaths = new Set(selection.files.map((file2) => file2.path));
@@ -43605,42 +43622,42 @@ var sameSelectedFiles = (left, right) => left.length === right.length && left.ev
   const candidate = right[index2];
   return candidate !== undefined && sameSelectedFileIdentity(file2, candidate);
 });
-var validateSelection = (input) => {
+var validateSelection = exports_Effect.fn("validateSelection")(function* (input) {
   const { selection, files, anchorFiles, metadata } = input;
-  const sealed = selectedReviewRangeFor(selection, metadata);
-  if (sealed === undefined) {
-    return exports_Effect.fail(ReviewSelectionViolation.make({
+  const verified = yield* selectedReviewRangeFor(selection, metadata);
+  if (verified === undefined) {
+    return yield* ReviewSelectionViolation.make({
       reason: "review selection was not created by the host range selector"
-    }));
+    });
   }
-  if (!sameSelectedFiles(sealed.files, files)) {
-    return exports_Effect.fail(ReviewSelectionViolation.make({
+  if (!sameSelectedFiles(verified.files, files)) {
+    return yield* ReviewSelectionViolation.make({
       reason: "review selection evidence does not match the model-visible source range"
-    }));
+    });
   }
-  if (sealed.mode === "incremental" && sealed.totalFiles !== files.length) {
-    return exports_Effect.fail(ReviewSelectionViolation.make({
+  if (verified.mode === "incremental" && verified.totalFiles !== files.length) {
+    return yield* ReviewSelectionViolation.make({
       reason: "review selection total does not match the model-visible source range"
-    }));
+    });
   }
   const anchorPaths = new Set(anchorFiles.map((file2) => file2.path));
   if (files.some((file2) => !anchorPaths.has(file2.path))) {
-    return exports_Effect.fail(ReviewSelectionViolation.make({
+    return yield* ReviewSelectionViolation.make({
       reason: "review selection contains a path outside the current pull-request source"
-    }));
+    });
   }
-  if (sealed.mode === "full" && (sealed.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))) {
-    return exports_Effect.fail(ReviewSelectionViolation.make({
+  if (verified.mode === "full" && (verified.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))) {
+    return yield* ReviewSelectionViolation.make({
       reason: "full review selection does not cover the current pull-request source"
-    }));
+    });
   }
-  if (sealed.mode === "incremental" && (sealed.priorState === undefined || sealed.baselineSha !== sealed.priorState.reviewedHeadSha || sealed.profileFingerprint !== sealed.priorState.profileFingerprint)) {
-    return exports_Effect.fail(ReviewSelectionViolation.make({
+  if (verified.mode === "incremental" && (verified.priorState === undefined || verified.baselineSha !== verified.priorState.reviewedHeadSha || verified.profileFingerprint !== verified.priorState.profileFingerprint)) {
+    return yield* ReviewSelectionViolation.make({
       reason: "incremental review selection is not bound to its authenticated prior state"
-    }));
+    });
   }
-  return exports_Effect.succeed(sealed);
-};
+  return verified;
+});
 var buildReviewMission = (metadata, files) => ReviewMission.make({
   repository: metadata.repository,
   number: metadata.number,
@@ -43825,7 +43842,10 @@ var requireReadonly = (tools) => {
   }
 };
 var provideIgnore = (effect2, ignore6) => ignore6 !== undefined && ignore6.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore6))) : effect2;
-var provideSelection = (effect2, selection) => selection === undefined ? effect2 : effect2.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(sealedReviewSelection(selection) ?? selection)));
+var provideSelection = (effect2, selection) => selection === undefined ? effect2 : exports_Effect.gen(function* () {
+  const sealed = yield* sealedReviewSelection(selection);
+  return yield* effect2.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(sealed ?? selection)));
+});
 var makeFingerprint = (signature, ignore6) => provideIgnore(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
@@ -55158,7 +55178,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           }
         }
       }
-      selection = selectReviewRange({
+      selection = yield* selectReviewRange({
         requestedMode: options3.reviewMode ?? "incremental",
         current: metadata,
         fullFiles,
@@ -55277,7 +55297,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       });
     }
     return { _tag: "Completed", outcome };
-  }).pipe(exports_Effect.provide(gitHubReviewLayers(target)));
+  }).pipe(exports_Effect.provide(exports_Layer.merge(gitHubReviewLayers(target), reviewSelectionAuthorityLayer)));
 });
 var reviewActionProgram = exports_Effect.gen(function* () {
   const inputs = yield* resolveActionInputs();
