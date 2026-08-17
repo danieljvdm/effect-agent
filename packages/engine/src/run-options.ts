@@ -10,7 +10,7 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import type { Effect } from "effect";
+import type { DateTime, Effect } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
@@ -395,6 +395,14 @@ export interface RunTurnResume {
   readonly calls: ReadonlyArray<RunTurnResumeCall>;
   readonly settled: ReadonlyArray<RunTurnResumeSettledCall>;
   /**
+   * Exact still-open delegation Call IDs whose attached child Settlements the
+   * durable coordinator proved canonical. Only this resumed join batch may
+   * finish after the logical Run deadline so accepted-work cleanup cannot be
+   * stranded; duration enforcement resumes before the continuation can start
+   * model, ordinary Tool, or new-child work (RUN-030/SUB-019).
+   */
+  readonly settledChildJoinCallIdsPastDeadline?: ReadonlyArray<ToolCallId> | undefined;
+  /**
    * The pending Turn's committed LEADING messages — the messages the durable
    * coordinator committed inside the pending Turn's canonical response record
    * BEFORE the assistant tool-call message (Turn-1 evaluated instructions +
@@ -456,6 +464,14 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly approval?: RunApprovalHook<HookError, HookRequirements> | undefined;
   readonly context?: RunContextHook<HookError, HookRequirements> | undefined;
   readonly budget?: RunBudgetHook<HookError, HookRequirements> | undefined;
+  /**
+   * Optional absolute deadline for the Run's `maxDuration` rail. The engine
+   * uses the earlier of this value and the fresh policy deadline, so callers
+   * may preserve or tighten an existing Run allowance but can never widen it.
+   * Durable coordinators derive this value from canonical Run-start evidence
+   * so replacement Attempts share one wall-clock allowance (RUN-030).
+   */
+  readonly durationDeadline?: DateTime.Utc | undefined;
   /**
    * Durable turn-commit seam (P5). When absent the engine behaves exactly as
    * the ephemeral runtime: no response/prepared commits, and `DurableStep`

@@ -20,6 +20,7 @@ import {
   type DelegationId,
   IdGenerator,
   type InstructionSource,
+  isDelegationToolName,
   type RunDispositionDeclaration,
   ModelStarted,
   ModelProtocolError,
@@ -317,6 +318,8 @@ interface RunContext {
   readonly pendingFollowUps: Array<Prompt.RawInput>;
   /** Wall-clock Run start, the base of the run-status elapsed rendering (RUN-024). */
   readonly startedAtMillis: number;
+  /** Absolute `maxDuration` rail shared by every durable Attempt (RUN-030). */
+  readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
   consecutiveToolFailures: number;
@@ -2976,6 +2979,10 @@ const makeTurn = <
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      if (now >= context.durationDeadlineMillis) {
+        return failRunEventStream(durationLimitError(agent.definition.policy));
+      }
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
       // Model-visible final-output contract (RUN-028):
@@ -3928,6 +3935,24 @@ const makeResumeTurn = <
           isFailure: settledCall.isFailure,
         };
       }
+      const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
+      if (settledChildJoinCallIds !== undefined) {
+        const cleanupIds = new Set<string>(settledChildJoinCallIds);
+        const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
+        if (
+          settledChildJoinCallIds.length === 0 ||
+          cleanupIds.size !== settledChildJoinCallIds.length ||
+          openCalls.length !== cleanupIds.size ||
+          openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))
+        ) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message:
+                "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call",
+            }),
+          );
+        }
+      }
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
@@ -4000,6 +4025,24 @@ const makeResumeTurn = <
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
+      const continueAfterBatch = () => {
+        const continuation = toolBatchContinuation(
+          agent,
+          context,
+          trace,
+          resumedPrompt,
+          turn,
+          toolCalls,
+          options,
+        );
+        return settledChildJoinCallIds === undefined
+          ? continuation
+          : enforceDurationDeadline(
+              continuation,
+              context.durationDeadlineMillis,
+              durationLimitError(policy),
+            );
+      };
 
       // RUN-018 on the resume path: a canonically declared over-budget batch
       // settles synthetically under final-answer mode — recorded settled
@@ -4019,9 +4062,7 @@ const makeResumeTurn = <
         );
         return started.pipe(
           Stream.concat(Stream.fromIterable(rejection)),
-          Stream.concat(
-            toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
-          ),
+          Stream.concat(continueAfterBatch()),
         );
       }
       const toolResults = guardBudgetStream(
@@ -4042,17 +4083,38 @@ const makeResumeTurn = <
         ),
         options.budget,
       );
-      return started.pipe(
-        Stream.concat(toolResults),
-        Stream.concat(
-          toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
-        ),
-      );
+      return started.pipe(Stream.concat(toolResults), Stream.concat(continueAfterBatch()));
     }),
   );
 
 const failRunEventStream = <Error>(error: Error): Stream.Stream<RunEvent, Error> =>
   Stream.fail(error);
+
+const durationLimitError = (policy: AgentPolicy): AgentPolicyError =>
+  AgentPolicyError.make({
+    limit: "duration",
+    message: `Agent exceeded its ${Duration.format(policy.maxDuration)} duration limit`,
+  });
+
+const enforceDurationDeadline = <A, E, R>(
+  execution: Stream.Stream<A, E, R>,
+  durationDeadlineMillis: number,
+  durationLimit: AgentPolicyError,
+): Stream.Stream<A, E | AgentPolicyError, R> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const remaining = durationDeadlineMillis - now;
+      if (remaining <= 0) {
+        return Stream.fail(durationLimit);
+      }
+      return execution.pipe(
+        Stream.interruptWhen(
+          Effect.sleep(remaining).pipe(Effect.andThen(Effect.fail(durationLimit))),
+        ),
+      );
+    }),
+  );
 
 const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
   stream: Stream.Stream<A, E, R>,
@@ -4100,7 +4162,17 @@ const stream = <
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
-      const startedAtMillis = yield* Clock.currentTimeMillis;
+      const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
+      const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
+      const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+      // RUN-030: a durable coordinator supplies the logical Run deadline from
+      // canonical Run-start evidence. Taking the earlier deadline keeps this
+      // public option tightening-only for every other caller.
+      const durationDeadlineMillis =
+        options.durationDeadline === undefined
+          ? attemptDeadlineMillis
+          : Math.min(attemptDeadlineMillis, DateTime.toEpochMillis(options.durationDeadline));
+      const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
       const ids = yield* IdGenerator;
       const conversationId =
         options.conversationId === undefined
@@ -4113,6 +4185,7 @@ const stream = <
         runId,
         pendingFollowUps: [],
         startedAtMillis,
+        durationDeadlineMillis,
         history: options.history ?? Prompt.empty,
         // RUN-019: a resumed Attempt re-seeds cumulative usage from the
         // canonical response records so token budgets and the compaction
@@ -4217,20 +4290,15 @@ const stream = <
         }),
       );
 
-      const durationLimit = AgentPolicyError.make({
-        limit: "duration",
-        message: `Agent exceeded its ${Duration.format(agent.definition.policy.maxDuration)} duration limit`,
-      });
-      const deadlineEffect = Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const remaining =
-          startedAtMillis + Duration.toMillis(agent.definition.policy.maxDuration) - now;
-        if (remaining > 0) {
-          yield* Effect.sleep(remaining);
-        }
-        return yield* durationLimit;
-      });
-      const deadline = execution.pipe(Stream.interruptWhen(deadlineEffect));
+      const durationLimit = durationLimitError(agent.definition.policy);
+      // A coordinator-proven resume of exact already-settled attached-child
+      // Calls is mandatory accepted-work cleanup. `makeResumeTurn` validates
+      // and runs only that join batch past expiry, then restores this same
+      // deadline guard around its continuation.
+      const deadline =
+        options.resume?.settledChildJoinCallIdsPastDeadline !== undefined
+          ? execution
+          : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
       // bound to the Run's immutable identity and delegation depth, plus the
