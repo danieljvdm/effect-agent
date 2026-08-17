@@ -35348,6 +35348,10 @@ function decodeRunDisposition(agent2, encoded) {
   })) : decodeRunDispositionCandidate(declaration, encoded);
 }
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const now3 = yield* exports_Clock.currentTimeMillis;
+  if (now3 >= context3.durationDeadlineMillis) {
+    return failRunEventStream(durationLimitError(agent2.definition.policy));
+  }
   const ids = yield* IdGenerator;
   const turnId = yield* ids.nextTurnId;
   const outputContract = outputSchemaContract(agent2.definition);
@@ -35837,10 +35841,18 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
   return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
 }));
 var failRunEventStream = (error2) => exports_Stream.fail(error2);
+var durationLimitError = (policy2) => AgentPolicyError.make({
+  limit: "duration",
+  message: `Agent exceeded its ${exports_Duration.format(policy2.maxDuration)} duration limit`
+});
 var guardBudgetStream = (stream, budget) => budget === undefined ? stream : exports_Stream.transformPull(stream, (pull) => exports_Effect.succeed(budget.guard(pull)));
 var stream = (agent2, input, options = {}) => {
   const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
-    const startedAtMillis = yield* exports_Clock.currentTimeMillis;
+    const attemptStartedAtMillis = yield* exports_Clock.currentTimeMillis;
+    const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
+    const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+    const durationDeadlineMillis = options.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options.durationDeadline));
+    const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
     const ids = yield* IdGenerator;
     const conversationId = options.conversationId === undefined ? yield* ids.nextConversationId : options.conversationId;
     const runId = options.runId === undefined ? yield* ids.nextRunId : options.runId;
@@ -35850,6 +35862,7 @@ var stream = (agent2, input, options = {}) => {
       runId,
       pendingFollowUps: [],
       startedAtMillis,
+      durationDeadlineMillis,
       history: options.history ?? exports_Prompt.empty,
       modelCalls: options.resumeUsage?.modelCalls ?? 0,
       consecutiveToolFailures: 0,
@@ -35916,19 +35929,16 @@ var stream = (agent2, input, options = {}) => {
       const initialPrompt = yield* appendInputs(context3, prompt, steering, options);
       return makeTurn(agent2, context3, initialPrompt, 1, 0, options);
     }));
-    const durationLimit = AgentPolicyError.make({
-      limit: "duration",
-      message: `Agent exceeded its ${exports_Duration.format(agent2.definition.policy.maxDuration)} duration limit`
-    });
+    const durationLimit = durationLimitError(agent2.definition.policy);
     const deadlineEffect = exports_Effect.gen(function* () {
       const now3 = yield* exports_Clock.currentTimeMillis;
-      const remaining2 = startedAtMillis + exports_Duration.toMillis(agent2.definition.policy.maxDuration) - now3;
+      const remaining2 = durationDeadlineMillis - now3;
       if (remaining2 > 0) {
         yield* exports_Effect.sleep(remaining2);
       }
       return yield* durationLimit;
     });
-    const deadline = execution.pipe(exports_Stream.interruptWhen(deadlineEffect));
+    const deadline = options.resume?.completeSettledChildJoinsPastDeadline === true ? execution : execution.pipe(exports_Stream.interruptWhen(deadlineEffect));
     const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
       agentId: context3.agentId,
       conversationId: context3.conversationId,

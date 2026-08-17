@@ -317,6 +317,8 @@ interface RunContext {
   readonly pendingFollowUps: Array<Prompt.RawInput>;
   /** Wall-clock Run start, the base of the run-status elapsed rendering (RUN-024). */
   readonly startedAtMillis: number;
+  /** Absolute `maxDuration` rail shared by every durable Attempt (RUN-030). */
+  readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
   consecutiveToolFailures: number;
@@ -2976,6 +2978,10 @@ const makeTurn = <
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      if (now >= context.durationDeadlineMillis) {
+        return failRunEventStream(durationLimitError(agent.definition.policy));
+      }
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
       // Model-visible final-output contract (RUN-028):
@@ -4054,6 +4060,12 @@ const makeResumeTurn = <
 const failRunEventStream = <Error>(error: Error): Stream.Stream<RunEvent, Error> =>
   Stream.fail(error);
 
+const durationLimitError = (policy: AgentPolicy): AgentPolicyError =>
+  AgentPolicyError.make({
+    limit: "duration",
+    message: `Agent exceeded its ${Duration.format(policy.maxDuration)} duration limit`,
+  });
+
 const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
   stream: Stream.Stream<A, E, R>,
   budget: RunOptions<HookError, HookRequirements>["budget"],
@@ -4100,7 +4112,17 @@ const stream = <
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
-      const startedAtMillis = yield* Clock.currentTimeMillis;
+      const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
+      const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
+      const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+      // RUN-030: a durable coordinator supplies the logical Run deadline from
+      // canonical Run-start evidence. Taking the earlier deadline keeps this
+      // public option tightening-only for every other caller.
+      const durationDeadlineMillis =
+        options.durationDeadline === undefined
+          ? attemptDeadlineMillis
+          : Math.min(attemptDeadlineMillis, DateTime.toEpochMillis(options.durationDeadline));
+      const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
       const ids = yield* IdGenerator;
       const conversationId =
         options.conversationId === undefined
@@ -4113,6 +4135,7 @@ const stream = <
         runId,
         pendingFollowUps: [],
         startedAtMillis,
+        durationDeadlineMillis,
         history: options.history ?? Prompt.empty,
         // RUN-019: a resumed Attempt re-seeds cumulative usage from the
         // canonical response records so token budgets and the compaction
@@ -4217,20 +4240,23 @@ const stream = <
         }),
       );
 
-      const durationLimit = AgentPolicyError.make({
-        limit: "duration",
-        message: `Agent exceeded its ${Duration.format(agent.definition.policy.maxDuration)} duration limit`,
-      });
+      const durationLimit = durationLimitError(agent.definition.policy);
       const deadlineEffect = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
-        const remaining =
-          startedAtMillis + Duration.toMillis(agent.definition.policy.maxDuration) - now;
+        const remaining = durationDeadlineMillis - now;
         if (remaining > 0) {
           yield* Effect.sleep(remaining);
         }
         return yield* durationLimit;
       });
-      const deadline = execution.pipe(Stream.interruptWhen(deadlineEffect));
+      // A coordinator-proven resume of already-settled attached children is
+      // mandatory accepted-work cleanup. Let those joins commit, then the
+      // `makeTurn` pre-model check observes the same expired deadline; no
+      // model call or new child/external work receives an extension.
+      const deadline =
+        options.resume?.completeSettledChildJoinsPastDeadline === true
+          ? execution
+          : execution.pipe(Stream.interruptWhen(deadlineEffect));
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
       // bound to the Run's immutable identity and delegation depth, plus the

@@ -2793,10 +2793,26 @@ const make = Effect.gen(function* () {
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
+    childAttachments: RecoverySnapshot["childAttachments"],
   ) =>
     Effect.gen(function* () {
       const submissionId = submission.submissionId;
       const runId = runIdForSubmission(submissionId);
+      const inputRecord = records.find(
+        (envelope) => envelope.record.recordId === submissionInputRecordId(submissionId),
+      );
+      if (inputRecord === undefined) {
+        return yield* RunJournalError.make({
+          message: `Run ${runId} has no canonical input record for its duration deadline`,
+        });
+      }
+      // RUN-030: the first canonical input append is the logical Run-start
+      // authority. Queue/admission time precedes it; every later Attempt uses
+      // this same absolute deadline, including after durable suspension.
+      const durationDeadline = DateTime.addDuration(
+        inputRecord.record.createdAt,
+        agent.definition.policy.maxDuration,
+      );
       const journal = yield* projectRunJournal(records, runId);
       const pending = yield* pendingToolBatchFor(records, runId);
       const resumeProjection =
@@ -2919,6 +2935,23 @@ const make = Effect.gen(function* () {
           declaredNamesByCallId.set(call.id, call.name);
         }
       }
+      const resumedSettledChildCleanup =
+        pending !== undefined &&
+        pending.calls.every((call) => {
+          if (pending.settled.some((settled) => settled.id === call.id)) return true;
+          const started = [...subagentState.started.values()].find(
+            (candidate) => candidate.toolCallId === call.id,
+          );
+          return (
+            started !== undefined &&
+            childAttachments.some(
+              (child) =>
+                child.toolCallId === started.toolCallId &&
+                child.childSubmissionId === started.childSubmissionId &&
+                child.childState === "settled",
+            )
+          );
+        });
       // Task #12 (WP1 `resume.leadingMessages`): the pending canonical response's messages
       // BEFORE its first assistant message — Turn-1 evaluated instructions + input, or steering
       // committed inside the pending record — re-enter official history through the engine so
@@ -3941,6 +3974,7 @@ const make = Effect.gen(function* () {
         approval,
         durability,
         subagent,
+        durationDeadline,
         ...(pending === undefined
           ? {}
           : {
@@ -3949,6 +3983,9 @@ const make = Effect.gen(function* () {
                 turnId: pending.turnId,
                 calls: pending.calls,
                 settled: pending.settled,
+                ...(resumedSettledChildCleanup
+                  ? { completeSettledChildJoinsPastDeadline: true as const }
+                  : {}),
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),
@@ -4495,6 +4532,9 @@ const make = Effect.gen(function* () {
       let approvalDecisionIntents = snapshot.approvalDecisions;
       while (true) {
         const currentRecords = yield* readAll(conversationId);
+        const currentSnapshot = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId }),
+        );
         const outcome = yield* runModel(
           agent,
           ctx,
@@ -4503,6 +4543,7 @@ const make = Effect.gen(function* () {
           currentRecords,
           lineage,
           approvalDecisionIntents,
+          currentSnapshot.childAttachments,
         );
         if (outcome._tag === "suspendedChild") {
           // Durable waitingForChild suspension (spec §12 step 10, SUB-030): the sibling

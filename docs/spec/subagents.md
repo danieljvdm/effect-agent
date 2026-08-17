@@ -599,8 +599,12 @@ another child.
 
 `waitingForChild` retains the parent Conversation lane, ownership of the join obligation, and its
 open budget reservation, but holds no worker, provider, model, Tool, or child-concurrency permit.
-Child Settlement durably wakes the parent. The child uses its separate Conversation lane. S2 MUST
-prove this suspension/wakeup path at the smallest worker-pool size.
+It does not pause the parent logical Run's wall-clock `maxDuration` (RUN-030). Child Settlement
+durably wakes the parent. The child uses its separate Conversation lane. S2 MUST prove this
+suspension/wakeup path at the smallest worker-pool size. If the parent deadline has expired by
+then, its replacement Attempt may complete only the already-settled child join and reservation
+release before recording the typed duration failure; it may not invoke another model, ordinary
+Tool, or child.
 
 Joining is also recoverable:
 
@@ -906,7 +910,8 @@ Require separate proposals:
 - **SUB-029**: S1 and S2 reject every nested delegation at preflight; depth above one requires a
   separately accepted scheduling, cycle, authority, and budget contract.
 - **SUB-030**: A durable parent waiting for a child retains its lane and join obligation but
-  releases worker, provider, model, Tool, and child-concurrency permits.
+  releases worker, provider, model, Tool, and child-concurrency permits without pausing its
+  logical Run's wall-clock duration allowance.
 - **SUB-031**: Durable admission recovery uses an authoritative idempotency-key query with
   `notAdmitted`, `admitted`, and `indeterminate` results; projection absence never proves absence.
 - **SUB-032**: Child-binding and parent-declaration compatibility failures have distinct,

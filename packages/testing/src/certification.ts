@@ -261,10 +261,16 @@ const promptShapeModel = (
     ),
   );
 
+// Tier-2 intentionally advances virtual time past a 30-second ownership lease on every
+// re-drive round. Keep its business-policy duration above the full eight-round sweep so this
+// fixture certifies crash convergence rather than accidentally relying on a fresh duration
+// allowance per replacement Attempt. RUN-030 owns the dedicated duration-expiry coverage.
+const CERTIFICATION_MAX_DURATION = "10 minutes" as const;
+
 const policy = AgentPolicy.make({
   maxTurns: 4,
   maxToolCalls: 4,
-  maxDuration: "30 seconds",
+  maxDuration: CERTIFICATION_MAX_DURATION,
   toolConcurrency: 2,
 });
 
@@ -334,7 +340,7 @@ const childDefinition = Agent.define("certify-child", {
   policy: AgentPolicy.make({
     maxTurns: 2,
     maxToolCalls: 1,
-    maxDuration: "30 seconds",
+    maxDuration: CERTIFICATION_MAX_DURATION,
     toolConcurrency: 1,
   }),
 });
@@ -357,7 +363,7 @@ const researchDelegation = Subagent.define("delegate_research", {
     maxConcurrency: 2,
     maxTurns: 4,
     maxToolCalls: 4,
-    maxDuration: "10 seconds",
+    maxDuration: CERTIFICATION_MAX_DURATION,
   }),
 });
 
@@ -374,7 +380,7 @@ const coordinatorDefinition = Agent.define("certify-coordinator", {
   policy: AgentPolicy.make({
     maxTurns: 4,
     maxToolCalls: 3,
-    maxDuration: "30 seconds",
+    maxDuration: CERTIFICATION_MAX_DURATION,
     toolConcurrency: 2,
   }),
 });

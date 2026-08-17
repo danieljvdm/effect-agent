@@ -92,6 +92,18 @@ Call success resets it, and reaching `repeatedFailureLimit` fails the Run with t
 failure (`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.
 Budget-rejected synthetic settlements neither advance nor reset that counter.
 
+`maxDuration` bounds wall clock for one logical Run, not one process Attempt and not cumulative
+worker-active time. In the durable assemblies the clock starts when the Submission's initial
+`UserInputRecorded` record becomes canonical: admission and queue delay precede the Run clock,
+while process loss, recovery gaps, approval suspension, unknown-outcome suspension, and
+`waitingForChild` suspension do not reset or pause it. The coordinator derives one absolute
+deadline from that canonical timestamp and supplies it to every replacement Attempt; the engine
+accepts only a deadline that preserves or tightens its fresh policy allowance (RUN-030).
+If the deadline expires while attached children are suspended, the coordinator still completes
+the mandatory joins of children whose Settlements are already canonical before failing the
+parent. That recovery cleanup authorizes no new child, ordinary Tool, or model execution and
+cannot turn the expired Run into success (SUB-019).
+
 Note on durable Attempts: the batch-resume seam counts Tool Calls from the resumed batch onward,
 so `maxToolCalls` is enforced per Attempt under the durable coordinator. This is existing,
 documented behavior; cumulative cross-Attempt accounting would require persisted counters and is
@@ -574,3 +586,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   persist the selected value. Failed, interrupted, aborted, incomplete, run-less, and
   budget-exhausted Runs carry none; invalid values fail typed, and consumers never infer a
   disposition from prose or Tool output.
+- **RUN-030:** `maxDuration` is one wall-clock allowance per logical Run. DN and DC derive its
+  absolute deadline from the first canonical input record and preserve that deadline across
+  Attempt replacement and every durable suspension; admission and queue delay are excluded, and
+  no Run option may widen the Definition's fresh duration allowance. Already-settled attached
+  children still join as mandatory recovery cleanup before the expired parent fails, without
+  authorizing a new model, ordinary Tool, or child execution.
