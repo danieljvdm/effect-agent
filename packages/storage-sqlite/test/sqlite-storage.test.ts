@@ -59,6 +59,7 @@ import {
   SqliteStorageError,
   SqliteWriteContention,
 } from "../src/index.ts";
+import { REQUIRED_SQLITE_TABLES } from "../src/sqlite-journal.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -477,6 +478,33 @@ describe("SqliteConversationStore", () => {
         );
         expect(tables).toEqual([]);
       }),
+    ),
+  );
+
+  it.effect("rejects a current-version database missing any required table", () =>
+    Effect.forEach(
+      REQUIRED_SQLITE_TABLES,
+      (table) =>
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            // First open creates the complete current format and migration ledger.
+            yield* withStorage(filename, ConversationStore);
+            yield* withSql(
+              filename,
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+                yield* sql.unsafe(`DROP TABLE ${table}`);
+              }),
+            );
+
+            const opened = yield* withStorage(filename, ConversationStore).pipe(Effect.exit);
+            expect(Exit.isFailure(opened)).toBe(true);
+            if (Exit.isFailure(opened)) {
+              expect(Cause.squash(opened.cause)).toBeInstanceOf(SqliteStorageCompatibilityError);
+            }
+          }),
+        ),
+      { concurrency: 1 },
     ),
   );
 

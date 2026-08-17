@@ -42,7 +42,13 @@ const AgeSeconds = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
  * The disposition family of `RecoveryReport`, reused verbatim so an explanation predicts exactly
  * what `runRecovery`/`retry` would report for the same decision.
  */
-export const RecoveryDisposition = Schema.Literals(["repaired", "deferred", "none", "unknown"]);
+export const RecoveryDisposition = Schema.Literals([
+  "repaired",
+  "deferred",
+  "none",
+  "unknown",
+  "quarantined",
+]);
 export type RecoveryDisposition = typeof RecoveryDisposition.Type;
 
 /** Submission identity, lane position, and Clock-derived ages (DUR-017 obligation visibility). */
@@ -195,6 +201,8 @@ export const RECOVERY_DECISION_MEANINGS: Readonly<Record<RecoveryDecision["_tag"
     "A child budget reservation can no longer bind a child: recovery freezes the deterministic zero-consumed accounting decision and releases the unused allocation exactly once (spec/subagents.md §13/§14).",
   AwaitParentEstablishment:
     "The Submission is a parent-linked child whose Conversation lacks the canonical lineage record: the child lane defers its own readiness repair — the parent's idempotent establishment completes it, so a child never runs a Turn before its lineage is canonical (P7 §7(a), SUB-016).",
+  QuarantineInvalidSuspension:
+    "The ledger suspension state and its reason disagree: recovery quarantines the accepted-work obligation and does not guess which workflow may resume it.",
   NoAction: "The Submission is settled; nothing is owed.",
 };
 
@@ -219,6 +227,8 @@ export const predictRecoveryDisposition = (
     case "AwaitUnknownResolution":
     case "MarkUnknown":
       return "unknown";
+    case "QuarantineInvalidSuspension":
+      return "quarantined";
     case "ResumeFromTurnBoundary":
     case "ResumePendingToolBatch":
     case "ResumeSuspended":
@@ -474,12 +484,15 @@ export const RetryRefusalReason = Schema.Literals([
   "await-unknown-resolution",
   /** The lane is durably waiting for approval decisions; use `resolveApproval`. */
   "await-approval-decision",
+  /** Suspension state/reason disagree; a store repair is required before re-drive. */
+  "quarantined",
 ]);
 export type RetryRefusalReason = typeof RetryRefusalReason.Type;
 
 /**
  * Typed refusal of `retry` (plan §3): lanes blocked on `AwaitUnknownResolution` or
- * `AwaitApprovalDecision` have their own authorized operations, and settled work is never
+ * `AwaitApprovalDecision` have their own authorized operations, corrupt suspension state is
+ * quarantined, and settled work is never
  * re-driven. The refusal names the classifier decision so the operator sees WHY.
  */
 export class RetryRefused extends Schema.TaggedError<RetryRefused>()("RetryRefused", {

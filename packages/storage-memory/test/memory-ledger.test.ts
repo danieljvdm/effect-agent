@@ -45,7 +45,7 @@ import { Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 import { MemorySubmissionLedgerLive, memorySubmissionLedgerLayer } from "../src/index.ts";
 
-const testLayer = Layer.mergeAll(MemorySubmissionLedgerLive, NodeCrypto.layer);
+const testLayer = MemorySubmissionLedgerLive.pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const conversationId = Schema.decodeSync(ConversationId)("conversation-memory-ledger-1");
 const principal = Schema.decodeSync(Principal)("principal-memory-ledger");
@@ -432,10 +432,9 @@ describe("MemorySubmissionLedger", () => {
   it.effect("answers Indeterminate from the fault seam and never treats it as absence", () =>
     Effect.gen(function* () {
       const fault = yield* Ref.make<Option.Option<string>>(Option.none());
-      const faultLayer = Layer.mergeAll(
-        memorySubmissionLedgerLayer({ resolveAdmissionFault: Ref.get(fault) }),
-        NodeCrypto.layer,
-      );
+      const faultLayer = memorySubmissionLedgerLayer({
+        resolveAdmissionFault: Ref.get(fault),
+      }).pipe(Layer.provideMerge(NodeCrypto.layer));
       yield* Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
         const key = SubmissionLookupByKey.make({

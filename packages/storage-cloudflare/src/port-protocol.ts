@@ -7,6 +7,7 @@ import {
   AdmissionResult,
   AppendConflict,
   AppendResult,
+  CanonicalSettlementRepair,
   CanonicalRecordEnvelope,
   ChildSettledNotification,
   ChildSettledOutcome,
@@ -23,12 +24,15 @@ import {
   JoinedToHost,
   LedgerError,
   MarkReadyRequest,
+  ResumeSuspensionRequest,
+  Settlement,
   SettlementConflict,
   SubmissionLookup,
   SubmissionLookupByKey,
   SubmissionSnapshot,
+  SuspensionResumeOutcome,
 } from "@effect-agent/session";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 /**
  * The cross-Durable-Object port protocol (plan §1.3, D-P6-3): Schema request/response/error
@@ -44,7 +48,7 @@ import { Schema } from "effect";
  * establishment, `verifySettledChild`, and result projection):
  *
  * - ledger: `admit`, `markReady`, `lookup`, `resolveAdmission`, `requestAbort`,
- *   `recordChildSettled`;
+ *   `recordChildSettled`, `repairSettlementFromCanonical`, `resumeSuspension`;
  * - store: `materialize`, `append`, `read` (one page), `inspectTail`, `export`.
  *
  * Every other port operation is lane-local by construction and is NOT given an envelope:
@@ -128,6 +132,20 @@ export class LedgerRecordChildSettledCall extends Schema.TaggedClass<LedgerRecor
   request: ChildSettledNotification,
 }) {}
 
+/** Routed canonical repair when recovery targets a Submission owned by another Object. */
+export class LedgerRepairSettlementCall extends Schema.TaggedClass<LedgerRepairSettlementCall>(
+  "@effect-agent/storage-cloudflare/LedgerRepairSettlementCall",
+)("LedgerRepairSettlement", {
+  request: CanonicalSettlementRepair,
+}) {}
+
+/** Routed canonical-evidence-authorized suspension wake. */
+export class LedgerResumeSuspensionCall extends Schema.TaggedClass<LedgerResumeSuspensionCall>(
+  "@effect-agent/storage-cloudflare/LedgerResumeSuspensionCall",
+)("LedgerResumeSuspension", {
+  request: ResumeSuspensionRequest,
+}) {}
+
 /** Routed `ConversationStore.materialize` against the owning Object. */
 export class StoreMaterializeCall extends Schema.TaggedClass<StoreMaterializeCall>(
   "@effect-agent/storage-cloudflare/StoreMaterializeCall",
@@ -171,6 +189,8 @@ export const PortRequest = Schema.Union([
   LedgerResolveAdmissionCall,
   LedgerRequestAbortCall,
   LedgerRecordChildSettledCall,
+  LedgerRepairSettlementCall,
+  LedgerResumeSuspensionCall,
   StoreMaterializeCall,
   StoreAppendCall,
   StoreReadPageCall,
@@ -181,6 +201,31 @@ export type PortRequest = typeof PortRequest.Type;
 
 /** The wire form of one port request (what a transport actually carries). */
 export type PortRequestEnvelope = typeof PortRequest.Encoded;
+
+/**
+ * Whether executing a decoded request durably mutates the owning Object. The exhaustive switch
+ * keeps the alarm pre-arm classification coupled to the closed protocol union: adding an
+ * operation without classifying it is a compile error in this protocol owner.
+ */
+export const portRequestMutates = (request: PortRequest): boolean => {
+  switch (request._tag) {
+    case "LedgerAdmit":
+    case "LedgerMarkReady":
+    case "LedgerRequestAbort":
+    case "LedgerRecordChildSettled":
+    case "LedgerRepairSettlement":
+    case "LedgerResumeSuspension":
+    case "StoreMaterialize":
+    case "StoreAppend":
+      return true;
+    case "LedgerLookup":
+    case "LedgerResolveAdmission":
+    case "StoreReadPage":
+    case "StoreInspectTail":
+    case "StoreExport":
+      return false;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Results
@@ -221,6 +266,18 @@ export class LedgerRecordChildSettledResult extends Schema.TaggedClass<LedgerRec
   outcome: ChildSettledOutcome,
 }) {}
 
+export class LedgerRepairSettlementResult extends Schema.TaggedClass<LedgerRepairSettlementResult>(
+  "@effect-agent/storage-cloudflare/LedgerRepairSettlementResult",
+)("LedgerRepairSettlementResult", {
+  settlement: Settlement,
+}) {}
+
+export class LedgerResumeSuspensionResult extends Schema.TaggedClass<LedgerResumeSuspensionResult>(
+  "@effect-agent/storage-cloudflare/LedgerResumeSuspensionResult",
+)("LedgerResumeSuspensionResult", {
+  outcome: SuspensionResumeOutcome,
+}) {}
+
 export class StoreMaterializeResult extends Schema.TaggedClass<StoreMaterializeResult>(
   "@effect-agent/storage-cloudflare/StoreMaterializeResult",
 )("StoreMaterializeResult", {}) {}
@@ -258,6 +315,8 @@ export const PortResult = Schema.Union([
   LedgerResolveAdmissionResult,
   LedgerRequestAbortResult,
   LedgerRecordChildSettledResult,
+  LedgerRepairSettlementResult,
+  LedgerResumeSuspensionResult,
   StoreMaterializeResult,
   StoreAppendResult,
   StoreReadPageResult,
@@ -315,5 +374,8 @@ export type PortResponseEnvelope = typeof PortResponse.Encoded;
 
 export const encodePortRequest = Schema.encodeEffect(PortRequest);
 export const decodePortRequest = Schema.decodeUnknownEffect(PortRequest);
+export const decodePortRequestMutation = Effect.fn("DoPortProtocol.decodePortRequestMutation")(
+  (encoded: unknown) => decodePortRequest(encoded).pipe(Effect.map(portRequestMutates)),
+);
 export const encodePortResponse = Schema.encodeEffect(PortResponse);
 export const decodePortResponse = Schema.decodeUnknownEffect(PortResponse);

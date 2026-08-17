@@ -144,6 +144,22 @@ type SqliteJournalFailpoint = (
 
 const noFailpoint: SqliteJournalFailpoint = () => Effect.void;
 
+/** Every Effect Agent table required by the current private-development SQLite format. */
+export const REQUIRED_SQLITE_TABLES = [
+  "effect_agent_abort_intents",
+  "effect_agent_approval_decisions",
+  "effect_agent_attempts",
+  "effect_agent_canonical_batches",
+  "effect_agent_canonical_records",
+  "effect_agent_checkpoints",
+  "effect_agent_child_reservations",
+  "effect_agent_conversations",
+  "effect_agent_settlement_reservations",
+  "effect_agent_submission_ownership",
+  "effect_agent_submissions",
+  "effect_agent_unknown_resolutions",
+] as const;
+
 const storageError =
   (operation: string) =>
   (error: SqlError): SqliteStorageError =>
@@ -289,19 +305,7 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     SELECT name
     FROM sqlite_master
     WHERE type = 'table'
-      AND name IN (
-        'effect_agent_conversations',
-        'effect_agent_canonical_batches',
-        'effect_agent_canonical_records',
-        'effect_agent_checkpoints',
-        'effect_agent_submissions',
-        'effect_agent_submission_ownership',
-        'effect_agent_attempts',
-        'effect_agent_settlement_reservations',
-        'effect_agent_abort_intents',
-        'effect_agent_approval_decisions',
-        'effect_agent_unknown_resolutions'
-      )
+      AND name IN ${sql.in([...REQUIRED_SQLITE_TABLES])}
     ORDER BY name
   `.pipe(Effect.mapError(storageError("verify storage tables")));
   const required = yield* decodeRows(
@@ -310,7 +314,7 @@ const ensureCurrentStorage = Effect.fn("SqliteJournal.ensureCurrentStorage")(fun
     "required_tables",
     requiredRows,
   );
-  if (required.length !== 11) {
+  if (required.length !== REQUIRED_SQLITE_TABLES.length) {
     return yield* SqliteStorageCompatibilityError.make({
       actualVersion: CurrentSqliteStorageVersion,
       supportedVersion: CurrentSqliteStorageVersion,

@@ -33,6 +33,8 @@ import {
   MAX_PERSISTED_JSON_BYTES,
   MAX_PERSISTED_JSON_DEPTH,
   OwnershipLost,
+  OperationAuthorizationRequest,
+  OperationCaller,
   PersistedJson,
   PreparedToolCallEvidence,
   ProducerEpoch,
@@ -55,6 +57,7 @@ import {
   submissionSettlementBatchId,
   submissionSettlementId,
   submissionSettlementRecordId,
+  subagentLineageRecordId,
   SuspendRequest,
   ToolReconciler,
   UnknownResolution,
@@ -80,6 +83,7 @@ import {
   turnPreparedBatchId,
   turnResponseBatchId,
   turnResultsBatchId,
+  validateSubagentLineageRecord,
 } from "../src/index.ts";
 
 const SHA_256_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -786,6 +790,28 @@ describe("SubmissionLedger port schemas", () => {
   );
 });
 
+describe("durable operation authorization contracts", () => {
+  it("requires an explicit caller principal at protected boundaries", () => {
+    const caller = Schema.decodeUnknownSync(OperationCaller)({ principal: "tenant-a" });
+    const request = OperationAuthorizationRequest.make({
+      operation: "awaitSettlement",
+      principal: caller.principal,
+      submissionId: Schema.decodeSync(SubmissionId)("submission-auth-1"),
+    });
+    expect(Schema.encodeSync(OperationAuthorizationRequest)(request)).toEqual({
+      operation: "awaitSettlement",
+      principal: "tenant-a",
+      submissionId: "submission-auth-1",
+    });
+    expect(
+      Schema.decodeUnknownExit(OperationAuthorizationRequest)({
+        operation: "awaitSettlement",
+        submissionId: "submission-auth-1",
+      })._tag,
+    ).toBe("Failure");
+  });
+});
+
 describe("phase 5 durable canonical payloads", () => {
   const encodedToolCallPrepared = {
     _tag: "ToolCallPrepared",
@@ -794,6 +820,7 @@ describe("phase 5 durable canonical payloads", () => {
     turn: 2,
     toolCallId: "call-1",
     toolName: "book_flight",
+    executionKind: "application",
     parameters: { destination: "Kyoto", travelerRef: "traveler-7" },
     parametersDigest: SHA_256_A,
   } as const;
@@ -1080,6 +1107,43 @@ describe("S2 durable subagent canonical payloads", () => {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
   });
+
+  it.effect("validates exact child lineage and rejects a divergent canonical payload", () =>
+    Effect.gen(function* () {
+      const parent = Schema.decodeUnknownSync(SubmissionSnapshot)({
+        submissionId: "submission-parent",
+        conversationId: "conversation-parent",
+        queueSequence: 0,
+        principal: "tenant-a",
+        idempotencyKey: "parent-key",
+        agentId: "travel-coordinator",
+        agentDigests: { agent: SHA_256_A, model: SHA_256_B, tools: SHA_256_C },
+        deploymentId: "test-deployment",
+        inputPayload: { destination: "Kyoto" },
+        inputDigest: SHA_256_C,
+        receiptId: "receipt-parent",
+        state: "running",
+        createdAt: "2026-08-12T12:00:00.000Z",
+        readyAt: "2026-08-12T12:00:00.000Z",
+      });
+      const requestRecord = decodeRecord("subagent-request", encodedSubagentRequested);
+      if (requestRecord.payload._tag !== "SubagentRequested") return;
+      const lineageRecord = decodeRecord(
+        subagentLineageRecordId(requestRecord.payload.childConversationId),
+        encodedSubagentLineage,
+      );
+      yield* validateSubagentLineageRecord(parent, requestRecord.payload, lineageRecord);
+
+      const divergent = decodeRecord(
+        subagentLineageRecordId(requestRecord.payload.childConversationId),
+        { ...encodedSubagentLineage, grantDigest: SHA_256_C },
+      );
+      const exit = yield* Effect.exit(
+        validateSubagentLineageRecord(parent, requestRecord.payload, divergent),
+      );
+      expect(exit._tag).toBe("Failure");
+    }),
+  );
 
   it("folds the parent-side invocation view and the child-side lineage into the projection", () => {
     const created = decodeEnvelope(

@@ -191,6 +191,20 @@ itself is operational ledger state, rebuildable from history, and no canonical "
 exists. The resumed Attempt appends the canonical approval decision before honoring
 it.
 
+Recovery treats the ledger suspension reason as an integrity claim, not as sufficient authority to
+resume. A `suspended` row without a reason, a reason on a non-suspended row, or an approval/child
+reason that does not match the canonical approval or child evidence is quarantined. Recovery does
+not guess a resumable workflow from incomplete or contradictory operational state.
+
+Approval-decision intents and child-settlement notifications are operational coverage only; their
+adapters never clear suspension. The coordinator retains all canonical approval-request IDs and
+exact `SubagentStarted` Tool Call/child pairs and applies two-sided validation: every identity in
+the stored reason has canonical provenance, and every canonically pending approval or unjoined
+started child remains named by the reason. This preserves the original reason through partial
+multi-item coverage while allowing earlier fully decided/joined suspension cycles to be absent.
+Only then may `resumeSuspension` atomically recheck the exact stored reason and complete operational
+coverage before transitioning `suspended → input-applied`.
+
 The scheduler must classify recovery rather than blindly retry when failure occurs:
 
 - during provider streaming before a complete canonical model item;
@@ -218,9 +232,11 @@ If a worker dies mid-stream:
 
 An ordinary tool is at-least-once and may have external side effects.
 
-Before calling it, the engine commits `ToolCallPrepared` with tool identity, decoded
-input digest, and tool-call ID. After it returns and output validation succeeds, the
-engine commits `ToolCallSettled`.
+Before calling it, the engine commits `ToolCallPrepared` with tool identity, decoded input digest,
+tool-call ID, and the Schema-backed execution kind copied from the actual Effect AI Tool
+annotation. The only execution kinds are `application` and `delegation`; Tool names, including a
+name beginning with `delegate_`, carry no replay-safety meaning. After the Tool returns and output
+validation succeeds, the engine commits `ToolCallSettled`.
 
 If recovery sees `ToolCallPrepared` without `ToolCallSettled`, the outcome is
 unknown unless a registered reconciliation policy can prove one of:
@@ -274,9 +290,12 @@ Terminalization is a recoverable sequence across the separate stores:
 3. finalize the ledger row as settled and release the conversation lane;
 4. make later queued work eligible.
 
-The canonical settlement record is the outcome authority. If the process stops after
-step 2 but before step 3, recovery reads history and repairs the ledger. It never
-rewrites history from the cached ledger status.
+The canonical settlement record is the outcome authority. If the process stops after step 2 but
+before step 3, recovery validates the exact deterministic record ID, payload family, submission and
+settlement identity, outcome, Receipt identity, and record digest, then atomically repairs the
+ledger's complete operational settlement state from that record. Missing or divergent cached
+reservation/status/outcome columns are overwritten by the validated canonical truth; recovery
+never rewrites history from cached ledger state and never combines fields from the two sources.
 
 Each step is idempotent. Conflicting terminal outcomes are rejected. Cleanup failure
 is recorded separately and cannot erase an accepted settlement.
@@ -317,34 +336,35 @@ A recovery worker:
 2. acquires a higher producer epoch;
 3. reads the ledger, canonical log tail, checkpoints, tool records, and commands;
 4. validates digests and schema versions;
-5. classifies the last durable boundary;
-6. either resumes, safely retries, reconciles, terminalizes, or marks unknown;
-7. records the recovery decision as an audit event;
-8. continues under the new fenced epoch.
+5. either resumes, safely retries, reconciles, terminalizes, quarantines, or marks unknown;
+6. records the recovery decision as an audit event;
+7. continues under the new fenced epoch.
 
 Recovery policy is pure where possible and testable against a finite persisted
 snapshot.
 
 ## 15. Crash-point matrix
 
-| Crash point                                                   | Durable state                                                     | Recovery                                          |
-| ------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------- |
-| Before ledger admission commits                               | Nothing accepted                                                  | Client retries                                    |
-| After ledger admission, before Conversation readiness         | Admitted, not ready                                               | Recovery materializes Conversation/attachments    |
-| After readiness, before receipt observed                      | Ready                                                             | Idempotent retry returns same receipt             |
-| After claim, before canonical input append                    | Running, input not applied                                        | Apply input idempotently                          |
-| After canonical input append, before applied marker           | Input canonical                                                   | Detect exact input and repair marker              |
-| After claim, before Attempt start                             | Ready/owned                                                       | Reclaim after ownership loss                      |
-| Mid-provider stream                                           | Canonical partial text/reasoning may exist; no completed response | Record interruption and retry as a new response   |
-| After model item commit, before tool preparation              | Model item canonical                                              | Resume tool scheduling                            |
-| After tool prepared, before invocation                        | Prepared only                                                     | Retry only if proof says invocation did not start |
-| During ordinary tool invocation                               | Prepared only                                                     | Reconcile or mark unknown                         |
-| After tool returns, before result commit                      | Prepared only                                                     | Reconcile/idempotent retry or mark unknown        |
-| After tool result commit                                      | Tool result canonical                                             | Continue next turn                                |
-| After decision to finish, before terminalizing                | Nonterminal                                                       | Recompute from canonical boundary                 |
-| After settlement reservation, before canonical append         | Settlement obligation                                             | Append reserved record                            |
-| After canonical settlement append, before ledger finalization | Canonical terminal outcome                                        | Rebuild/finalize ledger from history              |
-| After ledger finalization, before client notification         | Terminal                                                          | Return recorded settlement                        |
+| Crash point                                                               | Durable state                                                     | Recovery                                                                        |
+| ------------------------------------------------------------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Before ledger admission commits                                           | Nothing accepted                                                  | Client retries                                                                  |
+| After ledger admission, before Conversation readiness                     | Admitted, not ready                                               | Recovery materializes Conversation/attachments                                  |
+| After readiness, before receipt observed                                  | Ready                                                             | Idempotent retry returns same receipt                                           |
+| After claim, before canonical input append                                | Running, input not applied                                        | Apply input idempotently                                                        |
+| After canonical input append, before applied marker                       | Input canonical                                                   | Detect exact input and repair marker                                            |
+| After claim, before Attempt start                                         | Ready/owned                                                       | Reclaim after ownership loss                                                    |
+| Mid-provider stream                                                       | Canonical partial text/reasoning may exist; no completed response | Record interruption and retry as a new response                                 |
+| After model item commit, before tool preparation                          | Model item canonical                                              | Resume tool scheduling                                                          |
+| After tool prepared, before invocation                                    | Prepared only                                                     | Retry only if proof says invocation did not start                               |
+| During ordinary tool invocation                                           | Prepared only                                                     | Reconcile or mark unknown                                                       |
+| After tool returns, before result commit                                  | Prepared only                                                     | Reconcile/idempotent retry or mark unknown                                      |
+| After tool result commit                                                  | Tool result canonical                                             | Continue next turn                                                              |
+| After decision to finish, before terminalizing                            | Nonterminal                                                       | Recompute from canonical boundary                                               |
+| After settlement reservation, before canonical append                     | Settlement obligation                                             | Append reserved record                                                          |
+| After canonical settlement append, before ledger finalization             | Canonical terminal outcome                                        | Rebuild/finalize ledger from history                                            |
+| Canonical settlement exists, ledger settlement state missing or divergent | Canonical terminal outcome                                        | Atomically replace operational settlement state from the exact canonical record |
+| After ledger finalization, before client notification                     | Terminal                                                          | Return recorded settlement                                                      |
+| Suspended row lacks or contradicts its canonical reason                   | Corrupt operational suspension                                    | Quarantine; do not infer a resumable workflow                                   |
 
 Every row of this matrix — including the tool preparation, invocation, and
 result-commit rows — is realized by executable evidence: each row exists as a pure
@@ -385,8 +405,9 @@ for that queue.
 - **DUR-007**: Canonical batch append is atomic and idempotent.
 - **DUR-008**: Returned text/reasoning deltas may be canonical; partial Tool-argument deltas are
   not, and no incomplete response may execute Tools.
-- **DUR-009**: An unresolved ordinary tool is marked unknown and is not blindly
-  replayed.
+- **DUR-009**: An unresolved ordinary Tool is marked unknown and is not blindly replayed;
+  delegation recovery is selected only by the persisted Schema-backed execution kind and
+  authoritative lifecycle evidence, never by Tool name.
 - **DUR-010**: Durable step results are exactly-once recorded, not necessarily
   exactly-once executed.
 - **DUR-011**: Terminalization reserves one exact outcome, appends it canonically, then finalizes
@@ -395,10 +416,15 @@ for that queue.
   outcome.
 - **DUR-013**: Recovery decisions are recorded and testable from persisted state.
 - **DUR-014**: Retry exhaustion cannot leave accepted work silently abandoned.
-- **DUR-015**: Canonical history is authoritative for applied input and terminal outcome; the
-  operational ledger can be rebuilt from it.
+- **DUR-015**: Canonical history is authoritative for applied input and terminal outcome; after
+  exact record validation, one atomic ledger operation rebuilds missing or divergent operational
+  settlement state from it.
 - **DUR-016**: Recovery returns pre-append `joining` input to ready and reattaches post-append
   `joined` input without duplicate delivery.
 - **DUR-017**: Unknown external outcomes remain visible accepted-work obligations, consume no
   ordinary worker permit, and require an authorized, alerted resolution dependency before a
   deployment may claim durable liveness.
+- **DUR-018**: Recovery quarantines a suspended ledger row unless its reason exists and has
+  two-sided canonical approval/child provenance. Decision and settlement-notification rows never
+  wake it directly; only the coordinator's exact-reason `resumeSuspension` transition may make it
+  runnable after canonical validation and complete operational coverage.

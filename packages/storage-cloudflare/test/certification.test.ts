@@ -87,12 +87,12 @@ const CERTIFICATION_TIMEOUT = 240_000;
 
 describe("TEST-004 STORE-010 STORE-013 adapter certification — storage-cloudflare (DC, in-workerd)", () => {
   it(
-    "TIER1: all 32 SubmissionLedger and 8 ConversationStore contract cases pass",
+    "TIER1: all 33 SubmissionLedger and 8 ConversationStore contract cases pass",
     async () => {
       const report = await certified();
       const ledgerCases = report.tier1.filter((result) => result.suite === "submission-ledger");
       const storeCases = report.tier1.filter((result) => result.suite === "conversation-store");
-      expect(ledgerCases).toHaveLength(32);
+      expect(ledgerCases).toHaveLength(33);
       expect(ledgerCases).toHaveLength(submissionLedgerConformanceCases.length);
       expect(storeCases).toHaveLength(8);
       expect(storeCases).toHaveLength(conversationStoreConformanceCases.length);

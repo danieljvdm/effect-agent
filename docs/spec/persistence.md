@@ -82,6 +82,14 @@ interface SubmissionLedger {
     request: SettlementFinalization,
   ) => Effect.Effect<Settlement, SettlementConflict | LedgerError>;
 
+  readonly repairSettlementFromCanonical: (
+    request: CanonicalSettlementRepair,
+  ) => Effect.Effect<Settlement, LedgerError>;
+
+  readonly resumeSuspension: (
+    request: ResumeSuspensionRequest,
+  ) => Effect.Effect<SuspensionResumeOutcome, LedgerError>;
+
   readonly loadRecoverySnapshot: (
     request: RecoverySnapshotRequest,
   ) => Effect.Effect<RecoverySnapshot, LedgerError>;
@@ -122,6 +130,24 @@ span the two stores through recoverable states:
 - reserve settlement → append exact canonical record → finalize ledger.
 
 Canonical input and settlement records win over cached ledger markers during repair.
+`reserveSettlement` accepts only a self-consistent exact settlement record: its deterministic
+record and settlement identities, payload tag, Submission and receipt identities, outcome, and
+recomputed canonical digest must agree with the request and immutable ledger row before any
+mutation. Recovery invokes `repairSettlementFromCanonical` after observing that canonical record;
+the method atomically reconstructs or overwrites divergent operational reservation columns,
+settles the row, and releases lane ownership. An exact replay preserves its prior settlement time
+when that timestamp is valid; repaired or reconstructed state uses the transaction time.
+
+Operational approval decisions and child-settlement notifications are evidence only: recording
+them never clears a suspended lane. The coordinator validates canonical history, then calls
+`resumeSuspension` with the exact expected suspension reason. In one transaction, the adapter
+requires that reason to match the stored reason exactly and verifies that operational evidence
+covers every expected approval or child. Missing coverage returns `not-covered`; a lane already
+outside `suspended` returns `not-suspended`; only an exact, fully covered request clears the reason
+and transitions the lane to `input-applied`. A corrupt or divergent stored reason fails closed and
+leaves the row byte-for-byte unchanged. `suspend` may still return `resume-immediately` when the
+same exact reason is already fully covered before the suspension transaction, closing the
+pre-suspend race without transferring post-suspend wake authority to operational writers.
 
 ## 4. Record envelopes
 
@@ -245,7 +271,8 @@ Purpose: first operational local runtime and single-node durable host.
 - monotonically increasing epochs allocated transactionally;
 - blob payload thresholds with artifact spillover;
 - backup and integrity-check guidance: opening the store verifies the storage version and
-  required tables; the full payload/digest-chain integrity scan is an explicit opt-in
+  every table in the adapter's single authoritative current-format table list (including child
+  reservations); the full payload/digest-chain integrity scan is an explicit opt-in
   (`verifyOnOpen`, default off) because per-operation Schema decoding and the digest chain
   already fail clearly on corrupt rows;
 - no multi-host scheduler claim unless deployment constraints prove safe.
@@ -279,6 +306,9 @@ Rules:
 - preserve unknown future fields where forward compatibility requires it;
 - cap nesting, array length, and byte size before decode;
 - validate data read from storage, even if the application originally wrote it;
+- reject correlated optional columns when only one side is present (including the input-applied
+  record/sequence pair and suspension reason/time pair), and reject settlement reservation rows
+  whose redundant identity, outcome, record, or digest columns disagree;
 - store content digests over canonical encoding.
 
 Canonical encoding must be deterministic and locale-independent. Canonical JSON

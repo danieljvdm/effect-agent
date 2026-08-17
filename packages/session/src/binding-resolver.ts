@@ -125,15 +125,12 @@ export type ResolvedAttemptDriver = <
  * the exact registered definition digests, and an `attempt` closure that runs
  * a coordinator Attempt over the captured binding with its worker
  * requirements Context already provided (the S1 `Effect.context` capture
- * precedent from `SubagentRuntime.layer`). `digests` is `undefined` only for
- * the digest-transparent singleton registration used by the legacy
- * single-binding `runWorker` — identity-exact but accepting whatever digests
- * the claimed head stored; exact-digest enforcement requires
- * `DurableWorkerBinding.make` plus `runResolvedWorker`.
+ * precedent from `SubagentRuntime.layer`). Every registration carries exact
+ * digests; public worker entry points never create identity-only bindings.
  */
 export interface ResolvedBinding {
   readonly agentId: AgentId;
-  readonly digests: DefinitionDigests | undefined;
+  readonly digests: DefinitionDigests;
   readonly attempt: (
     driver: ResolvedAttemptDriver,
     conversationId: ConversationId,
@@ -163,7 +160,7 @@ const capture = <
     InstructionError,
     InstructionRequirements
   >,
-  digests: DefinitionDigests | undefined,
+  digests: DefinitionDigests,
 ): Effect.Effect<
   ResolvedBinding,
   never,
@@ -197,10 +194,6 @@ const capture = <
  *   strings the application submits with (`DurableSubmitOptions.definitions`)
  *   and declares on durable delegation Layers
  *   (`SubagentRuntimeOptions.durable.targetDigests`).
- * - `makeDigestTransparent(agent)` registers identity-only resolution for the
- *   legacy single-binding `runWorker`: a claimed head with a different
- *   `agentId` still fails closed, but the head's own stored digests are
- *   accepted as-is because this registration carries no digest authority.
  */
 export const DurableWorkerBinding = {
   make: <
@@ -231,33 +224,6 @@ export const DurableWorkerBinding = {
     never,
     DurableWorkerRequirements<typeof agent, InstructionRequirements>
   > => capture(agent, digests),
-  makeDigestTransparent: <
-    InputSchema extends Schema.Top,
-    OutputSchema extends Schema.Top,
-    Instructions,
-    Tools extends Record<string, Tool.Any>,
-    Provider,
-    ModelProvides,
-    ModelRequires,
-    InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
-    InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
-  >(
-    agent: RuntimeBinding<
-      InputSchema,
-      OutputSchema,
-      Instructions,
-      Tools,
-      Provider,
-      ModelProvides,
-      ModelRequires,
-      InstructionError,
-      InstructionRequirements
-    >,
-  ): Effect.Effect<
-    ResolvedBinding,
-    never,
-    DurableWorkerRequirements<typeof agent, InstructionRequirements>
-  > => capture(agent, undefined),
 } as const;
 
 /**
@@ -293,9 +259,8 @@ export class AgentBindingResolver extends Context.Service<
             }),
           );
         }
-        const exact = registered.find(
-          (binding) =>
-            binding.digests === undefined || definitionDigestsEqual(binding.digests, digests),
+        const exact = registered.find((binding) =>
+          definitionDigestsEqual(binding.digests, digests),
         );
         if (exact === undefined) {
           return Effect.fail(

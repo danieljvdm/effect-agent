@@ -1,5 +1,9 @@
 import {
+  CanonicalSettlementRepair,
+  ClaimRequest,
   LedgerError,
+  MarkReadyRequest,
+  RecoverySnapshotRequest,
   SubmissionLedger,
   SubmissionLookupByKey,
   submissionLedgerConformanceCases,
@@ -13,6 +17,7 @@ import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  DoStorageCorruptionError,
   DoStorageConfig,
   DoStorageFailpoint,
   DoValueBoundExceeded,
@@ -27,7 +32,9 @@ import {
   conversation,
   conversationStub,
   id,
+  settlementReservation,
   TEST_PRINCIPAL,
+  TEST_PRODUCER,
   withConversationStorage,
 } from "./harness.ts";
 
@@ -71,6 +78,173 @@ describe("DoSubmissionLedger", () => {
     expect(requirementsProof).toBe(true);
     expect(errorProof).toBe(true);
   });
+
+  for (const corruption of ["input-marker", "suspension"] as const) {
+    it(`rejects a one-sided persisted ${corruption} pair`, () =>
+      withConversationStorage(`wp1-ledger-corrupt-${corruption}`, (storage) =>
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const sql = yield* SqlClientService.SqlClient;
+          const admitted = yield* ledger.admit(
+            yield* admission(`conversation-corrupt-${corruption}`, `corrupt-${corruption}`, {
+              corruption,
+            }),
+          );
+          if (corruption === "input-marker") {
+            yield* sql`
+              UPDATE effect_agent_submissions
+              SET input_applied_sequence = 1
+              WHERE submission_id = ${admitted.submissionId}
+            `;
+          } else {
+            yield* sql`
+              UPDATE effect_agent_submissions
+              SET suspended_at = '1970-01-01T00:00:00.000Z'
+              WHERE submission_id = ${admitted.submissionId}
+            `;
+          }
+
+          const loaded = yield* ledger
+            .loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+            )
+            .pipe(Effect.exit);
+          expect(Exit.isFailure(loaded)).toBe(true);
+          if (Exit.isFailure(loaded)) {
+            const error = Cause.squash(loaded.cause);
+            expect(error).toBeInstanceOf(LedgerError);
+            if (error instanceof LedgerError) {
+              expect(error.cause).toBeInstanceOf(DoStorageCorruptionError);
+            }
+          }
+        }).pipe(
+          Effect.provide(
+            submissionLedgerLayer.pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  storageConfigLayer({ storage }),
+                  DoStorageFailpoint.layer,
+                  SqliteClient.layer({ storage }),
+                  BrowserCrypto.layer,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+  }
+
+  for (const corruption of [
+    "settlement-id",
+    "outcome",
+    "record-id",
+    "record-digest",
+    "submission-outcome",
+  ] as const) {
+    it(`rejects a settlement reservation with a tampered ${corruption}`, () =>
+      withConversationStorage(`wp1-ledger-reservation-corrupt-${corruption}`, (storage) =>
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const sql = yield* SqlClientService.SqlClient;
+          const lane = `conversation-reservation-corrupt-${corruption}`;
+          const admitted = yield* ledger.admit(
+            yield* admission(lane, `reservation-corrupt-${corruption}`, { corruption }),
+          );
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+          const claim = yield* ledger.claim(
+            ClaimRequest.make({
+              conversationId: conversation(lane),
+              producerId: TEST_PRODUCER,
+            }),
+          );
+          if (Option.isNone(claim)) return yield* Effect.die("missing settlement claim");
+          const reservation = yield* settlementReservation(
+            admitted,
+            claim.value.ownershipToken,
+            "completed",
+          );
+          yield* ledger.reserveSettlement(reservation);
+
+          switch (corruption) {
+            case "settlement-id":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET settlement_id = 'settlement-corrupt'
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
+            case "outcome":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET outcome = 'failed'
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
+            case "record-id":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET record_id = 'record-corrupt'
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
+            case "record-digest":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET record_digest = ${"b".repeat(64)}
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
+            case "submission-outcome":
+              yield* sql`
+                UPDATE effect_agent_submissions
+                SET settled_outcome = 'failed'
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
+          }
+
+          const loaded = yield* ledger
+            .loadRecoverySnapshot(
+              RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+            )
+            .pipe(Effect.exit);
+          expect(Exit.isFailure(loaded)).toBe(true);
+          if (Exit.isFailure(loaded)) {
+            const error = Cause.squash(loaded.cause);
+            expect(error).toBeInstanceOf(LedgerError);
+            if (error instanceof LedgerError) {
+              expect(error.cause).toBeInstanceOf(DoStorageCorruptionError);
+            }
+          }
+          const settlement = yield* ledger.repairSettlementFromCanonical(
+            CanonicalSettlementRepair.make({
+              submissionId: admitted.submissionId,
+              record: reservation.record,
+              recordDigest: reservation.recordDigest,
+            }),
+          );
+          const repaired = yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+          );
+          expect(settlement.outcome).toBe("completed");
+          expect(repaired.submission.state).toBe("settled");
+          expect(repaired.reservation?.recordDigest).toBe(reservation.recordDigest);
+        }).pipe(
+          Effect.provide(
+            submissionLedgerLayer.pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  storageConfigLayer({ storage }),
+                  DoStorageFailpoint.layer,
+                  SqliteClient.layer({ storage }),
+                  BrowserCrypto.layer,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+  }
 
   // The DC realization of "persists admissions durably across process-style reopen": the
   // Durable Object is evicted mid-flight through the failpoint's `ctx.abort()` mode — the

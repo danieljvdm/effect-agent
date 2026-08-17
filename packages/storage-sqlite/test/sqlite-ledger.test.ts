@@ -8,6 +8,7 @@ import {
   CanonicalBatch,
   CanonicalRecord,
   CanonicalSequence,
+  CanonicalSettlementRepair,
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
@@ -36,6 +37,7 @@ import {
   ProducerId,
   RecordEnvelope,
   RecoverySnapshotRequest,
+  ResumeSuspensionRequest,
   ReleaseChildBudgetRequest,
   RenewOwnershipRequest,
   ReleaseOwnershipRequest,
@@ -89,6 +91,7 @@ import {
   storageConfigLayer,
   SqliteStorageCompatibilityError,
   SqliteStorageConfig,
+  SqliteStorageCorruptionError,
   SqliteStorageFailpoint,
   SqliteStorageFailpointError,
   SqliteWriteContention,
@@ -291,6 +294,186 @@ describe("SqliteSubmissionLedger", () => {
     expect(requirementsProof).toBe(true);
     expect(errorProof).toBe(true);
   });
+
+  it.effect("rejects one-sided persisted input-marker and suspension pairs", () =>
+    Effect.forEach(
+      ["input-marker", "suspension"] as const,
+      (corruption) =>
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const admitted = yield* withLedger(
+              filename,
+              Effect.gen(function* () {
+                const ledger = yield* SubmissionLedger;
+                return yield* ledger.admit(
+                  yield* admission(`conversation-corrupt-${corruption}`, `corrupt-${corruption}`, {
+                    corruption,
+                  }),
+                );
+              }),
+            );
+            yield* withSql(
+              filename,
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+                if (corruption === "input-marker") {
+                  yield* sql`
+                    UPDATE effect_agent_submissions
+                    SET input_applied_sequence = 1
+                    WHERE submission_id = ${admitted.submissionId}
+                  `;
+                } else {
+                  yield* sql`
+                    UPDATE effect_agent_submissions
+                    SET suspended_at = '1970-01-01T00:00:00.000Z'
+                    WHERE submission_id = ${admitted.submissionId}
+                  `;
+                }
+              }),
+            );
+
+            const loaded = yield* withLedger(
+              filename,
+              Effect.gen(function* () {
+                const ledger = yield* SubmissionLedger;
+                return yield* ledger.loadRecoverySnapshot(
+                  RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+                );
+              }),
+            ).pipe(Effect.exit);
+            expect(Exit.isFailure(loaded)).toBe(true);
+            if (Exit.isFailure(loaded)) {
+              const error = Cause.squash(loaded.cause);
+              expect(error).toBeInstanceOf(LedgerError);
+              if (error instanceof LedgerError) {
+                expect(error.cause).toBeInstanceOf(SqliteStorageCorruptionError);
+              }
+            }
+          }),
+        ),
+      { concurrency: 1 },
+    ),
+  );
+
+  it.effect("rejects settlement reservations whose redundant columns were tampered", () =>
+    Effect.forEach(
+      ["settlement-id", "outcome", "record-id", "record-digest", "submission-outcome"] as const,
+      (corruption) =>
+        withTemporaryDatabase((filename) =>
+          Effect.gen(function* () {
+            const { admitted, reservation } = yield* withLedger(
+              filename,
+              Effect.gen(function* () {
+                const ledger = yield* SubmissionLedger;
+                const lane = `conversation-reservation-corrupt-${corruption}`;
+                const admitted = yield* ledger.admit(
+                  yield* admission(lane, `reservation-corrupt-${corruption}`, { corruption }),
+                );
+                yield* ledger.markReady(
+                  MarkReadyRequest.make({ submissionId: admitted.submissionId }),
+                );
+                const claim = yield* ledger.claim(
+                  ClaimRequest.make({
+                    conversationId: conversation(lane),
+                    producerId: TEST_PRODUCER,
+                  }),
+                );
+                if (Option.isNone(claim)) return yield* Effect.die("missing settlement claim");
+                const reservation = yield* settlementReservation(
+                  admitted,
+                  claim.value.ownershipToken,
+                  "completed",
+                );
+                yield* ledger.reserveSettlement(reservation);
+                return { admitted, reservation };
+              }),
+            );
+            yield* withSql(
+              filename,
+              Effect.gen(function* () {
+                const sql = yield* SqlClientService.SqlClient;
+                switch (corruption) {
+                  case "settlement-id":
+                    yield* sql`
+                      UPDATE effect_agent_settlement_reservations
+                      SET settlement_id = 'settlement-corrupt'
+                      WHERE submission_id = ${admitted.submissionId}
+                    `;
+                    break;
+                  case "outcome":
+                    yield* sql`
+                      UPDATE effect_agent_settlement_reservations
+                      SET outcome = 'failed'
+                      WHERE submission_id = ${admitted.submissionId}
+                    `;
+                    break;
+                  case "record-id":
+                    yield* sql`
+                      UPDATE effect_agent_settlement_reservations
+                      SET record_id = 'record-corrupt'
+                      WHERE submission_id = ${admitted.submissionId}
+                    `;
+                    break;
+                  case "record-digest":
+                    yield* sql`
+                      UPDATE effect_agent_settlement_reservations
+                      SET record_digest = ${"b".repeat(64)}
+                      WHERE submission_id = ${admitted.submissionId}
+                    `;
+                    break;
+                  case "submission-outcome":
+                    yield* sql`
+                      UPDATE effect_agent_submissions
+                      SET settled_outcome = 'failed'
+                      WHERE submission_id = ${admitted.submissionId}
+                    `;
+                    break;
+                }
+              }),
+            );
+
+            const loaded = yield* withLedger(
+              filename,
+              Effect.gen(function* () {
+                const ledger = yield* SubmissionLedger;
+                return yield* ledger.loadRecoverySnapshot(
+                  RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+                );
+              }),
+            ).pipe(Effect.exit);
+            expect(Exit.isFailure(loaded)).toBe(true);
+            if (Exit.isFailure(loaded)) {
+              const error = Cause.squash(loaded.cause);
+              expect(error).toBeInstanceOf(LedgerError);
+              if (error instanceof LedgerError) {
+                expect(error.cause).toBeInstanceOf(SqliteStorageCorruptionError);
+              }
+            }
+
+            const repaired = yield* withLedger(
+              filename,
+              Effect.gen(function* () {
+                const ledger = yield* SubmissionLedger;
+                const settlement = yield* ledger.repairSettlementFromCanonical(
+                  CanonicalSettlementRepair.make({
+                    submissionId: admitted.submissionId,
+                    record: reservation.record,
+                    recordDigest: reservation.recordDigest,
+                  }),
+                );
+                const snapshot = yield* ledger.loadRecoverySnapshot(
+                  RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+                );
+                return { settlement, snapshot };
+              }),
+            );
+            expect(repaired.settlement.outcome).toBe("completed");
+            expect(repaired.snapshot.submission.state).toBe("settled");
+            expect(repaired.snapshot.reservation?.recordDigest).toBe(reservation.recordDigest);
+          }),
+        ),
+    ),
+  );
 
   it.effect("persists admissions durably across process-style reopen", () =>
     withTemporaryDatabase((filename) =>
@@ -839,6 +1022,37 @@ describe("SqliteSubmissionLedger", () => {
         const settlement = yield* finalizeOnce;
         expect(settlement.outcome).toBe("completed");
 
+        // repairSettlementFromCanonical: before → the exact settled row is unchanged; after →
+        // the atomic repair committed and the retry preserves the exact settlement timestamp.
+        const repairOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.repairSettlementFromCanonical(
+              CanonicalSettlementRepair.make({
+                submissionId: admitted.submissionId,
+                record: reservation.record,
+                recordDigest: reservation.recordDigest,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:repair-settlement:before");
+        expectInjectedFailure(
+          yield* repairOnce.pipe(Effect.exit),
+          "ledger:repair-settlement:before",
+        );
+        expect((yield* reservationRows)[0]?.finalized_at).toBe(
+          DateTime.formatIso(settlement.settledAt),
+        );
+        yield* select("ledger:repair-settlement:after");
+        expectInjectedFailure(
+          yield* repairOnce.pipe(Effect.exit),
+          "ledger:repair-settlement:after",
+        );
+        yield* select(undefined);
+        const repaired = yield* repairOnce;
+        expect(repaired.settledAt).toEqual(settlement.settledAt);
+
         // requestAbort: before → no intent; after → intent durable, retry returns it unchanged.
         const abortLane = "conversation-failpoints-abort";
         yield* select(undefined);
@@ -988,13 +1202,14 @@ describe("SqliteSubmissionLedger", () => {
                 reason: "first of two calls",
               }),
             );
+            const gatedReason = ApprovalPendingSuspension.make({
+              toolCallIds: [toolCall("call-reopen-s1"), toolCall("call-reopen-s2")],
+            });
             const suspended = yield* ledger.suspend(
               SuspendRequest.make({
                 submissionId: gated.submissionId,
                 ownershipToken: gatedClaim.value.ownershipToken,
-                reason: ApprovalPendingSuspension.make({
-                  toolCallIds: [toolCall("call-reopen-s1"), toolCall("call-reopen-s2")],
-                }),
+                reason: gatedReason,
               }),
             );
             expect(suspended).toBe("suspended");
@@ -1106,6 +1321,23 @@ describe("SqliteSubmissionLedger", () => {
                 reason: "second of two calls",
               }),
             );
+            const stillSuspended = yield* ledger.lookup(
+              SubmissionLookupById.make({ submissionId: seeded.gated }),
+            );
+            expect(Option.isSome(stillSuspended)).toBe(true);
+            if (Option.isSome(stillSuspended)) {
+              expect(stillSuspended.value.state).toBe("suspended");
+            }
+            expect(
+              yield* ledger.resumeSuspension(
+                ResumeSuspensionRequest.make({
+                  submissionId: seeded.gated,
+                  expectedReason: ApprovalPendingSuspension.make({
+                    toolCallIds: [toolCall("call-reopen-s1"), toolCall("call-reopen-s2")],
+                  }),
+                }),
+              ),
+            ).toBe("resumed");
             const wokenGated = yield* ledger.lookup(
               SubmissionLookupById.make({ submissionId: seeded.gated }),
             );
@@ -1379,6 +1611,9 @@ describe("SqliteSubmissionLedger", () => {
         // suspend: before → ownership retained, no suspension; after → suspended durably
         // with the ownership period ended; the retry observes OwnershipLost exactly as a
         // recovering caller would.
+        const approvalSuspensionReason = ApprovalPendingSuspension.make({
+          toolCallIds: [toolCall("call-fp-b")],
+        });
         const suspendOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1386,7 +1621,7 @@ describe("SqliteSubmissionLedger", () => {
               SuspendRequest.make({
                 submissionId: host.submissionId,
                 ownershipToken: hostClaim.ownershipToken,
-                reason: ApprovalPendingSuspension.make({ toolCallIds: [toolCall("call-fp-b")] }),
+                reason: approvalSuspensionReason,
               }),
             );
           }),
@@ -1408,7 +1643,7 @@ describe("SqliteSubmissionLedger", () => {
           expect(Cause.squash(retriedSuspend.cause)).toBeInstanceOf(OwnershipLost);
         }
 
-        // Wake the lane and reclaim it for the unknown-outcome failpoints.
+        // Recording full operational coverage never wakes without coordinator authority.
         yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1423,7 +1658,35 @@ describe("SqliteSubmissionLedger", () => {
             );
           }),
         );
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("suspended");
+
+        // resumeSuspension: before → still suspended; after → the exact canonical-authorized
+        // wake committed atomically, and retry observes the already-resumed lane.
+        const resumeOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.resumeSuspension(
+              ResumeSuspensionRequest.make({
+                submissionId: host.submissionId,
+                expectedReason: approvalSuspensionReason,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:resume-suspension:before");
+        expectInjectedFailure(
+          yield* resumeOnce.pipe(Effect.exit),
+          "ledger:resume-suspension:before",
+        );
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("suspended");
+        yield* select("ledger:resume-suspension:after");
+        expectInjectedFailure(
+          yield* resumeOnce.pipe(Effect.exit),
+          "ledger:resume-suspension:after",
+        );
         expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("input-applied");
+        yield* select(undefined);
+        expect(yield* resumeOnce).toBe("not-suspended");
 
         // markUnknown: before → state unchanged; after → the unknown mark is durable; the
         // retry is an idempotent no-op.
@@ -1590,6 +1853,14 @@ describe("SqliteSubmissionLedger", () => {
           }),
         );
         if (seeded === undefined) return;
+        const waitingReason = WaitingForChildSuspension.make({
+          children: [
+            WaitingChild.make({
+              toolCallId: delegationCall,
+              childSubmissionId: seeded.child.submissionId,
+            }),
+          ],
+        });
 
         // A fresh process reads every S2 marker back through the storage schemas, and the
         // durable wake still works after reopen.
@@ -1644,8 +1915,8 @@ describe("SqliteSubmissionLedger", () => {
               expect(resolved.submission.receiptId).toBe(seeded.child.receiptId);
             }
 
-            // The suspended parent stays dormant; the child settles on its own lane and the
-            // recorded settlement durably wakes the parent (spec §12 step 10).
+            // The suspended parent stays dormant while child settlement contributes only
+            // operational coverage. The coordinator supplies the exact canonical reason to wake.
             const blocked = yield* ledger.claim(
               ClaimRequest.make({
                 conversationId: conversation(parentLane),
@@ -1673,13 +1944,31 @@ describe("SqliteSubmissionLedger", () => {
                 settlementId: reservation.settlementId,
               }),
             );
-            const woken = yield* ledger.recordChildSettled(
+            const recorded = yield* ledger.recordChildSettled(
               ChildSettledNotification.make({
                 parentSubmissionId: seeded.parent.submissionId,
                 childSubmissionId: seeded.child.submissionId,
               }),
             );
-            expect(woken).toBe("woken");
+            expect(recorded).toBe("still-waiting");
+            expect(
+              Option.isNone(
+                yield* ledger.claim(
+                  ClaimRequest.make({
+                    conversationId: conversation(parentLane),
+                    producerId: OTHER_PRODUCER,
+                  }),
+                ),
+              ),
+            ).toBe(true);
+            expect(
+              yield* ledger.resumeSuspension(
+                ResumeSuspensionRequest.make({
+                  submissionId: seeded.parent.submissionId,
+                  expectedReason: waitingReason,
+                }),
+              ),
+            ).toBe("resumed");
             const parentClaim = yield* ledger.claim(
               ClaimRequest.make({
                 conversationId: conversation(parentLane),
@@ -1916,8 +2205,17 @@ describe("SqliteSubmissionLedger", () => {
         const replayedRelease = yield* releaseOnce;
         expect(replayedRelease.status).toBe("released");
 
-        // recordChildSettled: before → the parent stays suspended; after → the wake transition
-        // is durable even though the caller never saw it; the retry answers not-waiting.
+        const waitingReason = WaitingForChildSuspension.make({
+          children: [
+            WaitingChild.make({
+              toolCallId: delegationCall,
+              childSubmissionId: child.submissionId,
+            }),
+          ],
+        });
+
+        // recordChildSettled: before → the parent stays suspended; after → operational
+        // coverage is durable, but notification delivery alone never wakes the parent.
         yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1925,14 +2223,7 @@ describe("SqliteSubmissionLedger", () => {
               SuspendRequest.make({
                 submissionId: parent.submissionId,
                 ownershipToken: parentClaim.ownershipToken,
-                reason: WaitingForChildSuspension.make({
-                  children: [
-                    WaitingChild.make({
-                      toolCallId: delegationCall,
-                      childSubmissionId: child.submissionId,
-                    }),
-                  ],
-                }),
+                reason: waitingReason,
               }),
             );
             expect(suspended).toBe("suspended");
@@ -1973,12 +2264,28 @@ describe("SqliteSubmissionLedger", () => {
         expect((yield* parentMarkers(parent.submissionId))[0]?.state).toBe("suspended");
         yield* select("ledger:child-settled:after");
         expectInjectedFailure(yield* notifyOnce.pipe(Effect.exit), "ledger:child-settled:after");
-        const wokenMarkers = yield* parentMarkers(parent.submissionId);
-        expect(wokenMarkers[0]?.state).toBe("input-applied");
-        expect(wokenMarkers[0]?.suspended_reason_json).toBeNull();
+        const coveredMarkers = yield* parentMarkers(parent.submissionId);
+        expect(coveredMarkers[0]?.state).toBe("suspended");
+        expect(coveredMarkers[0]?.suspended_reason_json).not.toBeNull();
         yield* select(undefined);
         const replayedNotification = yield* notifyOnce;
-        expect(replayedNotification).toBe("not-waiting");
+        expect(replayedNotification).toBe("still-waiting");
+
+        const resumed = yield* failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.resumeSuspension(
+              ResumeSuspensionRequest.make({
+                submissionId: parent.submissionId,
+                expectedReason: waitingReason,
+              }),
+            );
+          }),
+        );
+        expect(resumed).toBe("resumed");
+        const resumedMarkers = yield* parentMarkers(parent.submissionId);
+        expect(resumedMarkers[0]?.state).toBe("input-applied");
+        expect(resumedMarkers[0]?.suspended_reason_json).toBeNull();
       }),
     ),
   );

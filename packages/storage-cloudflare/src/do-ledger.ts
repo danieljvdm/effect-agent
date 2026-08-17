@@ -12,6 +12,7 @@ import {
   ApprovalDecisionIntent,
   AttachChildToReservationRequest,
   BeginChildBudgetReleaseRequest,
+  CanonicalSettlementRepair,
   CanonicalSequence,
   ChildAttachmentSnapshot,
   ChildBudgetReservationRequest,
@@ -47,6 +48,7 @@ import {
   RecoverySnapshotRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
+  ResumeSuspensionRequest,
   RenewOwnershipRequest,
   ReservedChildBudget,
   ReservedSettlement,
@@ -69,9 +71,11 @@ import {
   UnknownResolutionCommand,
   UnknownResolutionConflict,
   UnknownResolutionIntent,
+  validateCanonicalSettlementRepair,
   submissionAbortRecordId,
   type ChildSettledOutcome,
   type SuspensionOutcome,
+  type SuspensionResumeOutcome,
 } from "@effect-agent/session";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
@@ -135,6 +139,18 @@ class SubmissionRow extends Schema.Class<SubmissionRow>("SubmissionRow")({
   parent_submission_id: Schema.NullOr(BoundedIdentifier),
   parent_tool_call_id: Schema.NullOr(BoundedIdentifier),
 }) {}
+
+const ValidSubmissionRow = SubmissionRow.pipe(
+  Schema.refine(
+    (row): row is SubmissionRow =>
+      (row.input_applied_record_id === null) === (row.input_applied_sequence === null) &&
+      (row.suspended_reason_json === null) === (row.suspended_at === null),
+    {
+      expected:
+        "input marker record/sequence and suspension reason/timestamp must each be both present or both absent",
+    },
+  ),
+);
 
 class ChildReservationRow extends Schema.Class<ChildReservationRow>("ChildReservationRow")({
   reservation_id: BoundedIdentifier,
@@ -276,6 +292,7 @@ const decodeOwnershipSnapshot = Schema.decodeUnknownEffect(OwnershipSnapshot);
 const decodeInputAppliedMarker = Schema.decodeUnknownEffect(InputAppliedMarker);
 const decodeSubmissionSnapshotUnknown = Schema.decodeUnknownEffect(SubmissionSnapshot);
 const decodeSubmissionId = Schema.decodeUnknownEffect(SubmissionSnapshot.fields.submissionId);
+const decodeReceiptId = Schema.decodeUnknownEffect(SubmissionSnapshot.fields.receiptId);
 const decodeQueueSequence = Schema.decodeUnknownEffect(QueueSequence);
 const decodeUtcInstant = Schema.decodeUnknownEffect(Schema.DateTimeUtcFromString);
 const decodeJoiningClaim = Schema.decodeUnknownEffect(JoiningClaim);
@@ -372,7 +389,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     );
 
   const decodeSubmissionRows = (operation: string, rowKey: string, rows: unknown) =>
-    decodeRows(Schema.Array(SubmissionRow), "effect_agent_submissions", rowKey, rows).pipe(
+    decodeRows(Schema.Array(ValidSubmissionRow), "effect_agent_submissions", rowKey, rows).pipe(
       Effect.mapError(internalFailure(operation)),
     );
 
@@ -577,6 +594,79 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     }
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
+
+  const validateStoredReservation = Effect.fn("DoSubmissionLedger.validateStoredReservation")(
+    function* (operation: string, submission: SubmissionRow, row: ReservationRow) {
+      const rowFailure = (message: string) =>
+        corruptionFailure(
+          operation,
+          "effect_agent_settlement_reservations",
+          submission.submission_id,
+          message,
+        );
+      const record = yield* decodeRecordEnvelopeText(row.record_json).pipe(
+        Effect.mapError((error) => rowFailure(error.message)),
+      );
+      const submissionId = yield* decodeSubmissionId(submission.submission_id).pipe(
+        Effect.mapError((error) => rowFailure(error.message)),
+      );
+      const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
+        Effect.mapError((error) => rowFailure(error.message)),
+      );
+      const canonical = yield* validateCanonicalSettlementRepair(
+        CanonicalSettlementRepair.make({
+          submissionId,
+          record,
+          recordDigest: row.record_digest,
+        }),
+        receiptId,
+      ).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+        Effect.mapError((error) => rowFailure(error.message)),
+      );
+      if (
+        row.submission_id !== canonical.submissionId ||
+        row.settlement_id !== canonical.settlementId ||
+        row.outcome !== canonical.outcome ||
+        row.record_id !== canonical.record.recordId ||
+        (submission.state === "settled") !== (row.finalized_at !== null) ||
+        (submission.state === "settled"
+          ? submission.settled_outcome !== canonical.outcome
+          : submission.settled_outcome !== null)
+      ) {
+        return yield* rowFailure(
+          "Settlement reservation columns disagree with the exact canonical record.",
+        );
+      }
+      return canonical;
+    },
+  );
+
+  const validateRequestedSettlement = Effect.fn("DoSubmissionLedger.validateRequestedSettlement")(
+    function* (operation: string, submission: SubmissionRow, request: SettlementReservation) {
+      const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
+        Effect.mapError(internalFailure(operation)),
+      );
+      const canonical = yield* validateCanonicalSettlementRepair(
+        CanonicalSettlementRepair.make({
+          submissionId: request.submissionId,
+          record: request.record,
+          recordDigest: request.recordDigest,
+        }),
+        receiptId,
+      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      if (
+        canonical.settlementId !== request.settlementId ||
+        canonical.outcome !== request.outcome
+      ) {
+        return yield* LedgerError.make({
+          operation,
+          message: "Settlement reservation fields disagree with the exact canonical record.",
+        });
+      }
+      return canonical;
+    },
+  );
 
   const readAbortIntent = Effect.fn("DoSubmissionLedger.readAbortIntent")(function* (
     operation: string,
@@ -1459,40 +1549,36 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     const reserved = yield* inWriteTransaction(
       operation,
       Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        const canonical = yield* validateRequestedSettlement(operation, submission, validated);
         const existing = yield* readReservation(operation, validated.submissionId);
         if (Option.isSome(existing)) {
+          const storedCanonical = yield* validateStoredReservation(
+            operation,
+            submission,
+            existing.value,
+          );
           const identical =
-            existing.value.settlement_id === validated.settlementId &&
-            existing.value.outcome === validated.outcome &&
-            existing.value.record_digest === validated.recordDigest &&
+            storedCanonical.settlementId === canonical.settlementId &&
+            storedCanonical.outcome === canonical.outcome &&
+            storedCanonical.recordDigest === canonical.recordDigest &&
             existing.value.record_json === recordJson;
           if (!identical) {
             return yield* SettlementConflict.make({
-              submissionId: validated.submissionId,
-              existingOutcome: existing.value.outcome,
+              submissionId: canonical.submissionId,
+              existingOutcome: storedCanonical.outcome,
             });
           }
-          const record = yield* decodeRecordEnvelopeText(existing.value.record_json).pipe(
-            Effect.mapError((error) =>
-              corruptionFailure(
-                operation,
-                "effect_agent_settlement_reservations",
-                validated.submissionId,
-                error.message,
-              ),
-            ),
-          );
           return ReservedSettlement.make({
-            submissionId: validated.submissionId,
-            settlementId: validated.settlementId,
-            outcome: validated.outcome,
-            record,
-            recordDigest: validated.recordDigest,
+            submissionId: canonical.submissionId,
+            settlementId: canonical.settlementId,
+            outcome: canonical.outcome,
+            record: canonical.record,
+            recordDigest: canonical.recordDigest,
             replayed: true,
           });
         }
 
-        const submission = yield* requireSubmission(operation, validated.submissionId);
         if (submission.state === "settled") {
           if (submission.settled_outcome === null) {
             return yield* corruptionFailure(
@@ -1541,12 +1627,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             record_digest,
             reserved_at
           ) VALUES (
-            ${validated.submissionId},
-            ${validated.settlementId},
-            ${validated.outcome},
-            ${validated.record.recordId},
+            ${canonical.submissionId},
+            ${canonical.settlementId},
+            ${canonical.outcome},
+            ${canonical.record.recordId},
             ${recordJson},
-            ${validated.recordDigest},
+            ${canonical.recordDigest},
             ${now.iso}
           )
         `.pipe(Effect.mapError(sqlFailure(operation)));
@@ -1556,11 +1642,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           WHERE submission_id = ${validated.submissionId}
         `.pipe(Effect.mapError(sqlFailure(operation)));
         return ReservedSettlement.make({
-          submissionId: validated.submissionId,
-          settlementId: validated.settlementId,
-          outcome: validated.outcome,
-          record: validated.record,
-          recordDigest: validated.recordDigest,
+          submissionId: canonical.submissionId,
+          settlementId: canonical.settlementId,
+          outcome: canonical.outcome,
+          record: canonical.record,
+          recordDigest: canonical.recordDigest,
           replayed: false,
         });
       }),
@@ -1580,6 +1666,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     const settlement = yield* inWriteTransaction(
       operation,
       Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
         const reservation = yield* readReservation(operation, validated.submissionId);
         if (Option.isNone(reservation)) {
           return yield* LedgerError.make({
@@ -1587,13 +1674,17 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             message: `No settlement reservation exists for submission ${validated.submissionId}.`,
           });
         }
-        if (reservation.value.settlement_id !== validated.settlementId) {
+        const canonical = yield* validateStoredReservation(
+          operation,
+          submission,
+          reservation.value,
+        );
+        if (canonical.settlementId !== validated.settlementId) {
           return yield* SettlementConflict.make({
             submissionId: validated.submissionId,
-            existingOutcome: reservation.value.outcome,
+            existingOutcome: canonical.outcome,
           });
         }
-        const submission = yield* requireSubmission(operation, validated.submissionId);
         if (submission.state === "settled") {
           if (reservation.value.finalized_at === null) {
             return yield* corruptionFailure(
@@ -1607,14 +1698,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             submissionId: validated.submissionId,
             settlementId: validated.settlementId,
             receiptId: submission.receipt_id,
-            outcome: reservation.value.outcome,
+            outcome: canonical.outcome,
             settledAt: reservation.value.finalized_at,
           }).pipe(Effect.mapError(internalFailure(operation)));
         }
         const now = yield* currentInstant;
         yield* sql`
           UPDATE effect_agent_submissions
-          SET state = 'settled', settled_outcome = ${reservation.value.outcome}
+          SET state = 'settled', settled_outcome = ${canonical.outcome}
           WHERE submission_id = ${validated.submissionId}
         `.pipe(Effect.mapError(sqlFailure(operation)));
         yield* sql`
@@ -1630,7 +1721,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           submissionId: validated.submissionId,
           settlementId: validated.settlementId,
           receiptId: submission.receipt_id,
-          outcome: reservation.value.outcome,
+          outcome: canonical.outcome,
           settledAt: now.iso,
         }).pipe(Effect.mapError(internalFailure(operation)));
       }),
@@ -1638,6 +1729,100 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     yield* hitFailpoint("ledger:finalize-settlement:after", operation);
     return settlement;
   });
+
+  const repairSettlementFromCanonical: SubmissionLedger["Service"]["repairSettlementFromCanonical"] =
+    Effect.fn("DoSubmissionLedger.repairSettlementFromCanonical")(function* (
+      request: CanonicalSettlementRepair,
+    ) {
+      const operation = "ledger repair settlement from canonical";
+      const validated = yield* Schema.decodeUnknownEffect(Schema.toType(CanonicalSettlementRepair))(
+        request,
+      ).pipe(Effect.mapError(internalFailure(operation)));
+      yield* hitFailpoint("ledger:repair-settlement:before", operation);
+      const settlement = yield* inWriteTransaction(
+        operation,
+        Effect.gen(function* () {
+          const submission = yield* requireSubmission(operation, validated.submissionId);
+          const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
+            Effect.mapError(internalFailure(operation)),
+          );
+          const canonical = yield* validateCanonicalSettlementRepair(validated, receiptId).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+          );
+          const recordJson = yield* encodeRecordEnvelopeText(canonical.record).pipe(
+            Effect.mapError(internalFailure(operation)),
+          );
+          yield* journal
+            .checkValueBound(operation, recordJson)
+            .pipe(Effect.mapError(internalFailure(operation)));
+          const existing = yield* readReservation(operation, canonical.submissionId);
+          const now = yield* currentInstant;
+          let settledAt = now.iso;
+          if (
+            Option.isSome(existing) &&
+            submission.state === "settled" &&
+            submission.settled_outcome === canonical.outcome &&
+            existing.value.settlement_id === canonical.settlementId &&
+            existing.value.outcome === canonical.outcome &&
+            existing.value.record_id === canonical.record.recordId &&
+            existing.value.record_json === recordJson &&
+            existing.value.record_digest === canonical.recordDigest &&
+            existing.value.finalized_at !== null
+          ) {
+            const persistedSettledAt = yield* decodeUtcInstant(existing.value.finalized_at).pipe(
+              Effect.option,
+            );
+            if (Option.isSome(persistedSettledAt)) settledAt = existing.value.finalized_at;
+          }
+          yield* sql`
+            INSERT INTO effect_agent_settlement_reservations (
+              submission_id,
+              settlement_id,
+              outcome,
+              record_id,
+              record_json,
+              record_digest,
+              reserved_at,
+              finalized_at
+            ) VALUES (
+              ${canonical.submissionId},
+              ${canonical.settlementId},
+              ${canonical.outcome},
+              ${canonical.record.recordId},
+              ${recordJson},
+              ${canonical.recordDigest},
+              ${now.iso},
+              ${settledAt}
+            )
+            ON CONFLICT(submission_id) DO UPDATE SET
+              settlement_id = excluded.settlement_id,
+              outcome = excluded.outcome,
+              record_id = excluded.record_id,
+              record_json = excluded.record_json,
+              record_digest = excluded.record_digest,
+              finalized_at = excluded.finalized_at
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          yield* sql`
+            UPDATE effect_agent_submissions
+            SET state = 'settled', settled_outcome = ${canonical.outcome}
+            WHERE submission_id = ${canonical.submissionId}
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          yield* sql`
+            DELETE FROM effect_agent_submission_ownership
+            WHERE submission_id = ${canonical.submissionId}
+          `.pipe(Effect.mapError(sqlFailure(operation)));
+          return yield* decodeSettlement({
+            submissionId: canonical.submissionId,
+            settlementId: canonical.settlementId,
+            receiptId: canonical.receiptId,
+            outcome: canonical.outcome,
+            settledAt,
+          }).pipe(Effect.mapError(internalFailure(operation)));
+        }),
+      );
+      yield* hitFailpoint("ledger:repair-settlement:after", operation);
+      return settlement;
+    });
 
   const requestAbort: SubmissionLedger["Service"]["requestAbort"] = Effect.fn(
     "DoSubmissionLedger.requestAbort",
@@ -1914,9 +2099,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           // contradict it, so the reservation wins.
           const reservation = yield* readReservation(operation, validated.submissionId);
           if (Option.isSome(reservation)) {
+            const canonical = yield* validateStoredReservation(
+              operation,
+              submission,
+              reservation.value,
+            );
             return yield* SettlementConflict.make({
               submissionId: validated.submissionId,
-              existingOutcome: reservation.value.outcome,
+              existingOutcome: canonical.outcome,
             });
           }
           yield* requireOwnership(operation, submission, validated.ownershipToken);
@@ -1974,41 +2164,71 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     },
   );
 
-  /**
-   * Once every pending call of a recorded ApprovalPending suspension has a decision intent,
-   * the lane wakes: suspended → input-applied, suspension cleared (plan §2.6). A
-   * WaitingForChild suspension wakes only through recordChildSettled. Runs inside the caller's
-   * write transaction.
-   */
-  const wakeSuspendedIfCovered = Effect.fn("DoSubmissionLedger.wakeSuspendedIfCovered")(function* (
-    operation: string,
-    submission: SubmissionRow,
-  ): Effect.fn.Return<void, LedgerError> {
-    if (submission.state !== "suspended" || submission.suspended_reason_json === null) return;
-    const reason = yield* Schema.decodeEffect(Schema.fromJsonString(SuspensionReason))(
-      submission.suspended_reason_json,
-    ).pipe(
-      Effect.mapError((error) =>
-        corruptionFailure(
-          operation,
-          "effect_agent_submissions",
-          submission.submission_id,
-          error.message,
-        ),
-      ),
+  const resumeSuspension: SubmissionLedger["Service"]["resumeSuspension"] = Effect.fn(
+    "DoSubmissionLedger.resumeSuspension",
+  )(function* (request: ResumeSuspensionRequest) {
+    const operation = "ledger resume suspension";
+    const validated = yield* Schema.decodeUnknownEffect(Schema.toType(ResumeSuspensionRequest))(
+      request,
+    ).pipe(Effect.mapError(internalFailure(operation)));
+    const expectedReasonJson = yield* encodeSuspensionReasonText(validated.expectedReason).pipe(
+      Effect.mapError(internalFailure(operation)),
     );
-    if (reason._tag !== "ApprovalPending") return;
-    const decisions = yield* readApprovalDecisions(operation, submission.submission_id);
-    const decided = new Set(decisions.map((row) => row.tool_call_id));
-    if (!reason.toolCallIds.every((toolCallId) => decided.has(toolCallId))) return;
-    yield* sql`
-      UPDATE effect_agent_submissions
-      SET
-        state = 'input-applied',
-        suspended_reason_json = NULL,
-        suspended_at = NULL
-      WHERE submission_id = ${submission.submission_id}
-    `.pipe(Effect.mapError(sqlFailure(operation)));
+    yield* hitFailpoint("ledger:resume-suspension:before", operation);
+    const outcome = yield* inWriteTransaction(
+      operation,
+      Effect.gen(function* () {
+        const submission = yield* requireSubmission(operation, validated.submissionId);
+        if (submission.state !== "suspended") {
+          return "not-suspended" as SuspensionResumeOutcome;
+        }
+        if (submission.suspended_reason_json === null || submission.suspended_at === null) {
+          return yield* corruptionFailure(
+            operation,
+            "effect_agent_submissions",
+            validated.submissionId,
+            "A suspended Submission is missing its reason or timestamp.",
+          );
+        }
+        if (submission.suspended_reason_json !== expectedReasonJson) {
+          return yield* LedgerError.make({
+            operation,
+            message: `Stored suspension reason for submission ${validated.submissionId} does not match canonical evidence.`,
+          });
+        }
+        if (validated.expectedReason._tag === "ApprovalPending") {
+          const decisions = yield* readApprovalDecisions(operation, validated.submissionId);
+          const decided = new Set(decisions.map((row) => row.tool_call_id));
+          if (
+            !validated.expectedReason.toolCallIds.every((toolCallId) => decided.has(toolCallId))
+          ) {
+            return "not-covered" as SuspensionResumeOutcome;
+          }
+        } else {
+          const markers = yield* readChildSettlementMarkers(operation, validated.submissionId);
+          const markerChildren = new Set(markers.map((row) => row.child_submission_id));
+          for (const child of validated.expectedReason.children) {
+            const settled = yield* childProvablySettled(
+              operation,
+              markerChildren,
+              child.childSubmissionId,
+            );
+            if (!settled) return "not-covered" as SuspensionResumeOutcome;
+          }
+        }
+        yield* sql`
+          UPDATE effect_agent_submissions
+          SET
+            state = 'input-applied',
+            suspended_reason_json = NULL,
+            suspended_at = NULL
+          WHERE submission_id = ${validated.submissionId}
+        `.pipe(Effect.mapError(sqlFailure(operation)));
+        return "resumed" as SuspensionResumeOutcome;
+      }),
+    );
+    yield* hitFailpoint("ledger:resume-suspension:after", operation);
+    return outcome;
   });
 
   const recordApprovalDecision: SubmissionLedger["Service"]["recordApprovalDecision"] = Effect.fn(
@@ -2069,7 +2289,6 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             ${now.iso}
           )
         `.pipe(Effect.mapError(sqlFailure(operation)));
-        yield* wakeSuspendedIfCovered(operation, submission);
         return yield* decodeApprovalDecisionIntent({
           submissionId: validated.submissionId,
           toolCallId: validated.toolCallId,
@@ -2114,9 +2333,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         // classifier orders reservation ahead of MarkUnknown for the same reason.
         const reservation = yield* readReservation(operation, validated.submissionId);
         if (Option.isSome(reservation)) {
+          const canonical = yield* validateStoredReservation(
+            operation,
+            submission,
+            reservation.value,
+          );
           return yield* SettlementConflict.make({
             submissionId: validated.submissionId,
-            existingOutcome: reservation.value.outcome,
+            existingOutcome: canonical.outcome,
           });
         }
         // Idempotent merge: repeating is a no-op; additional open calls extend the marked
@@ -2308,30 +2532,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         ) {
           return "not-waiting" as ChildSettledOutcome;
         }
-        // The parent wakes exactly when EVERY listed child is provably settled — from its
-        // local row or a recorded marker (spec §12 step 10); replays re-run the coverage
-        // check so a recovering caller wakes the lane idempotently.
-        const markers = yield* readChildSettlementMarkers(operation, validated.parentSubmissionId);
-        const markerChildren = new Set(markers.map((row) => row.child_submission_id));
-        for (const entry of reason.children) {
-          const settled = yield* childProvablySettled(
-            operation,
-            markerChildren,
-            entry.childSubmissionId,
-          );
-          if (!settled) {
-            return "still-waiting" as ChildSettledOutcome;
-          }
-        }
-        yield* sql`
-          UPDATE effect_agent_submissions
-          SET
-            state = 'input-applied',
-            suspended_reason_json = NULL,
-            suspended_at = NULL
-          WHERE submission_id = ${validated.parentSubmissionId}
-        `.pipe(Effect.mapError(sqlFailure(operation)));
-        return "woken" as ChildSettledOutcome;
+        return "still-waiting" as ChildSettledOutcome;
       }),
     );
     yield* hitFailpoint("ledger:child-settled:after", operation);
@@ -2697,24 +2898,16 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           let reservation: SettlementReservationSnapshot | undefined;
           const reservationRow = yield* readReservation(operation, validated.submissionId);
           if (Option.isSome(reservationRow)) {
-            const record = yield* decodeRecordEnvelopeText(reservationRow.value.record_json).pipe(
-              Effect.mapError((error) =>
-                corruptionFailure(
-                  operation,
-                  "effect_agent_settlement_reservations",
-                  validated.submissionId,
-                  error.message,
-                ),
-              ),
+            const canonical = yield* validateStoredReservation(
+              operation,
+              submissionRow,
+              reservationRow.value,
             );
-            const settlementId = yield* Schema.decodeUnknownEffect(
-              SettlementReservationSnapshot.fields.settlementId,
-            )(reservationRow.value.settlement_id).pipe(Effect.mapError(internalFailure(operation)));
             reservation = SettlementReservationSnapshot.make({
-              settlementId,
-              outcome: reservationRow.value.outcome,
-              record,
-              recordDigest: reservationRow.value.record_digest,
+              settlementId: canonical.settlementId,
+              outcome: canonical.outcome,
+              record: canonical.record,
+              recordDigest: canonical.recordDigest,
               finalized: reservationRow.value.finalized_at !== null,
             });
           }
@@ -2891,11 +3084,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       markInputApplied,
       reserveSettlement,
       finalizeSettlement,
+      repairSettlementFromCanonical,
       requestAbort,
       claimJoining,
       markJoined,
       revertJoining,
       suspend,
+      resumeSuspension,
       recordApprovalDecision,
       markUnknown,
       recordUnknownResolution,

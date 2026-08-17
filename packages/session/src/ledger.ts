@@ -7,8 +7,9 @@ import {
   SubmissionId,
   ToolCallId,
 } from "@effect-agent/core";
-import { Context, Duration, Effect, Option, Schema, Stream } from "effect";
+import { Context, Crypto, Duration, Effect, Option, Schema, Stream } from "effect";
 
+import { digestJson } from "./digest.ts";
 import {
   AbortRequested,
   ApprovalDecision,
@@ -340,6 +341,31 @@ export class SettlementFinalization extends Schema.Class<SettlementFinalization>
   settlementId: SettlementId,
 }) {}
 
+/**
+ * Exact canonical evidence used to reconstruct or overwrite the Submission Ledger's operational
+ * settlement state (DUR-015). The Conversation Log record is the authority; `recordDigest`
+ * protects the exact envelope, including its timestamp and optional outcome metadata.
+ */
+export class CanonicalSettlementRepair extends Schema.Class<CanonicalSettlementRepair>(
+  "@effect-agent/session/CanonicalSettlementRepair",
+)({
+  submissionId: SubmissionId,
+  record: RecordEnvelope,
+  recordDigest: Digest,
+}) {}
+
+/** Canonical settlement fields extracted only after the shared exact-record validation passes. */
+export class ValidatedCanonicalSettlement extends Schema.Class<ValidatedCanonicalSettlement>(
+  "@effect-agent/session/ValidatedCanonicalSettlement",
+)({
+  submissionId: SubmissionId,
+  settlementId: SettlementId,
+  receiptId: ReceiptId,
+  outcome: SettlementOutcome,
+  record: RecordEnvelope,
+  recordDigest: Digest,
+}) {}
+
 /** The single durable terminal outcome recorded for one accepted Submission (DUR-002). */
 export class Settlement extends Schema.Class<Settlement>("@effect-agent/session/Settlement")({
   submissionId: SubmissionId,
@@ -437,8 +463,8 @@ export class WaitingChild extends Schema.Class<WaitingChild>("@effect-agent/sess
 /**
  * The parent Attempt ended without settling because attached durable children must settle and
  * join first (spec §12 step 10, SUB-030). The suspended lane holds no worker permit; each listed
- * child settles on its own Conversation lane and `recordChildSettled` wakes the parent once
- * every listed child is settled.
+ * child settles on its own Conversation lane and records operational coverage; only the
+ * coordinator's canonical-evidence-authorized `resumeSuspension` may wake the parent.
  */
 export class WaitingForChildSuspension extends Schema.TaggedClass<WaitingForChildSuspension>(
   "@effect-agent/session/WaitingForChildSuspension",
@@ -474,6 +500,22 @@ export const SuspensionOutcome = Schema.Literals(["suspended", "resume-immediate
 export type SuspensionOutcome = typeof SuspensionOutcome.Type;
 
 /**
+ * Coordinator-authorized wake of one exact suspension. The coordinator may construct this only
+ * after matching `expectedReason` against canonical Conversation evidence; the adapter atomically
+ * rechecks the stored reason and operational coverage before making the lane runnable.
+ */
+export class ResumeSuspensionRequest extends Schema.Class<ResumeSuspensionRequest>(
+  "@effect-agent/session/ResumeSuspensionRequest",
+)({
+  submissionId: SubmissionId,
+  expectedReason: SuspensionReason,
+}) {}
+
+/** Result of an exact, canonical-evidence-authorized suspension wake attempt. */
+export const SuspensionResumeOutcome = Schema.Literals(["resumed", "not-suspended", "not-covered"]);
+export type SuspensionResumeOutcome = typeof SuspensionResumeOutcome.Type;
+
+/**
  * A durable child-settlement notification for one waitingForChild parent (spec §12 step 10).
  * The child's canonical Settlement is the authority; this command only drives the parent lane's
  * wake transition.
@@ -486,10 +528,11 @@ export class ChildSettledNotification extends Schema.Class<ChildSettledNotificat
 }) {}
 
 /**
- * `woken` when this notification completed the waiting set and the parent transitioned
- * `suspended(WaitingForChild) → input-applied`; `still-waiting` while other listed children are
- * unsettled; `not-waiting` when the parent is not (or no longer) suspended waiting on this
- * child — including replays after a wake, so the operation is idempotent.
+ * This notification records operational child-settlement coverage but never makes a lane
+ * runnable by itself. `still-waiting` means the parent currently has a matching suspension;
+ * `not-waiting` means it does not. `woken` remains decode-compatible with stored/protocol results
+ * from the earlier combined operation but conforming adapters no longer produce it; only
+ * `resumeSuspension` may clear a suspension.
  */
 export const ChildSettledOutcome = Schema.Literals(["woken", "still-waiting", "not-waiting"]);
 export type ChildSettledOutcome = typeof ChildSettledOutcome.Type;
@@ -930,6 +973,12 @@ export type SubmissionLedgerFailure =
  *   record is canonical; releases the lane so the next `queueSequence` becomes claimable. It
  *   requires no ownership token: canonical history authorizes finalization (DUR-015). A
  *   finalization that disagrees with the recorded outcome fails with `SettlementConflict`.
+ * - `repairSettlementFromCanonical` — atomic recovery authority after the exact canonical
+ *   `SubmissionSettled` record is present. The adapter validates the deterministic record and
+ *   digest through `validateCanonicalSettlementRepair`, then reconstructs or overwrites every
+ *   missing/divergent operational reservation and settlement column from that record, marks the
+ *   row settled, and releases the lane. Divergent cached ledger state is repaired rather than
+ *   treated as a competing outcome: canonical history wins (DUR-015).
  * - `requestAbort` — durable, idempotent by `submissionId`: repeating returns the recorded
  *   intent unchanged (DUR-012). Fails with `SettlementConflict` once the Submission is settled;
  *   abort never rewrites a terminal outcome. Fails with `JoinedToHost` for a `joined` Submission
@@ -952,17 +1001,19 @@ export type SubmissionLedgerFailure =
  *   the suspend transaction commits is observed by that suspend (single-store adapters derive
  *   this from the child's own row; cross-store adapters record a durable notification marker).
  *   Fails with `SettlementConflict` once settled.
+ * - `resumeSuspension` — coordinator-owned wake transition after canonical evidence validation.
+ *   Atomically requires the stored suspension reason to equal `expectedReason` byte-for-field and
+ *   all corresponding operational decisions/child-settlement notifications to cover it, then
+ *   transitions `suspended → input-applied`. A divergent reason fails as `LedgerError`; incomplete
+ *   coverage returns `not-covered`; a replay after wake returns `not-suspended`.
  * - `recordApprovalDecision` — durable, idempotent per `(submissionId, toolCallId)`: repeating
  *   the same decision replays the intent; a divergent re-decision fails with `ApprovalConflict`.
- *   Transitions `suspended(ApprovalPending) → input-applied` once every pending call of the
- *   suspension reason is decided, waking the lane. Fails with `SettlementConflict` once settled.
- * - `recordChildSettled` — idempotent cross-lane wake (spec §12 step 10): transitions
- *   `suspended(WaitingForChild) → input-applied` exactly when EVERY listed child is settled,
- *   answering `woken`; `still-waiting` while any listed child is unsettled; `not-waiting` when
- *   the parent is not suspended waiting on this child (including replays after the wake). The
- *   child's canonical Settlement is the authority — a notification for an unsettled child is an
- *   adapter-checked caller error (`LedgerError` on single-store adapters). It never settles the
- *   parent and requires no ownership token: the recorded child settlement authorizes the wake.
+ *   It records operational coverage only and never clears suspension. Fails with
+ *   `SettlementConflict` once settled.
+ * - `recordChildSettled` — idempotently records cross-lane operational coverage. The child's
+ *   canonical Settlement is the authority — a notification for an unsettled child is an
+ *   adapter-checked caller error (`LedgerError` on single-store adapters). It never settles or
+ *   wakes the parent and requires no ownership token.
  * - `reserveChildBudget` — idempotent get-or-create of the parent-owned child budget
  *   reservation (spec §12 step 2), fenced by the parent lane's live `OwnershipToken`. An
  *   identical replay returns the stored row with `replayed` set (unfenced, mirroring
@@ -1027,6 +1078,9 @@ export class SubmissionLedger extends Context.Service<
     readonly finalizeSettlement: (
       request: SettlementFinalization,
     ) => Effect.Effect<Settlement, SettlementConflict | LedgerError>;
+    readonly repairSettlementFromCanonical: (
+      request: CanonicalSettlementRepair,
+    ) => Effect.Effect<Settlement, LedgerError>;
     readonly requestAbort: (
       request: AbortCommand,
     ) => Effect.Effect<AbortIntent, SettlementConflict | JoinedToHost | LedgerError>;
@@ -1040,6 +1094,9 @@ export class SubmissionLedger extends Context.Service<
     readonly suspend: (
       request: SuspendRequest,
     ) => Effect.Effect<SuspensionOutcome, OwnershipLost | SettlementConflict | LedgerError>;
+    readonly resumeSuspension: (
+      request: ResumeSuspensionRequest,
+    ) => Effect.Effect<SuspensionResumeOutcome, LedgerError>;
     readonly recordApprovalDecision: (
       command: ApprovalDecisionCommand,
     ) => Effect.Effect<ApprovalDecisionIntent, ApprovalConflict | SettlementConflict | LedgerError>;
@@ -1105,6 +1162,59 @@ export const submissionSettlementBatchId = (submissionId: SubmissionId): BatchId
 /** Deterministic canonical record identity of one Submission's `SubmissionSettled` record. */
 export const submissionSettlementRecordId = (submissionId: SubmissionId): RecordId =>
   decodeRecordId(`settlement:${submissionId}`);
+
+/**
+ * Shared fail-closed validator used by every SubmissionLedger adapter before canonical settlement
+ * repair. It validates the exact deterministic identity, record family, payload identity and
+ * outcome, row receipt identity, and SHA-256 digest. Adapters must call it before mutating any
+ * operational settlement columns and then use only the returned fields as repair authority.
+ */
+export const validateCanonicalSettlementRepair = Effect.fn(
+  "SubmissionLedger.validateCanonicalSettlementRepair",
+)(function* (
+  request: CanonicalSettlementRepair,
+  expectedReceiptId: ReceiptId,
+): Effect.fn.Return<ValidatedCanonicalSettlement, LedgerError, Crypto.Crypto> {
+  const payload = request.record.payload;
+  const invalid = (message: string) =>
+    LedgerError.make({ operation: "repairSettlementFromCanonical", message });
+  if (request.record.recordId !== submissionSettlementRecordId(request.submissionId)) {
+    return yield* invalid(
+      `Canonical settlement record id does not match Submission ${request.submissionId}`,
+    );
+  }
+  if (payload._tag !== "SubmissionSettled") {
+    return yield* invalid("Canonical settlement repair requires a SubmissionSettled record");
+  }
+  if (payload.submissionId !== request.submissionId) {
+    return yield* invalid("Canonical settlement payload carries a different Submission identity");
+  }
+  if (payload.settlementId !== submissionSettlementId(request.submissionId)) {
+    return yield* invalid("Canonical settlement payload carries a non-deterministic SettlementId");
+  }
+  if (payload.receiptId !== expectedReceiptId) {
+    return yield* invalid("Canonical settlement payload carries a different Receipt identity");
+  }
+  const encoded = yield* Schema.encodeEffect(RecordEnvelope)(request.record).pipe(
+    Effect.mapError((cause) =>
+      invalid(`Canonical settlement record failed Schema encoding: ${cause.message}`),
+    ),
+  );
+  const actualDigest = yield* digestJson(encoded).pipe(
+    Effect.mapError((cause) => invalid(`Canonical settlement digest failed: ${cause.message}`)),
+  );
+  if (actualDigest !== request.recordDigest) {
+    return yield* invalid("Canonical settlement record digest does not match its exact envelope");
+  }
+  return ValidatedCanonicalSettlement.make({
+    submissionId: request.submissionId,
+    settlementId: payload.settlementId,
+    receiptId: payload.receiptId,
+    outcome: payload.outcome,
+    record: request.record,
+    recordDigest: request.recordDigest,
+  });
+});
 
 /** Deterministic batch identity of one Submission's canonical `AbortRequested` append. */
 export const submissionAbortBatchId = (submissionId: SubmissionId): BatchId =>

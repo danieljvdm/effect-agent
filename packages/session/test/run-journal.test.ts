@@ -410,6 +410,7 @@ describe("run journal batch split (plan §2.1)", () => {
           turn: 1,
           toolCallId: "call-1",
           toolName: "book_flight",
+          executionKind: "application",
           parameters: { destination: "Kyoto" },
           parametersDigest: "a".repeat(64),
         });

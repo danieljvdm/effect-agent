@@ -216,6 +216,14 @@ export class ModelResponseRecorded extends Schema.TaggedClass<ModelResponseRecor
 }) {}
 
 /**
+ * Durable meaning of a prepared Tool Call. `application` follows the ordinary uncertainty
+ * protocol; `delegation` follows the idempotent child-establishment lifecycle. This value comes
+ * from the actual Effect AI Tool annotation, never its model-visible name.
+ */
+export const ToolCallExecutionKind = Schema.Literals(["application", "delegation"]);
+export type ToolCallExecutionKind = typeof ToolCallExecutionKind.Type;
+
+/**
  * One approved uncertain/idempotent ordinary Tool Call made durable BEFORE any handler starts
  * (durability §10). `parameters` is the Schema-encoded wire form of the declared call and
  * `parametersDigest` pins it; recovery that sees this record without a matching `ToolCallSettled`
@@ -230,6 +238,7 @@ export class ToolCallPrepared extends Schema.TaggedClass<ToolCallPrepared>(
   turn: TurnNumber,
   toolCallId: ToolCallId,
   toolName: BoundedName,
+  executionKind: ToolCallExecutionKind,
   parameters: PersistedJson,
   parametersDigest: Digest,
 }) {}

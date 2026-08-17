@@ -33,6 +33,10 @@ import {
   LedgerMarkReadyResult,
   LedgerRecordChildSettledCall,
   LedgerRecordChildSettledResult,
+  LedgerRepairSettlementCall,
+  LedgerRepairSettlementResult,
+  LedgerResumeSuspensionCall,
+  LedgerResumeSuspensionResult,
   LedgerRequestAbortCall,
   LedgerRequestAbortResult,
   LedgerResolveAdmissionCall,
@@ -212,7 +216,8 @@ const crossConversationLedgerError = (operation: string, target: string): Ledger
     message:
       `${operation} addressed to foreign Conversation ${target} is not route-capable; the ` +
       "closed cross-Object subset is admit, markReady, lookup, resolveAdmission, " +
-      "requestAbort, and recordChildSettled. Every other ledger operation is lane-local by " +
+      "requestAbort, recordChildSettled, repairSettlementFromCanonical, and " +
+      "resumeSuspension. Every other ledger operation is lane-local by " +
       "construction and must execute inside the owning Conversation's Durable Object.",
   });
 
@@ -532,6 +537,36 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
                 target.conversationId,
                 LedgerRecordChildSettledCall.make({ request }),
                 "LedgerRecordChildSettledResult",
+                noExtraFailure,
+              ).pipe(Effect.map((reply) => reply.outcome)),
+        ),
+      ),
+
+    repairSettlementFromCanonical: (request) =>
+      submissionTarget("ledger repair settlement from canonical", request.submissionId).pipe(
+        Effect.flatMap((target) =>
+          target._tag === "local"
+            ? local.repairSettlementFromCanonical(request)
+            : foreignLedgerCall(
+                "ledger repair settlement from canonical",
+                target.conversationId,
+                LedgerRepairSettlementCall.make({ request }),
+                "LedgerRepairSettlementResult",
+                noExtraFailure,
+              ).pipe(Effect.map((reply) => reply.settlement)),
+        ),
+      ),
+
+    resumeSuspension: (request) =>
+      submissionTarget("ledger resume suspension", request.submissionId).pipe(
+        Effect.flatMap((target) =>
+          target._tag === "local"
+            ? local.resumeSuspension(request)
+            : foreignLedgerCall(
+                "ledger resume suspension",
+                target.conversationId,
+                LedgerResumeSuspensionCall.make({ request }),
+                "LedgerResumeSuspensionResult",
                 noExtraFailure,
               ).pipe(Effect.map((reply) => reply.outcome)),
         ),
@@ -973,6 +1008,22 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
         ledger
           .recordChildSettled(request.request)
           .pipe(Effect.map((outcome) => LedgerRecordChildSettledResult.make({ outcome }))),
+      );
+    }
+    case "LedgerRepairSettlement": {
+      const ledger = yield* SubmissionLedger;
+      return yield* capture(
+        ledger
+          .repairSettlementFromCanonical(request.request)
+          .pipe(Effect.map((settlement) => LedgerRepairSettlementResult.make({ settlement }))),
+      );
+    }
+    case "LedgerResumeSuspension": {
+      const ledger = yield* SubmissionLedger;
+      return yield* capture(
+        ledger
+          .resumeSuspension(request.request)
+          .pipe(Effect.map((outcome) => LedgerResumeSuspensionResult.make({ outcome }))),
       );
     }
     case "StoreMaterialize": {

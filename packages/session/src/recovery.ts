@@ -1,21 +1,15 @@
-import {
-  ConversationId,
-  isDelegationToolName,
-  SettlementId,
-  SubmissionId,
-  ToolCallId,
-} from "@effect-agent/core";
+import { ConversationId, SettlementId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import { Effect, Schema } from "effect";
 
 import {
   ChildReservationId,
-  submissionSettlementId,
+  SuspensionReason,
   WaitingChild,
   type ChildAttachmentSnapshot,
   type ChildBudgetReservationSnapshot,
   type RecoverySnapshot,
 } from "./ledger.ts";
-import { SettlementOutcome, ToolCallPrepared } from "./records.ts";
+import { RecordEnvelope, SettlementOutcome, ToolCallPrepared } from "./records.ts";
 
 /** One canonical `ToolCallPrepared` without a settling or resolving canonical record (DUR-009). */
 export class OpenToolCallEvidence extends Schema.Class<OpenToolCallEvidence>(
@@ -24,6 +18,7 @@ export class OpenToolCallEvidence extends Schema.Class<OpenToolCallEvidence>(
   toolCallId: ToolCallId,
   toolName: ToolCallPrepared.fields.toolName,
   turn: ToolCallPrepared.fields.turn,
+  executionKind: ToolCallPrepared.fields.executionKind,
 }) {}
 
 /**
@@ -46,6 +41,14 @@ export class PendingApprovalEvidence extends Schema.Class<PendingApprovalEvidenc
   turn: ToolCallPrepared.fields.turn,
 }) {}
 
+/** Exact canonical parent-log `SubagentStarted` identity retained for suspension provenance. */
+export class CanonicalSubagentStartedEvidence extends Schema.Class<CanonicalSubagentStartedEvidence>(
+  "@effect-agent/session/CanonicalSubagentStartedEvidence",
+)({
+  toolCallId: ToolCallId,
+  childSubmissionId: SubmissionId,
+}) {}
+
 /**
  * The authoritative tri-state admission answer recorded as pure classifier evidence (SUB-031):
  * the recovery pass queries `resolveAdmission` with the deterministic child idempotency key for
@@ -64,8 +67,9 @@ export type DelegationAdmissionEvidence = typeof DelegationAdmissionEvidence.Typ
  * One prepared-without-outcome parent Tool Call that IS a delegation (plan §4.1), separated from
  * `openToolCalls` because its establishment protocol is idempotent by construction and must
  * NEVER be marked Unknown (spec §13 vs. DUR-009). Delegation detection is durable and
- * fail-closed: a matching `ChildBudgetReservation` row or `SubagentRequested` record, plus — for
- * the pre-reservation window — the core-owned `delegate_` naming rule. The
+ * fail-closed: the prepared record's Schema-backed `executionKind`, a matching
+ * `ChildBudgetReservation` row, or a `SubagentRequested` record. Tool names carry no durability
+ * authority. The
  * `requested`/`started`/`joined` flags come from the parent-log canonical records; the child
  * identity fields are present exactly when those records (or the reservation attachment) carry
  * them.
@@ -99,8 +103,8 @@ export class OpenDelegationCallEvidence extends Schema.Class<OpenDelegationCallE
  * `ToolCallSettled` or `ToolCallResolved`. S2 separates `openDelegationCalls` from it (plan
  * §4.1): a delegation's prepared-without-outcome state is provably replay-safe, so those calls
  * route through the Subagent recovery rows and never through `MarkUnknown` — the classifier
- * additionally applies the core-owned naming rule and the snapshot's reservation rows to any
- * delegation call an assembler left in `openToolCalls` (fail-closed). `joinedInputCovered`
+ * additionally applies the prepared record's execution kind and the snapshot's reservation rows
+ * to any delegation call an assembler left in `openToolCalls` (fail-closed). `joinedInputCovered`
  * implements the plan §2.5 prompt-coverage rule for the joined side: a joined input is covered
  * iff a later `ModelResponseRecorded` of the host Run exists after the `input:{sid}` record.
  * `hostSettlementOutcome` is the joined-side view of the host's canonical `SubmissionSettled`
@@ -117,7 +121,7 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
    * The committed canonical `SubmissionSettled` outcome (`settlement:{sid}`). Present exactly
    * when the canonical settlement record exists, so the flag and the outcome cannot diverge.
    */
-  recordedSettlementOutcome: Schema.optionalKey(SettlementOutcome),
+  recordedSettlement: Schema.optionalKey(RecordEnvelope),
   /** The deterministic canonical `AbortRequested` record (`abort:{sid}`) is committed. */
   abortRecorded: Schema.Boolean,
   /** Prepared ordinary Tool Calls without a canonical settled/resolved outcome (DUR-009). */
@@ -134,6 +138,18 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
   declaredPendingBatch: Schema.optionalKey(DeclaredPendingBatchEvidence),
   /** Canonically requested approvals without a canonical decision. */
   approvalsPending: Schema.Array(PendingApprovalEvidence),
+  /** Every canonical approval request for this Run, including calls since decided canonically. */
+  approvalRequests: Schema.Array(PendingApprovalEvidence).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
+  /** Exact canonical `SubagentStarted` Tool Call/child pairs for this Run. */
+  subagentStarts: Schema.Array(CanonicalSubagentStartedEvidence).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
+  /** Tool Calls closed by canonical `SubagentJoined` records for this Run. */
+  subagentJoinedToolCallIds: Schema.Array(ToolCallId).pipe(
+    Schema.withConstructorDefault(Effect.succeed([])),
+  ),
   /** Joined-side prompt coverage (plan §2.5); `true` whenever the Submission is not joined. */
   joinedInputCovered: Schema.Boolean,
   /** Joined-side view of the host's canonical settlement record, when it exists. */
@@ -197,6 +213,7 @@ export class FinalizeLedgerFromHistory extends Schema.TaggedClass<FinalizeLedger
   submissionId: SubmissionId,
   settlementId: SettlementId,
   outcome: SettlementOutcome,
+  record: RecordEnvelope,
 }) {}
 
 /** A durable abort intent exists, no terminal outcome is reserved, and no attached-child
@@ -330,17 +347,16 @@ export class EnsureWaitingForChild extends Schema.TaggedClass<EnsureWaitingForCh
 }) {}
 
 /** The parent is durably suspended `WaitingForChild` and at least one listed child is not yet
- * provably settled: the lane stays dormant and consumes no permit; the child's Settlement wakes
- * it durably (spec §12 step 10). An unresolved ordinary Tool inside a child keeps the parent
- * here honestly — the obligation stays visible and aged, nothing is fabricated (SUB-021). */
+ * provably settled: the lane stays dormant and consumes no permit; child settlement records
+ * operational coverage but only a canonical-evidence-authorized resume may wake it. An unresolved
+ * ordinary Tool inside a child keeps the parent here honestly (SUB-021). */
 export class AwaitChildSettlement extends Schema.TaggedClass<AwaitChildSettlement>(
   "@effect-agent/session/AwaitChildSettlement",
 )("AwaitChildSettlement", { submissionId: SubmissionId }) {}
 
-/** Every relevant child is provably settled but the parent has not joined (a dropped wake or a
- * crash between child finalization and `recordChildSettled`): replay the idempotent wake so a
- * claiming worker resumes the declared batch and joins each child's canonical Settlement — the
- * join itself needs the parent Binding and is deferred to that worker (spec §13). */
+/** Every relevant child is provably settled but the parent has not joined: replay the operational
+ * notifications, validate exact canonical starts, and request the idempotent exact-reason resume
+ * so a claiming worker joins each canonical Settlement (spec §13). */
 export class ResumeWaitingParent extends Schema.TaggedClass<ResumeWaitingParent>(
   "@effect-agent/session/ResumeWaitingParent",
 )("ResumeWaitingParent", {
@@ -408,6 +424,18 @@ export class NoAction extends Schema.TaggedClass<NoAction>("@effect-agent/sessio
   { submissionId: SubmissionId },
 ) {}
 
+/**
+ * The operational state says a lane is suspended but no matching suspension reason exists (or a
+ * reason exists on a non-suspended state). Recovery quarantines the obligation instead of
+ * guessing approval/child semantics and resuming work.
+ */
+export class QuarantineInvalidSuspension extends Schema.TaggedClass<QuarantineInvalidSuspension>(
+  "@effect-agent/session/QuarantineInvalidSuspension",
+)("QuarantineInvalidSuspension", {
+  submissionId: SubmissionId,
+  reason: Schema.String,
+}) {}
+
 /** The executable recovery decision table's output alphabet (plan §Recovery classifier). */
 export const RecoveryDecision = Schema.Union([
   CompleteMaterialization,
@@ -438,9 +466,54 @@ export const RecoveryDecision = Schema.Union([
   PropagateChildAbort,
   ReleaseOrphanChildReservation,
   AwaitParentEstablishment,
+  QuarantineInvalidSuspension,
   NoAction,
 ]);
 export type RecoveryDecision = typeof RecoveryDecision.Type;
+
+/**
+ * Validate a stored suspension reason exclusively against canonical Conversation evidence.
+ * Operational decision, attachment, and notification rows may establish coverage only after
+ * this provenance check succeeds; they can never make a fabricated reason resumable.
+ */
+export const canonicalSuspensionMismatch = (
+  reason: SuspensionReason,
+  evidence: RecoveryEvidence,
+): string | undefined => {
+  if (reason._tag === "ApprovalPending") {
+    const stored = reason.toolCallIds;
+    const canonicalRequests = new Set(
+      evidence.approvalRequests.map((request) => request.toolCallId),
+    );
+    const canonicallyPending = new Set(
+      evidence.approvalsPending.map((request) => request.toolCallId),
+    );
+    const storedSet = new Set(stored);
+    return storedSet.size === stored.length &&
+      stored.every((toolCallId) => canonicalRequests.has(toolCallId)) &&
+      [...canonicallyPending].every((toolCallId) => storedSet.has(toolCallId))
+      ? undefined
+      : "ApprovalPending suspension is not two-sided covered by canonical approval evidence";
+  }
+  const canonicalChildren = new Set(
+    evidence.subagentStarts.map((started) => `${started.toolCallId}:${started.childSubmissionId}`),
+  );
+  const joined = new Set(evidence.subagentJoinedToolCallIds);
+  const canonicallyUnjoined = new Set(
+    evidence.subagentStarts
+      .filter((started) => !joined.has(started.toolCallId))
+      .map((started) => `${started.toolCallId}:${started.childSubmissionId}`),
+  );
+  const suspendedChildren = reason.children.map(
+    (child) => `${child.toolCallId}:${child.childSubmissionId}`,
+  );
+  const suspendedSet = new Set(suspendedChildren);
+  return suspendedSet.size === suspendedChildren.length &&
+    suspendedChildren.every((identity) => canonicalChildren.has(identity)) &&
+    [...canonicallyUnjoined].every((identity) => suspendedSet.has(identity))
+    ? undefined
+    : "WaitingForChild suspension is not two-sided covered by canonical SubagentStarted evidence";
+};
 
 /**
  * The classifier's merged per-call view of one delegation Tool Call: canonical parent-log flags
@@ -466,8 +539,8 @@ const isTerminalAttachment = (attachment: ChildAttachmentSnapshot): boolean =>
 
 /**
  * Merge every durable delegation-detection source into per-call views (plan §4.1): the
- * separated `openDelegationCalls` evidence, the core-owned naming rule over any delegation call
- * an assembler left in `openToolCalls` (fail-closed), and the snapshot's reservation rows and
+ * separated `openDelegationCalls` evidence, the prepared execution kind over any delegation call
+ * an assembler left in `openToolCalls`, and the snapshot's reservation rows and
  * child attachments — a reservation row is durable proof of a delegation even without evidence.
  */
 const delegationViewsOf = (
@@ -506,7 +579,7 @@ const delegationViewsOf = (
   }
   const openByCallId = new Map(evidence.openToolCalls.map((call) => [call.toolCallId, call]));
   for (const [toolCallId, call] of openByCallId) {
-    if (views.has(toolCallId) || !isDelegationToolName(call.toolName)) continue;
+    if (views.has(toolCallId) || call.executionKind !== "delegation") continue;
     const view = ensure(toolCallId);
     view.turn = call.turn;
     view.open = true;
@@ -855,25 +928,39 @@ export const classifyRecovery = (
   if (state === "settled") {
     return NoAction.make({ submissionId });
   }
-  if (evidence.recordedSettlementOutcome !== undefined) {
+  const recordedSettlement = evidence.recordedSettlement;
+  if (recordedSettlement !== undefined && recordedSettlement.payload._tag === "SubmissionSettled") {
+    const recordedSettlementPayload = recordedSettlement.payload;
     return FinalizeLedgerFromHistory.make({
       submissionId,
-      settlementId: snapshot.reservation?.settlementId ?? submissionSettlementId(submissionId),
-      outcome: evidence.recordedSettlementOutcome,
+      settlementId: recordedSettlementPayload.settlementId,
+      outcome: recordedSettlementPayload.outcome,
+      record: recordedSettlement,
     });
   }
   if (snapshot.reservation !== undefined) {
-    if (snapshot.reservation.finalized) {
-      return FinalizeLedgerFromHistory.make({
-        submissionId,
-        settlementId: snapshot.reservation.settlementId,
-        outcome: snapshot.reservation.outcome,
-      });
-    }
     return AppendReservedSettlement.make({
       submissionId,
       settlementId: snapshot.reservation.settlementId,
       outcome: snapshot.reservation.outcome,
+    });
+  }
+  if (state === "suspended" && snapshot.suspension === undefined) {
+    return QuarantineInvalidSuspension.make({
+      submissionId,
+      reason: "Suspended ledger state has no suspension reason",
+    });
+  }
+  if (state === "suspended" && snapshot.suspension !== undefined) {
+    const mismatch = canonicalSuspensionMismatch(snapshot.suspension.reason, evidence);
+    if (mismatch !== undefined) {
+      return QuarantineInvalidSuspension.make({ submissionId, reason: mismatch });
+    }
+  }
+  if (state !== "suspended" && snapshot.suspension !== undefined) {
+    return QuarantineInvalidSuspension.make({
+      submissionId,
+      reason: `Ledger state ${state} carries a suspension reason`,
     });
   }
   if (state === "joining") {

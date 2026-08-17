@@ -12,6 +12,7 @@ import { DateTime, Schema } from "effect";
 import {
   AbortIntent,
   ApprovalDecisionIntent,
+  CanonicalSubagentStartedEvidence,
   CanonicalSequence,
   ChildAttachmentSnapshot,
   ChildBudgetReservationSnapshot,
@@ -261,8 +262,12 @@ const snapshot = (state: SubmissionState, overrides: SnapshotOverrides = {}): Re
     ...(overrides.parentLinkage === undefined ? {} : { parentLinkage: overrides.parentLinkage }),
   });
 
-const openCall = (toolCallId: ToolCallId, turn = 1, toolName = "book_flight") =>
-  OpenToolCallEvidence.make({ toolCallId, toolName, turn });
+const openCall = (
+  toolCallId: ToolCallId,
+  turn = 1,
+  toolName = "book_flight",
+  executionKind: "application" | "delegation" = "application",
+) => OpenToolCallEvidence.make({ toolCallId, toolName, turn, executionKind });
 
 const pendingApproval = (toolCallId: ToolCallId, turn = 1) =>
   PendingApprovalEvidence.make({ toolCallId, turn });
@@ -276,24 +281,42 @@ interface EvidenceOverrides {
   readonly openDelegationCalls?: ReadonlyArray<OpenDelegationCallEvidence>;
   readonly declaredPendingBatch?: DeclaredPendingBatchEvidence;
   readonly approvalsPending?: ReadonlyArray<PendingApprovalEvidence>;
+  readonly approvalRequests?: ReadonlyArray<PendingApprovalEvidence>;
+  readonly subagentStarts?: ReadonlyArray<CanonicalSubagentStartedEvidence>;
+  readonly subagentJoinedToolCallIds?: ReadonlyArray<ToolCallId>;
   readonly joinedInputCovered?: boolean;
   readonly hostSettlementOutcome?: SettlementOutcome;
   readonly subagentLineageRecorded?: boolean;
 }
 
-const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence =>
-  RecoveryEvidence.make({
+const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence => {
+  const openDelegationCalls = overrides.openDelegationCalls ?? [];
+  return RecoveryEvidence.make({
     conversationMaterialized: overrides.conversationMaterialized ?? true,
     inputRecorded: overrides.inputRecorded ?? false,
     abortRecorded: overrides.abortRecorded ?? false,
     openToolCalls: overrides.openToolCalls ?? [],
-    openDelegationCalls: overrides.openDelegationCalls ?? [],
+    openDelegationCalls,
     approvalsPending: overrides.approvalsPending ?? [],
+    approvalRequests: overrides.approvalRequests ?? overrides.approvalsPending ?? [],
+    subagentStarts:
+      overrides.subagentStarts ??
+      openDelegationCalls.flatMap((call) =>
+        call.started && call.childSubmissionId !== undefined
+          ? [
+              CanonicalSubagentStartedEvidence.make({
+                toolCallId: call.toolCallId,
+                childSubmissionId: call.childSubmissionId,
+              }),
+            ]
+          : [],
+      ),
+    subagentJoinedToolCallIds: overrides.subagentJoinedToolCallIds ?? [],
     joinedInputCovered: overrides.joinedInputCovered ?? true,
     subagentLineageRecorded: overrides.subagentLineageRecorded ?? false,
     ...(overrides.recordedSettlementOutcome === undefined
       ? {}
-      : { recordedSettlementOutcome: overrides.recordedSettlementOutcome }),
+      : { recordedSettlement: settlementRecord(overrides.recordedSettlementOutcome) }),
     ...(overrides.declaredPendingBatch === undefined
       ? {}
       : { declaredPendingBatch: overrides.declaredPendingBatch }),
@@ -301,6 +324,7 @@ const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence =>
       ? {}
       : { hostSettlementOutcome: overrides.hostSettlementOutcome }),
   });
+};
 
 /**
  * The executable crash-matrix decision table (plan §4.3, durability §15): one deterministic
@@ -396,12 +420,12 @@ describe("recovery classifier crash matrix", () => {
     }
   });
 
-  it("finalized reservation on a nonterminal row finalizes from history", () => {
+  it("a cached finalized marker without canonical evidence re-appends the exact reservation", () => {
     const decision = classifyRecovery(
       snapshot("terminalizing", { reservation: reservation("aborted", true) }),
       evidence({ inputRecorded: true }),
     );
-    expect(decision._tag).toBe("FinalizeLedgerFromHistory");
+    expect(decision._tag).toBe("AppendReservedSettlement");
   });
 
   it("abort of ready, inactive work settles aborted without an Attempt", () => {
@@ -570,6 +594,22 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
 });
 
 describe("recovery classifier P5 approval rows (plan §4.3)", () => {
+  it("quarantines suspended work without a matching suspension reason", () => {
+    const decision = classifyRecovery(
+      snapshot("suspended", { inputApplied: inputMarker }),
+      evidence({ inputRecorded: true }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSuspension");
+  });
+
+  it("quarantines a suspension reason attached to a non-suspended state", () => {
+    const decision = classifyRecovery(
+      snapshot("input-applied", { inputApplied: inputMarker, suspension }),
+      evidence({ inputRecorded: true }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSuspension");
+  });
+
   it("kill approval:after-request-append — request canonical, ledger not suspended, awaits the decision", () => {
     const decision = classifyRecovery(
       snapshot("running", { ownership, inputApplied: inputMarker }),
@@ -596,6 +636,52 @@ describe("recovery classifier P5 approval rows (plan §4.3)", () => {
       evidence({ inputRecorded: true, approvalsPending: [pendingApproval(CALL_ONE)] }),
     );
     expect(decision._tag).toBe("ResumeSuspended");
+  });
+
+  it("keeps a multi-approval suspension valid after only one operational decision", () => {
+    const requests = [pendingApproval(CALL_ONE), pendingApproval(CALL_TWO)];
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension: SuspensionSnapshot.make({
+          reason: ApprovalPendingSuspension.make({ toolCallIds: [CALL_ONE, CALL_TWO] }),
+          suspendedAt: CREATED_AT,
+        }),
+        approvalDecisions: [approvalDecision(CALL_ONE)],
+      }),
+      evidence({ inputRecorded: true, approvalsPending: requests, approvalRequests: requests }),
+    );
+    expect(decision._tag).toBe("AwaitApprovalDecision");
+  });
+
+  it("quarantines operational approval decisions without canonical request provenance", () => {
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension,
+        approvalDecisions: [approvalDecision(CALL_ONE)],
+      }),
+      evidence({ inputRecorded: true, approvalsPending: [], approvalRequests: [] }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSuspension");
+  });
+
+  it("accepts a later approval suspension cycle without requiring prior decided requests", () => {
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension: SuspensionSnapshot.make({
+          reason: ApprovalPendingSuspension.make({ toolCallIds: [CALL_TWO] }),
+          suspendedAt: CREATED_AT,
+        }),
+      }),
+      evidence({
+        inputRecorded: true,
+        approvalRequests: [pendingApproval(CALL_ONE, 1), pendingApproval(CALL_TWO, 2)],
+        approvalsPending: [pendingApproval(CALL_TWO, 2)],
+      }),
+    );
+    expect(decision._tag).toBe("AwaitApprovalDecision");
   });
 
   it("a decision recorded before suspension resumes the declared batch immediately", () => {
@@ -860,7 +946,72 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
         suspension: waitingSuspension([waitingChild(CALL_DELEGATE, CHILD_ONE)]),
         childAttachments: [childAttachment(CALL_DELEGATE, CHILD_ONE, "unknown")],
       }),
-      evidence({ inputRecorded: true }),
+      evidence({
+        inputRecorded: true,
+        subagentStarts: [
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+        ],
+      }),
+    );
+    expect(decision._tag).toBe("AwaitChildSettlement");
+  });
+
+  it("keeps the original multi-child reason valid after only one child joins", () => {
+    const reason = waitingSuspension([
+      waitingChild(CALL_DELEGATE, CHILD_ONE),
+      waitingChild(CALL_DELEGATE_TWO, CHILD_TWO),
+    ]);
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension: reason,
+        childAttachments: [
+          childAttachment(CALL_DELEGATE, CHILD_ONE, "settled", "completed"),
+          childAttachment(CALL_DELEGATE_TWO, CHILD_TWO, "running"),
+        ],
+      }),
+      evidence({
+        inputRecorded: true,
+        subagentStarts: [
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE_TWO,
+            childSubmissionId: CHILD_TWO,
+          }),
+        ],
+        subagentJoinedToolCallIds: [CALL_DELEGATE],
+      }),
+    );
+    expect(decision._tag).toBe("AwaitChildSettlement");
+  });
+
+  it("accepts a later child suspension cycle without requiring a previously joined child", () => {
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension: waitingSuspension([waitingChild(CALL_DELEGATE_TWO, CHILD_TWO)]),
+        childAttachments: [childAttachment(CALL_DELEGATE_TWO, CHILD_TWO, "running")],
+      }),
+      evidence({
+        inputRecorded: true,
+        subagentStarts: [
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE_TWO,
+            childSubmissionId: CHILD_TWO,
+          }),
+        ],
+        subagentJoinedToolCallIds: [CALL_DELEGATE],
+      }),
     );
     expect(decision._tag).toBe("AwaitChildSettlement");
   });
@@ -1054,15 +1205,26 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
     }
   });
 
-  it("a delegation call left in openToolCalls is detected by the core naming rule and never marks Unknown (fail-closed)", () => {
+  it("a delegation call left in openToolCalls is detected by its persisted execution kind and never marks Unknown", () => {
     const decision = classifyRecovery(
       snapshot("running", { ownership, inputApplied: inputMarker }),
       evidence({
         inputRecorded: true,
-        openToolCalls: [openCall(CALL_DELEGATE, 1, "delegate_destination_research")],
+        openToolCalls: [openCall(CALL_DELEGATE, 1, "delegate_destination_research", "delegation")],
       }),
     );
     expect(decision._tag).toBe("ResumePendingToolBatch");
+  });
+
+  it("an application Tool named delegate_* remains ordinary and becomes Unknown", () => {
+    const decision = classifyRecovery(
+      snapshot("running", { ownership, inputApplied: inputMarker }),
+      evidence({
+        inputRecorded: true,
+        openToolCalls: [openCall(CALL_DELEGATE, 1, "delegate_charge_card", "application")],
+      }),
+    );
+    expect(decision._tag).toBe("MarkUnknown");
   });
 
   it("a reservation row is durable delegation proof even for an unconventional Tool name", () => {
@@ -1090,7 +1252,19 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
           childAttachment(CALL_DELEGATE_TWO, CHILD_TWO, "settled", "failed"),
         ],
       }),
-      evidence({ inputRecorded: true }),
+      evidence({
+        inputRecorded: true,
+        subagentStarts: [
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE_TWO,
+            childSubmissionId: CHILD_TWO,
+          }),
+        ],
+      }),
     );
     expect(decision._tag).toBe("ResumeWaitingParent");
     if (decision._tag === "ResumeWaitingParent") {
@@ -1101,7 +1275,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
     }
   });
 
-  it("suspended WaitingForChild with an unproven child settlement stays awaiting (fail-closed)", () => {
+  it("quarantines WaitingForChild when the stored reason has no matching durable child evidence", () => {
     const decision = classifyRecovery(
       snapshot("suspended", {
         inputApplied: inputMarker,
@@ -1109,7 +1283,7 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
       }),
       evidence({ inputRecorded: true }),
     );
-    expect(decision._tag).toBe("AwaitChildSettlement");
+    expect(decision._tag).toBe("QuarantineInvalidSuspension");
   });
 
   it("suspended ApprovalPending keeps the P5 behavior byte-identical", () => {

@@ -4,6 +4,7 @@ import {
   AppendConflict,
   ApprovalPendingSuspension,
   AttachChildToReservationRequest,
+  CanonicalSettlementRepair,
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
@@ -28,6 +29,7 @@ import {
   MarkJoinedRequest,
   MarkReadyRequest,
   RecoverySnapshotRequest,
+  ResumeSuspensionRequest,
   RenewOwnershipRequest,
   SettlementConflict,
   SettlementFinalization,
@@ -330,7 +332,7 @@ describe("cross-DO port routing", () => {
         const live = yield* ledger.admit(
           yield* admission(targetConv, "wp2-abort-live", { role: "live" }),
         );
-        return { host, joined: queued, live };
+        return { host, joined: queued, live, reservation };
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
 
@@ -355,6 +357,16 @@ describe("cross-DO port routing", () => {
           expect(settledConflict.existingOutcome).toBe("completed");
           expect(settledConflict.submissionId).toBe(prepared.host.submissionId);
         }
+
+        const repaired = yield* ledger.repairSettlementFromCanonical(
+          CanonicalSettlementRepair.make({
+            submissionId: prepared.host.submissionId,
+            record: prepared.reservation.record,
+            recordDigest: prepared.reservation.recordDigest,
+          }),
+        );
+        expect(repaired.submissionId).toBe(prepared.host.submissionId);
+        expect(repaired.outcome).toBe("completed");
 
         // A joined Submission settles with its host: the redirect crosses Objects typed.
         const joinedRedirect = yield* ledger
@@ -407,7 +419,7 @@ describe("cross-DO port routing", () => {
     );
   });
 
-  it("wakes a waitingForChild parent across Objects through routed recordChildSettled", async () => {
+  it("resumes a waitingForChild parent across Objects only through routed canonical authority", async () => {
     const parentConv = "wp2-wake-parent";
     const childConv = "wp2-wake-child";
     const state = control();
@@ -437,6 +449,19 @@ describe("cross-DO port routing", () => {
       }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
     );
 
+    const waitingReason = WaitingForChildSuspension.make({
+      children: [
+        WaitingChild.make({
+          toolCallId: toolCall("wp2-call-1"),
+          childSubmissionId: children.settled.submissionId,
+        }),
+        WaitingChild.make({
+          toolCallId: toolCall("wp2-call-2"),
+          childSubmissionId: children.pending.submissionId,
+        }),
+      ],
+    });
+
     // The parent Object suspends its lane waiting on BOTH children (they live elsewhere, so
     // neither is locally provable and no marker exists yet).
     const parent = await withConversationStorage(parentConv, (storage) =>
@@ -449,18 +474,7 @@ describe("cross-DO port routing", () => {
           SuspendRequest.make({
             submissionId: lane.admitted.submissionId,
             ownershipToken: lane.claim.ownershipToken,
-            reason: WaitingForChildSuspension.make({
-              children: [
-                WaitingChild.make({
-                  toolCallId: toolCall("wp2-call-1"),
-                  childSubmissionId: children.settled.submissionId,
-                }),
-                WaitingChild.make({
-                  toolCallId: toolCall("wp2-call-2"),
-                  childSubmissionId: children.pending.submissionId,
-                }),
-              ],
-            }),
+            reason: waitingReason,
           }),
         );
         expect(outcome).toBe("suspended");
@@ -486,7 +500,7 @@ describe("cross-DO port routing", () => {
     );
     expect(state.calls).toBeGreaterThan(0);
 
-    // Settle the second child in its own Object, then notify again: woken, exactly once.
+    // Settle the second child in its own Object, then record full operational coverage.
     await withConversationStorage(childConv, (storage) =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
@@ -525,9 +539,25 @@ describe("cross-DO port routing", () => {
             childSubmissionId: children.pending.submissionId,
           }),
         );
-        expect(second).toBe("woken");
+        expect(second).toBe("still-waiting");
 
-        // At-least-once redelivery answers not-waiting idempotently after the wake.
+        const blocked = yield* ledger.lookup(
+          SubmissionLookupById.make({ submissionId: parent.submissionId }),
+        );
+        expect(Option.isSome(blocked)).toBe(true);
+        if (Option.isSome(blocked)) {
+          expect(blocked.value.state).toBe("suspended");
+        }
+
+        const resumed = yield* ledger.resumeSuspension(
+          ResumeSuspensionRequest.make({
+            submissionId: parent.submissionId,
+            expectedReason: waitingReason,
+          }),
+        );
+        expect(resumed).toBe("resumed");
+
+        // At-least-once redelivery answers not-waiting idempotently after explicit resume.
         const redelivered = yield* ledger.recordChildSettled(
           ChildSettledNotification.make({
             parentSubmissionId: parent.submissionId,
@@ -536,7 +566,7 @@ describe("cross-DO port routing", () => {
         );
         expect(redelivered).toBe("not-waiting");
 
-        // The routed lookup observes the woken parent lane in ITS Object.
+        // The routed lookup observes the resumed parent lane in ITS Object.
         const woken = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: parent.submissionId }),
         );

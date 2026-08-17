@@ -65,6 +65,23 @@ with a reason. Denial is typed and canonical when it affects accepted work.
 The engine rechecks authorization at action time. Authorization performed when
 instructions were first received is insufficient for a later tool call.
 
+Every protected durable-runtime call carries an explicit authenticated caller identity. A Receipt,
+`SubmissionId`, `ConversationId`, or other durable identifier is only a reference and never an
+authorization capability. Await, abort, observation, resolution, explanation, verification,
+retry, wake, and obligation scans consult a required host-supplied authorizer and fail with a typed
+denial. There is no ambient allow-default Layer; trusted local programs and tests must opt into the
+explicit service-possession substitute.
+
+Observation authorization is current, not a one-time subscription check. The runtime checks before
+opening a stream and before delivering each canonical record, so revocation affects a live stream;
+adapters that expose reconnects or pages must repeat the same check at every boundary.
+
+Durable child admission uses a separate narrow host port. It authorizes only the exact child
+establishment request—caller, parent/run/Tool Call, delegation, target and definition digests,
+child/input/grant identity, and budget reservation—and grants no later child action. Recovery
+reauthorizes immediately before replayed admission and again before materialization/readiness, so
+an earlier policy decision cannot be replayed after revocation.
+
 ## 4. Least authority
 
 An Agent Runtime is assembled with only the Layers required for that agent. Tools
@@ -305,6 +322,11 @@ Malformed provider or tool streams must not grow unbounded buffers.
   authority; host Tools are reachable only through the brokered, Schema-validated RPC surface.
 - **SEC-015**: Read-only SQL exposure is enforced by database authority and host-owned tenant
   scoping, never by source-text inspection.
+- **SEC-016**: Protected durable operations carry explicit caller identity; durable identifiers
+  confer no authority, and missing current-policy authorization fails closed with a typed denial.
+- **SEC-017**: Observation is reauthorized before subscription and each delivery boundary, and
+  durable child establishment is reauthorized under current policy before admission and before
+  materialization/readiness.
 - **OPS-001**: Accepted work settlement age is measurable and alertable.
 - **OPS-002**: Unknown outcomes produce an immediate operational signal.
 - **OPS-003**: Durable deployments have incident, backup, restore, and

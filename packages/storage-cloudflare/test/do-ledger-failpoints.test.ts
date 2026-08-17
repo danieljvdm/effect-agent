@@ -4,6 +4,7 @@ import {
   ApprovalPendingSuspension,
   AttachChildToReservationRequest,
   BeginChildBudgetReleaseRequest,
+  CanonicalSettlementRepair,
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
@@ -18,6 +19,7 @@ import {
   OwnershipLost,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
+  ResumeSuspensionRequest,
   RenewOwnershipRequest,
   ResolutionCompletedWithResult,
   ResolutionNeverHappened,
@@ -363,6 +365,36 @@ describe("DoSubmissionLedger failpoints", () => {
         const settlement = yield* finalizeOnce;
         expect(settlement.outcome).toBe("completed");
 
+        // repairSettlementFromCanonical: before → the exact settled row is unchanged; after →
+        // the atomic repair committed and the retry preserves the exact settlement timestamp.
+        const repairOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.repairSettlementFromCanonical(
+              CanonicalSettlementRepair.make({
+                submissionId: admitted.submissionId,
+                record: reservation.record,
+                recordDigest: reservation.recordDigest,
+              }),
+            );
+          }),
+        );
+        const initialFinalizedAt = (yield* reservationRows)[0]?.finalized_at;
+        yield* select("ledger:repair-settlement:before");
+        expectInjectedFailure(
+          yield* repairOnce.pipe(Effect.exit),
+          "ledger:repair-settlement:before",
+        );
+        expect((yield* reservationRows)[0]?.finalized_at).toBe(initialFinalizedAt);
+        yield* select("ledger:repair-settlement:after");
+        expectInjectedFailure(
+          yield* repairOnce.pipe(Effect.exit),
+          "ledger:repair-settlement:after",
+        );
+        yield* select(undefined);
+        const repaired = yield* repairOnce;
+        expect(repaired.settledAt).toEqual(settlement.settledAt);
+
         // requestAbort: before → no intent; after → intent durable, retry returns it unchanged.
         const abortLane = "conversation-failpoints-abort";
         yield* select(undefined);
@@ -650,6 +682,9 @@ describe("DoSubmissionLedger failpoints", () => {
         // suspend: before → ownership retained, no suspension; after → suspended durably
         // with the ownership period ended; the retry observes OwnershipLost exactly as a
         // recovering caller would.
+        const approvalSuspensionReason = ApprovalPendingSuspension.make({
+          toolCallIds: [toolCall("call-fp-b")],
+        });
         const suspendOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -657,7 +692,7 @@ describe("DoSubmissionLedger failpoints", () => {
               SuspendRequest.make({
                 submissionId: host.submissionId,
                 ownershipToken: hostClaim.ownershipToken,
-                reason: ApprovalPendingSuspension.make({ toolCallIds: [toolCall("call-fp-b")] }),
+                reason: approvalSuspensionReason,
               }),
             );
           }),
@@ -679,7 +714,7 @@ describe("DoSubmissionLedger failpoints", () => {
           expect(Cause.squash(retriedSuspend.cause)).toBeInstanceOf(OwnershipLost);
         }
 
-        // Wake the lane and reclaim it for the unknown-outcome failpoints.
+        // Recording full operational coverage never wakes without coordinator authority.
         yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -694,7 +729,35 @@ describe("DoSubmissionLedger failpoints", () => {
             );
           }),
         );
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("suspended");
+
+        // resumeSuspension: before → still suspended; after → exact canonical authority
+        // commits the wake atomically, and retry observes the already-resumed lane.
+        const resumeOnce = failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.resumeSuspension(
+              ResumeSuspensionRequest.make({
+                submissionId: host.submissionId,
+                expectedReason: approvalSuspensionReason,
+              }),
+            );
+          }),
+        );
+        yield* select("ledger:resume-suspension:before");
+        expectInjectedFailure(
+          yield* resumeOnce.pipe(Effect.exit),
+          "ledger:resume-suspension:before",
+        );
+        expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("suspended");
+        yield* select("ledger:resume-suspension:after");
+        expectInjectedFailure(
+          yield* resumeOnce.pipe(Effect.exit),
+          "ledger:resume-suspension:after",
+        );
         expect(markerFor(yield* submissionMarkers, host.submissionId)?.state).toBe("input-applied");
+        yield* select(undefined);
+        expect(yield* resumeOnce).toBe("not-suspended");
 
         // markUnknown: before → state unchanged; after → the unknown mark is durable; the
         // retry is an idempotent no-op.
@@ -968,10 +1031,18 @@ describe("DoSubmissionLedger failpoints", () => {
         const replayedRelease = yield* releaseOnce;
         expect(replayedRelease.status).toBe("released");
 
+        const waitingReason = WaitingForChildSuspension.make({
+          children: [
+            WaitingChild.make({
+              toolCallId: delegationCall,
+              childSubmissionId: child.submissionId,
+            }),
+          ],
+        });
+
         // recordChildSettled: before → the parent stays suspended AND no notification marker
-        // exists; after → the wake transition and the durable cross-store marker are one
-        // atomic durable step even though the caller never saw it; the retry answers
-        // not-waiting.
+        // exists; after → the durable cross-store coverage marker exists, but notification
+        // delivery alone never wakes the parent.
         yield* failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -979,14 +1050,7 @@ describe("DoSubmissionLedger failpoints", () => {
               SuspendRequest.make({
                 submissionId: parent.submissionId,
                 ownershipToken: parentClaim.ownershipToken,
-                reason: WaitingForChildSuspension.make({
-                  children: [
-                    WaitingChild.make({
-                      toolCallId: delegationCall,
-                      childSubmissionId: child.submissionId,
-                    }),
-                  ],
-                }),
+                reason: waitingReason,
               }),
             );
             expect(suspended).toBe("suspended");
@@ -1028,9 +1092,9 @@ describe("DoSubmissionLedger failpoints", () => {
         expect(yield* settlementMarkers).toEqual([]);
         yield* select("ledger:child-settled:after");
         expectInjectedFailure(yield* notifyOnce.pipe(Effect.exit), "ledger:child-settled:after");
-        const wokenMarkers = yield* parentMarkers(parent.submissionId);
-        expect(wokenMarkers[0]?.state).toBe("input-applied");
-        expect(wokenMarkers[0]?.suspended_reason_json).toBeNull();
+        const coveredMarkers = yield* parentMarkers(parent.submissionId);
+        expect(coveredMarkers[0]?.state).toBe("suspended");
+        expect(coveredMarkers[0]?.suspended_reason_json).not.toBeNull();
         const recordedMarkers = yield* settlementMarkers;
         expect(recordedMarkers).toHaveLength(1);
         expect(recordedMarkers[0]?.parent_submission_id).toBe(parent.submissionId);
@@ -1038,7 +1102,23 @@ describe("DoSubmissionLedger failpoints", () => {
         expect(recordedMarkers[0]?.child_outcome).toBe("completed");
         yield* select(undefined);
         const replayedNotification = yield* notifyOnce;
-        expect(replayedNotification).toBe("not-waiting");
+        expect(replayedNotification).toBe("still-waiting");
+
+        const resumed = yield* failingLedger(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return yield* ledger.resumeSuspension(
+              ResumeSuspensionRequest.make({
+                submissionId: parent.submissionId,
+                expectedReason: waitingReason,
+              }),
+            );
+          }),
+        );
+        expect(resumed).toBe("resumed");
+        const resumedMarkers = yield* parentMarkers(parent.submissionId);
+        expect(resumedMarkers[0]?.state).toBe("input-applied");
+        expect(resumedMarkers[0]?.suspended_reason_json).toBeNull();
       }),
     ));
 });

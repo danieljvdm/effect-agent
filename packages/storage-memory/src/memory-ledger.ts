@@ -25,6 +25,7 @@ import {
   ChildBudgetReservationSnapshot,
   ChildReservationConflict,
   ChildSettledNotification,
+  CanonicalSettlementRepair,
   Claim,
   ClaimJoiningRequest,
   ClaimRequest,
@@ -48,6 +49,7 @@ import {
   QueueSequence,
   RecoverySnapshot,
   RecoverySnapshotRequest,
+  ResumeSuspensionRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
@@ -70,6 +72,7 @@ import {
   UnknownResolutionCommand,
   UnknownResolutionConflict,
   UnknownResolutionIntent,
+  validateCanonicalSettlementRepair,
   type ChildReservationId,
   type ChildReservationStatus,
   type ChildSettledOutcome,
@@ -84,9 +87,22 @@ import {
   type SettlementOutcome,
   type SubmissionState,
   type SuspensionOutcome,
+  type SuspensionResumeOutcome,
   type SuspensionReason,
 } from "@effect-agent/session";
-import { Clock, DateTime, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
+import {
+  Clock,
+  Crypto,
+  DateTime,
+  Duration,
+  Effect,
+  Equal,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  Stream,
+} from "effect";
 
 const MAX_SUBMISSIONS = 65_536;
 
@@ -373,11 +389,13 @@ const findHead = (
  * - `resolveAdmission` derives its answer from the single strongly consistent store, so it
  *   never answers `Indeterminate` on its own; the test-only `resolveAdmissionFault` option
  *   injects the `Indeterminate` classification so SUB-031 callers can be conformance-tested.
- * - `recordChildSettled` and `suspend(WaitingForChild)` observe child settlement directly from
- *   the child rows (single-store latitude); no separate notification marker is stored.
+ * - `recordChildSettled` records/validates operational child evidence without waking. Both it
+ *   and `suspend(WaitingForChild)` observe settlement directly from child rows (single-store
+ *   latitude); `resumeSuspension` is the sole post-suspend wake authority.
  */
 const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
   Effect.gen(function* () {
+    const crypto = yield* Crypto.Crypto;
     const state = yield* Ref.make<LedgerState>({
       submissions: new Map(),
       admissionIndex: new Map(),
@@ -386,6 +404,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       mintCounter: 0,
     });
     const leaseMillis = Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION);
+    const validateCanonicalRepair = (request: CanonicalSettlementRepair, receiptId: ReceiptId) =>
+      validateCanonicalSettlementRepair(request, receiptId).pipe(
+        Effect.provideService(Crypto.Crypto, crypto),
+      );
 
     const capabilities = Effect.succeed(LedgerCapabilities.make({ durability: "non-durable" }));
 
@@ -771,6 +793,31 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
     )((unvalidated) =>
       Effect.gen(function* () {
         const request = yield* validate(SettlementReservation, "reserveSettlement", unvalidated);
+        const before = yield* Ref.get(state);
+        const beforeStored = before.submissions.get(request.submissionId);
+        if (beforeStored === undefined) {
+          return yield* ledgerError(
+            "reserveSettlement",
+            `Unknown Submission ${request.submissionId}`,
+          );
+        }
+        const canonical = yield* validateCanonicalRepair(
+          CanonicalSettlementRepair.make({
+            submissionId: request.submissionId,
+            record: request.record,
+            recordDigest: request.recordDigest,
+          }),
+          beforeStored.row.receiptId,
+        );
+        if (
+          canonical.settlementId !== request.settlementId ||
+          canonical.outcome !== request.outcome
+        ) {
+          return yield* ledgerError(
+            "reserveSettlement",
+            "Settlement reservation fields disagree with the exact canonical record",
+          );
+        }
         const decision = yield* Ref.modify(
           state,
           (
@@ -814,7 +861,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               if (
                 existing.settlementId !== request.settlementId ||
                 existing.outcome !== request.outcome ||
-                existing.recordDigest !== request.recordDigest
+                existing.recordDigest !== request.recordDigest ||
+                !Equal.equals(existing.record, canonical.record)
               ) {
                 return [
                   failure(
@@ -841,10 +889,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               ];
             }
             const reservation: StoredReservation = {
-              settlementId: request.settlementId,
-              outcome: request.outcome,
-              record: request.record,
-              recordDigest: request.recordDigest,
+              settlementId: canonical.settlementId,
+              outcome: canonical.outcome,
+              record: canonical.record,
+              recordDigest: canonical.recordDigest,
               finalizedAtMillis: undefined,
             };
             const row: SubmissionRow =
@@ -870,6 +918,87 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         return decision.value;
       }),
     );
+
+    const repairSettlementFromCanonical: SubmissionLedger["Service"]["repairSettlementFromCanonical"] =
+      Effect.fn("MemorySubmissionLedger.repairSettlementFromCanonical")((unvalidated) =>
+        Effect.gen(function* () {
+          const request = yield* validate(
+            CanonicalSettlementRepair,
+            "repairSettlementFromCanonical",
+            unvalidated,
+          );
+          const before = yield* Ref.get(state);
+          const beforeStored = before.submissions.get(request.submissionId);
+          if (beforeStored === undefined) {
+            return yield* ledgerError(
+              "repairSettlementFromCanonical",
+              `Unknown Submission ${request.submissionId}`,
+            );
+          }
+          const canonical = yield* validateCanonicalRepair(request, beforeStored.row.receiptId);
+          const nowMillis = yield* Clock.currentTimeMillis;
+          const decision = yield* Ref.modify(
+            state,
+            (current): readonly [Decision<Settlement, LedgerError>, LedgerState] => {
+              const stored = current.submissions.get(canonical.submissionId);
+              if (stored === undefined) {
+                return [
+                  failure(
+                    ledgerError(
+                      "repairSettlementFromCanonical",
+                      `Unknown Submission ${canonical.submissionId}`,
+                    ),
+                  ),
+                  current,
+                ];
+              }
+              const existing = stored.reservation;
+              const exactReplay =
+                existing !== undefined &&
+                existing.settlementId === canonical.settlementId &&
+                existing.outcome === canonical.outcome &&
+                existing.recordDigest === canonical.recordDigest &&
+                Equal.equals(existing.record, canonical.record) &&
+                existing.finalizedAtMillis !== undefined &&
+                stored.row.state === "settled" &&
+                stored.row.settledOutcome === canonical.outcome;
+              const settledAtMillis = exactReplay ? existing.finalizedAtMillis : nowMillis;
+              const reservation: StoredReservation = {
+                settlementId: canonical.settlementId,
+                outcome: canonical.outcome,
+                record: canonical.record,
+                recordDigest: canonical.recordDigest,
+                finalizedAtMillis: settledAtMillis,
+              };
+              const row: SubmissionRow = {
+                ...stored.row,
+                state: "settled",
+                settledOutcome: canonical.outcome,
+              };
+              const next = withSubmission(current, {
+                ...stored,
+                row,
+                reservation,
+                ownership: undefined,
+              });
+              return [
+                success(
+                  Settlement.make({
+                    submissionId: canonical.submissionId,
+                    settlementId: canonical.settlementId,
+                    receiptId: canonical.receiptId,
+                    outcome: canonical.outcome,
+                    settledAt: utc(settledAtMillis),
+                  }),
+                ),
+                next,
+              ];
+            },
+          );
+          if (decision._tag === "failure") return yield* decision.error;
+          return decision.value;
+        }),
+      );
 
     const finalizeSettlement: SubmissionLedger["Service"]["finalizeSettlement"] = Effect.fn(
       "MemorySubmissionLedger.finalizeSettlement",
@@ -1332,6 +1461,73 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       }),
     );
 
+    const resumeSuspension: SubmissionLedger["Service"]["resumeSuspension"] = Effect.fn(
+      "MemorySubmissionLedger.resumeSuspension",
+    )((unvalidated) =>
+      Effect.gen(function* () {
+        const request = yield* validate(ResumeSuspensionRequest, "resumeSuspension", unvalidated);
+        const decision = yield* Ref.modify(
+          state,
+          (current): readonly [Decision<SuspensionResumeOutcome, LedgerError>, LedgerState] => {
+            const stored = current.submissions.get(request.submissionId);
+            if (stored === undefined) {
+              return [
+                failure(
+                  ledgerError("resumeSuspension", `Unknown Submission ${request.submissionId}`),
+                ),
+                current,
+              ];
+            }
+            if (stored.row.state !== "suspended") {
+              return [success("not-suspended" as const), current];
+            }
+            if (stored.suspension === undefined) {
+              return [
+                failure(
+                  ledgerError(
+                    "resumeSuspension",
+                    `Suspended Submission ${request.submissionId} is missing its reason`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            if (!Equal.equals(stored.suspension.reason, request.expectedReason)) {
+              return [
+                failure(
+                  ledgerError(
+                    "resumeSuspension",
+                    `Stored suspension reason for Submission ${request.submissionId} does not match canonical evidence`,
+                  ),
+                ),
+                current,
+              ];
+            }
+            const covered =
+              request.expectedReason._tag === "ApprovalPending"
+                ? request.expectedReason.toolCallIds.every((toolCallId) =>
+                    stored.approvalDecisions.has(toolCallId),
+                  )
+                : request.expectedReason.children.every(
+                    (child) =>
+                      current.submissions.get(child.childSubmissionId)?.row.state === "settled",
+                  );
+            if (!covered) return [success("not-covered" as const), current];
+            return [
+              success("resumed" as const),
+              withSubmission(current, {
+                ...stored,
+                row: { ...stored.row, state: "input-applied" },
+                suspension: undefined,
+              }),
+            ];
+          },
+        );
+        if (decision._tag === "failure") return yield* decision.error;
+        return decision.value;
+      }),
+    );
+
     const recordApprovalDecision: SubmissionLedger["Service"]["recordApprovalDecision"] = Effect.fn(
       "MemorySubmissionLedger.recordApprovalDecision",
     )((unvalidated) =>
@@ -1412,22 +1608,10 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
               command.toolCallId,
               intent,
             );
-            // Once every pending call of an ApprovalPending suspension is decided, the lane
-            // wakes: suspended → input-applied (plan §2.6). A WaitingForChild suspension wakes
-            // only through recordChildSettled.
-            const wakes =
-              stored.row.state === "suspended" &&
-              stored.suspension !== undefined &&
-              stored.suspension.reason._tag === "ApprovalPending" &&
-              stored.suspension.reason.toolCallIds.every((toolCallId) =>
-                approvalDecisions.has(toolCallId),
-              );
             return [
               success(intent),
               withSubmission(current, {
                 ...stored,
-                row: wakes ? { ...stored.row, state: "input-applied" } : stored.row,
-                suspension: wakes ? undefined : stored.suspension,
                 approvalDecisions,
               }),
             ];
@@ -1676,21 +1860,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!children.some((entry) => entry.childSubmissionId === request.childSubmissionId)) {
               return [success("not-waiting" as const), current];
             }
-            // The parent wakes exactly when EVERY listed child is settled (spec §12 step 10);
-            // replays re-run the coverage check so a recovering caller wakes the lane
-            // idempotently.
-            const allSettled = children.every(
-              (entry) => current.submissions.get(entry.childSubmissionId)?.row.state === "settled",
-            );
-            if (!allSettled) return [success("still-waiting" as const), current];
-            return [
-              success("woken" as const),
-              withSubmission(current, {
-                ...parent,
-                row: { ...parent.row, state: "input-applied" },
-                suspension: undefined,
-              }),
-            ];
+            return [success("still-waiting" as const), current];
           },
         );
         if (decision._tag === "failure") return yield* decision.error;
@@ -2186,11 +2356,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       markInputApplied,
       reserveSettlement,
       finalizeSettlement,
+      repairSettlementFromCanonical,
       requestAbort,
       claimJoining,
       markJoined,
       revertJoining,
       suspend,
+      resumeSuspension,
       recordApprovalDecision,
       markUnknown,
       recordUnknownResolution,
@@ -2221,7 +2393,8 @@ export interface MemorySubmissionLedgerOptions {
  */
 export const memorySubmissionLedgerLayer = (
   options: MemorySubmissionLedgerOptions = {},
-): Layer.Layer<SubmissionLedger> => Layer.effect(SubmissionLedger, makeSubmissionLedger(options));
+): Layer.Layer<SubmissionLedger, never, Crypto.Crypto> =>
+  Layer.effect(SubmissionLedger, makeSubmissionLedger(options));
 
-export const MemorySubmissionLedgerLive: Layer.Layer<SubmissionLedger> =
+export const MemorySubmissionLedgerLive: Layer.Layer<SubmissionLedger, never, Crypto.Crypto> =
   memorySubmissionLedgerLayer();

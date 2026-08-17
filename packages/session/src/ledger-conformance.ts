@@ -13,6 +13,7 @@ import {
   ApprovalPendingSuspension,
   AttachChildToReservationRequest,
   BeginChildBudgetReleaseRequest,
+  CanonicalSettlementRepair,
   ChildBudgetReservationRequest,
   ChildReservationConflict,
   ChildReservationId,
@@ -31,6 +32,7 @@ import {
   ParentLinkage,
   Principal,
   RecoverySnapshotRequest,
+  ResumeSuspensionRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
@@ -974,6 +976,84 @@ const settlementConflicts = conformanceCase(
     }),
 );
 
+const canonicalSettlementRepair = conformanceCase(
+  "repairs missing ledger settlement state from the exact canonical record",
+  ({ ensure, expectFailure, expectSome }) =>
+    Effect.gen(function* () {
+      const conversationId = decodeConversationId("ledger-conformance-canonical-repair");
+      const ledger = yield* SubmissionLedger;
+      const admitted = yield* admitReady(conversationId, "canonical-repair-key", {
+        work: "canonical-repair",
+      });
+      const canonical = yield* settlementReservation({
+        submissionId: admitted.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: admitted.receiptId,
+        outcome: "failed",
+        result: { errorTag: "RecoveredCanonicalFailure" },
+      });
+      const request = CanonicalSettlementRepair.make({
+        submissionId: admitted.submissionId,
+        record: canonical.record,
+        recordDigest: canonical.recordDigest,
+      });
+      const repaired = yield* ledger.repairSettlementFromCanonical(request);
+      yield* ensure(
+        repaired.submissionId === admitted.submissionId &&
+          repaired.settlementId === canonical.settlementId &&
+          repaired.receiptId === admitted.receiptId &&
+          repaired.outcome === "failed",
+        "Canonical repair must reconstruct the exact Settlement without a prior reservation",
+      );
+      const repairedSnapshot = yield* recoverySnapshot(admitted.submissionId);
+      yield* ensure(
+        repairedSnapshot.submission.state === "settled" &&
+          repairedSnapshot.submission.settledOutcome === "failed" &&
+          repairedSnapshot.reservation?.recordDigest === canonical.recordDigest,
+        "Canonical repair must atomically reconstruct reservation columns and settle the row",
+      );
+      yield* TestClock.adjust("1 second");
+      const replayed = yield* ledger.repairSettlementFromCanonical(request);
+      yield* ensure(
+        sameInstant(replayed.settledAt, repaired.settledAt),
+        "Replaying the same canonical repair must preserve the original Settlement timestamp",
+      );
+
+      const tamperConversation = decodeConversationId("ledger-conformance-canonical-repair-tamper");
+      const tamper = yield* admitReady(tamperConversation, "canonical-repair-tamper-key", {
+        work: "canonical-repair-tamper",
+      });
+      const tamperCanonical = yield* settlementReservation({
+        submissionId: tamper.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: tamper.receiptId,
+        outcome: "completed",
+      });
+      const invalid = yield* expectFailure(
+        "repairing from a record whose supplied digest is not canonical",
+        ledger.repairSettlementFromCanonical(
+          CanonicalSettlementRepair.make({
+            submissionId: tamper.submissionId,
+            record: tamperCanonical.record,
+            recordDigest: CONFORMANCE_DEFINITION_DIGEST,
+          }),
+        ),
+      );
+      yield* ensure(
+        invalid instanceof LedgerError,
+        "A tampered canonical repair must fail as a typed LedgerError",
+      );
+      const untouched = yield* expectSome(
+        "the tampered repair target remains admitted",
+        yield* lookupById(tamper.submissionId),
+      );
+      yield* ensure(
+        untouched.state === "ready" && untouched.settledOutcome === undefined,
+        "Canonical validation must fail before any ledger mutation",
+      );
+    }),
+);
+
 const abortIdempotency = conformanceCase(
   "records abort intent idempotently and refuses to abort settled work",
   ({ ensure, expectFailure, expectSome }) =>
@@ -1746,6 +1826,17 @@ const claimNeverGrantsBlockedHead = conformanceCase(
           reason: "unblock the suspended head",
         }),
       );
+      yield* ensure(
+        Option.isNone(yield* claimLane(suspendedLane, PRODUCER_B)),
+        "An operational approval decision alone must not wake a suspended lane",
+      );
+      const resumed = yield* ledger.resumeSuspension(
+        ResumeSuspensionRequest.make({
+          submissionId: suspendedHost.submissionId,
+          expectedReason: ApprovalPendingSuspension.make({ toolCallIds: [gatedCall] }),
+        }),
+      );
+      yield* ensure(resumed === "resumed", "Exact covered approval evidence must resume the lane");
       const wokenClaim = yield* expectSome(
         "the claim after the covering decision",
         yield* claimLane(suspendedLane, PRODUCER_B),
@@ -2180,6 +2271,21 @@ const suspendResumesImmediatelyWhenDecided = conformanceCase(
           reason: "the covering decision",
         }),
       );
+      const inert = yield* expectSome(
+        "lookup after the operational covering decision",
+        yield* lookupById(admitted.submissionId),
+      );
+      yield* ensure(
+        inert.state === "suspended",
+        "A covering decision intent alone must not clear suspension",
+      );
+      const resumed = yield* ledger.resumeSuspension(
+        ResumeSuspensionRequest.make({
+          submissionId: admitted.submissionId,
+          expectedReason: ApprovalPendingSuspension.make({ toolCallIds: [callA, callB] }),
+        }),
+      );
+      yield* ensure(resumed === "resumed", "The exact covered reason must resume the lane");
       const woken = yield* expectSome(
         "lookup after the covering decision",
         yield* lookupById(admitted.submissionId),
@@ -2754,7 +2860,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
 );
 
 const recordChildSettledWake = conformanceCase(
-  "recordChildSettled wakes only when every listed child settled",
+  "child notifications stay inert until exact suspension resume",
   ({ ensure, expectFailure, expectSome }) =>
     Effect.gen(function* () {
       const parentLane = decodeConversationId("ledger-conformance-child-wake");
@@ -2770,22 +2876,23 @@ const recordChildSettledWake = conformanceCase(
         yield* claimLane(parentLane, PRODUCER_A),
       );
 
+      const waitingReason = WaitingForChildSuspension.make({
+        children: [
+          WaitingChild.make({
+            toolCallId: decodeToolCallId("call-wake-a"),
+            childSubmissionId: childA.submissionId,
+          }),
+          WaitingChild.make({
+            toolCallId: decodeToolCallId("call-wake-b"),
+            childSubmissionId: childB.submissionId,
+          }),
+        ],
+      });
       const suspended = yield* ledger.suspend(
         SuspendRequest.make({
           submissionId: parent.submissionId,
           ownershipToken: parentClaim.ownershipToken,
-          reason: WaitingForChildSuspension.make({
-            children: [
-              WaitingChild.make({
-                toolCallId: decodeToolCallId("call-wake-a"),
-                childSubmissionId: childA.submissionId,
-              }),
-              WaitingChild.make({
-                toolCallId: decodeToolCallId("call-wake-b"),
-                childSubmissionId: childB.submissionId,
-              }),
-            ],
-          }),
+          reason: waitingReason,
         }),
       );
       yield* ensure(
@@ -2808,6 +2915,22 @@ const recordChildSettledWake = conformanceCase(
       yield* ensure(
         Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
         "A waitingForChild head must produce no claim and consume no worker permit",
+      );
+      const mismatchedResume = yield* expectFailure(
+        "resuming with a reason that omits a waiting child",
+        ledger.resumeSuspension(
+          ResumeSuspensionRequest.make({
+            submissionId: parent.submissionId,
+            expectedReason: WaitingForChildSuspension.make({
+              children: [waitingReason.children[0]],
+            }),
+          }),
+        ),
+      );
+      yield* ensure(
+        mismatchedResume instanceof LedgerError &&
+          Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
+        "A divergent expected reason must fail without making the lane runnable",
       );
 
       const childClaimA = yield* expectSome(
@@ -2840,15 +2963,29 @@ const recordChildSettledWake = conformanceCase(
         yield* claimLane(childLaneB, PRODUCER_A),
       );
       yield* settleClaimed(childB, childClaimB.ownershipToken);
-      const woken = yield* ledger.recordChildSettled(
+      const covered = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
           childSubmissionId: childB.submissionId,
         }),
       );
       yield* ensure(
-        woken === "woken",
-        "The covering child settlement must wake the parent exactly once",
+        covered === "still-waiting",
+        "Operational child coverage alone must not wake the parent",
+      );
+      yield* ensure(
+        Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
+        "A fully covered lane stays suspended until canonical evidence authorizes resume",
+      );
+      const resumed = yield* ledger.resumeSuspension(
+        ResumeSuspensionRequest.make({
+          submissionId: parent.submissionId,
+          expectedReason: waitingReason,
+        }),
+      );
+      yield* ensure(
+        resumed === "resumed",
+        "The exact canonical-evidence-authorized child reason must resume once covered",
       );
       const awake = yield* expectSome(
         "lookup after the covering settlement",
@@ -3316,6 +3453,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   inputAppliedIdempotency,
   settlementLifecycle,
   settlementConflicts,
+  canonicalSettlementRepair,
   abortIdempotency,
   scanNonterminalWorklist,
   lookupByIdAndKey,

@@ -1,16 +1,31 @@
-import { ConversationId, SubmissionId } from "@effect-agent/core";
+import {
+  AgentId,
+  ConversationId,
+  DelegationId,
+  RunId,
+  SubmissionId,
+  ToolCallId,
+} from "@effect-agent/core";
 import { Context, Effect, Layer, Schema } from "effect";
 
-import { Principal } from "./ledger.ts";
+import { ChildReservationId, Principal } from "./ledger.ts";
+import { DefinitionDigests, Digest } from "./records.ts";
+
+/** Authenticated identity supplied explicitly at every protected durable-runtime boundary. */
+export class OperationCaller extends Schema.Class<OperationCaller>(
+  "@effect-agent/session/OperationCaller",
+)({
+  principal: Principal,
+}) {}
 
 /**
- * Administrative/observation operations submitted to authorization (P7 WP1; SEC-003/SEC-011,
- * DUR-017 "authenticated per-read authorization"). The union covers every operation the durable
- * runtime consults the authorizer for: canonical observation, the administrative surface, and
- * the two durable resolution paths.
+ * Administrative, observation, and lifecycle operations submitted to current-policy
+ * authorization (SEC-003/SEC-011). A Receipt or durable identifier is never authority.
  */
 export const AuthorizedOperation = Schema.Literals([
+  "awaitSettlement",
   "observe",
+  "abort",
   "explain",
   "verify",
   "retry",
@@ -21,62 +36,105 @@ export const AuthorizedOperation = Schema.Literals([
 ]);
 export type AuthorizedOperation = typeof AuthorizedOperation.Type;
 
-/**
- * One authorization question. `principal` is present only when the host authenticated a caller
- * identity and threaded it through — the framework never parses bearer tokens (SEC-001); absent
- * identity under the default authorizer keeps the pre-P7 service-possession behavior.
- */
+/** One explicit caller-bearing authorization question. */
 export class OperationAuthorizationRequest extends Schema.Class<OperationAuthorizationRequest>(
   "@effect-agent/session/OperationAuthorizationRequest",
 )({
   operation: AuthorizedOperation,
+  principal: Principal,
   conversationId: Schema.optionalKey(ConversationId),
   submissionId: Schema.optionalKey(SubmissionId),
-  principal: Schema.optionalKey(Principal),
 }) {}
 
 /** A typed, fail-closed authorization denial (never a defect, never silent). */
 export class OperationDenied extends Schema.TaggedError<OperationDenied>()("OperationDenied", {
   operation: AuthorizedOperation,
+  principal: Principal,
   reason: Schema.String.check(Schema.isMaxLength(4_096)),
   conversationId: Schema.optionalKey(ConversationId),
   submissionId: Schema.optionalKey(SubmissionId),
 }) {}
 
-/**
- * The minimal authorization port consulted by `observe`, the administrative operations, and the
- * `resolveUnknown`/`resolveApproval` resolution paths. `authorize` either succeeds (allow) or
- * fails with the typed `OperationDenied` (deny) — the runtime propagates the denial fail-closed
- * and performs no reads or writes for the denied operation.
- */
 export interface OperationAuthorizerService {
   readonly authorize: (
     request: OperationAuthorizationRequest,
   ) => Effect.Effect<void, OperationDenied>;
 }
 
-/**
- * The default possession-behavior authorizer: possession of the `DurableAgentRuntime` service
- * (plus each mutating command's mandatory author/reason audit fields) IS the authorization —
- * exactly the pre-P7 boundary, unchanged. Hosts that authenticate callers substitute a real
- * decision procedure through `operationAuthorizerLayer`; the framework enforces the decision
- * fail-closed without inventing an identity system (D10/DUR-017 stance, plan §3).
- */
+/** Required host authorization port. There is deliberately no ambient allow default. */
+export class OperationAuthorizer extends Context.Service<
+  OperationAuthorizer,
+  OperationAuthorizerService
+>()("@effect-agent/session/OperationAuthorizer") {}
+
+/** Explicit service-possession policy for trusted local programs and deterministic tests. */
 export const possessionOperationAuthorizer: OperationAuthorizerService = {
   authorize: () => Effect.void,
 };
 
-/**
- * Context reference with the possession default, mirroring `DurableApprovalResolver`: the
- * coordinator consults it unconditionally, and only a host-supplied non-default Layer changes
- * the answer. References resolve at Layer construction, so provide the override when building
- * `DurableAgentRuntime.layer` (e.g. `Layer.provide(operationAuthorizerLayer(...))`).
- */
-export const OperationAuthorizer: Context.Reference<OperationAuthorizerService> =
-  Context.Reference<OperationAuthorizerService>("@effect-agent/session/OperationAuthorizer", {
-    defaultValue: () => possessionOperationAuthorizer,
-  });
+export const operationAuthorizerLayer = (
+  service: OperationAuthorizerService,
+): Layer.Layer<OperationAuthorizer> => Layer.succeed(OperationAuthorizer)(service);
 
-/** Layer carrying a host-supplied authorization decision procedure. */
-export const operationAuthorizerLayer = (service: OperationAuthorizerService): Layer.Layer<never> =>
-  Layer.succeedContext(Context.make(OperationAuthorizer, service));
+export const possessionOperationAuthorizerLayer: Layer.Layer<OperationAuthorizer> =
+  operationAuthorizerLayer(possessionOperationAuthorizer);
+
+/**
+ * Current-policy question asked immediately before each durable child establishment attempt. The
+ * opaque grant digest remains capabilities-owned; session binds it without interpreting it.
+ */
+export class ChildAdmissionAuthorizationRequest extends Schema.Class<ChildAdmissionAuthorizationRequest>(
+  "@effect-agent/session/ChildAdmissionAuthorizationRequest",
+)({
+  principal: Principal,
+  parentSubmissionId: SubmissionId,
+  parentConversationId: ConversationId,
+  parentRunId: RunId,
+  parentToolCallId: ToolCallId,
+  delegationId: DelegationId,
+  childConversationId: ConversationId,
+  childPrincipal: Principal,
+  targetAgentId: AgentId,
+  targetDigests: DefinitionDigests,
+  childInputDigest: Digest,
+  grantDigest: Digest,
+  reservationId: ChildReservationId,
+  reservationDigest: Digest,
+}) {}
+
+/** Current policy denied this exact child admission/establishment attempt. */
+export class ChildAdmissionDenied extends Schema.TaggedError<ChildAdmissionDenied>()(
+  "ChildAdmissionDenied",
+  {
+    principal: Principal,
+    parentSubmissionId: SubmissionId,
+    parentToolCallId: ToolCallId,
+    childConversationId: ConversationId,
+    targetAgentId: AgentId,
+    reason: Schema.String.check(Schema.isMaxLength(4_096)),
+  },
+) {}
+
+export interface ChildAdmissionAuthorizerService {
+  readonly authorize: (
+    request: ChildAdmissionAuthorizationRequest,
+  ) => Effect.Effect<void, ChildAdmissionDenied>;
+}
+
+/** Narrow required authority for durable child admission; it grants no later child action. */
+export class ChildAdmissionAuthorizer extends Context.Service<
+  ChildAdmissionAuthorizer,
+  ChildAdmissionAuthorizerService
+>()("@effect-agent/session/ChildAdmissionAuthorizer") {}
+
+export const childAdmissionAuthorizerLayer = (
+  service: ChildAdmissionAuthorizerService,
+): Layer.Layer<ChildAdmissionAuthorizer> => Layer.succeed(ChildAdmissionAuthorizer)(service);
+
+/** Explicit trusted-local/test substitute; production hosts should provide current policy. */
+export const possessionChildAdmissionAuthorizer: ChildAdmissionAuthorizerService = {
+  authorize: () => Effect.void,
+};
+
+export const possessionChildAdmissionAuthorizerLayer: Layer.Layer<ChildAdmissionAuthorizer> =
+  childAdmissionAuthorizerLayer(possessionChildAdmissionAuthorizer);
