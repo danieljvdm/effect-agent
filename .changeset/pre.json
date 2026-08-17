@@ -52,6 +52,7 @@
     "retire-stale-reviews",
     "review-patchless-text",
     "typed-budget-settlement",
+    "typed-run-disposition",
     "visible-review-runs"
   ]
 }
