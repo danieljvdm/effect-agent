@@ -118,6 +118,7 @@ type HostKeepsTimeout = Assert<Equal<Extract<TypedHostError, WorkOrderTimeout>, 
 type HostKeepsCheck = Assert<
   Equal<Extract<TypedHostError, RequiredCheckFailed>, RequiredCheckFailed>
 >;
+type HostUnknownExcluded = Assert<Equal<unknown extends TypedHostError ? true : false, false>>;
 
 describe("implementation Agent type proofs", () => {
   it("WO-003 WO-012 keeps model requirements and host failures typed while hiding workspace internals", () => {
@@ -134,6 +135,7 @@ describe("implementation Agent type proofs", () => {
       hostKeepsRelease: true as HostKeepsRelease,
       hostKeepsTimeout: true as HostKeepsTimeout,
       hostKeepsCheck: true as HostKeepsCheck,
+      hostUnknownExcluded: true as HostUnknownExcluded,
     };
     expect(proofs).toEqual({
       modelRequirementProof: true,
@@ -148,6 +150,7 @@ describe("implementation Agent type proofs", () => {
       hostKeepsRelease: true,
       hostKeepsTimeout: true,
       hostKeepsCheck: true,
+      hostUnknownExcluded: true,
     });
   });
 });
@@ -978,6 +981,49 @@ describe("PR work-order host", () => {
             Effect.flip,
           );
           expect(failure._tag).toBe("StalePullRequestHead");
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
+    "WO-004 WO-007 completes a claimed stale-head failure so duplicate delivery does not hang",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.writeFileString(`${fixture.root}/${FILE_PATH}`, "export const answer = 99;\n");
+          yield* runGit(fixture.root, ["add", "--", FILE_PATH]);
+          yield* runGit(fixture.root, [
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@localhost",
+            "commit",
+            "-m",
+            "advance head before admission",
+          ]);
+          const implementer = makeScriptedImplementer("fix");
+          const services = hostServices(
+            authorizedConfig(fixture, {
+              checks: [passCheck],
+              requiredChecks: [REQUIRED_CHECK],
+            }),
+          );
+          const order = yield* orderFor(fixture);
+          yield* Effect.gen(function* () {
+            const first = yield* runWorkOrder({
+              order,
+              implement: implementer.implement,
+            }).pipe(Effect.flip);
+            expect(first._tag).toBe("StalePullRequestHead");
+            const duplicate = yield* runWorkOrder({
+              order,
+              implement: implementer.implement,
+            }).pipe(Effect.flip);
+            expect(duplicate._tag).toBe("StalePullRequestHead");
+            expect(implementer.invocations()).toBe(0);
+          }).pipe(Effect.provide(services));
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,

@@ -209,6 +209,13 @@ export class WorkOrderReleaseFailure extends Schema.TaggedError<WorkOrderRelease
   },
 ) {}
 
+export class WorkOrderImplementationFailure extends Schema.TaggedError<WorkOrderImplementationFailure>()(
+  "WorkOrderImplementationFailure",
+  {
+    reason: Schema.NonEmptyString.check(Schema.isMaxLength(4_096)),
+  },
+) {}
+
 export type WorkOrderHostError =
   | WorkOrderRejected
   | WorkOrderValidationFailure
@@ -216,7 +223,8 @@ export type WorkOrderHostError =
   | StalePullRequestHead
   | WorkspaceOperationFailure
   | WorkOrderReleaseFailure
-  | WorkOrderTimeout;
+  | WorkOrderTimeout
+  | WorkOrderImplementationFailure;
 
 const JsonArray = Schema.Array(Schema.Json);
 const isJsonArray = Schema.is(JsonArray);

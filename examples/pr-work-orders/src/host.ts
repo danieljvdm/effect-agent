@@ -3,6 +3,7 @@ import { type Crypto, type Duration, Effect, Exit, Ref, Schema } from "effect";
 import {
   RequiredCheckFailed,
   SettledWorkOrder,
+  WorkOrderImplementationFailure,
   WorkOrderRejected,
   WorkOrderReleaseFailure,
   WorkOrderTimeout,
@@ -64,16 +65,29 @@ const validateReportIdentity = (
   return Effect.void;
 };
 
-export const runWorkOrder = <ImplementError, ImplementRequirements>(options: {
+const describeImplementError = (error: unknown): string => {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "_tag" in error &&
+    typeof error._tag === "string" &&
+    error._tag.length > 0
+  ) {
+    return error._tag.slice(0, 4_096);
+  }
+  return "implementation failed";
+};
+
+export const runWorkOrder = <ImplementRequirements>(options: {
   readonly order: PullRequestWorkOrder;
   readonly implement: (
     mission: WorkOrderMission,
     workspace: ImplementationWorkspace,
-  ) => Effect.Effect<WorkOrderReport, ImplementError, ImplementRequirements>;
+  ) => Effect.Effect<WorkOrderReport, unknown, ImplementRequirements>;
   readonly timeout?: Duration.Duration | undefined;
 }): Effect.Effect<
   WorkOrderHostResult,
-  ImplementError | WorkOrderHostError,
+  WorkOrderHostError,
   ImplementRequirements | Crypto.Crypto | WorkOrderAttemptPolicy | WorkOrderHost
 > =>
   Effect.gen(function* () {
@@ -87,140 +101,151 @@ export const runWorkOrder = <ImplementError, ImplementRequirements>(options: {
     }
     const digest = yield* workOrderDigest(options.order);
     yield* host.authorizeDispatch(options.order);
-    const claim = yield* attempts.claim<ImplementError | WorkOrderHostError>(options.order);
+    const claim = yield* attempts.claim(options.order);
     if (claim._tag === "duplicate") {
       return yield* replayExit(claim.exit);
     }
-    yield* host.requireCurrentHead(options.order);
 
     const publication = yield* Ref.make<PublishedWorkOrder | undefined>(undefined);
-    const executed = host
-      .withWorktree(options.order, (worktree) =>
-        Effect.gen(function* () {
-          const implement = options.implement(
-            WorkOrderMission.make({
-              order: options.order,
-              workOrderDigest: digest,
-              requiredChecks: host.requiredChecks,
-            }),
-            worktree.modelWorkspace,
-          );
-          const report = yield* options.timeout
-            ? implement.pipe(
-                Effect.timeoutOrElse({
-                  duration: options.timeout,
-                  orElse: () =>
-                    WorkOrderTimeout.make({
-                      workOrderId: options.order.workOrderId,
-                      headSha: options.order.headSha,
-                    }),
+    return yield* Effect.gen(function* () {
+      yield* host.requireCurrentHead(options.order);
+      return yield* host
+        .withWorktree(options.order, (worktree) =>
+          Effect.gen(function* () {
+            const implement = options
+              .implement(
+                WorkOrderMission.make({
+                  order: options.order,
+                  workOrderDigest: digest,
+                  requiredChecks: host.requiredChecks,
                 }),
+                worktree.modelWorkspace,
               )
-            : implement;
-          yield* validateReportIdentity(report, digest, options.order);
-          const observedChecks = yield* worktree.observedChecks;
-          if (report.disposition === "fixed" && !exactChecks(report.checks, observedChecks)) {
-            return yield* WorkOrderValidationFailure.make({
-              reason: "check-results-mismatch",
-              detail: "model-reported checks differ from host-observed check capability results",
-            });
-          }
-
-          const patch = yield* worktree.inspectPatch;
-          if (report.disposition === "not-applicable" || report.disposition === "needs-human") {
-            if (
-              patch.changedPaths.length > 0 ||
-              report.changedPaths.length > 0 ||
-              report.patchDigest !== undefined
-            ) {
+              .pipe(
+                Effect.mapError((error) =>
+                  WorkOrderImplementationFailure.make({
+                    reason: describeImplementError(error),
+                  }),
+                ),
+              );
+            const report = yield* options.timeout
+              ? implement.pipe(
+                  Effect.timeoutOrElse({
+                    duration: options.timeout,
+                    orElse: () =>
+                      WorkOrderTimeout.make({
+                        workOrderId: options.order.workOrderId,
+                        headSha: options.order.headSha,
+                      }),
+                  }),
+                )
+              : implement;
+            yield* validateReportIdentity(report, digest, options.order);
+            const observedChecks = yield* worktree.observedChecks;
+            if (report.disposition === "fixed" && !exactChecks(report.checks, observedChecks)) {
               return yield* WorkOrderValidationFailure.make({
-                reason: "unexpected-patch",
-                detail: "non-publication dispositions must not propose a patch",
+                reason: "check-results-mismatch",
+                detail: "model-reported checks differ from host-observed check capability results",
               });
             }
-            return SettledWorkOrder.make({
-              workOrderId: options.order.workOrderId,
-              workOrderDigest: digest,
-              headSha: options.order.headSha,
-              disposition: report.disposition,
-              summary: report.summary,
-            });
-          }
 
-          if (patch.changedPaths.length === 0) {
-            return yield* WorkOrderValidationFailure.make({
-              reason: "empty-patch",
-              detail: "fixed disposition produced no host-visible patch",
-            });
-          }
-          if (patch.changedPaths.some((path) => !worktree.allowedPaths.has(path))) {
-            return yield* WorkOrderValidationFailure.make({
-              reason: "path-not-allowed",
-              detail: "host-collected patch contains a path outside the work-order allowlist",
-            });
-          }
-          if (!exactMultiset(report.changedPaths, patch.changedPaths)) {
-            return yield* WorkOrderValidationFailure.make({
-              reason: "changed-paths-mismatch",
-              detail: "model-reported changed paths differ from the host-collected patch",
-            });
-          }
-          if (report.patchDigest === undefined || report.patchDigest !== patch.digest) {
-            return yield* WorkOrderValidationFailure.make({
-              reason: "patch-digest-mismatch",
-              detail: "model-reported patch digest differs from the host-collected patch",
-            });
-          }
+            const patch = yield* worktree.inspectPatch;
+            if (report.disposition === "not-applicable" || report.disposition === "needs-human") {
+              if (
+                patch.changedPaths.length > 0 ||
+                report.changedPaths.length > 0 ||
+                report.patchDigest !== undefined
+              ) {
+                return yield* WorkOrderValidationFailure.make({
+                  reason: "unexpected-patch",
+                  detail: "non-publication dispositions must not propose a patch",
+                });
+              }
+              return SettledWorkOrder.make({
+                workOrderId: options.order.workOrderId,
+                workOrderDigest: digest,
+                headSha: options.order.headSha,
+                disposition: report.disposition,
+                summary: report.summary,
+              });
+            }
 
-          const checkResults = yield* Effect.forEach(host.requiredChecks, (name) =>
-            worktree.runCheck(name),
-          );
-          const failed = checkResults.find((check) => check.status === "failed");
-          if (failed !== undefined) {
-            return yield* RequiredCheckFailed.make({ check: failed.name, summary: failed.summary });
-          }
-          const afterChecks = yield* worktree.inspectPatch;
-          if (
-            afterChecks.digest !== patch.digest ||
-            !exactMultiset(afterChecks.changedPaths, patch.changedPaths)
-          ) {
-            return yield* WorkOrderValidationFailure.make({
-              reason: "check-mutated-patch",
-              detail: "a required check changed the patch after model settlement",
-            });
-          }
-          const published = yield* worktree.commitAndPublish({
-            order: options.order,
-            report,
-            patch: afterChecks,
-            checks: checkResults,
-          });
-          yield* Ref.set(publication, published);
-          return published;
-        }),
-      )
-      .pipe(
-        Effect.catch((error: ImplementError | WorkOrderHostError) =>
-          Effect.gen(function* () {
-            if (!Schema.is(WorkspaceOperationFailure)(error)) {
-              return yield* Effect.fail(error);
+            if (patch.changedPaths.length === 0) {
+              return yield* WorkOrderValidationFailure.make({
+                reason: "empty-patch",
+                detail: "fixed disposition produced no host-visible patch",
+              });
             }
-            const published = yield* Ref.get(publication);
-            if (published === undefined || !error.operation.startsWith("release ")) {
-              return yield* error;
+            if (patch.changedPaths.some((path) => !worktree.allowedPaths.has(path))) {
+              return yield* WorkOrderValidationFailure.make({
+                reason: "path-not-allowed",
+                detail: "host-collected patch contains a path outside the work-order allowlist",
+              });
             }
-            const observedHeadSha = yield* host.currentHead.pipe(
-              Effect.orElseSucceed(() => undefined),
+            if (!exactMultiset(report.changedPaths, patch.changedPaths)) {
+              return yield* WorkOrderValidationFailure.make({
+                reason: "changed-paths-mismatch",
+                detail: "model-reported changed paths differ from the host-collected patch",
+              });
+            }
+            if (report.patchDigest === undefined || report.patchDigest !== patch.digest) {
+              return yield* WorkOrderValidationFailure.make({
+                reason: "patch-digest-mismatch",
+                detail: "model-reported patch digest differs from the host-collected patch",
+              });
+            }
+
+            const checkResults = yield* Effect.forEach(host.requiredChecks, (name) =>
+              worktree.runCheck(name),
             );
-            return yield* WorkOrderReleaseFailure.make({
-              operation: error.operation,
-              reason: error.reason,
-              publication: published,
-              ...(observedHeadSha === undefined ? {} : { observedHeadSha }),
+            const failed = checkResults.find((check) => check.status === "failed");
+            if (failed !== undefined) {
+              return yield* RequiredCheckFailed.make({
+                check: failed.name,
+                summary: failed.summary,
+              });
+            }
+            const afterChecks = yield* worktree.inspectPatch;
+            if (
+              afterChecks.digest !== patch.digest ||
+              !exactMultiset(afterChecks.changedPaths, patch.changedPaths)
+            ) {
+              return yield* WorkOrderValidationFailure.make({
+                reason: "check-mutated-patch",
+                detail: "a required check changed the patch after model settlement",
+              });
+            }
+            const published = yield* worktree.commitAndPublish({
+              order: options.order,
+              report,
+              patch: afterChecks,
+              checks: checkResults,
             });
+            yield* Ref.set(publication, published);
+            return published;
           }),
-        ),
-      );
-
-    return yield* executed.pipe(Effect.onExit((exit) => attempts.complete(options.order, exit)));
+        )
+        .pipe(
+          Effect.catch((error: WorkOrderHostError) =>
+            Effect.gen(function* () {
+              if (!Schema.is(WorkspaceOperationFailure)(error)) {
+                return yield* Effect.fail(error);
+              }
+              const published = yield* Ref.get(publication);
+              if (published === undefined || !error.operation.startsWith("release ")) {
+                return yield* error;
+              }
+              const observedHeadSha = yield* host.currentHead.pipe(
+                Effect.orElseSucceed(() => undefined),
+              );
+              return yield* WorkOrderReleaseFailure.make({
+                operation: error.operation,
+                reason: error.reason,
+                publication: published,
+                ...(observedHeadSha === undefined ? {} : { observedHeadSha }),
+              });
+            }),
+          ),
+        );
+    }).pipe(Effect.onExit((exit) => attempts.complete(options.order, exit)));
   });

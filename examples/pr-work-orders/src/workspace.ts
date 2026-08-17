@@ -7,6 +7,7 @@ import {
   type PullRequestWorkOrder,
   type StalePullRequestHead,
   type WorkOrderCheckResult,
+  type WorkOrderHostError,
   type WorkOrderHostResult,
   type WorkOrderRejected,
   type WorkOrderReport,
@@ -82,16 +83,16 @@ export class WorkOrderHost extends Context.Service<
   }
 >()("@effect-agent/example-pr-work-orders/WorkOrderHost") {}
 
-type StoredAttemptExit = Exit.Exit<WorkOrderHostResult, unknown>;
+type AttemptExit = Exit.Exit<WorkOrderHostResult, WorkOrderHostError>;
 
 type AttemptEntry =
   | {
       readonly _tag: "pending";
-      readonly deferred: Deferred.Deferred<StoredAttemptExit>;
+      readonly deferred: Deferred.Deferred<AttemptExit>;
     }
   | {
       readonly _tag: "settled";
-      readonly exit: StoredAttemptExit;
+      readonly exit: AttemptExit;
     };
 
 const attemptKey = (order: PullRequestWorkOrder): string =>
@@ -100,49 +101,40 @@ const attemptKey = (order: PullRequestWorkOrder): string =>
 export class WorkOrderAttemptPolicy extends Context.Service<
   WorkOrderAttemptPolicy,
   {
-    readonly claim: <E>(
+    readonly claim: (
       order: PullRequestWorkOrder,
     ) => Effect.Effect<
-      | { readonly _tag: "claimed" }
-      | { readonly _tag: "duplicate"; readonly exit: Exit.Exit<WorkOrderHostResult, E> }
+      { readonly _tag: "claimed" } | { readonly _tag: "duplicate"; readonly exit: AttemptExit }
     >;
-    readonly complete: <E>(
-      order: PullRequestWorkOrder,
-      exit: Exit.Exit<WorkOrderHostResult, E>,
-    ) => Effect.Effect<void>;
+    readonly complete: (order: PullRequestWorkOrder, exit: AttemptExit) => Effect.Effect<void>;
   }
 >()("@effect-agent/example-pr-work-orders/WorkOrderAttemptPolicy") {
   static readonly layerMemory = Layer.effect(
     WorkOrderAttemptPolicy,
     Effect.gen(function* () {
       const claimed = yield* Ref.make<ReadonlyMap<string, AttemptEntry>>(new Map());
-      const claim = <E>(order: PullRequestWorkOrder) =>
-        Effect.gen(function* () {
-          const key = attemptKey(order);
-          const deferred = yield* Deferred.make<StoredAttemptExit>();
-          const existing = yield* Ref.modify(claimed, (previous) => {
-            const current = previous.get(key);
-            if (current !== undefined) return [current, previous] as const;
-            const pending = { _tag: "pending" as const, deferred };
-            return [pending, new Map(previous).set(key, pending)] as const;
-          });
-          if (existing._tag === "settled") {
-            return {
-              _tag: "duplicate" as const,
-              exit: existing.exit as Exit.Exit<WorkOrderHostResult, E>,
-            };
-          }
-          if (existing.deferred !== deferred) {
-            return {
-              _tag: "duplicate" as const,
-              exit: (yield* Deferred.await(existing.deferred)) as Exit.Exit<WorkOrderHostResult, E>,
-            };
-          }
-          return { _tag: "claimed" as const };
+      const claim = Effect.fn("WorkOrderAttemptPolicy.claim")(function* (
+        order: PullRequestWorkOrder,
+      ) {
+        const key = attemptKey(order);
+        const deferred = yield* Deferred.make<AttemptExit>();
+        const existing = yield* Ref.modify(claimed, (previous) => {
+          const current = previous.get(key);
+          if (current !== undefined) return [current, previous] as const;
+          const pending = { _tag: "pending" as const, deferred };
+          return [pending, new Map(previous).set(key, pending)] as const;
         });
+        if (existing._tag === "settled") {
+          return { _tag: "duplicate" as const, exit: existing.exit };
+        }
+        if (existing.deferred !== deferred) {
+          return { _tag: "duplicate" as const, exit: yield* Deferred.await(existing.deferred) };
+        }
+        return { _tag: "claimed" as const };
+      });
       const complete = Effect.fn("WorkOrderAttemptPolicy.complete")(function* (
         order: PullRequestWorkOrder,
-        exit: StoredAttemptExit,
+        exit: AttemptExit,
       ) {
         const key = attemptKey(order);
         const previous = yield* Ref.modify(claimed, (map) => {
