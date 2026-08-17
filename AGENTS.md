@@ -1,11 +1,3 @@
-<!-- DEV KIT START -->
-
-# Dev Kit
-
-This project uses `@danieljvdm/dev-kit` to manage portable agent skills and reproducible setup from `dev-kit.jsonc` and `dev-kit.lock.json`.
-
-For dev-kit operations, use the `dev-kit` skill and read `.agents/skills/dev-kit/SKILL.md` before changing managed outputs.
-
 # Learning more about the Effect
 
 This repository uses the Effect Typescript library.
@@ -42,8 +34,6 @@ Use these repository commands:
 - Toolchain or runtime troubleshooting: run `vp env doctor` and include its output when asking for help.
 
 Do not use `bun run`, `npm run`, `pnpm run`, or `yarn run` in this repository. Do not invoke underlying tools such as `tsc`, `vitest`, `oxlint`, or `oxfmt` directly; use the Vite+ entry points above.
-
-<!-- DEV KIT END -->
 
 # Instructions for implementation agents
 
@@ -117,8 +107,12 @@ packages.
   independently in a package.
 - After changing an Effect-family version, run `bun install`, `bun run sync:effect`, and
   `bun run ready`.
-- After changing `dev-kit.jsonc` or its dependency, run `bunx dev-kit apply` and commit the
-  regenerated `.agents/skills` copies, `.claude/skills` symlinks, and `dev-kit.lock.json`.
+- Contributor skills under `.agents/skills` are repo-owned, each tracked by its own
+  `.dev-kit-origin.json` receipt. Check for upstream updates with
+  `bunx @danieljvdm/dev-kit@latest skills status`, and fast-forward an unmodified skill with
+  `bunx @danieljvdm/dev-kit@latest skills update <name>`; a skill with local edits is left for an
+  agent merge instead of being overwritten. Add a new skill from the approved catalog with
+  `bunx @danieljvdm/dev-kit@latest skills add <name>`.
 - Contributor agent skills are repository tooling. They are not runtime Skill definitions and
   must not be imported by `@effect-agent/*`.
 - Before handoff, run `bun run ready`.

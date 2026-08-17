@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "selector": "cloudflare",
+  "name": "cloudflare",
+  "baseDigest": "sha256:dfc92bac99350aa358617e0b8edd61fd7115cbf1a873ba01d32f93d967b9822e",
+  "source": {
+    "type": "git",
+    "source": "cloudflare-skills",
+    "repository": "https://github.com/cloudflare/skills.git",
+    "resolved": "30553f89ae1ef1e3c2917cd09d72dac992bb4e9a"
+  }
+}

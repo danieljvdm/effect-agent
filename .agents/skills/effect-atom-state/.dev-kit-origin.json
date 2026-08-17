@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "effect-atom-state",
+  "name": "effect-atom-state",
+  "baseDigest": "sha256:417939e6f21850b6b73b0f5b67d1e594ba830de43a086eaa3fc7a6947cbde9eb",
+  "source": {
+    "type": "bundled",
+    "version": "0.17.0"
+  }
+}

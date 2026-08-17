@@ -56,9 +56,6 @@ jobs:
       - name: Install dependencies (frozen, scripts suppressed)
         run: bun install --frozen-lockfile --ignore-scripts
 
-      - name: Verify locked Dev Kit setup
-        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
-
       - name: Patch Effect TypeScript-Go
         run: bun run patch:tsgo
 
@@ -99,9 +96,6 @@ jobs:
 
       - name: Install dependencies (frozen, scripts suppressed)
         run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Verify locked Dev Kit setup
-        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
       - name: Patch Effect TypeScript-Go
         run: bun run patch:tsgo
@@ -151,9 +145,6 @@ jobs:
 
       - name: Install dependencies (frozen, scripts suppressed)
         run: bun install --frozen-lockfile --ignore-scripts
-
-      - name: Verify locked Dev Kit setup
-        run: bun ./node_modules/@danieljvdm/dev-kit/bin/dev-kit.mjs apply --locked
 
       - name: Patch Effect TypeScript-Go
         run: bun run patch:tsgo

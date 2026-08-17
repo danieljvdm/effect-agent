@@ -8,9 +8,9 @@
   ],
   "type": "module",
   "scripts": {
-    "postinstall": "dev-kit apply",
-    "sync:effect": "dev-kit effect sync --path repos/effect",
-    "patch:tsgo": "dev-kit tsgo patch",
+    "prepare": "vp config --no-agent --hooks-dir .vite-hooks",
+    "sync:effect": "bun scripts/sync-effect-source.ts",
+    "patch:tsgo": "bun scripts/patch-effect-tsgo.ts",
     "changeset": "bun x changeset",
     "changeset:version": "bun x changeset version",
     "changeset:publish": "bun x changeset publish",
@@ -37,7 +37,6 @@
   "devDependencies": {
     "@changesets/changelog-github": "0.7.0",
     "@changesets/cli": "2.31.0",
-    "@danieljvdm/dev-kit": "0.17.0",
     "@effect-agent/core": "workspace:*",
     "@effect-agent/platform-node": "workspace:*",
     "@effect-agent/session": "workspace:*",
@@ -45,6 +44,7 @@
     "@effect/tsgo": "catalog:",
     "@fontsource-variable/ibm-plex-sans": "catalog:",
     "@fontsource/ibm-plex-mono": "catalog:",
+    "@stylistic/eslint-plugin": "5.10.0",
     "@types/node": "catalog:",
     "alchemy": "2.0.0-beta.72",
     "effect": "catalog:",
