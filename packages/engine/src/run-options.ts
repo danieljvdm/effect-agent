@@ -10,7 +10,7 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import type { Effect } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
@@ -102,6 +102,38 @@ export interface RunContextHook<Error = never, Requirements = never> {
     request: RunContextRequest,
   ) => Effect.Effect<PreparedRunContext, Error, Requirements>;
 }
+
+/** A host-supplied model-context preparer failed in its closed, expected error channel. */
+export class RunContextPreparationError extends Schema.TaggedError<RunContextPreparationError>()(
+  "RunContextPreparationError",
+  {
+    preparerId: Schema.NonEmptyString,
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
+    /** Diagnostic cause for the live Effect only; durable hosts persist the bounded projection. */
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
+
+/**
+ * Generic host-owned preparation of one model-visible prompt.
+ *
+ * The service is intentionally narrower than a Conversation store: it receives the engine's
+ * immutable source prompt and can return only the prompt used for the next model request. Durable
+ * coordinators capture it once while their runtime Layer is acquired. When absent, they preserve
+ * the existing pass-through behavior.
+ */
+export class RunContextPreparation extends Context.Service<
+  RunContextPreparation,
+  {
+    /** Absent is the exact legacy path: the engine receives no context hook. */
+    readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
+  }
+>()("@effect-agent/engine/RunContextPreparation") {}
+
+/** Explicit no-preparer Layer used by compatible runtime assemblies. */
+export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation> = Layer.succeed(
+  RunContextPreparation,
+)({});
 
 /**
  * One usage delta. Turn-boundary consumption charges `modelCalls: 1` after a

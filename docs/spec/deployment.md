@@ -263,6 +263,30 @@ identities are derived and receives the live `DurableObjectState`, raw Worker en
 resources such as Worker service bindings; database clients and other request-scoped resources
 remain outside the cached Durable Object runtime.
 
+`CloudflareDurableRuntimeOptions.runContext` is the generic model-context extension boundary. It
+accepts either a closed `CloudflareRunContextLayer` or a per-incarnation factory receiving the same
+explicit Object state, environment, Conversation identity, and producer identity. The Layer must
+provide `RunContextPreparation`; its only permitted remaining requirement is `Crypto.Crypto`,
+which the platform supplies with `BrowserCrypto`. A host using the capabilities compactor closes
+its own service dependencies before returning the adapter:
+
+```ts
+runContext: ({ env }) =>
+  contextCompactorRunContextLayer.pipe(Layer.provide(makeContextCompactorLayer(env)));
+```
+
+The factory is evaluated once and the Layer is built in the cached runtime Scope for each Durable
+Object incarnation. Normal Scope closure runs finalizers, but correctness never depends on a
+finalizer during eviction: Cloudflare may discard in-memory state and construct a new incarnation
+without a shutdown callback. The reconstructed Layer receives canonical history again before it
+prepares model context. The default is absence/pass-through, so existing Conversation Object
+construction remains compatible.
+
+`runContext`, like `bindings`, `toolReconciler`, failpoints, and authorization services, is a
+non-serializable Layer option and is deliberately outside `CloudflareDurableRuntimeConfigValue`.
+That Schema continues to decode only scalar identities, cadences, limits, and storage gates before
+resources open.
+
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
@@ -381,3 +405,6 @@ Current platform references:
 - **DEPLOY-012**: Cloudflare Conversation maintenance is generation-incremental and quiescent for
   stable external waits; pre-armed mutations, pass acknowledgement, restart recovery, and
   autonomous rearming obey the protocol above.
+- **DEPLOY-013**: A Cloudflare host context-preparation Layer is acquired once per Object
+  incarnation, runs only after canonical resume reconstruction, never replaces canonical history,
+  and is reconstructible without process-global state.

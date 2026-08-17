@@ -1,5 +1,10 @@
 import { Agent, AgentPolicy, ConversationId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
+import {
+  DurableStep,
+  DurableStepError,
+  RunContextPreparation,
+  ToolExecutionClass,
+} from "@effect-agent/engine";
 import {
   AbortCommand,
   CanonicalRecordEnvelope,
@@ -1272,11 +1277,23 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       const layerNeedsReconciler: ToolReconciler extends LayerIn<typeof DurableAgentRuntime.layer>
         ? true
         : false = true;
+      const customLayerNeedsContext: RunContextPreparation extends LayerIn<
+        typeof DurableAgentRuntime.layerWithContext
+      >
+        ? true
+        : false = true;
+      const defaultLayerClosesContext: RunContextPreparation extends LayerIn<
+        typeof DurableAgentRuntime.layer
+      >
+        ? false
+        : true = true;
 
       expect(resolveHasConflict).toBe(true);
       expect(resolveHasSettlement).toBe(true);
       expect(resolveHasFailpoint).toBe(true);
       expect(layerNeedsReconciler).toBe(true);
+      expect(customLayerNeedsContext).toBe(true);
+      expect(defaultLayerClosesContext).toBe(true);
     }),
   );
 });

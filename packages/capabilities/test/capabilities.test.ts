@@ -7,9 +7,21 @@ import {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
+import { RunContextPreparation } from "@effect-agent/engine";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Clock, DateTime, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import {
+  Cause,
+  Clock,
+  Crypto,
+  DateTime,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Schema,
+} from "effect";
 import { TestClock } from "effect/testing";
 import { Prompt, Response, Tool, Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
@@ -27,6 +39,8 @@ import {
   BudgetExceeded,
   BudgetNodeConflict,
   CompactionArtifact,
+  ContextCompactor,
+  ContextTransformError,
   ConversationAppend,
   ConversationExport,
   ConversationHistoryDiverged,
@@ -56,6 +70,7 @@ import {
   validateMcpDiscovery,
   resolveToolConcurrency,
   conversationPrompt,
+  contextCompactorRunContextLayer,
   toRunBudgetHook,
   toRunConversationOptions,
   toRunApprovalHook,
@@ -1115,6 +1130,210 @@ describe("capability contracts", () => {
       );
       expect(Exit.isFailure(exit)).toBe(true);
     }).pipe(Effect.provide(Layer.merge(EphemeralConversationsLive, NodeCrypto.layer))),
+  );
+
+  it.effect(
+    "adapts ContextCompactor into a closed run-context service without flattening uncovered parts",
+    () =>
+      Effect.gen(function* () {
+        const preparation = yield* RunContextPreparation;
+        const hook = preparation.hook;
+        if (hook === undefined) return yield* Effect.die("expected the compactor context hook");
+        const richAssistant = Prompt.assistantMessage({
+          options: { provider: { trace: "keep-native-options" } },
+          content: [
+            Prompt.reasoningPart({ text: "keep-native-reasoning" }),
+            Prompt.toolCallPart({
+              id: "keep-tool-call",
+              name: "search",
+              params: { query: "native" },
+              providerExecuted: false,
+            }),
+          ],
+        });
+        const source = Prompt.fromMessages([
+          Prompt.systemMessage({ content: "covered instructions" }),
+          richAssistant,
+        ]);
+        const prepared = yield* hook.prepare({
+          conversationId,
+          runId,
+          turnId,
+          turn: 0,
+          source,
+        });
+
+        expect(prepared.prompt.content[0]).toEqual(
+          Prompt.systemMessage({ content: "digest-bound summary" }),
+        );
+        expect(prepared.prompt.content[1]).toEqual(richAssistant);
+      }).pipe(
+        Effect.provide(
+          contextCompactorRunContextLayer.pipe(
+            Layer.provide(
+              Layer.effect(
+                ContextCompactor,
+                Effect.gen(function* () {
+                  const crypto = yield* Crypto.Crypto;
+                  return ContextCompactor.of({
+                    compact: (snapshot) =>
+                      digestCompactionSource(snapshot, 0, 0).pipe(
+                        Effect.provideService(Crypto.Crypto, crypto),
+                        Effect.map((sourceDigest) =>
+                          CompactionArtifact.make({
+                            version: 1,
+                            conversationId: snapshot.conversationId,
+                            coversFrom: 0,
+                            coversThrough: 0,
+                            summary: ModelContextMessage.make({
+                              role: "system",
+                              content: "digest-bound summary",
+                              sourceSequences: [0],
+                            }),
+                            retainedFacts: [],
+                            tokenEstimate: 3,
+                            sourceDigest,
+                            compactorVersion: "adapter-test@1",
+                          }),
+                        ),
+                        Effect.mapError((error) =>
+                          ContextTransformError.make({
+                            transformId: "adapter-test",
+                            message: error.message,
+                          }),
+                        ),
+                      ),
+                  });
+                }),
+              ),
+            ),
+            Layer.provide(NodeCrypto.layer),
+          ),
+        ),
+      ),
+  );
+
+  it.effect("rejects a compaction boundary that splits a native Tool call/result pair", () => {
+    const source = Prompt.fromMessages([
+      Prompt.assistantMessage({
+        content: [
+          Prompt.toolCallPart({
+            id: "correlated-call",
+            name: "search",
+            params: { query: "native" },
+            providerExecuted: false,
+          }),
+        ],
+      }),
+      Prompt.toolMessage({
+        content: [
+          Prompt.toolResultPart({
+            id: "correlated-call",
+            name: "search",
+            isFailure: false,
+            result: { answer: "retain with call" },
+            providerExecuted: false,
+          }),
+        ],
+      }),
+    ]);
+    const layer = contextCompactorRunContextLayer.pipe(
+      Layer.provide(
+        Layer.effect(
+          ContextCompactor,
+          Effect.gen(function* () {
+            const crypto = yield* Crypto.Crypto;
+            return ContextCompactor.of({
+              compact: (snapshot) =>
+                digestCompactionSource(snapshot, 0, 0).pipe(
+                  Effect.provideService(Crypto.Crypto, crypto),
+                  Effect.map((sourceDigest) =>
+                    CompactionArtifact.make({
+                      version: 1,
+                      conversationId: snapshot.conversationId,
+                      coversFrom: 0,
+                      coversThrough: 0,
+                      summary: ModelContextMessage.make({
+                        role: "system",
+                        content: "invalid split summary",
+                        sourceSequences: [0],
+                      }),
+                      retainedFacts: [],
+                      tokenEstimate: 3,
+                      sourceDigest,
+                      compactorVersion: "split-test@1",
+                    }),
+                  ),
+                  Effect.mapError((error) =>
+                    ContextTransformError.make({
+                      transformId: "split-test",
+                      message: error.message,
+                    }),
+                  ),
+                ),
+            });
+          }),
+        ),
+      ),
+      Layer.provide(NodeCrypto.layer),
+    );
+
+    return RunContextPreparation.use((service) =>
+      service.hook === undefined
+        ? Effect.die("expected the compactor context hook")
+        : service.hook
+            .prepare({ conversationId, runId, turnId, turn: 0, source })
+            .pipe(Effect.flip),
+    ).pipe(
+      Effect.provide(layer),
+      Effect.map((error) => {
+        expect(error._tag).toBe("RunContextPreparationError");
+        expect(error.message).toBe(
+          "Context compaction coverage splits a native Tool call/result or approval pair",
+        );
+      }),
+    );
+  });
+
+  it.effect("keeps typed compactor failures typed with a cause and leaves defects as defects", () =>
+    Effect.gen(function* () {
+      const source = Prompt.fromMessages([Prompt.systemMessage({ content: "source" })]);
+      const request = { conversationId, runId, turnId, turn: 0, source } as const;
+      const expected = ContextTransformError.make({
+        transformId: "typed-failure",
+        message: "expected compactor refusal",
+      });
+      const typedLayer = contextCompactorRunContextLayer.pipe(
+        Layer.provide(
+          Layer.succeed(ContextCompactor)({
+            compact: () => Effect.fail(expected),
+          }),
+        ),
+        Layer.provide(NodeCrypto.layer),
+      );
+      const typed = yield* RunContextPreparation.use((service) =>
+        service.hook === undefined
+          ? Effect.die("expected the typed compactor context hook")
+          : service.hook.prepare(request).pipe(Effect.flip),
+      ).pipe(Effect.provide(typedLayer));
+      expect(typed._tag).toBe("RunContextPreparationError");
+      expect(typed.cause).toBe(expected);
+
+      const defectLayer = contextCompactorRunContextLayer.pipe(
+        Layer.provide(
+          Layer.succeed(ContextCompactor)({
+            compact: () => Effect.die("compactor defect"),
+          }),
+        ),
+        Layer.provide(NodeCrypto.layer),
+      );
+      const defect = yield* RunContextPreparation.use((service) =>
+        service.hook === undefined
+          ? Effect.die("expected the defecting compactor context hook")
+          : service.hook.prepare(request).pipe(Effect.exit),
+      ).pipe(Effect.provide(defectLayer));
+      expect(Exit.isFailure(defect) && Cause.hasDies(defect.cause)).toBe(true);
+    }),
   );
 
   it.effect(
