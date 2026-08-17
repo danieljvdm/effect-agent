@@ -14,6 +14,7 @@ import {
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import { cloudflareCryptoLayer } from "../src/crypto.ts";
 import { TEST_DIGESTS, recordSupplierCall, supplierCountsFor } from "./fixtures.ts";
 
 /**
@@ -313,7 +314,10 @@ export const siblingCoordinatorDefinition = Agent.define("cf-s2-sibling-coordina
 // Registered worker Bindings (SUB-023: exact digest registration)
 // ---------------------------------------------------------------------------
 
-const delegationSupport = Layer.mergeAll(SubagentReservationsMemoryLive, IdGenerator.layer);
+const delegationSupport = Layer.mergeAll(
+  SubagentReservationsMemoryLive,
+  IdGenerator.layer.pipe(Layer.provide(cloudflareCryptoLayer)),
+);
 
 const mapChildFailure = (failure: { readonly _tag: string }) =>
   CfDelegationFailed.make({ childErrorTag: failure._tag });

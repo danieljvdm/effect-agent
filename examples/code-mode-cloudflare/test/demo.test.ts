@@ -1,5 +1,6 @@
 import { join } from "node:path";
 
+import { Effect, Schema } from "effect";
 import { build } from "esbuild";
 import { Miniflare, kCurrentWorker } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
@@ -33,19 +34,38 @@ const openRuntime = (): Miniflare =>
     },
   });
 
-interface AskResult {
-  readonly answer: string;
-  readonly codeMode: {
-    readonly used: boolean;
-    readonly tool: string;
-    readonly executor: string;
-    readonly calls: number;
-    readonly program?: string;
-    readonly result?: { readonly topCustomers: ReadonlyArray<string>; readonly count: number };
-    readonly logs?: ReadonlyArray<string>;
-  };
-  readonly profile: string;
-}
+const AskResult = Schema.Struct({
+  answer: Schema.String,
+  codeMode: Schema.Struct({
+    used: Schema.Boolean,
+    tool: Schema.String,
+    executor: Schema.String,
+    calls: Schema.Natural,
+    program: Schema.optionalKey(Schema.String),
+    result: Schema.optionalKey(Schema.Json),
+    logs: Schema.optionalKey(Schema.Array(Schema.Json)),
+  }),
+  profile: Schema.Literals(["scripted", "openai"]),
+});
+
+const WarehouseOutcome = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("WarehouseInvoices"),
+    invoices: Schema.Array(
+      Schema.Struct({
+        customer: Schema.String,
+        region: Schema.Literals(["amer", "emea", "apac"]),
+        revenue: Schema.Natural,
+        createdAt: Schema.String,
+      }),
+    ),
+    truncated: Schema.Boolean,
+  }),
+  Schema.Struct({
+    _tag: Schema.Literal("WarehouseQueryDenied"),
+    reason: Schema.String,
+  }),
+]);
 
 describe("Code Mode over a SQLite Durable Object warehouse", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -93,7 +113,9 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     });
     const rawBody = await response.text();
     expect(response.ok, `unexpected status ${response.status}: ${rawBody}`).toBe(true);
-    const result = JSON.parse(rawBody) as AskResult;
+    const result = await Effect.runPromise(
+      Schema.decodeUnknownEffect(AskResult)(JSON.parse(rawBody)),
+    );
 
     // The deterministic profile ran (no credential in the test env).
     expect(result.profile).toBe("scripted");
@@ -106,7 +128,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     expect(result.codeMode.tool).toBe("run_javascript");
     expect(result.codeMode.executor).toBe("cloudflare-dynamic-worker");
     expect(result.codeMode.calls).toBe(1);
-    expect(result.codeMode.program).toContain("warehouse.query");
+    expect(result.codeMode.program).toContain("warehouse.listInvoices");
 
     // The evidence that matters: the isolated program queried the REAL
     // Durable Object SQLite and returned the computed result. The seed has
@@ -115,57 +137,51 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       topCustomers: ["Stellar Freight", "Vertex Robotics", "Nimbus Analytics"],
       count: 3,
     });
-    expect(result.codeMode.logs).toContain("scanned 5 customers, kept 3");
+    expect(result.codeMode.logs).toContain("matched 3 high-revenue customers");
   }, 120_000);
 
-  it("denies a write-attempting program through the read-only allowlist", async () => {
-    // The `?probe=write` program attempts an UPDATE inside the isolated
-    // Dynamic Worker; the read-only allowlist denies it and the program
-    // catches the typed WarehouseQueryDenied envelope.
-    const response = await runtime.dispatchFetch("http://demo/ask?probe=write", {
+  it("rejects malformed and out-of-Schema HTTP request bodies", async () => {
+    const malformed = await runtime.dispatchFetch("http://demo/ask", {
       method: "POST",
-      body: JSON.stringify({ question: "try to zero out revenue" }),
+      body: "{",
     });
-    const rawBody = await response.text();
-    expect(response.ok, `unexpected status ${response.status}: ${rawBody}`).toBe(true);
-    const result = JSON.parse(rawBody) as {
-      readonly codeMode: { readonly result?: { readonly writeDenied: boolean } };
-    };
-    expect(result.codeMode.result?.writeDenied).toBe(true);
+    expect(malformed.status).toBe(400);
+
+    const wrongShape = await runtime.dispatchFetch("http://demo/ask", {
+      method: "POST",
+      body: JSON.stringify({ question: 42 }),
+    });
+    expect(wrongShape.status).toBe(400);
   });
 
-  it("rejects a CTE-prefixed write that a leading-keyword denylist would miss", async () => {
-    // Direct-to-DO evidence that the allowlist is not bypassable by a
-    // statement that merely does not START with a write keyword. The row
-    // count is unchanged afterward.
+  it("exposes only a curated Schema-decoded invoice operation over DO RPC", async () => {
     const warehouse = await runtime.getDurableObjectNamespace("WAREHOUSE");
     const stub = warehouse.get(warehouse.idFromName("acme")) as unknown as {
-      query: (
-        sql: string,
-        parameters: ReadonlyArray<string | number | boolean | null>,
-      ) => Promise<{
-        readonly ok: boolean;
-        readonly rows: ReadonlyArray<Record<string, unknown>>;
-        readonly reason?: string;
-      }>;
+      listInvoices: (request: unknown) => Promise<unknown>;
     };
 
-    // Seed and confirm the baseline read works.
-    const before = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
-    expect(before.ok).toBe(true);
-    expect(before.rows[0]?.n).toBe(5);
-
-    // A denylist keyed on the leading token would let this through; the
-    // allowlist rejects it because DELETE appears anywhere in the statement.
-    const bypass = await stub.query(
-      "WITH doomed AS (SELECT customer FROM invoice_summary) DELETE FROM invoice_summary",
-      [],
+    const listed = await Effect.runPromise(
+      Schema.decodeUnknownEffect(WarehouseOutcome)(
+        await stub.listInvoices({ minimumRevenue: 10_000 }),
+      ),
     );
-    expect(bypass.ok).toBe(false);
-    expect(bypass.reason).toMatch(/DELETE|read-only/i);
+    expect(listed).toMatchObject({
+      _tag: "WarehouseInvoices",
+      invoices: [
+        { customer: "Stellar Freight" },
+        { customer: "Vertex Robotics" },
+        { customer: "Nimbus Analytics" },
+      ],
+    });
 
-    const after = await stub.query("SELECT COUNT(*) AS n FROM invoice_summary", []);
-    expect(after.ok).toBe(true);
-    expect(after.rows[0]?.n).toBe(5);
+    const denied = await Effect.runPromise(
+      Schema.decodeUnknownEffect(WarehouseOutcome)(
+        await stub.listInvoices({ minimumRevenue: "UPDATE invoice_summary" }),
+      ),
+    );
+    expect(denied).toMatchObject({
+      _tag: "WarehouseQueryDenied",
+      reason: expect.stringContaining("invalid warehouse request"),
+    });
   });
 });

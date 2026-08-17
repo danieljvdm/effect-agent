@@ -35,6 +35,7 @@ export default defineConfig({
               compatibilityFlags: ["nodejs_compat"],
               durableObjects: {
                 CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
+                DENIED: { className: "DeniedConversationObject", useSQLite: true },
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
                 SUBAGENTS: { className: "SubagentConversationObject", useSQLite: true },

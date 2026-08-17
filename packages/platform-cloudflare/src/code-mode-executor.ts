@@ -73,14 +73,15 @@ export class CodeModeHostEntrypoint extends WorkerEntrypoint {
 
 /**
  * The fixed harness loaded as the dynamic worker's main module. The generated
- * source becomes `program.mjs` (`export default (<expression>);`) — a module,
- * never `eval`. The harness installs namespace globals and a bounded console,
- * imports the program, invokes it exactly once, and returns one envelope the
+ * source becomes a module exporting one loader function — a module, never
+ * `eval`. The harness installs namespace globals and a bounded console before
+ * calling that loader, so even expression evaluation is resource-accounted,
+ * then invokes the resulting program exactly once and returns one envelope the
  * host validates through Effect Schema.
  */
 const HARNESS_MODULE = String.raw`
 import { WorkerEntrypoint } from "cloudflare:workers";
-import programDefault from "./program.js";
+import loadProgram from "./program.js";
 
 const encoder = new TextEncoder();
 const utf8 = (text) => encoder.encode(text).byteLength;
@@ -165,23 +166,15 @@ export default class CodeModeHarness extends WorkerEntrypoint {
       globalThis[namespace.name] = methods;
     }
 
-    // program.js is imported statically at the top of this module, so a
-    // syntactically invalid program fails the whole harness at load (mapped
-    // to a source error by the host). Using a static import keeps this module
-    // free of dynamic-import expressions, which single-script Miniflare hosts
-    // reject. The isolation boundary does NOT depend on the ordering of this
-    // import versus the console/namespace shims installed below: the loaded
-    // Worker has globalOutbound: null and no bindings, secrets, or env from
-    // the Worker Loader config BEFORE any module in the graph evaluates, so
-    // module-level program code has no ambient authority regardless. The
-    // shims below are usability wrappers (bounded console, namespace globals),
-    // and the accepted program is a single async-function expression whose
-    // body runs only when invoked here — after the shims exist.
-    const program = programDefault;
-    if (typeof program !== "function") {
-      return { _tag: "source-not-a-function", actual: typeof program };
-    }
     try {
+      // program.js is imported statically, so invalid syntax still fails the
+      // module load and maps to a source error. Its module body only defines
+      // loadProgram; the guest expression itself is evaluated here, after the
+      // bounded console and namespace globals are installed.
+      const program = await loadProgram();
+      if (typeof program !== "function") {
+        return { _tag: "source-not-a-function", actual: typeof program };
+      }
       const value = await program();
       if (fatal !== undefined) return fatal;
       let text;
@@ -613,7 +606,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
       mainModule: "harness.js",
       modules: {
         "harness.js": HARNESS_MODULE,
-        "program.js": `export default (\n${request.source}\n);`,
+        "program.js": `export default async function loadProgram() {\n  return (\n${request.source}\n  );\n}`,
       },
       env: {
         CODE_MODE_HOST: options.hostStub,

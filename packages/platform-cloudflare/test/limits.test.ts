@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { AdmissionLimitExceeded, CloudflareConversationClient } from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
+  TEST_CALLER,
   approvalDefinition,
   decodeConversationId,
   plannerDefinition,
@@ -69,6 +70,36 @@ const submitRefusal = (
   );
 
 describe("DC admission limits (before any ledger row exists)", () => {
+  it("bounds readAll materialization while readPage remains available", async () => {
+    const conversation = lane("read-all");
+    await submitTo("CONVERSATIONS", plannerDefinition, conversation, "read-all-key");
+    await drainAlarmsUntil(conversation, allSettled(conversation));
+
+    const failure = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client
+          .readAll(decodeConversationId(conversation), TEST_CALLER, { maxRecords: 1 })
+          .pipe(Effect.flip);
+      }),
+    );
+    expect(failure).toMatchObject({
+      _tag: "ConversationReadLimitExceeded",
+      maximum: 1,
+      observed: 2,
+    });
+
+    const page = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.readPage(decodeConversationId(conversation), TEST_CALLER, {
+          limit: 1,
+        });
+      }),
+    );
+    expect(page).toHaveLength(1);
+  });
+
   it("refuses the over-depth admission typed and admits again once the lane drains", async () => {
     const conversation = lane("queue-depth");
     // S1 suspends durably on approval, S2 queues behind it: depth 2 = the configured max.
@@ -106,6 +137,7 @@ describe("DC admission limits (before any ledger row exists)", () => {
             resolver: "cf-limits-approver",
             reason: "reopen the lane quota",
           }),
+          TEST_CALLER,
         );
       }),
       "LIMITED",

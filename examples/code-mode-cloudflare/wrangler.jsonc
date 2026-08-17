@@ -4,7 +4,7 @@
   "main": "src/worker.ts",
   "compatibility_date": "2025-05-01",
   "compatibility_flags": ["nodejs_compat", "experimental"],
-  // The SQLite-backed warehouse Durable Object the read-only SQL tool queries.
+  // The SQLite-backed warehouse Durable Object the curated invoice tool queries.
   "durable_objects": {
     "bindings": [{ "name": "WAREHOUSE", "class_name": "WarehouseObject" }],
   },

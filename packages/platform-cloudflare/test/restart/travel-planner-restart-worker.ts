@@ -1,15 +1,18 @@
 import {
   DurableRuntimeFailpointLocation,
+  OperationCaller,
   Receipt,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare";
 import {
   TravelPlannerPhase4,
-  makePhase6TravelPlannerBindings,
+  makePhase6TravelPlannerHarness,
   phase1Trip,
+  phase4TravelPlannerPrincipal,
   phase4TravelPlannerSubmitOptions,
-  phase6SupplierReconcilerLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing";
@@ -46,11 +49,15 @@ import {
 
 let alarmDeliveries = 0;
 const clientEntries: Array<string> = [];
+const travelPlannerHarness = Effect.runSync(makePhase6TravelPlannerHarness());
+const operationCaller = OperationCaller.make({ principal: phase4TravelPlannerPrincipal });
 
 const baseClass = makeConversationObjectClass({
   namespaceBinding: "CONVERSATIONS",
   deploymentId: phase6TravelPlannerDeploymentId,
   producerPrefix: phase6TravelPlannerProducerPrefix,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ownershipLeaseDuration: 1_000,
   leaseRenewalInterval: 100,
   wakeScanInterval: 100,
@@ -59,8 +66,8 @@ const baseClass = makeConversationObjectClass({
   alarmBackoffBase: 10,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
-  bindings: makePhase6TravelPlannerBindings,
-  toolReconciler: phase6SupplierReconcilerLayer,
+  bindings: travelPlannerHarness.bindings,
+  toolReconciler: travelPlannerHarness.supplierReconcilerLayer,
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,
 });
@@ -201,7 +208,7 @@ export default {
             env,
             Effect.gen(function* () {
               const client = yield* CloudflareConversationClient;
-              return yield* client.awaitSettlement(receipt);
+              return yield* client.awaitSettlement(receipt, operationCaller);
             }),
           );
           return Response.json({ outcome: settlement.outcome });
@@ -212,7 +219,10 @@ export default {
             env,
             Effect.gen(function* () {
               const client = yield* CloudflareConversationClient;
-              return yield* client.readAll(decodeConversationId(body.conversation));
+              return yield* client.readAll(
+                decodeConversationId(body.conversation),
+                operationCaller,
+              );
             }),
           );
           return Response.json({

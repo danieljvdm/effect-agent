@@ -2,6 +2,7 @@ import { ToolCallId } from "@effect-agent/core";
 import {
   ApprovalDecisionCommand,
   CanonicalRecordEnvelope,
+  OperationCaller,
   ResolutionNeverHappened,
   UnknownResolutionCommand,
   type DurableSubmitAgent,
@@ -20,25 +21,16 @@ import {
   expectedTravelPlan,
   normalizeCrossPlatformTravelPlannerEvidence,
   phase1Trip,
-  phase4TravelPlannerPrincipal,
   phase4TravelPlannerSubmitOptions,
   phase5TravelPlannerSubmitOptions,
+  phase5TravelPlannerPrincipal,
   phase6BookingToolCallId,
   phase6BookingTrip,
-  phase6GatedPlannerDefinitionDigests,
-  phase6GatedTrip,
-  phase6GuideInvocationCount,
   phase6ResearchDestination,
   phase6ResearchMission,
-  phase6SupplierDesk,
-  phase6SupplierDeskLayer,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerGoldenEvidence,
   phase6TravelPlannerProducerPrefix,
-  releasePhase6PlannerGate,
-  releasePhase6ResearcherGate,
-  resetPhase6PlannerGate,
-  resetPhase6ResearcherGate,
   s2TravelPlannerSubmitOptions,
   travelPlanFromDurableSettlement,
   TripRequest,
@@ -67,6 +59,7 @@ import {
   stubFor,
   type TestNamespace,
 } from "./harness.ts";
+import { travelPlannerHarness } from "./travel-planner-worker.ts";
 
 /**
  * The Travel Planner DC slice (plan §6): the SAME cumulative Travel Planner fixtures the DN
@@ -79,6 +72,7 @@ import {
 
 let laneCounter = 0;
 const lane = (label: string): string => `cf-tp-${label}-${laneCounter++}`;
+const BOOKING_CALLER = OperationCaller.make({ principal: phase5TravelPlannerPrincipal });
 
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const encodeEnvelope = Schema.encodeSync(CanonicalRecordEnvelope);
@@ -159,7 +153,7 @@ const normalizedDcEvidence = (
   );
 
 const supplierCallCount = (idempotencyKey: string): Promise<number> =>
-  Effect.runPromise(phase6SupplierDesk.callCount(idempotencyKey));
+  Effect.runPromise(travelPlannerHarness.supplierDesk.callCount(idempotencyKey));
 
 interface ReservationRow {
   readonly record_json: string;
@@ -373,6 +367,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
             resolver: "travel-desk",
             reason: "phase-6 approval row",
           }),
+          BOOKING_CALLER,
         );
       }),
     );
@@ -390,7 +385,9 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     // result references supplier truth (never fabricated).
     expect(await supplierCallCount(bookKey)).toBe(1);
     await Effect.runPromise(
-      assertSettledBookingsExistAtSupplier(records).pipe(Effect.provide(phase6SupplierDeskLayer)),
+      assertSettledBookingsExistAtSupplier(records).pipe(
+        Effect.provide(travelPlannerHarness.supplierDeskLayer),
+      ),
     );
   }, 30_000);
 
@@ -416,6 +413,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
             resolver: "travel-desk",
             reason: "phase-6 unknown row",
           }),
+          BOOKING_CALLER,
         );
       }),
     );
@@ -452,6 +450,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
             reason: "phase-6 unknown row: the desk shows no booking under this key",
             resolution: ResolutionNeverHappened.make(),
           }),
+          BOOKING_CALLER,
         );
       }),
     );
@@ -463,7 +462,9 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     expect(settledPayloadOf(records).outcome).toBe("completed");
     expect(await supplierCallCount(bookKey)).toBe(1);
     await Effect.runPromise(
-      assertSettledBookingsExistAtSupplier(records).pipe(Effect.provide(phase6SupplierDeskLayer)),
+      assertSettledBookingsExistAtSupplier(records).pipe(
+        Effect.provide(travelPlannerHarness.supplierDeskLayer),
+      ),
     );
   }, 60_000);
 });
@@ -475,7 +476,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
 describe("DC Travel Planner — cross-Object delegation", () => {
   it("coordinator→researcher delegation joins across two Durable Objects after parent and child evictions; the completed child never re-executes", async () => {
     const conversation = lane("delegation");
-    resetPhase6ResearcherGate();
+    await Effect.runPromise(travelPlannerHarness.resetResearcherGate);
     armRuntimeEviction(conversation, "subagent:after-reserve");
     const receipt = await submitCoordinator(conversation);
     // The deterministic child identity (SUB-016): parent Submission and Tool Call pair.
@@ -496,7 +497,11 @@ describe("DC Travel Planner — cross-Object delegation", () => {
       return logTags(records).includes("SubagentStarted");
     });
     expect(armedEvictionsRemaining(conversation)).toBe(0);
-    releasePhase6ResearcherGate();
+    await Effect.runPromise(travelPlannerHarness.releaseResearcherGate);
+    // The fixture gate intentionally owns no cross-context Deferred. Evict the currently
+    // blocked child incarnation after flipping the plain worker-root flag; its persisted alarm
+    // enters a fresh incarnation whose model observes the released gate.
+    await abortIncarnation(childConversation);
 
     await drainLanesUntil([conversation, childConversation], allSettled(conversation));
     expect(armedEvictionsRemaining(childConversation)).toBe(0);
@@ -505,7 +510,7 @@ describe("DC Travel Planner — cross-Object delegation", () => {
 
     // The child's external side effect happened exactly once, and the completed child was
     // never re-executed: two model Turns and one Settlement in the child's own Object.
-    expect(phase6GuideInvocationCount()).toBe(1);
+    expect(await Effect.runPromise(travelPlannerHarness.guideInvocationCount)).toBe(1);
     const childRecords = await readCanonical(childConversation);
     expect(modelResponseCount(childRecords)).toBe(2);
     expect(
@@ -566,49 +571,94 @@ describe("DC Travel Planner — admission limits", () => {
       ),
     );
     expect(refusal._tag).toBe("AdmissionLimitExceeded");
-    if (refusal._tag === "AdmissionLimitExceeded") {
-      expect(refusal.limit).toBe("input-bytes");
-    }
+    if (refusal._tag !== "AdmissionLimitExceeded") throw refusal;
+    expect(refusal.limit).toBe("input-bytes");
     // Refused BEFORE admission: no ledger row exists on the lane.
     expect(await laneRows(conversation, "LIMITED")).toHaveLength(0);
   }, 30_000);
 
   it("admission refuses over-limit queue depth before any third ledger row exists", async () => {
     const conversation = lane("limit-queue");
-    resetPhase6PlannerGate(conversation);
-    const gatedOptions = (key: string): DurableSubmitOptions => ({
-      conversationId: decodeConversationId(conversation),
-      principal: phase4TravelPlannerPrincipal,
-      idempotencyKey: decodeIdempotencyKey(key),
-      definitions: phase6GatedPlannerDefinitionDigests,
-    });
-    // The gated planner holds the lane durably busy, so both admissions stay nonterminal.
+    const bookingOptions = (key: string) =>
+      phase5TravelPlannerSubmitOptions(
+        decodeConversationId(conversation),
+        decodeIdempotencyKey(key),
+      );
+    // The first booking suspends on its declared approval; the second remains queued, so both
+    // accepted admissions are nonterminal without a Worker-root Deferred.
     const first = await submitAgent(
-      { definition: TravelPlannerPhase4 },
-      phase6GatedTrip(conversation),
-      gatedOptions(`${conversation}-k1`),
+      { definition: TravelPlannerPhase5 },
+      phase6BookingTrip(conversation),
+      bookingOptions(`${conversation}-k1`),
       "LIMITED",
     );
+    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended", "LIMITED"), {
+      namespace: "LIMITED",
+    });
     const second = await submitAgent(
-      { definition: TravelPlannerPhase4 },
-      phase6GatedTrip(conversation),
-      gatedOptions(`${conversation}-k2`),
+      { definition: TravelPlannerPhase5 },
+      phase6BookingTrip(conversation),
+      bookingOptions(`${conversation}-k2`),
       "LIMITED",
     );
     expect(first.queueSequence).toBe(1);
     expect(second.queueSequence).toBe(2);
 
-    const refusal = await submitFlipped(phase6GatedTrip(conversation), {
-      ...gatedOptions(`${conversation}-k3`),
-    });
+    const refusal = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client
+          .submit(
+            { definition: TravelPlannerPhase5 },
+            phase6BookingTrip(conversation),
+            bookingOptions(`${conversation}-k3`),
+          )
+          .pipe(Effect.flip);
+      }),
+      "LIMITED",
+    );
     expect(refusal._tag).toBe("AdmissionLimitExceeded");
-    if (refusal._tag === "AdmissionLimitExceeded") {
-      expect(refusal.limit).toBe("queue-depth");
-      expect(refusal.maximum).toBe(2);
-    }
-    // The refused Submission left no third row; the accepted work then settles normally.
+    if (refusal._tag !== "AdmissionLimitExceeded") throw refusal;
+    expect(refusal.limit).toBe("queue-depth");
+    expect(refusal.maximum).toBe(2);
+    // The refused Submission left no third row. Resolve each accepted approval in FIFO order,
+    // proving the queue fixture drains without a cross-DO gate promise.
     expect(await laneRows(conversation, "LIMITED")).toHaveLength(2);
-    releasePhase6PlannerGate(conversation);
+    const approve = (submissionId: Receipt["submissionId"]) =>
+      runClient(
+        Effect.gen(function* () {
+          const client = yield* CloudflareConversationClient;
+          return yield* client.resolveApproval(
+            decodeConversationId(conversation),
+            ApprovalDecisionCommand.make({
+              submissionId,
+              toolCallId: decodeToolCallId(phase6BookingToolCallId(conversation)),
+              decision: "approved",
+              resolver: "travel-limit-fixture",
+              reason: "drain accepted quota-test work",
+            }),
+            BOOKING_CALLER,
+          );
+        }),
+        "LIMITED",
+      );
+    await approve(first.submissionId);
+    await drainAlarmsUntil(
+      conversation,
+      async () => {
+        const rows = await laneRows(conversation, "LIMITED");
+        return rows.some(
+          (row) =>
+            row.submission_id === second.submissionId &&
+            (row.state === "suspended" || row.state === "settled"),
+        );
+      },
+      { namespace: "LIMITED" },
+    );
+    const secondRow = (await laneRows(conversation, "LIMITED")).find(
+      (row) => row.submission_id === second.submissionId,
+    );
+    if (secondRow?.state === "suspended") await approve(second.submissionId);
     await drainAlarmsUntil(conversation, allSettled(conversation, "LIMITED"), {
       namespace: "LIMITED",
     });

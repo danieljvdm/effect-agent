@@ -254,6 +254,25 @@ identities are derived and receives the live `DurableObjectState`, raw Worker en
 resources such as Worker service bindings; database clients and other request-scoped resources
 remain outside the cached Durable Object runtime.
 
+The Conversation Object composition root requires the session package's existing
+`OperationAuthorizerService` and `ChildAdmissionAuthorizerService`; there is no ambient allow
+default. Protected Worker-to-Object calls Schema-encode an explicit `OperationCaller`, and an
+authorization refusal returns `OperationDenied` through the same closed RPC failure union so the
+Worker client retains the typed denial. Trusted local deployments and tests may deliberately
+select the exported possession policies.
+
+`CloudflareConversationClient.readPage` remains the bounded pagination primitive. Its `readAll`
+convenience is also bounded: callers may set `maxRecords`, the default is 4,096, and reaching a
+larger committed history fails with `ConversationReadLimitExceeded` before an unbounded array can
+materialize.
+
+`CloudflareDurableRuntimeOptions.databasePlan` declares the deployed Durable Objects account
+tier. It defaults conservatively to `free`, whose current SQLite-backed per-Object cap is 1 GB,
+with a 900 MB admission ceiling. Selecting `paid` uses the current 10 GB per-Object cap and a
+9 GB default ceiling. An explicit `maxDatabaseBytes` above the selected tier's actual cap fails
+configuration before storage opens; the runtime never infers a Paid deployment from a large
+quota value.
+
 Durable Object storage is the only correctness-critical store for that Conversation. In-memory
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
@@ -281,7 +300,10 @@ finalizers. Host callbacks run one at a time on retained independent root Effect
 return RPC is not coupled to the still-open guest RPC; pass teardown closes callback admission,
 interrupts and awaits active work, and settles queued calls. One absolute monotonic deadline
 applies to the worker RPC and every host callback. A synchronous runaway program is stopped by
-platform CPU limits, not only by a JavaScript timer.
+platform CPU limits, not only by a JavaScript timer. The generated module only defines a loader;
+the guest expression itself is evaluated after the bounded console and broker namespaces are
+installed, so an immediately invoked expression cannot perform unaccounted work during module
+initialization.
 
 The adapter records no persistent state and adds no deployment-class claim beyond `E`: the `DN`
 and `DC` assemblies make no Code Mode claim until this specification says otherwise. The tested harness is

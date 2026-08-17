@@ -1,3 +1,8 @@
+import {
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
+  OperationDenied,
+} from "@effect-agent/session";
 import { Effect } from "effect";
 
 import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
@@ -25,6 +30,8 @@ const baseOptions: ConversationObjectOptions = {
   namespaceBinding: CONVERSATIONS_BINDING,
   deploymentId: DEPLOYMENT_ID,
   producerPrefix: PRODUCER_PREFIX,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   // A dead incarnation's lease must lapse quickly so alarm passes reclaim its lane.
   ownershipLeaseDuration: 250,
   leaseRenewalInterval: 50,
@@ -72,6 +79,26 @@ const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
 
 /** The eviction/alarm/chaos suites' Conversation Object. */
 export class TestConversationObject extends makeConversationObjectClass(baseOptions) {}
+
+/** Fail-closed policy proving denials survive the real Worker↔DO RPC boundary. */
+export class DeniedConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "DENIED",
+  operationAuthorizer: {
+    authorize: (request) =>
+      Effect.fail(
+        OperationDenied.make({
+          operation: request.operation,
+          principal: request.principal,
+          reason: "denied by the platform RPC policy fixture",
+          ...(request.conversationId === undefined
+            ? {}
+            : { conversationId: request.conversationId }),
+          ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
+        }),
+      ),
+  },
+}) {}
 
 /** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
 export class LimitedConversationObject extends makeConversationObjectClass({

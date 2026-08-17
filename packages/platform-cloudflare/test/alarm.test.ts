@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { CloudflareConversationClient } from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
+  TEST_CALLER,
   approvalDefinition,
   armRuntimeEviction,
   armedEvictionsRemaining,
@@ -107,6 +108,7 @@ describe("DC alarm semantics", () => {
             resolver: "cf-alarm-approver",
             reason: "double-fire idempotency row",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -137,6 +139,7 @@ describe("DC alarm semantics", () => {
             reason: "double-fire idempotency row",
             resolution: ResolutionNeverHappened.make(),
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -183,6 +186,7 @@ describe("DC alarm semantics", () => {
             resolver: "cf-alarm-approver",
             reason: "invariant row",
           }),
+          TEST_CALLER,
         );
       }),
     );

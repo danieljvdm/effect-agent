@@ -18,9 +18,12 @@ import {
   IdempotencyKey,
   JoinedToHost,
   LedgerError,
+  OperationCaller,
+  OperationDenied,
   PersistedJson,
   Principal,
   Receipt,
+  RunJournalError,
   Settlement,
   SettlementConflict,
   UnknownResolutionCommand,
@@ -76,6 +79,33 @@ export class ConversationClientError extends Schema.TaggedError<ConversationClie
   },
 ) {}
 
+/** `readAll` reached its explicit materialization bound before the committed tail. */
+export class ConversationReadLimitExceeded extends Schema.TaggedError<ConversationReadLimitExceeded>()(
+  "ConversationReadLimitExceeded",
+  {
+    conversationId: Schema.String,
+    maximum: Schema.Int.check(Schema.isGreaterThan(0)),
+    observed: Schema.Int.check(Schema.isGreaterThan(0)),
+  },
+) {
+  override get message() {
+    return (
+      `Conversation ${this.conversationId} contains more than the readAll limit of ` +
+      `${this.maximum} records; at least ${this.observed} were observed. Use readPage for ` +
+      "larger histories."
+    );
+  }
+}
+
+/** Conservative default preventing accidental unbounded history materialization. */
+export const DEFAULT_READ_ALL_MAX_RECORDS = 4_096;
+
+const ReadAllMaximum = Schema.Int.check(
+  Schema.isGreaterThan(0),
+  Schema.isLessThanOrEqualTo(1_000_000),
+);
+const decodeReadAllMaximum = Schema.decodeUnknownEffect(ReadAllMaximum);
+
 // ---------------------------------------------------------------------------
 // Requests
 // ---------------------------------------------------------------------------
@@ -96,12 +126,41 @@ export class SubmitRequest extends Schema.Class<SubmitRequest>(
   inputPayload: PersistedJson,
 }) {}
 
+export class AwaitSettlementRequest extends Schema.Class<AwaitSettlementRequest>(
+  "@effect-agent/platform-cloudflare/AwaitSettlementRequest",
+)({
+  receipt: Receipt,
+  caller: OperationCaller,
+}) {}
+
 /** One bounded page of canonical records after an optional sequence. */
 export class ObservePageRequest extends Schema.Class<ObservePageRequest>(
   "@effect-agent/platform-cloudflare/ObservePageRequest",
 )({
   afterSequence: Schema.optionalKey(CanonicalSequence),
   limit: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(1_024)),
+  caller: OperationCaller,
+}) {}
+
+export class AbortHostRequest extends Schema.Class<AbortHostRequest>(
+  "@effect-agent/platform-cloudflare/AbortHostRequest",
+)({
+  command: AbortCommand,
+  caller: OperationCaller,
+}) {}
+
+export class ApprovalHostRequest extends Schema.Class<ApprovalHostRequest>(
+  "@effect-agent/platform-cloudflare/ApprovalHostRequest",
+)({
+  command: ApprovalDecisionCommand,
+  caller: OperationCaller,
+}) {}
+
+export class UnknownResolutionHostRequest extends Schema.Class<UnknownResolutionHostRequest>(
+  "@effect-agent/platform-cloudflare/UnknownResolutionHostRequest",
+)({
+  command: UnknownResolutionCommand,
+  caller: OperationCaller,
 }) {}
 
 // ---------------------------------------------------------------------------
@@ -115,6 +174,7 @@ export class ObservePageRequest extends Schema.Class<ObservePageRequest>(
  * fidelity (plan §2.8).
  */
 export const HostFailure = Schema.Union([
+  OperationDenied,
   AgentInputError,
   DigestError,
   AdmissionConflict,
@@ -124,6 +184,7 @@ export const HostFailure = Schema.Union([
   JoinedToHost,
   LedgerError,
   ConversationStoreError,
+  RunJournalError,
   ConversationNotMaterialized,
   AppendConflict,
   FenceRejected,
@@ -195,16 +256,18 @@ export type HostResponse = typeof HostResponse.Type;
 
 export const decodeSubmitRequest = Schema.decodeUnknownEffect(SubmitRequest);
 export const encodeSubmitRequest = Schema.encodeEffect(SubmitRequest);
-export const decodeReceipt = Schema.decodeUnknownEffect(Receipt);
-export const encodeReceipt = Schema.encodeEffect(Receipt);
+export const decodeAwaitSettlementRequest = Schema.decodeUnknownEffect(AwaitSettlementRequest);
+export const encodeAwaitSettlementRequest = Schema.encodeEffect(AwaitSettlementRequest);
 export const decodeObservePageRequest = Schema.decodeUnknownEffect(ObservePageRequest);
 export const encodeObservePageRequest = Schema.encodeEffect(ObservePageRequest);
-export const decodeAbortCommand = Schema.decodeUnknownEffect(AbortCommand);
-export const encodeAbortCommand = Schema.encodeEffect(AbortCommand);
-export const decodeApprovalDecisionCommand = Schema.decodeUnknownEffect(ApprovalDecisionCommand);
-export const encodeApprovalDecisionCommand = Schema.encodeEffect(ApprovalDecisionCommand);
-export const decodeUnknownResolutionCommand = Schema.decodeUnknownEffect(UnknownResolutionCommand);
-export const encodeUnknownResolutionCommand = Schema.encodeEffect(UnknownResolutionCommand);
+export const decodeAbortHostRequest = Schema.decodeUnknownEffect(AbortHostRequest);
+export const encodeAbortHostRequest = Schema.encodeEffect(AbortHostRequest);
+export const decodeApprovalHostRequest = Schema.decodeUnknownEffect(ApprovalHostRequest);
+export const encodeApprovalHostRequest = Schema.encodeEffect(ApprovalHostRequest);
+export const decodeUnknownResolutionHostRequest = Schema.decodeUnknownEffect(
+  UnknownResolutionHostRequest,
+);
+export const encodeUnknownResolutionHostRequest = Schema.encodeEffect(UnknownResolutionHostRequest);
 export const encodeHostResponse = Schema.encodeEffect(HostResponse);
 export const decodeHostResponse = Schema.decodeUnknownEffect(HostResponse);
 
@@ -231,19 +294,25 @@ export type ClientSubmitFailure =
 export type ClientAwaitFailure =
   | LedgerError
   | SettlementConflict
+  | OperationDenied
   | HostProtocolError
   | ConversationClientError;
 
 export type ClientObserveFailure =
   | ConversationStoreError
   | ConversationNotMaterialized
+  | OperationDenied
   | HostProtocolError
   | ConversationClientError;
+
+/** `readAll` adds only its local materialization bound to the paged observation failures. */
+export type ClientReadAllFailure = ClientObserveFailure | ConversationReadLimitExceeded;
 
 export type ClientAbortFailure =
   | LedgerError
   | SettlementConflict
   | JoinedToHost
+  | OperationDenied
   | DurableRuntimeFailpointError
   | DurableAlarmError
   | HostProtocolError
@@ -253,6 +322,7 @@ export type ClientApprovalFailure =
   | LedgerError
   | SettlementConflict
   | ApprovalConflict
+  | OperationDenied
   | DurableAlarmError
   | HostProtocolError
   | ConversationClientError;
@@ -262,6 +332,7 @@ export type ClientUnknownFailure =
   | SettlementConflict
   | UnknownResolutionConflict
   | JoinedToHost
+  | OperationDenied
   | DurableRuntimeFailpointError
   | DurableAlarmError
   | HostProtocolError
@@ -284,17 +355,20 @@ const SUBMIT_FAILURE_TAGS: ReadonlySet<string> = new Set([
 const AWAIT_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "LedgerError",
   "SettlementConflict",
+  "OperationDenied",
   "HostProtocolError",
 ]);
 const OBSERVE_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "ConversationStoreError",
   "ConversationNotMaterialized",
+  "OperationDenied",
   "HostProtocolError",
 ]);
 const ABORT_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "LedgerError",
   "SettlementConflict",
   "JoinedToHost",
+  "OperationDenied",
   "DurableRuntimeFailpointError",
   "DurableAlarmError",
   "HostProtocolError",
@@ -303,6 +377,7 @@ const APPROVAL_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "LedgerError",
   "SettlementConflict",
   "ApprovalConflict",
+  "OperationDenied",
   "DurableAlarmError",
   "HostProtocolError",
 ]);
@@ -311,6 +386,7 @@ const UNKNOWN_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "SettlementConflict",
   "UnknownResolutionConflict",
   "JoinedToHost",
+  "OperationDenied",
   "DurableRuntimeFailpointError",
   "DurableAlarmError",
   "HostProtocolError",
@@ -350,23 +426,29 @@ export class CloudflareConversationClient extends Context.Service<
       options: DurableSubmitOptions,
     ) => Effect.Effect<Receipt, ClientSubmitFailure, InputSchema["EncodingServices"]>;
     /** Wake-hinted, poll-guaranteed settlement wait executed inside the owning Object. */
-    readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, ClientAwaitFailure>;
+    readonly awaitSettlement: (
+      receipt: Receipt,
+      caller: OperationCaller,
+    ) => Effect.Effect<Settlement, ClientAwaitFailure>;
     /** One bounded page of canonical records. */
     readonly readPage: (
       conversationId: ConversationId,
+      caller: OperationCaller,
       options?: {
         readonly afterSequence?: CanonicalSequence | undefined;
         readonly limit?: number | undefined;
       },
     ) => Effect.Effect<ReadonlyArray<CanonicalRecordEnvelope>, ClientObserveFailure>;
     /**
-     * Every canonical record up to the CURRENT committed tail, via repeated pages. A
-     * snapshot read, not a live observation — callers wanting liveness re-read after
-     * `awaitSettlement`.
+     * Canonical records up to the CURRENT committed tail, via repeated pages and bounded by
+     * `maxRecords`. A snapshot read, not a live observation — callers wanting liveness
+     * re-read after `awaitSettlement`. Use `readPage` for histories above the bound.
      */
     readonly readAll: (
       conversationId: ConversationId,
-    ) => Effect.Effect<ReadonlyArray<CanonicalRecordEnvelope>, ClientObserveFailure>;
+      caller: OperationCaller,
+      options?: { readonly maxRecords?: number | undefined },
+    ) => Effect.Effect<ReadonlyArray<CanonicalRecordEnvelope>, ClientReadAllFailure>;
     /**
      * Submission-addressed operations take the owning Conversation explicitly (from the
      * Receipt): minted Submission identities stay OPAQUE outside the storage adapter that
@@ -375,14 +457,17 @@ export class CloudflareConversationClient extends Context.Service<
     readonly abort: (
       conversationId: ConversationId,
       command: AbortCommand,
+      caller: OperationCaller,
     ) => Effect.Effect<AbortIntent, ClientAbortFailure>;
     readonly resolveApproval: (
       conversationId: ConversationId,
       command: ApprovalDecisionCommand,
+      caller: OperationCaller,
     ) => Effect.Effect<ApprovalDecisionIntent, ClientApprovalFailure>;
     readonly resolveUnknown: (
       conversationId: ConversationId,
       command: UnknownResolutionCommand,
+      caller: OperationCaller,
     ) => Effect.Effect<UnknownResolutionIntent, ClientUnknownFailure>;
   }
 >()("@effect-agent/platform-cloudflare/CloudflareConversationClient") {
@@ -457,6 +542,7 @@ export class CloudflareConversationClient extends Context.Service<
 
       const readPage = (
         conversationId: ConversationId,
+        caller: OperationCaller,
         options?: {
           readonly afterSequence?: CanonicalSequence | undefined;
           readonly limit?: number | undefined;
@@ -468,6 +554,7 @@ export class CloudflareConversationClient extends Context.Service<
               ? {}
               : { afterSequence: options.afterSequence }),
             limit: options?.limit ?? 256,
+            caller,
           });
           const encoded = yield* encodeObservePageRequest(request).pipe(
             Effect.mapError((error) =>
@@ -537,9 +624,11 @@ export class CloudflareConversationClient extends Context.Service<
             return succeeded.receipt;
           }),
 
-        awaitSettlement: (receipt) =>
+        awaitSettlement: (receipt, caller) =>
           Effect.gen(function* () {
-            const encoded = yield* encodeReceipt(receipt).pipe(
+            const encoded = yield* encodeAwaitSettlementRequest(
+              AwaitSettlementRequest.make({ receipt, caller }),
+            ).pipe(
               Effect.mapError((error) =>
                 HostProtocolError.make({
                   message: boundHostDiagnostic(`receipt encode failed: ${error.message}`),
@@ -560,22 +649,47 @@ export class CloudflareConversationClient extends Context.Service<
 
         readPage,
 
-        readAll: (conversationId) =>
+        readAll: (conversationId, caller, options) =>
           Effect.gen(function* () {
+            const maximum = yield* decodeReadAllMaximum(
+              options?.maxRecords ?? DEFAULT_READ_ALL_MAX_RECORDS,
+            ).pipe(
+              Effect.mapError((error) =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(
+                    `readAll maxRecords must be an integer from 1 through 1000000: ${error.message}`,
+                  ),
+                }),
+              ),
+            );
             const all: Array<CanonicalRecordEnvelope> = [];
             let after: CanonicalSequence | undefined;
             for (;;) {
-              const page = yield* readPage(conversationId, { afterSequence: after, limit: 1_024 });
+              const remaining = maximum - all.length;
+              const pageLimit = Math.min(1_024, remaining + 1);
+              const page = yield* readPage(conversationId, caller, {
+                afterSequence: after,
+                limit: pageLimit,
+              });
+              if (page.length > remaining) {
+                return yield* ConversationReadLimitExceeded.make({
+                  conversationId,
+                  maximum,
+                  observed: all.length + page.length,
+                });
+              }
               all.push(...page);
               const last = page.at(-1);
-              if (page.length < 1_024 || last === undefined) return all;
+              if (page.length < pageLimit || last === undefined) return all;
               after = last.sequence;
             }
           }),
 
-        abort: (conversationId, command) =>
+        abort: (conversationId, command, caller) =>
           Effect.gen(function* () {
-            const encoded = yield* encodeAbortCommand(command).pipe(
+            const encoded = yield* encodeAbortHostRequest(
+              AbortHostRequest.make({ command, caller }),
+            ).pipe(
               Effect.mapError((error) =>
                 HostProtocolError.make({
                   message: boundHostDiagnostic(`abort command encode failed: ${error.message}`),
@@ -594,9 +708,11 @@ export class CloudflareConversationClient extends Context.Service<
             return recorded.intent;
           }),
 
-        resolveApproval: (conversationId, command) =>
+        resolveApproval: (conversationId, command, caller) =>
           Effect.gen(function* () {
-            const encoded = yield* encodeApprovalDecisionCommand(command).pipe(
+            const encoded = yield* encodeApprovalHostRequest(
+              ApprovalHostRequest.make({ command, caller }),
+            ).pipe(
               Effect.mapError((error) =>
                 HostProtocolError.make({
                   message: boundHostDiagnostic(`approval command encode failed: ${error.message}`),
@@ -615,9 +731,11 @@ export class CloudflareConversationClient extends Context.Service<
             return recorded.intent;
           }),
 
-        resolveUnknown: (conversationId, command) =>
+        resolveUnknown: (conversationId, command, caller) =>
           Effect.gen(function* () {
-            const encoded = yield* encodeUnknownResolutionCommand(command).pipe(
+            const encoded = yield* encodeUnknownResolutionHostRequest(
+              UnknownResolutionHostRequest.make({ command, caller }),
+            ).pipe(
               Effect.mapError((error) =>
                 HostProtocolError.make({
                   message: boundHostDiagnostic(

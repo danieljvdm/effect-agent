@@ -1,15 +1,20 @@
 import { ConversationId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
-  ConversationStore,
+  type OperationAuthorizer,
+  childAdmissionAuthorizerLayer,
+  type ConversationStore,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   ProducerId,
-  SubmissionLedger,
+  operationAuthorizerLayer,
+  type SubmissionLedger,
   ToolReconciler,
-  WakeScheduler,
+  type WakeScheduler,
   type DurableRuntimeFailpointHandler,
+  type ChildAdmissionAuthorizerService,
+  type OperationAuthorizerService,
   type ResolvedBinding,
 } from "@effect-agent/session";
 import {
@@ -24,22 +29,25 @@ import {
   type DoStorageInitializationError,
   type DoStorageOptions,
 } from "@effect-agent/storage-cloudflare";
-import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
 import {
   ConversationObjectIdentity,
-  ConversationObjectNamespace,
+  type ConversationObjectNamespace,
   DurableObjectContext,
 } from "./bindings.ts";
 import {
+  CLOUDFLARE_FREE_DATABASE_CAP_BYTES,
+  CLOUDFLARE_PAID_DATABASE_CAP_BYTES,
   CLOUDFLARE_RUNTIME_DEFAULTS,
+  DEFAULT_PAID_MAX_DATABASE_BYTES,
   CloudflareDurableRuntimeConfig,
   CloudflareDurableRuntimeConfigValue,
   CloudflarePlatformConfigError,
 } from "./config.ts";
+import { cloudflareCryptoLayer } from "./crypto.ts";
 import { conversationPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
@@ -51,8 +59,14 @@ import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
  */
 export interface CloudflareDurableRuntimeOptions {
   readonly deploymentId: string;
+  /** Cloudflare account tier; defaults conservatively to `free`. */
+  readonly databasePlan?: "free" | "paid" | undefined;
   /** Head of the minted producer identity `{producerPrefix}:{conversationId}`. */
   readonly producerPrefix: string;
+  /** Required current-policy authority for every protected runtime operation. */
+  readonly operationAuthorizer: OperationAuthorizerService;
+  /** Required current-policy authority for durable child establishment. */
+  readonly childAdmissionAuthorizer: ChildAdmissionAuthorizerService;
   /** Milliseconds; default 30s (D5). */
   readonly ownershipLeaseDuration?: number | undefined;
   /** Milliseconds; default 100. */
@@ -77,7 +91,7 @@ export interface CloudflareDurableRuntimeOptions {
   readonly maxQueueDepthPerLane?: number | undefined;
   /** Encoded input bytes per Submission; default = the stored-value bound. */
   readonly maxInputBytes?: number | undefined;
-  /** `ctx.storage.sql.databaseSize` ceiling at admission; default 9 GB (10 GB platform cap). */
+  /** Database-size admission ceiling; default 900 MB Free or 9 GB when `paid` is explicit. */
   readonly maxDatabaseBytes?: number | undefined;
   /**
    * Durable Object storage fault injection (`ledger:*` / `append:*` locations). Handlers are
@@ -143,7 +157,8 @@ export type CloudflareDurableRuntimeServices =
   | ConversationObjectIdentity
   | DurableAlarmService
   | ConversationMaintenance
-  | ConversationObjectPorts;
+  | ConversationObjectPorts
+  | OperationAuthorizer;
 
 /**
  * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
@@ -162,11 +177,24 @@ const decodeConfigValue = Schema.decodeUnknownEffect(CloudflareDurableRuntimeCon
 const decodeConversationId = Schema.decodeUnknownEffect(ConversationId);
 const decodeProducerId = Schema.decodeUnknownEffect(ProducerId);
 
-const configFromOptions = (
-  options: CloudflareDurableRuntimeOptions,
-): Effect.Effect<CloudflareDurableRuntimeConfigValue, CloudflarePlatformConfigError> =>
-  decodeConfigValue({
+export const cloudflareDurableRuntimeConfigFromOptions = (
+  options: Omit<
+    CloudflareDurableRuntimeOptions,
+    "operationAuthorizer" | "childAdmissionAuthorizer"
+  >,
+): Effect.Effect<CloudflareDurableRuntimeConfigValue, CloudflarePlatformConfigError> => {
+  const databasePlan = options.databasePlan ?? CLOUDFLARE_RUNTIME_DEFAULTS.databasePlan;
+  const databaseCap =
+    databasePlan === "paid"
+      ? CLOUDFLARE_PAID_DATABASE_CAP_BYTES
+      : CLOUDFLARE_FREE_DATABASE_CAP_BYTES;
+  const defaultMaximum =
+    databasePlan === "paid"
+      ? DEFAULT_PAID_MAX_DATABASE_BYTES
+      : CLOUDFLARE_RUNTIME_DEFAULTS.maxDatabaseBytes;
+  return decodeConfigValue({
     deploymentId: options.deploymentId,
+    databasePlan,
     producerPrefix: options.producerPrefix,
     ownershipLeaseDuration:
       options.ownershipLeaseDuration ?? CLOUDFLARE_RUNTIME_DEFAULTS.ownershipLeaseDuration,
@@ -190,7 +218,7 @@ const configFromOptions = (
         options.maxInputBytes ?? CLOUDFLARE_RUNTIME_DEFAULTS.maxInputBytes,
         options.maxStoredValueBytes ?? CLOUDFLARE_RUNTIME_DEFAULTS.maxStoredValueBytes,
       ),
-      maxDatabaseBytes: options.maxDatabaseBytes ?? CLOUDFLARE_RUNTIME_DEFAULTS.maxDatabaseBytes,
+      maxDatabaseBytes: options.maxDatabaseBytes ?? defaultMaximum,
     },
   }).pipe(
     Effect.mapError((error) =>
@@ -199,7 +227,18 @@ const configFromOptions = (
         cause: error,
       }),
     ),
+    Effect.filterOrFail(
+      (config) => config.limits.maxDatabaseBytes <= databaseCap,
+      (config) =>
+        CloudflarePlatformConfigError.make({
+          message:
+            `Invalid Cloudflare durable runtime configuration: maxDatabaseBytes ` +
+            `${config.limits.maxDatabaseBytes} exceeds the ${config.databasePlan} plan cap ` +
+            `${databaseCap}. Select the deployed plan explicitly or lower the admission limit.`,
+        }),
+    ),
   );
+};
 
 /**
  * The Conversation this Object owns, from the Object identity rule (plan §1.2): Conversation
@@ -269,7 +308,7 @@ export class CloudflareDurableRuntime {
     return Layer.unwrap(
       Effect.gen(function* () {
         const { ctx, env } = yield* DurableObjectContext;
-        const config = yield* configFromOptions(options);
+        const config = yield* cloudflareDurableRuntimeConfigFromOptions(options);
         const conversationId = yield* conversationIdFromState(ctx);
         const producerId = yield* decodeProducerId(
           `${config.producerPrefix}:${conversationId}`,
@@ -300,7 +339,7 @@ export class CloudflareDurableRuntime {
           storageConfigLayer(storageOptions),
           storageFailpointLayer(storageOptions),
           SqliteClient.layer({ storage: ctx.storage }),
-          BrowserCrypto.layer,
+          cloudflareCryptoLayer,
         );
 
         /**
@@ -341,6 +380,10 @@ export class CloudflareDurableRuntime {
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
+        const authorizerLayers = Layer.merge(
+          operationAuthorizerLayer(options.operationAuthorizer),
+          childAdmissionAuthorizerLayer(options.childAdmissionAuthorizer),
+        );
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
             resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
@@ -360,7 +403,12 @@ export class CloudflareDurableRuntime {
           Layer.provideMerge(runtimeConfigLayer),
           Layer.provideMerge(bindingResolverLayer),
           Layer.provide(
-            Layer.mergeAll(runtimeFailpointLayer, reconcilerLayer, BrowserCrypto.layer),
+            Layer.mergeAll(
+              runtimeFailpointLayer,
+              reconcilerLayer,
+              authorizerLayers,
+              cloudflareCryptoLayer,
+            ),
           ),
           Layer.provideMerge(base),
         );
@@ -369,6 +417,7 @@ export class CloudflareDurableRuntime {
           runtimeStack,
           ConversationMaintenance.layer.pipe(Layer.provide(runtimeStack)),
           portsEndpointLayer,
+          authorizerLayers,
         );
       }),
     );

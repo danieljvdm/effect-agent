@@ -24,6 +24,7 @@ import {
   armedEvictionsRemaining,
   decodeConversationId,
   submitOptions,
+  TEST_CALLER,
 } from "./fixtures.ts";
 import { anyInState, laneRows, readCanonical, runClient, stubFor } from "./harness.ts";
 import {
@@ -110,6 +111,7 @@ const abortParent = (conversation: string, receipt: Receipt) =>
           author: "operator",
           reason: "cross-Object abort propagation",
         }),
+        TEST_CALLER,
       );
     }),
     SUBAGENTS,
@@ -252,7 +254,7 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
 
     // The WP1 admin surface names the deferral: the child Object explains its own lane.
     const explainedRaw: unknown = await Promise.resolve(
-      stubFor(child, SUBAGENTS).explainEncoded({}),
+      stubFor(child, SUBAGENTS).explainEncoded({ caller: { principal: TEST_CALLER.principal } }),
     );
     const explained: AdminResponse = await Effect.runPromise(decodeAdminResponse(explainedRaw));
     expect(explained._tag).toBe("ExplainedRecovery");

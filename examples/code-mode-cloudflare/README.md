@@ -13,19 +13,21 @@ POST /ask { "question": "Which customers have more than $10,000 in revenue?" }
         ▼
    ephemeral Code Mode Agent  ──writes──►  one bounded JavaScript program
         │                                          │
-        │ native run_javascript tool               │ warehouse.query(...)  (typed sandbox global)
+        │ native run_javascript tool               │ warehouse.listInvoices(...)  (typed sandbox global)
         ▼                                          ▼
  Dynamic Worker CodeExecutor ──loads──►  fresh Worker (globalOutbound: null)
    (@effect-agent/platform-cloudflare)        │ no network / bindings / secrets
         │                                      │ RPC back through the broker only
         ▼                                      ▼
- engine-owned Tool broker  ──►  read-only SQL tool  ──►  WarehouseObject (SQLite DO)
+engine-owned Tool broker  ──►  curated invoice Tool  ──►  WarehouseObject (SQLite DO)
 ```
 
 The model never touches the database. It writes a program; the program runs in
 an **isolated Dynamic Worker** with no ambient authority and reaches the
-warehouse only through the brokered `warehouse.query` method, which runs one
-**read-only** SQL statement against a SQLite Durable Object. Deployment class
+warehouse only through the brokered `warehouse.listInvoices` method. The
+caller supplies typed filters (`minimumRevenue` and `region`), while the
+adapter selects a fixed parameterized read statement. No SQL text crosses the
+Tool or RPC boundary. Deployment class
 **E**: the Agent runs ephemerally; the Durable Object is the warehouse data
 store, not a Conversation store.
 
@@ -40,7 +42,7 @@ executor, and the **actual JavaScript the model wrote**, alongside its result:
     "tool": "run_javascript",
     "executor": "cloudflare-dynamic-worker",
     "calls": 1,
-    "program": "async () => { const result = await warehouse.query({ sql: \"SELECT region, SUM(revenue) AS total_revenue FROM invoice_summary GROUP BY region ORDER BY total_revenue DESC LIMIT 1\" }); return result.rows[0]; }",
+    "program": "async () => { const result = await warehouse.listInvoices({ region: \"emea\" }); return result.invoices.reduce((sum, row) => sum + row.revenue, 0); }",
     "result": { "region": "emea", "total_revenue": 69250 },
     "logs": [],
   },
@@ -51,36 +53,26 @@ executor, and the **actual JavaScript the model wrote**, alongside its result:
 On the offline scripted profile `program` is a fixed demonstration program and
 `profile` is `"scripted"`; on the live profile the model writes its own.
 
-### Read-only enforcement on Durable Object SQLite
+### Read-only authority on Durable Object SQLite
 
-The plan (§8.4) prescribes database authority as the read-only boundary. On
-Durable Object SQLite the `PRAGMA query_only` lock is blocked by the storage
-authorizer (`SQLITE_AUTH`), so this demo enforces read-only in application
-code. Because a denylist of write keywords is bypassable — a `WITH … DELETE`
-common-table expression does not _start_ with a write keyword — the scan is an
-**allowlist**: the statement must be a single read (`SELECT`, or a `WITH` whose
-body is a read) and must contain no write, DDL, transaction, or escape-hatch
-token (`INSERT`/`UPDATE`/`DELETE`/`DROP`/`PRAGMA`/`ATTACH`/`load_extension`/…)
-anywhere in the literal-stripped text. Row and byte caps are enforced while
-draining the cursor, so a query that would return a huge result set never
-fully materializes.
-
-This text scan is a demo-grade boundary. A production warehouse should back
-this with a read-only database identity or curated read-only views. The Node
-reference fixture in `@effect-agent/testing` (`warehouseDbLayer`) proves the
-stronger _database-authority_ path (`PRAGMA query_only = ON` →
-`SQLITE_READONLY`) that Node SQLite allows.
+Durable Object SQLite does not expose a connection-level `query_only` lock to
+this Worker. The example therefore does not accept arbitrary SQL and does not
+claim a text scanner is database authority. `WarehouseObject.listInvoices`
+Schema-decodes one closed request, selects one of four adapter-owned
+parameterized `SELECT` statements, caps the cursor at 200 rows, and
+Schema-encodes the response. A write statement is not representable through
+the public Tool or DO RPC surface.
 
 ## Run the tests (no credentials)
 
-```sh
-bun run --filter @effect-agent/example-code-mode-cloudflare test
-```
+Run `vp test run examples/code-mode-cloudflare/test/demo.test.ts` from the
+repository root.
 
 The test bundles the Worker and boots it in a real workerd runtime
 (programmatic Miniflare) with a Worker Loader binding and the SQLite Durable
 Object, then asserts that a generated program queried the real DO and computed
-the answer, and that a write is denied by the read-only database authority. The
+the answer, malformed HTTP/DO values fail Schema decoding, and SQL authority is
+absent from the curated operation. The
 default profile is a deterministic scripted model, so no API key is needed.
 
 ## Deploy to Cloudflare

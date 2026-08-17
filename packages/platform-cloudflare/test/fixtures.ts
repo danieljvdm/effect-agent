@@ -7,6 +7,7 @@ import {
   DurableWorkerBinding,
   IdempotencyKey,
   Principal,
+  OperationCaller,
   ReconciliationSafeToRetry,
   ReconciliationUncertain,
   ToolReconciler,
@@ -176,6 +177,7 @@ export const decodeConversationId = Schema.decodeSync(ConversationId);
 export const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
 export const TEST_PRINCIPAL = Schema.decodeSync(Principal)("principal-cf-eviction");
+export const TEST_CALLER = OperationCaller.make({ principal: TEST_PRINCIPAL });
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 export const TEST_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 

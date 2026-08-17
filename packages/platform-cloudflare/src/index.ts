@@ -13,6 +13,7 @@
  * to import the `cloudflare:workers` runtime module.
  */
 export * from "./bindings.ts";
+export * from "./crypto.ts";
 export * from "./config.ts";
 export * from "./alarm.ts";
 export * from "./wake-scheduler.ts";

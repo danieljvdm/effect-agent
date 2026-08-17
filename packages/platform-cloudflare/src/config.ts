@@ -45,11 +45,22 @@ export class AdmissionLimitExceeded extends Schema.TaggedError<AdmissionLimitExc
   }
 }
 
-/** The platform's hard per-Object database cap (10 GB, developers.cloudflare.com limits). */
-export const CLOUDFLARE_DATABASE_CAP_BYTES = 10_000_000_000;
+/** Cloudflare account tier whose SQLite-backed Durable Object cap is being deployed. */
+export const CloudflareDatabasePlan = Schema.Literals(["free", "paid"]);
+export type CloudflareDatabasePlan = typeof CloudflareDatabasePlan.Type;
 
-/** Default database-size admission ceiling: a 1 GB safety margin under the platform cap. */
-export const DEFAULT_MAX_DATABASE_BYTES = 9_000_000_000;
+/** Current per-Object SQLite database caps published by Cloudflare. */
+export const CLOUDFLARE_FREE_DATABASE_CAP_BYTES = 1_000_000_000;
+export const CLOUDFLARE_PAID_DATABASE_CAP_BYTES = 10_000_000_000;
+
+/** Backward-compatible name for the largest platform cap accepted by the Schema. */
+export const CLOUDFLARE_DATABASE_CAP_BYTES = CLOUDFLARE_PAID_DATABASE_CAP_BYTES;
+
+/** Conservative Free-plan default, leaving 100 MB before the platform cap. */
+export const DEFAULT_MAX_DATABASE_BYTES = 900_000_000;
+
+/** Paid-plan default, leaving 1 GB before the platform cap. */
+export const DEFAULT_PAID_MAX_DATABASE_BYTES = 9_000_000_000;
 
 /**
  * Explicit bounded admission quotas checked by the Conversation Object BEFORE admission
@@ -65,7 +76,7 @@ export class CloudflareAdmissionLimitsValue extends Schema.Class<CloudflareAdmis
   ),
   /** Maximum encoded input bytes; never above the storage per-value bound. */
   maxInputBytes: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2_000_000)),
-  /** Maximum `ctx.storage.sql.databaseSize` at admission; stays under the 10 GB platform cap. */
+  /** Maximum `ctx.storage.sql.databaseSize` at admission; validated against the selected plan. */
   maxDatabaseBytes: Schema.Int.check(
     Schema.isGreaterThan(0),
     Schema.isLessThanOrEqualTo(CLOUDFLARE_DATABASE_CAP_BYTES),
@@ -82,6 +93,8 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   "@effect-agent/platform-cloudflare/CloudflareDurableRuntimeConfigValue",
 )({
   deploymentId: DeploymentId,
+  /** Deployment account tier whose real per-Object database cap applies. */
+  databasePlan: CloudflareDatabasePlan,
   /** Head of the minted producer identity `{producerPrefix}:{conversationId}`. */
   producerPrefix: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
   /** Submission ownership lease duration (D5); fences work across Object incarnations. */
@@ -121,6 +134,7 @@ export class CloudflareDurableRuntimeConfig extends Context.Service<
 
 /** Documented production defaults applied by `CloudflareDurableRuntime.layer`. */
 export const CLOUDFLARE_RUNTIME_DEFAULTS = {
+  databasePlan: "free" as const,
   ownershipLeaseDuration: Duration.toMillis(DEFAULT_OWNERSHIP_LEASE_DURATION),
   alarmBackoffBase: 100,
   alarmBackoffCap: 5_000,

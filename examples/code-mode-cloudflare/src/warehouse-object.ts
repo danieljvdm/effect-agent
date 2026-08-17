@@ -4,178 +4,147 @@ import { Context, Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 /**
- * The warehouse Durable Object: a SQLite-backed store of curated invoice data
- * that generated Code Mode programs query through a read-only SQL Tool. Only a
- * single curated `invoice_summary` table is exposed, and every query goes
- * through the read-only ALLOWLIST scan (`scanReadOnly`) — Durable Object
- * SQLite cannot lock the connection with `PRAGMA query_only`, so the demo
- * permits only single read statements (see the README for the production
- * guidance). Nothing about the connection, credentials, or storage ever
- * reaches the isolated executor: generated code sees only the brokered
- * `warehouse.query` method and its Schema-bounded result.
- *
- * This is the demo's "SQLite DO db": one Durable Object per tenant name,
- * seeded once, then read-only.
+ * The warehouse Durable Object exposes one curated invoice-list operation.
+ * Callers choose typed filters, never SQL text, so the `readonly` Tool label
+ * reflects real authority: every reachable statement is selected and owned by
+ * this adapter. Generated code sees no connection, credentials, or storage.
  */
 
 const MAX_ROWS = 200;
-const MAX_RESULT_BYTES = 256 * 1024;
 
-/** A read-only query outcome returned across the DO RPC boundary as plain JSON. */
-export interface WarehouseQueryOutcome {
-  readonly ok: boolean;
-  readonly columns: ReadonlyArray<string>;
-  readonly rows: ReadonlyArray<Record<string, unknown>>;
-  readonly rowCount: number;
-  readonly truncated: boolean;
-  /** Present when `ok` is false: a stable denial/failure reason. */
-  readonly reason?: string;
-}
+export const WarehouseRegion = Schema.Literals(["amer", "emea", "apac"]);
+export type WarehouseRegion = typeof WarehouseRegion.Type;
 
-const seedRows: ReadonlyArray<{
-  readonly customer: string;
-  readonly region: string;
-  readonly revenue: number;
-  readonly createdAt: string;
-}> = [
-  { customer: "Stellar Freight", region: "emea", revenue: 48_200, createdAt: "2026-07-03" },
-  { customer: "Nimbus Analytics", region: "amer", revenue: 12_800, createdAt: "2026-07-11" },
-  { customer: "Copper Kettle Co", region: "amer", revenue: 730, createdAt: "2026-07-15" },
-  { customer: "Harbor Lights Ltd", region: "apac", revenue: 9_400, createdAt: "2026-07-21" },
-  { customer: "Vertex Robotics", region: "emea", revenue: 21_050, createdAt: "2026-07-24" },
+export class WarehouseInvoice extends Schema.Class<WarehouseInvoice>(
+  "@effect-agent/example-code-mode-cloudflare/WarehouseInvoice",
+)({
+  customer: Schema.NonEmptyString,
+  region: WarehouseRegion,
+  revenue: Schema.Natural,
+  createdAt: Schema.NonEmptyString,
+}) {}
+
+export class WarehouseListRequest extends Schema.Class<WarehouseListRequest>(
+  "@effect-agent/example-code-mode-cloudflare/WarehouseListRequest",
+)({
+  minimumRevenue: Schema.optionalKey(Schema.Natural),
+  region: Schema.optionalKey(WarehouseRegion),
+}) {}
+
+export class WarehouseInvoices extends Schema.TaggedClass<WarehouseInvoices>(
+  "@effect-agent/example-code-mode-cloudflare/WarehouseInvoices",
+)("WarehouseInvoices", {
+  invoices: Schema.Array(WarehouseInvoice).check(Schema.isMaxLength(MAX_ROWS)),
+  truncated: Schema.Boolean,
+}) {}
+
+export class WarehouseQueryDenied extends Schema.TaggedClass<WarehouseQueryDenied>(
+  "@effect-agent/example-code-mode-cloudflare/WarehouseQueryDenied",
+)("WarehouseQueryDenied", {
+  reason: Schema.String.check(Schema.isMaxLength(500)),
+}) {}
+
+export const WarehouseListOutcome = Schema.Union([WarehouseInvoices, WarehouseQueryDenied]);
+export type WarehouseListOutcome = typeof WarehouseListOutcome.Type;
+
+const decodeListRequest = Schema.decodeUnknownEffect(WarehouseListRequest);
+const decodeListOutcome = Schema.decodeUnknownEffect(WarehouseListOutcome);
+const encodeListRequest = Schema.encodeEffect(WarehouseListRequest);
+const encodeListOutcome = Schema.encodeEffect(WarehouseListOutcome);
+const decodeInvoice = Schema.decodeUnknownOption(WarehouseInvoice);
+const decodeCount = Schema.decodeUnknownOption(
+  Schema.Struct({ n: Schema.Union([Schema.Number, Schema.String]) }),
+);
+
+const seedRows: ReadonlyArray<WarehouseInvoice> = [
+  WarehouseInvoice.make({
+    customer: "Stellar Freight",
+    region: "emea",
+    revenue: 48_200,
+    createdAt: "2026-07-03",
+  }),
+  WarehouseInvoice.make({
+    customer: "Nimbus Analytics",
+    region: "amer",
+    revenue: 12_800,
+    createdAt: "2026-07-11",
+  }),
+  WarehouseInvoice.make({
+    customer: "Copper Kettle Co",
+    region: "amer",
+    revenue: 730,
+    createdAt: "2026-07-15",
+  }),
+  WarehouseInvoice.make({
+    customer: "Harbor Lights Ltd",
+    region: "apac",
+    revenue: 9_400,
+    createdAt: "2026-07-21",
+  }),
+  WarehouseInvoice.make({
+    customer: "Vertex Robotics",
+    region: "emea",
+    revenue: 21_050,
+    createdAt: "2026-07-24",
+  }),
 ];
 
-const stripLiteralsAndComments = (sql: string): string => {
-  let output = "";
-  let index = 0;
-  while (index < sql.length) {
-    const char = sql[index];
-    if (char === "'") {
-      index += 1;
-      while (index < sql.length) {
-        if (sql[index] === "'" && sql[index + 1] === "'") {
-          index += 2;
-          continue;
-        }
-        if (sql[index] === "'") {
-          index += 1;
-          break;
-        }
-        index += 1;
-      }
-      output += " ";
-      continue;
-    }
-    if (char === "-" && sql[index + 1] === "-") {
-      while (index < sql.length && sql[index] !== "\n") index += 1;
-      continue;
-    }
-    output += char;
-    index += 1;
-  }
-  return output;
-};
-
-// Cloudflare Durable Object SQLite blocks `PRAGMA query_only` through its
-// statement authorizer (SQLITE_AUTH), so — unlike the Node reference fixture,
-// which locks the connection read-only and lets database authority deny every
-// write (the primary boundary the plan §8.4 prescribes) — this demo enforces
-// read-only in application code. Because a denylist of write keywords is
-// bypassable (e.g. a `WITH … DELETE` common-table expression does not START
-// with a write keyword), the scan is an ALLOWLIST: the statement must be a
-// single read (`SELECT`, or a `WITH` whose body is a read) and must contain
-// no write, DDL, or escape-hatch token ANYWHERE in the literal-stripped text.
-// A production deployment should still back the warehouse with a read-only
-// database identity or curated read-only views rather than a text scan.
-const readOnlyPrefix = /^\s*(select|with)\b/i;
-const disallowedTokens =
-  /\b(insert|update|delete|replace|drop|create|alter|truncate|reindex|analyze|pragma|attach|detach|vacuum|load_extension|savepoint|release|begin|commit|rollback)\b/i;
-
-const scanReadOnly = (sql: string): string | undefined => {
-  const stripped = stripLiteralsAndComments(sql);
-  const semicolon = stripped.indexOf(";");
-  if (semicolon !== -1 && stripped.slice(semicolon + 1).trim().length > 0) {
-    return "exactly one statement is allowed per call";
-  }
-  if (!readOnlyPrefix.test(stripped)) {
-    return "only read-only SELECT statements are allowed";
-  }
-  const disallowed = disallowedTokens.exec(stripped);
-  return disallowed === null
-    ? undefined
-    : `${disallowed[1].toUpperCase()} is not allowed in a read-only query`;
-};
-
-const utf8ByteLength = (value: string): number => new TextEncoder().encode(value).byteLength;
-
-const decodeRow = Schema.decodeUnknownOption(Schema.Record(Schema.String, Schema.Json));
-
-/**
- * Run one bounded read-only query over the DO's SQLite storage. The read-only
- * boundary is the ALLOWLIST scan (`scanReadOnly`) — Durable Object SQLite
- * cannot lock the connection with `PRAGMA query_only`, so this demo permits
- * only single read statements. The row and byte caps are enforced WHILE
- * draining the cursor (early break), so a query that would return a huge
- * result set never fully materializes.
- */
-const runQuery = (
+const queryInvoices = (
   storage: DurableObjectStorage,
-  sql: string,
-  parameters: ReadonlyArray<string | number | boolean | null>,
-): Effect.Effect<WarehouseQueryOutcome> =>
+  request: WarehouseListRequest,
+): Effect.Effect<WarehouseListOutcome> =>
   Effect.sync(() => {
-    const denied = scanReadOnly(sql);
-    if (denied !== undefined) {
-      return { ok: false, columns: [], rows: [], rowCount: 0, truncated: false, reason: denied };
-    }
-    let cursor;
-    try {
-      cursor = storage.sql.exec(sql, ...parameters);
-    } catch (cause) {
-      return {
-        ok: false,
-        columns: [],
-        rows: [],
-        rowCount: 0,
-        truncated: false,
-        reason: `query failed: ${(cause instanceof Error ? cause.message : String(cause)).slice(0, 500)}`,
-      };
-    }
-    const rows: Array<Record<string, unknown>> = [];
-    let truncated = false;
-    let usedBytes = 0;
+    const minimum = request.minimumRevenue;
+    const region = request.region;
+    const limit = MAX_ROWS + 1;
+    const cursor =
+      minimum === undefined
+        ? region === undefined
+          ? storage.sql.exec(
+              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary ORDER BY revenue DESC LIMIT ?",
+              limit,
+            )
+          : storage.sql.exec(
+              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE region = ? ORDER BY revenue DESC LIMIT ?",
+              region,
+              limit,
+            )
+        : region === undefined
+          ? storage.sql.exec(
+              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? ORDER BY revenue DESC LIMIT ?",
+              minimum,
+              limit,
+            )
+          : storage.sql.exec(
+              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? AND region = ? ORDER BY revenue DESC LIMIT ?",
+              minimum,
+              region,
+              limit,
+            );
+
+    const invoices: Array<WarehouseInvoice> = [];
     for (const raw of cursor) {
-      if (rows.length >= MAX_ROWS) {
-        truncated = true;
-        break;
+      if (invoices.length === MAX_ROWS) {
+        return WarehouseInvoices.make({ invoices, truncated: true });
       }
-      const decoded = decodeRow(raw as Record<string, unknown>);
-      if (Option.isNone(decoded)) {
-        return {
-          ok: false,
-          columns: [],
-          rows: [],
-          rowCount: 0,
-          truncated: false,
-          reason: "a result row contained a non-JSON value",
-        };
+      const invoice = decodeInvoice(raw);
+      if (Option.isNone(invoice)) {
+        return WarehouseQueryDenied.make({
+          reason: "warehouse returned a row outside the invoice wire Schema",
+        });
       }
-      const bytes = utf8ByteLength(JSON.stringify(decoded.value));
-      if (usedBytes + bytes > MAX_RESULT_BYTES) {
-        truncated = true;
-        break;
-      }
-      usedBytes += bytes;
-      rows.push(decoded.value);
+      invoices.push(invoice.value);
     }
-    return {
-      ok: true,
-      columns: rows.length === 0 ? [] : Object.keys(rows[0]),
-      rows,
-      rowCount: rows.length,
-      truncated,
-    };
-  });
+    return WarehouseInvoices.make({ invoices, truncated: false });
+  }).pipe(
+    Effect.catchDefect((cause) =>
+      Effect.succeed(
+        WarehouseQueryDenied.make({
+          reason: `warehouse query failed: ${String(cause).slice(0, 450)}`,
+        }),
+      ),
+    ),
+  );
 
 export class WarehouseObject extends DurableObject {
   #ready = false;
@@ -191,9 +160,9 @@ export class WarehouseObject extends DurableObject {
           revenue INTEGER NOT NULL,
           created_at TEXT NOT NULL
         )`;
-        const existing = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`.pipe(
-          Effect.map((rows) => Number((rows[0] as { n?: unknown }).n ?? 0)),
-        );
+        const rows = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`;
+        const decoded = decodeCount(rows[0]);
+        const existing = Option.isSome(decoded) ? Number(decoded.value.n) : 0;
         if (existing === 0) {
           for (const row of seedRows) {
             yield* sql`INSERT INTO invoice_summary ${sql.insert({
@@ -209,31 +178,41 @@ export class WarehouseObject extends DurableObject {
         Effect.orDie,
       ) as Effect.Effect<void>,
     );
-    // On Durable Object SQLite the `PRAGMA query_only` lock is authorizer-
-    // blocked (SQLITE_AUTH), so the read-only guarantee here is the
-    // leading-keyword scan in `scanReadOnly`; the Node reference fixture in
-    // `@effect-agent/testing` proves the stronger database-authority path.
     this.#ready = true;
   }
 
-  /** The read-only query RPC the warehouse Tool calls (Workers RPC returns JSON). */
-  async query(
-    sql: string,
-    parameters: ReadonlyArray<string | number | boolean | null>,
-  ): Promise<WarehouseQueryOutcome> {
-    await this.#ensureSeeded();
-    return Effect.runPromise(runQuery(this.ctx.storage, sql, parameters));
+  /** Schema-decoded RPC request and Schema-encoded response. */
+  async listInvoices(encoded: unknown): Promise<unknown> {
+    const outcome = await Effect.runPromise(
+      decodeListRequest(encoded).pipe(
+        Effect.mapError((error) =>
+          WarehouseQueryDenied.make({
+            reason: `invalid warehouse request: ${error.message.slice(0, 450)}`,
+          }),
+        ),
+        Effect.tap(() => Effect.promise(() => this.#ensureSeeded())),
+        Effect.flatMap((request) => queryInvoices(this.ctx.storage, request)),
+        Effect.catch((failure) => Effect.succeed(failure)),
+      ),
+    );
+    return Effect.runPromise(
+      encodeListOutcome(outcome).pipe(
+        Effect.catch((error) =>
+          Effect.succeed({
+            _tag: "WarehouseQueryDenied",
+            reason: `warehouse response encoding failed: ${error.message.slice(0, 430)}`,
+          }),
+        ),
+      ),
+    );
   }
 }
 
-/** Effect service wrapping the warehouse DO namespace (host-side authority). */
+/** Effect service wrapping the tenant-scoped warehouse authority. */
 export class Warehouse extends Context.Service<
   Warehouse,
   {
-    readonly query: (
-      sql: string,
-      parameters: ReadonlyArray<string | number | boolean | null>,
-    ) => Effect.Effect<WarehouseQueryOutcome>;
+    readonly listInvoices: (request: WarehouseListRequest) => Effect.Effect<WarehouseListOutcome>;
   }
 >()("@effect-agent/example-code-mode-cloudflare/Warehouse") {}
 
@@ -246,26 +225,21 @@ export const warehouseLayer = (
   tenant: string,
 ): Layer.Layer<Warehouse> =>
   Layer.succeed(Warehouse)({
-    query: (sql, parameters) =>
-      // A Durable Object RPC failure (transport, DO exception) is an EXPECTED
-      // outcome the tool handler branches on, not a defect — surface it as a
-      // typed denied outcome rather than dying the pass.
-      Effect.tryPromise((): Promise<WarehouseQueryOutcome> => {
-        const stub = namespace.get(namespace.idFromName(tenant));
-        return stub.query(sql, [...parameters]) as Promise<WarehouseQueryOutcome>;
-      }).pipe(
-        Effect.catch((error) =>
-          Effect.succeed<WarehouseQueryOutcome>({
-            ok: false,
-            columns: [],
-            rows: [],
-            rowCount: 0,
-            truncated: false,
-            reason: `warehouse unavailable: ${(error.cause instanceof Error
-              ? error.cause.message
-              : String(error.cause)
-            ).slice(0, 300)}`,
+    listInvoices: (request) =>
+      encodeListRequest(request).pipe(
+        Effect.flatMap((encoded) =>
+          Effect.tryPromise(() => {
+            const stub = namespace.get(namespace.idFromName(tenant));
+            return stub.listInvoices(encoded);
           }),
+        ),
+        Effect.flatMap(decodeListOutcome),
+        Effect.catch((error) =>
+          Effect.succeed(
+            WarehouseQueryDenied.make({
+              reason: `warehouse unavailable or returned an invalid response: ${error.message.slice(0, 390)}`,
+            }),
+          ),
         ),
       ),
   });

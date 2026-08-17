@@ -24,6 +24,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { CloudflareConversationClient } from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
+  TEST_CALLER,
   TEST_DIGESTS,
   approvalDefinition,
   armRuntimeEviction,
@@ -227,6 +228,7 @@ const approveBooking = (conversation: string, receipt: Receipt, decision: "appro
           resolver: "cf-eviction-approver",
           reason: "eviction matrix decision",
         }),
+        TEST_CALLER,
       );
     }),
   );
@@ -244,6 +246,7 @@ const resolveNeverHappened = (conversation: string, receipt: Receipt) =>
           reason: "eviction matrix resolution",
           resolution: ResolutionNeverHappened.make(),
         }),
+        TEST_CALLER,
       );
     }),
   );
@@ -642,6 +645,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             author: "cf-eviction-operator",
             reason: "eviction abort row",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -665,6 +669,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             author: "cf-eviction-operator",
             reason: "eviction abort row",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -694,6 +699,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             author: "cf-eviction-operator",
             reason: "cancelled while queued behind a suspended head",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -752,6 +758,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             author: "cf-eviction-operator",
             reason: "eviction abort row",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -782,6 +789,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             resolver: "cf-eviction-approver",
             reason: "eviction decision row",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -815,6 +823,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             resolver: "cf-eviction-approver",
             reason: "eviction decision row",
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -846,6 +855,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             reason: "eviction resolution row",
             resolution: ResolutionNeverHappened.make(),
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -878,6 +888,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             reason: "eviction resolution row",
             resolution: ResolutionNeverHappened.make(),
           }),
+          TEST_CALLER,
         );
       }),
     );
@@ -908,6 +919,7 @@ describe("DC eviction matrix — client mutation entry points", () => {
             reason: "eviction resolution row",
             resolution: ResolutionNeverHappened.make(),
           }),
+          TEST_CALLER,
         );
       }),
     );

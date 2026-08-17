@@ -4,83 +4,76 @@ import { ToolExecutionClass } from "@effect-agent/engine";
 import { Effect, Layer, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-import { Warehouse } from "./warehouse-object.ts";
+import {
+  Warehouse,
+  WarehouseInvoices,
+  WarehouseListRequest,
+  WarehouseQueryDenied,
+  WarehouseRegion,
+} from "./warehouse-object.ts";
 
 /**
- * The read-only SQL warehouse Tool (plan §8.3): a native Effect AI Tool built
- * over the application-owned `Warehouse` service, annotated `readonly`. Its
- * result is Schema-bounded JSON; the executor never sees the connection.
+ * The curated read-only warehouse Tool: callers provide only typed filters,
+ * while the adapter owns every reachable SQL statement. The executor never
+ * receives SQL authority or the connection.
  */
-export const warehouseQueryTool = Tool.make("query_warehouse", {
+export const warehouseListTool = Tool.make("list_warehouse_invoices", {
   description:
-    "Run one read-only SQL statement over the curated `invoice_summary` view (columns: customer TEXT, region TEXT, revenue INTEGER, created_at TEXT). Use ? placeholders with the parameters array; one statement per call. Oversized results return truncated: true.",
+    "List invoices from the curated warehouse, optionally filtering by minimum revenue and region. Results are ordered by revenue descending and bounded to 200 rows.",
   parameters: Schema.Struct({
-    sql: Schema.NonEmptyString.check(Schema.isMaxLength(16 * 1024)),
-    parameters: Schema.optionalKey(
-      Schema.Array(Schema.Union([Schema.String, Schema.Number, Schema.Boolean, Schema.Null])).check(
-        Schema.isMaxLength(32),
-      ),
-    ),
+    minimumRevenue: Schema.optionalKey(Schema.Natural),
+    region: Schema.optionalKey(WarehouseRegion),
   }),
   success: Schema.Struct({
-    columns: Schema.Array(Schema.String),
-    rows: Schema.Array(Schema.Record(Schema.String, Schema.Json)),
-    rowCount: Schema.Natural,
+    invoices: WarehouseInvoices.fields.invoices,
     truncated: Schema.Boolean,
   }),
-  failure: Schema.Struct({
-    _tag: Schema.Literal("WarehouseQueryDenied"),
-    reason: Schema.String,
-  }),
+  failure: WarehouseQueryDenied,
 }).annotate(ToolExecutionClass, "readonly");
 
-const warehouseToolkit = Toolkit.make(warehouseQueryTool);
+const warehouseToolkit = Toolkit.make(warehouseListTool);
 
 /** Handler Layer binding the Tool to the tenant-scoped read-only DO service. */
 export const warehouseHandlersLayer: Layer.Layer<
-  Tool.HandlersFor<{ readonly query_warehouse: typeof warehouseQueryTool }>,
+  Tool.HandlersFor<{ readonly list_warehouse_invoices: typeof warehouseListTool }>,
   never,
   Warehouse
 > = warehouseToolkit.toLayer(
   Effect.gen(function* () {
     const warehouse = yield* Warehouse;
     return {
-      query_warehouse: ({
-        sql,
-        parameters,
-      }: {
-        readonly sql: string;
-        readonly parameters?: ReadonlyArray<string | number | boolean | null> | undefined;
-      }) =>
-        warehouse.query(sql, parameters ?? []).pipe(
-          Effect.flatMap((outcome) =>
-            outcome.ok
-              ? Effect.succeed({
-                  columns: outcome.columns,
-                  rows: outcome.rows as ReadonlyArray<Record<string, Schema.Json>>,
-                  rowCount: outcome.rowCount,
-                  truncated: outcome.truncated,
-                })
-              : Effect.fail({
-                  _tag: "WarehouseQueryDenied" as const,
-                  reason: outcome.reason ?? "denied",
-                }),
+      list_warehouse_invoices: ({ minimumRevenue, region }) =>
+        warehouse
+          .listInvoices(
+            WarehouseListRequest.make({
+              ...(minimumRevenue === undefined ? {} : { minimumRevenue }),
+              ...(region === undefined ? {} : { region }),
+            }),
+          )
+          .pipe(
+            Effect.flatMap((outcome) =>
+              outcome._tag === "WarehouseInvoices"
+                ? Effect.succeed({
+                    invoices: outcome.invoices,
+                    truncated: outcome.truncated,
+                  })
+                : Effect.fail(outcome),
+            ),
           ),
-        ),
     };
   }),
 );
 
 /**
  * The Code Mode capability: one native `run_javascript` Tool whose
- * `warehouse.query` sandbox global routes to the read-only SQL Tool. The
+ * `warehouse.listInvoices` sandbox global routes to the curated Tool. The
  * model writes a bounded JavaScript program that queries and shapes the data;
  * the program runs in an isolated Dynamic Worker.
  */
 export const codeMode = CodeMode.make("run_javascript", {
   description:
     "Write bounded JavaScript to answer questions about the invoice warehouse. Query the data, filter/aggregate it locally, and return one small JSON answer.",
-  tools: { warehouse: { query: warehouseQueryTool } },
+  tools: { warehouse: { listInvoices: warehouseListTool } },
 });
 
 export const codeModeAgent = Agent.define("warehouse-analyst", {
@@ -88,8 +81,8 @@ export const codeModeAgent = Agent.define("warehouse-analyst", {
   output: Schema.Struct({ answer: Schema.String }),
   instructions: [
     "You answer questions about invoice data.",
-    "First call run_javascript exactly once with a program that queries the warehouse (via warehouse.query) and computes the answer in code.",
-    "The warehouse exposes a read-only `invoice_summary` table (columns: customer TEXT, region TEXT, revenue INTEGER, created_at TEXT).",
+    "First call run_javascript exactly once with a program that reads invoices via warehouse.listInvoices({ minimumRevenue?, region? }) and computes the answer in code.",
+    "Each invoice has customer, region, revenue, and createdAt fields. No SQL interface is exposed.",
     "After the program returns, respond with only a JSON object of exactly this shape, no prose:",
     '{"answer": "<one concise sentence answering the question>"}',
   ].join("\n"),

@@ -2,14 +2,15 @@ import { IdGenerator } from "@effect-agent/core";
 import { AgentRuntime } from "@effect-agent/engine";
 import {
   CodeModeHostEntrypoint,
+  cloudflareCryptoLayer,
   dynamicWorkerCodeExecutorLayer,
   dynamicWorkerImplementation,
   type CodeModeHostStub,
 } from "@effect-agent/platform-cloudflare";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 
 import { codeModeHandlersLayer } from "./agent.ts";
-import { liveAgent, scriptedAgent, scriptedWriteProbeAgent } from "./profiles.ts";
+import { liveAgent, scriptedAgent } from "./profiles.ts";
 import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
 
 /**
@@ -17,8 +18,8 @@ import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./war
  * warehouse by running a Code Mode Agent. The model writes one JavaScript
  * program; the program executes in an isolated Cloudflare Dynamic Worker
  * (`globalOutbound: null`, no ambient authority) and reaches the warehouse
- * only through the brokered `warehouse.query` method, which runs a read-only
- * SQL query against a SQLite-backed Durable Object. Deployment class E: the
+ * only through the brokered `warehouse.listInvoices` method, whose typed
+ * filters select a fixed adapter-owned query. Deployment class E: the
  * Agent runs ephemerally; the Durable Object is the warehouse data store, not
  * a Conversation store.
  *
@@ -42,24 +43,42 @@ interface WorkerEnv {
   readonly DEMO_AUTH_TOKEN?: string;
 }
 
-interface AskResult {
-  readonly answer: string;
+export class AskRequest extends Schema.Class<AskRequest>(
+  "@effect-agent/example-code-mode-cloudflare/AskRequest",
+)({
+  question: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
+}) {}
+
+const CodeModeEvidence = Schema.Struct({
+  used: Schema.Boolean,
+  tool: Schema.String,
+  executor: Schema.String,
+  calls: Schema.Natural,
+  program: Schema.optionalKey(Schema.String),
+  result: Schema.optionalKey(Schema.Json),
+  logs: Schema.optionalKey(Schema.Array(Schema.Json)),
+});
+
+export class AskResult extends Schema.Class<AskResult>(
+  "@effect-agent/example-code-mode-cloudflare/AskResult",
+)({
+  answer: Schema.String,
   /**
    * Evidence that the answer came from Code Mode: the tool the model called,
    * how many times, the JavaScript program it actually wrote, and the isolated
    * executor that ran it — plus the program's returned value and console logs.
    */
-  readonly codeMode: {
-    readonly used: boolean;
-    readonly tool: string;
-    readonly executor: string;
-    readonly calls: number;
-    readonly program?: string;
-    readonly result?: unknown;
-    readonly logs?: ReadonlyArray<unknown>;
-  };
-  readonly profile: "scripted" | "openai";
-}
+  codeMode: CodeModeEvidence,
+  profile: Schema.Literals(["scripted", "openai"]),
+}) {}
+
+const decodeAskRequest = Schema.decodeUnknownEffect(AskRequest);
+const encodeAskResult = Schema.encodeEffect(AskResult);
+const decodeProgramInput = Schema.decodeUnknownOption(Schema.Struct({ code: Schema.String }));
+const decodeCodeModeSuccess = Schema.decodeUnknownOption(
+  Schema.Struct({ result: Schema.Json, logs: Schema.Array(Schema.Json) }),
+);
+const decodeAgentAnswer = Schema.decodeUnknownOption(Schema.Struct({ answer: Schema.String }));
 
 /**
  * Both profiles' bindings share one definition and both models resolve to a
@@ -85,22 +104,16 @@ type DemoBinding = typeof scriptedAgent;
  * the decoded input as an event.
  */
 const programSourceOf = (parameters: unknown): string | undefined => {
-  if (typeof parameters === "object" && parameters !== null && "code" in parameters) {
-    const code = (parameters as Record<string, unknown>).code;
-    return typeof code === "string" ? code : undefined;
-  }
-  return undefined;
+  const decoded = decodeProgramInput(parameters);
+  return Option.isSome(decoded) ? decoded.value.code : undefined;
 };
 
 /** The `run_javascript` success value is `{ result, logs }` — read it safely. */
 const successOutcomeOf = (
   value: unknown,
-): { readonly result: unknown; readonly logs: ReadonlyArray<unknown> } => {
-  if (typeof value === "object" && value !== null) {
-    const record = value as Record<string, unknown>;
-    return { result: record.result, logs: Array.isArray(record.logs) ? record.logs : [] };
-  }
-  return { result: undefined, logs: [] };
+): { readonly result?: Schema.Json; readonly logs?: ReadonlyArray<Schema.Json> } => {
+  const decoded = decodeCodeModeSuccess(value);
+  return Option.isSome(decoded) ? decoded.value : {};
 };
 
 /** Run one bound agent to an `AskResult`. */
@@ -121,7 +134,7 @@ const runBound = (
         dynamicWorkerCodeExecutorLayer({ loader: env.LOADER, hostStub: env.CODE_MODE_HOST }),
       ),
     ),
-    IdGenerator.layer,
+    IdGenerator.layer.pipe(Layer.provide(cloudflareCryptoLayer)),
   );
   return Effect.gen(function* () {
     // Stream the Run and correlate each `run_javascript` call's declared
@@ -131,7 +144,10 @@ const runBound = (
     // earlier call's result). `used` reflects a real successful execution, not
     // merely a declaration.
     const declaredPrograms = new Map<string, string | undefined>();
-    const successes = new Map<string, { result: unknown; logs: ReadonlyArray<unknown> }>();
+    const successes = new Map<
+      string,
+      { readonly result?: Schema.Json; readonly logs?: ReadonlyArray<Schema.Json> }
+    >();
     let answer = "";
     let completed = false;
     // Expected Run failures become defects at this HTTP boundary: `runPromise`
@@ -147,9 +163,9 @@ const runBound = (
           }
           if (event._tag === "RunCompleted") {
             completed = true;
-            const output = event.output as { readonly answer?: unknown };
-            if (typeof output.answer === "string") {
-              answer = output.answer;
+            const output = decodeAgentAnswer(event.output);
+            if (Option.isSome(output)) {
+              answer = output.value.answer;
             }
           }
         }),
@@ -173,28 +189,25 @@ const runBound = (
     const soleId =
       successIds.length === 1 && declaredPrograms.has(successIds[0]) ? successIds[0] : undefined;
     const executed = soleId === undefined ? undefined : successes.get(soleId);
-    return {
+    return AskResult.make({
       answer,
       codeMode: {
         used: successes.size > 0,
         tool: "run_javascript",
         executor: dynamicWorkerImplementation.identity,
         calls: declaredPrograms.size,
-        program: soleId === undefined ? undefined : declaredPrograms.get(soleId),
-        result: executed?.result,
-        logs: executed?.logs,
+        ...(soleId === undefined || declaredPrograms.get(soleId) === undefined
+          ? {}
+          : { program: declaredPrograms.get(soleId) }),
+        ...(executed?.result === undefined ? {} : { result: executed.result }),
+        ...(executed?.logs === undefined ? {} : { logs: executed.logs }),
       },
       profile,
-    };
+    });
   });
 };
 
-const runAsk = (
-  env: WorkerEnv,
-  question: string,
-  tenant: string,
-  probe: string | null,
-): Effect.Effect<AskResult> => {
+const runAsk = (env: WorkerEnv, question: string, tenant: string): Effect.Effect<AskResult> => {
   if (env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0) {
     return runBound(
       env,
@@ -204,8 +217,7 @@ const runAsk = (
       "openai",
     );
   }
-  const agent = probe === "write" ? scriptedWriteProbeAgent : scriptedAgent;
-  return runBound(env, agent, question, tenant, "scripted");
+  return runBound(env, scriptedAgent, question, tenant, "scripted");
 };
 
 export default {
@@ -236,15 +248,20 @@ export default {
     if (hasAuthToken && request.headers.get("authorization") !== `Bearer ${authToken}`) {
       return Response.json({ error: "unauthorized" }, { status: 401 });
     }
-    let question = "Which customers have more than $10,000 in revenue?";
+    let body: unknown;
     try {
-      const body = (await request.json()) as { readonly question?: unknown };
-      if (typeof body.question === "string" && body.question.trim().length > 0) {
-        // Bound the question so an oversized body cannot drive an unbounded prompt.
-        question = body.question.slice(0, 2_000);
-      }
+      body = await request.json();
     } catch {
-      // fall back to the default question
+      return Response.json({ error: "request body must be valid JSON" }, { status: 400 });
+    }
+    let decodedAsk: AskRequest;
+    try {
+      decodedAsk = await Effect.runPromise(decodeAskRequest(body));
+    } catch {
+      return Response.json(
+        { error: "body must be { question: non-empty string <= 2000 chars }" },
+        { status: 400 },
+      );
     }
     // The tenant addresses a Durable Object, so reject anything that is not a
     // short, safe identifier rather than minting an arbitrary Object.
@@ -253,10 +270,8 @@ export default {
       return Response.json({ error: "tenant must match /^[a-z0-9-]{1,32}$/" }, { status: 400 });
     }
     try {
-      const result = await Effect.runPromise(
-        runAsk(env, question, tenant, url.searchParams.get("probe")),
-      );
-      return Response.json(result);
+      const result = await Effect.runPromise(runAsk(env, decodedAsk.question, tenant));
+      return Response.json(await Effect.runPromise(encodeAskResult(result)));
     } catch (cause) {
       return Response.json(
         { error: cause instanceof Error ? cause.message : String(cause) },

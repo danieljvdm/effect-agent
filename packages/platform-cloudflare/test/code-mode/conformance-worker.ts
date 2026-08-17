@@ -146,6 +146,30 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       );
     }
 
+    // Guest expressions can execute code while producing the async function.
+    // That evaluation must happen only after the bounded console exists.
+    const expressionLimitOutcome = yield* runOutcome(
+      request(
+        `(() => {
+          console.log("x".repeat(256));
+          return async () => "unreachable";
+        })()`,
+        {
+          limits: CodeExecutionLimits.make({ ...baseLimits, maxLogBytes: 32 }),
+        },
+      ),
+      layer,
+    );
+    if (
+      expressionLimitOutcome.tag !== "CodeOutputLimitError" ||
+      !Predicate.isObject(expressionLimitOutcome.detail) ||
+      expressionLimitOutcome.detail.surface !== "logs"
+    ) {
+      failures.push(
+        `guest expression accounting: expected a log limit error, got ${JSON.stringify(expressionLimitOutcome)}`,
+      );
+    }
+
     const allowlistOutcome = yield* runOutcome(
       request("async () => 1", {
         network: NetworkAllowlist.make({ domains: ["example.com"], ports: [443] }),

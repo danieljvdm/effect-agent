@@ -6,7 +6,7 @@ import {
   decodeAdminResponse,
   type AdminResponse,
 } from "../src/index.ts";
-import { plannerDefinition, submitOptions } from "./fixtures.ts";
+import { TEST_CALLER, plannerDefinition, submitOptions } from "./fixtures.ts";
 import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
 /**
@@ -18,6 +18,7 @@ import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
 let laneCounter = 0;
 const lane = (): string => `cf-admin-encoded-${laneCounter++}`;
+const ENCODED_CALLER = { principal: TEST_CALLER.principal } as const;
 
 const submitPlanner = (conversation: string, key: string) =>
   runClient(
@@ -49,7 +50,7 @@ describe("P7 admin encoded entry points (DC)", () => {
     const stub = stubFor(conversation);
 
     const explained = await callAdmin(() =>
-      stub.explainEncoded({ submissionId: receipt.submissionId }),
+      stub.explainEncoded({ submissionId: receipt.submissionId, caller: ENCODED_CALLER }),
     );
     expect(explained._tag).toBe("ExplainedRecovery");
     if (explained._tag === "ExplainedRecovery") {
@@ -62,7 +63,7 @@ describe("P7 admin encoded entry points (DC)", () => {
     }
 
     // The lane form explains nonterminal members only: a settled lane owes nothing.
-    const laneExplained = await callAdmin(() => stub.explainEncoded({}));
+    const laneExplained = await callAdmin(() => stub.explainEncoded({ caller: ENCODED_CALLER }));
     expect(laneExplained._tag).toBe("ExplainedRecovery");
     if (laneExplained._tag === "ExplainedRecovery") {
       expect(laneExplained.explanations).toEqual([]);
@@ -74,7 +75,9 @@ describe("P7 admin encoded entry points (DC)", () => {
     await submitPlanner(conversation, "admin-verify");
     await drainAlarmsUntil(conversation, allSettled(conversation));
 
-    const verified = await callAdmin(() => stubFor(conversation).verifyEncoded({}));
+    const verified = await callAdmin(() =>
+      stubFor(conversation).verifyEncoded({ caller: ENCODED_CALLER }),
+    );
     expect(verified._tag).toBe("VerifiedIntegrity");
     if (verified._tag === "VerifiedIntegrity") {
       expect(verified.report.ok).toBe(true);
@@ -97,9 +100,12 @@ describe("P7 admin encoded entry points (DC)", () => {
 
     const refused = await callAdmin(() =>
       stub.retryEncoded({
-        submissionId: receipt.submissionId,
-        author: "operator",
-        reason: "re-drive settled work over the wire",
+        command: {
+          submissionId: receipt.submissionId,
+          author: "operator",
+          reason: "re-drive settled work over the wire",
+        },
+        caller: ENCODED_CALLER,
       }),
     );
     expect(refused._tag).toBe("AdminFailed");
@@ -125,7 +131,10 @@ describe("P7 admin encoded entry points (DC)", () => {
     await drainAlarmsUntil(conversation, allSettled(conversation));
 
     const scanned = await callAdmin(() =>
-      stubFor(conversation).obligationsEncoded({ agingSeconds: 60, overdueSeconds: 600 }),
+      stubFor(conversation).obligationsEncoded({
+        thresholds: { agingSeconds: 60, overdueSeconds: 600 },
+        caller: ENCODED_CALLER,
+      }),
     );
     expect(scanned._tag).toBe("ObligationsScanned");
     if (scanned._tag === "ObligationsScanned") {

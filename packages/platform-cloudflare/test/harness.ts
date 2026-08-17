@@ -15,9 +15,15 @@ import {
   ConversationObjectNamespace,
   type ConversationObjectRpc,
 } from "../src/index.ts";
-import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
+import {
+  TEST_CALLER,
+  decodeConversationId,
+  supplierCountsFor,
+  supplierValuesFor,
+} from "./fixtures.ts";
 import type {
   ArrayBindingsConversationObject,
+  DeniedConversationObject,
   DynamicBindingsConversationObject,
   EffectBindingsConversationObject,
   LimitedConversationObject,
@@ -31,6 +37,7 @@ declare global {
   namespace Cloudflare {
     interface Env {
       CONVERSATIONS: DurableObjectNamespace<TestConversationObject>;
+      DENIED: DurableObjectNamespace<DeniedConversationObject>;
       LIMITED: DurableObjectNamespace<LimitedConversationObject>;
       TINYDB: DurableObjectNamespace<TinyDatabaseConversationObject>;
       SUBAGENTS: DurableObjectNamespace<SubagentConversationObject>;
@@ -51,6 +58,7 @@ declare global {
 
 export type TestNamespace =
   | "CONVERSATIONS"
+  | "DENIED"
   | "LIMITED"
   | "TINYDB"
   | "SUBAGENTS"
@@ -232,7 +240,7 @@ export const readCanonical = (
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareConversationClient;
-      return yield* client.readAll(decodeConversationId(conversation));
+      return yield* client.readAll(decodeConversationId(conversation), TEST_CALLER);
     }),
     namespace,
   );
