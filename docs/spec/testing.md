@@ -136,6 +136,12 @@ After recovery it asserts:
 - uncertain ordinary tools do not replay automatically;
 - terminalizing work eventually settles.
 
+The public Durable Object RPC/alarm seam also carries the maintenance regressions from
+[issue #93](https://github.com/danieljvdm/effect-agent/issues/93): a stable approval wait clears
+its alarm; a forced caught-up alarm performs no SQLite, ledger, recovery, or canonical-history
+work; mutations racing acknowledgement and mutations held after pre-arm remain dirty; and a child
+evicted after settlement finalization has already committed its parent marker/generation.
+
 The crash-point table in [durability.md](./durability.md) is a minimum coverage
 matrix and should be machine-linked to test names.
 

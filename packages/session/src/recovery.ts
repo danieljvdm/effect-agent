@@ -356,9 +356,11 @@ export class AwaitChildSettlement extends Schema.TaggedClass<AwaitChildSettlemen
   "@effect-agent/session/AwaitChildSettlement",
 )("AwaitChildSettlement", { submissionId: SubmissionId }) {}
 
-/** Every relevant child is provably settled but the parent has not joined: replay the operational
- * notifications, validate exact canonical starts, and request the idempotent exact-reason resume
- * so a claiming worker joins each canonical Settlement (spec §13). */
+/** Every relevant child is provably settled but the parent has not joined (legacy data, or a
+ * canonical settlement whose operational notification still needs replay): record/replay the
+ * operational coverage, validate exact canonical starts, and request the idempotent exact-reason
+ * resume. The join itself needs the parent Binding and is deferred to a claiming worker
+ * (spec §13). */
 export class ResumeWaitingParent extends Schema.TaggedClass<ResumeWaitingParent>(
   "@effect-agent/session/ResumeWaitingParent",
 )("ResumeWaitingParent", {

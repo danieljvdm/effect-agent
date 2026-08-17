@@ -708,7 +708,7 @@ capability because they weaken structured ownership and complicate accepted-work
 | Parent abort canonical, before child abort                    | Recovery emits the one idempotent child abort command                                       |
 | Child abort canonical, before parent propagation marker       | Recovery repairs the marker without a second command                                        |
 | Child terminal races with child abort                         | The one canonical child Settlement wins and is joined                                       |
-| After child Settlement, before parent observes it             | Parent wakes and reads the same Settlement                                                  |
+| After child Settlement append, before child ledger finalizes  | Parent marker/generation is durable first; parent wakes and reads the same Settlement       |
 | After result projection, before parent join append            | Projection is recomputed from canonical child output and fixed digests                      |
 | After join append, before budget `releasePending`             | Canonical join drives idempotent accounting repair                                          |
 | After `releasePending`, before `released`                     | The fixed consumed/released amounts are applied once                                        |

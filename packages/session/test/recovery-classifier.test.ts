@@ -1068,7 +1068,7 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
     expect(decision._tag).toBe("AwaitChildSettlement");
   });
 
-  it("kill between child finalize and recordChildSettled — child terminal on a live parent replays the wake (row 9)", () => {
+  it("legacy settled child without a parent marker replays the idempotent wake (row 9)", () => {
     const decision = classifyRecovery(
       running({
         childAttachments: [childAttachment(CALL_DELEGATE, CHILD_ONE, "settled", "completed")],

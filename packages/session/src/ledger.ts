@@ -1013,9 +1013,12 @@ export type SubmissionLedgerFailure =
  *   It records operational coverage only and never clears suspension. Fails with
  *   `SettlementConflict` once settled.
  * - `recordChildSettled` — idempotently records cross-lane operational coverage. The child's
- *   canonical Settlement is the authority — a notification for an unsettled child is an
- *   adapter-checked caller error (`LedgerError` on single-store adapters). It never settles or
- *   wakes the parent and requires no ownership token.
+ *   canonical Settlement is the authority. The runtime may report it after the exact reserved
+ *   record is appended and before ledger finalization, so same-store adapters accept
+ *   `terminalizing` only when its exact reservation exists; an earlier child is an
+ *   adapter-checked caller error. It records coverage but never settles or wakes the parent and
+ *   requires no ownership token. Only the coordinator's canonical-evidence-authorized
+ *   `resumeSuspension` transition may make the parent runnable.
  * - `reserveChildBudget` — idempotent get-or-create of the parent-owned child budget
  *   reservation (spec §12 step 2), fenced by the parent lane's live `OwnershipToken`. An
  *   identical replay returns the stored row with `replayed` set (unfenced, mirroring

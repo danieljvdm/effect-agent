@@ -1510,10 +1510,13 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 ? request.expectedReason.toolCallIds.every((toolCallId) =>
                     stored.approvalDecisions.has(toolCallId),
                   )
-                : request.expectedReason.children.every(
-                    (child) =>
-                      current.submissions.get(child.childSubmissionId)?.row.state === "settled",
-                  );
+                : request.expectedReason.children.every((child) => {
+                    const listed = current.submissions.get(child.childSubmissionId);
+                    return (
+                      listed?.row.state === "settled" ||
+                      (listed?.row.state === "terminalizing" && listed.reservation !== undefined)
+                    );
+                  });
             if (!covered) return [success("not-covered" as const), current];
             return [
               success("resumed" as const),
@@ -1837,10 +1840,16 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            // The child's canonical Settlement is the authority for this wake; a notification
-            // for an unsettled (or unknown) child is a caller error in a single-store adapter.
+            // The caller may notify after the canonical Settlement append but before ledger
+            // finalization. In a single store, an exact reservation plus `terminalizing` is the
+            // narrow durable prefix that makes that ordering admissible; earlier states remain
+            // a caller error.
             const child = current.submissions.get(request.childSubmissionId);
-            if (child === undefined || child.row.state !== "settled") {
+            const announced =
+              child !== undefined &&
+              (child.row.state === "settled" ||
+                (child.row.state === "terminalizing" && child.reservation !== undefined));
+            if (!announced) {
               return [
                 failure(
                   ledgerError(

@@ -2939,7 +2939,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
 );
 
 const recordChildSettledWake = conformanceCase(
-  "child notifications stay inert until exact suspension resume",
+  "child notifications accept canonical terminalizing prefixes but stay inert until exact suspension resume",
   ({ ensure, expectFailure, expectSome }) =>
     Effect.gen(function* () {
       const parentLane = decodeConversationId("ledger-conformance-child-wake");
@@ -3016,7 +3016,13 @@ const recordChildSettledWake = conformanceCase(
         "the first child claim",
         yield* claimLane(childLaneA, PRODUCER_A),
       );
-      yield* settleClaimed(childA, childClaimA.ownershipToken);
+      const childReservationA = yield* settlementReservation({
+        submissionId: childA.submissionId,
+        ownershipToken: childClaimA.ownershipToken,
+        receiptId: childA.receiptId,
+        outcome: "completed",
+      });
+      yield* ledger.reserveSettlement(childReservationA);
       const partial = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
@@ -3026,6 +3032,12 @@ const recordChildSettledWake = conformanceCase(
       yield* ensure(
         partial === "still-waiting",
         "A settlement notification must not wake the parent while a listed child is unsettled",
+      );
+      yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: childA.submissionId,
+          settlementId: childReservationA.settlementId,
+        }),
       );
       const stillSuspended = yield* expectSome(
         "lookup while one child is outstanding",
@@ -3041,7 +3053,13 @@ const recordChildSettledWake = conformanceCase(
         "the second child claim",
         yield* claimLane(childLaneB, PRODUCER_A),
       );
-      yield* settleClaimed(childB, childClaimB.ownershipToken);
+      const childReservationB = yield* settlementReservation({
+        submissionId: childB.submissionId,
+        ownershipToken: childClaimB.ownershipToken,
+        receiptId: childB.receiptId,
+        outcome: "completed",
+      });
+      yield* ledger.reserveSettlement(childReservationB);
       const covered = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
@@ -3065,6 +3083,12 @@ const recordChildSettledWake = conformanceCase(
       yield* ensure(
         resumed === "resumed",
         "The exact canonical-evidence-authorized child reason must resume once covered",
+      );
+      yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: childB.submissionId,
+          settlementId: childReservationB.settlementId,
+        }),
       );
       const awake = yield* expectSome(
         "lookup after the covering settlement",

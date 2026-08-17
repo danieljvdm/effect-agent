@@ -31,13 +31,16 @@ import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import {
   ConversationMaintenance,
+  ConversationMaintenanceFailpoint,
+  ConversationMutationBoundary,
   DurableAlarmService,
   cloudflareOperationMutationPreparerLayer,
+  type ConversationMaintenanceFailpointHandler,
 } from "./alarm.ts";
 import {
   ConversationObjectIdentity,
-  type ConversationObjectNamespace,
   DurableObjectContext,
+  type ConversationObjectNamespace,
 } from "./bindings.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
@@ -97,6 +100,10 @@ export interface CloudflareDurableRuntimeOptions {
   /** Coordinator fault injection (`submit:*` / `terminalize:*` locations); default none. */
   readonly runtimeFailpoint?:
     | ((ctx: DurableObjectState) => DurableRuntimeFailpointHandler)
+    | undefined;
+  /** Conversation-maintenance generation/alarm fault injection; default none. */
+  readonly maintenanceFailpoint?:
+    | ((ctx: DurableObjectState) => ConversationMaintenanceFailpointHandler)
     | undefined;
   /**
    * Reconciliation policy consulted for open ordinary Tool Calls before an Unknown Outcome
@@ -360,6 +367,12 @@ export class CloudflareDurableRuntime {
           options.runtimeFailpoint === undefined
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
+        const maintenanceFailpointLayer =
+          options.maintenanceFailpoint === undefined
+            ? ConversationMaintenanceFailpoint.layer
+            : Layer.succeed(ConversationMaintenanceFailpoint)({
+                hit: options.maintenanceFailpoint(ctx),
+              });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
@@ -368,11 +381,16 @@ export class CloudflareDurableRuntime {
           ),
         );
 
-        const base = Layer.mergeAll(
+        const maintenanceBase = Layer.mergeAll(
           identityLayer,
           cloudflareConfigLayer,
           DurableAlarmService.layer,
+          maintenanceFailpointLayer,
         );
+        const mutationBoundaryLayer = ConversationMutationBoundary.layer.pipe(
+          Layer.provide(maintenanceBase),
+        );
+        const base = Layer.mergeAll(maintenanceBase, mutationBoundaryLayer);
         const mutationPreparerLayer = cloudflareOperationMutationPreparerLayer.pipe(
           Layer.provide(base),
         );

@@ -20,7 +20,8 @@
     "@effect-agent/storage-sqlite": "0.0.0",
     "@effect-agent/testing": "0.0.0",
     "effect-agent": "0.0.1-beta.3",
-    "@effect-agent/example-code-mode-cloudflare": "0.0.0"
+    "@effect-agent/example-code-mode-cloudflare": "0.0.0",
+    "@effect-agent/example-pr-work-orders": "0.0.0"
   },
   "changesets": [
     "beta107-runtime-fixes",
@@ -44,6 +45,7 @@
     "pr-review-posting-identity",
     "pr-review-presentation",
     "pr-review-skip-unchanged",
+    "quiescent-conversation-maintenance",
     "quiet-review-headroom",
     "resilient-review-scope",
     "retire-stale-reviews",

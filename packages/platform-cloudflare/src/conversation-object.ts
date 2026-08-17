@@ -236,17 +236,15 @@ const submitEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoin
         const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
         yield* gateAdmissionLimits(request);
-        // Alarm invariant: the alarm commits BEFORE the admission it will finish (D-P6-2).
-        yield* maintenance.preArm;
-        const receipt = yield* runtime.submit(
-          passthroughSubmitAgent(request.agentId),
-          request.inputPayload,
-          {
+        // Alarm invariant: the generation + alarm commit BEFORE the admission, and maintenance
+        // cannot acknowledge that generation until this mutation leaves its public RPC seam.
+        const receipt = yield* maintenance.withMutation(
+          runtime.submit(passthroughSubmitAgent(request.agentId), request.inputPayload, {
             conversationId: identity.conversationId,
             principal: request.principal,
             idempotencyKey: request.idempotencyKey,
             definitions: request.definitions,
-          },
+          }),
         );
         return SubmitSucceeded.make({ receipt });
       }),
@@ -313,8 +311,11 @@ const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.mapError(protocolFailure("The abort command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
+        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        const intent = yield* runtime.abort(request.command, request.caller);
+        const intent = yield* maintenance.withPreparedMutation(
+          runtime.abort(request.command, request.caller),
+        );
         return AbortRecorded.make({ intent });
       }),
     ),
@@ -329,8 +330,11 @@ const resolveApprovalEndpoint = (
     Effect.mapError(protocolFailure("The approval command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
+        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        const intent = yield* runtime.resolveApproval(request.command, request.caller);
+        const intent = yield* maintenance.withPreparedMutation(
+          runtime.resolveApproval(request.command, request.caller),
+        );
         return ApprovalRecorded.make({ intent });
       }),
     ),
@@ -345,8 +349,11 @@ const resolveUnknownEndpoint = (
     Effect.mapError(protocolFailure("The resolution command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
+        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        const intent = yield* runtime.resolveUnknown(request.command, request.caller);
+        const intent = yield* maintenance.withPreparedMutation(
+          runtime.resolveUnknown(request.command, request.caller),
+        );
         return UnknownResolutionRecorded.make({ intent });
       }),
     ),
@@ -512,8 +519,11 @@ const retryEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.mapError(protocolFailure("The retry command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
+        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        const report = yield* runtime.retry(request.command, request.caller);
+        const report = yield* maintenance.withPreparedMutation(
+          runtime.retry(request.command, request.caller),
+        );
         return RetryExecuted.make({ report });
       }),
     ),
@@ -536,10 +546,11 @@ const obligationsEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
   );
 
 /**
- * Owner-side `portCall`: pre-arm before a mutating envelope (a routed admission committed by
- * THIS Object must already carry the alarm that will finish it), execute on the LOCAL facets
- * (never the routed decorators), then arm an immediate alarm so the mutated lane is
- * processed promptly. Protocol anomalies answer `PortFailed(PortProtocolError)`.
+ * Owner-side `portCall`: wrap a mutating envelope in the same pre-armed generation protocol as
+ * public RPC (a routed mutation committed by THIS Object must already carry the alarm that will
+ * finish it), execute on the LOCAL facets (never the routed decorators), then arm an immediate
+ * alarm so the mutated lane is processed promptly. Protocol anomalies answer
+ * `PortFailed(PortProtocolError)`.
  */
 const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
   Effect.gen(function* () {
@@ -552,16 +563,17 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
     const mutating = yield* decodePortRequestMutation(encoded).pipe(
       Effect.orElseSucceed(() => false),
     );
-    if (mutating) {
-      const preArmed = yield* maintenance.preArm.pipe(Effect.exit);
-      if (preArmed._tag === "Failure") {
-        // Without the committed alarm the invariant cannot be promised; refuse the mutation.
-        return encodedPortProtocolFailure(
-          "The owner Object could not arm its maintenance alarm before the mutation.",
-        );
-      }
+    const handled = yield* (
+      mutating ? maintenance.withMutation(ports.handle(encoded)) : ports.handle(encoded)
+    ).pipe(Effect.exit);
+    if (handled._tag === "Failure") {
+      // Without the committed generation/alarm the invariant cannot be promised; refuse before
+      // the port mutation runs. `ports.handle` itself is total, so this is the maintenance error.
+      return encodedPortProtocolFailure(
+        "The owner Object could not arm its maintenance alarm before the mutation.",
+      );
     }
-    const response = yield* ports.handle(encoded);
+    const response = handled.value;
     if (mutating) {
       // Prompt processing hint; the pre-armed alarm already guarantees convergence.
       yield* alarm.scheduleNow.pipe(
@@ -586,7 +598,7 @@ const alarmEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointService
   function* () {
     const maintenance = yield* ConversationMaintenance;
     // Typed pass failures propagate: the rejected promise makes workerd retry the alarm
-    // (at-least-once delivery), and the pass's own pre-arm keeps the slot committed meanwhile.
+    // (at-least-once delivery), and the dirty generation retains a committed slot meanwhile.
     yield* maintenance.pass;
   },
 );

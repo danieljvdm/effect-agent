@@ -24,6 +24,11 @@ import {
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import type {
+  ConversationMaintenanceFailpointHandler,
+  ConversationMaintenanceFailpointLocation,
+} from "../src/index.ts";
+
 /**
  * Workerd-safe eviction-harness fixtures (plan §3, §4 WP3). The vitest pool runs test files
  * and the worker entry in ONE isolate, so this module's state is shared between the tests
@@ -116,6 +121,95 @@ export const runtimeEvictionFailpoint =
         });
       }
       return Effect.void;
+    });
+
+// ---------------------------------------------------------------------------
+// Conversation-maintenance race gate (issue #93)
+// ---------------------------------------------------------------------------
+
+const maintenancePauses = new Map<string, Array<ConversationMaintenanceFailpointLocation>>();
+
+interface MaintenancePauseGate {
+  readonly reached: Promise<void>;
+  readonly released: Promise<void>;
+  readonly resolveReached: () => void;
+  readonly resolveReleased: () => void;
+  reachedFlag: boolean;
+}
+
+const maintenancePauseGates = new Map<string, MaintenancePauseGate>();
+
+const maintenancePauseKey = (
+  conversation: string,
+  location: ConversationMaintenanceFailpointLocation,
+): string => `${conversation}:${location}`;
+
+export const armMaintenancePause = (
+  conversation: string,
+  ...locations: ReadonlyArray<ConversationMaintenanceFailpointLocation>
+): void => {
+  maintenancePauses.set(conversation, [...locations]);
+  for (const location of locations) {
+    const key = maintenancePauseKey(conversation, location);
+    let resolveReached!: () => void;
+    let resolveReleased!: () => void;
+    maintenancePauseGates.set(key, {
+      reached: new Promise<void>((resolve) => {
+        resolveReached = resolve;
+      }),
+      released: new Promise<void>((resolve) => {
+        resolveReleased = resolve;
+      }),
+      resolveReached: () => resolveReached(),
+      resolveReleased: () => resolveReleased(),
+      reachedFlag: false,
+    });
+  }
+};
+
+export const awaitMaintenancePause = (
+  conversation: string,
+  location: ConversationMaintenanceFailpointLocation,
+): Promise<void> => {
+  const gate = maintenancePauseGates.get(maintenancePauseKey(conversation, location));
+  if (gate === undefined) {
+    return Promise.reject(
+      new Error(`Maintenance pause ${location} is not armed for ${conversation}.`),
+    );
+  }
+  return gate.reached;
+};
+
+export const releaseMaintenancePause = (
+  conversation: string,
+  location?: ConversationMaintenanceFailpointLocation,
+): void => {
+  if (location === undefined) {
+    for (const [key, gate] of maintenancePauseGates) {
+      if (key.startsWith(`${conversation}:`) && gate.reachedFlag) gate.resolveReleased();
+    }
+    return;
+  }
+  maintenancePauseGates.get(maintenancePauseKey(conversation, location))?.resolveReleased();
+};
+
+export const maintenanceRaceFailpoint =
+  (ctx: DurableObjectState): ConversationMaintenanceFailpointHandler =>
+  (location) =>
+    Effect.gen(function* () {
+      const conversation = ctx.id.name;
+      if (conversation === undefined) return;
+      const queue = maintenancePauses.get(conversation);
+      if (queue?.[0] !== location) return;
+      queue.shift();
+      if (queue.length === 0) maintenancePauses.delete(conversation);
+      const key = maintenancePauseKey(conversation, location);
+      const gate = maintenancePauseGates.get(key);
+      if (gate === undefined) return;
+      gate.reachedFlag = true;
+      gate.resolveReached();
+      yield* Effect.promise(() => gate.released);
+      maintenancePauseGates.delete(key);
     });
 
 // ---------------------------------------------------------------------------

@@ -385,15 +385,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "kill between the child settlement finalize and the parent wake: recovery replays the wake",
+      "kill after the precommitted parent notification and child finalize: recovery resumes idempotently",
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
             const conversation = "conversation-s2-wake";
             const key = "s2-wake-1";
-            // The FIRST settlement finalization of the scenario is the child's: the kill lands
-            // after the child is durably settled but before `recordChildSettled` wakes the
-            // suspended parent (spec §14 "after child Settlement, before parent observes it").
+            // The FIRST settlement finalization of the scenario is the child's. The inert parent
+            // notification is now durably committed before this boundary, so recovery can prove
+            // the exact canonical child before it resumes the suspended parent (issue #93).
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "subagent-run",
@@ -406,7 +406,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             expectKilled(result);
             yield* waitOutChildLease;
 
-            // Before recovery: the child is settled, the parent still durably suspended.
+            // Before recovery: the child is settled and its parent notification is durable, but
+            // notifications never clear suspension without coordinator-owned canonical proof.
             const ids = yield* withRuntime(
               site.db,
               Effect.gen(function* () {
@@ -428,8 +429,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === ids.parent,
                 );
-                // Scan-seeded recovery replays the idempotent wake: a dropped wake is never a
-                // lost obligation (plan §1.3).
+                // The parent notification was already committed before the kill. Recovery
+                // validates the open canonical delegation and performs the sole resume operation.
                 expect(report?.decision._tag).toBe("ResumeWaitingParent");
                 expect(report?.disposition).toBe("repaired");
                 expect((yield* submissionSnapshot(ids.parent)).state).toBe("input-applied");

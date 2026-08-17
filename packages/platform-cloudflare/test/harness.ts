@@ -169,13 +169,14 @@ export const scheduledAlarm = (
 
 /**
  * Alarm-only convergence: fire the persisted alarm (at-least-once; an armed eviction or a
- * typed pass failure rejects the delivery and the pass's pre-arm keeps the slot committed)
+ * typed pass failure rejects the delivery and the dirty generation keeps the slot committed)
  * until the predicate holds. NO client entry point is ever called — this is the exit gate's
  * "recovers without an incoming request" in its deterministic form: `runDurableObjectAlarm`
  * is accelerated delivery of the alarm that would fire on its own.
  *
- * Built-in invariant audit: nonterminal work observed WITHOUT a scheduled alarm repeatedly
- * is a broken alarm invariant and fails the row immediately instead of timing out.
+ * Built-in invariant audit: locally actionable states observed WITHOUT a scheduled alarm
+ * repeatedly are broken. Stable external waits (`suspended`, `unknown`, `joined`, and an
+ * admitted child awaiting parent establishment) are intentionally allowed to quiesce.
  */
 export const drainAlarmsUntil = async (
   conversation: string,
@@ -197,14 +198,16 @@ export const drainAlarmsUntil = async (
     }
     if (!fired) {
       const rows = await laneRows(conversation, namespace);
-      const nonterminal = rows.some((row) => row.state !== "settled");
-      if (nonterminal) {
+      const actionable = rows.some((row) =>
+        ["ready", "input-applied", "running", "joining", "terminalizing"].includes(row.state),
+      );
+      if (actionable) {
         consecutiveIdleWithWork += 1;
-        // The alarm invariant: committed nonterminal work implies a committed alarm. Allow
-        // a few rounds for a concurrently-running pass to re-arm before declaring it broken.
+        // Actionable committed work implies a committed alarm. Allow a few rounds for a
+        // concurrently-running pass to re-arm before declaring it broken.
         if (consecutiveIdleWithWork >= 20) {
           throw new Error(
-            `Alarm invariant broken for ${conversation}: nonterminal work with no scheduled alarm`,
+            `Alarm invariant broken for ${conversation}: actionable work with no scheduled alarm`,
           );
         }
       } else {

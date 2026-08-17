@@ -1853,12 +1853,12 @@ const make = Effect.gen(function* () {
    */
   /**
    * Cross-lane drive-forward after one child Submission settles (spec §12 step 10): the child's
-   * canonical Settlement is already durable, so `recordChildSettled` records operational
-   * coverage. The parent lane then validates its exact canonical `SubagentStarted` pairs before
-   * `resumeSuspension` may make it runnable. The child never reads the parent's lane-local
-   * recovery snapshot: the routed notification pre-arms the owning Object, and the wake below is
-   * only a liveness hint. Invoked from every settlement finalization path; a crash between either
-   * step is repaired by `ResumeWaitingParent`.
+   * exact canonical record is already durable, so `recordChildSettled` records operational
+   * coverage after append and before ledger finalization. This ensures the routed notification
+   * pre-arms the owning Object before the child may become terminal; finalization replays it for
+   * single-store parent re-suspension races. The parent lane validates its exact canonical
+   * `SubagentStarted` pairs before `resumeSuspension` may make it runnable, and the wake below is
+   * only a liveness hint. A crash between steps is repaired by `ResumeWaitingParent`.
    */
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
@@ -1947,6 +1947,7 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
@@ -2043,6 +2044,7 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
@@ -2075,6 +2077,7 @@ const make = Effect.gen(function* () {
       );
       yield* hit("terminalize:after-canonical-append");
     }
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({
         submissionId: submission.submissionId,

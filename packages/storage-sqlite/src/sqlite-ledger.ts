@@ -2120,7 +2120,12 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         } else {
           for (const child of validated.expectedReason.children) {
             const childRow = yield* readSubmission(operation, child.childSubmissionId);
-            if (Option.isNone(childRow) || childRow.value.state !== "settled") {
+            const childReservation = yield* readReservation(operation, child.childSubmissionId);
+            const covered =
+              Option.isSome(childRow) &&
+              (childRow.value.state === "settled" ||
+                (childRow.value.state === "terminalizing" && Option.isSome(childReservation)));
+            if (!covered) {
               return "not-covered" as SuspensionResumeOutcome;
             }
           }
@@ -2386,10 +2391,16 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       operation,
       Effect.gen(function* () {
         const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
-        // The child's canonical Settlement is the authority for this wake; a notification for
-        // an unsettled (or unknown) child is a caller error in a single-store adapter.
+        // The caller may notify after the canonical Settlement append but before ledger
+        // finalization. An exact reservation plus `terminalizing` is the narrow durable prefix
+        // that makes that ordering admissible; earlier states remain a caller error.
         const child = yield* readSubmission(operation, validated.childSubmissionId);
-        if (Option.isNone(child) || child.value.state !== "settled") {
+        const childReservation = yield* readReservation(operation, validated.childSubmissionId);
+        const announced =
+          Option.isSome(child) &&
+          (child.value.state === "settled" ||
+            (child.value.state === "terminalizing" && Option.isSome(childReservation)));
+        if (!announced) {
           return yield* LedgerError.make({
             operation,
             message: `Child submission ${validated.childSubmissionId} has no recorded settlement.`,
