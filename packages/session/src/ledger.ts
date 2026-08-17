@@ -977,8 +977,9 @@ export type SubmissionLedgerFailure =
  *   `SubmissionSettled` record is present. The adapter validates the deterministic record and
  *   digest through `validateCanonicalSettlementRepair`, then reconstructs or overwrites every
  *   missing/divergent operational reservation and settlement column from that record, marks the
- *   row settled, and releases the lane. Divergent cached ledger state is repaired rather than
- *   treated as a competing outcome: canonical history wins (DUR-015).
+ *   row settled, clears any stale nonterminal suspension state, and releases the lane. Divergent
+ *   cached ledger state is repaired rather than treated as a competing outcome: canonical history
+ *   wins (DUR-015).
  * - `requestAbort` — durable, idempotent by `submissionId`: repeating returns the recorded
  *   intent unchanged (DUR-012). Fails with `SettlementConflict` once the Submission is settled;
  *   abort never rewrites a terminal outcome. Fails with `JoinedToHost` for a `joined` Submission

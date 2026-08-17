@@ -980,6 +980,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 row,
                 reservation,
                 ownership: undefined,
+                suspension: undefined,
               });
               return [
                 success(

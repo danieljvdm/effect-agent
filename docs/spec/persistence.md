@@ -135,8 +135,9 @@ record and settlement identities, payload tag, Submission and receipt identities
 recomputed canonical digest must agree with the request and immutable ledger row before any
 mutation. Recovery invokes `repairSettlementFromCanonical` after observing that canonical record;
 the method atomically reconstructs or overwrites divergent operational reservation columns,
-settles the row, and releases lane ownership. An exact replay preserves its prior settlement time
-when that timestamp is valid; repaired or reconstructed state uses the transaction time.
+settles the row, clears any stale nonterminal suspension state, and releases lane ownership. An
+exact replay preserves its prior settlement time when that timestamp is valid; repaired or
+reconstructed state uses the transaction time.
 
 Operational approval decisions and child-settlement notifications are evidence only: recording
 them never clears a suspended lane. The coordinator validates canonical history, then calls

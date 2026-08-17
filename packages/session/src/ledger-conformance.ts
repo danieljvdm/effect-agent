@@ -985,6 +985,23 @@ const canonicalSettlementRepair = conformanceCase(
       const admitted = yield* admitReady(conversationId, "canonical-repair-key", {
         work: "canonical-repair",
       });
+      const claim = yield* expectSome(
+        "the claim before the stale suspension",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      const suspended = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: admitted.submissionId,
+          ownershipToken: claim.ownershipToken,
+          reason: ApprovalPendingSuspension.make({
+            toolCallIds: [decodeToolCallId("call-canonical-repair-stale-suspension")],
+          }),
+        }),
+      );
+      yield* ensure(
+        suspended === "suspended",
+        "The repair fixture must begin with stale nonterminal suspension state",
+      );
       const canonical = yield* settlementReservation({
         submissionId: admitted.submissionId,
         ownershipToken: BOGUS_TOKEN,
@@ -1009,8 +1026,9 @@ const canonicalSettlementRepair = conformanceCase(
       yield* ensure(
         repairedSnapshot.submission.state === "settled" &&
           repairedSnapshot.submission.settledOutcome === "failed" &&
-          repairedSnapshot.reservation?.recordDigest === canonical.recordDigest,
-        "Canonical repair must atomically reconstruct reservation columns and settle the row",
+          repairedSnapshot.reservation?.recordDigest === canonical.recordDigest &&
+          repairedSnapshot.suspension === undefined,
+        "Canonical repair must atomically reconstruct reservation columns, settle the row, and clear stale suspension state",
       );
       yield* TestClock.adjust("1 second");
       const replayed = yield* ledger.repairSettlementFromCanonical(request);

@@ -1804,7 +1804,11 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           `.pipe(Effect.mapError(sqlFailure(operation)));
           yield* sql`
             UPDATE effect_agent_submissions
-            SET state = 'settled', settled_outcome = ${canonical.outcome}
+            SET
+              state = 'settled',
+              settled_outcome = ${canonical.outcome},
+              suspended_reason_json = NULL,
+              suspended_at = NULL
             WHERE submission_id = ${canonical.submissionId}
           `.pipe(Effect.mapError(sqlFailure(operation)));
           yield* sql`
