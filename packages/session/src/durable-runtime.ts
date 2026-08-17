@@ -991,7 +991,15 @@ const make = Effect.gen(function* () {
     const after = records.at(-1)?.sequence ?? ZERO_SEQUENCE;
     const tail = yield* store.inspectTail(ConversationTailRequest.make({ conversationId }));
     if (tail.tailSequence <= after) return records;
-    const suffix = yield* readCanonicalRange(conversationId, after, tail.tailSequence);
+    const suffix = yield* readCanonicalRange(conversationId, after, tail.tailSequence).pipe(
+      Effect.catchTag("ConversationNotMaterialized", (error) =>
+        ConversationStoreError.make({
+          operation: "read recovery history",
+          message: `Conversation ${conversationId} disappeared after its recovery suffix tail was captured`,
+          cause: error,
+        }),
+      ),
+    );
     return [...records, ...suffix];
   });
 

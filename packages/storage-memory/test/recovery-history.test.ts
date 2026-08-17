@@ -7,6 +7,7 @@ import {
   CanonicalSequence,
   ConversationCreated,
   ConversationMaterialization,
+  ConversationNotMaterialized,
   ConversationRead,
   ConversationStore,
   DefinitionDigests,
@@ -31,13 +32,14 @@ import {
 } from "@effect-agent/session";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Context, DateTime, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Context, DateTime, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 
 import { MemoryConversationStoreLive, MemorySubmissionLedgerLive } from "../src/index.ts";
 
 class RecoveryReadProbe extends Context.Service<
   RecoveryReadProbe,
   {
+    readonly failReadAfter: (sequence: CanonicalSequence) => Effect.Effect<void>;
     readonly requests: Effect.Effect<ReadonlyArray<ConversationRead>>;
     readonly reset: Effect.Effect<void>;
   }
@@ -47,14 +49,23 @@ const countingConversationStoreLayer = Layer.effectContext(
   Effect.gen(function* () {
     const store = yield* ConversationStore;
     const requests = yield* Ref.make<ReadonlyArray<ConversationRead>>([]);
+    const failingAfter = yield* Ref.make<Option.Option<CanonicalSequence>>(Option.none());
     const counted = ConversationStore.of({
       materialize: store.materialize,
       append: store.append,
       read: (request) =>
         Stream.unwrap(
-          Ref.update(requests, (current) => [...current, request]).pipe(
-            Effect.as(store.read(request)),
-          ),
+          Effect.gen(function* () {
+            yield* Ref.update(requests, (current) => [...current, request]);
+            const failure = yield* Ref.get(failingAfter);
+            if (Option.isSome(failure) && request.afterSequence === failure.value) {
+              yield* Ref.set(failingAfter, Option.none());
+              return Stream.fail(
+                ConversationNotMaterialized.make({ conversationId: request.conversationId }),
+              );
+            }
+            return store.read(request);
+          }),
         ),
       observe: store.observe,
       export: store.export,
@@ -66,6 +77,7 @@ const countingConversationStoreLayer = Layer.effectContext(
       Context.add(
         RecoveryReadProbe,
         RecoveryReadProbe.of({
+          failReadAfter: (sequence) => Ref.set(failingAfter, Option.some(sequence)),
           requests: Ref.get(requests),
           reset: Ref.set(requests, []),
         }),
@@ -95,6 +107,7 @@ const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 const DIGEST = decodeDigest("a".repeat(64));
 const DEFINITIONS = DefinitionDigests.make({ agent: DIGEST, model: DIGEST, tools: DIGEST });
 const HISTORY_RECORDS = 2_050;
+const HISTORY_TAIL = Schema.decodeSync(CanonicalSequence)(HISTORY_RECORDS);
 
 const runtimeLayer = DurableAgentRuntime.layer.pipe(
   Layer.provideMerge(
@@ -230,6 +243,61 @@ describe("DurableAgentRuntime recovery history", () => {
         { afterSequence: 1_024, limit: 1_024 },
         { afterSequence: 2_048, limit: 2 },
       ]);
+    }).pipe(Effect.provide(runtimeLayer)),
+  );
+
+  it.effect("STORE-015 issue #96: normalizes disappearance during suffix refresh", () =>
+    Effect.gen(function* () {
+      yield* seedHistory();
+      const ledger = yield* SubmissionLedger;
+      const runtime = yield* DurableAgentRuntime;
+      const probe = yield* RecoveryReadProbe;
+      for (let index = 0; index < 2; index++) {
+        const input = { work: `suffix-race-${index}` };
+        const inputDigest = yield* digestJson(input);
+        const admitted = yield* ledger.admit(
+          AdmissionRequest.make({
+            conversationId: CONVERSATION_ID,
+            principal: PRINCIPAL,
+            idempotencyKey: decodeIdempotencyKey(`recovery-suffix-race-${index}`),
+            agentId: AGENT_ID,
+            agentDigests: DEFINITIONS,
+            deploymentId: DEPLOYMENT_ID,
+            inputPayload: input,
+            inputDigest,
+          }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        if (index === 0) {
+          yield* ledger.requestAbort(
+            AbortCommand.make({
+              submissionId: admitted.submissionId,
+              author: "issue-96-test",
+              reason: "exercise suffix refresh after a repaired predecessor",
+            }),
+          );
+        }
+      }
+
+      yield* probe.reset;
+      yield* probe.failReadAfter(HISTORY_TAIL);
+      const failure = yield* runtime.runRecovery.pipe(Effect.flip);
+      expect(failure).toMatchObject({
+        _tag: "ConversationStoreError",
+        operation: "read recovery history",
+      });
+      const requests = (yield* probe.requests).map((request) => ({
+        afterSequence: request.afterSequence,
+        limit: request.limit,
+      }));
+      expect(requests.slice(0, 3)).toEqual([
+        { afterSequence: undefined, limit: 1_024 },
+        { afterSequence: 1_024, limit: 1_024 },
+        { afterSequence: 2_048, limit: 2 },
+      ]);
+      expect(requests.at(-1)).toMatchObject({
+        afterSequence: HISTORY_TAIL,
+      });
     }).pipe(Effect.provide(runtimeLayer)),
   );
 });
