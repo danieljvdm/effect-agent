@@ -14,6 +14,7 @@ import {
 import {
   allSettled,
   anyInState,
+  awaitReconstructedProgressWaiter,
   drainAlarmsUntil,
   readCanonical,
   runClient,
@@ -204,10 +205,15 @@ describe("#94 Cloudflare durable progress wait", () => {
       state.abort("#94 forced wait eviction");
     }).catch(() => undefined);
 
+    const reconstructedIncarnation = await awaitReconstructedProgressWaiter(
+      conversation,
+      priorIncarnation,
+      1,
+    );
+    expect(reconstructedIncarnation).not.toBe(priorIncarnation);
     await approve(conversation, approval.receipt);
     await waiting;
     await drainAlarmsUntil(conversation, allSettled(conversation));
-    expect(await progressStub(conversation).progressIncarnation()).not.toBe(priorIncarnation);
     const after = await readCanonical(conversation);
     expect(after.some((record) => record.sequence > cursor)).toBe(true);
   }, 20_000);

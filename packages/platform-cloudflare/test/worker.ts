@@ -141,6 +141,16 @@ export class TestConversationObject extends makeConversationObjectClass(baseOpti
     return awaitProgressWaiterCount(this.ctx, expected);
   }
 
+  async awaitProgressWaiterCountAfter(
+    previousIncarnation: number,
+    expected: number,
+  ): Promise<number | null> {
+    const incarnation = progressIncarnation(this.ctx);
+    if (incarnation === previousIncarnation) return null;
+    await awaitProgressWaiterCount(this.ctx, expected);
+    return incarnation;
+  }
+
   progressIncarnation(): number {
     return progressIncarnation(this.ctx);
   }
