@@ -9,6 +9,7 @@ import {
   hasReviewableContent,
   renderReviewContent,
 } from "./diff.ts";
+import type { ChangedFile } from "./diff.ts";
 import {
   normalizeRepoRelativePath,
   PullRequestSource,
@@ -31,7 +32,7 @@ export const MAX_FINDINGS = 20;
 export const MAX_CONCERNS = 10;
 
 /** Annotated patches larger than this are truncated with an explicit marker. */
-const MAX_PATCH_CHARS = 60_000;
+export const MAX_PATCH_CHARS = 60_000;
 
 /** The encoded Tool result must retain one complete bounded content fallback. */
 export const REVIEW_TOOL_RESULT_MAX_BYTES = 2 * 1024 * 1024;
@@ -104,6 +105,28 @@ export class FileDiffView extends Schema.Class<FileDiffView>(
   annotatedPatch: Schema.String,
   truncated: Schema.Boolean,
 }) {}
+
+/** Host-owned rendering of one changed file's bounded review evidence. */
+export const fileDiffView = (file: ChangedFile): FileDiffView => {
+  const contentEvidence = renderReviewContent(file);
+  const reviewMode =
+    file.patch !== undefined
+      ? ("diff" as const)
+      : contentEvidence !== undefined
+        ? ("content" as const)
+        : ("unavailable" as const);
+  const annotated = file.patch === undefined ? (contentEvidence ?? "") : annotatePatch(file.patch);
+  const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
+  return FileDiffView.make({
+    path: file.path,
+    status: file.status,
+    reviewMode,
+    annotatedPatch: truncated
+      ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
+      : annotated,
+    truncated,
+  });
+};
 
 // Read failures stay model-visible results ("return"), never run-killers:
 // a model asking for an out-of-changeset path is expected untrusted-input
@@ -194,25 +217,7 @@ export const readFileDiffHandler = (query: FileDiffQuery) =>
         reason: "Path is not part of this pull request's changeset.",
       });
     }
-    const contentEvidence = renderReviewContent(file);
-    const reviewMode =
-      file.patch !== undefined
-        ? ("diff" as const)
-        : contentEvidence !== undefined
-          ? ("content" as const)
-          : ("unavailable" as const);
-    const annotated =
-      file.patch === undefined ? (contentEvidence ?? "") : annotatePatch(file.patch);
-    const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
-    return FileDiffView.make({
-      path: file.path,
-      status: file.status,
-      reviewMode,
-      annotatedPatch: truncated
-        ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
-        : annotated,
-      truncated,
-    });
+    return fileDiffView(file);
   });
 
 /**
@@ -400,15 +405,15 @@ export const makeReviewInstructions =
         : "The author provided no description.",
       ...resolveGuidance(options.guidance, mission),
       "Work in this order:",
-      "1. Call list_changed_files once to see the changeset. That list is your COMPLETE review scope: in incremental reviews it is deliberately a subset of the pull request's full diff (totalFiles counts the whole pull request), and everything it omits was already reviewed or excluded.",
-      "2. Call read_file_diff for every file you review. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
+      "1. Call list_changed_files once to see the selected input scope. In incremental reviews it is deliberately a subset of the pull request's full diff (totalFiles counts the whole pull request); omitted paths belong to settled prior scope or explicit host exclusions, not to this run.",
+      "2. Call read_file_diff for every listed file. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
       "3. Call read_file when you need surrounding context the diff does not show. ONLY listed files are readable — read_file_diff and read_file both return a failed result for any other path (an import, a neighbor, a file named in the description). Do not request or retry unlisted paths; reason from the visible diffs instead and note the gap honestly in your summary when it matters.",
       "4. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
       "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
       "Go shallow only when the diff has no behavioral surface at all: doc typos, formatting, lockfile or generated-code regeneration, a mechanical rename. Line count is not the signal — a one-line change to auth, money, SQL, a comparison operator, or a config default is not trivial.",
       "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
       '5. After collecting anchored findings, deliberately scan for concerns with NO line to point at: deletion or cleanup plans for code the diff replaces, rollout or migration sequencing, coverage gaps the diff implies but does not add, scope questions only the author can answer. Report each as a "concern", never as a finding with an invented anchor; report none when none exist.',
-      `6. Write a walkthrough: for every file you reviewed, one factual sentence (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars) describing what changed in that file — written for a reader scanning the pull request, never restating the diff line by line. Use only paths from list_changed_files; invented paths are dropped.`,
+      `6. Write a walkthrough: for every file whose evidence you examined, one factual sentence (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars) describing what changed in that file — written for a reader scanning the pull request, never restating the diff line by line. Use only paths from list_changed_files; invented paths are dropped.`,
       '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string, a changed file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL: "correctness" | "security" | "concurrency" | "performance" | "resources" | "error-handling" | "testing" | "maintainability" | "style" | "docs">, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement text for exactly lines startLine..endLine, ready to commit>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], only for step-5 concerns with no valid anchor — never duplicate a finding here>, "walkthrough": <array, OPTIONAL: [{"path": <string, a changed file path>, "summary": <string, the step-6 sentence>}], one entry per reviewed file>}.',
       `Report at most ${maxFindings} findings and at most ${MAX_CONCERNS} concerns; prefer the most important ones. An empty findings array with verdict "approve" is a valid review. Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement for every line in the range and nothing else.`,
       'Use verdict "request-changes" only when at least one finding or concern is "blocking". Line anchors you invent will be discarded, so copy R-numbers from read_file_diff output.',

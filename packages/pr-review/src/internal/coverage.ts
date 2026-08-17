@@ -3,14 +3,30 @@ import type { RunEvent } from "effect-agent";
 
 import type { ChangedFile } from "./diff.ts";
 import { isReviewableFile } from "./diff.ts";
-import { FileReviewDelegationFailure, FileReviewRequest, FileReviewUnitResult } from "./fan-out.ts";
-import { FileDiffQuery, type WalkthroughEntry } from "./review-agent.ts";
-import { planReviewUnits } from "./review-units.ts";
+import {
+  FileReviewDelegationFailure,
+  FileReviewRequest,
+  FileReviewUnitResult,
+  ReviewCandidate,
+} from "./fan-out.ts";
+import {
+  FileDiffView,
+  FileDiffQuery,
+  type ReviewConcern,
+  type ReviewFinding,
+  type WalkthroughEntry,
+} from "./review-agent.ts";
+import { planReviewUnits, type ReviewDiscoveryPass } from "./review-units.ts";
 
 // ---------------------------------------------------------------------------
-// Host-owned coverage. Model summaries are untrusted prose; the check result
-// is based on deterministic unit planning plus the semantic Tool events that
-// prove which required review operations actually settled successfully.
+// Two different claims are deliberately modeled:
+//
+// - input coverage: every required path was assigned bounded evidence or was
+//   explicitly reported outside the pipeline's capacity;
+// - review assurance: every configured discovery/specialist pass and every
+//   candidate-verification batch settled exactly.
+//
+// Neither claims that the model found every defect.
 // ---------------------------------------------------------------------------
 
 export const ReviewShape = Schema.Literals(["flat", "fan-out"]);
@@ -23,6 +39,11 @@ export class FailedReviewUnit extends Schema.Class<FailedReviewUnit>(
   errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
 }) {}
 
+/**
+ * Compatibility diagnostic retained for callers that consumed the original
+ * `coverage` field. New UI and state decisions use ReviewInputCoverage and
+ * ReviewAssurance directly.
+ */
 export class ReviewCoverage extends Schema.Class<ReviewCoverage>(
   "@effect-agent/pr-review/ReviewCoverage",
 )({
@@ -38,7 +59,58 @@ export class ReviewCoverage extends Schema.Class<ReviewCoverage>(
   ),
   failedUnits: Schema.Array(FailedReviewUnit).check(Schema.isMaxLength(8)),
   reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
+    Schema.isMaxLength(32),
+  ),
+}) {}
+
+export class ReviewInputCoverage extends Schema.Class<ReviewInputCoverage>(
+  "@effect-agent/pr-review/ReviewInputCoverage",
+)({
+  status: Schema.Literals(["complete", "incomplete"]),
+  requiredPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(300),
+  ),
+  assignedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(300),
+  ),
+  /** Assigned paths whose model-visible diff was truncated by the evidence bound. */
+  partialPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(300),
+  ),
+  unassignedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
+    Schema.isMaxLength(300),
+  ),
+  reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
     Schema.isMaxLength(20),
+  ),
+}) {}
+
+export class FailedReviewPass extends Schema.Class<FailedReviewPass>(
+  "@effect-agent/pr-review/FailedReviewPass",
+)({
+  workId: Schema.NonEmptyString.check(Schema.isMaxLength(96)),
+  stage: Schema.Literals(["discovery", "specialist", "verification"]),
+  errorTag: Schema.NonEmptyString.check(Schema.isMaxLength(256)),
+}) {}
+
+export class ReviewAssurance extends Schema.Class<ReviewAssurance>(
+  "@effect-agent/pr-review/ReviewAssurance",
+)({
+  status: Schema.Literals(["settled", "incomplete", "unverified"]),
+  requiredGeneralDiscoveryPasses: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  completedGeneralDiscoveryPasses: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  requiredSpecialistPasses: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  completedSpecialistPasses: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  requiredVerificationPasses: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  completedVerificationPasses: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  discoveredCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  confirmedCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  rejectedCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  unsettledCandidates: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** Every failure remains visible within the coordinator's 32-call hard bound. */
+  failedPasses: Schema.Array(FailedReviewPass).check(Schema.isMaxLength(64)),
+  reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
+    Schema.isMaxLength(32),
   ),
 }) {}
 
@@ -81,24 +153,30 @@ const boundedListReason = (label: string, values: Iterable<string>): string => {
   return rendered;
 };
 
-const flatCoverage = (
+const flatInputCoverage = (
   files: ReadonlyArray<ChangedFile>,
   totalFiles: number,
   trace: ToolTrace,
-): ReviewCoverage => {
+): ReviewInputCoverage => {
   const requiredPaths = sortedUnique(files.map((file) => file.path));
-  const reviewed = new Set<string>();
+  const assigned = new Set<string>();
+  const partial = new Set<string>();
   const failedPaths = new Set<string>();
   for (const [toolCallId, declaration] of trace.declared) {
     if (declaration.toolName !== "read_file_diff") continue;
     const query = Schema.decodeUnknownOption(FileDiffQuery)(declaration.parameters);
     if (Option.isNone(query)) continue;
-    if (trace.succeeded.has(toolCallId)) reviewed.add(query.value.path);
+    const success = trace.succeeded.get(toolCallId);
+    if (success !== undefined) {
+      assigned.add(query.value.path);
+      const view = Schema.decodeUnknownOption(FileDiffView)(success.result);
+      if (Option.isSome(view) && view.value.truncated) partial.add(query.value.path);
+    }
     if (trace.failed.has(toolCallId)) failedPaths.add(query.value.path);
   }
   const undiffable = files.filter((file) => !isReviewableFile(file)).map((file) => file.path);
-  const unreviewed = requiredPaths.filter(
-    (path) => !reviewed.has(path) || undiffable.includes(path) || failedPaths.has(path),
+  const unassigned = requiredPaths.filter(
+    (path) => !assigned.has(path) || undiffable.includes(path) || failedPaths.has(path),
   );
   const reasons: Array<string> = [];
   if (files.length < totalFiles) {
@@ -109,92 +187,31 @@ const flatCoverage = (
       boundedListReason("required paths have no reviewable diff or bounded text", undiffable),
     );
   }
-  if (failedPaths.size > 0) {
-    reasons.push(boundedListReason("diff reads failed", failedPaths));
+  if (failedPaths.size > 0) reasons.push(boundedListReason("diff reads failed", failedPaths));
+  if (partial.size > 0) {
+    reasons.push(boundedListReason("model-visible diff evidence was truncated", partial));
   }
-  if (unreviewed.length > 0) {
-    reasons.push(boundedListReason("required paths were not successfully reviewed", unreviewed));
+  if (unassigned.length > 0) {
+    reasons.push(boundedListReason("required paths received no successful diff input", unassigned));
   }
-  return ReviewCoverage.make({
+  return ReviewInputCoverage.make({
     status: reasons.length === 0 ? "complete" : "incomplete",
     requiredPaths,
-    reviewedPaths: sortedUnique(reviewed),
-    unreviewedPaths: sortedUnique(unreviewed),
-    failedUnits: [],
+    assignedPaths: sortedUnique(assigned),
+    partialPaths: sortedUnique(partial),
+    unassignedPaths: sortedUnique(unassigned),
     reasons,
   });
 };
 
-const fanOutCoverage = (
+const fanOutInputCoverage = (
   files: ReadonlyArray<ChangedFile>,
   totalFiles: number,
-  trace: ToolTrace,
-): ReviewCoverage => {
+): ReviewInputCoverage => {
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
-  const declarationsByUnit = new Map<
-    string,
-    Array<{ readonly id: string; readonly paths: ReadonlyArray<string> }>
-  >();
-  for (const [toolCallId, declaration] of trace.declared) {
-    if (declaration.toolName !== "delegate_file_review") continue;
-    const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-    if (Option.isNone(request)) continue;
-    const declarations = declarationsByUnit.get(request.value.unitId) ?? [];
-    declarations.push({ id: toolCallId, paths: request.value.paths });
-    declarationsByUnit.set(request.value.unitId, declarations);
-  }
-
-  const reviewed = new Set<string>();
-  const unreviewed = new Set<string>([...plan.undiffablePaths, ...plan.unassignedPaths]);
-  const failedUnits: Array<FailedReviewUnit> = [];
+  const assignedPaths = sortedUnique(plan.units.flatMap((unit) => unit.paths));
+  const unassignedPaths = sortedUnique([...plan.undiffablePaths, ...plan.unassignedPaths]);
   const reasons: Array<string> = [];
-  for (const unit of plan.units) {
-    const declarations = declarationsByUnit.get(unit.unitId) ?? [];
-    const expectedPaths = [...unit.paths];
-    const exact = declarations.filter(
-      (declaration) =>
-        declaration.paths.length === expectedPaths.length &&
-        declaration.paths.every((path, index) => path === expectedPaths[index]),
-    );
-    const successful = exact.filter((declaration) => {
-      const event = trace.succeeded.get(declaration.id);
-      if (event === undefined || trace.failed.has(declaration.id)) return false;
-      const result = Schema.decodeUnknownOption(FileReviewUnitResult)(event.result);
-      return Option.isSome(result) && result.value.unitId === unit.unitId;
-    });
-    if (declarations.length === 1 && exact.length === 1 && successful.length === 1) {
-      for (const path of unit.paths) reviewed.add(path);
-      continue;
-    }
-    for (const path of unit.paths) unreviewed.add(path);
-    const failure = declarations
-      .map((declaration) => trace.failed.get(declaration.id))
-      .find((event) => event !== undefined);
-    const returnedFailure = declarations
-      .map((declaration) => trace.succeeded.get(declaration.id))
-      .filter((event) => event !== undefined)
-      .map((event) => Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result))
-      .find(Option.isSome);
-    failedUnits.push(
-      FailedReviewUnit.make({
-        unitId: unit.unitId,
-        errorTag:
-          failure?.errorTag ??
-          (returnedFailure !== undefined
-            ? returnedFailure.value._tag === "FileReviewUnitFailed"
-              ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}`
-              : returnedFailure.value._tag
-            : undefined) ??
-          (declarations.length === 0
-            ? "UnitNotAssigned"
-            : declarations.length > 1
-              ? "UnitAssignedMultipleTimes"
-              : exact.length === 0
-                ? "UnitAssignmentMismatch"
-                : "UnitDidNotSettleSuccessfully"),
-      }),
-    );
-  }
   if (plan.truncated) {
     reasons.push(`review range exposed ${files.length} of ${totalFiles} required files`);
   }
@@ -206,58 +223,444 @@ const fanOutCoverage = (
       ),
     );
   }
+  if (plan.partialEvidencePaths.length > 0) {
+    reasons.push(
+      boundedListReason("model-visible diff evidence was truncated", plan.partialEvidencePaths),
+    );
+  }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
   }
-  if (failedUnits.length > 0) {
-    reasons.push(
-      boundedListReason(
-        "review units did not complete",
-        failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`),
-      ),
-    );
-  }
-  return ReviewCoverage.make({
+  return ReviewInputCoverage.make({
     status: reasons.length === 0 ? "complete" : "incomplete",
     requiredPaths: sortedUnique(files.map((file) => file.path)),
-    reviewedPaths: sortedUnique(reviewed),
-    unreviewedPaths: sortedUnique(unreviewed),
-    failedUnits,
+    assignedPaths,
+    partialPaths: plan.partialEvidencePaths,
+    unassignedPaths,
     reasons,
   });
 };
 
-/**
- * Host-verified per-file summaries from the fan-out run's Tool events: for
- * every successfully settled delegation, the child-reported `fileSummaries`
- * whose paths belong to that invocation's requested unit. This is the
- * declassification check `projectResult` cannot perform itself (it never sees
- * the request): a child assigned file A cannot smuggle a summary for changed
- * file B into the merged walkthrough, and a coordinator cannot invent or edit
- * entries — only exact child-reported, in-unit summaries survive.
- */
-export const collectUnitFileSummaries = (
-  events: ReadonlyArray<RunEvent>,
-): ReadonlyArray<WalkthroughEntry> => {
-  const trace = toolTrace(events);
-  const entries: Array<WalkthroughEntry> = [];
-  for (const [toolCallId, declaration] of trace.declared) {
-    if (declaration.toolName !== "delegate_file_review") continue;
+const sameStrings = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
+
+const candidateKey = (candidate: ReviewCandidate): string =>
+  JSON.stringify(Schema.encodeSync(ReviewCandidate)(candidate));
+
+const sameCandidates = (
+  left: ReadonlyArray<ReviewCandidate>,
+  right: ReadonlyArray<ReviewCandidate>,
+): boolean =>
+  left.length === right.length &&
+  left.every((candidate, index) => {
+    const corresponding = right[index];
+    return corresponding !== undefined && candidateKey(candidate) === candidateKey(corresponding);
+  });
+
+const delegationDeclarations = (trace: ToolTrace) =>
+  [...trace.declared].flatMap(([id, declaration]) => {
+    if (declaration.toolName !== "delegate_file_review") return [];
     const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
-    if (Option.isNone(request)) continue;
-    const success = trace.succeeded.get(toolCallId);
-    if (success === undefined || trace.failed.has(toolCallId)) continue;
-    const result = Schema.decodeUnknownOption(FileReviewUnitResult)(success.result);
-    if (Option.isNone(result) || result.value.unitId !== request.value.unitId) continue;
-    const assigned = new Set(request.value.paths);
-    for (const entry of result.value.fileSummaries ?? []) {
-      if (assigned.has(entry.path)) entries.push(entry);
-    }
-  }
-  return entries;
+    return Option.isNone(request) ? [] : [{ id, request: request.value }];
+  });
+
+const failureTag = (trace: ToolTrace, id: string): string | undefined => {
+  const failed = trace.failed.get(id);
+  if (failed !== undefined) return failed.errorTag;
+  const succeeded = trace.succeeded.get(id);
+  if (succeeded === undefined) return undefined;
+  const returned = Schema.decodeUnknownOption(FileReviewDelegationFailure)(succeeded.result);
+  if (Option.isNone(returned)) return undefined;
+  return returned.value._tag === "FileReviewUnitFailed"
+    ? `${returned.value._tag}:${returned.value.childErrorTag}`
+    : returned.value._tag;
 };
 
-/** Assess one settled run without trusting its prose summary or verdict. */
+const exactDiscoveryRequest = (request: FileReviewRequest, pass: ReviewDiscoveryPass): boolean =>
+  request.phase === "discovery" &&
+  request.workId === pass.passId &&
+  request.unitId === pass.unitId &&
+  request.perspective === pass.perspective &&
+  sameStrings(request.paths, pass.paths) &&
+  sameStrings(request.riskCategories, pass.riskCategories) &&
+  request.candidates.length === 0;
+
+const validCandidate = (candidate: ReviewCandidate, pass: ReviewDiscoveryPass): boolean => {
+  const allowed = new Set(pass.paths);
+  return (
+    candidate.workId === pass.passId &&
+    candidate.unitId === pass.unitId &&
+    candidate.evidencePaths.length > 0 &&
+    candidate.evidencePaths.every((path) => allowed.has(path)) &&
+    (candidate._tag !== "FindingCandidate" || allowed.has(candidate.finding.path))
+  );
+};
+
+interface AssuranceAssessment {
+  readonly assurance: ReviewAssurance;
+  readonly confirmedFindings: ReadonlyArray<ReviewFinding>;
+  readonly confirmedConcerns: ReadonlyArray<ReviewConcern>;
+  readonly walkthrough: ReadonlyArray<WalkthroughEntry>;
+}
+
+const flatAssurance = (): AssuranceAssessment => ({
+  assurance: ReviewAssurance.make({
+    status: "unverified",
+    requiredGeneralDiscoveryPasses: 1,
+    completedGeneralDiscoveryPasses: 1,
+    requiredSpecialistPasses: 0,
+    completedSpecialistPasses: 0,
+    requiredVerificationPasses: 1,
+    completedVerificationPasses: 0,
+    discoveredCandidates: 0,
+    confirmedCandidates: 0,
+    rejectedCandidates: 0,
+    unsettledCandidates: 0,
+    failedPasses: [],
+    reasons: [
+      "flat review has no independent candidate-verification pass; use the fan-out pipeline for a settled assurance result",
+    ],
+  }),
+  confirmedFindings: [],
+  confirmedConcerns: [],
+  walkthrough: [],
+});
+
+const fanOutAssurance = (
+  files: ReadonlyArray<ChangedFile>,
+  totalFiles: number,
+  trace: ToolTrace,
+): AssuranceAssessment => {
+  const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
+  const declarations = delegationDeclarations(trace);
+  const expectedWorkIds = new Set(plan.discoveryPasses.map((pass) => pass.passId));
+  const failedPasses: Array<FailedReviewPass> = [];
+  const reasons: Array<string> = [];
+  const candidatesByUnit = new Map<string, Array<ReviewCandidate>>();
+  const walkthrough: Array<WalkthroughEntry> = [];
+  let completedGeneralDiscoveryPasses = 0;
+  let completedSpecialistPasses = 0;
+
+  for (const pass of plan.discoveryPasses) {
+    const matching = declarations.filter(({ request }) => exactDiscoveryRequest(request, pass));
+    const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
+    if (matching.length !== 1) {
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId: pass.passId,
+          stage,
+          errorTag: matching.length === 0 ? "PassNotAssigned" : "PassAssignedMultipleTimes",
+        }),
+      );
+      continue;
+    }
+    const call = matching[0];
+    if (call === undefined) {
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId: pass.passId,
+          stage,
+          errorTag: "PassLookupInvariantFailed",
+        }),
+      );
+      continue;
+    }
+    const failure = failureTag(trace, call.id);
+    const succeeded = trace.succeeded.get(call.id);
+    const result =
+      succeeded === undefined
+        ? Option.none()
+        : Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
+    if (
+      failure !== undefined ||
+      Option.isNone(result) ||
+      result.value.phase !== "discovery" ||
+      result.value.workId !== pass.passId ||
+      result.value.unitId !== pass.unitId ||
+      result.value.assessments.length !== 0
+    ) {
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId: pass.passId,
+          stage,
+          errorTag: failure ?? "DiscoveryDidNotSettleExactly",
+        }),
+      );
+      continue;
+    }
+    const ids = new Set<string>();
+    let candidatesValid = true;
+    for (const candidate of result.value.candidates) {
+      if (ids.has(candidate.candidateId) || !validCandidate(candidate, pass)) {
+        candidatesValid = false;
+        break;
+      }
+      ids.add(candidate.candidateId);
+    }
+    if (!candidatesValid) {
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId: pass.passId,
+          stage,
+          errorTag: "DiscoveryCandidateMismatch",
+        }),
+      );
+      continue;
+    }
+    if (stage === "specialist") {
+      completedSpecialistPasses += 1;
+    } else {
+      completedGeneralDiscoveryPasses += 1;
+    }
+    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
+    unitCandidates.push(...result.value.candidates);
+    candidatesByUnit.set(pass.unitId, unitCandidates);
+    if (pass.perspective === "general") {
+      const allowed = new Set(pass.paths);
+      walkthrough.push(...result.value.fileSummaries.filter((entry) => allowed.has(entry.path)));
+    }
+  }
+
+  const confirmedCandidates: Array<ReviewCandidate> = [];
+  let rejectedCandidates = 0;
+  let unsettledCandidates = 0;
+  let requiredVerificationPasses = 0;
+  let completedVerificationPasses = 0;
+  for (const unit of plan.units) {
+    const candidates = candidatesByUnit.get(unit.unitId) ?? [];
+    if (candidates.length === 0) continue;
+    requiredVerificationPasses += 1;
+    const workId = `${unit.unitId}-verification`;
+    expectedWorkIds.add(workId);
+    const matching = declarations.filter(
+      ({ request }) =>
+        request.phase === "verification" &&
+        request.workId === workId &&
+        request.unitId === unit.unitId &&
+        request.perspective === "candidate-verification" &&
+        sameStrings(request.paths, unit.paths) &&
+        sameStrings(request.riskCategories, unit.riskCategories) &&
+        sameCandidates(request.candidates, candidates),
+    );
+    if (matching.length !== 1) {
+      unsettledCandidates += candidates.length;
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId,
+          stage: "verification",
+          errorTag:
+            matching.length === 0
+              ? "VerificationNotAssignedOrCandidateMismatch"
+              : "VerificationAssignedMultipleTimes",
+        }),
+      );
+      continue;
+    }
+    const call = matching[0];
+    if (call === undefined) {
+      unsettledCandidates += candidates.length;
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId,
+          stage: "verification",
+          errorTag: "PassLookupInvariantFailed",
+        }),
+      );
+      continue;
+    }
+    const failure = failureTag(trace, call.id);
+    const succeeded = trace.succeeded.get(call.id);
+    const result =
+      succeeded === undefined
+        ? Option.none()
+        : Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
+    if (
+      failure !== undefined ||
+      Option.isNone(result) ||
+      result.value.phase !== "verification" ||
+      result.value.workId !== workId ||
+      result.value.unitId !== unit.unitId ||
+      result.value.candidates.length !== 0 ||
+      result.value.fileSummaries.length !== 0
+    ) {
+      unsettledCandidates += candidates.length;
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId,
+          stage: "verification",
+          errorTag: failure ?? "VerificationDidNotSettleExactly",
+        }),
+      );
+      continue;
+    }
+    const expectedIds = new Set(candidates.map((candidate) => candidate.candidateId));
+    const assessedIds = new Set<string>();
+    const exactAssessments = result.value.assessments.every((assessment) => {
+      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+        return false;
+      }
+      assessedIds.add(assessment.candidateId);
+      return true;
+    });
+    if (!exactAssessments || assessedIds.size !== expectedIds.size) {
+      unsettledCandidates += candidates.length;
+      failedPasses.push(
+        FailedReviewPass.make({
+          workId,
+          stage: "verification",
+          errorTag: "VerificationAssessmentMismatch",
+        }),
+      );
+      continue;
+    }
+    completedVerificationPasses += 1;
+    const byId = new Map(
+      candidates.map((candidate) => [candidate.candidateId, candidate] as const),
+    );
+    for (const assessment of result.value.assessments) {
+      if (assessment.disposition === "confirmed") {
+        const candidate = byId.get(assessment.candidateId);
+        if (candidate !== undefined) confirmedCandidates.push(candidate);
+      } else {
+        rejectedCandidates += 1;
+      }
+    }
+  }
+
+  const unexpected = declarations.filter(({ request }) => !expectedWorkIds.has(request.workId));
+  for (const declaration of unexpected) {
+    failedPasses.push(
+      FailedReviewPass.make({
+        workId: declaration.request.workId,
+        stage: declaration.request.phase === "verification" ? "verification" : "discovery",
+        errorTag: "UnexpectedPass",
+      }),
+    );
+  }
+  if (failedPasses.length > 0) {
+    reasons.push(
+      boundedListReason(
+        "configured review passes did not settle",
+        failedPasses.map((pass) => `${pass.workId} (${pass.errorTag})`),
+      ),
+    );
+  }
+  if (unsettledCandidates > 0) {
+    reasons.push(
+      `${unsettledCandidates} discovered candidate(s) did not receive exact verification`,
+    );
+  }
+  const requiredSpecialistPasses = plan.discoveryPasses.filter(
+    (pass) => pass.perspective === "risk-specialist",
+  ).length;
+  const requiredGeneralDiscoveryPasses = plan.discoveryPasses.length - requiredSpecialistPasses;
+  const discoveredCandidates = [...candidatesByUnit.values()].reduce(
+    (total, candidates) => total + candidates.length,
+    0,
+  );
+  return {
+    assurance: ReviewAssurance.make({
+      status: reasons.length === 0 ? "settled" : "incomplete",
+      requiredGeneralDiscoveryPasses,
+      completedGeneralDiscoveryPasses,
+      requiredSpecialistPasses,
+      completedSpecialistPasses,
+      requiredVerificationPasses,
+      completedVerificationPasses,
+      discoveredCandidates,
+      confirmedCandidates: confirmedCandidates.length,
+      rejectedCandidates,
+      unsettledCandidates,
+      failedPasses,
+      reasons,
+    }),
+    confirmedFindings: confirmedCandidates.flatMap((candidate) =>
+      candidate._tag === "FindingCandidate" ? [candidate.finding] : [],
+    ),
+    confirmedConcerns: confirmedCandidates.flatMap((candidate) =>
+      candidate._tag === "ConcernCandidate" ? [candidate.concern] : [],
+    ),
+    walkthrough,
+  };
+};
+
+const compatibilityCoverage = (
+  inputCoverage: ReviewInputCoverage,
+  assurance: ReviewAssurance,
+): ReviewCoverage => {
+  const assuranceIncomplete = assurance.status === "incomplete";
+  const failedUnits = new Map<string, FailedReviewUnit>();
+  for (const pass of assurance.failedPasses) {
+    const unitId = pass.workId.slice(0, "unit-000".length);
+    if (!failedUnits.has(unitId)) {
+      failedUnits.set(
+        unitId,
+        FailedReviewUnit.make({ unitId, errorTag: `${pass.stage}:${pass.errorTag}` }),
+      );
+    }
+  }
+  return ReviewCoverage.make({
+    status: inputCoverage.status === "complete" && !assuranceIncomplete ? "complete" : "incomplete",
+    requiredPaths: inputCoverage.requiredPaths,
+    reviewedPaths: inputCoverage.assignedPaths,
+    unreviewedPaths: sortedUnique([
+      ...inputCoverage.partialPaths,
+      ...inputCoverage.unassignedPaths,
+    ]),
+    failedUnits: [...failedUnits.values()].slice(0, 8),
+    reasons: [...inputCoverage.reasons, ...(assuranceIncomplete ? assurance.reasons : [])],
+  });
+};
+
+export interface ReviewPipelineAssessment {
+  readonly inputCoverage: ReviewInputCoverage;
+  readonly assurance: ReviewAssurance;
+  /** Deprecated compatibility aggregate. */
+  readonly coverage: ReviewCoverage;
+  readonly confirmedFindings: ReadonlyArray<ReviewFinding>;
+  readonly confirmedConcerns: ReadonlyArray<ReviewConcern>;
+  readonly walkthrough: ReadonlyArray<WalkthroughEntry>;
+}
+
+/** Assess one settled run without trusting coordinator prose or findings. */
+export const assessReviewPipeline = (input: {
+  readonly shape: ReviewShape;
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly totalFiles: number;
+  readonly anchorFiles: ReadonlyArray<ChangedFile>;
+  readonly totalAnchorFiles: number;
+  readonly events: ReadonlyArray<RunEvent>;
+}): ReviewPipelineAssessment => {
+  const trace = toolTrace(input.events);
+  let inputCoverage =
+    input.shape === "fan-out"
+      ? fanOutInputCoverage(input.files, input.totalFiles)
+      : flatInputCoverage(input.files, input.totalFiles, trace);
+  if (input.anchorFiles.length < input.totalAnchorFiles) {
+    inputCoverage = ReviewInputCoverage.make({
+      ...inputCoverage,
+      status: "incomplete",
+      reasons: [
+        ...inputCoverage.reasons,
+        `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`,
+      ],
+    });
+  }
+  const assessed =
+    input.shape === "fan-out"
+      ? fanOutAssurance(input.files, input.totalFiles, trace)
+      : flatAssurance();
+  return {
+    inputCoverage,
+    assurance: assessed.assurance,
+    coverage: compatibilityCoverage(inputCoverage, assessed.assurance),
+    confirmedFindings: assessed.confirmedFindings,
+    confirmedConcerns: assessed.confirmedConcerns,
+    walkthrough: assessed.walkthrough,
+  };
+};
+
+/** Compatibility helper; prefer assessReviewPipeline for precise claims. */
 export const assessReviewCoverage = (input: {
   readonly shape: ReviewShape;
   readonly files: ReadonlyArray<ChangedFile>;
@@ -265,19 +668,27 @@ export const assessReviewCoverage = (input: {
   readonly anchorFiles: ReadonlyArray<ChangedFile>;
   readonly totalAnchorFiles: number;
   readonly events: ReadonlyArray<RunEvent>;
-}): ReviewCoverage => {
-  const trace = toolTrace(input.events);
-  const coverage =
-    input.shape === "fan-out"
-      ? fanOutCoverage(input.files, input.totalFiles, trace)
-      : flatCoverage(input.files, input.totalFiles, trace);
-  if (input.anchorFiles.length >= input.totalAnchorFiles) return coverage;
-  return ReviewCoverage.make({
-    ...coverage,
-    status: "incomplete",
-    reasons: [
-      ...coverage.reasons,
-      `full pull-request anchor surface exposed ${input.anchorFiles.length} of ${input.totalAnchorFiles} required files`,
-    ],
+}): ReviewCoverage => assessReviewPipeline(input).coverage;
+
+/** Host-verified summaries from successful general discovery passes only. */
+export const collectUnitFileSummaries = (
+  events: ReadonlyArray<RunEvent>,
+): ReadonlyArray<WalkthroughEntry> => {
+  const trace = toolTrace(events);
+  return delegationDeclarations(trace).flatMap(({ id, request }) => {
+    if (request.phase !== "discovery" || request.perspective !== "general") return [];
+    const success = trace.succeeded.get(id);
+    if (success === undefined || trace.failed.has(id)) return [];
+    const result = Schema.decodeUnknownOption(FileReviewUnitResult)(success.result);
+    if (
+      Option.isNone(result) ||
+      result.value.phase !== "discovery" ||
+      result.value.workId !== request.workId ||
+      result.value.unitId !== request.unitId
+    ) {
+      return [];
+    }
+    const assigned = new Set(request.paths);
+    return result.value.fileSummaries.filter((entry) => assigned.has(entry.path));
   });
 };

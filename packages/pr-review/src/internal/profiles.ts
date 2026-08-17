@@ -50,6 +50,14 @@ export class FanOutReviewerProfile extends Schema.Class<FanOutReviewerProfile>(
   attachedEphemeralDelegation: Schema.Literal(true),
   /** A failed unit surfaces to the coordinator as a typed failed result, never retried. */
   failedUnitsReportedNotRetried: Schema.Literal(true),
+  /** Risk categories and required specialist passes are pure host policy. */
+  hostOwnedRiskClassification: Schema.Literal(true),
+  /** Every host-classified high-risk unit receives a fresh specialist pass. */
+  redundantHighRiskDiscovery: Schema.Literal(true),
+  /** Only exact candidates confirmed by a fresh verifier child may publish. */
+  independentCandidateVerification: Schema.Literal(true),
+  /** No bounded model pipeline proves that a pull request is defect-free. */
+  defectAbsenceProven: Schema.Literal(false),
   /** The live profile is env-gated out of every ordinary test gate. */
   liveProfileOptIn: Schema.Literal(true),
   /** Never claimed at any phase (DUR-003). */
@@ -63,6 +71,10 @@ export const fanOutReviewerProfile = FanOutReviewerProfile.make({
   anchorsValidatedBeforePublication: true,
   attachedEphemeralDelegation: true,
   failedUnitsReportedNotRetried: true,
+  hostOwnedRiskClassification: true,
+  redundantHighRiskDiscovery: true,
+  independentCandidateVerification: true,
+  defectAbsenceProven: false,
   liveProfileOptIn: true,
   exactlyOnceExternalEffects: false,
 });

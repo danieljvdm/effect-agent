@@ -10,6 +10,12 @@ Architecture review method — apply to every changed service, Layer, tool, hand
 - Pass-through abstractions. Apply the deletion test: a wrapper that only yields a service and forwards one method, or an abstraction whose removal leaves equally clear code, should be folded into its owner. Do not propose a wrapper, service, or Schema merely for symmetry.
 - Public surface. Public asynchronous operations return Effect or Stream, never naked Promises; Promise conversion exists only at external boundaries.
 
+Review-assurance posture:
+
+- Treat path/input coverage and defect discovery as different claims. Reading every assigned file proves only that bounded evidence was available; never call that exhaustive semantic review.
+- In a specialist discovery pass, independently re-read the supplied high-risk evidence and look for a concrete counterexample even when a general pass may have examined the same paths. Authentication/authorization, security boundaries, persistence/durability, concurrency, credentials, and external effects deserve this redundant scrutiny.
+- In a verification pass, try to falsify each supplied candidate from the bounded evidence. Confirm only a supported, actionable defect; reject speculation, duplicates, and claims that require missing context. A settled clean pipeline still does not prove absence of defects.
+
 Framework invariants — violations are blocking:
 
 - No code, comment, or document may claim exactly-once external side-effect execution; recovery is at-least-once. The word "durable" must name the DN or DC assembly.

@@ -3,6 +3,7 @@ import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } 
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
 
+import type { ChangedFile } from "./internal/diff.ts";
 import { InvalidEffortInput, parseEffortPosition, type EffortPosition } from "./internal/effort.ts";
 import { PrReview, type RunReviewOptions } from "./internal/factory.ts";
 import { readGitHubEvent, resolveReviewTarget, gitHubReviewLayers } from "./internal/github-env.ts";
@@ -33,7 +34,11 @@ import {
 } from "./internal/review-state.ts";
 import { fanOutReviewBudgetLimits, reviewBudgetLimits } from "./internal/run.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
-import { normalizeRepoRelativePath, PullRequestSource } from "./internal/source.ts";
+import {
+  normalizeRepoRelativePath,
+  PullRequestSource,
+  type PullRequestMetadata,
+} from "./internal/source.ts";
 
 // ---------------------------------------------------------------------------
 // The GitHub Actions entrypoint (deployment class E: one bounded ephemeral
@@ -262,6 +267,9 @@ const outcomeOutputs = (
   ["skipped", "false"],
   ["conclusion", conclusion],
   ["verdict", outcome.review.verdict],
+  ["input-coverage", outcome.inputCoverage.status],
+  ["review-assurance", outcome.assurance.status],
+  // Compatibility output: the precise outputs above own new integrations.
   ["coverage", outcome.coverage.status],
   ["review-mode", outcome.reviewMode ?? "full"],
   ["review-reason", outcome.reviewReason ?? "direct full review"],
@@ -285,7 +293,8 @@ const outcomeSummary = (
   "### Pull-request review",
   `- Check conclusion: **${conclusion}**`,
   `- Verdict: **${outcome.review.verdict}**`,
-  `- Coverage: **${outcome.coverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
+  `- Input coverage: **${outcome.inputCoverage.status}** · scope: ${outcome.reviewMode ?? "full"}`,
+  `- Review assurance: **${outcome.assurance.status}** · general discovery ${outcome.assurance.completedGeneralDiscoveryPasses}/${outcome.assurance.requiredGeneralDiscoveryPasses} · specialist ${outcome.assurance.completedSpecialistPasses}/${outcome.assurance.requiredSpecialistPasses} · verification ${outcome.assurance.completedVerificationPasses}/${outcome.assurance.requiredVerificationPasses}`,
   `- Inline comments: ${outcome.plan.comments.length} · demoted findings: ${outcome.plan.demoted.length} · concerns: ${outcome.review.concerns?.length ?? 0}`,
   ...(modelLabel === undefined ? [] : [`- Model: \`${modelLabel}\``]),
   ...(outcome.usage === undefined
@@ -337,17 +346,15 @@ export interface HarnessedReviewer<E, R, FingerprintE, FingerprintR> {
   readonly snapshot?:
     | Effect.Effect<
         {
-          readonly metadata: import("./internal/source.ts").PullRequestMetadata;
-          readonly files: ReadonlyArray<import("./internal/diff.ts").ChangedFile>;
+          readonly metadata: PullRequestMetadata;
+          readonly files: ReadonlyArray<ChangedFile>;
         },
         FingerprintE,
         FingerprintR
       >
     | undefined;
   readonly filterFiles?:
-    | ((
-        files: ReadonlyArray<import("./internal/diff.ts").ChangedFile>,
-      ) => ReadonlyArray<import("./internal/diff.ts").ChangedFile>)
+    | ((files: ReadonlyArray<ChangedFile>) => ReadonlyArray<ChangedFile>)
     | undefined;
 }
 
@@ -370,8 +377,17 @@ export const concludeReviewOutcome = (
   readonly conclusion: ReviewCheckConclusion;
   readonly reasons: ReadonlyArray<string>;
 } => {
-  if (outcome.coverage.status === "incomplete") {
-    return { conclusion: "incomplete", reasons: outcome.coverage.reasons };
+  if (outcome.inputCoverage.status === "incomplete") {
+    return { conclusion: "incomplete", reasons: outcome.inputCoverage.reasons };
+  }
+  if (outcome.assurance.status !== "settled") {
+    return {
+      conclusion: "incomplete",
+      reasons:
+        outcome.assurance.reasons.length > 0
+          ? outcome.assurance.reasons
+          : ["configured discovery and verification work did not settle"],
+    };
   }
   const reasons = blockingReasons({
     findings: outcome.activeFindings,
@@ -408,6 +424,8 @@ const skipCoveredReview = Effect.fn("skipCoveredReview")(function* (input: {
     ["skip-reason", input.reason],
     ...(input.fingerprint === undefined ? [] : ([["fingerprint", input.fingerprint]] as const)),
     ["conclusion", result.conclusion],
+    ["input-coverage", "complete"],
+    ["review-assurance", "settled"],
     ["coverage", "complete"],
     ["review-mode", "incremental"],
   ]);
@@ -520,8 +538,8 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             pullRequestNumber: target.number,
             reason:
               equivalentPatchState.reviewedHeadSha === metadata.headSha
-                ? "the current head already has complete stored review coverage"
-                : "the effective pull-request patch is unchanged since the last complete review",
+                ? "the current head already has settled stored review assurance"
+                : "the effective pull-request patch is unchanged since the last settled review",
             state: equivalentPatchState,
             fingerprint: currentFingerprint,
           });
@@ -583,36 +601,13 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           selection.files.length === 0 &&
           selection.priorState !== undefined
         ) {
-          const reason = "no changed review scope since the last successfully reviewed head";
+          const reason = "no changed review scope since the last settled review head";
           return yield* skipCoveredReview({
             repository: target.repository,
             pullRequestNumber: target.number,
             reason,
             state: selection.priorState,
           });
-        }
-      } else if (options.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
-        // Preserve the pre-state custom harness contract explicitly. The
-        // packaged reviewer always takes the authenticated state path above.
-        const current = yield* reviewer.fingerprint;
-        const history = options.priorReviews ?? (yield* PriorReviews);
-        const latest = yield* history.latestFingerprint.pipe(
-          Effect.orElseSucceed(() => Option.none<string>()),
-        );
-        if (Option.isSome(latest) && latest.value === current) {
-          const reason = "changeset unchanged since the last review";
-          yield* Console.log(
-            `Skipping review of ${target.repository}#${target.number}: ${reason}.`,
-          );
-          yield* writeActionOutputs([
-            ["skipped", "true"],
-            ["skip-reason", reason],
-            ["fingerprint", current],
-            ["conclusion", "success"],
-            ["coverage", "complete"],
-          ]);
-          yield* writeStepSummary(["### Pull-request review skipped", `- Reason: ${reason}`]);
-          return { _tag: "Skipped", reason } satisfies ReviewActionResult;
         }
       }
       yield* Console.log(

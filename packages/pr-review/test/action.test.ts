@@ -33,7 +33,9 @@ import {
   PublishedReview,
   PullRequestMetadata,
   ReviewCoverage,
+  ReviewAssurance,
   ReviewFinding,
+  ReviewInputCoverage,
   ReviewRunOutcome,
   ReviewState,
   StoredReviewFinding,
@@ -176,6 +178,7 @@ const fakeOutcome = (
   options: {
     readonly blocking?: boolean;
     readonly incomplete?: boolean;
+    readonly assuranceIncomplete?: boolean;
     readonly state?: ReviewState;
   } = {},
 ): ReviewRunOutcome => {
@@ -197,12 +200,41 @@ const fakeOutcome = (
     activeFindings: findings,
     activeConcerns: review.concerns ?? [],
     coverage: ReviewCoverage.make({
-      status: options.incomplete ? "incomplete" : "complete",
+      status: options.incomplete || options.assuranceIncomplete ? "incomplete" : "complete",
       requiredPaths: [],
       reviewedPaths: [],
       unreviewedPaths: [],
       failedUnits: [],
-      reasons: options.incomplete ? ["review unit unit-001 did not complete"] : [],
+      reasons:
+        options.incomplete || options.assuranceIncomplete
+          ? ["configured review work did not settle"]
+          : [],
+    }),
+    inputCoverage: ReviewInputCoverage.make({
+      status: options.incomplete ? "incomplete" : "complete",
+      requiredPaths: [],
+      assignedPaths: [],
+      partialPaths: [],
+      unassignedPaths: [],
+      reasons: options.incomplete ? ["review input was not completely assigned"] : [],
+    }),
+    assurance: ReviewAssurance.make({
+      status: options.incomplete || options.assuranceIncomplete ? "incomplete" : "settled",
+      requiredGeneralDiscoveryPasses: 1,
+      completedGeneralDiscoveryPasses: options.incomplete || options.assuranceIncomplete ? 0 : 1,
+      requiredSpecialistPasses: 0,
+      completedSpecialistPasses: 0,
+      requiredVerificationPasses: 0,
+      completedVerificationPasses: 0,
+      discoveredCandidates: 0,
+      confirmedCandidates: 0,
+      rejectedCandidates: 0,
+      unsettledCandidates: 0,
+      failedPasses: [],
+      reasons:
+        options.incomplete || options.assuranceIncomplete
+          ? ["review discovery did not settle"]
+          : [],
     }),
     plan: planPublication(review, [], {
       applyVerdict: false,
@@ -316,6 +348,8 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("verdict=comment");
       expect(outputs).toContain("inline-comments=0");
       expect(outputs).toContain("conclusion=success");
+      expect(outputs).toContain("input-coverage=complete");
+      expect(outputs).toContain("review-assurance=settled");
       expect(outputs).toContain("coverage=complete");
     }),
   );
@@ -493,7 +527,34 @@ describe("runReviewAction", () => {
     }),
   );
 
-  it.effect("preserves legacy fingerprint skipping for explicit custom harness history", () =>
+  it.effect("fails the check when input is covered but review assurance is unsettled", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const exit = yield* runReviewAction(
+        {
+          run: () => Effect.succeed(fakeOutcome("approve", { assuranceIncomplete: true })),
+        },
+        { post: false },
+      ).pipe(Effect.provide(harness.layer), Effect.exit);
+      const failure = failureFrom(exit);
+      expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);
+      if (Schema.is(ReviewGateFailed)(failure)) {
+        expect(failure.conclusion).toBe("incomplete");
+        expect(failure.reasons).toContain("review discovery did not settle");
+      }
+      const outputs = yield* Ref.get(harness.written);
+      expect(outputs).toContain("input-coverage=complete");
+      expect(outputs).toContain("review-assurance=incomplete");
+      expect(outputs).toContain("conclusion=incomplete");
+    }),
+  );
+
+  it.effect("does not turn a legacy fingerprint match into green unverified assurance", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
         JSON.stringify({
@@ -516,9 +577,9 @@ describe("runReviewAction", () => {
           priorReviews: staticPriorReviews(Option.some(fingerprint)),
         },
       ).pipe(Effect.provide(harness.layer));
-      expect(result._tag).toBe("Skipped");
-      expect(yield* Ref.get(invoked)).toBe(0);
-      expect(yield* Ref.get(harness.written)).toContain(`fingerprint=${fingerprint}`);
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(invoked)).toBe(1);
+      expect(yield* Ref.get(harness.written)).not.toContain("skipped=true");
     }),
   );
 

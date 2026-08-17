@@ -47,10 +47,12 @@ export class StoredReviewConcern extends Schema.Class<StoredReviewConcern>(
 }) {}
 
 /**
- * Versioned state embedded in one successfully covered review. The reviewed
- * head plus the full-scope fingerprint means every path not represented by an
- * unresolved item is accepted at that head; storing hundreds of path strings
- * separately would not fit GitHub's bounded review body in the worst case.
+ * Versioned state embedded only after complete input assignment and settled
+ * configured review assurance. The head plus full-scope fingerprint forms an
+ * incremental baseline; an absent unresolved item never means the path is
+ * defect-free. The `acceptedScopeFingerprint` name is retained for wire
+ * compatibility. Storing hundreds of path strings separately would not fit
+ * GitHub's bounded review body in the worst case.
  */
 export class ReviewState extends Schema.Class<ReviewState>("@effect-agent/pr-review/ReviewState")({
   version: Schema.Literal(1),
@@ -415,7 +417,7 @@ export const selectReviewRange = (input: {
   );
   return {
     mode: "incremental",
-    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+    reason: `changes since settled review head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
     files: selectedFiles,
     affectedPaths: [...affectedPaths].sort(),
     totalFiles: selectedFiles.length,

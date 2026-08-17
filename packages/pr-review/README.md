@@ -1,9 +1,9 @@
 # @effect-agent/pr-review
 
 A bounded, fail-closed GitHub pull-request reviewer built on the effect-agent
-public surface. One read-only Agent reviews a pull request through typed
-ports; the host validates every finding anchor against the real diff and
-posts one review after the run settles.
+public surface. Read-only Agents review host-partitioned pull-request evidence
+through typed ports; the host validates every finding anchor against the real
+diff and posts one review after the run settles.
 
 **Deployment class E (ephemeral).** One `AgentRuntime.run` per invocation, no
 durability claim, and review posting is never exactly-once: a failed or
@@ -58,11 +58,18 @@ configurable: model output is untrusted input, so finding anchors are
 re-validated against the parsed unified diff (invalid ones are demoted into
 the review body with the reason named, never trusted), the findings bound is
 enforced host-side, and publication happens only through the
-`ReviewPublisher` port after the run settles. `PrReview.makeFanOut` builds
-the delegating variant — bounded per-unit child reviewers (S1 attached
-ephemeral delegation) merged under the same output contract and the same
-publication path; the shared `guidance` and `maxFindings` shape the
-coordinator's merge as well as the children.
+`ReviewPublisher` port after the run settles. `PrReview.makeFanOut` builds the
+assured delegating variant. The host deterministically partitions bounded
+evidence, classifies high-risk units, requires a general discovery pass for
+every unit, adds a fresh specialist discovery pass for every classified
+high-risk unit, and requires a fresh verifier to confirm or reject every
+discovered candidate. These are S1 attached ephemeral children using Effect
+structured concurrency. Verifiers receive the exact candidate claims and
+only their bounded relevant evidence; they do not receive discovery reasoning.
+The host reconstructs publishable findings and concerns from exact confirmed
+candidate IDs, so neither a discovery child nor the coordinator can publish
+an unsupported or invented finding. Shared `guidance` reaches both discovery
+and verification; `maxFindings` remains a host-enforced publication cap.
 
 GitHub may omit the `patch` field for large textual files as well as binary
 files. The GitHub source recovers a missing patch by reading bounded, strict
@@ -73,6 +80,30 @@ report defects as review-body concerns. Invalid UTF-8, binary NUL content,
 missing sides, files beyond the per-side read bound, and complete B/H evidence
 beyond the model-facing render bound remain explicit coverage gaps.
 
+## Assurance model
+
+The public result deliberately separates two claims:
+
+- **Input coverage** says every required path in the selected scope was
+  assigned bounded evidence and separately names partial diff evidence,
+  undiffable paths, source truncation, or over-capacity paths. It does not say
+  the model understood the evidence.
+- **Review assurance** says every configured general discovery pass, required
+  high-risk specialist pass, and candidate-verification batch settled
+  exactly. It reports discovered, confirmed, rejected, and unsettled
+  candidate counts plus failed pass IDs.
+
+`settled` assurance means the configured work completed; it never means the
+review is exhaustive or the pull request is defect-free. Risk classification
+is deterministic host policy over paths and bounded text and intentionally
+favors redundant work, but it cannot recognize every semantically risky
+change. The specialist pass is context-independent redundancy, not a claim of
+provider or model diversity. The legacy aggregate `coverage` field remains
+for compatibility; new hosts and UI use `inputCoverage` and `assurance`.
+The flat reviewer has path-input accounting but no independent verifier, so
+its assurance is `unverified` and the Action check cannot report success from
+that shape.
+
 ## What a posted review looks like
 
 The body opens with a host-derived callout tier — `[!CAUTION]` when any
@@ -81,7 +112,9 @@ for nits, `✅` for a clean approval — computed from the validated severities,
 never from model prose. Directly under it, one host-derived stats line names
 the changeset size (`N files (+adds / −dels)`), the severity tally, and a
 deterministic 1–5 review-effort estimate computed from the changeset shape
-alone. Below the summary, a collapsed **📝 Walkthrough** table carries the
+alone. Fan-out reviews add a second host-derived line naming input assignment,
+discovery/specialist/verification settlement, and candidate dispositions.
+Below the summary, a collapsed **📝 Walkthrough** table carries the
 model's one-sentence per-file change summaries — walkthrough paths are
 validated like finding anchors, so entries naming files outside the changeset
 are dropped. Under fan-out the walkthrough is additionally host-verified
@@ -129,14 +162,15 @@ ordinary gate.
 
 ## Incremental Action reviews
 
-A completely covered posted Action review carries bounded, versioned,
-HMAC-authenticated continuity state:
-the exact PR/base/head lineage, profile and accepted-scope fingerprints, and
+A posted Action review with complete input coverage and settled review
+assurance carries bounded, versioned, HMAC-authenticated continuity state:
+the exact PR/base/head lineage, profile and settled-scope fingerprints, and
 the still-unresolved findings and concerns. A later Action run validates the
 state and reviews the GitHub comparison from that reviewed head to the
-current head, not the complete base...HEAD diff. Unchanged accepted scope is
+current head, not the complete base...HEAD diff. Unchanged settled scope is
 not sent back to the model; unchanged unresolved findings remain active;
-changed or reverted paths invalidate their prior findings. Non-anchored
+changed or reverted paths invalidate their prior findings and receive fresh
+discovery and verification. Non-anchored
 concerns are carried conservatively until a full audit because they cannot be
 mapped safely to one path.
 
@@ -150,10 +184,11 @@ and comparison checks are fail-closed for scope selection: missing, stale,
 incompatible, or truncated state/comparisons produce a visible full-diff
 fallback. An ancestor base advance remains incremental and adds overlapping
 PR paths as affected context; a materially changed base lineage falls back to
-full unless the authenticated accepted-scope fingerprint still matches. That
+full unless the authenticated settled-scope fingerprint still matches. The
+schema field retains the compatibility name `acceptedScopeFingerprint`. That
 fingerprint hashes the ignore-filtered effective diff, patchless base/head
 evidence, PR framing, and review-shaping profile while excluding commit IDs,
-base ancestry, and unified-diff hunk coordinates. Re-running the same covered
+base ancestry, and unified-diff hunk coordinates. Re-running the same settled
 head or a patch-equivalent rebase skips model execution by default while
 preserving its stored blocking/success conclusion and posting no duplicate
 review comments. Missing/corrupt state and any fingerprint or profile mismatch
@@ -175,8 +210,9 @@ schema-branded and capped at 24,000 characters. If signing fails or state
 exceeds that bound, the completed review is posted without continuity state
 and with a bounded warning, so the next run safely performs a full review.
 
-`review-mode: final` is the explicit bounded merge-readiness audit. It reviews
-the full current PR diff and resets the incremental baseline; normal
+`review-mode: final` is the explicit bounded merge-readiness audit. It ignores
+prior assurance state, plans fresh discovery over the full current PR
+diff, verifies new candidates, and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
 Because equivalence is based on the textual review surface, a base change that
 alters runtime meaning without changing the diff/context is not detectable;
@@ -218,9 +254,14 @@ bytes or characters is refused typed; patchless content is reviewable only
 when its complete B/H rendering fits 220k characters. The changeset surface is
 bounded at 300 files:
 files beyond the bound are not fetched, and the review body reports
-`Reviewed N of M changed files` instead of claiming completeness. Fan-out
-capacity overflow is reported in the review summary, never dropped. Any
-blocking active finding fails the Action check. Any required-file coverage
-gap — paths with neither a patch nor bounded textual fallback, unassigned
-paths, failed units (including policy exhaustion), truncation, or
-coordinator/run failure — is non-success rather than green.
+`Input exposed N of M changed files` instead of claiming completeness.
+Fan-out capacity overflow is reported, never dropped. Every fan-out unit has
+at most 12 files, 800 weighted changed lines, and 240,000 evidence characters;
+at most eight units produce at most 24 attached children (general and
+specialist discovery plus one verification batch per unit), with child
+concurrency capped at four. Any blocking active finding fails the Action
+check. Any input gap—including truncated model-visible diff evidence—failed or
+exhausted configured pass, mismatched candidate batch, or unsettled
+verification is non-success rather than green. A settled
+clean result is evidence that these bounded passes completed, not proof that
+no defect exists.

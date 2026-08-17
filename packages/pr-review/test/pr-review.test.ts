@@ -400,7 +400,7 @@ describe("publication planning", () => {
       headSha: FIXTURE_SHA,
       totalChangedFiles: 310,
     });
-    expect(truncatedPlan.body).toContain("Reviewed 2 of 310 changed files");
+    expect(truncatedPlan.body).toContain("Input exposed 2 of 310 changed files");
     const completePlan = planPublication(scriptedReview, files, {
       applyVerdict: false,
       headSha: FIXTURE_SHA,
@@ -1164,6 +1164,14 @@ describe("offline review run", () => {
         title: "Unchanged blocker",
         body: "This remains active until its path changes.",
       });
+      const affectedPriorFinding = StoredReviewFinding.make({
+        path: correctiveFile.path,
+        startLine: 1,
+        endLine: 1,
+        severity: "important",
+        title: "Affected finding must be revalidated",
+        body: "A new delta touching this path invalidates the carried finding.",
+      });
       const priorState = ReviewState.make({
         version: 1,
         repository: metadata.repository,
@@ -1175,7 +1183,7 @@ describe("offline review run", () => {
         profileFingerprint,
         acceptedScopeFingerprint: "b".repeat(64),
         reviewedPathCount: 2,
-        unresolvedFindings: [priorFinding],
+        unresolvedFindings: [priorFinding, affectedPriorFinding],
         unresolvedConcerns: [],
         lastReviewMode: "full",
       });
@@ -1237,6 +1245,9 @@ describe("offline review run", () => {
       expect(selection.files.map((file) => file.path)).toEqual(["src/corrective.ts"]);
       expect(outcome.coverage.status).toBe("complete");
       expect(outcome.activeFindings.map((finding) => finding.title)).toEqual([priorFinding.title]);
+      expect(outcome.activeFindings.map((finding) => finding.title)).not.toContain(
+        affectedPriorFinding.title,
+      );
       expect(outcome.plan.body).toContain("Unresolved findings carried from unchanged scope");
       expect(outcome.plan.body).toContain(priorFinding.title);
       expect((yield* scripted.prompts).join("\n")).not.toContain("src/unchanged.ts");

@@ -77,7 +77,7 @@ describe("progress comment rendering", () => {
       "🛑 **Code review posted** — blocking findings",
     );
     expect(renderProgressSettleBody({ ...base, conclusion: "incomplete" }, CLAIM)).toContain(
-      "required coverage is incomplete",
+      "input coverage or configured review assurance is incomplete",
     );
 
     const failed = renderProgressSettleBody({ outcome: "failed", runUrl: RUN_URL }, CLAIM);

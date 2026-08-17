@@ -337,6 +337,22 @@ The Travel Planner Reference Application (the cumulative fixture tree in
   redacted;
 - persistent and durable profiles identify deployment class `P`, `DN`, or `DC` explicitly.
 
+The `@effect-agent/pr-review` deterministic fixtures separately pin input coverage and review
+assurance. They must prove that every path in a 41-file reviewable changeset is assigned or
+explicitly reported, and that truncated diff evidence is marked partial; host-classified
+high-risk scope receives a fresh specialist discovery pass;
+a defect missed by general discovery can still become a candidate; and an independent verifier
+rejects an unsupported candidate before host-side publication. Failed or exhausted discovery and
+verification passes remain visible, leave candidates unsettled, emit no authenticated continuity
+state, and cannot produce a successful Action conclusion. Incremental fixtures prove that newly
+affected paths invalidate carried findings while unchanged findings remain active. Explicit final
+mode discards prior assurance scope and plans fresh discovery over the complete bounded diff.
+
+These fixtures guarantee deterministic work assignment, exact pass settlement, and fail-closed
+publication from confirmed candidates. They do not and cannot prove that a model found every
+defect, that the keyword risk classifier recognizes every risky semantic change, or that redundant
+passes provide model diversity.
+
 Test IDs use requirement references:
 
 ```ts

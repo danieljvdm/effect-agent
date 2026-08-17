@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 
-import type { ReviewCoverage } from "./coverage.ts";
+import type { ReviewAssurance, ReviewCoverage, ReviewInputCoverage } from "./coverage.ts";
 import { commentableLines, type ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
 import {
@@ -214,13 +214,23 @@ const renderVerdictCallout = (
     readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
     readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
     readonly coverage?: ReviewCoverage | undefined;
+    readonly inputCoverage?: ReviewInputCoverage | undefined;
+    readonly assurance?: ReviewAssurance | undefined;
   },
 ): string => {
   const counts = severityCounts(review, options.carriedFindings, options.carriedConcerns);
-  if (options.coverage?.status === "incomplete") {
+  if (
+    options.inputCoverage?.status === "incomplete" ||
+    (options.inputCoverage === undefined && options.coverage?.status === "incomplete")
+  ) {
     const suffix =
       counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
-    return `> [!CAUTION]\n> Review coverage is incomplete — the check must not pass.${suffix}`;
+    return `> [!CAUTION]\n> Input coverage is incomplete — the check must not pass.${suffix}`;
+  }
+  if (options.assurance !== undefined && options.assurance.status !== "settled") {
+    const suffix =
+      counts.blocking > 0 ? ` It also has ${countNoun(counts.blocking, "blocking finding")}.` : "";
+    return `> [!CAUTION]\n> Configured review assurance did not settle — the check must not pass.${suffix}`;
   }
   if (counts.blocking > 0) {
     return `> [!CAUTION]\n> ${countNoun(counts.blocking, "blocking finding")} — do not merge before addressing ${counts.blocking === 1 ? "it" : "them"}.`;
@@ -408,7 +418,11 @@ export const planPublication = (
     readonly fingerprint?: string | undefined;
     /** Host-owned coverage; incomplete coverage is rendered and fails the check. */
     readonly coverage?: ReviewCoverage | undefined;
-    /** Unchanged unresolved items carried from the prior successfully reviewed head. */
+    /** Host-owned path/evidence assignment, separate from review assurance. */
+    readonly inputCoverage?: ReviewInputCoverage | undefined;
+    /** Host-owned discovery/specialist/verification settlement. */
+    readonly assurance?: ReviewAssurance | undefined;
+    /** Unchanged unresolved items carried from the prior settled assurance baseline. */
     readonly carriedFindings?: ReadonlyArray<ReviewFinding> | undefined;
     readonly carriedConcerns?: ReadonlyArray<ReviewConcern> | undefined;
     /** Selected review scope, made visible whenever orchestration chose it. */
@@ -491,13 +505,15 @@ export const planPublication = (
         carriedFindings,
         carriedConcerns,
         coverage: options.coverage,
+        inputCoverage: options.inputCoverage,
+        assurance: options.assurance,
       }),
     ];
     if (options.reviewMode !== undefined && options.reviewReason !== undefined) {
       parts.push(
         "",
         options.reviewMode === "incremental"
-          ? `**Incremental scope:** reviewed ${options.reviewFilesVisible ?? files.length} file(s) ${options.reviewReason}. Unchanged accepted scope was preserved and not reopened.`
+          ? `**Incremental scope:** reopened ${options.reviewFilesVisible ?? files.length} affected file(s) ${options.reviewReason}. Unchanged settled scope was preserved and not reopened.`
           : `**Full-diff scope:** ${options.reviewReason}.`,
       );
     }
@@ -508,18 +524,32 @@ export const planPublication = (
       );
     }
     parts.push("", renderReviewStats(files, options.totalChangedFiles, counts));
+    if (options.inputCoverage !== undefined && options.assurance !== undefined) {
+      parts.push(
+        "",
+        `**Input coverage:** ${options.inputCoverage.status} (${options.inputCoverage.assignedPaths.length}/${options.inputCoverage.requiredPaths.length} paths assigned, ${options.inputCoverage.partialPaths.length} partial) · **Review assurance:** ${options.assurance.status} (${options.assurance.completedGeneralDiscoveryPasses}/${options.assurance.requiredGeneralDiscoveryPasses} general discovery, ${options.assurance.completedSpecialistPasses}/${options.assurance.requiredSpecialistPasses} specialist, ${options.assurance.completedVerificationPasses}/${options.assurance.requiredVerificationPasses} verification; ${options.assurance.confirmedCandidates} confirmed / ${options.assurance.rejectedCandidates} rejected / ${options.assurance.unsettledCandidates} unsettled candidates)`,
+      );
+    }
     parts.push("", review.summary);
     if (walkthroughKept && walkthrough.length > 0) {
       parts.push("", renderWalkthrough(walkthrough));
     } else if (walkthrough.length > 0) {
       parts.push("", "⚠️ Walkthrough omitted — the body exceeded GitHub's review size cap.");
     }
-    if (options.coverage?.status === "incomplete") {
+    if (options.inputCoverage?.status === "incomplete") {
       parts.push(
         "",
-        "### 🛑 Incomplete coverage",
+        "### 🛑 Incomplete input coverage",
         "",
-        ...options.coverage.reasons.map((reason) => `- ${reason}`),
+        ...options.inputCoverage.reasons.map((reason) => `- ${reason}`),
+      );
+    }
+    if (options.assurance !== undefined && options.assurance.status !== "settled") {
+      parts.push(
+        "",
+        "### 🛑 Incomplete review assurance",
+        "",
+        ...options.assurance.reasons.map((reason) => `- ${reason}`),
       );
     }
     if (carriedFindings.length > 0) {
@@ -543,7 +573,7 @@ export const planPublication = (
     if (files.length < options.totalChangedFiles) {
       parts.push(
         "",
-        `⚠️ Reviewed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
+        `⚠️ Input exposed ${files.length} of ${options.totalChangedFiles} changed files — the changeset exceeded the reviewer's file bound.`,
       );
     }
     if (demotedKept > 0) {
@@ -592,7 +622,10 @@ export const planPublication = (
   );
   const event: ReviewEvent = !options.applyVerdict
     ? "COMMENT"
-    : options.coverage?.status === "incomplete" || counts.blocking > 0
+    : options.inputCoverage?.status === "incomplete" ||
+        (options.inputCoverage === undefined && options.coverage?.status === "incomplete") ||
+        (options.assurance !== undefined && options.assurance.status !== "settled") ||
+        counts.blocking > 0
       ? "REQUEST_CHANGES"
       : review.verdict === "approve" && counts.important === 0
         ? "APPROVE"
