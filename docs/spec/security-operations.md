@@ -186,7 +186,9 @@ packaged reviewer remains read-only and may produce only a bounded, Schema-valid
 handoff is authenticated and binds repository, PR number, exact reviewed head, review/profile
 fingerprints, and stable identities for the selected blocking/important findings. Finding text and
 suggestions are untrusted evidence, never executable patches. The handoff builder must require the
-review source snapshot and host publication plan to identify the same exact head.
+review source snapshot and host publication plan to identify the same exact head; all metadata,
+changed-file, anchor, and file-content evidence in that review must derive from the one immutable
+source snapshot.
 
 A separate implementation Agent may receive only explicit capabilities for a scoped worktree:
 bounded reads/searches, path-jailed edits, patch inspection, and requests for named host-configured

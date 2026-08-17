@@ -27,6 +27,7 @@ import {
   PatchSnapshot,
   PublishedRemediation,
   type RemediationCheckResult,
+  type RemediationTrigger,
   RemediationTriggerRejected,
   StalePullRequestHead,
   WorkspaceOperationFailure,
@@ -353,7 +354,8 @@ export const localGitPullRequestSourceLayer = (
         );
         return { baseSha, headSha, files };
       });
-      const metadata = load().pipe(
+      const loadSnapshot = yield* Effect.cached(load());
+      const metadata = loadSnapshot.pipe(
         Effect.map(({ baseSha, headSha, files }) =>
           PullRequestMetadata.make({
             repository: config.repository,
@@ -374,7 +376,7 @@ export const localGitPullRequestSourceLayer = (
           }),
         ),
       );
-      const files = load().pipe(
+      const files = loadSnapshot.pipe(
         Effect.map((snapshot) => snapshot.files),
         Effect.mapError((error) =>
           PullRequestSourceFailure.make({
@@ -390,7 +392,7 @@ export const localGitPullRequestSourceLayer = (
         readFile: (requestedPath: string) =>
           Effect.gen(function* () {
             const path = yield* normalizeRepoRelativePath(requestedPath);
-            const snapshot = yield* load().pipe(
+            const snapshot = yield* loadSnapshot.pipe(
               Effect.mapError((error) =>
                 PullRequestSourceFailure.make({
                   operation: error.operation,
@@ -627,7 +629,9 @@ export const localGitRemediationHostLayer = (
       const crypto = yield* Crypto.Crypto;
       const access = yield* makeGitAccess(config);
       const checks = new Map(config.checks.map((check) => [check.name, check] as const));
-      const authorizeTrigger = Effect.fn("RemediationHost.authorizeTrigger")(function* (trigger) {
+      const authorizeTrigger = Effect.fn("RemediationHost.authorizeTrigger")(function* (
+        trigger: RemediationTrigger,
+      ) {
         if (
           trigger.label !== "pr-remediate" ||
           trigger.trust !== "same-repository" ||

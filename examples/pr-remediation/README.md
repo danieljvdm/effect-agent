@@ -35,10 +35,11 @@ code with credentials or provider secrets in this host. A production host must p
 isolation for checks, authenticate the label actor and same-repository provenance, keep credentials
 out of the worktree/check environment, and implement the same head-bound atomic publication seam.
 
-The local source adapter parses NUL-delimited Git records, preserves add/remove/rename/copy/type
-status, and treats binary, oversized, malformed UTF-8, or unsupported path evidence as a coverage
-gap or typed failure rather than reviewable text. Worktree and temporary-directory release failures
-remain typed host failures.
+The local source adapter captures one immutable Git snapshot per source-layer acquisition, parses
+NUL-delimited Git records, preserves add/remove/rename/copy/type status, and treats binary,
+oversized, malformed UTF-8, or unsupported path evidence as a coverage gap or typed failure rather
+than reviewable text. A fresh reviewer acquires a new source layer and therefore a new head
+snapshot. Worktree and temporary-directory release failures remain typed host failures.
 
 The deterministic real-Git tests cover success, path escape rejection, false check claims,
 host-check failure, a moved or inconsistently reviewed head, Git status/binary/path parsing,

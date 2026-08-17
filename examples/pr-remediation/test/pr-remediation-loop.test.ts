@@ -60,6 +60,8 @@ import {
 const FILE_PATH = "src/value.ts";
 const REQUIRED_CHECK = "fixture-check";
 
+const decodeGitSha = (value: string) => Schema.decodeUnknownEffect(GitCommitSha)(value.trim());
+
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
     ? true
@@ -192,9 +194,7 @@ const withFixtureRepository = <A, E, R>(
         "-m",
         "introduce reviewed change",
       ]);
-      const h0 = Schema.decodeSync(GitCommitSha)(
-        (yield* runGit(root, ["rev-parse", "HEAD"])).trim(),
-      );
+      const h0 = yield* decodeGitSha(yield* runGit(root, ["rev-parse", "HEAD"]));
       return yield* use({
         root,
         h0,
@@ -268,6 +268,16 @@ const finding = ReviewFinding.make({
   title: "The answer is off by one",
   body: "The exported answer must be 42.",
   suggestion: "export const answer = 42;",
+});
+
+const secondFinding = ReviewFinding.make({
+  path: FILE_PATH,
+  startLine: 1,
+  endLine: 1,
+  severity: "important",
+  category: "correctness",
+  title: "The answer also violates the fixture contract",
+  body: "The fixture contract independently requires the exported answer to be 42.",
 });
 
 const findingReview = CodeReview.make({
@@ -478,6 +488,62 @@ const hostServices = (config: LocalGitRemediationConfig) =>
 
 describe("local Git pull-request source", () => {
   it.effect(
+    "uses one immutable snapshot per layer acquisition and refreshes the next acquisition",
+    () =>
+      withSourceFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.writeFileString(`${fixture.root}/src/first.ts`, "export const first = 1;\n");
+          yield* runGit(fixture.root, ["add", "--", "src/first.ts"]);
+          yield* runGit(fixture.root, [
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@localhost",
+            "commit",
+            "-m",
+            "first source head",
+          ]);
+          const sourceLayer = localGitPullRequestSourceLayer(fixture.config);
+          const firstSnapshot = yield* Effect.gen(function* () {
+            const source = yield* PullRequestSource;
+            const metadata = yield* source.metadata;
+            yield* fs.writeFileString(
+              `${fixture.root}/src/second.ts`,
+              "export const second = 2;\n",
+            );
+            yield* runGit(fixture.root, ["add", "--", "src/second.ts"]);
+            yield* runGit(fixture.root, [
+              "-c",
+              "user.name=fixture",
+              "-c",
+              "user.email=fixture@localhost",
+              "commit",
+              "-m",
+              "second source head",
+            ]);
+            return { metadata, files: yield* source.changedFiles };
+          }).pipe(Effect.provide(sourceLayer));
+          const freshSnapshot = yield* Effect.gen(function* () {
+            const source = yield* PullRequestSource;
+            return {
+              metadata: yield* source.metadata,
+              files: yield* source.changedFiles,
+            };
+          }).pipe(Effect.provide(sourceLayer));
+
+          expect(firstSnapshot.files.map((file) => file.path)).toEqual(["src/first.ts"]);
+          expect(freshSnapshot.metadata.headSha).not.toBe(firstSnapshot.metadata.headSha);
+          expect(freshSnapshot.files.map((file) => file.path)).toEqual([
+            "src/first.ts",
+            "src/second.ts",
+          ]);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
     "preserves added, removed, renamed, and binary change semantics",
     () =>
       withSourceFixtureRepository((fixture) =>
@@ -655,9 +721,7 @@ describe("PR review -> remediation -> re-review loop", () => {
             expect(failure.reason).toBe("reviewed-head-mismatch");
           }
           expect(
-            Schema.decodeSync(GitCommitSha)(
-              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
-            ),
+            yield* decodeGitSha(yield* runGit(fixture.root, ["rev-parse", "feature"])),
           ).not.toBe(fixture.h0);
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
@@ -690,11 +754,9 @@ describe("PR review -> remediation -> re-review loop", () => {
             expect(failure.reason).toBe("finding-needs-human");
           }
           expect((yield* implementer.prompts).join("\n")).toContain("WorkspaceViolation");
-          expect(
-            Schema.decodeSync(GitCommitSha)(
-              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
-            ),
-          ).toBe(fixture.h0);
+          expect(yield* decodeGitSha(yield* runGit(fixture.root, ["rev-parse", "feature"]))).toBe(
+            fixture.h0,
+          );
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,
@@ -738,11 +800,61 @@ describe("PR review -> remediation -> re-review loop", () => {
           if (failure._tag === "RemediationValidationFailure") {
             expect(failure.reason).toBe("check-results-mismatch");
           }
-          expect(
-            Schema.decodeSync(GitCommitSha)(
-              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
+          expect(yield* decodeGitSha(yield* runGit(fixture.root, ["rev-parse", "feature"]))).toBe(
+            fixture.h0,
+          );
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
+    "rejects unequal finding-identity multisets",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const reviewer = yield* makeReviewer(fixture.config);
+          const implementer = yield* makeScriptedImplementer("fix");
+          const failure = yield* runPrRemediationLoop({
+            trigger: triggerFor(fixture),
+            review: () =>
+              reviewer.review().pipe(
+                Effect.map((evidence) => ({
+                  ...evidence,
+                  outcome: ReviewRunOutcome.make({
+                    ...evidence.outcome,
+                    activeFindings: [finding, finding, secondFinding],
+                  }),
+                })),
+              ),
+            implement: (mission, workspace) =>
+              implementer.implement(mission, workspace).pipe(
+                Effect.map((report) =>
+                  RemediationReport.make({
+                    ...report,
+                    resolutions: report.resolutions.map((resolution, index) =>
+                      index === 1 ? (report.resolutions[2] ?? resolution) : resolution,
+                    ),
+                  }),
+                ),
+              ),
+          }).pipe(
+            Effect.provide(
+              hostServices({
+                ...fixture.config,
+                checks: [passCheck],
+                requiredChecks: [REQUIRED_CHECK],
+              }),
             ),
-          ).toBe(fixture.h0);
+            Effect.flip,
+          );
+          expect(failure._tag).toBe("RemediationValidationFailure");
+          if (failure._tag === "RemediationValidationFailure") {
+            expect(failure.reason).toBe("finding-accounting-mismatch");
+          }
+          expect(yield* decodeGitSha(yield* runGit(fixture.root, ["rev-parse", "feature"]))).toBe(
+            fixture.h0,
+          );
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,
@@ -790,11 +902,9 @@ describe("PR review -> remediation -> re-review loop", () => {
           expect(first._tag).toBe("RequiredCheckFailed");
           expect(second._tag).toBe("RemediationAttemptAlreadyClaimed");
           expect(yield* Ref.get(invocations)).toBe(2);
-          expect(
-            Schema.decodeSync(GitCommitSha)(
-              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
-            ),
-          ).toBe(fixture.h0);
+          expect(yield* decodeGitSha(yield* runGit(fixture.root, ["rev-parse", "feature"]))).toBe(
+            fixture.h0,
+          );
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,
@@ -905,11 +1015,9 @@ describe("PR review -> remediation -> re-review loop", () => {
           yield* Fiber.interrupt(fiber);
           expect(yield* Deferred.await(released)).toBe(worktree);
           expect(yield* fs.exists(worktree)).toBe(false);
-          expect(
-            Schema.decodeSync(GitCommitSha)(
-              (yield* runGit(fixture.root, ["rev-parse", "feature"])).trim(),
-            ),
-          ).toBe(fixture.h0);
+          expect(yield* decodeGitSha(yield* runGit(fixture.root, ["rev-parse", "feature"]))).toBe(
+            fixture.h0,
+          );
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,

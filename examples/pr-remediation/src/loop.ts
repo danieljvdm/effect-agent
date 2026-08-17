@@ -36,9 +36,8 @@ export interface ReviewEvidence {
 const sorted = (values: Iterable<string>): ReadonlyArray<string> =>
   [...values].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0));
 
-const exactSet = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
-  left.length === right.length &&
-  sorted(new Set(left)).join("\0") === sorted(new Set(right)).join("\0");
+const exactMultiset = (left: ReadonlyArray<string>, right: ReadonlyArray<string>): boolean =>
+  left.length === right.length && sorted(left).join("\0") === sorted(right).join("\0");
 
 const exactChecks = (
   reported: ReadonlyArray<RemediationCheckResult>,
@@ -145,7 +144,7 @@ export const runPrRemediationLoop = <
         }
         const expectedFindingIds = handoff.findings.map((finding) => finding.id);
         const reportedFindingIds = report.resolutions.map((resolution) => resolution.findingId);
-        if (!exactSet(expectedFindingIds, reportedFindingIds)) {
+        if (!exactMultiset(expectedFindingIds, reportedFindingIds)) {
           return yield* RemediationValidationFailure.make({
             reason: "finding-accounting-mismatch",
             detail: "implementation report must account for every finding exactly once",
@@ -171,7 +170,7 @@ export const runPrRemediationLoop = <
             detail: "host-collected patch contains a path outside the remediation allowlist",
           });
         }
-        if (!exactSet(report.changedPaths, patch.changedPaths)) {
+        if (!exactMultiset(report.changedPaths, patch.changedPaths)) {
           return yield* RemediationValidationFailure.make({
             reason: "changed-paths-mismatch",
             detail: "model-reported changed paths differ from the host-collected patch",
@@ -194,7 +193,7 @@ export const runPrRemediationLoop = <
         const afterChecks = yield* worktree.inspectPatch;
         if (
           afterChecks.digest !== patch.digest ||
-          !exactSet(afterChecks.changedPaths, patch.changedPaths)
+          !exactMultiset(afterChecks.changedPaths, patch.changedPaths)
         ) {
           return yield* RemediationValidationFailure.make({
             reason: "check-mutated-patch",
