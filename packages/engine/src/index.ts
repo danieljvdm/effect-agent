@@ -20,6 +20,7 @@ import {
   type DelegationId,
   IdGenerator,
   type InstructionSource,
+  isDelegationToolName,
   type RunDispositionDeclaration,
   ModelStarted,
   ModelProtocolError,
@@ -3934,6 +3935,24 @@ const makeResumeTurn = <
           isFailure: settledCall.isFailure,
         };
       }
+      const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
+      if (settledChildJoinCallIds !== undefined) {
+        const cleanupIds = new Set<string>(settledChildJoinCallIds);
+        const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
+        if (
+          settledChildJoinCallIds.length === 0 ||
+          cleanupIds.size !== settledChildJoinCallIds.length ||
+          openCalls.length !== cleanupIds.size ||
+          openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))
+        ) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message:
+                "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call",
+            }),
+          );
+        }
+      }
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
@@ -4006,6 +4025,24 @@ const makeResumeTurn = <
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
+      const continueAfterBatch = () => {
+        const continuation = toolBatchContinuation(
+          agent,
+          context,
+          trace,
+          resumedPrompt,
+          turn,
+          toolCalls,
+          options,
+        );
+        return settledChildJoinCallIds === undefined
+          ? continuation
+          : enforceDurationDeadline(
+              continuation,
+              context.durationDeadlineMillis,
+              durationLimitError(policy),
+            );
+      };
 
       // RUN-018 on the resume path: a canonically declared over-budget batch
       // settles synthetically under final-answer mode — recorded settled
@@ -4025,9 +4062,7 @@ const makeResumeTurn = <
         );
         return started.pipe(
           Stream.concat(Stream.fromIterable(rejection)),
-          Stream.concat(
-            toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
-          ),
+          Stream.concat(continueAfterBatch()),
         );
       }
       const toolResults = guardBudgetStream(
@@ -4048,12 +4083,7 @@ const makeResumeTurn = <
         ),
         options.budget,
       );
-      return started.pipe(
-        Stream.concat(toolResults),
-        Stream.concat(
-          toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
-        ),
-      );
+      return started.pipe(Stream.concat(toolResults), Stream.concat(continueAfterBatch()));
     }),
   );
 
@@ -4065,6 +4095,26 @@ const durationLimitError = (policy: AgentPolicy): AgentPolicyError =>
     limit: "duration",
     message: `Agent exceeded its ${Duration.format(policy.maxDuration)} duration limit`,
   });
+
+const enforceDurationDeadline = <A, E, R>(
+  execution: Stream.Stream<A, E, R>,
+  durationDeadlineMillis: number,
+  durationLimit: AgentPolicyError,
+): Stream.Stream<A, E | AgentPolicyError, R> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const remaining = durationDeadlineMillis - now;
+      if (remaining <= 0) {
+        return Stream.fail(durationLimit);
+      }
+      return execution.pipe(
+        Stream.interruptWhen(
+          Effect.sleep(remaining).pipe(Effect.andThen(Effect.fail(durationLimit))),
+        ),
+      );
+    }),
+  );
 
 const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
   stream: Stream.Stream<A, E, R>,
@@ -4241,28 +4291,14 @@ const stream = <
       );
 
       const durationLimit = durationLimitError(agent.definition.policy);
-      // Fail an already-expired ordinary Attempt synchronously before
-      // subscribing to the lazy resume/execution stream. The ongoing
-      // interrupter below remains responsible only for future expiry.
-      const deadlineExpired = (yield* Clock.currentTimeMillis) >= durationDeadlineMillis;
-      const deadlineEffect = Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const remaining = durationDeadlineMillis - now;
-        if (remaining > 0) {
-          yield* Effect.sleep(remaining);
-        }
-        return yield* durationLimit;
-      });
-      // A coordinator-proven resume of already-settled attached children is
-      // mandatory accepted-work cleanup. Let those joins commit, then the
-      // `makeTurn` pre-model check observes the same expired deadline; no
-      // model call or new child/external work receives an extension.
+      // A coordinator-proven resume of exact already-settled attached-child
+      // Calls is mandatory accepted-work cleanup. `makeResumeTurn` validates
+      // and runs only that join batch past expiry, then restores this same
+      // deadline guard around its continuation.
       const deadline =
-        options.resume?.completeSettledChildJoinsPastDeadline === true
+        options.resume?.settledChildJoinCallIdsPastDeadline !== undefined
           ? execution
-          : deadlineExpired
-            ? failRunEventStream(durationLimit)
-            : execution.pipe(Stream.interruptWhen(deadlineEffect));
+          : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
       // bound to the Run's immutable identity and delegation depth, plus the

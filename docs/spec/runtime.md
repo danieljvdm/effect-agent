@@ -103,8 +103,11 @@ An ordinary replacement Attempt whose deadline is already expired fails before s
 unresolved Tool or model execution; deadline interruption then handles only future expiry.
 If the deadline expires while attached children are suspended, the coordinator still completes
 the mandatory joins of children whose Settlements are already canonical before failing the
-parent. That recovery cleanup authorizes no new child, ordinary Tool, or model execution and
-cannot turn the expired Run into success (SUB-019).
+parent. The coordinator supplies the exact still-open child Call IDs, the engine verifies they
+are every and only the resumed delegation calls, and duration interruption is restored around
+the continuation after those joins. That recovery cleanup authorizes no new child, ordinary
+Tool, or model execution and cannot turn the expired Run into success, including when the
+deadline expires during the post-join continuation (SUB-019).
 
 Note on durable Attempts: the batch-resume seam counts Tool Calls from the resumed batch onward,
 so `maxToolCalls` is enforced per Attempt under the durable coordinator. This is existing,
@@ -592,5 +595,6 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   absolute deadline from the first canonical input record and preserve that deadline across
   Attempt replacement and every durable suspension; admission and queue delay are excluded, and
   no Run option may widen the Definition's fresh duration allowance. Already-settled attached
-  children still join as mandatory recovery cleanup before the expired parent fails, without
-  authorizing a new model, ordinary Tool, or child execution.
+  children still join as mandatory recovery cleanup before the expired parent fails. The engine
+  verifies the coordinator's exact open delegation Call IDs and restores duration interruption
+  before continuation, without authorizing a new model, ordinary Tool, or child execution.

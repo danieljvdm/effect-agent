@@ -395,13 +395,13 @@ export interface RunTurnResume {
   readonly calls: ReadonlyArray<RunTurnResumeCall>;
   readonly settled: ReadonlyArray<RunTurnResumeSettledCall>;
   /**
-   * The durable coordinator proved that every still-open call is an attached
-   * child whose Settlement is already canonical. Those mandatory joins may
+   * Exact still-open delegation Call IDs whose attached child Settlements the
+   * durable coordinator proved canonical. Only this resumed join batch may
    * finish after the logical Run deadline so accepted-work cleanup cannot be
-   * stranded; the next Turn still observes the expired deadline before any
-   * model call or new Tool work starts (RUN-030/SUB-019).
+   * stranded; duration enforcement resumes before the continuation can start
+   * model, ordinary Tool, or new-child work (RUN-030/SUB-019).
    */
-  readonly completeSettledChildJoinsPastDeadline?: true | undefined;
+  readonly settledChildJoinCallIdsPastDeadline?: ReadonlyArray<ToolCallId> | undefined;
   /**
    * The pending Turn's committed LEADING messages — the messages the durable
    * coordinator committed inside the pending Turn's canonical response record

@@ -2935,23 +2935,32 @@ const make = Effect.gen(function* () {
           declaredNamesByCallId.set(call.id, call.name);
         }
       }
-      const resumedSettledChildCleanup =
-        pending !== undefined &&
-        pending.calls.every((call) => {
-          if (pending.settled.some((settled) => settled.id === call.id)) return true;
+      let settledChildJoinCallIdsPastDeadline: ReadonlyArray<ToolCallId> | undefined;
+      if (pending !== undefined) {
+        const joinCallIds: Array<ToolCallId> = [];
+        let everyOpenCallIsSettledChild = true;
+        for (const call of pending.calls) {
+          if (pending.settled.some((settled) => settled.id === call.id)) continue;
           const started = [...subagentState.started.values()].find(
             (candidate) => candidate.toolCallId === call.id,
           );
-          return (
-            started !== undefined &&
-            childAttachments.some(
-              (child) =>
-                child.toolCallId === started.toolCallId &&
-                child.childSubmissionId === started.childSubmissionId &&
-                child.childState === "settled",
-            )
+          const settledChild = childAttachments.find(
+            (child) =>
+              started !== undefined &&
+              child.toolCallId === started.toolCallId &&
+              child.childSubmissionId === started.childSubmissionId &&
+              child.childState === "settled",
           );
-        });
+          if (started === undefined || settledChild === undefined) {
+            everyOpenCallIsSettledChild = false;
+            break;
+          }
+          joinCallIds.push(settledChild.toolCallId);
+        }
+        if (everyOpenCallIsSettledChild && joinCallIds.length > 0) {
+          settledChildJoinCallIdsPastDeadline = joinCallIds;
+        }
+      }
       // Task #12 (WP1 `resume.leadingMessages`): the pending canonical response's messages
       // BEFORE its first assistant message — Turn-1 evaluated instructions + input, or steering
       // committed inside the pending record — re-enter official history through the engine so
@@ -3983,9 +3992,9 @@ const make = Effect.gen(function* () {
                 turnId: pending.turnId,
                 calls: pending.calls,
                 settled: pending.settled,
-                ...(resumedSettledChildCleanup
-                  ? { completeSettledChildJoinsPastDeadline: true as const }
-                  : {}),
+                ...(settledChildJoinCallIdsPastDeadline === undefined
+                  ? {}
+                  : { settledChildJoinCallIdsPastDeadline }),
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),

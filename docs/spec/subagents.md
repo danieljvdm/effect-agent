@@ -603,8 +603,10 @@ It does not pause the parent logical Run's wall-clock `maxDuration` (RUN-030). C
 durably wakes the parent. The child uses its separate Conversation lane. S2 MUST prove this
 suspension/wakeup path at the smallest worker-pool size. If the parent deadline has expired by
 then, its replacement Attempt may complete only the already-settled child join and reservation
-release before recording the typed duration failure; it may not invoke another model, ordinary
-Tool, or child.
+release before recording the typed duration failure. The coordinator names the exact open child
+Call IDs, the engine rejects a cleanup claim covering any ordinary or non-open call, and duration
+interruption resumes around the post-join continuation; it may not invoke another model,
+ordinary Tool, or child.
 
 Joining is also recoverable:
 

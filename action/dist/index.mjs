@@ -35783,6 +35783,16 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       isFailure: settledCall.isFailure
     };
   }
+  const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
+  if (settledChildJoinCallIds !== undefined) {
+    const cleanupIds = new Set(settledChildJoinCallIds);
+    const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
+    if (settledChildJoinCallIds.length === 0 || cleanupIds.size !== settledChildJoinCallIds.length || openCalls.length !== cleanupIds.size || openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))) {
+      return failRunEventStream(ModelProtocolError.make({
+        message: "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call"
+      }));
+    }
+  }
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options);
   const toolCalls = trace2.toolCalls.size;
@@ -35827,24 +35837,36 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.resume"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
+  const continueAfterBatch = () => {
+    const continuation = toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options);
+    return settledChildJoinCallIds === undefined ? continuation : enforceDurationDeadline(continuation, context3.durationDeadlineMillis, durationLimitError(policy2));
+  };
   if (overToolBudget) {
     const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
       limit: "tool-calls",
       message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
     }), settledIds);
-    return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
+    return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(continueAfterBatch()));
   }
   const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
     maxToolCalls: bounds.maxToolCalls,
     declaredToolCalls: toolCalls
   }, agent2.definition.policy.toolResultBounds, settledIds), options.budget);
-  return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
+  return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(continueAfterBatch()));
 }));
 var failRunEventStream = (error2) => exports_Stream.fail(error2);
 var durationLimitError = (policy2) => AgentPolicyError.make({
   limit: "duration",
   message: `Agent exceeded its ${exports_Duration.format(policy2.maxDuration)} duration limit`
 });
+var enforceDurationDeadline = (execution, durationDeadlineMillis, durationLimit) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const now3 = yield* exports_Clock.currentTimeMillis;
+  const remaining2 = durationDeadlineMillis - now3;
+  if (remaining2 <= 0) {
+    return exports_Stream.fail(durationLimit);
+  }
+  return execution.pipe(exports_Stream.interruptWhen(exports_Effect.sleep(remaining2).pipe(exports_Effect.andThen(exports_Effect.fail(durationLimit)))));
+}));
 var guardBudgetStream = (stream, budget) => budget === undefined ? stream : exports_Stream.transformPull(stream, (pull) => exports_Effect.succeed(budget.guard(pull)));
 var stream = (agent2, input, options = {}) => {
   const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
@@ -35930,16 +35952,7 @@ var stream = (agent2, input, options = {}) => {
       return makeTurn(agent2, context3, initialPrompt, 1, 0, options);
     }));
     const durationLimit = durationLimitError(agent2.definition.policy);
-    const deadlineExpired = (yield* exports_Clock.currentTimeMillis) >= durationDeadlineMillis;
-    const deadlineEffect = exports_Effect.gen(function* () {
-      const now3 = yield* exports_Clock.currentTimeMillis;
-      const remaining2 = durationDeadlineMillis - now3;
-      if (remaining2 > 0) {
-        yield* exports_Effect.sleep(remaining2);
-      }
-      return yield* durationLimit;
-    });
-    const deadline = options.resume?.completeSettledChildJoinsPastDeadline === true ? execution : deadlineExpired ? failRunEventStream(durationLimit) : execution.pipe(exports_Stream.interruptWhen(deadlineEffect));
+    const deadline = options.resume?.settledChildJoinCallIdsPastDeadline !== undefined ? execution : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
     const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
       agentId: context3.agentId,
       conversationId: context3.conversationId,
