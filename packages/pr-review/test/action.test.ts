@@ -35,6 +35,7 @@ import {
   ReviewFinding,
   ReviewRunOutcome,
   ReviewState,
+  ReviewStateAuthenticator,
   StoredReviewFinding,
   webCryptoReviewStateAuthenticatorLayer,
   type ReviewVerdict,
@@ -316,6 +317,36 @@ describe("runReviewAction", () => {
       expect(outputs).toContain("inline-comments=0");
       expect(outputs).toContain("conclusion=success");
       expect(outputs).toContain("coverage=complete");
+    }),
+  );
+
+  it.effect("does not access authenticated-state support for a legacy fingerprint reviewer", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const unsupportedState = ReviewStateAuthenticator.of({
+        status: "available",
+        unavailableReason: undefined,
+        render: () => Effect.die("legacy reviewer must not render state"),
+        extract: () => Effect.die("legacy reviewer must not extract state"),
+      });
+      const result = yield* runReviewAction(
+        {
+          run: () => Effect.succeed(fakeOutcome("comment")),
+          fingerprint: Effect.succeed("f".repeat(64)),
+        },
+        { post: false, priorReviews: staticPriorReviews(Option.none()) },
+      ).pipe(
+        Effect.provideService(ReviewStateAuthenticator, unsupportedState),
+        Effect.provide(harness.layer),
+      );
+
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(harness.written)).toContain("conclusion=success");
     }),
   );
 

@@ -282,23 +282,145 @@ export interface ReviewSelection {
   readonly profileFingerprint: string;
 }
 
+/**
+ * A selection is an internal capability, not caller-supplied accounting data.
+ * The range selector records the object it produced so a structural lookalike
+ * cannot shrink a current full review and mint continuity state for it.
+ */
+interface SelectionSource {
+  readonly repository: string;
+  readonly number: number;
+  readonly baseRef: string;
+  readonly baseSha?: string | undefined;
+  readonly headRef: string;
+  readonly headSha: string;
+  readonly totalChangedFiles: number;
+}
+
+interface SelectionBinding {
+  readonly source: SelectionSource;
+  readonly fingerprint: string;
+  readonly snapshot: ReviewSelection;
+}
+
+const selectedRanges = new WeakMap<object, SelectionBinding>();
+
+const selectionFingerprint = (selection: ReviewSelection): string | undefined => {
+  try {
+    return JSON.stringify({
+      mode: selection.mode,
+      reason: selection.reason,
+      files: selection.files.map((file) => Schema.encodeSync(ChangedFile)(file)),
+      affectedPaths: selection.affectedPaths,
+      totalFiles: selection.totalFiles,
+      baselineSha: selection.baselineSha,
+      priorState:
+        selection.priorState === undefined
+          ? undefined
+          : Schema.encodeSync(ReviewState)(selection.priorState),
+      profileFingerprint: selection.profileFingerprint,
+    });
+  } catch {
+    return undefined;
+  }
+};
+
+const freeze = <Value>(value: Value): Value => {
+  if (typeof value !== "object" || value === null) return value;
+  for (const nested of Object.values(value)) freeze(nested);
+  return Object.freeze(value);
+};
+
+const selectionSnapshot = (selection: ReviewSelection): ReviewSelection =>
+  freeze({
+    mode: selection.mode,
+    reason: selection.reason,
+    files: selection.files.map((file) =>
+      Schema.decodeUnknownSync(ChangedFile)(Schema.encodeSync(ChangedFile)(file)),
+    ),
+    affectedPaths: [...selection.affectedPaths],
+    totalFiles: selection.totalFiles,
+    baselineSha: selection.baselineSha,
+    priorState:
+      selection.priorState === undefined
+        ? undefined
+        : Schema.decodeUnknownSync(ReviewState)(
+            Schema.encodeSync(ReviewState)(selection.priorState),
+          ),
+    profileFingerprint: selection.profileFingerprint,
+  });
+
+const sealReviewSelection = (
+  selection: ReviewSelection,
+  source: PullRequestMetadata,
+): ReviewSelection => {
+  const snapshot = selectionSnapshot(selection);
+  const fingerprint = selectionFingerprint(selection);
+  if (fingerprint === undefined) throw new Error("Range selector produced an invalid selection");
+  selectedRanges.set(selection, {
+    source: {
+      repository: source.repository,
+      number: source.number,
+      baseRef: source.baseRef,
+      ...(source.baseSha === undefined ? {} : { baseSha: source.baseSha }),
+      headRef: source.headRef,
+      headSha: source.headSha,
+      totalChangedFiles: source.totalChangedFiles,
+    },
+    fingerprint,
+    snapshot,
+  });
+  return selection;
+};
+
+/** The immutable selection snapshot, if this object originated at the host range selector. */
+export const sealedReviewSelection = (selection: ReviewSelection): ReviewSelection | undefined =>
+  selectedRanges.get(selection)?.snapshot;
+
+/** Resolve an unmodified range-selector selection for this exact source snapshot. */
+export const selectedReviewRangeFor = (
+  selection: ReviewSelection,
+  current: PullRequestMetadata,
+): ReviewSelection | undefined => {
+  const binding = selectedRanges.get(selection);
+  if (binding === undefined) return undefined;
+  const source = binding.source;
+  if (
+    binding.fingerprint === selectionFingerprint(selection) &&
+    source.repository === current.repository &&
+    source.number === current.number &&
+    source.baseRef === current.baseRef &&
+    source.baseSha === current.baseSha &&
+    source.headRef === current.headRef &&
+    source.headSha === current.headSha &&
+    source.totalChangedFiles === current.totalChangedFiles
+  ) {
+    return binding.snapshot;
+  }
+  return undefined;
+};
+
 const fullSelection = (input: {
   readonly reason: string;
   readonly files: ReadonlyArray<ChangedFile>;
-  readonly totalFiles: number;
+  readonly current: PullRequestMetadata;
   readonly profileFingerprint: string;
-}): ReviewSelection => ({
-  mode: "full",
-  reason: input.reason,
-  files: input.files,
-  affectedPaths: input.files.flatMap((file) =>
-    file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-  ),
-  totalFiles: input.totalFiles,
-  baselineSha: undefined,
-  priorState: undefined,
-  profileFingerprint: input.profileFingerprint,
-});
+}): ReviewSelection =>
+  sealReviewSelection(
+    {
+      mode: "full",
+      reason: input.reason,
+      files: input.files,
+      affectedPaths: input.files.flatMap((file) =>
+        file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
+      ),
+      totalFiles: input.current.totalChangedFiles,
+      baselineSha: undefined,
+      priorState: undefined,
+      profileFingerprint: input.profileFingerprint,
+    },
+    input.current,
+  );
 
 /**
  * Validate that persisted state belongs to this exact PR/base lineage and the
@@ -337,7 +459,7 @@ export const selectReviewRange = (input: {
     fullSelection({
       reason,
       files: input.fullFiles,
-      totalFiles: input.current.totalChangedFiles,
+      current: input.current,
       profileFingerprint: input.profileFingerprint,
     });
   if (input.requestedMode === "final") return full("explicit final full-diff audit requested");
@@ -411,16 +533,19 @@ export const selectReviewRange = (input: {
   const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
-  return {
-    mode: "incremental",
-    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
-    files: selectedFiles,
-    affectedPaths: [...affectedPaths].sort(),
-    totalFiles: selectedFiles.length,
-    baselineSha: input.priorState.reviewedHeadSha,
-    priorState: input.priorState,
-    profileFingerprint: input.profileFingerprint,
-  };
+  return sealReviewSelection(
+    {
+      mode: "incremental",
+      reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+      files: selectedFiles,
+      affectedPaths: [...affectedPaths].sort(),
+      totalFiles: selectedFiles.length,
+      baselineSha: input.priorState.reviewedHeadSha,
+      priorState: input.priorState,
+      profileFingerprint: input.profileFingerprint,
+    },
+    input.current,
+  );
 };
 
 /**

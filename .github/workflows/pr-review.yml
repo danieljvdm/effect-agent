@@ -36,10 +36,10 @@ jobs:
     # internally; this guard saves the runner spin-up).
     if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
     runs-on: ubuntu-latest
-    # Above the configured 18-minute final-audit duration budget, so a run approaching
+    # Above the configured 50-minute final-audit duration budget, so a run approaching
     # its own budget ends gracefully instead of being killed by the runner
     # with nothing posted.
-    timeout-minutes: 20
+    timeout-minutes: 55 # FAN_OUT_WORKFLOW_TIMEOUT_MINUTES
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -52,16 +52,18 @@ jobs:
           # A dedicated secret is preferred. The provider credential is a
           # stable workflow-only fallback and is never sent to the reviewer as state.
           state-secret: ${{ secrets.PR_REVIEW_STATE_SECRET || secrets.OPENAI_API_KEY }}
-          # Routine incremental deltas use one flat reviewer. Reserve fan-out
-          # for the explicit full-diff audit instead of multiplying model calls
-          # across every corrective push.
-          fan-out: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'true' || 'false' }}
+          # One flat reviewer has an honest 11-file diff+context envelope
+          # after its initial list call.
+          # Larger PRs use bounded fan-out even for routine incremental runs;
+          # the explicit full-diff audit always does so regardless of size.
+          fan-out: ${{ ((github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit') || github.event.pull_request.changed_files > 11) && 'true' || 'false' }}
           # Medium is the routine-review default. The deliberate full-diff
           # audit gets high effort together with fan-out.
           effort: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}
-          # A 16-unit final audit needs four bounded waves at concurrency four;
-          # leave runner-cleanup headroom under the 20-minute job timeout.
-          max-duration-minutes: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && '18' || '10' }}
+          # A 20-unit final audit plus one five-unit retry wave needs five
+          # 8-minute child waves, then a 10-minute coordinator merge window.
+          # Leave runner-cleanup headroom under the 55-minute job timeout.
+          max-duration-minutes: ${{ ((github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit') || github.event.pull_request.changed_files > 11) && '50' || '10' }}
           # The repository's deep Effect-architecture review profile —
           # distilled from the effect-architecture-audit skill and AGENTS.md's
           # non-negotiables. Fan-out injects it into every child reviewer.

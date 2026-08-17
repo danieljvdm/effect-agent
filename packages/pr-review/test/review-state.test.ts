@@ -1,16 +1,17 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Option, Redacted } from "effect";
 
+import * as publicApi from "../src/index.ts";
 import {
   ChangedFile,
   PullRequestMetadata,
   ReviewHeadComparison,
   ReviewState,
   ReviewStateAuthenticator,
-  selectReviewRange,
   StoredReviewFinding,
   webCryptoReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
+import { selectedReviewRangeFor, selectReviewRange } from "../src/internal/review-state.ts";
 
 const BASE_SHA = "1".repeat(40);
 const REVIEWED_HEAD_SHA = "2".repeat(40);
@@ -92,6 +93,32 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
   });
 
 describe("review state", () => {
+  it("does not export the host-only range-selection issuer", () => {
+    expect("selectReviewRange" in publicApi).toBe(false);
+    expect("selectedReviewRangeFor" in publicApi).toBe(false);
+    expect("sealedReviewSelection" in publicApi).toBe(false);
+  });
+
+  it("invalidates a sealed selection when an aliased source array changes after selection", () => {
+    const fullFiles = [acceptedFile, correctiveFile];
+    const selection = selectReviewRange({
+      requestedMode: "final",
+      current: metadata,
+      fullFiles,
+      profileFingerprint: PROFILE_FINGERPRINT,
+      priorState: undefined,
+      comparison: undefined,
+    });
+
+    expect(selectedReviewRangeFor(selection, metadata)?.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    fullFiles[0] = correctiveFile;
+
+    expect(selectedReviewRangeFor(selection, metadata)).toBeUndefined();
+  });
+
   it.effect("authenticates only a terminal schema-validated review-body marker", () =>
     Effect.gen(function* () {
       const secret = Redacted.make("stable-state-secret");
