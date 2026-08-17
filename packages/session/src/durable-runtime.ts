@@ -499,6 +499,12 @@ export type DurableWorkerFailure =
 
 export type DurableAwaitFailure = LedgerError | SettlementConflict;
 
+/** Typed failures from the public canonical progress boundary. */
+export type DurableProgressFailure =
+  | ConversationStoreError
+  | ConversationNotMaterialized
+  | OperationDenied;
+
 export type DurableAbortFailure =
   | LedgerError
   | SettlementConflict
@@ -1207,6 +1213,7 @@ const make = Effect.gen(function* () {
                   )
               : Effect.fail(error),
           ),
+          Effect.andThen(wake.notify(conversationId)),
           Effect.asVoid,
         );
     },
@@ -1282,6 +1289,9 @@ const make = Effect.gen(function* () {
               sequence: result.lastSequence,
               digest: result.tailDigest,
             });
+            // Canonical storage is already committed. This hint may be lost or duplicated, but
+            // it lets scoped progress waiters re-read promptly without making memory authoritative.
+            yield* wake.notify(ctx.conversationId);
             return result;
           }
         }
@@ -2048,6 +2058,7 @@ const make = Effect.gen(function* () {
               )
             : Effect.fail(error),
         ),
+        Effect.andThen(wake.notify(request.childConversationId)),
         Effect.asVoid,
       );
   });
@@ -4800,6 +4811,7 @@ const make = Effect.gen(function* () {
           producerEpoch: tail.producerEpoch,
         }),
       );
+      yield* wake.notify(conversationId);
     }).pipe(Effect.ignore);
 
   const settleAbortedForRecovery = Effect.fn("DurableAgentRuntime.settleAbortedForRecovery")(
@@ -5709,6 +5721,38 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const awaitProgress = Effect.fn("DurableAgentRuntime.awaitProgress")(function* (
+    conversationId: ConversationId,
+    afterSequence: CanonicalSequence,
+  ): Effect.fn.Return<void, DurableProgressFailure> {
+    yield* operationAuthorizer.authorize(
+      OperationAuthorizationRequest.make({
+        operation: "observe",
+        conversationId,
+      }),
+    );
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        // Registration MUST precede the authoritative read. A notify between this acquisition
+        // and parking completes the returned one-shot Effect, so neither subscribe/check nor
+        // check/park can lose progress.
+        const awaitHint = yield* wake.subscribe(conversationId);
+        const committed = yield* Stream.runHead(
+          store.read(
+            ConversationRead.make({
+              conversationId,
+              afterSequence,
+              limit: 1,
+            }),
+          ),
+        );
+        if (Option.isSome(committed)) return;
+        // A wake is only a hint. The caller re-reads canonical records after this returns.
+        yield* awaitHint;
+      }),
+    );
+  });
+
   const observe = (receipt: Receipt, options?: DurableObserveOptions) =>
     Stream.unwrap(
       operationAuthorizer
@@ -6250,6 +6294,7 @@ const make = Effect.gen(function* () {
   return DurableAgentRuntime.of({
     submit,
     awaitSettlement,
+    awaitProgress,
     observe,
     abort,
     resolveUnknown,
@@ -6338,6 +6383,14 @@ export class DurableAgentRuntime extends Context.Service<
       options: DurableSubmitOptions,
     ) => Effect.Effect<Receipt, DurableSubmitFailure, InputSchema["EncodingServices"]>;
     readonly awaitSettlement: (receipt: Receipt) => Effect.Effect<Settlement, DurableAwaitFailure>;
+    /**
+     * Wait for an already-committed record or one incarnation-local progress hint after
+     * `afterSequence`. Canonical records remain authoritative: callers re-read after return.
+     */
+    readonly awaitProgress: (
+      conversationId: ConversationId,
+      afterSequence: CanonicalSequence,
+    ) => Effect.Effect<void, DurableProgressFailure>;
     readonly observe: (
       receipt: Receipt,
       options?: DurableObserveOptions,

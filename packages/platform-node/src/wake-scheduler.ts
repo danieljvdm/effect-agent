@@ -1,5 +1,5 @@
 import type { ConversationId } from "@effect-agent/core";
-import { SubmissionLedger, WakeScheduler } from "@effect-agent/session";
+import { makeWakeSubscriptionHub, SubmissionLedger, WakeScheduler } from "@effect-agent/session";
 import { Context, Duration, Effect, Layer, PubSub, Stream } from "effect";
 
 /**
@@ -27,6 +27,7 @@ const makeWakeScheduler = Effect.gen(function* () {
   const ledger = yield* SubmissionLedger;
   const config = yield* NodeWakeSchedulerConfig;
   const hints = yield* PubSub.sliding<ConversationId>(WAKE_BUFFER_CAPACITY);
+  const progress = yield* makeWakeSubscriptionHub;
   yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
   /**
@@ -61,7 +62,11 @@ const makeWakeScheduler = Effect.gen(function* () {
   );
 
   return WakeScheduler.of({
-    notify: (conversationId) => PubSub.publish(hints, conversationId).pipe(Effect.asVoid),
+    notify: (conversationId) =>
+      progress
+        .notify(conversationId)
+        .pipe(Effect.andThen(PubSub.publish(hints, conversationId)), Effect.asVoid),
+    subscribe: progress.subscribe,
     wakes: Stream.merge(Stream.fromPubSub(hints), fallbackScans),
   });
 });

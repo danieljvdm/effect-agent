@@ -1,6 +1,11 @@
+import { OperationDenied } from "@effect-agent/session";
 import { Effect } from "effect";
 
-import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
+import {
+  makeConversationObjectClass,
+  type ConversationObjectOptions,
+  type ConversationObjectRpc,
+} from "../src/index.ts";
 import {
   CONVERSATIONS_BINDING,
   DEPLOYMENT_ID,
@@ -73,7 +78,87 @@ const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
   });
 
 /** The eviction/alarm/chaos suites' Conversation Object. */
-export class TestConversationObject extends makeConversationObjectClass(baseOptions) {}
+const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
+interface ProgressWaiterCountLatch {
+  readonly expected: number;
+  readonly resolve: () => void;
+}
+const progressWaiterCountLatches = new WeakMap<
+  DurableObjectState,
+  Array<ProgressWaiterCountLatch>
+>();
+const progressIncarnations = new WeakMap<DurableObjectState, number>();
+let nextProgressIncarnation = 0;
+
+const setProgressWaiterCount = (ctx: DurableObjectState, count: number): void => {
+  progressWaiterCounts.set(ctx, count);
+  const latches = progressWaiterCountLatches.get(ctx);
+  if (latches === undefined) return;
+  const pending: Array<ProgressWaiterCountLatch> = [];
+  for (const latch of latches) {
+    if (latch.expected === count) {
+      latch.resolve();
+    } else {
+      pending.push(latch);
+    }
+  }
+  if (pending.length === 0) {
+    progressWaiterCountLatches.delete(ctx);
+  } else {
+    progressWaiterCountLatches.set(ctx, pending);
+  }
+};
+
+const awaitProgressWaiterCount = (ctx: DurableObjectState, expected: number): Promise<void> => {
+  if ((progressWaiterCounts.get(ctx) ?? 0) === expected) return Promise.resolve();
+  return new Promise((resolve) => {
+    const latches = progressWaiterCountLatches.get(ctx) ?? [];
+    latches.push({ expected, resolve });
+    progressWaiterCountLatches.set(ctx, latches);
+  });
+};
+
+const progressIncarnation = (ctx: DurableObjectState): number => {
+  const existing = progressIncarnations.get(ctx);
+  if (existing !== undefined) return existing;
+  const created = ++nextProgressIncarnation;
+  progressIncarnations.set(ctx, created);
+  return created;
+};
+
+export class TestConversationObject extends makeConversationObjectClass(baseOptions) {
+  override async awaitProgressEncoded(encoded: unknown): Promise<unknown> {
+    progressIncarnation(this.ctx);
+    setProgressWaiterCount(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);
+    try {
+      return await super.awaitProgressEncoded(encoded);
+    } finally {
+      setProgressWaiterCount(this.ctx, Math.max(0, (progressWaiterCounts.get(this.ctx) ?? 1) - 1));
+    }
+  }
+
+  progressWaiterCount(): number {
+    return progressWaiterCounts.get(this.ctx) ?? 0;
+  }
+
+  awaitProgressWaiterCount(expected: number): Promise<void> {
+    return awaitProgressWaiterCount(this.ctx, expected);
+  }
+
+  async awaitProgressWaiterCountAfter(
+    previousIncarnation: number,
+    expected: number,
+  ): Promise<number | null> {
+    const incarnation = progressIncarnation(this.ctx);
+    if (incarnation === previousIncarnation) return null;
+    await awaitProgressWaiterCount(this.ctx, expected);
+    return incarnation;
+  }
+
+  progressIncarnation(): number {
+    return progressIncarnation(this.ctx);
+  }
+}
 
 /** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
 export class LimitedConversationObject extends makeConversationObjectClass({
@@ -88,6 +173,25 @@ export class TinyDatabaseConversationObject extends makeConversationObjectClass(
   ...baseOptions,
   namespaceBinding: "TINYDB",
   maxDatabaseBytes: 1,
+}) {}
+
+/** Fail-closed authorization fixture for host-protocol error-tag fidelity. */
+export class DeniedConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "DENIED",
+  operationAuthorizer: {
+    authorize: (request) =>
+      Effect.fail(
+        OperationDenied.make({
+          operation: request.operation,
+          reason: "denied by the #94 Cloudflare fixture",
+          ...(request.conversationId === undefined
+            ? {}
+            : { conversationId: request.conversationId }),
+          ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
+        }),
+      ),
+  },
 }) {}
 
 /** Callback-form Binding capture probe. */
@@ -146,27 +250,75 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
 /**
  * The WP4 cross-Object subagent matrix's Conversation Object: parent and child Conversations
  * of one delegation are DIFFERENT Objects of this namespace by the identity rule. The
- * `portCall` override is the DO-unreachable lever — an armed transport fault makes the
- * incoming cross-Object RPC reject exactly like an unreachable Object's stub would, BEFORE
- * any owner-side execution, so the routed caller observes a `PortTransportError` (and
- * `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Unarmed, it is a passthrough.
+ * namespace wrapper is the DO-unreachable lever — an armed transport fault makes the
+ * caller-side stub throw BEFORE owner-side execution, so the routed caller observes a
+ * `PortTransportError` (and `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Wake
+ * hints fail at the same seam and remain droppable. Unarmed, every stub is a passthrough.
  */
-export class SubagentConversationObject extends makeConversationObjectClass({
+const SubagentConversationObjectBase = makeConversationObjectClass({
   ...baseOptions,
   namespaceBinding: "SUBAGENTS",
   bindings: makeSubagentTestBindings,
-}) {
-  override async portCall(encoded: unknown): Promise<unknown> {
-    const reason = transportFaultReason(this.ctx.id.name);
-    if (reason !== undefined) throw new Error(reason);
-    return super.portCall(encoded);
-  }
+});
 
-  /** An unreachable Object drops wake hints too — droppable by contract, so senders swallow. */
-  override async wake(): Promise<void> {
-    const reason = transportFaultReason(this.ctx.id.name);
-    if (reason !== undefined) throw new Error(reason);
-    return super.wake();
+const faultableStub = <RpcService extends ConversationObjectRpc>(
+  stub: DurableObjectStub<RpcService>,
+  name: string | undefined,
+): DurableObjectStub<RpcService> =>
+  new Proxy(stub, {
+    get(target, property, receiver) {
+      if (property === "portCall") {
+        return (encoded: unknown): Promise<unknown> => {
+          const reason = transportFaultReason(name);
+          if (reason !== undefined) throw new Error(reason);
+          return target.portCall(encoded);
+        };
+      }
+      if (property === "wake") {
+        return (): Promise<void> => {
+          const reason = transportFaultReason(name);
+          if (reason !== undefined) throw new Error(reason);
+          return target.wake();
+        };
+      }
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+const faultableNamespace = <RpcService extends ConversationObjectRpc>(
+  namespace: DurableObjectNamespace<RpcService>,
+): DurableObjectNamespace<RpcService> =>
+  new Proxy(namespace, {
+    get(target, property, receiver) {
+      if (property === "get") {
+        return (
+          id: DurableObjectId,
+          options?: DurableObjectNamespaceGetDurableObjectOptions,
+        ): DurableObjectStub<RpcService> => faultableStub(target.get(id, options), id.name);
+      }
+      if (property === "getByName") {
+        return (
+          name: string,
+          options?: DurableObjectNamespaceGetDurableObjectOptions,
+        ): DurableObjectStub<RpcService> => faultableStub(target.getByName(name, options), name);
+      }
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+const faultableEnvironment = (env: Cloudflare.Env): Cloudflare.Env =>
+  new Proxy(env, {
+    get(target, property, receiver) {
+      if (property === "SUBAGENTS") return faultableNamespace(target.SUBAGENTS);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+export class SubagentConversationObject extends SubagentConversationObjectBase {
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    super(ctx, faultableEnvironment(env));
   }
 }
 

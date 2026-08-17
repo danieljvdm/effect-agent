@@ -31,6 +31,10 @@ export interface ConversationObjectRpc extends Rpc.DurableObjectBranded {
   submitEncoded(encoded: unknown): Promise<unknown>;
   /** Wake-hinted, poll-guaranteed settlement wait; answers an `AwaitSettlementResponse`. */
   awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
+  /** Event-driven durable progress wait; answers a `ProgressObserved` host response. */
+  awaitProgressEncoded(encoded: unknown): Promise<unknown>;
+  /** Best-effort cancellation for one in-flight progress wait. */
+  cancelProgressEncoded(encoded: unknown): Promise<unknown>;
   /** One bounded page of canonical records; answers an `ObservePageResponse`. */
   observePage(encoded: unknown): Promise<unknown>;
   /** Durable abort intent; answers an `AbortResponse`. */
