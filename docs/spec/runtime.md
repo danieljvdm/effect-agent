@@ -99,6 +99,8 @@ while process loss, recovery gaps, approval suspension, unknown-outcome suspensi
 `waitingForChild` suspension do not reset or pause it. The coordinator derives one absolute
 deadline from that canonical timestamp and supplies it to every replacement Attempt; the engine
 accepts only a deadline that preserves or tightens its fresh policy allowance (RUN-030).
+An ordinary replacement Attempt whose deadline is already expired fails before subscribing to
+unresolved Tool or model execution; deadline interruption then handles only future expiry.
 If the deadline expires while attached children are suspended, the coordinator still completes
 the mandatory joins of children whose Settlements are already canonical before failing the
 parent. That recovery cleanup authorizes no new child, ordinary Tool, or model execution and

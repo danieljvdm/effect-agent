@@ -4241,6 +4241,10 @@ const stream = <
       );
 
       const durationLimit = durationLimitError(agent.definition.policy);
+      // Fail an already-expired ordinary Attempt synchronously before
+      // subscribing to the lazy resume/execution stream. The ongoing
+      // interrupter below remains responsible only for future expiry.
+      const deadlineExpired = (yield* Clock.currentTimeMillis) >= durationDeadlineMillis;
       const deadlineEffect = Effect.gen(function* () {
         const now = yield* Clock.currentTimeMillis;
         const remaining = durationDeadlineMillis - now;
@@ -4256,7 +4260,9 @@ const stream = <
       const deadline =
         options.resume?.completeSettledChildJoinsPastDeadline === true
           ? execution
-          : execution.pipe(Stream.interruptWhen(deadlineEffect));
+          : deadlineExpired
+            ? failRunEventStream(durationLimit)
+            : execution.pipe(Stream.interruptWhen(deadlineEffect));
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
       // bound to the Run's immutable identity and delegation depth, plus the

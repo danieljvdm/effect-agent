@@ -35930,6 +35930,7 @@ var stream = (agent2, input, options = {}) => {
       return makeTurn(agent2, context3, initialPrompt, 1, 0, options);
     }));
     const durationLimit = durationLimitError(agent2.definition.policy);
+    const deadlineExpired = (yield* exports_Clock.currentTimeMillis) >= durationDeadlineMillis;
     const deadlineEffect = exports_Effect.gen(function* () {
       const now3 = yield* exports_Clock.currentTimeMillis;
       const remaining2 = durationDeadlineMillis - now3;
@@ -35938,7 +35939,7 @@ var stream = (agent2, input, options = {}) => {
       }
       return yield* durationLimit;
     });
-    const deadline = options.resume?.completeSettledChildJoinsPastDeadline === true ? execution : execution.pipe(exports_Stream.interruptWhen(deadlineEffect));
+    const deadline = options.resume?.completeSettledChildJoinsPastDeadline === true ? execution : deadlineExpired ? failRunEventStream(durationLimit) : execution.pipe(exports_Stream.interruptWhen(deadlineEffect));
     const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
       agentId: context3.agentId,
       conversationId: context3.conversationId,
