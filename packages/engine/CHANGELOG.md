@@ -1,5 +1,33 @@
 # @effect-agent/engine
 
+## 0.1.0-beta.18
+
+### Patch Changes
+
+- [#104](https://github.com/danieljvdm/effect-agent/pull/104) [`f36fd40`](https://github.com/danieljvdm/effect-agent/commit/f36fd409f8a34e13c87646fd857a4060ac89e89d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Preserve one wall-clock `maxDuration` deadline across durable Attempts. The coordinator now
+  derives the logical Run deadline from its first canonical input record, so recovery and
+  `waitingForChild` suspension cannot reset the parent allowance; queue time remains excluded and
+  the engine's deadline option is tightening-only. Already-settled child joins remain mandatory
+  recovery cleanup before an expired parent records its typed duration failure; cleanup authority
+  names the exact open delegation Calls and duration interruption resumes before continuation.
+  Adapter certification fixtures now keep their Run duration above the deliberate multi-round
+  virtual lease-expiry horizon instead of relying on replacement Attempts to reset it.
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.18
+
+## 0.1.0-beta.17
+
+### Minor Changes
+
+- [#101](https://github.com/danieljvdm/effect-agent/pull/101) [`016df57`](https://github.com/danieljvdm/effect-agent/commit/016df574fa8c0f362468d848ae830d72532cbcaf) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add a Definition-owned Schema boundary for typed application run dispositions and persist valid
+  ordinary-completion values on canonical `SubmissionSettled` records across crash recovery and
+  replay, including materialization through the public durable Settlement API.
+
+### Patch Changes
+
+- Updated dependencies [[`016df57`](https://github.com/danieljvdm/effect-agent/commit/016df574fa8c0f362468d848ae830d72532cbcaf)]:
+  - @effect-agent/core@0.1.0-beta.17
+
 ## 0.1.0-beta.16
 
 ### Patch Changes

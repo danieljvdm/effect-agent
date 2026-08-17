@@ -7,6 +7,7 @@ import {
   type AgentError,
   type AgentInputError,
   type AgentOutputError,
+  type AgentRunDispositionError,
   AgentPolicy,
   type CompactionPolicy,
   type ContextOverflowError,
@@ -87,6 +88,27 @@ const definition = Agent.define("type-proof", {
 });
 const agent = Agent.withModel(definition, model);
 
+const RunDisposition = Schema.Literal("application-complete");
+const dispositionDefinition = Agent.define("disposition-type-proof", {
+  input: Schema.Struct({ destination: Schema.String }),
+  output: Schema.Struct({
+    summary: Schema.String,
+    runDisposition: Schema.optionalKey(RunDisposition),
+  }),
+  instructions: "Answer with a typed disposition when the run completed the application work.",
+  toolkit: Toolkit.empty,
+  policy: AgentPolicy.make({
+    maxTurns: 1,
+    maxToolCalls: 1,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+  runDisposition: {
+    schema: RunDisposition,
+    fromOutput: (output) => output.runDisposition,
+  },
+});
+
 type ExpectedRequirements =
   | InstructionContext
   | ModelConfig
@@ -118,6 +140,24 @@ type InputProjectionProof = Assert<
 type OutputProjectionProof = Assert<
   Equal<Agent.Output<typeof agent>, { readonly summary: string }>
 >;
+type RunDispositionProjectionProof = Assert<
+  Equal<Agent.RunDisposition<typeof dispositionDefinition>, "application-complete">
+>;
+type RunDispositionRequirementsProof = Assert<
+  Equal<Agent.DefinitionRequirements<typeof dispositionDefinition>, never>
+>;
+type PlainRunDispositionFailureProof = Assert<
+  Equal<Agent.RunDispositionFailure<typeof definition>, never>
+>;
+type DeclaredRunDispositionFailureProof = Assert<
+  Equal<Agent.RunDispositionFailure<typeof dispositionDefinition>, AgentRunDispositionError>
+>;
+type RunDispositionFailureProof = Assert<
+  Equal<
+    Extract<Agent.Failure<typeof dispositionDefinition>, { _tag: "AgentRunDispositionError" }>,
+    AgentRunDispositionError
+  >
+>;
 type PolicyExhaustionModeProof = Assert<
   Equal<AgentPolicy["onExhaustion"], "final-answer" | "fail">
 >;
@@ -142,6 +182,11 @@ describe("Agent type inference", () => {
     const bindingRetainsNativeModelProof: BindingRetainsNativeModelProof = true;
     const inputProjectionProof: InputProjectionProof = true;
     const outputProjectionProof: OutputProjectionProof = true;
+    const runDispositionProjectionProof: RunDispositionProjectionProof = true;
+    const runDispositionRequirementsProof: RunDispositionRequirementsProof = true;
+    const plainRunDispositionFailureProof: PlainRunDispositionFailureProof = true;
+    const declaredRunDispositionFailureProof: DeclaredRunDispositionFailureProof = true;
+    const runDispositionFailureProof: RunDispositionFailureProof = true;
     const policyExhaustionModeProof: PolicyExhaustionModeProof = true;
     const policyRunStatusProof: PolicyRunStatusProof = true;
     const policyContextLimitOptionalityProof: PolicyContextLimitOptionalityProof = true;
@@ -162,6 +207,12 @@ describe("Agent type inference", () => {
     expect(bindingRetainsNativeModelProof).toBe(true);
     expect(inputProjectionProof).toBe(true);
     expect(outputProjectionProof).toBe(true);
+    expect(runDispositionProjectionProof).toBe(true);
+    expect(runDispositionRequirementsProof).toBe(true);
+    expect(plainRunDispositionFailureProof).toBe(true);
+    expect(declaredRunDispositionFailureProof).toBe(true);
+    expect(runDispositionFailureProof).toBe(true);
+    expect(Object.isFrozen(dispositionDefinition.runDisposition)).toBe(true);
     expect(agent.definition).toBe(definition);
     expect(agent.model).toBe(model);
     expect(Object.isFrozen(definition)).toBe(true);

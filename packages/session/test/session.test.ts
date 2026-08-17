@@ -328,6 +328,47 @@ describe("phase 4 durable canonical payloads", () => {
     expect(Schema.encodeSync(RecordEnvelope)(record).payload).toEqual(withoutOptional);
   });
 
+  it("DUR-011: requires an exact bounded diagnostic on every failed settlement", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-p4-failed-settlement",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-07-29T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const diagnostic = {
+      errorTag: "AgentOutputError",
+      message: "The final output did not satisfy the Agent output Schema",
+    };
+    const failed = {
+      ...encodedSubmissionSettled,
+      outcome: "failed",
+      result: diagnostic,
+    } as const;
+
+    const roundTripped = Schema.encodeSync(RecordEnvelope)(
+      Schema.decodeUnknownSync(RecordEnvelope)(envelope(failed)),
+    );
+    expect(roundTripped.payload).toEqual(failed);
+
+    const malformed: ReadonlyArray<unknown> = [
+      // The filed legacy shape: a failed outcome with no diagnostic is not trustworthy history.
+      (() => {
+        const { result: _result, ...withoutResult } = failed;
+        return withoutResult;
+      })(),
+      { ...failed, result: { message: diagnostic.message } },
+      { ...failed, result: { errorTag: diagnostic.errorTag } },
+      { ...failed, result: { ...diagnostic, cause: { secret: "must-not-cross-boundary" } } },
+      { ...failed, result: { ...diagnostic, errorTag: "x".repeat(257) } },
+      { ...failed, result: { ...diagnostic, message: "x".repeat(16 * 1024 + 1) } },
+    ];
+    for (const payload of malformed) {
+      expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
+    }
+  });
+
   it("rejects malformed durable payloads", () => {
     const envelope = (payload: unknown): unknown => ({
       recordId: "record-p4-invalid",
@@ -418,6 +459,60 @@ describe("phase 4 durable canonical payloads", () => {
         return { ...withoutResult, outcome: "failed", policyLimit: "tokens" };
       })(),
     ];
+    for (const payload of failures) {
+      expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
+    }
+  });
+
+  it("RUN-029: round-trips an application run disposition on ordinary completion", () => {
+    const payload = {
+      ...encodedSubmissionSettled,
+      runDisposition: "application-complete",
+    } as const;
+    const record = decodeRecord("record-run029", payload);
+
+    expect(Schema.encodeSync(RecordEnvelope)(record).payload).toEqual(payload);
+    expect(
+      Schema.decodeUnknownSync(RecordEnvelope)(Schema.encodeSync(RecordEnvelope)(record)),
+    ).toEqual(record);
+  });
+
+  it("RUN-029: rejects run disposition outside an ordinary completed Run", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-run029-invalid",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-07-29T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const failures: ReadonlyArray<unknown> = [
+      {
+        ...encodedSubmissionSettled,
+        outcome: "failed",
+        runDisposition: "application-complete",
+      },
+      {
+        ...encodedSubmissionSettled,
+        outcome: "aborted",
+        runDisposition: "application-complete",
+      },
+      {
+        ...encodedSubmissionSettled,
+        finishReason: "budget-exhausted",
+        exhausted: "turns",
+        runDisposition: "application-complete",
+      },
+      (() => {
+        const { runId: _runId, ...withoutRun } = encodedSubmissionSettled;
+        return { ...withoutRun, runDisposition: "application-complete" };
+      })(),
+      (() => {
+        const { result: _result, ...withoutResult } = encodedSubmissionSettled;
+        return { ...withoutResult, runDisposition: "application-complete" };
+      })(),
+    ];
+
     for (const payload of failures) {
       expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
     }
@@ -697,9 +792,34 @@ describe("SubmissionLedger port schemas", () => {
       settlementId: "settlement:submission-1",
       receiptId: "receipt-1",
       outcome: "completed",
+      runDisposition: "application-complete",
       settledAt: "2026-08-12T00:01:00.000Z",
     });
     expect(settlement.outcome).toBe("completed");
+    expect(settlement.runDisposition).toBe("application-complete");
+    expect(
+      Schema.decodeUnknownExit(Settlement)({
+        submissionId: "submission-1",
+        settlementId: "settlement:submission-1",
+        receiptId: "receipt-1",
+        outcome: "failed",
+        settledAt: "2026-08-12T00:01:00.000Z",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownExit(Settlement)({
+        submissionId: "submission-1",
+        settlementId: "settlement:submission-1",
+        receiptId: "receipt-1",
+        outcome: "failed",
+        failure: {
+          errorTag: "AgentOutputError",
+          message: "invalid output",
+          cause: { secret: "must-not-cross-boundary" },
+        },
+        settledAt: "2026-08-12T00:01:00.000Z",
+      })._tag,
+    ).toBe("Failure");
     expect(
       Schema.decodeUnknownExit(SettlementReservation)({
         ...encodedReservation,

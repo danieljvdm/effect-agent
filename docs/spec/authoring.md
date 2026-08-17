@@ -63,12 +63,51 @@ An Agent Binding additionally requires one Effect AI Model. An unbound Definitio
 ### Optional fields
 
 - description and metadata;
+- an application run-disposition Schema and decoded-output selector;
 - context transforms;
 - response acceptance policy;
 - compaction policy;
 - content persistence policy;
 - capability requirements;
 - application version label.
+
+### Application run disposition
+
+An application that needs a durable completion classification declares a vocabulary-neutral
+Schema boundary on the Definition. The application owns the vocabulary; the framework owns
+validation and persistence.
+
+```ts
+const TaskRunDisposition = Schema.Literal("application-complete");
+
+const TaskAgent = Agent.define("task-agent", {
+  input: TaskInput,
+  output: TaskReport,
+  instructions,
+  toolkit,
+  policy,
+  runDisposition: {
+    schema: TaskRunDisposition,
+    fromOutput: (report) => report.runDisposition,
+  },
+});
+
+type TaskDisposition = Agent.RunDisposition<typeof TaskAgent>;
+// "application-complete"
+```
+
+`fromOutput` receives the decoded output and returns an untrusted candidate or `undefined`. The
+runtime Schema-encodes the candidate before it emits `RunCompleted`; validation failure is the
+typed `AgentRunDispositionError`. The disposition Schema's decoding and encoding services remain
+visible in the Definition and runtime requirement projections. `Agent.Failure` admits
+`AgentRunDispositionError` only for a Definition that declares this boundary. A thrown selector
+value is retained on that typed error as a Schema-safe diagnostic `cause`, while the canonical
+`RunFailed` message is fixed and does not expose application exception text.
+
+The selector runs only at ordinary completion. Final-answer budget exhaustion, failure,
+interruption, abort, unresolved recovery, and run-less joined settlement never acquire a run
+disposition. Applications must not derive one from summary prose or arbitrary successful Tool
+Calls.
 
 ## 3. Instructions
 

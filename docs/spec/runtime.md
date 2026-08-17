@@ -92,6 +92,23 @@ Call success resets it, and reaching `repeatedFailureLimit` fails the Run with t
 failure (`limit: "repeated-failures"`). A `repeatedFailureLimit` of `0` disables the bound.
 Budget-rejected synthetic settlements neither advance nor reset that counter.
 
+`maxDuration` bounds wall clock for one logical Run, not one process Attempt and not cumulative
+worker-active time. In the durable assemblies the clock starts when the Submission's initial
+`UserInputRecorded` record becomes canonical: admission and queue delay precede the Run clock,
+while process loss, recovery gaps, approval suspension, unknown-outcome suspension, and
+`waitingForChild` suspension do not reset or pause it. The coordinator derives one absolute
+deadline from that canonical timestamp and supplies it to every replacement Attempt; the engine
+accepts only a deadline that preserves or tightens its fresh policy allowance (RUN-030).
+An ordinary replacement Attempt whose deadline is already expired fails before subscribing to
+unresolved Tool or model execution; deadline interruption then handles only future expiry.
+If the deadline expires while attached children are suspended, the coordinator still completes
+the mandatory joins of children whose Settlements are already canonical before failing the
+parent. The coordinator supplies the exact still-open child Call IDs, the engine verifies they
+are every and only the resumed delegation calls, and duration interruption is restored around
+the continuation after those joins. That recovery cleanup authorizes no new child, ordinary
+Tool, or model execution and cannot turn the expired Run into success, including when the
+deadline expires during the post-join continuation (SUB-019).
+
 Note on durable Attempts: the batch-resume seam counts Tool Calls from the resumed batch onward,
 so `maxToolCalls` is enforced per Attempt under the durable coordinator. This is existing,
 documented behavior; cumulative cross-Attempt accounting would require persisted counters and is
@@ -370,6 +387,18 @@ Terminal events are exactly one of:
 - `RunInterrupted`;
 - `RunSuspended`.
 
+An Agent Definition may declare an application run-disposition Schema plus a pure selector from
+decoded output. At an ordinary completion seam the engine selects, Schema-encodes, and JSON-checks
+that value before adding it to `RunCompleted.runDisposition`; `undefined` means absent. Invalid
+selection fails typed with `AgentRunDispositionError`. A final-answer budget completion never
+evaluates or carries the selector result. Reducers fail closed if a budget-completed event carries
+a disposition or if an event carries one without a Definition-owned Schema. No runtime path parses
+output prose or infers disposition from Tool events. When the application selector throws, the
+typed error retains the original value in its Schema-safe diagnostic `cause`; the terminal event
+uses a fixed non-sensitive message and never serializes that foreign cause. The public
+`AgentResultSchema` independently rejects a disposition on `finishReason: "budget-exhausted"`, so
+untrusted serialized results cannot bypass the event-reducer invariant.
+
 Raw provider chunks are never mixed into the stable event union.
 
 `RunFailed` covers expected failures. The engine keeps defects as defects: a defect fails the
@@ -570,3 +599,15 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   derivation, applied after context preparation and never entered into official history; a
   Definition whose output Schema cannot be derived runs with the documented fallback and a
   diagnostic, never a silent difference.
+- **RUN-029:** An Agent Definition may declare an application-owned run-disposition Schema and
+  decoded-output selector. Only an ordinary completed Run may Schema-validate, emit, and durably
+  persist the selected value. Failed, interrupted, aborted, incomplete, run-less, and
+  budget-exhausted Runs carry none; invalid values fail typed, and consumers never infer a
+  disposition from prose or Tool output.
+- **RUN-030:** `maxDuration` is one wall-clock allowance per logical Run. DN and DC derive its
+  absolute deadline from the first canonical input record and preserve that deadline across
+  Attempt replacement and every durable suspension; admission and queue delay are excluded, and
+  no Run option may widen the Definition's fresh duration allowance. Already-settled attached
+  children still join as mandatory recovery cleanup before the expired parent fails. The engine
+  verifies the coordinator's exact open delegation Call IDs and restores duration interruption
+  before continuation, without authorizing a new model, ordinary Tool, or child execution.

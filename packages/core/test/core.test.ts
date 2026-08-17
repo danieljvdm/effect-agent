@@ -19,6 +19,7 @@ import {
   AgentInputError,
   AgentInterrupted,
   AgentOutputError,
+  AgentRunDispositionError,
   AgentPolicy,
   AgentPolicyError,
   applyToolResultBounds,
@@ -118,6 +119,10 @@ describe("core schemas", () => {
     const failures = [
       AgentInputError.make({ message: "invalid trip input" }),
       AgentOutputError.make({ message: "invalid itinerary output" }),
+      AgentRunDispositionError.make({
+        cause: new Error("invalid application run disposition"),
+        message: "invalid application run disposition",
+      }),
       AgentPolicyError.make({ limit: "turns", message: "turn limit reached" }),
       AgentPolicyError.make({
         limit: "repeated-failures",
@@ -163,6 +168,29 @@ describe("core schemas", () => {
       eventVersion: 2,
     };
     expect(() => Schema.decodeUnknownSync(RunEvent)(invalidEncodedEvent)).toThrow();
+  });
+
+  it("round-trips a Schema-encoded application run disposition on ordinary completion", () => {
+    const encodedEvent = {
+      _tag: "RunCompleted",
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "travel-planner",
+      sequence: 5,
+      timestamp: "2026-07-29T12:00:00.000Z",
+      output: { itinerary: "Kyoto" },
+      turns: 1,
+      finishReason: "model-stop",
+      runDisposition: "application-complete",
+    } satisfies typeof RunCompleted.Encoded;
+
+    const event = Schema.decodeSync(RunEvent)(encodedEvent);
+    expect(event).toMatchObject({
+      _tag: "RunCompleted",
+      runDisposition: "application-complete",
+    });
+    expect(Schema.encodeSync(RunEvent)(event)).toEqual(encodedEvent);
   });
 
   it("preserves Tool Call parameters and provider execution provenance", () => {

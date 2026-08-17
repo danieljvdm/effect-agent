@@ -109,6 +109,9 @@ const settlementRecord = (outcome: SettlementOutcome) =>
       settlementId: submissionSettlementId(SUBMISSION_ID),
       receiptId: "receipt-classifier-1",
       outcome,
+      ...(outcome === "failed"
+        ? { result: { errorTag: "ClassifierFailure", message: "The classified Run failed" } }
+        : {}),
     },
   });
 

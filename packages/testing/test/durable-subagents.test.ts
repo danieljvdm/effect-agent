@@ -55,6 +55,7 @@ import {
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
@@ -545,6 +546,45 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         expect(roles.indexOf("user")).toBeGreaterThanOrEqual(0);
         expect(roles.indexOf("user")).toBeLessThan(roles.indexOf("assistant"));
       }),
+  );
+
+  it.effect("RUN-030: counts waitingForChild wall clock against parent maxDuration", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      const harness = yield* makeHarness();
+      const run = drive(harness);
+      const conversation = "conversation-s2-parent-duration";
+      const parent = yield* harness.submitParent(conversation, "parent-duration-1");
+      const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+
+      const first = yield* run(parent.conversationId);
+      expect(first).toHaveLength(0);
+      expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
+
+      // `maxDuration` is wall clock for the logical Run, not a fresh allowance per Attempt.
+      // Advancing deterministic time while no parent worker is held must therefore exhaust the
+      // same parent Run before its replacement Attempt can continue after the child join.
+      yield* TestClock.adjust(Duration.seconds(31));
+
+      const childSettlements = yield* run(childConversationId);
+      expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+      expect((yield* parentState(parent.submissionId)).state).toBe("input-applied");
+
+      const parentSettlements = yield* run(parent.conversationId);
+      expect(parentSettlements.map((settlement) => settlement.outcome)).toEqual(["failed"]);
+      expect(yield* harness.childInvocations).toBe(1);
+      expect(harness.parentPrompts).toHaveLength(1);
+
+      const log = yield* readLog(parent.conversationId);
+      expect(payloadsOf(log, "SubagentJoined")).toHaveLength(1);
+      expect((yield* parentReservations(parent.submissionId)).map((row) => row.status)).toEqual([
+        "released",
+      ]);
+      const settled = payloadsOf(log, "SubmissionSettled")[0]?.record.payload;
+      if (settled?._tag !== "SubmissionSettled") throw new Error("Expected SubmissionSettled");
+      expect(settled.policyLimit).toBe("duration");
+      expect(settled.result).toMatchObject({ errorTag: "AgentPolicyError" });
+    }),
   );
 
   it.effect("every establishment failpoint converges on one child Receipt and Conversation", () =>

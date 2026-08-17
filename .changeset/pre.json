@@ -32,6 +32,7 @@
     "context-review-fixes",
     "delegation-containment",
     "durable-progress-wait",
+    "durable-run-duration",
     "effect-agent-umbrella",
     "efficient-pr-review",
     "friendly-cloudflare-peer",
@@ -52,6 +53,7 @@
     "retire-stale-reviews",
     "review-patchless-text",
     "typed-budget-settlement",
+    "typed-run-disposition",
     "visible-review-runs"
   ]
 }

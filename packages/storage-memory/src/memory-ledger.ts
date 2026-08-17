@@ -59,6 +59,7 @@ import {
   SettlementFinalization,
   SettlementReservation,
   SettlementReservationSnapshot,
+  settlementFailureFromRecord,
   AbortIntent,
   SubmissionLedger,
   SubmissionLookup,
@@ -903,6 +904,18 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
+            const settlementFailure = settlementFailureFromRecord(reservation.record);
+            if ((reservation.outcome === "failed") !== (settlementFailure !== undefined)) {
+              return [
+                failure(
+                  ledgerError(
+                    "finalizeSettlement",
+                    `Settlement reservation for Submission ${request.submissionId} has contradictory failure evidence`,
+                  ),
+                ),
+                current,
+              ];
+            }
             if (reservation.settlementId !== request.settlementId) {
               return [
                 failure(
@@ -922,6 +935,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                     settlementId: reservation.settlementId,
                     receiptId: stored.row.receiptId,
                     outcome: reservation.outcome,
+                    ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
                     settledAt: utc(reservation.finalizedAtMillis),
                   }),
                 ),
@@ -941,6 +955,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                   settlementId: reservation.settlementId,
                   receiptId: stored.row.receiptId,
                   outcome: reservation.outcome,
+                  ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
                   settledAt: utc(nowMillis),
                 }),
               ),

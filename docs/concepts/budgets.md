@@ -33,15 +33,15 @@ AgentPolicy.make({
 });
 ```
 
-| Bound                  | What it limits                                      | On exhaustion                     |
-| ---------------------- | --------------------------------------------------- | --------------------------------- |
-| `maxTurns`             | model requests per Run                              | `onExhaustion` resolves           |
-| `maxToolCalls`         | declared Tool Calls per Run (programmatic included) | `onExhaustion` resolves           |
-| `maxDuration`          | wall clock per Run                                  | always fails typed                |
-| `tokenBudget`          | input + output tokens per Run                       | `onExhaustion` resolves (RUN-025) |
-| `costBudgetMicrousd`   | estimated cost per Run (needs a cost estimator)     | always fails typed                |
-| `repeatedFailureLimit` | consecutive terminal Tool failures                  | always fails typed                |
-| `toolConcurrency`      | parallel Tool Handlers per batch                    | not a failure — a gate            |
+| Bound                  | What it limits                                       | On exhaustion                     |
+| ---------------------- | ---------------------------------------------------- | --------------------------------- |
+| `maxTurns`             | model requests per Run                               | `onExhaustion` resolves           |
+| `maxToolCalls`         | declared Tool Calls per Run (programmatic included)  | `onExhaustion` resolves           |
+| `maxDuration`          | logical-Run wall clock, including durable suspension | always fails typed                |
+| `tokenBudget`          | input + output tokens per Run                        | `onExhaustion` resolves (RUN-025) |
+| `costBudgetMicrousd`   | estimated cost per Run (needs a cost estimator)      | always fails typed                |
+| `repeatedFailureLimit` | consecutive terminal Tool failures                   | always fails typed                |
+| `toolConcurrency`      | parallel Tool Handlers per batch                     | not a failure — a gate            |
 
 A typed exhaustion failure is `AgentPolicyError` with a `limit` literal naming which bound bound.
 In the DN and DC assemblies a Run failed this way settles with that literal preserved as the

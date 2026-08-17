@@ -48,6 +48,7 @@ import {
   SubmissionLookupById,
   SubmissionLookupByKey,
   SubmissionSettled,
+  SubmissionSettledRecord,
   SuspendRequest,
   UnknownResolutionCommand,
   WaitingChild,
@@ -169,18 +170,29 @@ const settlementReservation = Effect.fn("SqliteLedgerTest.settlementReservation"
   outcome: SettlementOutcome,
 ) {
   const settlementId = submissionSettlementId(admitted.submissionId);
+  const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+    SubmissionSettled.make({
+      submissionId: admitted.submissionId,
+      settlementId,
+      receiptId: admitted.receiptId,
+      outcome,
+      ...(outcome === "failed"
+        ? {
+            result: {
+              errorTag: "SqliteLedgerTestFailure",
+              message: "The SQLite ledger test Submission failed",
+            },
+          }
+        : {}),
+    }),
+  ).pipe(Effect.orDie);
   const record = RecordEnvelope.make({
     recordId: submissionSettlementRecordId(admitted.submissionId),
     family: "conversation",
     schemaVersion: 1,
     createdAt: at(1),
     deploymentId: TEST_DEPLOYMENT,
-    payload: SubmissionSettled.make({
-      submissionId: admitted.submissionId,
-      settlementId,
-      receiptId: admitted.receiptId,
-      outcome,
-    }),
+    payload,
   });
   const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
   const recordDigest = yield* digestJson(encoded);

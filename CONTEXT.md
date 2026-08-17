@@ -23,6 +23,11 @@ the durable runtime admits a Submission and coordinates Attempts until Settlemen
 One logical request to execute an Agent Binding against a Conversation. In ephemeral mode the Run
 lives for one Scope. In durable mode the logical Run may span multiple process Attempts.
 
+**Run Disposition**<br>
+An optional application-defined value selected from decoded Agent output and validated by a
+Definition-owned Effect Schema. It is durable only for an ordinary completed Run and is never
+inferred from prose, Tool output, or successful side effects.
+
 **Attempt**  
 One ownership period in which a worker tries to advance a durable Submission. An interruption,
 lost ownership, eviction, or redeploy may end an Attempt without ending the Run.
@@ -50,7 +55,10 @@ capability.
 
 **Settlement**  
 The single durable terminal outcome owed to an accepted Submission: `completed`, `failed`, or
-`aborted`.
+`aborted`. A failed Settlement always carries the framework's bounded generic diagnostic;
+completed joined work and every aborted Settlement may legitimately have no result. An ordinary
+completed Settlement may materialize the Definition-validated, Schema-encoded application run
+disposition stored in its exact canonical record.
 
 ## Agent capabilities
 

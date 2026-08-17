@@ -16,6 +16,7 @@ import {
   type ExhaustedLimit,
   type RunEvent,
   type RunId,
+  type RunDispositionDeclaration,
   type TurnId,
 } from "@effect-agent/core";
 import {
@@ -174,11 +175,13 @@ import {
   RecordEnvelope,
   RecordId,
   RepairAnnotated,
+  SettlementFailureDiagnostic,
   SubagentJoined,
   SubagentLineageRecorded,
   SubagentRequested,
   SubagentStarted,
   SubmissionSettled,
+  SubmissionSettledRecord,
   ToolApprovalDecided,
   ToolApprovalRequested,
   ToolCallPrepared,
@@ -633,6 +636,8 @@ type AttemptOutcome =
   | {
       readonly _tag: "completed";
       readonly result: PersistedJson;
+      /** Schema-encoded application disposition, only for an ordinary completed Run. */
+      readonly runDisposition?: PersistedJson;
       /** Set when the Run settled through the final-answer exhaustion resolution (RUN-018). */
       readonly finishReason?: "budget-exhausted";
       /** The dimension that bound; set exactly alongside `finishReason` (RUN-011). */
@@ -640,7 +645,7 @@ type AttemptOutcome =
     }
   | {
       readonly _tag: "failed";
-      readonly result: PersistedJson;
+      readonly result: SettlementFailureDiagnostic;
       /** The typed limit of an `AgentPolicyError` failure; absent otherwise (RUN-011). */
       readonly policyLimit?: PolicyLimit;
     }
@@ -824,6 +829,37 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const materializeSettlement = (
+    settlement: Settlement,
+    record: RecordEnvelope | undefined,
+  ): Settlement => {
+    const common = {
+      submissionId: settlement.submissionId,
+      settlementId: settlement.settlementId,
+      receiptId: settlement.receiptId,
+      outcome: settlement.outcome,
+      ...(settlement.failure === undefined ? {} : { failure: settlement.failure }),
+      settledAt: settlement.settledAt,
+    };
+    const payload = record?.payload;
+    if (
+      payload === undefined ||
+      payload._tag !== "SubmissionSettled" ||
+      payload.submissionId !== settlement.submissionId ||
+      payload.settlementId !== settlement.settlementId ||
+      payload.receiptId !== settlement.receiptId ||
+      payload.outcome !== settlement.outcome ||
+      settlement.outcome !== "completed" ||
+      payload.runDisposition === undefined
+    ) {
+      return Settlement.make(common);
+    }
+    return Settlement.make({
+      ...common,
+      runDisposition: payload.runDisposition,
+    });
+  };
+
   const readAll = Effect.fn("DurableAgentRuntime.readAll")(function* (
     conversationId: ConversationId,
   ): Effect.fn.Return<
@@ -862,6 +898,46 @@ const make = Effect.gen(function* () {
 
   const knownRecordIdsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Set<string> =>
     new Set(records.map((envelope) => envelope.record.recordId));
+
+  const settlementPayloadFromRecord = Effect.fn("DurableAgentRuntime.settlementPayloadFromRecord")(
+    function* (
+      record: RecordEnvelope,
+      submissionId: SubmissionId,
+    ): Effect.fn.Return<SubmissionSettledRecord, LedgerError> {
+      const payload = record.payload;
+      if (
+        payload._tag !== "SubmissionSettled" ||
+        payload.submissionId !== submissionId ||
+        payload.settlementId !== submissionSettlementId(submissionId) ||
+        record.recordId !== submissionSettlementRecordId(submissionId)
+      ) {
+        return yield* LedgerError.make({
+          operation: "settlementPayloadFromRecord",
+          message: `The reserved canonical record is not the exact Settlement for Submission ${submissionId}`,
+        });
+      }
+      return payload;
+    },
+  );
+
+  const canonicalSettlementRecord = Effect.fn("DurableAgentRuntime.canonicalSettlementRecord")(
+    function* (
+      records: ReadonlyArray<CanonicalRecordEnvelope>,
+      submissionId: SubmissionId,
+    ): Effect.fn.Return<RecordEnvelope, LedgerError> {
+      const record = records.find(
+        (envelope) => envelope.record.recordId === submissionSettlementRecordId(submissionId),
+      )?.record;
+      if (record === undefined) {
+        return yield* LedgerError.make({
+          operation: "canonicalSettlementRecord",
+          message: `Canonical history has no Settlement for Submission ${submissionId}`,
+        });
+      }
+      yield* settlementPayloadFromRecord(record, submissionId);
+      return record;
+    },
+  );
 
   /**
    * Fold structured recovery evidence from canonical records (plan §2.2). Canonical history is
@@ -1735,10 +1811,11 @@ const make = Effect.gen(function* () {
 
   const settleOneJoined = Effect.fn("DurableAgentRuntime.settleOneJoined")(function* (
     ctx: AttemptAppendContext,
-    hostSubmissionId: SubmissionId,
-    outcome: SettlementOutcome,
+    hostSettlement: SubmissionSettledRecord,
     joined: RecoverySnapshot,
   ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
+    const hostSubmissionId = hostSettlement.submissionId;
+    const outcome = hostSettlement.outcome;
     const submission = joined.submission;
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
@@ -1748,13 +1825,16 @@ const make = Effect.gen(function* () {
       // batch replay is byte-identical (DUR-011).
       record = joined.reservation.record;
     } else {
-      const payload = SubmissionSettled.make({
-        submissionId,
-        settlementId,
-        receiptId: submission.receiptId,
-        outcome,
-        runId: runIdForSubmission(hostSubmissionId),
-      });
+      const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+        SubmissionSettled.make({
+          submissionId,
+          settlementId,
+          receiptId: submission.receiptId,
+          outcome,
+          runId: runIdForSubmission(hostSubmissionId),
+          ...(hostSettlement.outcome === "failed" ? { result: hostSettlement.result } : {}),
+        }),
+      ).pipe(Effect.orDie);
       const envelope = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
       // The envelope was constructed from validated parts, so an encode failure is a defect.
       const encoded = yield* Schema.encodeEffect(RecordEnvelope)(envelope).pipe(Effect.orDie);
@@ -1821,9 +1901,9 @@ const make = Effect.gen(function* () {
   const settleJoinedSubmissions = Effect.fn("DurableAgentRuntime.settleJoinedSubmissions")(
     function* (
       ctx: AttemptAppendContext,
-      hostSubmissionId: SubmissionId,
-      outcome: SettlementOutcome,
+      hostSettlement: SubmissionSettledRecord,
     ): Effect.fn.Return<void, DurableWorkerFailure> {
+      const hostSubmissionId = hostSettlement.submissionId;
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: hostSubmissionId }),
       );
@@ -1833,7 +1913,7 @@ const make = Effect.gen(function* () {
           RecoverySnapshotRequest.make({ submissionId: join.submissionId }),
         );
         if (joinedSnapshot.submission.state === "settled") continue;
-        yield* settleOneJoined(ctx, hostSubmissionId, outcome, joinedSnapshot);
+        yield* settleOneJoined(ctx, hostSettlement, joinedSnapshot);
       }
     },
   );
@@ -1853,23 +1933,31 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
-    const payload = SubmissionSettled.make({
-      submissionId,
-      settlementId,
-      receiptId: submission.receiptId,
-      outcome: outcome._tag,
-      ...(includeRunId ? { runId: runIdForSubmission(submissionId) } : {}),
-      ...(outcome._tag === "aborted" ? {} : { result: outcome.result }),
-      ...(outcome._tag === "completed" && outcome.finishReason !== undefined
-        ? { finishReason: outcome.finishReason }
-        : {}),
-      ...(outcome._tag === "completed" && outcome.exhausted !== undefined
-        ? { exhausted: outcome.exhausted }
-        : {}),
-      ...(outcome._tag === "failed" && outcome.policyLimit !== undefined
-        ? { policyLimit: outcome.policyLimit }
-        : {}),
-    });
+    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+      SubmissionSettled.make({
+        submissionId,
+        settlementId,
+        receiptId: submission.receiptId,
+        outcome: outcome._tag,
+        ...(includeRunId ? { runId: runIdForSubmission(submissionId) } : {}),
+        ...(outcome._tag === "aborted" ? {} : { result: outcome.result }),
+        ...(includeRunId &&
+        outcome._tag === "completed" &&
+        outcome.finishReason === undefined &&
+        outcome.runDisposition !== undefined
+          ? { runDisposition: outcome.runDisposition }
+          : {}),
+        ...(outcome._tag === "completed" && outcome.finishReason !== undefined
+          ? { finishReason: outcome.finishReason }
+          : {}),
+        ...(outcome._tag === "completed" && outcome.exhausted !== undefined
+          ? { exhausted: outcome.exhausted }
+          : {}),
+        ...(outcome._tag === "failed" && outcome.policyLimit !== undefined
+          ? { policyLimit: outcome.policyLimit }
+          : {}),
+      }),
+    ).pipe(Effect.orDie);
     const record = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
     // The envelope was constructed from validated parts, so an encode failure is a defect.
     const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
@@ -1902,10 +1990,11 @@ const make = Effect.gen(function* () {
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
+    const canonicalSettlement = yield* settlementPayloadFromRecord(reserved.record, submissionId);
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
-    yield* settleJoinedSubmissions(ctx, submissionId, outcome._tag);
-    return settlement;
+    yield* settleJoinedSubmissions(ctx, canonicalSettlement);
+    return materializeSettlement(settlement, reserved.record);
   });
 
   /** Complete a previously reserved settlement: append the EXACT reserved record, then finalize. */
@@ -1938,24 +2027,35 @@ const make = Effect.gen(function* () {
         settlementId: reservation.settlementId,
       }),
     );
+    const canonicalSettlement = yield* settlementPayloadFromRecord(
+      reservation.record,
+      submission.submissionId,
+    );
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
-    yield* settleJoinedSubmissions(ctx, submission.submissionId, settlement.outcome);
-    return settlement;
+    yield* settleJoinedSubmissions(ctx, canonicalSettlement);
+    return materializeSettlement(settlement, reservation.record);
   });
 
   /** Canonical settlement exists: rebuild the ledger from history, never the reverse (DUR-015). */
   const finalizeFromHistory = Effect.fn("DurableAgentRuntime.finalizeFromHistory")(function* (
     submission: SubmissionSnapshot,
-    settlementId: Settlement["settlementId"],
+    record: RecordEnvelope,
   ): Effect.fn.Return<Settlement, LedgerError | SettlementConflict> {
+    const canonicalSettlement = yield* settlementPayloadFromRecord(record, submission.submissionId);
     yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
-      SettlementFinalization.make({ submissionId: submission.submissionId, settlementId }),
+      SettlementFinalization.make({
+        submissionId: submission.submissionId,
+        settlementId: canonicalSettlement.settlementId,
+      }),
+    );
+    const snapshot = yield* ledger.loadRecoverySnapshot(
+      RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
-    return settlement;
+    return materializeSettlement(settlement, snapshot.reservation?.record);
   });
 
   /**
@@ -2195,18 +2295,15 @@ const make = Effect.gen(function* () {
 
   /** The coordinator's bounded `{errorTag, message}` projection of a non-completed child. */
   const boundedChildFailureResult = (
-    payload: SubmissionSettled,
+    payload: SubmissionSettledRecord,
     childSubmissionId: SubmissionId,
   ): Effect.Effect<PersistedJson> => {
-    if (payload.outcome === "failed" && payload.result !== undefined) {
+    if (payload.outcome === "failed") {
       return Effect.succeed(payload.result);
     }
     return decodePersisted({
-      errorTag: payload.outcome === "aborted" ? "SubagentAborted" : "ChildRunFailed",
-      message:
-        payload.outcome === "aborted"
-          ? `Attached child ${childSubmissionId} settled aborted`
-          : `Attached child ${childSubmissionId} settled failed without a recorded failure payload`,
+      errorTag: "SubagentAborted",
+      message: `Attached child ${childSubmissionId} settled aborted`,
     }).pipe(Effect.orDie);
   };
 
@@ -2215,7 +2312,7 @@ const make = Effect.gen(function* () {
     readonly outcome: SettlementOutcome;
     /** Child terminal output for `completed`; the bounded `{errorTag, message}` projection otherwise. */
     readonly encodedResult: PersistedJson;
-    readonly settlement: SubmissionSettled;
+    readonly settlement: SubmissionSettledRecord;
     readonly childRecords: ReadonlyArray<CanonicalRecordEnvelope>;
   }
 
@@ -2645,11 +2742,11 @@ const make = Effect.gen(function* () {
   });
 
   const failureOutcome = (error: unknown): Effect.Effect<AttemptOutcome> =>
-    Schema.decodeUnknownEffect(PersistedJson)({
-      errorTag: errorTagOf(error),
+    Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
+      errorTag: errorTagOf(error).slice(0, 256) || "UnknownError",
       message: errorMessageOf(error).slice(0, MAX_FAILURE_MESSAGE_LENGTH),
     }).pipe(
-      // Two bounded strings always satisfy the canonical persistence limits.
+      // The exact diagnostic Schema admits no raw Cause, stack, or provider payload.
       Effect.orDie,
       Effect.map((result) => ({
         _tag: "failed" as const,
@@ -2732,6 +2829,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -2742,7 +2842,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
@@ -2750,10 +2851,26 @@ const make = Effect.gen(function* () {
     records: ReadonlyArray<CanonicalRecordEnvelope>,
     lineage: AttemptLineage,
     approvalDecisions: ReadonlyArray<ApprovalDecisionIntent>,
+    childAttachments: RecoverySnapshot["childAttachments"],
   ) =>
     Effect.gen(function* () {
       const submissionId = submission.submissionId;
       const runId = runIdForSubmission(submissionId);
+      const inputRecord = records.find(
+        (envelope) => envelope.record.recordId === submissionInputRecordId(submissionId),
+      );
+      if (inputRecord === undefined) {
+        return yield* RunJournalError.make({
+          message: `Run ${runId} has no canonical input record for its duration deadline`,
+        });
+      }
+      // RUN-030: the first canonical input append is the logical Run-start
+      // authority. Queue/admission time precedes it; every later Attempt uses
+      // this same absolute deadline, including after durable suspension.
+      const durationDeadline = DateTime.addDuration(
+        inputRecord.record.createdAt,
+        agent.definition.policy.maxDuration,
+      );
       const journal = yield* projectRunJournal(records, runId);
       const pending = yield* pendingToolBatchFor(records, runId);
       const resumeProjection =
@@ -2876,6 +2993,32 @@ const make = Effect.gen(function* () {
           declaredNamesByCallId.set(call.id, call.name);
         }
       }
+      let settledChildJoinCallIdsPastDeadline: ReadonlyArray<ToolCallId> | undefined;
+      if (pending !== undefined) {
+        const joinCallIds: Array<ToolCallId> = [];
+        let everyOpenCallIsSettledChild = true;
+        for (const call of pending.calls) {
+          if (pending.settled.some((settled) => settled.id === call.id)) continue;
+          const started = [...subagentState.started.values()].find(
+            (candidate) => candidate.toolCallId === call.id,
+          );
+          const settledChild = childAttachments.find(
+            (child) =>
+              started !== undefined &&
+              child.toolCallId === started.toolCallId &&
+              child.childSubmissionId === started.childSubmissionId &&
+              child.childState === "settled",
+          );
+          if (started === undefined || settledChild === undefined) {
+            everyOpenCallIsSettledChild = false;
+            break;
+          }
+          joinCallIds.push(settledChild.toolCallId);
+        }
+        if (everyOpenCallIsSettledChild && joinCallIds.length > 0) {
+          settledChildJoinCallIdsPastDeadline = joinCallIds;
+        }
+      }
       // Task #12 (WP1 `resume.leadingMessages`): the pending canonical response's messages
       // BEFORE its first assistant message — Turn-1 evaluated instructions + input, or steering
       // committed inside the pending record — re-enter official history through the engine so
@@ -2927,6 +3070,7 @@ const make = Effect.gen(function* () {
         readonly history: Prompt.Prompt | undefined;
         readonly pendingTurn: { readonly turn: number; readonly turnId: TurnId } | undefined;
         readonly completedOutput: PersistedJson | undefined;
+        readonly completedRunDisposition: PersistedJson | undefined;
         readonly completedFinishReason: "budget-exhausted" | undefined;
         readonly completedExhausted: ExhaustedLimit | undefined;
       }
@@ -2936,6 +3080,7 @@ const make = Effect.gen(function* () {
         history: undefined,
         pendingTurn: undefined,
         completedOutput: undefined,
+        completedRunDisposition: undefined,
         completedFinishReason: undefined,
         completedExhausted: undefined,
       });
@@ -3917,6 +4062,7 @@ const make = Effect.gen(function* () {
         approval,
         durability,
         subagent,
+        durationDeadline,
         ...(pending === undefined
           ? {}
           : {
@@ -3925,6 +4071,9 @@ const make = Effect.gen(function* () {
                 turnId: pending.turnId,
                 calls: pending.calls,
                 settled: pending.settled,
+                ...(settledChildJoinCallIdsPastDeadline === undefined
+                  ? {}
+                  : { settledChildJoinCallIdsPastDeadline }),
                 ...(resumeLeadingMessages === undefined
                   ? {}
                   : { leadingMessages: resumeLeadingMessages }),
@@ -4017,27 +4166,48 @@ const make = Effect.gen(function* () {
         output: unknown,
         finishReason: "completed" | "model-stop" | "budget-exhausted",
         exhausted: ExhaustedLimit | undefined,
+        runDisposition: unknown,
       ): Effect.Effect<void, DurableWorkerFailure> =>
-        Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
-          Effect.mapError(
-            (cause): DurableWorkerFailure =>
-              LedgerError.make({
-                operation: "recordCompleted",
-                message: "Run output exceeds canonical persistence bounds",
-                cause,
-              }),
-          ),
-          Effect.flatMap((result) =>
-            Ref.update(stateRef, (state) => ({
-              ...state,
-              completedOutput: result,
-              completedFinishReason: finishReason === "budget-exhausted" ? finishReason : undefined,
-              // The pair travels together or not at all (RUN-011 fail-safe): a
-              // divergent event never persists a lone dimension.
-              completedExhausted: finishReason === "budget-exhausted" ? exhausted : undefined,
-            })),
-          ),
-        );
+        Effect.gen(function* () {
+          const result = yield* Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
+            Effect.mapError(
+              (cause): DurableWorkerFailure =>
+                LedgerError.make({
+                  operation: "recordCompleted",
+                  message: "Run output exceeds canonical persistence bounds",
+                  cause,
+                }),
+            ),
+          );
+          if (finishReason === "budget-exhausted" && runDisposition !== undefined) {
+            return yield* LedgerError.make({
+              operation: "recordCompleted",
+              message: "A budget-exhausted Run cannot declare an application run disposition",
+            });
+          }
+          const persistedRunDisposition =
+            runDisposition === undefined
+              ? undefined
+              : yield* Schema.decodeUnknownEffect(PersistedJson)(runDisposition).pipe(
+                  Effect.mapError(
+                    (cause): DurableWorkerFailure =>
+                      LedgerError.make({
+                        operation: "recordCompleted",
+                        message: "Run disposition exceeds canonical persistence bounds",
+                        cause,
+                      }),
+                  ),
+                );
+          yield* Ref.update(stateRef, (state) => ({
+            ...state,
+            completedOutput: result,
+            completedRunDisposition: persistedRunDisposition,
+            completedFinishReason: finishReason === "budget-exhausted" ? finishReason : undefined,
+            // The pair travels together or not at all (RUN-011 fail-safe): a
+            // divergent event never persists a lone dimension.
+            completedExhausted: finishReason === "budget-exhausted" ? exhausted : undefined,
+          }));
+        });
 
       const handleEvent = (event: RunEvent): Effect.Effect<void, DurableWorkerFailure> => {
         switch (event._tag) {
@@ -4053,7 +4223,14 @@ const make = Effect.gen(function* () {
           }
           case "RunCompleted": {
             return commitPendingTurn.pipe(
-              Effect.andThen(recordCompleted(event.output, event.finishReason, event.exhausted)),
+              Effect.andThen(
+                recordCompleted(
+                  event.output,
+                  event.finishReason,
+                  event.exhausted,
+                  event.runDisposition,
+                ),
+              ),
             );
           }
           case "RunFailed": {
@@ -4288,6 +4465,9 @@ const make = Effect.gen(function* () {
       return {
         _tag: "completed",
         result: state.completedOutput,
+        ...(state.completedRunDisposition === undefined
+          ? {}
+          : { runDisposition: state.completedRunDisposition }),
         ...(state.completedFinishReason === undefined
           ? {}
           : { finishReason: state.completedFinishReason }),
@@ -4314,6 +4494,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -4324,7 +4507,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     conversationId: ConversationId,
     claim: Claim,
@@ -4358,11 +4542,10 @@ const make = Effect.gen(function* () {
       const knownIds = knownRecordIdsOf(records);
 
       if (evidence.recordedSettlementOutcome !== undefined) {
-        const settlement = yield* finalizeFromHistory(
-          submission,
-          snapshot.reservation?.settlementId ?? submissionSettlementId(submissionId),
-        );
-        yield* settleJoinedSubmissions(ctx, submissionId, settlement.outcome);
+        const record = yield* canonicalSettlementRecord(records, submissionId);
+        const settlement = yield* finalizeFromHistory(submission, record);
+        const canonicalSettlement = yield* settlementPayloadFromRecord(record, submissionId);
+        yield* settleJoinedSubmissions(ctx, canonicalSettlement);
         return Option.some(settlement);
       }
       if (snapshot.reservation !== undefined) {
@@ -4435,6 +4618,9 @@ const make = Effect.gen(function* () {
       let approvalDecisionIntents = snapshot.approvalDecisions;
       while (true) {
         const currentRecords = yield* readAll(conversationId);
+        const currentSnapshot = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId }),
+        );
         const outcome = yield* runModel(
           agent,
           ctx,
@@ -4443,6 +4629,7 @@ const make = Effect.gen(function* () {
           currentRecords,
           lineage,
           approvalDecisionIntents,
+          currentSnapshot.childAttachments,
         );
         if (outcome._tag === "suspendedChild") {
           // Durable waitingForChild suspension (spec §12 step 10, SUB-030): the sibling
@@ -4590,7 +4777,7 @@ const make = Effect.gen(function* () {
         // An earlier pass already reserved the one exact outcome: complete it, never re-decide.
         return yield* completeReservation(ctx, submission, snapshot.reservation, recorded);
       }
-      const result = yield* decodePersisted({
+      const result = yield* Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
         errorTag: "ChildCompatibilityFailure",
         message: boundedText(failure.message),
       }).pipe(Effect.orDie);
@@ -4729,6 +4916,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -4739,7 +4929,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     conversationId: ConversationId,
   ) =>
@@ -5251,16 +5442,13 @@ const make = Effect.gen(function* () {
         case "SettleJoinedWithHost": {
           const hostSubmissionId = snapshot.hostSubmissionId;
           if (hostSubmissionId === undefined) return "deferred";
+          const hostRecord = yield* canonicalSettlementRecord(records, hostSubmissionId);
+          const hostSettlement = yield* settlementPayloadFromRecord(hostRecord, hostSubmissionId);
           // The host settled canonically, so no live owner can exist for this lane (a joined
           // head is never claimable): the joined settlement completes unfenced at the current
           // tail, deferring to any racing fence advance.
           const ctx = yield* attemptContextAtTail(submission.conversationId);
-          const applied = yield* settleOneJoined(
-            ctx,
-            hostSubmissionId,
-            decision.outcome,
-            snapshot,
-          ).pipe(
+          const applied = yield* settleOneJoined(ctx, hostSettlement, snapshot).pipe(
             Effect.as(true),
             Effect.catchTag("FenceRejected", () => Effect.succeed(false)),
           );
@@ -5367,7 +5555,8 @@ const make = Effect.gen(function* () {
           return "repaired";
         }
         case "FinalizeLedgerFromHistory": {
-          yield* finalizeFromHistory(submission, decision.settlementId);
+          const record = yield* canonicalSettlementRecord(records, submission.submissionId);
+          yield* finalizeFromHistory(submission, record);
           return "repaired";
         }
         case "SettleAborted": {
@@ -5727,12 +5916,16 @@ const make = Effect.gen(function* () {
       }
       if (snapshot.value.state === "settled") {
         // The idempotent finalization replay returns the recorded Settlement (settledAt intact).
-        return yield* ledger.finalizeSettlement(
+        const settlement = yield* ledger.finalizeSettlement(
           SettlementFinalization.make({
             submissionId: receipt.submissionId,
             settlementId: submissionSettlementId(receipt.submissionId),
           }),
         );
+        const recovery = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+        );
+        return materializeSettlement(settlement, recovery.reservation?.record);
       }
       // Wake delivery is a pure liveness hint; the ledger poll below guarantees progress.
       yield* Effect.raceFirst(
@@ -6270,6 +6463,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -6280,7 +6476,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
   ) =>
     Effect.gen(function* () {
@@ -6484,6 +6681,9 @@ export class DurableAgentRuntime extends Context.Service<
       ModelRequires,
       InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
       InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+      RunDispositionValue extends
+        | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+        | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -6494,7 +6694,8 @@ export class DurableAgentRuntime extends Context.Service<
         ModelProvides,
         ModelRequires,
         InstructionError,
-        InstructionRequirements
+        InstructionRequirements,
+        RunDispositionValue
       >,
       conversationId: ConversationId,
     ) => Effect.Effect<
@@ -6510,7 +6711,8 @@ export class DurableAgentRuntime extends Context.Service<
           ModelProvides,
           ModelRequires,
           InstructionError,
-          InstructionRequirements
+          InstructionRequirements,
+          RunDispositionValue
         >,
         InstructionRequirements
       >
@@ -6532,6 +6734,9 @@ export class DurableAgentRuntime extends Context.Service<
       ModelRequires,
       InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
       InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+      RunDispositionValue extends
+        | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+        | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -6542,7 +6747,8 @@ export class DurableAgentRuntime extends Context.Service<
         ModelProvides,
         ModelRequires,
         InstructionError,
-        InstructionRequirements
+        InstructionRequirements,
+        RunDispositionValue
       >,
     ) => Effect.Effect<
       void,
@@ -6557,7 +6763,8 @@ export class DurableAgentRuntime extends Context.Service<
           ModelProvides,
           ModelRequires,
           InstructionError,
-          InstructionRequirements
+          InstructionRequirements,
+          RunDispositionValue
         >,
         InstructionRequirements
       >

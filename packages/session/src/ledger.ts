@@ -22,6 +22,7 @@ import {
   ProducerId,
   RecordEnvelope,
   RecordId,
+  SettlementFailureDiagnostic,
   SettlementOutcome,
   ToolApprovalDecided,
   ToolCallResolved,
@@ -340,14 +341,41 @@ export class SettlementFinalization extends Schema.Class<SettlementFinalization>
   settlementId: SettlementId,
 }) {}
 
-/** The single durable terminal outcome recorded for one accepted Submission (DUR-002). */
-export class Settlement extends Schema.Class<Settlement>("@effect-agent/session/Settlement")({
+const SettlementFields = Schema.Struct({
   submissionId: SubmissionId,
   settlementId: SettlementId,
   receiptId: ReceiptId,
   outcome: SettlementOutcome,
+  /** Schema-encoded application disposition materialized from the exact canonical reservation. */
+  runDisposition: Schema.optionalKey(PersistedJson),
+  /** Present exactly for `failed`; its Schema rejects excess keys before canonical projection. */
+  failure: Schema.optionalKey(SettlementFailureDiagnostic),
   settledAt: Schema.DateTimeUtcFromString,
-}) {}
+}).check(
+  Schema.makeFilter(
+    (settlement) => (settlement.outcome === "failed") === (settlement.failure !== undefined),
+    { title: "failure exactly on a failed Settlement" },
+  ),
+);
+
+/** The single durable terminal outcome recorded for one accepted Submission (DUR-002). */
+export class Settlement extends Schema.Class<Settlement>("@effect-agent/session/Settlement")(
+  SettlementFields,
+) {}
+
+/**
+ * Project the bounded failed-settlement diagnostic from an already Schema-validated exact
+ * reservation. Storage adapters use this when materializing their operational Settlement value;
+ * the canonical record remains the authority.
+ */
+export const settlementFailureFromRecord = (
+  record: RecordEnvelope,
+): SettlementFailureDiagnostic | undefined => {
+  const payload = record.payload;
+  return payload._tag === "SubmissionSettled" && payload.outcome === "failed"
+    ? payload.result
+    : undefined;
+};
 
 /**
  * A durable abort command (durability §13). Field bounds are exactly those of the canonical

@@ -4,6 +4,7 @@ import {
   AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
+  AgentRunDispositionError,
   type AgentPolicy,
   AgentPolicyError,
   type AgentId,
@@ -19,6 +20,8 @@ import {
   type DelegationId,
   IdGenerator,
   type InstructionSource,
+  isDelegationToolName,
+  type RunDispositionDeclaration,
   ModelStarted,
   ModelProtocolError,
   ReasoningDelta,
@@ -111,12 +114,16 @@ export type RuntimeBinding<
   ModelRequires,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 > = {
   readonly definition: Definition<
     InputSchema,
     OutputSchema,
     Instructions,
-    Toolkit.Toolkit<Tools>
+    Toolkit.Toolkit<Tools>,
+    RunDispositionValue
   > & {
     readonly instructions: InstructionSource<
       InputSchema["Type"],
@@ -224,7 +231,20 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
     /** Dimension that bound when the Run settled budget-exhausted (RUN-025; the grant-flow marker). */
     exhausted: Schema.optionalKey(Schema.Literals(["tokens", "tool-calls", "turns"])),
-  });
+    /** Schema-encoded application disposition declared for an ordinary completed Run. */
+    runDisposition: Schema.optionalKey(Schema.Json),
+  }).check(
+    Schema.makeFilter(
+      (result) =>
+        !("runDisposition" in result) ||
+        result.runDisposition === undefined ||
+        !("finishReason" in result) ||
+        result.finishReason !== "budget-exhausted",
+      {
+        expected: "runDisposition only when finishReason is not budget-exhausted",
+      },
+    ),
+  );
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
 export type AgentResult<Output> = ReturnType<
@@ -298,6 +318,8 @@ interface RunContext {
   readonly pendingFollowUps: Array<Prompt.RawInput>;
   /** Wall-clock Run start, the base of the run-status elapsed rendering (RUN-024). */
   readonly startedAtMillis: number;
+  /** Absolute `maxDuration` rail shared by every durable Attempt (RUN-030). */
+  readonly durationDeadlineMillis: number;
   history: Prompt.Prompt;
   modelCalls: number;
   consecutiveToolFailures: number;
@@ -2778,7 +2800,7 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
   agent: AgentValue,
   text: string,
 ): Effect.fn.Return<
-  Schema.Json,
+  { readonly encoded: Schema.Json; readonly decoded: Agent.Output<AgentValue> },
   AgentOutputError,
   AgentValue["definition"]["output"]["DecodingServices"]
 > {
@@ -2792,15 +2814,130 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
     ),
   );
   const candidateOutput: unknown = eventJson;
-  yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
+  const decoded = yield* Schema.decodeUnknownEffect(agent.definition.output)(candidateOutput).pipe(
     Effect.mapError((cause) =>
       AgentOutputError.make({
         message: cause.message,
       }),
     ),
   );
-  return eventJson;
+  return { encoded: eventJson, decoded };
 });
+
+const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDisposition")(function* <
+  Output,
+  DispositionSchema extends Schema.Top,
+>(
+  declaration: RunDispositionDeclaration<Output, DispositionSchema>,
+  output: Output,
+): Effect.fn.Return<
+  Schema.Json | undefined,
+  AgentRunDispositionError,
+  DispositionSchema["EncodingServices"]
+> {
+  const selected = yield* Effect.try({
+    try: () => declaration.fromOutput(output),
+    catch: (cause) =>
+      AgentRunDispositionError.make({
+        cause,
+        message: "Run disposition selector failed",
+      }),
+  });
+  if (selected === undefined) return undefined;
+  const encoded = yield* Schema.encodeUnknownEffect(declaration.schema)(selected).pipe(
+    Effect.mapError((cause) =>
+      AgentRunDispositionError.make({
+        cause,
+        message: "Run disposition failed Schema encoding",
+      }),
+    ),
+  );
+  return yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
+    Effect.mapError((cause) =>
+      AgentRunDispositionError.make({
+        cause,
+        message: "Run disposition did not encode as durable JSON",
+      }),
+    ),
+  );
+});
+
+function encodeRunDisposition<AgentValue extends Agent.Any>(
+  agent: AgentValue,
+  output: Agent.Output<AgentValue>,
+): Effect.Effect<
+  Schema.Json | undefined,
+  Agent.RunDispositionFailure<AgentValue>,
+  Agent.RunDispositionSchema<AgentValue>["EncodingServices"]
+>;
+function encodeRunDisposition<Output, DispositionSchema extends Schema.Top>(
+  agent: {
+    readonly definition: {
+      readonly runDisposition?: RunDispositionDeclaration<Output, DispositionSchema> | undefined;
+    };
+  },
+  output: Output,
+): Effect.Effect<
+  Schema.Json | void,
+  AgentRunDispositionError,
+  DispositionSchema["EncodingServices"]
+> {
+  const declaration = agent.definition.runDisposition;
+  return declaration === undefined
+    ? Effect.void
+    : encodeRunDispositionCandidate(declaration, output);
+}
+
+const decodeRunDispositionCandidate = Effect.fn("AgentRuntime.decodeRunDisposition")(function* <
+  Output,
+  DispositionSchema extends Schema.Top,
+>(
+  declaration: RunDispositionDeclaration<Output, DispositionSchema>,
+  encoded: Schema.Json,
+): Effect.fn.Return<
+  DispositionSchema["Type"],
+  AgentRunDispositionError,
+  DispositionSchema["DecodingServices"]
+> {
+  return yield* Schema.decodeUnknownEffect(declaration.schema)(encoded).pipe(
+    Effect.mapError((cause) =>
+      AgentRunDispositionError.make({
+        cause,
+        message: cause.message,
+      }),
+    ),
+  );
+});
+
+function decodeRunDisposition<AgentValue extends Agent.Any>(
+  agent: AgentValue,
+  encoded: Schema.Json,
+): Effect.Effect<
+  Agent.RunDisposition<AgentValue>,
+  Agent.RunDispositionFailure<AgentValue> | ModelProtocolError,
+  Agent.RunDispositionSchema<AgentValue>["DecodingServices"]
+>;
+function decodeRunDisposition<DispositionSchema extends Schema.Top>(
+  agent: {
+    readonly definition: {
+      readonly runDisposition?: RunDispositionDeclaration<never, DispositionSchema> | undefined;
+    };
+  },
+  encoded: Schema.Json,
+): Effect.Effect<
+  DispositionSchema["Type"],
+  AgentRunDispositionError | ModelProtocolError,
+  DispositionSchema["DecodingServices"]
+> {
+  const declaration = agent.definition.runDisposition;
+  return declaration === undefined
+    ? Effect.fail(
+        ModelProtocolError.make({
+          message: "RunCompleted declared a run disposition without a definition-owned Schema",
+        }),
+      )
+    : decodeRunDispositionCandidate(declaration, encoded);
+}
 
 const makeTurn = <
   InputSchema extends Schema.Top,
@@ -2814,6 +2951,9 @@ const makeTurn = <
   HookRequirements,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -2824,7 +2964,8 @@ const makeTurn = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   context: RunContext,
   prompt: Prompt.Prompt,
@@ -2838,6 +2979,10 @@ const makeTurn = <
 > =>
   Stream.unwrap(
     Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      if (now >= context.durationDeadlineMillis) {
+        return failRunEventStream(durationLimitError(agent.definition.policy));
+      }
       const ids = yield* IdGenerator;
       const turnId = yield* ids.nextTurnId;
       // Model-visible final-output contract (RUN-028):
@@ -3272,7 +3417,7 @@ const makeTurn = <
                               Effect.map(eventBase(context), (base) =>
                                 RunCompleted.make({
                                   ...base,
-                                  output: output.value,
+                                  output: output.value.encoded,
                                   turns: turn,
                                   finishReason: "budget-exhausted",
                                   exhausted: "tokens",
@@ -3373,11 +3518,17 @@ const makeTurn = <
                 return makeTurn(agent, context, nextPrompt, turn + 1, toolCalls, options);
               }
               const output = yield* decodeFinalOutput(agent, trace.text.join(""));
+              const declaration = agent.definition.runDisposition;
+              const runDisposition =
+                finalAnswerOnly || declaration === undefined
+                  ? undefined
+                  : yield* encodeRunDisposition(agent, output.decoded);
               return Stream.fromEffect(
                 Effect.map(eventBase(context), (base) =>
                   RunCompleted.make({
                     ...base,
-                    output,
+                    output: output.encoded,
+                    ...(runDisposition === undefined ? {} : { runDisposition }),
                     turns: turn,
                     // A Run settled under the final-answer constraint reports
                     // the exhaustion honestly (RUN-011), never a plain model
@@ -3546,6 +3697,9 @@ const toolBatchContinuation = <
   HookRequirements,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -3556,7 +3710,8 @@ const toolBatchContinuation = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   context: RunContext,
   trace: TurnTrace,
@@ -3641,6 +3796,9 @@ const makeResumeTurn = <
   HookRequirements,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -3651,7 +3809,8 @@ const makeResumeTurn = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   context: RunContext,
   prompt: Prompt.Prompt,
@@ -3776,6 +3935,24 @@ const makeResumeTurn = <
           isFailure: settledCall.isFailure,
         };
       }
+      const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
+      if (settledChildJoinCallIds !== undefined) {
+        const cleanupIds = new Set<string>(settledChildJoinCallIds);
+        const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
+        if (
+          settledChildJoinCallIds.length === 0 ||
+          cleanupIds.size !== settledChildJoinCallIds.length ||
+          openCalls.length !== cleanupIds.size ||
+          openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))
+        ) {
+          return failRunEventStream(
+            ModelProtocolError.make({
+              message:
+                "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call",
+            }),
+          );
+        }
+      }
       const policy = agent.definition.policy;
       const bounds = effectiveRunBounds(policy, options);
       const toolCalls = trace.toolCalls.size;
@@ -3848,6 +4025,24 @@ const makeResumeTurn = <
           ] satisfies ReadonlyArray<RunEvent>;
         }).pipe(Effect.withLogSpan("AgentRuntime.resume")),
       ).pipe(Stream.flatMap(Stream.fromIterable));
+      const continueAfterBatch = () => {
+        const continuation = toolBatchContinuation(
+          agent,
+          context,
+          trace,
+          resumedPrompt,
+          turn,
+          toolCalls,
+          options,
+        );
+        return settledChildJoinCallIds === undefined
+          ? continuation
+          : enforceDurationDeadline(
+              continuation,
+              context.durationDeadlineMillis,
+              durationLimitError(policy),
+            );
+      };
 
       // RUN-018 on the resume path: a canonically declared over-budget batch
       // settles synthetically under final-answer mode — recorded settled
@@ -3867,9 +4062,7 @@ const makeResumeTurn = <
         );
         return started.pipe(
           Stream.concat(Stream.fromIterable(rejection)),
-          Stream.concat(
-            toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
-          ),
+          Stream.concat(continueAfterBatch()),
         );
       }
       const toolResults = guardBudgetStream(
@@ -3890,17 +4083,38 @@ const makeResumeTurn = <
         ),
         options.budget,
       );
-      return started.pipe(
-        Stream.concat(toolResults),
-        Stream.concat(
-          toolBatchContinuation(agent, context, trace, resumedPrompt, turn, toolCalls, options),
-        ),
-      );
+      return started.pipe(Stream.concat(toolResults), Stream.concat(continueAfterBatch()));
     }),
   );
 
 const failRunEventStream = <Error>(error: Error): Stream.Stream<RunEvent, Error> =>
   Stream.fail(error);
+
+const durationLimitError = (policy: AgentPolicy): AgentPolicyError =>
+  AgentPolicyError.make({
+    limit: "duration",
+    message: `Agent exceeded its ${Duration.format(policy.maxDuration)} duration limit`,
+  });
+
+const enforceDurationDeadline = <A, E, R>(
+  execution: Stream.Stream<A, E, R>,
+  durationDeadlineMillis: number,
+  durationLimit: AgentPolicyError,
+): Stream.Stream<A, E | AgentPolicyError, R> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const remaining = durationDeadlineMillis - now;
+      if (remaining <= 0) {
+        return Stream.fail(durationLimit);
+      }
+      return execution.pipe(
+        Stream.interruptWhen(
+          Effect.sleep(remaining).pipe(Effect.andThen(Effect.fail(durationLimit))),
+        ),
+      );
+    }),
+  );
 
 const guardBudgetStream = <A, E, R, HookError, HookRequirements>(
   stream: Stream.Stream<A, E, R>,
@@ -3923,6 +4137,9 @@ const stream = <
   HookRequirements = never,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -3933,7 +4150,8 @@ const stream = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   input: unknown,
   options: RunOptions<HookError, HookRequirements> = {},
@@ -3944,7 +4162,17 @@ const stream = <
 > => {
   const interpreted = Stream.unwrap(
     Effect.gen(function* () {
-      const startedAtMillis = yield* Clock.currentTimeMillis;
+      const attemptStartedAtMillis = yield* Clock.currentTimeMillis;
+      const maxDurationMillis = Duration.toMillis(agent.definition.policy.maxDuration);
+      const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+      // RUN-030: a durable coordinator supplies the logical Run deadline from
+      // canonical Run-start evidence. Taking the earlier deadline keeps this
+      // public option tightening-only for every other caller.
+      const durationDeadlineMillis =
+        options.durationDeadline === undefined
+          ? attemptDeadlineMillis
+          : Math.min(attemptDeadlineMillis, DateTime.toEpochMillis(options.durationDeadline));
+      const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
       const ids = yield* IdGenerator;
       const conversationId =
         options.conversationId === undefined
@@ -3957,6 +4185,7 @@ const stream = <
         runId,
         pendingFollowUps: [],
         startedAtMillis,
+        durationDeadlineMillis,
         history: options.history ?? Prompt.empty,
         // RUN-019: a resumed Attempt re-seeds cumulative usage from the
         // canonical response records so token budgets and the compaction
@@ -4061,20 +4290,15 @@ const stream = <
         }),
       );
 
-      const durationLimit = AgentPolicyError.make({
-        limit: "duration",
-        message: `Agent exceeded its ${Duration.format(agent.definition.policy.maxDuration)} duration limit`,
-      });
-      const deadlineEffect = Effect.gen(function* () {
-        const now = yield* Clock.currentTimeMillis;
-        const remaining =
-          startedAtMillis + Duration.toMillis(agent.definition.policy.maxDuration) - now;
-        if (remaining > 0) {
-          yield* Effect.sleep(remaining);
-        }
-        return yield* durationLimit;
-      });
-      const deadline = execution.pipe(Stream.interruptWhen(deadlineEffect));
+      const durationLimit = durationLimitError(agent.definition.policy);
+      // A coordinator-proven resume of exact already-settled attached-child
+      // Calls is mandatory accepted-work cleanup. `makeResumeTurn` validates
+      // and runs only that join batch past expiry, then restores this same
+      // deadline guard around its continuation.
+      const deadline =
+        options.resume?.settledChildJoinCallIdsPastDeadline !== undefined
+          ? execution
+          : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
 
       // Engine-provided Tool services for this Run: a real `AgentSpawner`
       // bound to the Run's immutable identity and delegation depth, plus the
@@ -4152,8 +4376,10 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
   events: Stream.Stream<RunEvent, Error, Requirements>,
 ): Effect.Effect<
   AgentResult<Agent.Output<AgentValue>>,
-  Error | ModelProtocolError | AgentOutputError,
-  Requirements | AgentValue["definition"]["output"]["DecodingServices"]
+  Error | ModelProtocolError | AgentOutputError | Agent.RunDispositionFailure<AgentValue>,
+  | Requirements
+  | AgentValue["definition"]["output"]["DecodingServices"]
+  | Agent.RunDispositionSchema<AgentValue>["DecodingServices"]
 > =>
   Effect.gen(function* () {
     const reduction = yield* Stream.runFold(
@@ -4175,6 +4401,20 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
         }),
       ),
     );
+    const declaration = agent.definition.runDisposition;
+    const runDisposition =
+      completed.runDisposition === undefined
+        ? undefined
+        : completed.finishReason === "budget-exhausted"
+          ? yield* ModelProtocolError.make({
+              message: "A budget-exhausted RunCompleted event cannot declare a run disposition",
+            })
+          : declaration === undefined
+            ? yield* ModelProtocolError.make({
+                message:
+                  "RunCompleted declared a run disposition without a definition-owned Schema",
+              })
+            : yield* decodeRunDisposition(agent, completed.runDisposition);
     return {
       output,
       conversationId: completed.conversationId,
@@ -4182,6 +4422,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
       turns: completed.turns,
       finishReason: completed.finishReason,
       ...(completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {}),
+      ...(runDisposition === undefined ? {} : { runDisposition: completed.runDisposition }),
     };
   });
 
@@ -4198,6 +4439,9 @@ const run = Effect.fn("AgentRuntime.run")(function* <
   HookRequirements = never,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -4208,7 +4452,8 @@ const run = Effect.fn("AgentRuntime.run")(function* <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   input: unknown,
   options: RunOptions<HookError, HookRequirements> = {},
@@ -4250,6 +4495,9 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   HookRequirements = never,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -4260,7 +4508,8 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   input: unknown,
   options: RunOptions<HookError, HookRequirements> = {},

@@ -29384,11 +29384,15 @@ var EventOffset = identifier2("EventOffset");
 // packages/core/src/agent.ts
 var Agent;
 ((Agent) => {
-  Agent.define = (id2, options) => Object.freeze({
-    ...options,
-    id: exports_Schema.decodeSync(AgentId)(id2),
-    metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata })
-  });
+  function define(id2, options) {
+    return Object.freeze({
+      ...options,
+      id: exports_Schema.decodeSync(AgentId)(id2),
+      metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
+      runDisposition: options.runDisposition === undefined ? undefined : Object.freeze({ ...options.runDisposition })
+    });
+  }
+  Agent.define = define;
   Agent.withModel = (definition, model) => Object.freeze({
     definition,
     model
@@ -29401,6 +29405,12 @@ class AgentInputError extends exports_Schema.TaggedError()("AgentInputError", {
 }
 
 class AgentOutputError extends exports_Schema.TaggedError()("AgentOutputError", {
+  message: exports_Schema.String
+}) {
+}
+
+class AgentRunDispositionError extends exports_Schema.TaggedError()("AgentRunDispositionError", {
+  cause: exports_Schema.Defect(),
   message: exports_Schema.String
 }) {
 }
@@ -29453,6 +29463,7 @@ class ContextOverflowError extends exports_Schema.TaggedError()("ContextOverflow
 var AgentError = exports_Schema.Union([
   AgentInputError,
   AgentOutputError,
+  AgentRunDispositionError,
   AgentPolicyError,
   AgentApprovalDenied,
   AgentApprovalPending,
@@ -29602,6 +29613,7 @@ var ExhaustedLimit = exports_Schema.Literals(["tokens", "tool-calls", "turns"]);
 class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", {
   ...RunEventBase,
   output: exports_Schema.Json,
+  runDisposition: exports_Schema.optionalKey(exports_Schema.Json),
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
   exhausted: exports_Schema.optionalKey(ExhaustedLimit)
@@ -35306,12 +35318,51 @@ var decodeFinalOutput = exports_Effect.fn("AgentRuntime.decodeFinalOutput")(func
     message: `Agent output is not valid JSON: ${cause.message}`
   })));
   const candidateOutput = eventJson;
-  yield* exports_Schema.decodeUnknownEffect(agent2.definition.output)(candidateOutput).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
+  const decoded = yield* exports_Schema.decodeUnknownEffect(agent2.definition.output)(candidateOutput).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
     message: cause.message
   })));
-  return eventJson;
+  return { encoded: eventJson, decoded };
 });
+var encodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.encodeRunDisposition")(function* (declaration, output) {
+  const selected = yield* exports_Effect.try({
+    try: () => declaration.fromOutput(output),
+    catch: (cause) => AgentRunDispositionError.make({
+      cause,
+      message: "Run disposition selector failed"
+    })
+  });
+  if (selected === undefined)
+    return;
+  const encoded = yield* exports_Schema.encodeUnknownEffect(declaration.schema)(selected).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
+    cause,
+    message: "Run disposition failed Schema encoding"
+  })));
+  return yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(encoded).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
+    cause,
+    message: "Run disposition did not encode as durable JSON"
+  })));
+});
+function encodeRunDisposition(agent2, output) {
+  const declaration = agent2.definition.runDisposition;
+  return declaration === undefined ? exports_Effect.void : encodeRunDispositionCandidate(declaration, output);
+}
+var decodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.decodeRunDisposition")(function* (declaration, encoded) {
+  return yield* exports_Schema.decodeUnknownEffect(declaration.schema)(encoded).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
+    cause,
+    message: cause.message
+  })));
+});
+function decodeRunDisposition(agent2, encoded) {
+  const declaration = agent2.definition.runDisposition;
+  return declaration === undefined ? exports_Effect.fail(ModelProtocolError.make({
+    message: "RunCompleted declared a run disposition without a definition-owned Schema"
+  })) : decodeRunDispositionCandidate(declaration, encoded);
+}
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const now3 = yield* exports_Clock.currentTimeMillis;
+  if (now3 >= context3.durationDeadlineMillis) {
+    return failRunEventStream(durationLimitError(agent2.definition.policy));
+  }
   const ids = yield* IdGenerator;
   const turnId = yield* ids.nextTurnId;
   const outputContract = outputSchemaContract(agent2.definition);
@@ -35510,7 +35561,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
             yield* advanceHistory(context3, historyWithResponse(), options);
             return emitThen(exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
               ...base2,
-              output: output.value,
+              output: output.value.encoded,
               turns: turn,
               finishReason: "budget-exhausted",
               exhausted: "tokens"
@@ -35550,9 +35601,12 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
         return makeTurn(agent2, context3, nextPrompt, turn + 1, toolCalls, options);
       }
       const output = yield* decodeFinalOutput(agent2, trace2.text.join(""));
+      const declaration = agent2.definition.runDisposition;
+      const runDisposition = finalAnswerOnly || declaration === undefined ? undefined : yield* encodeRunDisposition(agent2, output.decoded);
       return exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
         ...base2,
-        output,
+        output: output.encoded,
+        ...runDisposition === undefined ? {} : { runDisposition },
         turns: turn,
         finishReason: finalAnswerOnly ? "budget-exhausted" : "model-stop",
         ...finalAnswerOnly && context3.exhaustedDimension !== undefined ? { exhausted: context3.exhaustedDimension } : {}
@@ -35740,6 +35794,16 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       isFailure: settledCall.isFailure
     };
   }
+  const settledChildJoinCallIds = resume.settledChildJoinCallIdsPastDeadline;
+  if (settledChildJoinCallIds !== undefined) {
+    const cleanupIds = new Set(settledChildJoinCallIds);
+    const openCalls = resume.calls.filter((call) => !settledIds.has(call.id));
+    if (settledChildJoinCallIds.length === 0 || cleanupIds.size !== settledChildJoinCallIds.length || openCalls.length !== cleanupIds.size || openCalls.some((call) => !cleanupIds.has(call.id) || !isDelegationToolName(call.name))) {
+      return failRunEventStream(ModelProtocolError.make({
+        message: "Past-deadline cleanup authority must identify every and only still-open delegation Tool Call"
+      }));
+    }
+  }
   const policy2 = agent2.definition.policy;
   const bounds = effectiveRunBounds(policy2, options);
   const toolCalls = trace2.toolCalls.size;
@@ -35784,24 +35848,44 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       })
     ];
   }).pipe(exports_Effect.withLogSpan("AgentRuntime.resume"))).pipe(exports_Stream.flatMap(exports_Stream.fromIterable));
+  const continueAfterBatch = () => {
+    const continuation = toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options);
+    return settledChildJoinCallIds === undefined ? continuation : enforceDurationDeadline(continuation, context3.durationDeadlineMillis, durationLimitError(policy2));
+  };
   if (overToolBudget) {
     const rejection = yield* settleRejectedBatch(context3, turnId, trace2, AgentPolicyError.make({
       limit: "tool-calls",
       message: `Tool Call budget exhausted: this Run's ${bounds.maxToolCalls} Tool Call limit was reached, so this call was rejected without executing. Do not request more tools; produce your final answer now from the information you already have.`
     }), settledIds);
-    return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
+    return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(continueAfterBatch()));
   }
   const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
     maxToolCalls: bounds.maxToolCalls,
     declaredToolCalls: toolCalls
   }, agent2.definition.policy.toolResultBounds, settledIds), options.budget);
-  return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(toolBatchContinuation(agent2, context3, trace2, resumedPrompt, turn, toolCalls, options)));
+  return started.pipe(exports_Stream.concat(toolResults), exports_Stream.concat(continueAfterBatch()));
 }));
 var failRunEventStream = (error2) => exports_Stream.fail(error2);
+var durationLimitError = (policy2) => AgentPolicyError.make({
+  limit: "duration",
+  message: `Agent exceeded its ${exports_Duration.format(policy2.maxDuration)} duration limit`
+});
+var enforceDurationDeadline = (execution, durationDeadlineMillis, durationLimit) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+  const now3 = yield* exports_Clock.currentTimeMillis;
+  const remaining2 = durationDeadlineMillis - now3;
+  if (remaining2 <= 0) {
+    return exports_Stream.fail(durationLimit);
+  }
+  return execution.pipe(exports_Stream.interruptWhen(exports_Effect.sleep(remaining2).pipe(exports_Effect.andThen(exports_Effect.fail(durationLimit)))));
+}));
 var guardBudgetStream = (stream, budget) => budget === undefined ? stream : exports_Stream.transformPull(stream, (pull) => exports_Effect.succeed(budget.guard(pull)));
 var stream = (agent2, input, options = {}) => {
   const interpreted = exports_Stream.unwrap(exports_Effect.gen(function* () {
-    const startedAtMillis = yield* exports_Clock.currentTimeMillis;
+    const attemptStartedAtMillis = yield* exports_Clock.currentTimeMillis;
+    const maxDurationMillis = exports_Duration.toMillis(agent2.definition.policy.maxDuration);
+    const attemptDeadlineMillis = attemptStartedAtMillis + maxDurationMillis;
+    const durationDeadlineMillis = options.durationDeadline === undefined ? attemptDeadlineMillis : Math.min(attemptDeadlineMillis, exports_DateTime.toEpochMillis(options.durationDeadline));
+    const startedAtMillis = durationDeadlineMillis - maxDurationMillis;
     const ids = yield* IdGenerator;
     const conversationId = options.conversationId === undefined ? yield* ids.nextConversationId : options.conversationId;
     const runId = options.runId === undefined ? yield* ids.nextRunId : options.runId;
@@ -35811,6 +35895,7 @@ var stream = (agent2, input, options = {}) => {
       runId,
       pendingFollowUps: [],
       startedAtMillis,
+      durationDeadlineMillis,
       history: options.history ?? exports_Prompt.empty,
       modelCalls: options.resumeUsage?.modelCalls ?? 0,
       consecutiveToolFailures: 0,
@@ -35877,19 +35962,8 @@ var stream = (agent2, input, options = {}) => {
       const initialPrompt = yield* appendInputs(context3, prompt, steering, options);
       return makeTurn(agent2, context3, initialPrompt, 1, 0, options);
     }));
-    const durationLimit = AgentPolicyError.make({
-      limit: "duration",
-      message: `Agent exceeded its ${exports_Duration.format(agent2.definition.policy.maxDuration)} duration limit`
-    });
-    const deadlineEffect = exports_Effect.gen(function* () {
-      const now3 = yield* exports_Clock.currentTimeMillis;
-      const remaining2 = startedAtMillis + exports_Duration.toMillis(agent2.definition.policy.maxDuration) - now3;
-      if (remaining2 > 0) {
-        yield* exports_Effect.sleep(remaining2);
-      }
-      return yield* durationLimit;
-    });
-    const deadline = execution.pipe(exports_Stream.interruptWhen(deadlineEffect));
+    const durationLimit = durationLimitError(agent2.definition.policy);
+    const deadline = options.resume?.settledChildJoinCallIdsPastDeadline !== undefined ? execution : enforceDurationDeadline(execution, durationDeadlineMillis, durationLimit);
     const engineToolServices = exports_Context.make(AgentSpawner, makeAgentSpawner({
       agentId: context3.agentId,
       conversationId: context3.conversationId,
@@ -35932,13 +36006,20 @@ var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
   const output = yield* exports_Schema.decodeUnknownEffect(agent2.definition.output)(candidateOutput).pipe(exports_Effect.mapError((cause) => AgentOutputError.make({
     message: cause.message
   })));
+  const declaration = agent2.definition.runDisposition;
+  const runDisposition = completed.runDisposition === undefined ? undefined : completed.finishReason === "budget-exhausted" ? yield* ModelProtocolError.make({
+    message: "A budget-exhausted RunCompleted event cannot declare a run disposition"
+  }) : declaration === undefined ? yield* ModelProtocolError.make({
+    message: "RunCompleted declared a run disposition without a definition-owned Schema"
+  }) : yield* decodeRunDisposition(agent2, completed.runDisposition);
   return {
     output,
     conversationId: completed.conversationId,
     runId: completed.runId,
     turns: completed.turns,
     finishReason: completed.finishReason,
-    ...completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {}
+    ...completed.exhausted !== undefined ? { exhausted: completed.exhausted } : {},
+    ...runDisposition === undefined ? {} : { runDisposition: completed.runDisposition }
   };
 });
 var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, options = {}) {

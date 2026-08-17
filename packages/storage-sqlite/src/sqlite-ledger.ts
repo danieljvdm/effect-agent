@@ -62,6 +62,7 @@ import {
   SubmissionSnapshot,
   SubmissionState,
   SettlementReservationSnapshot,
+  settlementFailureFromRecord,
   SuspendRequest,
   SuspensionReason,
   SuspensionSnapshot,
@@ -1523,6 +1524,27 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             existingOutcome: reservation.value.outcome,
           });
         }
+        const reservationRecord = yield* decodeRecordEnvelopeText(
+          reservation.value.record_json,
+        ).pipe(
+          Effect.mapError((error) =>
+            corruptionFailure(
+              operation,
+              "effect_agent_settlement_reservations",
+              validated.submissionId,
+              error.message,
+            ),
+          ),
+        );
+        const settlementFailure = settlementFailureFromRecord(reservationRecord);
+        if ((reservation.value.outcome === "failed") !== (settlementFailure !== undefined)) {
+          return yield* corruptionFailure(
+            operation,
+            "effect_agent_settlement_reservations",
+            validated.submissionId,
+            "The reserved outcome and canonical failure diagnostic disagree.",
+          );
+        }
         const submission = yield* requireSubmission(operation, validated.submissionId);
         if (submission.state === "settled") {
           if (reservation.value.finalized_at === null) {
@@ -1538,6 +1560,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             settlementId: validated.settlementId,
             receiptId: submission.receipt_id,
             outcome: reservation.value.outcome,
+            ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
             settledAt: reservation.value.finalized_at,
           }).pipe(Effect.mapError(internalFailure(operation)));
         }
@@ -1561,6 +1584,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           settlementId: validated.settlementId,
           receiptId: submission.receipt_id,
           outcome: reservation.value.outcome,
+          ...(settlementFailure === undefined ? {} : { failure: settlementFailure }),
           settledAt: now.iso,
         }).pipe(Effect.mapError(internalFailure(operation)));
       }),

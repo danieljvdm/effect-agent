@@ -293,6 +293,33 @@ wrong settlement family — or a `policyLimit` whose `result` does not carry the
 and records persisted before the metadata existed decode with it absent (additive,
 schemaVersion 1).
 
+An ordinary completed Run may additionally carry the application-defined, Schema-encoded
+`runDisposition` from `RunCompleted` (RUN-029). It is part of the same exact reserved settlement
+record, so reservation replay, canonical append, ledger-finalization recovery, record reads, and
+projection rebuilds preserve it byte-for-byte. The public `Settlement` returned by
+`awaitSettlement` materializes the encoded value from that exact reservation, including after
+recovery; it does not derive it from cached outcome metadata. Decode is fail-closed: the field is
+valid only on a `completed` settlement with a `runId` and without
+`finishReason: "budget-exhausted"`. Failed, aborted, budget-exhausted, run-less joined,
+incomplete, and recovery-only outcomes cannot acquire one. The durable runtime never reconstructs
+this value from result prose or Tool records.
+
+Every `failed` canonical settlement carries exactly one generic failure diagnostic in `result`:
+`errorTag` is non-empty and at most 256 characters, and `message` is at most 16 KiB. No other
+field is admitted. In particular, raw Effect Causes, defects, stacks, provider payloads, and
+application-specific data are not settlement diagnostics. The runtime builds this projection
+from the already-classified Run failure; joined Submissions copy the host's canonical diagnostic
+byte-for-byte in both the live and recovery paths rather than rebuilding it from a Cause or
+message. The `SubmissionLedger` returns the same diagnostic as `Settlement.failure` on first
+finalization and every idempotent replay.
+
+Result-less cases are explicit by settlement family. A joined `completed` Submission has no
+independent output and may omit `result`; an `aborted` Submission always omits it because abort
+records intent rather than inventing a failure. A `failed` record without its exact diagnostic —
+including a schema-version-1 record written by an earlier private-development build — is malformed
+and fails Schema decode during replay or recovery. The private-development compatibility policy
+does not migrate that record into apparently trustworthy history.
+
 ## 13. Abort
 
 Abort is a durable command with identity, author, reason, and target.
@@ -390,7 +417,9 @@ for that queue.
 - **DUR-010**: Durable step results are exactly-once recorded, not necessarily
   exactly-once executed.
 - **DUR-011**: Terminalization reserves one exact outcome, appends it canonically, then finalizes
-  the ledger idempotently.
+  the ledger idempotently. Every failed canonical and public Settlement preserves the exact bounded
+  generic diagnostic through joined fanout, recovery, and replay; only the documented completed
+  and aborted families are result-less.
 - **DUR-012**: Abort is canonical, idempotent, and cannot rewrite a prior terminal
   outcome.
 - **DUR-013**: Recovery decisions are recorded and testable from persisted state.

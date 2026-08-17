@@ -27,13 +27,25 @@ making Model selection explicit.
 ## Definition contract
 
 ```ts
-interface Definition<InputSchema, OutputSchema, Instructions, Toolkit> {
+interface RunDispositionDeclaration<Output, DispositionSchema> {
+  readonly schema: DispositionSchema;
+  readonly fromOutput: (output: Output) => unknown;
+}
+
+interface Definition<
+  InputSchema,
+  OutputSchema,
+  Instructions,
+  Toolkit,
+  RunDispositionValue = undefined,
+> {
   readonly id: AgentId;
   readonly input: InputSchema;
   readonly output: OutputSchema;
   readonly instructions: Instructions;
   readonly toolkit: Toolkit;
   readonly policy: AgentPolicy;
+  readonly runDisposition?: RunDispositionValue;
   readonly description?: string;
   readonly metadata?: Readonly<Record<string, string>>;
 }
@@ -56,6 +68,36 @@ type Failure = Agent.Failure<typeof agent>;
 
 The repository protects these projections with compile-time tests. An unbound Definition is
 rejected by `AgentRuntime`.
+
+## Declare application completion explicitly
+
+Use an optional run-disposition boundary when a record reader needs an application-owned durable
+classification beyond the framework's `completed | failed | aborted` settlement outcome.
+
+```ts
+const RunDisposition = Schema.Literal("application-complete");
+
+const definition = Agent.define("support-triage", {
+  input: SupportRequest,
+  output: Resolution,
+  instructions,
+  toolkit: SupportToolkit,
+  policy,
+  runDisposition: {
+    schema: RunDisposition,
+    fromOutput: (resolution) => resolution.runDisposition,
+  },
+});
+```
+
+The selector sees decoded output and may return `undefined`. Its candidate is untrusted until the
+Schema validates and encodes it; invalid selection fails with `AgentRunDispositionError`, which
+joins `Agent.Failure` only for Definitions that declare this boundary. An ordinary completed
+durable Run persists the encoded value on `SubmissionSettled.runDisposition`, where readers decode
+it with the same application Schema. Budget exhaustion, failure, abort, and incomplete recovery
+never receive one. A selector exception remains available as the typed error's diagnostic `cause`;
+only a fixed, non-sensitive message enters the Run event stream. Do not parse summary prose or
+infer finality from successful Tool Calls.
 
 ## Stable identity
 
