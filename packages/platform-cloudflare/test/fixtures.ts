@@ -127,8 +127,16 @@ export const runtimeEvictionFailpoint =
 // ---------------------------------------------------------------------------
 
 const maintenancePauses = new Map<string, Array<ConversationMaintenanceFailpointLocation>>();
-const reachedMaintenancePauses = new Set<string>();
-const releasedMaintenancePauses = new Set<string>();
+
+interface MaintenancePauseGate {
+  readonly reached: Promise<void>;
+  readonly released: Promise<void>;
+  readonly resolveReached: () => void;
+  readonly resolveReleased: () => void;
+  reachedFlag: boolean;
+}
+
+const maintenancePauseGates = new Map<string, MaintenancePauseGate>();
 
 const maintenancePauseKey = (
   conversation: string,
@@ -142,30 +150,46 @@ export const armMaintenancePause = (
   maintenancePauses.set(conversation, [...locations]);
   for (const location of locations) {
     const key = maintenancePauseKey(conversation, location);
-    reachedMaintenancePauses.delete(key);
-    releasedMaintenancePauses.delete(key);
+    let resolveReached!: () => void;
+    let resolveReleased!: () => void;
+    maintenancePauseGates.set(key, {
+      reached: new Promise<void>((resolve) => {
+        resolveReached = resolve;
+      }),
+      released: new Promise<void>((resolve) => {
+        resolveReleased = resolve;
+      }),
+      resolveReached: () => resolveReached(),
+      resolveReleased: () => resolveReleased(),
+      reachedFlag: false,
+    });
   }
 };
 
-export const maintenancePauseReached = (
+export const awaitMaintenancePause = (
   conversation: string,
-  location?: ConversationMaintenanceFailpointLocation,
-): boolean =>
-  location === undefined
-    ? [...reachedMaintenancePauses].some((key) => key.startsWith(`${conversation}:`))
-    : reachedMaintenancePauses.has(maintenancePauseKey(conversation, location));
+  location: ConversationMaintenanceFailpointLocation,
+): Promise<void> => {
+  const gate = maintenancePauseGates.get(maintenancePauseKey(conversation, location));
+  if (gate === undefined) {
+    return Promise.reject(
+      new Error(`Maintenance pause ${location} is not armed for ${conversation}.`),
+    );
+  }
+  return gate.reached;
+};
 
 export const releaseMaintenancePause = (
   conversation: string,
   location?: ConversationMaintenanceFailpointLocation,
 ): void => {
   if (location === undefined) {
-    for (const key of reachedMaintenancePauses) {
-      if (key.startsWith(`${conversation}:`)) releasedMaintenancePauses.add(key);
+    for (const [key, gate] of maintenancePauseGates) {
+      if (key.startsWith(`${conversation}:`) && gate.reachedFlag) gate.resolveReleased();
     }
     return;
   }
-  releasedMaintenancePauses.add(maintenancePauseKey(conversation, location));
+  maintenancePauseGates.get(maintenancePauseKey(conversation, location))?.resolveReleased();
 };
 
 export const maintenanceRaceFailpoint =
@@ -179,12 +203,12 @@ export const maintenanceRaceFailpoint =
       queue.shift();
       if (queue.length === 0) maintenancePauses.delete(conversation);
       const key = maintenancePauseKey(conversation, location);
-      reachedMaintenancePauses.add(key);
-      while (!releasedMaintenancePauses.has(key)) {
-        yield* Effect.sleep(Duration.millis(1));
-      }
-      releasedMaintenancePauses.delete(key);
-      reachedMaintenancePauses.delete(key);
+      const gate = maintenancePauseGates.get(key);
+      if (gate === undefined) return;
+      gate.reachedFlag = true;
+      gate.resolveReached();
+      yield* Effect.promise(() => gate.released);
+      maintenancePauseGates.delete(key);
     });
 
 // ---------------------------------------------------------------------------

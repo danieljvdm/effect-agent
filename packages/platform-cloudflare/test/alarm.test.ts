@@ -4,7 +4,7 @@ import {
   UnknownResolutionCommand,
 } from "@effect-agent/session";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { CloudflareConversationClient } from "../src/index.ts";
@@ -17,7 +17,7 @@ import {
   bookDefinition,
   decodeConversationId,
   armMaintenancePause,
-  maintenancePauseReached,
+  awaitMaintenancePause,
   plannerDefinition,
   releaseMaintenancePause,
   submitOptions,
@@ -71,6 +71,19 @@ const canonicalFingerprint = async (conversation: string): Promise<string> => {
   );
 };
 
+const MaintenanceGenerationProbe = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  dirty: Schema.BigIntFromString,
+  processed: Schema.BigIntFromString,
+});
+
+const maintenanceGeneration = (conversation: string) =>
+  runInDurableObject(stubFor(conversation), async (_instance, state) =>
+    Schema.decodeUnknownSync(MaintenanceGenerationProbe)(
+      await state.storage.get<unknown>("effect-agent:conversation-maintenance:v1"),
+    ),
+  );
+
 describe("DC alarm semantics", () => {
   it("issue #93: a stable approval wait quiesces and a forced caught-up alarm performs no SQL work", async () => {
     const conversation = lane("issue-93-quiescent-approval");
@@ -117,10 +130,7 @@ describe("DC alarm semantics", () => {
     armMaintenancePause(conversation, "maintenance:finish:before");
     const receipt = await submitTo(approvalDefinition, conversation);
 
-    for (let round = 0; round < 400 && !maintenancePauseReached(conversation); round++) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    expect(maintenancePauseReached(conversation)).toBe(true);
+    await awaitMaintenancePause(conversation, "maintenance:finish:before");
     expect((await laneRows(conversation))[0]?.state).toBe("suspended");
 
     // The alarm pass has observed the stable wait but has not acknowledged/cancelled yet.
@@ -158,6 +168,7 @@ describe("DC alarm semantics", () => {
       "maintenance:mutation:armed",
       "maintenance:begin:after",
       "maintenance:mutation:finished",
+      "maintenance:finish:before",
     );
     const resolution = runClient(
       Effect.gen(function* () {
@@ -174,45 +185,27 @@ describe("DC alarm semantics", () => {
         );
       }),
     );
-    for (
-      let round = 0;
-      round < 400 && !maintenancePauseReached(conversation, "maintenance:mutation:armed");
-      round++
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    expect(maintenancePauseReached(conversation, "maintenance:mutation:armed")).toBe(true);
+    await awaitMaintenancePause(conversation, "maintenance:mutation:armed");
 
     // Start a forced pass while the RPC is still between pre-arm and body. It snapshots both the
     // new generation and the active-mutation count, then pauses before recovery.
     const forcedPass = runDurableObjectAlarm(stubFor(conversation)).catch(() => undefined);
-    for (
-      let round = 0;
-      round < 400 && !maintenancePauseReached(conversation, "maintenance:begin:after");
-      round++
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    expect(maintenancePauseReached(conversation, "maintenance:begin:after")).toBe(true);
+    await awaitMaintenancePause(conversation, "maintenance:begin:after");
 
     // Let the mutation body finish BEFORE the pass observes durable state, but hold the RPC at
     // its body-complete boundary. The pass may see the approval decision, but must conservatively
     // retain this overlapped generation rather than acknowledge a body that was not visible at
     // its snapshot boundary.
     releaseMaintenancePause(conversation, "maintenance:mutation:armed");
-    for (
-      let round = 0;
-      round < 400 && !maintenancePauseReached(conversation, "maintenance:mutation:finished");
-      round++
-    ) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-    }
-    expect(maintenancePauseReached(conversation, "maintenance:mutation:finished")).toBe(true);
+    await awaitMaintenancePause(conversation, "maintenance:mutation:finished");
     releaseMaintenancePause(conversation, "maintenance:mutation:finished");
     releaseMaintenancePause(conversation, "maintenance:begin:after");
+    await awaitMaintenancePause(conversation, "maintenance:finish:before");
+    const generation = await maintenanceGeneration(conversation);
+    expect(generation.dirty > generation.processed).toBe(true);
+    releaseMaintenancePause(conversation, "maintenance:finish:before");
     await resolution;
     await forcedPass;
-    expect(await scheduledAlarm(conversation)).not.toBeNull();
     await drainAlarmsUntil(conversation, allSettled(conversation));
     await assertConvergence(conversation);
   }, 30_000);
