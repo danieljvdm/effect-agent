@@ -49,7 +49,7 @@ import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts
 import { IsolatedChecks } from "../src/isolation.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
-import { DurableAttemptStore } from "../src/store.ts";
+import { FileBackedAttemptStore } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
 const STALE = Schema.decodeUnknownSync(GitCommitSha)("b".repeat(40));
@@ -92,7 +92,7 @@ type HandleRequiresPolicy = Assert<
   Equal<Extract<TypedHandleServices, IngressPolicy>, IngressPolicy>
 >;
 type HandleRequiresStore = Assert<
-  Equal<Extract<TypedHandleServices, DurableAttemptStore>, DurableAttemptStore>
+  Equal<Extract<TypedHandleServices, FileBackedAttemptStore>, FileBackedAttemptStore>
 >;
 type HandleRequiresHost = Assert<Equal<Extract<TypedHandleServices, WorkOrderHost>, WorkOrderHost>>;
 type HandleRequiresCrypto = Assert<
@@ -330,7 +330,7 @@ const withIngress = <A, E, R>(
             IngressPolicy.layer(policyConfig),
             ObservedActionsIdentity.layerAbsent,
             IsolatedChecks.layer,
-            DurableAttemptStore.layer(directory),
+            FileBackedAttemptStore.layer(directory),
             stubHostLayer,
             WorkOrderAttemptPolicy.layerMemory,
             implementer.layer,
@@ -588,10 +588,9 @@ describe("PR work-order ingress", () => {
           eventName: "pull_request_review_comment",
           payload: mentionPayload({ inReplyTo: 1001 }),
         });
-        const policy = yield* IngressPolicy;
-        const target = yield* parseDispatchTarget(delivery, policy);
-        const order = yield* constructWorkOrder(target, policy, delivery.deliveryId);
-        const store = yield* DurableAttemptStore;
+        const target = yield* parseDispatchTarget(delivery);
+        const order = yield* constructWorkOrder(target, delivery.deliveryId);
+        const store = yield* FileBackedAttemptStore;
         expect((yield* store.claim(order))._tag).toBe("claimed");
         const rejected = yield* handleWorkOrderDelivery(delivery).pipe(Effect.flip);
         expect(rejected._tag).toBe("AttemptIncomplete");
@@ -662,23 +661,22 @@ describe("PR work-order ingress", () => {
           }),
         }),
       );
-      yield* authenticateDelivery(delivery, policyConfig).pipe(Effect.provide(matching));
+      const actionsPolicy = Layer.mergeAll(matching, IngressPolicy.layer(policyConfig));
+      yield* authenticateDelivery(delivery).pipe(Effect.provide(actionsPolicy));
       const forged = yield* authenticateDelivery(
         PlatformDelivery.make({
           deliveryId: "actions-run-1:1",
           eventName: "pull_request_review_comment",
           rawBody: JSON.stringify({ forged: true }),
         }),
-        policyConfig,
-      ).pipe(Effect.provide(matching), Effect.flip);
+      ).pipe(Effect.provide(actionsPolicy), Effect.flip);
       const swappedId = yield* authenticateDelivery(
         PlatformDelivery.make({
           deliveryId: "other-run:1",
           eventName: "pull_request_review_comment",
           rawBody,
         }),
-        policyConfig,
-      ).pipe(Effect.provide(matching), Effect.flip);
+      ).pipe(Effect.provide(actionsPolicy), Effect.flip);
       expect(forged._tag).toBe("DeliveryUnauthentic");
       expect(swappedId._tag).toBe("DeliveryUnauthentic");
     }),

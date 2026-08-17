@@ -8,10 +8,10 @@ import { Context, Effect } from "effect";
 
 import { authenticateDelivery } from "./authenticate.ts";
 import { constructWorkOrder } from "./construct.ts";
-import { IngressPolicy, type IngressError, type PlatformDelivery } from "./contracts.ts";
+import { type IngressError, type PlatformDelivery } from "./contracts.ts";
 import { parseDispatchTarget } from "./parse-event.ts";
 import { presentFailure, presentSuccess } from "./presentation.ts";
-import { DurableAttemptStore, replaySnapshot } from "./store.ts";
+import { FileBackedAttemptStore, replaySnapshot } from "./store.ts";
 
 export class WorkOrderImplementer extends Context.Service<
   WorkOrderImplementer,
@@ -38,11 +38,10 @@ const describeError = (
 export const handleWorkOrderDelivery = Effect.fn("handleWorkOrderDelivery")(function* (
   delivery: PlatformDelivery,
 ) {
-  const policy = yield* IngressPolicy;
-  yield* authenticateDelivery(delivery, policy);
-  const target = yield* parseDispatchTarget(delivery, policy);
-  const order = yield* constructWorkOrder(target, policy, delivery.deliveryId);
-  const store = yield* DurableAttemptStore;
+  yield* authenticateDelivery(delivery);
+  const target = yield* parseDispatchTarget(delivery);
+  const order = yield* constructWorkOrder(target, delivery.deliveryId);
+  const store = yield* FileBackedAttemptStore;
   const claim = yield* store.claim(order);
   if (claim._tag !== "claimed") {
     return yield* replaySnapshot(claim.snapshot);

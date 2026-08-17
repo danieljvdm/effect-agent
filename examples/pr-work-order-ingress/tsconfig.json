@@ -4,5 +4,6 @@
     "tsBuildInfoFile": "./node_modules/.tmp/pr-work-order-ingress.tsbuildinfo",
     "types": ["node"]
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  "exclude": ["src/isolation-worker.ts"]
 }

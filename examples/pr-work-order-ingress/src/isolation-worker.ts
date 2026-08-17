@@ -1,13 +1,18 @@
+/// <reference types="node" />
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+
+import { Schema } from "effect";
+
+import { IsolatedCheckWorkerRequest, IsolatedPublishWorkerRequest } from "./worker-contracts.ts";
 
 const WRITE_TOKEN = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
 const MODEL_SECRET = "EFFECT_AGENT_MODEL_SECRET";
 const role = process.argv[2];
 const requestPath = process.argv[3];
 
-const fail = (payload) => {
+const fail = (payload: unknown): never => {
   process.stdout.write(JSON.stringify(payload));
   process.exit(0);
 };
@@ -17,9 +22,24 @@ const environment = {
   hasModelSecret: Object.prototype.hasOwnProperty.call(process.env, MODEL_SECRET),
 };
 
-const request = JSON.parse(readFileSync(requestPath, "utf8"));
+const requestText = (() => {
+  try {
+    return readFileSync(requestPath ?? "", "utf8");
+  } catch {
+    return undefined;
+  }
+})();
 
-const headerPath = (line, side) => {
+const decodeRequest = <A>(schema: Schema.Codec<A, string>) => {
+  if (requestText === undefined) return undefined;
+  try {
+    return Schema.decodeUnknownSync(schema)(requestText);
+  } catch {
+    return undefined;
+  }
+};
+
+const headerPath = (line: string, side: string) => {
   const body = line.slice(4).split("\t", 1)[0] ?? "";
   if (body === "/dev/null") return "/dev/null";
   const prefix = `${side}/`;
@@ -28,16 +48,16 @@ const headerPath = (line, side) => {
   return value.length > 0 ? value : undefined;
 };
 
-const provenPathsFromPatch = (patch) => {
-  if (patch.trim() === "") return { ok: true, paths: [] };
-  const paths = new Set();
-  let current;
+const provenPathsFromPatch = (patch: string) => {
+  if (patch.trim() === "") return { ok: true as const, paths: [] as Array<string> };
+  const paths = new Set<string>();
+  let current: { source: string | undefined; dest: string | undefined } | undefined;
   let files = 0;
   const start = () => {
     current ??= { source: undefined, dest: undefined };
     return current;
   };
-  const assign = (field, value) => {
+  const assign = (field: "source" | "dest", value: string) => {
     const slot = start();
     if (slot[field] !== undefined && slot[field] !== value) return false;
     slot[field] = value;
@@ -54,58 +74,56 @@ const provenPathsFromPatch = (patch) => {
   };
   for (const line of patch.split("\n")) {
     if (line.startsWith("diff --git ")) {
-      if (!flush()) return { ok: false };
+      if (!flush()) return { ok: false as const };
       const git = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-      if (git === null || git[1] === undefined || git[2] === undefined) return { ok: false };
-      if (!assign("source", git[1]) || !assign("dest", git[2])) return { ok: false };
+      if (git === null || git[1] === undefined || git[2] === undefined)
+        return { ok: false as const };
+      if (!assign("source", git[1]) || !assign("dest", git[2])) return { ok: false as const };
       continue;
     }
     if (line.startsWith("--- ")) {
       const path = headerPath(line, "a");
-      if (path === undefined || !assign("source", path)) return { ok: false };
+      if (path === undefined || !assign("source", path)) return { ok: false as const };
       continue;
     }
     if (line.startsWith("+++ ")) {
       const path = headerPath(line, "b");
-      if (path === undefined || !assign("dest", path)) return { ok: false };
+      if (path === undefined || !assign("dest", path)) return { ok: false as const };
       continue;
     }
     if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
       const path = line.slice(line.startsWith("rename from ") ? 12 : 10);
-      if (path.length === 0 || !assign("source", path)) return { ok: false };
+      if (path.length === 0 || !assign("source", path)) return { ok: false as const };
       continue;
     }
     if (line.startsWith("rename to ") || line.startsWith("copy to ")) {
       const path = line.slice(line.startsWith("rename to ") ? 10 : 8);
-      if (path.length === 0 || !assign("dest", path)) return { ok: false };
+      if (path.length === 0 || !assign("dest", path)) return { ok: false as const };
     }
   }
-  if (!flush() || files === 0) return { ok: false };
-  return { ok: true, paths: [...paths] };
+  if (!flush() || files === 0) return { ok: false as const };
+  return { ok: true as const, paths: [...paths] };
 };
 
-const sameStringArray = (left, right) =>
-  Array.isArray(left) &&
-  Array.isArray(right) &&
-  left.length === right.length &&
-  left.every((value, index) => value === right[index]);
+const sameStringArray = (left: ReadonlyArray<string>, right: ReadonlyArray<string>) =>
+  left.length === right.length && left.every((value, index) => value === right[index]);
 
-const sameChecks = (left, right) =>
-  Array.isArray(left) &&
-  Array.isArray(right) &&
+const sameChecks = (
+  left: IsolatedPublishWorkerRequest["trust"]["requiredChecks"],
+  right: IsolatedPublishWorkerRequest["trust"]["requiredChecks"],
+) =>
   left.length === right.length &&
   left.every(
     (check, index) =>
-      check?.name === right[index]?.name &&
-      check?.status === right[index]?.status &&
-      check?.summary === right[index]?.summary,
+      check.name === right[index]?.name &&
+      check.status === right[index]?.status &&
+      check.summary === right[index]?.summary,
   );
 
-const sameIdentity = (trust, expected) =>
-  expected !== null &&
-  expected !== undefined &&
-  trust !== null &&
-  trust !== undefined &&
+const sameIdentity = (
+  trust: IsolatedPublishWorkerRequest["trust"],
+  expected: IsolatedPublishWorkerRequest["expected"],
+) =>
   trust.workOrderId === expected.workOrderId &&
   trust.workOrderDigest === expected.workOrderDigest &&
   trust.repository === expected.repository &&
@@ -116,6 +134,13 @@ const sameIdentity = (trust, expected) =>
   sameChecks(trust.requiredChecks, expected.requiredChecks);
 
 if (role === "check") {
+  const request =
+    decodeRequest(Schema.fromJsonString(IsolatedCheckWorkerRequest)) ??
+    fail({
+      _tag: "IsolationViolation",
+      process: "check",
+      reason: "isolation request failed schema decode",
+    });
   if (environment.hasWriteToken || environment.hasModelSecret) {
     fail({
       _tag: "IsolationViolation",
@@ -149,6 +174,13 @@ if (role === "check") {
 }
 
 if (role === "publish") {
+  const request =
+    decodeRequest(Schema.fromJsonString(IsolatedPublishWorkerRequest)) ??
+    fail({
+      _tag: "IsolationViolation",
+      process: "publish",
+      reason: "isolation request failed schema decode",
+    });
   if (environment.hasModelSecret) {
     fail({
       _tag: "IsolationViolation",
@@ -174,14 +206,14 @@ if (role === "publish") {
     });
   }
   const proven = provenPathsFromPatch(patch);
-  if (!proven.ok) {
-    fail({
-      _tag: "PublisherVerificationFailure",
-      reason: "path-not-allowed",
-      detail: "publisher could not prove the complete source and destination path set",
-    });
-  }
-  if (proven.paths.some((entry) => !trust.allowedPaths.includes(entry))) {
+  const paths = proven.ok
+    ? proven.paths
+    : fail({
+        _tag: "PublisherVerificationFailure",
+        reason: "path-not-allowed",
+        detail: "publisher could not prove the complete source and destination path set",
+      });
+  if (paths.some((entry) => !trust.allowedPaths.includes(entry))) {
     fail({
       _tag: "PublisherVerificationFailure",
       reason: "path-not-allowed",
@@ -211,12 +243,12 @@ if (role === "publish") {
       // lock already released
     }
   };
-  let actual;
+  let actual: string;
   try {
     actual = readFileSync(`${stateDir}/head`, "utf8").trim();
   } catch (cause) {
     releaseLock();
-    fail({
+    actual = fail({
       _tag: "PublicationUncertainty",
       reason: `could not read current head: ${String(cause).slice(0, 1_000)}`,
     });

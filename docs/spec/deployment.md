@@ -18,8 +18,8 @@ The `examples/pr-work-orders` work-order host is class E trusted-local evidence.
 Its one-attempt policy is process-local, its worktree is scoped to one run, and
 its branch update is locally compare-and-swap fenced. It makes no
 restart-recovery, hosted publication, or untrusted-code isolation claim. See
-[pull-request work orders](pr-work-orders.md). GitHub dispatch, durable
-admission, isolated checks, and network compare-and-swap live in
+[pull-request work orders](pr-work-orders.md). GitHub dispatch, file-backed
+attempt admission, isolated checks, and network compare-and-swap live in
 `examples/pr-work-order-ingress` and [work-order ingress](pr-work-order-ingress.md).
 That leaf is not an enabled workflow.
 

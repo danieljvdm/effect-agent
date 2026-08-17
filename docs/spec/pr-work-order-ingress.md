@@ -6,8 +6,9 @@ This specification is the GitHub-facing follow-up to
 [pull-request work orders](pr-work-orders.md). That document owns the canonical
 work order, the jailed implementer, and the deterministic host algorithm. This
 document owns how a human dispatch on GitHub becomes that work order, how
-production attempt admission stays durable, how checks and credentials stay
-isolated, and how a validated patch is published back to the pull request.
+production attempt admission is persisted in a file-backed store, how checks
+and credentials stay isolated, and how a validated patch is published back to
+the pull request.
 
 The class E leaf `examples/pr-work-orders` remains the host proof. It does not
 implement this ingress. No enabled GitHub workflow may run an implementer until
@@ -70,7 +71,7 @@ No field copied from the comment, and no Schema-valid `dispatch.kind`,
 authorizes the run. Authorization is the authenticated actor plus repository
 policy.
 
-## 3. Durable admission
+## 3. Attempt admission
 
 Production ingress must persist the attempt key
 `(repository, pullRequestNumber, headSha, workOrderId)` and the terminal
@@ -210,9 +211,10 @@ The suite must demonstrate:
 - **WOI-005**: Ingress constructs the canonical work order and invokes the
   existing host; it does not widen implementer file, process, credential, or
   publish authority.
-- **WOI-006**: Production admission is durable on
-  `(repository, pullRequestNumber, headSha, workOrderId)`; duplicate delivery
-  of `dispatch.eventId` is idempotent and never retries automatically.
+- **WOI-006**: Production admission persists
+  `(repository, pullRequestNumber, headSha, workOrderId)` in a file-backed
+  attempt store; duplicate delivery of `dispatch.eventId` is idempotent and
+  never retries automatically. This leaf does not claim DN or DC durability.
 - **WOI-007**: Checks, model/provider, and publication run in isolated
   processes with fail-closed credential separation.
 - **WOI-008**: The publisher independently verifies patch digest, a proven

@@ -207,6 +207,15 @@ export class IsolatedCheckRequest extends Schema.Class<IsolatedCheckRequest>(
   checks: Schema.Array(IsolatedCheckSpec).check(Schema.isMaxLength(20)),
 }) {}
 
+export class IsolatedPublishWorkerRequest extends Schema.Class<IsolatedPublishWorkerRequest>(
+  "@effect-agent/example-pr-work-order-ingress/IsolatedPublishWorkerRequest",
+)({
+  patch: Schema.String.check(Schema.isMaxLength(1_000_000)),
+  trust: PublisherTrust,
+  expected: PublisherTrust,
+  stateDir: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+}) {}
+
 export class ThreadReply extends Schema.Class<ThreadReply>(
   "@effect-agent/example-pr-work-order-ingress/ThreadReply",
 )({

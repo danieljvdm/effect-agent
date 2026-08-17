@@ -1,6 +1,6 @@
 import { Context, Effect, Encoding, FileSystem, Layer, Result } from "effect";
 
-import { DeliveryUnauthentic, type IngressPolicy, type PlatformDelivery } from "./contracts.ts";
+import { DeliveryUnauthentic, IngressPolicy, type PlatformDelivery } from "./contracts.ts";
 
 export interface TrustedActionsIdentity {
   readonly repository: string;
@@ -117,8 +117,8 @@ const verifySignature = Effect.fn("verifySignature")(function* (
 
 export const authenticateDelivery = Effect.fn("authenticateDelivery")(function* (
   delivery: PlatformDelivery,
-  policy: IngressPolicy["Service"],
-): Effect.fn.Return<void, DeliveryUnauthentic, ObservedActionsIdentity> {
+): Effect.fn.Return<void, DeliveryUnauthentic, ObservedActionsIdentity | IngressPolicy> {
+  const policy = yield* IngressPolicy;
   if (delivery.signature !== undefined) {
     const valid = yield* verifySignature(
       policy.webhookSecret,

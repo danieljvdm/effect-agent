@@ -3,7 +3,7 @@ import { Effect, Schema } from "effect";
 import {
   DispatchTarget,
   DispatchTargetRejected,
-  type IngressPolicy,
+  IngressPolicy,
   type PlatformDelivery,
 } from "./contracts.ts";
 
@@ -63,8 +63,8 @@ const actorId = (id: number): string => String(id);
 
 export const parseDispatchTarget = Effect.fn("parseDispatchTarget")(function* (
   delivery: PlatformDelivery,
-  policy: IngressPolicy["Service"],
-): Effect.fn.Return<DispatchTarget, DispatchTargetRejected> {
+): Effect.fn.Return<DispatchTarget, DispatchTargetRejected, IngressPolicy> {
+  const policy = yield* IngressPolicy;
   const payload = yield* decodeJson(delivery.rawBody);
   if (delivery.eventName === "issue_comment") {
     return yield* DispatchTargetRejected.make({

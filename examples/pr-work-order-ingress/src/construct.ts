@@ -8,18 +8,18 @@ import { Effect } from "effect";
 import {
   DispatchTargetRejected,
   DispatchUnauthorized,
+  IngressPolicy,
   StaleCommentAnchor,
   UntrustedPullRequest,
   type DispatchTarget,
-  type IngressPolicy,
 } from "./contracts.ts";
 import { GitHubApi } from "./github.ts";
 
 export const constructWorkOrder = Effect.fn("constructWorkOrder")(function* (
   target: DispatchTarget,
-  policy: IngressPolicy["Service"],
   eventId: string,
 ) {
+  const policy = yield* IngressPolicy;
   if (!policy.authorizedActorIds.includes(target.actorId)) {
     return yield* DispatchUnauthorized.make({
       actorId: target.actorId,

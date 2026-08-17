@@ -3,9 +3,14 @@ import { fileURLToPath } from "node:url";
 import { Context, Effect, FileSystem, Layer, Path, Schema, type Scope, Stream } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/unstable/process";
 
-import { type IsolatedCheckRequest, IsolatedEnvironment, IsolationViolation } from "./contracts.ts";
+import {
+  IsolatedCheckRequest,
+  IsolatedEnvironment,
+  IsolatedPublishWorkerRequest,
+  IsolationViolation,
+} from "./contracts.ts";
 
-const workerPath = fileURLToPath(new URL("./isolation-worker.mjs", import.meta.url));
+const workerPath = fileURLToPath(new URL("./isolation-worker.ts", import.meta.url));
 
 const IsolatedCheckOutcome = Schema.Union([
   Schema.TaggedStruct("checked", {
@@ -23,15 +28,21 @@ const IsolatedCheckOutcome = Schema.Union([
 
 export const spawnIsolatedWorker = Effect.fn("spawnIsolatedWorker")(function* (input: {
   readonly role: "check" | "publish";
-  readonly request: unknown;
+  readonly request: IsolatedCheckRequest | IsolatedPublishWorkerRequest;
   readonly env?: Record<string, string> | undefined;
 }) {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-isolate-" });
   const requestPath = path.join(directory, "request.json");
-  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
-    input.request,
+  const encoded = yield* (
+    input.role === "check"
+      ? Schema.encodeEffect(Schema.fromJsonString(IsolatedCheckRequest))(
+          input.request as IsolatedCheckRequest,
+        )
+      : Schema.encodeEffect(Schema.fromJsonString(IsolatedPublishWorkerRequest))(
+          input.request as IsolatedPublishWorkerRequest,
+        )
   ).pipe(
     Effect.mapError(() =>
       IsolationViolation.make({
@@ -48,13 +59,23 @@ export const spawnIsolatedWorker = Effect.fn("spawnIsolatedWorker")(function* (i
       }),
     ),
   );
-  const child = yield* ChildProcess.make(process.execPath, [workerPath, input.role, requestPath], {
-    env: { PATH: "/usr/bin:/bin", ...input.env },
-    extendEnv: false,
-    stdin: "ignore",
-    stderr: "pipe",
-    stdout: "pipe",
-  }).pipe(
+  const child = yield* ChildProcess.make(
+    process.execPath,
+    [
+      "--experimental-strip-types",
+      "--no-warnings=ExperimentalWarning",
+      workerPath,
+      input.role,
+      requestPath,
+    ],
+    {
+      env: { PATH: "/usr/bin:/bin", ...input.env },
+      extendEnv: false,
+      stdin: "ignore",
+      stderr: "pipe",
+      stdout: "pipe",
+    },
+  ).pipe(
     Effect.mapError((cause) =>
       IsolationViolation.make({
         process: input.role,

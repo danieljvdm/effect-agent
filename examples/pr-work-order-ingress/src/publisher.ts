@@ -4,6 +4,7 @@ import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GITHUB_WRITE_TOKEN_ENV,
+  IsolatedPublishWorkerRequest,
   IsolationViolation,
   type PublisherRequest,
   type PublisherTrust,
@@ -49,12 +50,12 @@ export class IsolatedPublisher extends Context.Service<
           Effect.gen(function* () {
             const payload = yield* spawnIsolatedWorker({
               role: "publish",
-              request: {
+              request: IsolatedPublishWorkerRequest.make({
                 patch: request.patch,
                 trust: request.trust,
                 expected: options.expected,
                 stateDir: options.stateDir,
-              },
+              }),
               env:
                 options.writeToken === undefined
                   ? {}

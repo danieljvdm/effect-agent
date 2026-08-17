@@ -4,7 +4,7 @@ import {
   PublishedWorkOrder,
   SettledWorkOrder,
 } from "@effect-agent/example-pr-work-orders";
-import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
 
 import { AttemptIncomplete, IngressStoreFailure, StoredDeliveryFailure } from "./contracts.ts";
 
@@ -31,8 +31,32 @@ export type ClaimResult =
   | { readonly _tag: "duplicate"; readonly snapshot: AttemptSnapshot }
   | { readonly _tag: "incomplete"; readonly snapshot: AttemptSnapshot };
 
-export class DurableAttemptStore extends Context.Service<
-  DurableAttemptStore,
+export const IngressStoreFailpointLocation = Schema.Literals([
+  "before-claim-event",
+  "after-claim-event",
+  "before-claim-key",
+  "after-claim-key",
+  "before-complete-event",
+  "after-complete-event",
+  "before-complete-key",
+  "after-complete-key",
+]);
+export type IngressStoreFailpointLocation = typeof IngressStoreFailpointLocation.Type;
+
+export class IngressStoreFailpoint extends Context.Service<
+  IngressStoreFailpoint,
+  {
+    readonly hit: (location: IngressStoreFailpointLocation) => Effect.Effect<void>;
+  }
+>()("@effect-agent/example-pr-work-order-ingress/IngressStoreFailpoint") {
+  static readonly layer = Layer.succeed(
+    IngressStoreFailpoint,
+    IngressStoreFailpoint.of({ hit: () => Effect.void }),
+  );
+}
+
+export class FileBackedAttemptStore extends Context.Service<
+  FileBackedAttemptStore,
   {
     readonly claim: (
       order: PullRequestWorkOrder,
@@ -44,13 +68,19 @@ export class DurableAttemptStore extends Context.Service<
         | { readonly _tag: "failure"; readonly errorTag: string; readonly detail: string },
     ) => Effect.Effect<void, IngressStoreFailure>;
   }
->()("@effect-agent/example-pr-work-order-ingress/DurableAttemptStore") {
+>()("@effect-agent/example-pr-work-order-ingress/FileBackedAttemptStore") {
   static readonly layer = (directory: string) =>
     Layer.effect(
-      DurableAttemptStore,
+      FileBackedAttemptStore,
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
+        const failpoint = yield* Effect.serviceOption(IngressStoreFailpoint);
+        const hit = (location: IngressStoreFailpointLocation) =>
+          Option.match(failpoint, {
+            onNone: () => Effect.void,
+            onSome: (service) => service.hit(location),
+          });
         const eventsDir = path.join(directory, "events");
         const attemptsDir = path.join(directory, "attempts");
         const ensureDirectories = Effect.gen(function* () {
@@ -85,9 +115,13 @@ export class DurableAttemptStore extends Context.Service<
           );
         const writeSnapshot = (file: string, snapshot: AttemptSnapshot, exclusive: boolean) =>
           Schema.encodeEffect(Schema.fromJsonString(AttemptSnapshot))(snapshot).pipe(
-            Effect.flatMap((text) =>
-              fs.writeFileString(file, text, exclusive ? { flag: "wx" } : undefined),
-            ),
+            Effect.flatMap((text) => {
+              if (exclusive) {
+                return fs.writeFileString(file, text, { flag: "wx" });
+              }
+              const next = `${file}.next`;
+              return fs.writeFileString(next, text).pipe(Effect.andThen(fs.rename(next, file)));
+            }),
             Effect.mapError((cause) =>
               IngressStoreFailure.make({
                 operation: "write attempt snapshot",
@@ -110,7 +144,7 @@ export class DurableAttemptStore extends Context.Service<
           snapshot.status === "claimed"
             ? { _tag: "incomplete", snapshot }
             : { _tag: "duplicate", snapshot };
-        const claim = Effect.fn("DurableAttemptStore.claim")(function* (
+        const claim = Effect.fn("FileBackedAttemptStore.claim")(function* (
           order: PullRequestWorkOrder,
         ) {
           yield* ensureDirectories;
@@ -128,6 +162,7 @@ export class DurableAttemptStore extends Context.Service<
           if (eventExists) return existingOf(yield* readSnapshot(eventFile));
           const keyExists = yield* exists(keyFile);
           if (keyExists) return existingOf(yield* readSnapshot(keyFile));
+          yield* hit("before-claim-event");
           const written = yield* writeSnapshot(eventFile, claimed, true).pipe(
             Effect.as(true),
             Effect.catch((error: IngressStoreFailure) =>
@@ -137,10 +172,13 @@ export class DurableAttemptStore extends Context.Service<
             ),
           );
           if (!written) return existingOf(yield* readSnapshot(eventFile));
+          yield* hit("after-claim-event");
+          yield* hit("before-claim-key");
           yield* writeSnapshot(keyFile, claimed, false);
+          yield* hit("after-claim-key");
           return { _tag: "claimed" as const };
         });
-        const complete = Effect.fn("DurableAttemptStore.complete")(function* (
+        const complete = Effect.fn("FileBackedAttemptStore.complete")(function* (
           order: PullRequestWorkOrder,
           outcome:
             | { readonly _tag: "result"; readonly result: PublishedWorkOrder | SettledWorkOrder }
@@ -158,10 +196,14 @@ export class DurableAttemptStore extends Context.Service<
               ? { result: outcome.result }
               : { failure: { errorTag: outcome.errorTag, detail: outcome.detail } }),
           });
+          yield* hit("before-complete-event");
           yield* writeSnapshot(eventPath(order.dispatch.eventId), snapshot, false);
+          yield* hit("after-complete-event");
+          yield* hit("before-complete-key");
           yield* writeSnapshot(attemptPath(order), snapshot, false);
+          yield* hit("after-complete-key");
         });
-        return DurableAttemptStore.of({ claim, complete });
+        return FileBackedAttemptStore.of({ claim, complete });
       }),
     );
 }
