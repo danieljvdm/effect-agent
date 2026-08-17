@@ -69,13 +69,16 @@ export class WorkOrderHost extends Context.Service<
   {
     readonly requiredChecks: ReadonlyArray<string>;
     readonly currentHead: Effect.Effect<GitCommitSha, WorkspaceOperationFailure>;
-    readonly authorize: (
+    readonly authorizeDispatch: (
       order: PullRequestWorkOrder,
-    ) => Effect.Effect<void, WorkOrderRejected | StalePullRequestHead | WorkspaceOperationFailure>;
+    ) => Effect.Effect<void, WorkOrderRejected | WorkspaceOperationFailure>;
+    readonly requireCurrentHead: (
+      order: PullRequestWorkOrder,
+    ) => Effect.Effect<void, StalePullRequestHead | WorkspaceOperationFailure>;
     readonly withWorktree: <A, E, R>(
       order: PullRequestWorkOrder,
       use: (worktree: AcquiredWorktree) => Effect.Effect<A, E, R>,
-    ) => Effect.Effect<A, E | WorkspaceOperationFailure, R>;
+    ) => Effect.Effect<A, E | WorkOrderRejected | WorkspaceOperationFailure, R>;
   }
 >()("@effect-agent/example-pr-work-orders/WorkOrderHost") {}
 

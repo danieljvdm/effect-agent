@@ -824,6 +824,38 @@ describe("PR work-order host", () => {
             implement: implementer.implement,
           }).pipe(Effect.provide(services), Effect.flip);
           expect(foreign._tag).toBe("WorkOrderRejected");
+
+          const forged = yield* runWorkOrder({
+            order: PullRequestWorkOrder.make({
+              ...(yield* orderFor(fixture, { eventId: "evt-forged-id" })),
+              workOrderId: "forged-work-order-id",
+            }),
+            implement: implementer.implement,
+          }).pipe(Effect.provide(services), Effect.flip);
+          expect(forged).toMatchObject({
+            _tag: "WorkOrderRejected",
+            reason: "work-order identity does not match the admitted snapshot",
+          });
+
+          const badSupport = yield* runWorkOrder({
+            order: yield* orderFor(fixture, { eventId: "evt-bad-support" }),
+            implement: implementer.implement,
+          }).pipe(
+            Effect.provide(
+              hostServices(
+                authorizedConfig(fixture, {
+                  checks: [passCheck],
+                  requiredChecks: [REQUIRED_CHECK],
+                  allowedSupportPaths: ["../escape.ts"],
+                }),
+              ),
+            ),
+            Effect.flip,
+          );
+          expect(badSupport).toMatchObject({
+            _tag: "WorkOrderRejected",
+            reason: "support path rejected: path segments must not be empty, '.' or '..'",
+          });
           expect(implementer.invocations()).toBe(0);
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
@@ -866,6 +898,28 @@ describe("PR work-order host", () => {
             expect(second._tag).toBe("settled");
             expect(implementer.invocations()).toBe(2);
           }).pipe(Effect.provide(services));
+
+          const publisher = makeScriptedImplementer("fix");
+          const publishServices = hostServices(
+            authorizedConfig(fixture, {
+              checks: [passCheck],
+              requiredChecks: [REQUIRED_CHECK],
+            }),
+          );
+          const publishedOrder = yield* orderFor(fixture, { eventId: "evt-pub-dup" });
+          yield* Effect.gen(function* () {
+            const published = yield* runWorkOrder({
+              order: publishedOrder,
+              implement: publisher.implement,
+            });
+            expect(published._tag).toBe("published");
+            const replayed = yield* runWorkOrder({
+              order: publishedOrder,
+              implement: publisher.implement,
+            });
+            expect(replayed).toEqual(published);
+            expect(publisher.invocations()).toBe(1);
+          }).pipe(Effect.provide(publishServices));
         }),
       ).pipe(Effect.provide(NodeServices.layer)),
     60_000,

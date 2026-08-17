@@ -388,14 +388,19 @@ export const localGitWorkOrderHostLayer = (
       const crypto = yield* Crypto.Crypto;
       const git = yield* LocalGit;
       const checks = new Map(config.checks.map((check) => [check.name, check] as const));
-      const supportPaths = yield* Effect.forEach(
-        config.allowedSupportPaths ?? [],
-        normalizeWorkspacePath,
-      ).pipe(Effect.orDie);
+      const configuredSupportPaths = Effect.forEach(config.allowedSupportPaths ?? [], (path) =>
+        normalizeWorkspacePath(path).pipe(
+          Effect.mapError((violation) =>
+            WorkOrderRejected.make({
+              reason: `support path rejected: ${violation.reason}`,
+            }),
+          ),
+        ),
+      );
       const currentHead = git
         .run(config.repositoryPath, ["rev-parse", config.headRef], "resolve pull-request head")
         .pipe(Effect.flatMap((output) => decodeSha("resolve pull-request head", output)));
-      const authorize = Effect.fn("WorkOrderHost.authorize")(function* (
+      const authorizeDispatch = Effect.fn("WorkOrderHost.authorizeDispatch")(function* (
         order: PullRequestWorkOrder,
       ) {
         if (
@@ -423,6 +428,11 @@ export const localGitWorkOrderHostLayer = (
             }),
           ),
         );
+        yield* configuredSupportPaths;
+      });
+      const requireCurrentHead = Effect.fn("WorkOrderHost.requireCurrentHead")(function* (
+        order: PullRequestWorkOrder,
+      ) {
         const actual = yield* currentHead;
         if (actual !== order.headSha) {
           return yield* StalePullRequestHead.make({ expected: order.headSha, actual });
@@ -451,7 +461,10 @@ export const localGitWorkOrderHostLayer = (
               () =>
                 Effect.gen(function* () {
                   yield* config.onWorktreeAcquired?.(root) ?? Effect.void;
-                  const allowedPaths = new Set<string>([order.source.path, ...supportPaths]);
+                  const allowedPaths = new Set<string>([
+                    order.source.path,
+                    ...(yield* configuredSupportPaths),
+                  ]);
                   const workspace = yield* makeWorkspace({
                     root,
                     allowedPaths,
@@ -584,7 +597,8 @@ export const localGitWorkOrderHostLayer = (
       return WorkOrderHost.of({
         requiredChecks: [...config.requiredChecks],
         currentHead,
-        authorize,
+        authorizeDispatch,
+        requireCurrentHead,
         withWorktree,
       });
     }),

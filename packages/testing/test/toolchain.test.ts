@@ -247,6 +247,18 @@ const readDirectory = (path: string) =>
     return yield* fs.readDirectory(path);
   });
 
+const readWorkspaceNames = (path: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const names: Array<string> = [];
+    for (const entry of yield* fs.readDirectory(path)) {
+      if (yield* fs.exists(`${path}/${entry}/package.json`)) {
+        names.push(entry);
+      }
+    }
+    return names;
+  });
+
 const exists = (path: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -672,8 +684,8 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
   it.effect("keeps framework packages separate from leaf example workspaces", () =>
     Effect.gen(function* () {
       const [activePackages, activeExamples, rootEntries, rootManifest] = yield* Effect.all([
-        readDirectory(`${repositoryRoot}/packages`),
-        readDirectory(`${repositoryRoot}/examples`),
+        readWorkspaceNames(`${repositoryRoot}/packages`),
+        readWorkspaceNames(`${repositoryRoot}/examples`),
         readDirectory(repositoryRoot),
         readManifest(`${repositoryRoot}/package.json`),
       ]);

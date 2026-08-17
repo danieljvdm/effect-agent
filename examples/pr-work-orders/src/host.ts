@@ -3,6 +3,7 @@ import { type Crypto, type Duration, Effect, Exit, Ref, Schema } from "effect";
 import {
   RequiredCheckFailed,
   SettledWorkOrder,
+  WorkOrderRejected,
   WorkOrderReleaseFailure,
   WorkOrderTimeout,
   WorkOrderValidationFailure,
@@ -15,6 +16,8 @@ import {
   type WorkOrderHostResult,
   type WorkOrderReport,
   workOrderDigest,
+  workOrderIdFor,
+  workOrderIdentityOf,
 } from "./contracts.ts";
 import { WorkOrderMission } from "./implementation-agent.ts";
 import {
@@ -76,12 +79,19 @@ export const runWorkOrder = <ImplementError, ImplementRequirements>(options: {
   Effect.gen(function* () {
     const host = yield* WorkOrderHost;
     const attempts = yield* WorkOrderAttemptPolicy;
+    const expectedId = yield* workOrderIdFor(workOrderIdentityOf(options.order));
+    if (options.order.workOrderId !== expectedId) {
+      return yield* WorkOrderRejected.make({
+        reason: "work-order identity does not match the admitted snapshot",
+      });
+    }
     const digest = yield* workOrderDigest(options.order);
-    yield* host.authorize(options.order);
+    yield* host.authorizeDispatch(options.order);
     const claim = yield* attempts.claim<ImplementError | WorkOrderHostError>(options.order);
     if (claim._tag === "duplicate") {
       return yield* replayExit(claim.exit);
     }
+    yield* host.requireCurrentHead(options.order);
 
     const publication = yield* Ref.make<PublishedWorkOrder | undefined>(undefined);
     const executed = host

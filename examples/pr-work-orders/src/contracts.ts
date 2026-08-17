@@ -254,9 +254,19 @@ const digestCanonical = Effect.fn("digestCanonical")(function* (value: Schema.Js
   );
 });
 
-export const createWorkOrder = Effect.fn("createWorkOrder")(function* (
+export const workOrderIdentityOf = (order: PullRequestWorkOrder): WorkOrderIdentity =>
+  WorkOrderIdentity.make({
+    version: order.version,
+    repository: order.repository,
+    pullRequestNumber: order.pullRequestNumber,
+    headSha: order.headSha,
+    source: order.source,
+    dispatch: order.dispatch,
+  });
+
+export const workOrderIdFor = Effect.fn("workOrderIdFor")(function* (
   input: WorkOrderIdentity,
-): Effect.fn.Return<PullRequestWorkOrder, WorkspaceOperationFailure, Crypto.Crypto> {
+): Effect.fn.Return<string, WorkspaceOperationFailure, Crypto.Crypto> {
   const encoded = yield* Schema.encodeEffect(WorkOrderIdentity)(input).pipe(
     Effect.flatMap(Schema.decodeUnknownEffect(Schema.Json)),
     Effect.mapError((cause) =>
@@ -266,8 +276,16 @@ export const createWorkOrder = Effect.fn("createWorkOrder")(function* (
       }),
     ),
   );
-  const workOrderId = yield* digestCanonical(encoded);
-  return PullRequestWorkOrder.make({ ...input, workOrderId });
+  return yield* digestCanonical(encoded);
+});
+
+export const createWorkOrder = Effect.fn("createWorkOrder")(function* (
+  input: WorkOrderIdentity,
+): Effect.fn.Return<PullRequestWorkOrder, WorkspaceOperationFailure, Crypto.Crypto> {
+  return PullRequestWorkOrder.make({
+    ...input,
+    workOrderId: yield* workOrderIdFor(input),
+  });
 });
 
 export const workOrderDigest = Effect.fn("workOrderDigest")(function* (
