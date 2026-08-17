@@ -89,8 +89,11 @@ adapters that expose reconnects or pages must repeat the same check at every bou
 Durable child admission uses a separate narrow host port. It authorizes only the exact child
 establishment request—caller, parent/run/Tool Call, delegation, target and definition digests,
 child/input/grant identity, and budget reservation—and grants no later child action. Recovery
-reauthorizes immediately before replayed admission and again before materialization/readiness, so
-an earlier policy decision cannot be replayed after revocation.
+authorizes immediately before a replayed first admission. An exact matching admitted row is the
+durable commit of that decision, so recovery completes its materialization, lineage, readiness, and
+parent start link without a second policy decision that could strand accepted work. This does not
+freeze authority for later child actions: each remains subject to its action-owning current-policy
+check.
 
 ## 4. Least authority
 
@@ -341,9 +344,10 @@ Malformed provider or tool streams must not grow unbounded buffers.
   scoping, never by source-text inspection.
 - **SEC-016**: Protected durable operations carry explicit caller identity; durable identifiers
   confer no authority, and missing current-policy authorization fails closed with a typed denial.
-- **SEC-017**: Observation is reauthorized before subscription and each delivery boundary, and
-  durable child establishment is reauthorized under current policy before admission and before
-  materialization/readiness.
+- **SEC-017**: Observation is reauthorized before subscription and each delivery boundary. Durable
+  child establishment authorizes current policy immediately before first admission; an exact
+  admitted row commits that decision for recovery of materialization/readiness, while every later
+  protected child action remains independently authorized under current policy.
 - **OPS-001**: Accepted work settlement age is measurable and alertable.
 - **OPS-002**: Unknown outcomes produce an immediate operational signal.
 - **OPS-003**: Durable deployments have incident, backup, restore, and

@@ -73,6 +73,15 @@ export const MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 4;
  */
 export const MAX_FILE_REVIEW_TURNS = MAX_FILE_REVIEW_TOOL_CALLS + 1;
 
+/**
+ * Each maximum-size unit may read 12 annotated diffs and then inspect up to
+ * three bounded contexts per file. The live 172-file audit demonstrated that
+ * 200k cumulative tokens is below that ordinary, permitted read envelope.
+ * 600k remains finite while leaving the 150k live-context cap as the prompt
+ * safety boundary.
+ */
+export const FILE_REVIEW_TOKEN_BUDGET = 600_000;
+
 /** Parent-side concurrent child permits. */
 export const FILE_REVIEW_MAX_CONCURRENCY = 5;
 
@@ -192,7 +201,7 @@ export const defaultFileReviewerPolicy = AgentPolicy.make({
   // model-visible results, and one parallel batch of out-of-unit probes must
   // not kill the child before it has seen a single refusal.
   repeatedFailureLimit: 12,
-  tokenBudget: 200_000,
+  tokenBudget: FILE_REVIEW_TOKEN_BUDGET,
   // Bound one live prompt independently from cumulative usage. The engine
   // prunes old diff/file results before paying for a summary.
   contextTokenLimit: 150_000,

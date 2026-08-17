@@ -18,6 +18,7 @@ import {
   AbortCommand,
   AgentBindingResolver,
   CanonicalRecordEnvelope,
+  ChildAdmissionDenied,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -44,7 +45,10 @@ import {
   SubmissionLookupByKey,
   ToolReconciler,
   WakeScheduler,
+  childAdmissionAuthorizerLayer,
   childConversationIdFor,
+  noopOperationMutationPreparerLayer,
+  possessionOperationAuthorizerLayer,
   runIdForSubmission,
   submissionSettlementId,
   type DurableRuntimeFailpointLocation,
@@ -261,6 +265,32 @@ const configLayer = DurableRuntimeConfig.layer({
 let admissionFault: string | undefined;
 /** Test-only routed parent-read failure injected after a child claim. */
 let parentReadFault: ConversationId | undefined;
+/** Current-policy switch proving durable admission, rather than readiness, commits authority. */
+let childAdmissionDenied = false;
+let childAdmissionAuthorizationCalls = 0;
+
+const revocableChildAdmissionAuthorizationLayer = Layer.mergeAll(
+  possessionOperationAuthorizerLayer,
+  noopOperationMutationPreparerLayer,
+  childAdmissionAuthorizerLayer({
+    authorize: (request) =>
+      Effect.suspend(() => {
+        childAdmissionAuthorizationCalls += 1;
+        return childAdmissionDenied
+          ? Effect.fail(
+              ChildAdmissionDenied.make({
+                principal: request.principal,
+                parentSubmissionId: request.parentSubmissionId,
+                parentToolCallId: request.parentToolCallId,
+                childConversationId: request.childConversationId,
+                targetAgentId: request.targetAgentId,
+                reason: "current policy revoked child admission",
+              }),
+            )
+          : Effect.void;
+      }),
+  }),
+);
 
 /** Runtime-order probe for a local child projection that canonical recovery must repair. */
 let deferPreRepairChildNotification = false;
@@ -309,7 +339,11 @@ const parentReadFaultStoreLive = Layer.effect(
   }),
 ).pipe(Layer.provide(MemoryConversationStoreLive));
 
-const baseLayer = (ledger: Layer.Layer<SubmissionLedger>, store = MemoryConversationStoreLive) =>
+const baseLayer = (
+  ledger: Layer.Layer<SubmissionLedger>,
+  store = MemoryConversationStoreLive,
+  authorization = TrustedLocalDurableAuthorizationLayer,
+) =>
   DurableAgentRuntime.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
@@ -319,7 +353,7 @@ const baseLayer = (ledger: Layer.Layer<SubmissionLedger>, store = MemoryConversa
         DurableRuntimeFailpoint.layerTest,
         ToolReconciler.uncertain,
         configLayer,
-        TrustedLocalDurableAuthorizationLayer,
+        authorization,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
   );
@@ -337,6 +371,11 @@ const parentReadFaultTestLayer = baseLayer(
   parentReadFaultStoreLive,
 );
 const childSettlementRepairTestLayer = baseLayer(childSettlementRepairProbeLedgerLive);
+const revocableAdmissionTestLayer = baseLayer(
+  MemorySubmissionLedgerLive.pipe(Layer.provide(NodeCrypto.layer)),
+  MemoryConversationStoreLive,
+  revocableChildAdmissionAuthorizationLayer,
+);
 
 const makeChildFixture = Effect.gen(function* () {
   const childScripted = yield* makeScriptedModel(() => finalParts('{"answer":"child-answer"}'));
@@ -1138,6 +1177,81 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           "released",
         ]);
       }),
+  );
+});
+
+layer(revocableAdmissionTestLayer)("S2 durable child admission authorization", (it) => {
+  it.effect("finishes an admitted child after revocation while denying a new admission", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      childAdmissionDenied = false;
+      childAdmissionAuthorizationCalls = 0;
+      const harness = yield* makeHarness();
+      const run = drive(harness);
+      const parent = yield* harness.submitParent(
+        "conversation-s2-admission-commit",
+        "admission-commit-1",
+      );
+      const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+
+      // Current policy authorizes the first admission, which commits before this crash. No
+      // materialization, lineage, readiness, or parent start link has completed yet.
+      yield* armFailpoint("subagent:after-admit");
+      const killed = yield* Effect.exit(run(parent.conversationId));
+      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+      expect(childAdmissionAuthorizationCalls).toBe(1);
+
+      const ledger = yield* SubmissionLedger;
+      const admitted = yield* ledger.resolveAdmission(
+        SubmissionLookupByKey.make({
+          conversationId: childConversationId,
+          principal: PRINCIPAL,
+          idempotencyKey: decodeIdempotencyKey(
+            `subagent:${runIdForSubmission(parent.submissionId)}:delegate-1`,
+          ),
+        }),
+      );
+      expect(admitted._tag).toBe("Admitted");
+      if (admitted._tag !== "Admitted") throw new Error("Expected committed child admission");
+
+      // Revocation cannot retroactively reject an accepted Submission. Recovery validates the
+      // exact canonical request/admission binding and completes the already-authorized child.
+      childAdmissionDenied = true;
+      const runtime = yield* DurableAgentRuntime;
+      const reports = yield* runtime.runRecovery;
+      const repaired = reports.find((report) => report.submissionId === parent.submissionId);
+      expect(repaired?.decision._tag).toBe("RepairSubagentStartLink");
+      expect(repaired?.disposition).toBe("repaired");
+      expect(childAdmissionAuthorizationCalls).toBe(1);
+      expect(["ready", "input-applied"]).toContain(
+        (yield* parentState(admitted.submission.submissionId)).state,
+      );
+      expect(
+        payloadsOf(yield* readLog(childConversationId), "SubagentLineageRecorded"),
+      ).toHaveLength(1);
+      expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentStarted")).toHaveLength(1);
+
+      // The same revoked policy still denies a genuinely new child admission.
+      const deniedHarness = yield* makeHarness();
+      const deniedParent = yield* deniedHarness.submitParent(
+        "conversation-s2-admission-revoked",
+        "admission-revoked-1",
+      );
+      const denied = yield* Effect.exit(drive(deniedHarness)(deniedParent.conversationId));
+      expect(failureTag(denied)).toBe("ChildAdmissionDenied");
+      expect(childAdmissionAuthorizationCalls).toBe(2);
+      const deniedResolution = yield* ledger.resolveAdmission(
+        SubmissionLookupByKey.make({
+          conversationId: childConversationIdFor(deniedParent.submissionId, DELEGATE_CALL),
+          principal: PRINCIPAL,
+          idempotencyKey: decodeIdempotencyKey(
+            `subagent:${runIdForSubmission(deniedParent.submissionId)}:delegate-1`,
+          ),
+        }),
+      );
+      expect(deniedResolution._tag).toBe("NotAdmitted");
+    }),
   );
 });
 

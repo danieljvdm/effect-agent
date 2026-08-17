@@ -23,7 +23,6 @@ import {
   JoinedToHost,
   LedgerError,
   MarkReadyRequest,
-  QueueSequence,
   ResumeSuspensionRequest,
   ScanConversationNonterminalRequest,
   SettlementConflict,
@@ -146,7 +145,6 @@ export class LedgerScanConversationNonterminalPageCall extends Schema.TaggedClas
   "@effect-agent/storage-cloudflare/LedgerScanConversationNonterminalPageCall",
 )("LedgerScanConversationNonterminalPage", {
   request: ScanConversationNonterminalRequest,
-  afterQueueSequence: Schema.optionalKey(QueueSequence),
 }) {}
 
 /** Routed `ConversationStore.materialize` against the owning Object. */

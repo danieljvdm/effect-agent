@@ -20,6 +20,7 @@ import {
   DefinitionDigests,
   DeploymentId,
   Digest,
+  DigestError,
   digestJson,
   EMPTY_TAIL_DIGEST,
   FencedAppendRequest,
@@ -265,6 +266,33 @@ const withLedger = <A, E>(
 const withSql = <A, E>(filename: string, effect: Effect.Effect<A, E, SqlClientService.SqlClient>) =>
   Effect.provide(effect, SqliteClient.layer({ filename }));
 
+const failingDigestCryptoLayer = Layer.succeed(Crypto.Crypto)(
+  Crypto.make({
+    randomBytes: (size) => new Uint8Array(size),
+    digest: () =>
+      Effect.fail(
+        PlatformError.systemError({
+          _tag: "Unknown",
+          module: "SqliteLedgerTestCrypto",
+          method: "digest",
+          description: "injected operational failure",
+        }),
+      ),
+  }),
+);
+
+const ledgerLayerWithCrypto = (filename: string, cryptoLayer: Layer.Layer<Crypto.Crypto>) =>
+  submissionLedgerLayer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        storageConfigLayer({ filename }),
+        SqliteStorageFailpoint.layer,
+        SqliteClient.layer({ filename }),
+        cryptoLayer,
+      ),
+    ),
+  );
+
 /** ConversationStore and SubmissionLedger sharing one SqlClient over one database file. */
 const combinedLayer = (filename: string) =>
   Layer.mergeAll(conversationStoreLayer, submissionLedgerLayer).pipe(
@@ -506,6 +534,58 @@ describe("SqliteSubmissionLedger", () => {
             expect(repaired.snapshot.reservation?.recordDigest).toBe(reservation.recordDigest);
           }),
         ),
+    ),
+  );
+
+  it.effect("propagates operational Crypto failure while checking recovery integrity", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const admitted = yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const admitted = yield* ledger.admit(
+              yield* admission("recovery-crypto-failure", "recovery-crypto-failure", {
+                work: "digest",
+              }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+            const claim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation("recovery-crypto-failure"),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            if (Option.isNone(claim)) return yield* Effect.die("missing settlement claim");
+            const reservation = yield* settlementReservation(
+              admitted,
+              claim.value.ownershipToken,
+              "completed",
+            );
+            yield* ledger.reserveSettlement(reservation);
+            return admitted;
+          }),
+        );
+        if (admitted === undefined) return;
+        const loaded = yield* Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          return yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+          );
+        }).pipe(
+          Effect.provide(ledgerLayerWithCrypto(filename, failingDigestCryptoLayer)),
+          Effect.exit,
+        );
+        expect(Exit.isFailure(loaded)).toBe(true);
+        if (Exit.isFailure(loaded)) {
+          const error = Cause.squash(loaded.cause);
+          expect(error).toBeInstanceOf(LedgerError);
+          if (error instanceof LedgerError) {
+            expect(error.operation).toBe("ledger load recovery snapshot");
+            expect(error.cause).toBeInstanceOf(DigestError);
+          }
+        }
+      }),
     ),
   );
 
@@ -909,7 +989,7 @@ describe("SqliteSubmissionLedger", () => {
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
             return yield* sql<Record<string, unknown>>`
-              SELECT submission_id, settlement_id, outcome, finalized_at
+              SELECT submission_id, settlement_id, outcome, reserved_at, finalized_at
               FROM effect_agent_settlement_reservations
             `;
           }),
@@ -1130,7 +1210,9 @@ describe("SqliteSubmissionLedger", () => {
 
         // Corrupt one redundant reservation column while retaining the finalized timestamp
         // and canonical envelope needed for repair.
-        const initialFinalizedAt = (yield* reservationRows)[0]?.finalized_at;
+        const initialReservation = (yield* reservationRows)[0];
+        const initialReservedAt = initialReservation?.reserved_at;
+        const initialFinalizedAt = initialReservation?.finalized_at;
         yield* withSql(
           filename,
           Effect.gen(function* () {
@@ -1144,6 +1226,7 @@ describe("SqliteSubmissionLedger", () => {
         );
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "failed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
 
@@ -1168,6 +1251,7 @@ describe("SqliteSubmissionLedger", () => {
         );
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "failed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
         yield* select("ledger:repair-settlement:after");
@@ -1177,14 +1261,17 @@ describe("SqliteSubmissionLedger", () => {
         );
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "completed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
+        yield* TestClock.adjust(1_000);
         yield* select(undefined);
         const repaired = yield* repairOnce;
         expect(repaired.outcome).toBe("completed");
         expect(repaired.settledAt).toEqual(settlement.settledAt);
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "completed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
 
@@ -2248,6 +2335,14 @@ describe("SqliteSubmissionLedger", () => {
                   )
                   .pipe(Effect.exit);
                 expect(Exit.isFailure(resume)).toBe(true);
+                if (Exit.isFailure(resume)) {
+                  const error = Cause.squash(resume.cause);
+                  expect(error).toBeInstanceOf(LedgerError);
+                  if (error instanceof LedgerError) {
+                    expect(error.operation).toBe("ledger resume suspension");
+                    expect(error.cause).toBeInstanceOf(SqliteStorageCorruptionError);
+                  }
+                }
                 const parent = yield* ledger.loadRecoverySnapshot(
                   RecoverySnapshotRequest.make({ submissionId: seeded.parent.submissionId }),
                 );

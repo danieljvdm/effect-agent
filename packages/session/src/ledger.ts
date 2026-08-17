@@ -9,7 +9,7 @@ import {
 } from "@effect-agent/core";
 import { Context, Crypto, Duration, Effect, Option, Schema, Stream } from "effect";
 
-import { digestJson } from "./digest.ts";
+import { DigestError, digestJson } from "./digest.ts";
 import {
   AbortRequested,
   ApprovalDecision,
@@ -531,11 +531,12 @@ export class ChildSettledNotification extends Schema.Class<ChildSettledNotificat
 /**
  * This notification records operational child-settlement coverage but never makes a lane
  * runnable by itself. `still-waiting` means the parent currently has a matching suspension;
- * `not-waiting` means it does not. `child-not-terminal` is a successful no-op for a locally
- * present preterminal child: no parent coverage was recorded, and the coordinator may first
- * repair that child's projection from canonical history. `woken` remains decode-compatible with
- * stored/protocol results from the earlier combined operation but conforming adapters no longer
- * produce it; only `resumeSuspension` may clear a suspension.
+ * `not-waiting` means it does not. `child-not-terminal` is a successful no-op for any locally
+ * present child whose exact finalized settlement projection is not verified, including
+ * `terminalizing` or corrupt/missing reservation state: no parent coverage was recorded, and the
+ * coordinator may first repair that child's projection from canonical history. `woken` remains
+ * decode-compatible with stored/protocol results from the earlier combined operation but
+ * conforming adapters no longer produce it; only `resumeSuspension` may clear a suspension.
  */
 export const ChildSettledOutcome = Schema.Literals([
   "woken",
@@ -777,11 +778,16 @@ export class RecoverySnapshotRequest extends Schema.Class<RecoverySnapshotReques
   submissionId: SubmissionId,
 }) {}
 
-/** Adapter-owned, indexed recovery worklist for one Conversation lane. */
+/**
+ * Adapter-owned, indexed recovery worklist for one Conversation lane. `afterQueueSequence` is an
+ * exclusive storage cursor so routed pages start at the owner-side index instead of replaying and
+ * dropping an already-read prefix.
+ */
 export class ScanConversationNonterminalRequest extends Schema.Class<ScanConversationNonterminalRequest>(
   "@effect-agent/session/ScanConversationNonterminalRequest",
 )({
   conversationId: ConversationId,
+  afterQueueSequence: Schema.optionalKey(QueueSequence),
 }) {}
 
 /** One joined/joining Submission of a host Run, as the host's recovery sees it. */
@@ -1037,13 +1043,15 @@ export type SubmissionLedgerFailure =
  *   `SettlementConflict` once settled.
  * - `recordChildSettled` — idempotently records cross-lane operational coverage. The child's
  *   canonical Settlement is the authority. The runtime may report it after the exact reserved
- *   record is appended and before ledger finalization, so same-store adapters accept
- *   `terminalizing` only when its exact reservation exists; an earlier child is an
- *   adapter-checked `child-not-terminal` result. That result records no parent coverage: it lets
- *   canonical settlement repair proceed in the same store, where the repaired child row becomes
- *   the parent's atomic coverage source. The operation records coverage but never settles or
- *   wakes the parent and requires no ownership token. Only the coordinator's
- *   canonical-evidence-authorized `resumeSuspension` transition may make the parent runnable.
+ *   record is appended and before ledger finalization, but a same-store `terminalizing` row is
+ *   only a disposable reservation projection and therefore returns `child-not-terminal`, as does
+ *   any locally settled row whose finalized reservation cannot be verified. That result records
+ *   no parent coverage: it lets canonical settlement repair proceed in the same store, where the
+ *   repaired child row becomes the parent's atomic coverage source. Cross-store adapters may
+ *   durably record notification coverage when the child is absent locally. The operation records
+ *   coverage but never settles or wakes the parent and requires no ownership token. Only the
+ *   coordinator's canonical-evidence-authorized `resumeSuspension` transition may make the parent
+ *   runnable.
  * - `reserveChildBudget` — idempotent get-or-create of the parent-owned child budget
  *   reservation (spec §12 step 2), fenced by the parent lane's live `OwnershipToken`. An
  *   identical replay returns the stored row with `replayed` set (unfenced, mirroring
@@ -1074,8 +1082,9 @@ export type SubmissionLedgerFailure =
  * - `scanNonterminal` — streams every Submission whose state is not `settled`, ordered by
  *   (conversationId, queueSequence); recovery's admission-independent worklist (DUR-014).
  * - `scanConversationNonterminal` — streams only one Conversation's nonterminal Submissions in
- *   queue order through an adapter-owned indexed query; wake handling never filters a global
- *   worklist in the coordinator.
+ *   queue order through an adapter-owned indexed query, optionally strictly after its storage
+ *   cursor; wake handling never filters a global worklist in the coordinator and routed paging
+ *   never replays an already-read prefix.
  * - `loadRecoverySnapshot` — strongly consistent full snapshot for the pure recovery classifier.
  *
  * No operation claims exactly-once external side effects; the ledger records decisions
@@ -1261,7 +1270,16 @@ export const validateCanonicalSettlementRepair = Effect.fn(
     ),
   );
   const actualDigest = yield* digestJson(encoded).pipe(
-    Effect.mapError((cause) => invalid(`Canonical settlement digest failed: ${cause.message}`)),
+    // Preserve the typed digest failure as the diagnostic cause. Adapters may classify a plain
+    // validation LedgerError as invalid persisted evidence, but must propagate this operational
+    // Crypto failure instead of converting it to reservationIntegrity: invalid.
+    Effect.mapError((cause) =>
+      LedgerError.make({
+        operation: "repairSettlementFromCanonical",
+        message: `Canonical settlement digest failed: ${cause.message}`,
+        cause,
+      }),
+    ),
   );
   if (actualDigest !== request.recordDigest) {
     return yield* invalid("Canonical settlement record digest does not match its exact envelope");
@@ -1275,6 +1293,16 @@ export const validateCanonicalSettlementRepair = Effect.fn(
     recordDigest: request.recordDigest,
   });
 });
+
+const isDigestError = Schema.is(DigestError);
+
+/**
+ * Distinguishes an operational Crypto failure from invalid canonical-settlement evidence. Recovery
+ * adapters propagate this failure; only ordinary validation failures may become an `invalid`
+ * disposable-reservation classification.
+ */
+export const isCanonicalSettlementRepairOperationalFailure = (error: LedgerError): boolean =>
+  error.operation === "repairSettlementFromCanonical" && isDigestError(error.cause);
 
 /** Deterministic batch identity of one Submission's canonical `AbortRequested` append. */
 export const submissionAbortBatchId = (submissionId: SubmissionId): BatchId =>

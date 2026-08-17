@@ -254,7 +254,7 @@ const childSettlementCoverage = (stored: StoredSubmission | undefined): ChildSet
       : "invalid";
   }
   if (stored.row.state === "terminalizing") {
-    return stored.reservation === undefined ? "not-covered" : "covered";
+    return "not-covered";
   }
   return "not-covered";
 };
@@ -2303,6 +2303,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                       .filter(
                         (stored) =>
                           stored.row.conversationId === request.conversationId &&
+                          (request.afterQueueSequence === undefined ||
+                            stored.row.queueSequence > request.afterQueueSequence) &&
                           stored.row.state !== "settled",
                       )
                       .sort((left, right) => left.row.queueSequence - right.row.queueSequence)

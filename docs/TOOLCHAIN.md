@@ -241,14 +241,14 @@ zero-config defaults.
 
 ## Script runners
 
-Repository scripts run under **Bun** (`bun scripts/<name>.ts`) — there is no
-`tsx` in this repository. The one exception is anything that imports
-`@effect-agent/storage-sqlite`: Bun does not implement `node:sqlite`, so
-`admin:durable` runs under `node --experimental-transform-types` (plain
-strip-only mode rejects the framework's runtime `namespace` declarations),
-and the platform-node crash/soak harnesses spawn their TypeScript worker
-entries the same way (verified: the full process-kill matrix passes under
-transform-mode workers).
+Repository scripts normally run under **Bun** (`bun scripts/<name>.ts`). Anything
+that imports `@effect-agent/storage-sqlite` must instead use Node because Bun does
+not implement `node:sqlite`. Those entrypoints run with the explicit `tsx` loader
+(`node --import tsx`): plain Node strip-only mode rejects the framework's runtime
+`namespace` declarations, while Node 26 removed the former
+`--experimental-transform-types` flag. The root catalog pins `tsx`, and
+`admin:durable` plus the platform-node crash/soak harnesses use that same
+Node-compatible boundary.
 
 ## Post-install setup
 

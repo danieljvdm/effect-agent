@@ -157,6 +157,30 @@ export class ReviewSelectionViolation extends Schema.TaggedError<ReviewSelection
 const sameFiles = (left: ReadonlyArray<ChangedFile>, right: ReadonlyArray<ChangedFile>): boolean =>
   left.length === right.length && left.every((file, index) => Equal.equals(file, right[index]));
 
+/**
+ * The selected-source decorator may add bounded base/head evidence to a
+ * patchless selected file. That is host-side enrichment of the exact same
+ * changed-file identity, not a second selection. Keep every selection field
+ * stable while deliberately excluding only those two evidence fields.
+ */
+const sameSelectedFileIdentity = (left: ChangedFile, right: ChangedFile): boolean =>
+  left.path === right.path &&
+  left.status === right.status &&
+  left.additions === right.additions &&
+  left.deletions === right.deletions &&
+  left.previousPath === right.previousPath &&
+  left.patch === right.patch;
+
+const sameSelectedFiles = (
+  left: ReadonlyArray<ChangedFile>,
+  right: ReadonlyArray<ChangedFile>,
+): boolean =>
+  left.length === right.length &&
+  left.every((file, index) => {
+    const candidate = right[index];
+    return candidate !== undefined && sameSelectedFileIdentity(file, candidate);
+  });
+
 const validateSelection = (input: {
   readonly selection: ReviewSelection;
   readonly files: ReadonlyArray<ChangedFile>;
@@ -172,14 +196,14 @@ const validateSelection = (input: {
       }),
     );
   }
-  if (!sameFiles(sealed.files, files)) {
+  if (!sameSelectedFiles(sealed.files, files)) {
     return Effect.fail(
       ReviewSelectionViolation.make({
         reason: "review selection evidence does not match the model-visible source range",
       }),
     );
   }
-  if (sealed.totalFiles !== files.length) {
+  if (sealed.mode === "incremental" && sealed.totalFiles !== files.length) {
     return Effect.fail(
       ReviewSelectionViolation.make({
         reason: "review selection total does not match the model-visible source range",

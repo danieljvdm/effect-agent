@@ -335,8 +335,10 @@ stores a versioned `dirty`/`processed` generation beside its single alarm slot:
 Child-to-parent settlement follows the same quiescent contract. After the exact child Settlement
 record is canonical but before child ledger finalization, the child routes the idempotent durable
 settlement marker to the parent. That routed mutation pre-arms and dirties the parent, so child
-eviction after finalization cannot strand a quiescent parent. Same-store ledgers accept this
-notification only for the exact `terminalizing` reservation; earlier states fail closed.
+eviction after finalization cannot strand a quiescent parent. A cross-Object parent, where the child
+row is absent locally, records that pre-finalization marker. A same-store `terminalizing` child is
+still only a disposable projection and returns `child-not-terminal`; canonical repair first makes
+the finalized local row authoritative coverage, then the notification replays idempotently.
 
 `CloudflareConversationClient.awaitProgress(conversationId, afterSequence)` carries that same
 Effect-native boundary across RPC. A normal wait performs no periodic read and creates no alarm

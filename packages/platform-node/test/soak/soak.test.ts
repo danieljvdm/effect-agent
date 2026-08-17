@@ -17,7 +17,13 @@ import { expect, layer } from "@effect/vitest";
 import { Duration, Effect, FileSystem, Option, Schema, Stream, type Scope } from "effect";
 
 import { NodeDurableHost } from "../../src/index.ts";
-import { packageRoot, waitUntil, withHost, withRuntime } from "../crash/harness.ts";
+import {
+  packageRoot,
+  typescriptNodeArguments,
+  waitUntil,
+  withHost,
+  withRuntime,
+} from "../crash/harness.ts";
 import {
   SOAK_DELEGATE_CALL_ID,
   SOAK_CALLER,
@@ -93,7 +99,7 @@ const startSoakWorker = (
 ): Effect.Effect<SoakWorker, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const child = spawn(process.execPath, ["--experimental-transform-types", soakWorkerEntry], {
+      const child = spawn(process.execPath, typescriptNodeArguments(soakWorkerEntry), {
         cwd: packageRoot,
         env: {
           ...process.env,

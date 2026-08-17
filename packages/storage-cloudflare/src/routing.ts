@@ -6,6 +6,7 @@ import {
   ConversationStoreError,
   LedgerError,
   RecoverySnapshot,
+  ScanConversationNonterminalRequest,
   SubmissionLedger,
   SubmissionLookupById,
   type AdmissionConflict,
@@ -733,28 +734,28 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     scanConversationNonterminal: (request) =>
       request.conversationId === options.localConversationId
         ? local.scanConversationNonterminal(request)
-        : Stream.paginate(
-            undefined as SubmissionSnapshot["queueSequence"] | undefined,
-            (afterQueueSequence) =>
-              foreignLedgerCall(
-                "ledger scan conversation nonterminal",
-                request.conversationId,
-                LedgerScanConversationNonterminalPageCall.make({
-                  request,
+        : Stream.paginate(request.afterQueueSequence, (afterQueueSequence) =>
+            foreignLedgerCall(
+              "ledger scan conversation nonterminal",
+              request.conversationId,
+              LedgerScanConversationNonterminalPageCall.make({
+                request: ScanConversationNonterminalRequest.make({
+                  conversationId: request.conversationId,
                   ...(afterQueueSequence === undefined ? {} : { afterQueueSequence }),
                 }),
-                "LedgerScanConversationNonterminalPageResult",
-                noExtraFailure,
-              ).pipe(
-                Effect.map((reply) => {
-                  const last = reply.submissions[reply.submissions.length - 1];
-                  const next: Option.Option<SubmissionSnapshot["queueSequence"] | undefined> =
-                    last === undefined || reply.submissions.length < LEDGER_SCAN_PAGE_SIZE
-                      ? Option.none()
-                      : Option.some(last.queueSequence);
-                  return [reply.submissions, next] as const;
-                }),
-              ),
+              }),
+              "LedgerScanConversationNonterminalPageResult",
+              noExtraFailure,
+            ).pipe(
+              Effect.map((reply) => {
+                const last = reply.submissions[reply.submissions.length - 1];
+                const next: Option.Option<SubmissionSnapshot["queueSequence"] | undefined> =
+                  last === undefined || reply.submissions.length < LEDGER_SCAN_PAGE_SIZE
+                    ? Option.none()
+                    : Option.some(last.queueSequence);
+                return [reply.submissions, next] as const;
+              }),
+            ),
           ),
 
     loadRecoverySnapshot: (request) =>
@@ -1047,16 +1048,8 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
     }
     case "LedgerScanConversationNonterminalPage": {
       const ledger = yield* SubmissionLedger;
-      const stream = ledger.scanConversationNonterminal(request.request);
-      const afterQueueSequence = request.afterQueueSequence;
-      const page =
-        afterQueueSequence === undefined
-          ? stream
-          : stream.pipe(
-              Stream.dropWhile((submission) => submission.queueSequence <= afterQueueSequence),
-            );
       return yield* capture(
-        page.pipe(
+        ledger.scanConversationNonterminal(request.request).pipe(
           Stream.take(LEDGER_SCAN_PAGE_SIZE),
           Stream.runCollect,
           Effect.map((submissions) =>

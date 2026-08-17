@@ -10,7 +10,7 @@ finite policy, and an explicit Model Binding. This page builds one from scratch.
 publish to npm on the opt-in `beta` dist-tag:
 
 ```sh
-npm install @effect-agent/core@beta @effect-agent/engine@beta @effect/platform-node effect
+npm install @effect-agent/core@beta @effect-agent/engine@beta @effect/ai-openai@beta @effect/platform-node effect
 ```
 
 ## 1. Model the boundary

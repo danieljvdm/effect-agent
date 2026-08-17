@@ -36,12 +36,11 @@ import {
   ReviewPublicationPlan,
   ReviewState,
   ReviewToolkitLayer,
-  selectReviewRange,
-  selectedPullRequestSourceLayer,
   StoredReviewFinding,
   WalkthroughEntry,
   unavailableReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
+import { selectReviewRange, selectedPullRequestSourceLayer } from "../src/internal/review-state.ts";
 import {
   collectingReviewPublisherLayer,
   FixtureFile,
@@ -1213,7 +1212,14 @@ describe("offline review run", () => {
         status: "modified",
         additions: 1,
         deletions: 1,
-        patch: "@@ -1 +1 @@\n-before\n+after",
+      });
+      // The compare payload has no patch. The selected-source decorator must
+      // enrich it from the current full source without invalidating the
+      // authenticated incremental selection's stable identity.
+      const enrichedCorrectiveFile = ChangedFile.make({
+        ...correctiveFile,
+        reviewBaseContent: "before",
+        reviewHeadContent: "after",
       });
       const metadata = PullRequestMetadata.make({
         repository: "acme/widgets",
@@ -1281,7 +1287,7 @@ describe("offline review run", () => {
           metadata,
           files: [
             FixtureFile.make({ file: unchangedFile, headContent: "unchanged" }),
-            FixtureFile.make({ file: correctiveFile, headContent: "after" }),
+            FixtureFile.make({ file: enrichedCorrectiveFile, headContent: "after" }),
           ],
         }),
       );
@@ -1312,6 +1318,78 @@ describe("offline review run", () => {
       expect(outcome.plan.body).toContain(priorFinding.title);
       expect((yield* scripted.prompts).join("\n")).not.toContain("src/unchanged.ts");
     }),
+  );
+
+  it.effect(
+    "reports a full source truncated by the host bound as incomplete instead of rejecting it",
+    () =>
+      Effect.gen(function* () {
+        const file = ChangedFile.make({
+          path: "src/visible.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          patch: "@@ -1 +1 @@\n-old\n+new",
+        });
+        const metadata = PullRequestMetadata.make({
+          repository: "acme/widgets",
+          number: 32,
+          title: "Bounded source",
+          body: "",
+          baseRef: "main",
+          baseSha: "1".repeat(40),
+          headRef: "fix/bounded-source",
+          headSha: "2".repeat(40),
+          // The adapter's visible list is bounded below GitHub's total.
+          totalChangedFiles: 2,
+        });
+        const selection = selectReviewRange({
+          requestedMode: "final",
+          current: metadata,
+          fullFiles: [file],
+          profileFingerprint: "a".repeat(64),
+          priorState: undefined,
+          comparison: undefined,
+        });
+        const scripted = yield* makeOfflineReviewerModel({
+          diffPath: file.path,
+          readPath: file.path,
+          review: CodeReview.make({
+            summary: "one visible file",
+            verdict: "approve",
+            findings: [],
+          }),
+        });
+        const outcome = yield* executeReview(Agent.withModel(PullRequestReviewer, scripted.model), {
+          post: false,
+          applyVerdict: false,
+          selection,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              ReviewToolkitLayer.pipe(
+                Layer.provideMerge(
+                  fixturePullRequestSourceLayer(
+                    FixturePullRequest.make({
+                      metadata,
+                      files: [FixtureFile.make({ file, headContent: "new" })],
+                    }),
+                  ),
+                ),
+              ),
+              collectingReviewPublisherLayer(
+                yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]),
+              ),
+              testIdGeneratorLayer,
+              unavailableReviewStateAuthenticatorLayer("bounded source test"),
+            ),
+          ),
+          Effect.scoped,
+        );
+
+        expect(outcome.coverage.status).toBe("incomplete");
+        expect(outcome.plan.body).toContain("Reviewed 1 of 2 changed files");
+      }),
   );
 
   it.effect(

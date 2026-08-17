@@ -15,6 +15,7 @@ import {
   OperationAuthorizer,
   OperationDenied,
   OperationCaller,
+  OperationMutationPreparer,
   Principal,
   ProducerId,
   ResolutionNeverHappened,
@@ -23,7 +24,6 @@ import {
   ToolReconciler,
   UnknownResolutionCommand,
   WakeScheduler,
-  noopOperationMutationPreparerLayer,
   possessionChildAdmissionAuthorizerLayer,
   type AuthorizedOperation,
   type DurableSubmitOptions,
@@ -213,7 +213,7 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
   }),
 );
 
-/** Records any protected storage or wait-boundary entry while the foreign-target sweep is armed. */
+/** Records every protected storage or wait-boundary entry; armed foreign sweeps also fail it. */
 class ProtectedBoundaryControl extends Context.Service<
   ProtectedBoundaryControl,
   {
@@ -233,16 +233,13 @@ const protectedBoundaryControlLayer = Layer.effect(
       enable: Ref.set(accesses, []).pipe(Effect.andThen(Ref.set(enabled, true))),
       disable: Ref.set(enabled, false),
       record: (operation) =>
-        Ref.get(enabled).pipe(
+        Ref.update(accesses, (all) => [...all, operation]).pipe(
+          Effect.andThen(Ref.get(enabled)),
           Effect.flatMap((isEnabled) =>
             isEnabled
-              ? Ref.update(accesses, (all) => [...all, operation]).pipe(
-                  Effect.andThen(
-                    Effect.die(
-                      new Error(
-                        `Authorization reached protected boundary ${operation} before denying the foreign target`,
-                      ),
-                    ),
+              ? Effect.die(
+                  new Error(
+                    `Authorization reached protected boundary ${operation} before denying the foreign target`,
                   ),
                 )
               : Effect.void,
@@ -350,10 +347,21 @@ const guardedWakeSchedulerLayer = Layer.effect(
   }),
 ).pipe(Layer.provide(WakeScheduler.layerNoop));
 
+const guardedOperationMutationPreparerLayer = Layer.effect(
+  OperationMutationPreparer,
+  Effect.gen(function* () {
+    const control = yield* ProtectedBoundaryControl;
+    return OperationMutationPreparer.of({
+      prepare: (request) => control.record(`mutation.prepare.${request.operation}`),
+    });
+  }),
+);
+
 const protectedBoundaryLayer = Layer.mergeAll(
   guardedSubmissionLedgerLayer,
   guardedConversationStoreLayer,
   guardedWakeSchedulerLayer,
+  guardedOperationMutationPreparerLayer,
 ).pipe(Layer.provideMerge(protectedBoundaryControlLayer));
 
 const baseLayer = Layer.mergeAll(
@@ -362,7 +370,6 @@ const baseLayer = Layer.mergeAll(
   ToolReconciler.uncertain,
   configLayer,
   tenantScopedAuthorizerLayer,
-  noopOperationMutationPreparerLayer,
   possessionChildAdmissionAuthorizerLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
@@ -541,11 +548,19 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         const explainOwn = yield* runtime.explain(ownReceipt.submissionId, CALLER);
         expect(explainOwn.submission.submissionId).toBe(ownReceipt.submissionId);
 
+        // Isolate the two Conversation-targeted admin reads. Both must use the scoped ledger
+        // port; a global scan would cross tenant lanes even though its returned rows are filtered.
+        yield* protectedBoundaries.takeAccesses;
         const explainConvOwn = yield* runtime.explainConversation(ownConversationId, CALLER);
         expect(explainConvOwn).toEqual([]); // settled lane: no nonterminal explanations
 
         const verifyOwn = yield* runtime.verify(ownConversationId, CALLER);
         expect(verifyOwn.ok).toBe(true);
+        const ownAdminAccesses = yield* protectedBoundaries.takeAccesses;
+        expect(ownAdminAccesses.filter((operation) => operation.startsWith("ledger.scan"))).toEqual(
+          ["ledger.scanConversationNonterminal", "ledger.scanConversationNonterminal"],
+        );
+        expect(ownAdminAccesses).not.toContain("ledger.scanNonterminal");
 
         yield* runtime.wake(ownConversationId, CALLER);
 

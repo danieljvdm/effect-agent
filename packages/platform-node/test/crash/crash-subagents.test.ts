@@ -766,6 +766,18 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   supplierDir: site.supplier,
                 });
                 yield* waitForFile(childMarker);
+                // `driveResolved` runs recovery before it claims the child lane. The child-model
+                // marker is written only after that recovery completed, so capture the durable
+                // parent state before either worker is killed: the earlier child-worker pass has
+                // already restored its waiting checkpoint.
+                const parentBeforeKill = yield* withRuntime(
+                  site.db,
+                  Effect.gen(function* () {
+                    const parent = yield* lookupByKey(conversation, key);
+                    return yield* submissionSnapshot(parent.submissionId);
+                  }),
+                );
+                expect(parentBeforeKill.state).toBe("suspended");
                 parentWorker.kill();
                 childWorker.kill();
                 const parentExit = yield* parentWorker.awaitExit;
@@ -784,17 +796,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const parent = yield* lookupByKey(conversation, key);
                 const started = yield* startedPayloadOf(conversation);
-                // Independent fenced recovery: either the child worker's pre-drive scan already
-                // restored the parent checkpoint after its short lease expired, or this startup
-                // pass does so now. Both histories leave the parent suspended on the same
-                // canonical child while that child resumes from its own Turn boundary.
+                // The pre-kill durable state proves the child worker's earlier recovery pass
+                // already repaired the parent. The replacement host therefore observes a
+                // suspended parent with a nonterminal child and defers it without another
+                // repair; the child itself resumes from its interrupted Turn boundary.
                 const parentReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === parent.submissionId,
                 );
-                expect([
-                  ["EnsureWaitingForChild", "repaired"],
-                  ["AwaitChildSettlement", "deferred"],
-                ]).toContainEqual([parentReport?.decision._tag, parentReport?.disposition]);
+                expect(parentReport?.decision._tag).toBe("AwaitChildSettlement");
+                expect(parentReport?.disposition).toBe("deferred");
                 const childReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === started.childSubmissionId,
                 );

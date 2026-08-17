@@ -81,6 +81,7 @@ export default defineConfig({
               durableObjects: {
                 CONVERSATIONS: { className: "TravelPlannerConversationObject", useSQLite: true },
                 LIMITED: { className: "TravelPlannerLimitedObject", useSQLite: true },
+                RESEARCH_GATE: { className: "TravelPlannerResearchGate", useSQLite: true },
               },
             },
           }),

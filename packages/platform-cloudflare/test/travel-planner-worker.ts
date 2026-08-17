@@ -42,6 +42,7 @@ import {
   type BookingRef,
   type SupplierBookRequest,
 } from "@effect-agent/testing";
+import { DurableObject } from "cloudflare:workers";
 import { Effect, Layer, Option, Stream } from "effect";
 import { LanguageModel, Model, type Response as AiResponse } from "effect/unstable/ai";
 
@@ -54,13 +55,65 @@ import { runtimeEvictionFailpoint, storageEvictionFailpoint } from "./fixtures.t
  * Effects are constructed for execution inside the addressed Object.
  */
 interface CloudflarePhase6Harness {
-  readonly bindings: Effect.Effect<ReadonlyArray<ResolvedBinding>>;
+  readonly bindings: (
+    researcherGate: DurableObjectStub<TravelPlannerResearchGate>,
+  ) => Effect.Effect<ReadonlyArray<ResolvedBinding>>;
   readonly supplierDesk: SupplierBookingDesk["Service"];
   readonly supplierDeskLayer: Layer.Layer<SupplierBookingDesk>;
   readonly supplierReconcilerLayer: Layer.Layer<ToolReconciler>;
-  readonly releaseResearcherGate: Effect.Effect<void>;
-  readonly resetResearcherGate: Effect.Effect<void>;
+  readonly releaseResearcherGate: (
+    namespace: DurableObjectNamespace<TravelPlannerResearchGate>,
+  ) => Effect.Effect<void>;
+  readonly resetResearcherGate: (
+    namespace: DurableObjectNamespace<TravelPlannerResearchGate>,
+  ) => Effect.Effect<void>;
   readonly guideInvocationCount: Effect.Effect<number>;
+}
+
+const RESEARCHER_GATE_NAME = "phase-6-researcher";
+const RESEARCHER_GATE_RELEASED_KEY = "released";
+
+interface TravelPlannerWorkerEnvironment {
+  readonly RESEARCH_GATE: DurableObjectNamespace<TravelPlannerResearchGate>;
+}
+
+/**
+ * Fixture-only coordination Object. Both the pending wait RPC and the release RPC execute in this
+ * Object's I/O context, so releasing wakes an already-running researcher without cross-Object
+ * Deferred/Ref access, wall-clock polling, or forcing a Conversation Object eviction.
+ */
+export class TravelPlannerResearchGate extends DurableObject {
+  #waiter:
+    | {
+        readonly promise: Promise<void>;
+        readonly resolve: () => void;
+      }
+    | undefined;
+
+  async waitUntilReleased(): Promise<void> {
+    if ((await this.ctx.storage.get<boolean>(RESEARCHER_GATE_RELEASED_KEY)) === true) return;
+    if (this.#waiter !== undefined) return this.#waiter.promise;
+    let resolve!: () => void;
+    const promise = new Promise<void>((resume) => {
+      resolve = resume;
+    });
+    this.#waiter = { promise, resolve };
+    return promise;
+  }
+
+  async release(): Promise<void> {
+    await this.ctx.storage.put(RESEARCHER_GATE_RELEASED_KEY, true);
+    const waiter = this.#waiter;
+    this.#waiter = undefined;
+    waiter?.resolve();
+  }
+
+  async reset(): Promise<void> {
+    if (this.#waiter !== undefined) {
+      throw new Error("Cannot reset the Phase 6 researcher gate while a waiter is active.");
+    }
+    await this.ctx.storage.delete(RESEARCHER_GATE_RELEASED_KEY);
+  }
 }
 
 const usage = { inputTokens: { total: 128 }, outputTokens: { total: 96 } };
@@ -151,7 +204,6 @@ const cloudflareBookingModel = promptAwareModel(
 );
 
 const makeCloudflarePhase6Harness = (): CloudflarePhase6Harness => {
-  let researcherGateReleased = false;
   let guideInvocations = 0;
   const bookings = new Map<string, SupplierBookingRecord>();
   const counts = new Map<string, number>();
@@ -205,14 +257,6 @@ const makeCloudflarePhase6Harness = (): CloudflarePhase6Harness => {
     Layer.provide(supplierDeskLayer),
   );
 
-  const researcherModel = promptAwareModel("destination-researcher-p6-cloudflare", (promptJson) => {
-    if (promptJson.includes(phase6ChildLookupCallId)) {
-      return Stream.fromIterable(researcherReportParts);
-    }
-    return researcherGateReleased
-      ? Stream.fromIterable(researcherLookupParts)
-      : Stream.fromEffectDrain(Effect.never);
-  });
   const countingGuideLayer = Layer.succeed(
     DestinationGuide,
     DestinationGuide.of({
@@ -223,57 +267,74 @@ const makeCloudflarePhase6Harness = (): CloudflarePhase6Harness => {
     }),
   );
 
-  const bindings = Effect.gen(function* () {
-    const planner = yield* DurableWorkerBinding.make(
-      Agent.withModel(TravelPlannerPhase4, phase6PlannerModel),
-      phase4TravelPlannerDefinitionDigests,
-    ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
-    const booking = yield* DurableWorkerBinding.make(
-      Agent.withModel(TravelPlannerPhase5, cloudflareBookingModel),
-      phase5TravelPlannerDefinitionDigests,
-    ).pipe(
-      Effect.provide(phase5TravelPlannerWorkerLayer.pipe(Layer.provideMerge(supplierDeskLayer))),
-    );
-    const researcherBinding = Agent.withModel(DestinationResearcher, researcherModel);
-    const childToolkitLayer = DestinationResearcherToolkitLayer.pipe(
-      Layer.provideMerge(countingGuideLayer),
-    );
-    const coordinator = yield* DurableWorkerBinding.make(
-      Agent.withModel(TravelCoordinator, phase6CoordinatorModel),
-      s2CoordinatorDigests,
-    ).pipe(
-      Effect.provide(
-        durableDestinationResearchHandlersLayer(researcherBinding).pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              childToolkitLayer,
-              SubagentReservationsMemoryLive,
-              DeterministicIdGeneratorLayer,
-              ResearchDispatchGate.layerOpen,
+  const bindings = (researcherGate: DurableObjectStub<TravelPlannerResearchGate>) =>
+    Effect.gen(function* () {
+      const researcherModel = promptAwareModel(
+        "destination-researcher-p6-cloudflare",
+        (promptJson) => {
+          if (promptJson.includes(phase6ChildLookupCallId)) {
+            return Stream.fromIterable(researcherReportParts);
+          }
+          return Stream.fromEffect(
+            Effect.promise(() => researcherGate.waitUntilReleased()).pipe(
+              Effect.as(researcherLookupParts),
+            ),
+          ).pipe(Stream.flatMap(Stream.fromIterable));
+        },
+      );
+      const planner = yield* DurableWorkerBinding.make(
+        Agent.withModel(TravelPlannerPhase4, phase6PlannerModel),
+        phase4TravelPlannerDefinitionDigests,
+      ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
+      const booking = yield* DurableWorkerBinding.make(
+        Agent.withModel(TravelPlannerPhase5, cloudflareBookingModel),
+        phase5TravelPlannerDefinitionDigests,
+      ).pipe(
+        Effect.provide(phase5TravelPlannerWorkerLayer.pipe(Layer.provideMerge(supplierDeskLayer))),
+      );
+      const researcherBinding = Agent.withModel(DestinationResearcher, researcherModel);
+      const childToolkitLayer = DestinationResearcherToolkitLayer.pipe(
+        Layer.provideMerge(countingGuideLayer),
+      );
+      const coordinator = yield* DurableWorkerBinding.make(
+        Agent.withModel(TravelCoordinator, phase6CoordinatorModel),
+        s2CoordinatorDigests,
+      ).pipe(
+        Effect.provide(
+          durableDestinationResearchHandlersLayer(researcherBinding).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                childToolkitLayer,
+                SubagentReservationsMemoryLive,
+                DeterministicIdGeneratorLayer,
+                ResearchDispatchGate.layerOpen,
+              ),
             ),
           ),
         ),
-      ),
-    );
-    const researcher = yield* DurableWorkerBinding.make(
-      researcherBinding,
-      s2ResearcherDigests,
-    ).pipe(Effect.provide(childToolkitLayer));
-    return [planner, booking, coordinator, researcher];
-  });
+      );
+      const researcher = yield* DurableWorkerBinding.make(
+        researcherBinding,
+        s2ResearcherDigests,
+      ).pipe(Effect.provide(childToolkitLayer));
+      return [planner, booking, coordinator, researcher];
+    });
 
   return {
     bindings,
     supplierDesk,
     supplierDeskLayer,
     supplierReconcilerLayer,
-    releaseResearcherGate: Effect.sync(() => {
-      researcherGateReleased = true;
-    }),
-    resetResearcherGate: Effect.sync(() => {
-      researcherGateReleased = false;
-      guideInvocations = 0;
-    }),
+    releaseResearcherGate: (namespace) =>
+      Effect.promise(() => namespace.getByName(RESEARCHER_GATE_NAME).release()),
+    resetResearcherGate: (namespace) =>
+      Effect.promise(() => namespace.getByName(RESEARCHER_GATE_NAME).reset()).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            guideInvocations = 0;
+          }),
+        ),
+      ),
     guideInvocationCount: Effect.sync(() => guideInvocations),
   };
 };
@@ -298,7 +359,12 @@ const baseOptions: ConversationObjectOptions = {
   alarmBackoffBase: 10,
   alarmBackoffCap: 100,
   observationPollInterval: 10,
-  bindings: travelPlannerHarness.bindings,
+  bindings: ({ env }) => {
+    // `env` is deliberately unknown at the public adapter boundary; this fixture Worker owns
+    // the binding declaration and narrows it once at its composition root.
+    const researchGateNamespace = (env as TravelPlannerWorkerEnvironment).RESEARCH_GATE;
+    return travelPlannerHarness.bindings(researchGateNamespace.getByName(RESEARCHER_GATE_NAME));
+  },
   toolReconciler: travelPlannerHarness.supplierReconcilerLayer,
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,

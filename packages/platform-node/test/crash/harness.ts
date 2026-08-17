@@ -56,6 +56,16 @@ import {
 export const workerEntry = fileURLToPath(new URL("./worker-entry.ts", import.meta.url));
 export const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
 
+/** The explicit loader supports worker TypeScript namespaces on Node 24 and Node 26. */
+export const typescriptNodeArguments = (entry: string): ReadonlyArray<string> => [
+  "--import",
+  "tsx",
+  entry,
+];
+
+export const workerNodeArguments = (): ReadonlyArray<string> =>
+  typescriptNodeArguments(workerEntry);
+
 /** Lease the child claims with in kill scenarios; expired by `waitOutChildLease` after death. */
 export const CHILD_LEASE_MS = 250;
 const LEASE_WAIT_MS = 1_000;
@@ -162,7 +172,7 @@ export const startWorker = (
 ): Effect.Effect<WorkerHandle, never, Scope.Scope> =>
   Effect.acquireRelease(
     Effect.sync(() => {
-      const child = spawn(process.execPath, ["--experimental-transform-types", workerEntry], {
+      const child = spawn(process.execPath, workerNodeArguments(), {
         cwd: packageRoot,
         env: { ...process.env, ...childEnv(options) },
         stdio: ["ignore", "pipe", "pipe"],

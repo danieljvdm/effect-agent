@@ -2314,25 +2314,6 @@ const make = Effect.gen(function* () {
       const principal = yield* decodeChildPrincipal(request.childPrincipal);
       const idempotencyKey = yield* decodeChildIdempotencyKey(request.childIdempotencyKey);
       const reservationId = yield* decodeChildReservationId(request.reservationId);
-      const authorizeChild = childAdmissionAuthorizer.authorize(
-        ChildAdmissionAuthorizationRequest.make({
-          principal: parent.principal,
-          parentSubmissionId: parent.submissionId,
-          parentConversationId: parent.conversationId,
-          parentRunId: request.runId,
-          parentToolCallId: request.toolCallId,
-          delegationId: request.delegationId,
-          childConversationId: request.childConversationId,
-          childPrincipal: principal,
-          targetAgentId: request.targetAgentId,
-          targetDigests: request.targetDigests,
-          childInputDigest: request.childInputDigest,
-          grantDigest: request.grantDigest,
-          reservationId,
-          reservationDigest: request.reservationDigest,
-        }),
-      );
-      yield* authorizeChild;
       const resolution = yield* ledger.resolveAdmission(
         SubmissionLookupByKey.make({
           conversationId: request.childConversationId,
@@ -2347,6 +2328,27 @@ const make = Effect.gen(function* () {
           return { _tag: "indeterminate", reason: resolution.reason };
         }
         case "NotAdmitted": {
+          // Current policy owns the one transition that accepts the durable child obligation.
+          // Once admission commits, recovery must finish that already-authorized obligation
+          // instead of asking a later policy decision whether an accepted Submission may exist.
+          yield* childAdmissionAuthorizer.authorize(
+            ChildAdmissionAuthorizationRequest.make({
+              principal: parent.principal,
+              parentSubmissionId: parent.submissionId,
+              parentConversationId: parent.conversationId,
+              parentRunId: request.runId,
+              parentToolCallId: request.toolCallId,
+              delegationId: request.delegationId,
+              childConversationId: request.childConversationId,
+              childPrincipal: principal,
+              targetAgentId: request.targetAgentId,
+              targetDigests: request.targetDigests,
+              childInputDigest: request.childInputDigest,
+              grantDigest: request.grantDigest,
+              reservationId,
+              reservationDigest: request.reservationDigest,
+            }),
+          );
           const admitted: AdmissionResult = yield* ledger
             .admit(
               AdmissionRequest.make({
@@ -2386,9 +2388,9 @@ const make = Effect.gen(function* () {
         }
       }
       yield* hit("subagent:after-admit");
-      // Admission may have been replayed long after the original request. Recheck current policy
-      // immediately before making the child runnable; an old grant digest never freezes authority.
-      yield* authorizeChild;
+      // Admission is the durable authorization commit boundary. Materialization, exact lineage,
+      // and readiness merely complete that accepted obligation; later child actions still consult
+      // their action-owning adapters under current policy.
       yield* materializeAtLeast(request.childConversationId, ZERO_EPOCH);
       yield* ensureConversationCreated(
         request.childConversationId,
@@ -6402,10 +6404,11 @@ const make = Effect.gen(function* () {
         conversationId,
       }),
     );
-    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const nonterminal = yield* ledger
+      .scanConversationNonterminal(ScanConversationNonterminalRequest.make({ conversationId }))
+      .pipe(Stream.runCollect);
     const explanations: Array<RecoveryExplanation> = [];
     for (const submission of nonterminal) {
-      if (submission.conversationId !== conversationId) continue;
       explanations.push(yield* explainSubmission(submission));
     }
     return explanations;
@@ -6427,11 +6430,11 @@ const make = Effect.gen(function* () {
     // the ledger port scans nonterminal work only, and canonical history is the authority for
     // everything settled (DUR-015).
     const rows = new Map<SubmissionId, SubmissionSnapshot>();
-    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const nonterminal = yield* ledger
+      .scanConversationNonterminal(ScanConversationNonterminalRequest.make({ conversationId }))
+      .pipe(Stream.runCollect);
     for (const submission of nonterminal) {
-      if (submission.conversationId === conversationId) {
-        rows.set(submission.submissionId, submission);
-      }
+      rows.set(submission.submissionId, submission);
     }
     const named = new Set<SubmissionId>();
     for (const envelope of exported.records) {
@@ -6885,7 +6888,9 @@ const make = Effect.gen(function* () {
  *   Protected mutations
  *   then consult the required `OperationMutationPreparer` exactly once at their commit boundary.
  *   Durable child admission separately consults the narrow required `ChildAdmissionAuthorizer`
- *   immediately before admission and again before materialization/readiness.
+ *   immediately before first admission. Exact admitted state commits that decision for recovery
+ *   of materialization/lineage/readiness; later child actions retain their own current-policy
+ *   authorization boundaries.
  */
 export class DurableAgentRuntime extends Context.Service<
   DurableAgentRuntime,

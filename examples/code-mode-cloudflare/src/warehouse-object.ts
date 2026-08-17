@@ -96,44 +96,121 @@ const selectInvoiceRows = (
     catch: (cause) => WarehouseQueryFault.make({ reason: "query-failed", cause }),
   }).pipe(Effect.catch(redactFailure));
 
-const seedRows: ReadonlyArray<WarehouseInvoice> = [
-  WarehouseInvoice.make({
-    customer: "Stellar Freight",
-    region: "emea",
-    revenue: 48_200,
-    createdAt: "2026-07-03",
-  }),
-  WarehouseInvoice.make({
-    customer: "Nimbus Analytics",
-    region: "amer",
-    revenue: 12_800,
-    createdAt: "2026-07-11",
-  }),
-  WarehouseInvoice.make({
-    customer: "Copper Kettle Co",
-    region: "amer",
-    revenue: 730,
-    createdAt: "2026-07-15",
-  }),
-  WarehouseInvoice.make({
-    customer: "Harbor Lights Ltd",
-    region: "apac",
-    revenue: 9_400,
-    createdAt: "2026-07-21",
-  }),
-  WarehouseInvoice.make({
-    customer: "Boundary Foods",
-    region: "amer",
-    revenue: 10_000,
-    createdAt: "2026-07-22",
-  }),
-  WarehouseInvoice.make({
-    customer: "Vertex Robotics",
-    region: "emea",
-    revenue: 21_050,
-    createdAt: "2026-07-24",
-  }),
+interface WarehouseSeedMigration {
+  readonly version: number;
+  readonly rows: ReadonlyArray<WarehouseInvoice>;
+}
+
+const warehouseSeedMigrations: ReadonlyArray<WarehouseSeedMigration> = [
+  {
+    version: 1,
+    rows: [
+      WarehouseInvoice.make({
+        customer: "Stellar Freight",
+        region: "emea",
+        revenue: 48_200,
+        createdAt: "2026-07-03",
+      }),
+      WarehouseInvoice.make({
+        customer: "Nimbus Analytics",
+        region: "amer",
+        revenue: 12_800,
+        createdAt: "2026-07-11",
+      }),
+      WarehouseInvoice.make({
+        customer: "Copper Kettle Co",
+        region: "amer",
+        revenue: 730,
+        createdAt: "2026-07-15",
+      }),
+      WarehouseInvoice.make({
+        customer: "Harbor Lights Ltd",
+        region: "apac",
+        revenue: 9_400,
+        createdAt: "2026-07-21",
+      }),
+      WarehouseInvoice.make({
+        customer: "Vertex Robotics",
+        region: "emea",
+        revenue: 21_050,
+        createdAt: "2026-07-24",
+      }),
+    ],
+  },
+  {
+    version: 2,
+    rows: [
+      WarehouseInvoice.make({
+        customer: "Boundary Foods",
+        region: "amer",
+        revenue: 10_000,
+        createdAt: "2026-07-22",
+      }),
+    ],
+  },
+  {
+    version: 3,
+    rows: [
+      WarehouseInvoice.make({
+        customer: "Atlas Components",
+        region: "amer",
+        revenue: 6_000,
+        createdAt: "2026-07-26",
+      }),
+      WarehouseInvoice.make({
+        customer: "Atlas Components",
+        region: "amer",
+        revenue: 5_500,
+        createdAt: "2026-07-27",
+      }),
+    ],
+  },
 ];
+
+/*
+ * Seed migrations are separate from the Durable Object class migration tag: existing Objects
+ * keep their SQLite database when a Worker version changes, so each curated data revision must
+ * be adopted idempotently inside that database.
+ */
+const applyWarehouseSeedMigrations = Effect.fn("WarehouseObject.applyWarehouseSeedMigrations")(
+  function* (sql: SqlClient.SqlClient) {
+    yield* sql`CREATE TABLE IF NOT EXISTS warehouse_seed_migrations (
+      version INTEGER PRIMARY KEY
+    )`;
+    for (const migration of warehouseSeedMigrations) {
+      const appliedRows = yield* sql`
+        SELECT COUNT(*) AS n
+        FROM warehouse_seed_migrations
+        WHERE version = ${migration.version}
+      `;
+      const applied = yield* decodeCount(appliedRows[0]);
+      if (applied.n > 0) continue;
+
+      for (const row of migration.rows) {
+        // A pre-migration tenant can already contain the v1 rows. Adopt each exact curated row
+        // instead of duplicating it; if a crash lands before the version marker, retry is safe.
+        const existingRows = yield* sql`
+          SELECT COUNT(*) AS n
+          FROM invoice_summary
+          WHERE customer = ${row.customer}
+            AND region = ${row.region}
+            AND revenue = ${row.revenue}
+            AND created_at = ${row.createdAt}
+        `;
+        const existing = yield* decodeCount(existingRows[0]);
+        if (existing.n === 0) {
+          yield* sql`INSERT INTO invoice_summary ${sql.insert({
+            customer: row.customer,
+            region: row.region,
+            revenue: row.revenue,
+            created_at: row.createdAt,
+          })}`;
+        }
+      }
+      yield* sql`INSERT INTO warehouse_seed_migrations (version) VALUES (${migration.version})`;
+    }
+  },
+);
 
 const queryInvoices = (
   storage: DurableObjectStorage,
@@ -173,19 +250,7 @@ export class WarehouseObject extends DurableObject {
           revenue INTEGER NOT NULL,
           created_at TEXT NOT NULL
         )`;
-        const rows = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`;
-        const decoded = yield* decodeCount(rows[0]);
-        const existing = decoded.n;
-        if (existing === 0) {
-          for (const row of seedRows) {
-            yield* sql`INSERT INTO invoice_summary ${sql.insert({
-              customer: row.customer,
-              region: row.region,
-              revenue: row.revenue,
-              created_at: row.createdAt,
-            })}`;
-          }
-        }
+        yield* applyWarehouseSeedMigrations(sql);
       }).pipe(Effect.provide(SqliteClient.layer({ storage: this.ctx.storage }))),
     );
     this.#ready = true;

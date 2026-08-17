@@ -41736,6 +41736,7 @@ var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
 var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 4;
 var MAX_FILE_REVIEW_TURNS = MAX_FILE_REVIEW_TOOL_CALLS + 1;
+var FILE_REVIEW_TOKEN_BUDGET = 600000;
 var FILE_REVIEW_MAX_CONCURRENCY = 5;
 var MAX_FILE_REVIEW_RETRIES = FILE_REVIEW_MAX_CONCURRENCY;
 var MAX_FILE_REVIEW_ATTEMPTS = MAX_REVIEW_UNITS + MAX_FILE_REVIEW_RETRIES;
@@ -41793,7 +41794,7 @@ var defaultFileReviewerPolicy = AgentPolicy.make({
   maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: 2,
   repeatedFailureLimit: 12,
-  tokenBudget: 200000,
+  tokenBudget: FILE_REVIEW_TOKEN_BUDGET,
   contextTokenLimit: 150000,
   toolResultBounds: ToolResultBounds.make({ maxBytes: REVIEW_TOOL_RESULT_MAX_BYTES }),
   onExhaustion: "fail"
@@ -43599,6 +43600,11 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
 class ReviewSelectionViolation extends exports_Schema.TaggedError()("ReviewSelectionViolation", { reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000)) }) {
 }
 var sameFiles = (left, right) => left.length === right.length && left.every((file2, index2) => exports_Equal.equals(file2, right[index2]));
+var sameSelectedFileIdentity = (left, right) => left.path === right.path && left.status === right.status && left.additions === right.additions && left.deletions === right.deletions && left.previousPath === right.previousPath && left.patch === right.patch;
+var sameSelectedFiles = (left, right) => left.length === right.length && left.every((file2, index2) => {
+  const candidate = right[index2];
+  return candidate !== undefined && sameSelectedFileIdentity(file2, candidate);
+});
 var validateSelection = (input) => {
   const { selection, files, anchorFiles, metadata } = input;
   const sealed = selectedReviewRangeFor(selection, metadata);
@@ -43607,12 +43613,12 @@ var validateSelection = (input) => {
       reason: "review selection was not created by the host range selector"
     }));
   }
-  if (!sameFiles(sealed.files, files)) {
+  if (!sameSelectedFiles(sealed.files, files)) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "review selection evidence does not match the model-visible source range"
     }));
   }
-  if (sealed.totalFiles !== files.length) {
+  if (sealed.mode === "incremental" && sealed.totalFiles !== files.length) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "review selection total does not match the model-visible source range"
     }));

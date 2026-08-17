@@ -52,9 +52,37 @@ const alarmFailure =
   (cause: unknown): DurableAlarmError =>
     DurableAlarmError.make({
       operation,
-      message: cause instanceof Error ? cause.message : String(cause),
+      message: alarmDiagnostic(cause),
       cause,
     });
+
+const alarmDiagnostic = (cause: unknown): string => {
+  const fallback = "Durable Object alarm storage operation failed";
+  try {
+    if (cause instanceof Error) {
+      return typeof cause.message === "string" && cause.message.length > 0
+        ? cause.message.slice(0, 4_096)
+        : fallback;
+    }
+  } catch {
+    // A hostile Proxy can throw from `instanceof` or from an Error message accessor.
+    return fallback;
+  }
+  switch (typeof cause) {
+    case "string":
+      return cause.length > 0 ? cause.slice(0, 4_096) : fallback;
+    case "number":
+    case "bigint":
+    case "boolean":
+    case "undefined":
+      return String(cause).slice(0, 4_096);
+    case "function":
+    case "object":
+    case "symbol":
+      // Never invoke object/function/symbol coercion while translating a foreign rejection.
+      return fallback;
+  }
+};
 
 /** `ctx.storage` alarm slot as an Effect service; storage is truth, never a memory field. */
 export class DurableAlarmService extends Context.Service<
@@ -311,23 +339,27 @@ export class ConversationMutationBoundary extends Context.Service<
 
       const prepare = Effect.gen(function* () {
         const current = yield* CurrentPreparedMutation;
+        if (Option.isNone(current)) {
+          return yield* DurableAlarmError.make({
+            operation: "prepare mutation",
+            message: "Mutation preparation requires an active endpoint mutation bracket",
+          });
+        }
         const armed = yield* generationGate.withPermit(
           Effect.gen(function* () {
             // Preparations in child fibers inherit the same endpoint-local marker. The marker
             // must be checked only after acquiring the generation permit: two concurrent calls
             // may both have observed `false` before one of them commits the durable generation.
-            if (Option.isSome(current) && (yield* Ref.get(current.value))) return false;
+            if (yield* Ref.get(current.value)) return false;
             yield* advanceMaintenanceGeneration(ctx, config, failpoint);
-            if (Option.isSome(current)) {
-              // The finalizer uses the marker to decide whether it owns one active count. Keep
-              // those two in-memory writes interrupt-safe so it can never observe half of the
-              // activation and either leak or over-release the count.
-              yield* Effect.uninterruptible(
-                Ref.update(activeMutations, (active) => active + 1).pipe(
-                  Effect.andThen(Ref.set(current.value, true)),
-                ),
-              );
-            }
+            // The finalizer uses the marker to decide whether it owns one active count. Keep
+            // those two in-memory writes interrupt-safe so it can never observe half of the
+            // activation and either leak or over-release the count.
+            yield* Effect.uninterruptible(
+              Ref.update(activeMutations, (active) => active + 1).pipe(
+                Effect.andThen(Ref.set(current.value, true)),
+              ),
+            );
             return true;
           }),
         );

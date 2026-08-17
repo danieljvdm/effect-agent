@@ -34,7 +34,7 @@ import {
 } from "@effect-agent/session";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Cause, Crypto, Effect, Exit, Option, Ref, Schema } from "effect";
+import { Cause, type Crypto, Effect, Exit, Option, Ref, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
@@ -147,7 +147,7 @@ describe("DoSubmissionLedger failpoints", () => {
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;
             return yield* sql<Record<string, unknown>>`
-              SELECT submission_id, settlement_id, outcome, finalized_at
+              SELECT submission_id, settlement_id, outcome, reserved_at, finalized_at
               FROM effect_agent_settlement_reservations
             `;
           }),
@@ -367,7 +367,9 @@ describe("DoSubmissionLedger failpoints", () => {
 
         // Corrupt one redundant reservation column while keeping the canonical envelope and
         // finalized timestamp available for repair.
-        const initialFinalizedAt = (yield* reservationRows)[0]?.finalized_at;
+        const initialReservation = (yield* reservationRows)[0];
+        const initialReservedAt = initialReservation?.reserved_at;
+        const initialFinalizedAt = initialReservation?.finalized_at;
         yield* TestClock.adjust(1_000);
         yield* withSql(
           Effect.gen(function* () {
@@ -381,6 +383,7 @@ describe("DoSubmissionLedger failpoints", () => {
         );
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "failed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
 
@@ -405,6 +408,7 @@ describe("DoSubmissionLedger failpoints", () => {
         );
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "failed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
         yield* select("ledger:repair-settlement:after");
@@ -414,14 +418,17 @@ describe("DoSubmissionLedger failpoints", () => {
         );
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "completed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
+        yield* TestClock.adjust(1_000);
         yield* select(undefined);
         const repaired = yield* repairOnce;
         expect(repaired.outcome).toBe("completed");
         expect(repaired.settledAt).toEqual(settlement.settledAt);
         expect((yield* reservationRows)[0]).toMatchObject({
           outcome: "completed",
+          reserved_at: initialReservedAt,
           finalized_at: initialFinalizedAt,
         });
 

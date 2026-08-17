@@ -73,6 +73,7 @@ import {
   UnknownResolutionConflict,
   UnknownResolutionIntent,
   validateCanonicalSettlementRepair,
+  isCanonicalSettlementRepairOperationalFailure,
   submissionAbortRecordId,
   type ChildSettledOutcome,
   type SuspensionOutcome,
@@ -337,6 +338,15 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   const failpoint = yield* DoStorageFailpoint;
   const sql = yield* SqlClientService.SqlClient;
   const crypto = yield* Crypto.Crypto;
+  // Close Crypto once at adapter construction; business operations call this boundary function
+  // without providing hidden services themselves.
+  const validateCanonicalSettlement = (
+    request: unknown,
+    receiptId: SubmissionSnapshot["receiptId"],
+  ) =>
+    validateCanonicalSettlementRepair(request, receiptId).pipe(
+      Effect.provideService(Crypto.Crypto, crypto),
+    );
   const journal = yield* initializeDoJournal(sql, failpoint.hit, config.maxStoredValueBytes);
 
   const hitFailpoint = (
@@ -623,7 +633,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
     const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
       Effect.mapError((error) => rowFailure(error.message)),
     );
-    const canonical = yield* validateCanonicalSettlementRepair(
+    const canonical = yield* validateCanonicalSettlement(
       CanonicalSettlementRepair.make({
         submissionId,
         record,
@@ -631,8 +641,9 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       }),
       receiptId,
     ).pipe(
-      Effect.provideService(Crypto.Crypto, crypto),
-      Effect.mapError((error) => rowFailure(error.message)),
+      Effect.mapError((error) =>
+        isCanonicalSettlementRepairOperationalFailure(error) ? error : rowFailure(error.message),
+      ),
     );
     if (
       row.submission_id !== canonical.submissionId ||
@@ -700,7 +711,16 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
         operation,
         submission,
         row,
-      ).pipe(Effect.option);
+      ).pipe(
+        Effect.map(Option.some),
+        Effect.catch((error) =>
+          isCanonicalSettlementRepairOperationalFailure(error)
+            ? Effect.fail(
+                LedgerError.make({ operation, message: error.message, cause: error.cause }),
+              )
+            : Effect.succeed(Option.none()),
+        ),
+      );
       if (Option.isNone(canonical)) {
         return { reservationIntegrity: "invalid" as const };
       }
@@ -722,14 +742,14 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
         Effect.mapError(internalFailure(operation)),
       );
-      const canonical = yield* validateCanonicalSettlementRepair(
+      const canonical = yield* validateCanonicalSettlement(
         CanonicalSettlementRepair.make({
           submissionId: request.submissionId,
           record: request.record,
           recordDigest: request.recordDigest,
         }),
         receiptId,
-      ).pipe(Effect.provideService(Crypto.Crypto, crypto));
+      );
       if (
         canonical.settlementId !== request.settlementId ||
         canonical.outcome !== request.outcome
@@ -816,20 +836,15 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   ): Effect.fn.Return<boolean, LedgerError> {
     const childRow = yield* readSubmission(operation, childSubmissionId);
     if (Option.isNone(childRow)) return markerChildren.has(childSubmissionId);
-    if (childRow.value.state !== "settled" && childRow.value.state !== "terminalizing") {
-      return false;
-    }
+    if (childRow.value.state !== "settled") return false;
     const reservation = yield* readReservation(operation, childSubmissionId);
     if (Option.isNone(reservation)) {
-      if (childRow.value.state === "settled") {
-        return yield* corruptionFailure(
-          operation,
-          "effect_agent_settlement_reservations",
-          childSubmissionId,
-          "A settled child Submission has no exact settlement reservation.",
-        );
-      }
-      return false;
+      return yield* corruptionFailure(
+        operation,
+        "effect_agent_settlement_reservations",
+        childSubmissionId,
+        "A settled child Submission has no exact settlement reservation.",
+      );
     }
     yield* validateStoredReservation(operation, childRow.value, reservation.value);
     return true;
@@ -839,14 +854,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
   const localChildSettlementNotificationCovered = Effect.fn(
     "DoSubmissionLedger.localChildSettlementNotificationCovered",
   )(function* (operation: string, child: SubmissionRow): Effect.fn.Return<boolean, LedgerError> {
-    if (child.state !== "settled" && child.state !== "terminalizing") return false;
+    if (child.state !== "settled") return false;
     const evidence = yield* readRecoveryReservation(operation, child);
     if (evidence.reservationIntegrity !== "verified" || evidence.reservation === undefined) {
       return false;
     }
-    return child.state === "settled"
-      ? evidence.reservation.finalized && child.settled_outcome === evidence.reservation.outcome
-      : !evidence.reservation.finalized && child.settled_outcome === null;
+    return evidence.reservation.finalized && child.settled_outcome === evidence.reservation.outcome;
   });
 
   const decodeChildReservationRows = (operation: string, rowKey: string, rows: unknown) =>
@@ -1851,9 +1864,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
             Effect.mapError(internalFailure(operation)),
           );
-          const canonical = yield* validateCanonicalSettlementRepair(validated, receiptId).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-          );
+          const canonical = yield* validateCanonicalSettlement(validated, receiptId);
           const recordJson = yield* encodeRecordEnvelopeText(canonical.record).pipe(
             Effect.mapError(internalFailure(operation)),
           );
@@ -1861,12 +1872,20 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
             .checkValueBound(operation, recordJson)
             .pipe(Effect.mapError(internalFailure(operation)));
           const existingRows = yield* sql<Record<string, unknown>>`
-            SELECT finalized_at
+            SELECT reserved_at, finalized_at
             FROM effect_agent_settlement_reservations
             WHERE submission_id = ${canonical.submissionId}
           `.pipe(Effect.mapError(sqlFailure(operation)));
           const now = yield* currentInstant;
+          let reservedAt = now.iso;
           let settledAt = now.iso;
+          const existingReservedAt = existingRows[0]?.reserved_at;
+          if (typeof existingReservedAt === "string") {
+            const persistedReservedAt = yield* decodeUtcInstant(existingReservedAt).pipe(
+              Effect.option,
+            );
+            if (Option.isSome(persistedReservedAt)) reservedAt = existingReservedAt;
+          }
           const existingFinalizedAt = existingRows[0]?.finalized_at;
           if (submission.state === "settled" && typeof existingFinalizedAt === "string") {
             const persistedSettledAt = yield* decodeUtcInstant(existingFinalizedAt).pipe(
@@ -1891,7 +1910,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
               ${canonical.record.recordId},
               ${recordJson},
               ${canonical.recordDigest},
-              ${now.iso},
+              ${reservedAt},
               ${settledAt}
             )
             ON CONFLICT(submission_id) DO UPDATE SET
@@ -2582,13 +2601,12 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       operation,
       Effect.gen(function* () {
         const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
-        // The child's canonical Settlement is the authority for this wake. When the child's
-        // row lives in THIS store (single-store latitude, and every conformance lane), either a
-        // settled row with its exact reservation or an exact terminalizing reservation admits
-        // the notification: the runtime calls only after the canonical append and before ledger
-        // finalization. When the
-        // row does not live here — the normal cross-DO case — the routed notification from the
-        // child's owning Durable Object is the settlement evidence this store records durably.
+        // The child's canonical Settlement is the authority for this wake. When the child's row
+        // lives in THIS store (single-store latitude, and every conformance lane), only a settled
+        // row with its exact finalized reservation admits the notification; `terminalizing`
+        // remains a disposable prefix and defers to canonical repair. When the row does not live
+        // here — the normal cross-DO case — the routed notification from the child's owning
+        // Durable Object is the settlement evidence this store records durably.
         const child = yield* readSubmission(operation, validated.childSubmissionId);
         if (
           Option.isSome(child) &&
@@ -2984,7 +3002,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       Schema.decodeUnknownEffect(Schema.toType(ScanConversationNonterminalRequest))(request).pipe(
         Effect.mapError(internalFailure("ledger scan conversation nonterminal")),
         Effect.map((validated) =>
-          Stream.paginate(undefined as number | undefined, (cursor) =>
+          Stream.paginate(validated.afterQueueSequence, (cursor) =>
             Effect.gen(function* () {
               const operation = "ledger scan conversation nonterminal";
               const rows = yield* (
@@ -3016,7 +3034,7 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
                 decodeSubmissionSnapshot(operation, row),
               );
               const last = decoded[decoded.length - 1];
-              const next: Option.Option<number | undefined> =
+              const next: Option.Option<SubmissionSnapshot["queueSequence"] | undefined> =
                 last === undefined || decoded.length < SCAN_PAGE_SIZE
                   ? Option.none()
                   : Option.some(last.queue_sequence);

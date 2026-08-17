@@ -216,6 +216,10 @@ describe("cross-DO port routing", () => {
         }
 
         yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        const second = yield* ledger.admit(
+          yield* admission(childConv, "wp2-child-key-2", { task: "second" }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: second.submissionId }));
 
         const byIdRow = yield* ledger.lookup(
           SubmissionLookupById.make({ submissionId: admitted.submissionId }),
@@ -254,7 +258,19 @@ describe("cross-DO port routing", () => {
             ScanConversationNonterminalRequest.make({ conversationId: conversation(childConv) }),
           )
           .pipe(Stream.runCollect);
-        expect(routedScan.map((row) => row.submissionId)).toEqual([admitted.submissionId]);
+        expect(routedScan.map((row) => row.submissionId)).toEqual([
+          admitted.submissionId,
+          second.submissionId,
+        ]);
+        const routedSuffix = yield* ledger
+          .scanConversationNonterminal(
+            ScanConversationNonterminalRequest.make({
+              conversationId: conversation(childConv),
+              afterQueueSequence: admitted.queueSequence,
+            }),
+          )
+          .pipe(Stream.runCollect);
+        expect(routedSuffix.map((row) => row.submissionId)).toEqual([second.submissionId]);
 
         return admitted;
       }),

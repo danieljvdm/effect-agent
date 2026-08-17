@@ -1,7 +1,7 @@
-import { ConversationId, RunId, SubmissionId, ToolCallId } from "@effect-agent/core";
+import { ConversationId, ReceiptId, RunId, SubmissionId, ToolCallId } from "@effect-agent/core";
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it, layer } from "@effect/vitest";
-import { Duration, Effect, Schema } from "effect";
+import { Crypto, Duration, Effect, PlatformError, Schema } from "effect";
 
 import {
   AbortCommand,
@@ -13,6 +13,7 @@ import {
   ApprovalDecisionCommand,
   ApprovalDecisionIntent,
   CanonicalBatch,
+  CanonicalSettlementRepair,
   CanonicalRecordEnvelope,
   Claim,
   ClaimJoiningRequest,
@@ -21,6 +22,7 @@ import {
   DefinitionDigestInput,
   DefinitionDigests,
   Digest,
+  DigestError,
   digestCanonicalBatch,
   digestDefinitions,
   digestJson,
@@ -28,6 +30,7 @@ import {
   JoinedToHost,
   JoiningClaim,
   IdempotencyKey,
+  isCanonicalSettlementRepairOperationalFailure,
   LedgerError,
   LedgerCapabilities,
   MarkJoinedRequest,
@@ -92,6 +95,7 @@ import {
   turnResultsBatchId,
   validateSubagentLineageRecord,
   validateSubagentAdmissionBinding,
+  validateCanonicalSettlementRepair,
 } from "../src/index.ts";
 
 const SHA_256_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -556,6 +560,14 @@ describe("SubmissionLedger port schemas", () => {
     expect(Schema.encodeSync(ScanConversationNonterminalRequest)(scopedScan)).toEqual({
       conversationId: "travel-conversation",
     });
+    const pagedScopedScan = Schema.decodeUnknownSync(ScanConversationNonterminalRequest)({
+      conversationId: "travel-conversation",
+      afterQueueSequence: 7,
+    });
+    expect(Schema.encodeSync(ScanConversationNonterminalRequest)(pagedScopedScan)).toEqual({
+      conversationId: "travel-conversation",
+      afterQueueSequence: 7,
+    });
     expect(Schema.decodeUnknownExit(SubmissionLookup)({ _tag: "LookupByGuess" })._tag).toBe(
       "Failure",
     );
@@ -729,6 +741,49 @@ describe("SubmissionLedger port schemas", () => {
       })._tag,
     ).toBe("Failure");
   });
+
+  it.effect(
+    "preserves operational Crypto failure when validating canonical settlement evidence",
+    () =>
+      Effect.gen(function* () {
+        const submissionId = yield* Schema.decodeUnknownEffect(SubmissionId)(
+          "submission-operational-digest",
+        );
+        const receiptId = yield* Schema.decodeUnknownEffect(ReceiptId)(
+          "receipt-operational-digest",
+        );
+        const record = decodeRecord(submissionSettlementRecordId(submissionId), {
+          _tag: "SubmissionSettled",
+          submissionId,
+          settlementId: submissionSettlementId(submissionId),
+          receiptId,
+          outcome: "completed",
+        });
+        const failingCrypto = Crypto.make({
+          randomBytes: (size) => new Uint8Array(size),
+          digest: () =>
+            Effect.fail(
+              PlatformError.systemError({
+                _tag: "Unknown",
+                module: "TestCrypto",
+                method: "digest",
+                description: "injected operational failure",
+              }),
+            ),
+        });
+        const failure = yield* validateCanonicalSettlementRepair(
+          CanonicalSettlementRepair.make({
+            submissionId,
+            record,
+            recordDigest: yield* Schema.decodeUnknownEffect(Digest)(SHA_256_A),
+          }),
+          receiptId,
+        ).pipe(Effect.provideService(Crypto.Crypto, failingCrypto), Effect.flip);
+        expect(failure).toBeInstanceOf(LedgerError);
+        expect(failure.cause).toBeInstanceOf(DigestError);
+        expect(isCanonicalSettlementRepairOperationalFailure(failure)).toBe(true);
+      }),
+  );
 
   it("round-trips abort commands, intents, capabilities, and typed errors", () => {
     const command = Schema.decodeUnknownSync(AbortCommand)({

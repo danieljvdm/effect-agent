@@ -1274,6 +1274,18 @@ const scanNonterminalWorklist = conformanceCase(
           scoped.every((snapshot) => snapshot.conversationId === laneA),
         "scanConversationNonterminal must push down one lane and preserve queue order",
       );
+      const afterSecond = yield* ledger
+        .scanConversationNonterminal(
+          ScanConversationNonterminalRequest.make({
+            conversationId: laneA,
+            afterQueueSequence: second.queueSequence,
+          }),
+        )
+        .pipe(Stream.runCollect);
+      yield* ensure(
+        afterSecond.length === 1 && afterSecond[0]?.submissionId === third.submissionId,
+        "A scoped scan cursor must start strictly after the named queue sequence",
+      );
     }),
 );
 
@@ -2970,7 +2982,7 @@ const releaseAppliedExactlyOnce = conformanceCase(
 );
 
 const recordChildSettledWake = conformanceCase(
-  "child notifications accept canonical terminalizing prefixes but stay inert until exact suspension resume",
+  "child notifications require finalized local coverage and stay inert until exact suspension resume",
   ({ ensure, expectFailure, expectSome }) =>
     Effect.gen(function* () {
       const parentLane = decodeConversationId("ledger-conformance-child-wake");
@@ -3061,14 +3073,24 @@ const recordChildSettledWake = conformanceCase(
         }),
       );
       yield* ensure(
-        partial === "still-waiting",
-        "A settlement notification must not wake the parent while a listed child is unsettled",
+        partial === "child-not-terminal",
+        "A reserved but unfinalized child must not become parent settlement coverage",
       );
       yield* ledger.finalizeSettlement(
         SettlementFinalization.make({
           submissionId: childA.submissionId,
           settlementId: childReservationA.settlementId,
         }),
+      );
+      const firstCovered = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: childA.submissionId,
+        }),
+      );
+      yield* ensure(
+        firstCovered === "still-waiting",
+        "A finalized first child records coverage but cannot cover the remaining child",
       );
       const stillSuspended = yield* expectSome(
         "lookup while one child is outstanding",
@@ -3098,8 +3120,8 @@ const recordChildSettledWake = conformanceCase(
         }),
       );
       yield* ensure(
-        covered === "still-waiting",
-        "Operational child coverage alone must not wake the parent",
+        covered === "child-not-terminal",
+        "The second reserved but unfinalized child must not become parent settlement coverage",
       );
       yield* ensure(
         Option.isNone(yield* claimLane(parentLane, PRODUCER_B)),
@@ -3112,14 +3134,34 @@ const recordChildSettledWake = conformanceCase(
         }),
       );
       yield* ensure(
-        resumed === "resumed",
-        "The exact canonical-evidence-authorized child reason must resume once covered",
+        resumed === "not-covered",
+        "A terminalizing child reservation cannot authorize the parent resume transition",
       );
       yield* ledger.finalizeSettlement(
         SettlementFinalization.make({
           submissionId: childB.submissionId,
           settlementId: childReservationB.settlementId,
         }),
+      );
+      const fullyCovered = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: childB.submissionId,
+        }),
+      );
+      yield* ensure(
+        fullyCovered === "still-waiting",
+        "Operational child coverage alone must not wake the parent",
+      );
+      const resumedAfterFinalization = yield* ledger.resumeSuspension(
+        ResumeSuspensionRequest.make({
+          submissionId: parent.submissionId,
+          expectedReason: waitingReason,
+        }),
+      );
+      yield* ensure(
+        resumedAfterFinalization === "resumed",
+        "The exact canonical-evidence-authorized child reason must resume after every child is finalized",
       );
       const awake = yield* expectSome(
         "lookup after the covering settlement",
@@ -3170,7 +3212,7 @@ const recordChildSettledWake = conformanceCase(
 );
 
 const childNotificationDefersToCanonicalRepair = conformanceCase(
-  "a preterminal local child notification is inert until canonical repair makes the child visible",
+  "a terminalizing local child is not settlement coverage before canonical repair",
   ({ ensure, expectSome }) =>
     Effect.gen(function* () {
       const parentLane = decodeConversationId("ledger-conformance-child-repair-parent");
@@ -3198,6 +3240,18 @@ const childNotificationDefersToCanonicalRepair = conformanceCase(
         }),
       );
 
+      const childClaim = yield* expectSome(
+        "the child claim before reserving its settlement",
+        yield* claimLane(childLane, PRODUCER_A),
+      );
+      const canonical = yield* settlementReservation({
+        submissionId: child.submissionId,
+        ownershipToken: childClaim.ownershipToken,
+        receiptId: child.receiptId,
+        outcome: "completed",
+      });
+      yield* ledger.reserveSettlement(canonical);
+
       const beforeRepair = yield* ledger.recordChildSettled(
         ChildSettledNotification.make({
           parentSubmissionId: parent.submissionId,
@@ -3206,7 +3260,7 @@ const childNotificationDefersToCanonicalRepair = conformanceCase(
       );
       yield* ensure(
         beforeRepair === "child-not-terminal",
-        "A locally present preterminal child must return child-not-terminal without recording coverage",
+        "A terminalizing child with an exact reservation must return child-not-terminal without recording coverage",
       );
       const uncovered = yield* ledger.resumeSuspension(
         ResumeSuspensionRequest.make({
@@ -3219,12 +3273,6 @@ const childNotificationDefersToCanonicalRepair = conformanceCase(
         "The child-not-terminal result must leave the parent suspension uncovered",
       );
 
-      const canonical = yield* settlementReservation({
-        submissionId: child.submissionId,
-        ownershipToken: BOGUS_TOKEN,
-        receiptId: child.receiptId,
-        outcome: "completed",
-      });
       yield* ledger.repairSettlementFromCanonical(
         CanonicalSettlementRepair.make({
           submissionId: child.submissionId,

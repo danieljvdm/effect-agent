@@ -28,6 +28,7 @@ import {
   FAN_OUT_WORKFLOW_TIMEOUT_MINUTES,
   FILE_REVIEW_MAX_CONCURRENCY,
   FILE_REVIEW_MAX_DURATION_MINUTES,
+  FILE_REVIEW_TOKEN_BUDGET,
   FILE_REVIEW_WAVE_DURATION_MINUTES,
   fanOutHandlersLayer,
   FanOutReviewer,
@@ -304,6 +305,11 @@ describe("file-reviewer policy", () => {
     expect(fileReviewPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
     expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 4);
     expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 4);
+    // The complete permitted read envelope for a 12-file unit is deliberately
+    // larger than the former 200k cumulative budget; it must not fail as an
+    // ordinary `AgentPolicyError:tokens` after all valid reads were allowed.
+    expect(defaultFileReviewerPolicy.tokenBudget).toBe(FILE_REVIEW_TOKEN_BUDGET);
+    expect(FILE_REVIEW_TOKEN_BUDGET).toBe(600_000);
   });
 
   it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {

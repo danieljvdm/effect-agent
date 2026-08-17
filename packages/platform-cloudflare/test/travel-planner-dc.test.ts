@@ -38,7 +38,7 @@ import {
   TripRequest,
 } from "@effect-agent/testing";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { Effect, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
@@ -61,7 +61,7 @@ import {
   stubFor,
   type TestNamespace,
 } from "./harness.ts";
-import { travelPlannerHarness } from "./travel-planner-worker.ts";
+import { travelPlannerHarness, type TravelPlannerResearchGate } from "./travel-planner-worker.ts";
 
 /**
  * The Travel Planner DC slice (plan §6): the SAME cumulative Travel Planner fixtures the DN
@@ -77,6 +77,11 @@ const lane = (label: string): string => `cf-tp-${label}-${laneCounter++}`;
 const PLANNER_CALLER = OperationCaller.make({ principal: phase4TravelPlannerPrincipal });
 const BOOKING_CALLER = OperationCaller.make({ principal: phase5TravelPlannerPrincipal });
 const COORDINATOR_CALLER = OperationCaller.make({ principal: s2TravelPlannerPrincipal });
+const researchGateNamespace = (
+  env as unknown as {
+    readonly RESEARCH_GATE: DurableObjectNamespace<TravelPlannerResearchGate>;
+  }
+).RESEARCH_GATE;
 
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const encodeEnvelope = Schema.encodeSync(CanonicalRecordEnvelope);
@@ -480,7 +485,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
 describe("DC Travel Planner — cross-Object delegation", () => {
   it("coordinator→researcher delegation joins across two Durable Objects after parent and child evictions; the completed child never re-executes", async () => {
     const conversation = lane("delegation");
-    await Effect.runPromise(travelPlannerHarness.resetResearcherGate);
+    await Effect.runPromise(travelPlannerHarness.resetResearcherGate(researchGateNamespace));
     armRuntimeEviction(conversation, "subagent:after-reserve");
     const receipt = await submitCoordinator(conversation);
     // The deterministic child identity (SUB-016): parent Submission and Tool Call pair.
@@ -501,11 +506,9 @@ describe("DC Travel Planner — cross-Object delegation", () => {
       return logTags(records).includes("SubagentStarted");
     });
     expect(armedEvictionsRemaining(conversation)).toBe(0);
-    await Effect.runPromise(travelPlannerHarness.releaseResearcherGate);
-    // The fixture gate intentionally owns no cross-context Deferred. Evict the currently
-    // blocked child incarnation after flipping the plain worker-root flag; its persisted alarm
-    // enters a fresh incarnation whose model observes the released gate.
-    await abortIncarnation(childConversation);
+    // Release must wake the already-running child model request itself. No eviction, alarm,
+    // polling loop, or second model invocation is allowed to make the gate transition visible.
+    await Effect.runPromise(travelPlannerHarness.releaseResearcherGate(researchGateNamespace));
 
     await drainLanesUntil([conversation, childConversation], allSettled(conversation));
     expect(armedEvictionsRemaining(childConversation)).toBe(0);

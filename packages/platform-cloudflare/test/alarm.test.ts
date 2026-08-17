@@ -161,6 +161,101 @@ describe("DC alarm semantics", () => {
     expect(result).toEqual({ activeDuring: 1, activeAfter: 0, generationAttempts: 1 });
   });
 
+  it("refuses mutation preparation outside the endpoint-owned active-mutation bracket", async () => {
+    const conversation = lane("unbracketed-preparation");
+    const result = await runInDurableObject(stubFor(conversation), async (_instance, state) => {
+      const maintenanceBefore = await state.storage.get("effect-agent:conversation-maintenance:v1");
+      const alarmBefore = await state.storage.getAlarm();
+      const config = await Effect.runPromise(
+        cloudflareDurableRuntimeConfigFromOptions({
+          deploymentId: "cf-alarm-unbracketed-preparation",
+          producerPrefix: "cf-alarm",
+        }),
+      );
+      const boundaryLayer = ConversationMutationBoundary.layer.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            DurableObjectContext.layer(state, {}),
+            Layer.succeed(CloudflareDurableRuntimeConfig)(config),
+            ConversationMaintenanceFailpoint.layer,
+          ),
+        ),
+      );
+      const failure = await Effect.runPromise(
+        Effect.gen(function* () {
+          const boundary = yield* ConversationMutationBoundary;
+          return yield* Effect.flip(boundary.prepare);
+        }).pipe(Effect.provide(boundaryLayer)),
+      );
+      return {
+        tag: failure._tag,
+        operation: failure.operation,
+        maintenanceUnchanged:
+          JSON.stringify(await state.storage.get("effect-agent:conversation-maintenance:v1")) ===
+          JSON.stringify(maintenanceBefore),
+        alarmUnchanged: (await state.storage.getAlarm()) === alarmBefore,
+      };
+    });
+
+    expect(result).toEqual({
+      tag: "DurableAlarmError",
+      operation: "prepare mutation",
+      maintenanceUnchanged: true,
+      alarmUnchanged: true,
+    });
+  });
+
+  it("maps a hostile storage rejection to one bounded typed diagnostic without coercing it", async () => {
+    const conversation = lane("hostile-storage-rejection");
+    await runInDurableObject(stubFor(conversation), async (_instance, state) => {
+      const hostile = new Proxy(
+        {},
+        {
+          get: () => {
+            throw new Error("hostile property access");
+          },
+          getPrototypeOf: () => {
+            throw new Error("hostile prototype access");
+          },
+        },
+      );
+      const transaction = vi
+        .spyOn(state.storage, "transaction")
+        .mockImplementation(() => Promise.reject(hostile));
+      try {
+        const config = await Effect.runPromise(
+          cloudflareDurableRuntimeConfigFromOptions({
+            deploymentId: "cf-alarm-hostile-storage-rejection",
+            producerPrefix: "cf-alarm",
+          }),
+        );
+        const boundaryLayer = ConversationMutationBoundary.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              DurableObjectContext.layer(state, {}),
+              Layer.succeed(CloudflareDurableRuntimeConfig)(config),
+              ConversationMaintenanceFailpoint.layer,
+            ),
+          ),
+        );
+        const failure = await Effect.runPromise(
+          Effect.gen(function* () {
+            const boundary = yield* ConversationMutationBoundary;
+            return yield* Effect.flip(boundary.withMutation(Effect.void));
+          }).pipe(Effect.provide(boundaryLayer)),
+        );
+        expect(failure).toMatchObject({
+          _tag: "DurableAlarmError",
+          operation: "advance maintenance generation",
+          message: "Durable Object alarm storage operation failed",
+        });
+        expect(failure.cause).toBe(hostile);
+      } finally {
+        transaction.mockRestore();
+      }
+    });
+  });
+
   it("issue #93: a stable approval wait quiesces and a forced caught-up alarm performs no SQL work", async () => {
     const conversation = lane("issue-93-quiescent-approval");
     const receipt = await submitTo(approvalDefinition, conversation);

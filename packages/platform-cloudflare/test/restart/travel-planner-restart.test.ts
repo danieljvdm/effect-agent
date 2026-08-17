@@ -147,7 +147,10 @@ describe("Miniflare restart lane — Travel Planner armed-failpoint convergence"
       const armedTotal = row.arms.reduce((total, arm) => total + arm.count, 0);
 
       // Runtime 1: arm, submit, and prove the block engaged (the armed location fired at
-      // least once AND a retry hit it again — runtime 1 cannot finish this Submission).
+      // least once AND a retry hit it again — runtime 1 cannot finish this Submission). Each
+      // failpoint kind is an ordered queue whose handler can consume only its head; in the
+      // finalize/repair row, reaching 48 therefore necessarily consumed terminalize once,
+      // finalize once, and repair twice. Repair cannot hide a missing finalize hit.
       const first = openRuntime(persistDirectory);
       for (const arm of row.arms) {
         await call(first, "/arm", { _tag: arm.kind, conversation, ...arm });

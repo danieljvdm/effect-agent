@@ -21,6 +21,7 @@ const workerEntry = join(import.meta.dirname, "..", "src", "worker.ts");
 let workerScript = "";
 let invalidAnswerWorkerScript = "";
 let runtimeFailureWorkerScript = "";
+let legacySeedWorkerScript = "";
 
 const executableWorkerScript = (outputFiles: ReadonlyArray<OutputFile> | undefined): string => {
   const output = outputFiles?.[0];
@@ -141,6 +142,46 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       logLevel: "silent",
     });
     runtimeFailureWorkerScript = executableWorkerScript(runtimeFailureBundle.outputFiles);
+
+    const legacySeedBundle = await build({
+      stdin: {
+        contents: `
+          import worker, { CodeModeHostEntrypoint } from "../src/worker.ts";
+          import { WarehouseObject as CurrentWarehouseObject } from "../src/warehouse-object.ts";
+
+          export { CodeModeHostEntrypoint };
+          export class WarehouseObject extends CurrentWarehouseObject {
+            async seedLegacy(): Promise<void> {
+              this.ctx.storage.sql.exec(
+                "CREATE TABLE IF NOT EXISTS invoice_summary (customer TEXT NOT NULL, region TEXT NOT NULL, revenue INTEGER NOT NULL, created_at TEXT NOT NULL)",
+              );
+              this.ctx.storage.sql.exec(
+                "INSERT INTO invoice_summary (customer, region, revenue, created_at) VALUES (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?), (?, ?, ?, ?)",
+                "Stellar Freight", "emea", 48200, "2026-07-03",
+                "Nimbus Analytics", "amer", 12800, "2026-07-11",
+                "Copper Kettle Co", "amer", 730, "2026-07-15",
+                "Harbor Lights Ltd", "apac", 9400, "2026-07-21",
+                "Vertex Robotics", "emea", 21050, "2026-07-24",
+              );
+            }
+          }
+
+          export default worker;
+        `,
+        resolveDir: import.meta.dirname,
+        sourcefile: "legacy-seed-worker.ts",
+        loader: "ts",
+      },
+      bundle: true,
+      write: false,
+      format: "esm",
+      target: "es2022",
+      platform: "browser",
+      conditions: ["workerd", "worker", "browser"],
+      external: ["cloudflare:*", "node:*"],
+      logLevel: "silent",
+    });
+    legacySeedWorkerScript = executableWorkerScript(legacySeedBundle.outputFiles);
     runtime = openRuntime();
     cleanups.push(() => runtime.dispose());
   }, 120_000);
@@ -176,13 +217,13 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     expect(result.codeMode.program).toContain("warehouse.listInvoices");
 
     // The evidence that matters: the isolated program queried the REAL
-    // Durable Object SQLite and returned the computed result. The seed has
-    // exactly three customers above $10k, highest revenue first.
+    // Durable Object SQLite and returned the computed result. Atlas has two
+    // sub-$10k invoices whose customer-level total crosses the strict threshold.
     expect(result.codeMode.result).toEqual({
-      topCustomers: ["Stellar Freight", "Vertex Robotics", "Nimbus Analytics"],
-      count: 3,
+      topCustomers: ["Stellar Freight", "Vertex Robotics", "Nimbus Analytics", "Atlas Components"],
+      count: 4,
     });
-    expect(result.codeMode.logs).toContain("matched 3 high-revenue customers");
+    expect(result.codeMode.logs).toContain("matched 4 high-revenue customers");
   }, 120_000);
 
   it("rejects malformed and out-of-Schema HTTP request bodies", async () => {
@@ -223,6 +264,33 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
 
     expect(response.status).toBe(500);
     expect(await response.json()).toEqual({ error: "the agent runtime failed" });
+  });
+
+  it("upgrades a pre-change five-row warehouse through idempotent versioned seed migrations", async () => {
+    const legacyRuntime = openRuntime(legacySeedWorkerScript);
+    cleanups.push(() => legacyRuntime.dispose());
+    const warehouse = await legacyRuntime.getDurableObjectNamespace("WAREHOUSE");
+    const rawStub = warehouse.get(warehouse.idFromName("legacy-acme"));
+    const stub = rawStub as unknown as {
+      seedLegacy: () => Promise<void>;
+      listInvoices: (request: unknown) => Promise<unknown>;
+    };
+    await stub.seedLegacy();
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const migrated = await Effect.runPromise(
+        Schema.decodeUnknownEffect(WarehouseListOutcome)(await stub.listInvoices({})),
+      );
+      expect(migrated._tag).toBe("WarehouseInvoices");
+      if (migrated._tag !== "WarehouseInvoices") throw new Error("expected invoices");
+      expect(migrated.invoices).toHaveLength(8);
+      expect(
+        migrated.invoices.filter((invoice) => invoice.customer === "Boundary Foods"),
+      ).toHaveLength(1);
+      expect(
+        migrated.invoices.filter((invoice) => invoice.customer === "Atlas Components"),
+      ).toHaveLength(2);
+    }
   });
 
   it("exposes only a curated Schema-decoded invoice operation over DO RPC", async () => {

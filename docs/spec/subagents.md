@@ -333,7 +333,10 @@ model; S1/S2 do not define or claim one.
 
 ### 6.2 Fail-closed rules
 
-- Durable child-admission authorization is evaluated immediately before establishment.
+- Durable child-admission authorization is evaluated immediately before the first admission. A
+  matching admitted row is the durable commit of that authorization decision; recovery completes
+  its exact materialization, lineage, readiness, and parent start link without allowing a later
+  policy change to strand an accepted Submission.
 - Every child model/provider selection, Tool/MCP/Skill activation, secret resolution, artifact
   dereference, sandbox operation, administrative command, and future nested delegation is
   authorized at its action-owning adapter under current policy and normalized resource identity;
@@ -578,9 +581,11 @@ Establishment is a recoverable protocol:
 2. Under the parent ownership token and epoch, create or read the parent-owned budget reservation.
 3. Append `SubagentRequested` with the reservation ID/digest and intended child identity.
 4. Derive a stable child admission idempotency key from the parent Run and Tool Call identity.
-5. Authorize the exact establishment request under current host policy.
-6. Admit or resolve the child Submission in the Submission Ledger.
-7. Reauthorize current policy, then materialize the child Conversation and immutable Parent Link.
+5. Resolve the deterministic admission identity directly in the Submission Ledger.
+6. If and only if it is `notAdmitted`, authorize the exact establishment request under current host
+   policy and admit the child; that durable admission commits the authorization decision.
+7. For the newly or previously admitted child, materialize the child Conversation and immutable
+   Parent Link without a second authorization decision.
 8. Validate the complete lineage record byte-for-field against the request, store durable
    attachments, and mark the child ready.
 9. Receive the child Receipt.
@@ -652,25 +657,25 @@ or rewrite it.
 
 Recovery classifies these states:
 
-| Parent/child evidence                                           | Recovery action                                                                                                                                                                                                |
-| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No reservation and no `SubagentRequested`                       | No child obligation exists; normal Tool preparation rules apply                                                                                                                                                |
-| Reservation exists, request absent                              | Under the parent fence, append the fixed request or release the unused reservation                                                                                                                             |
-| Requested, direct admission result `notAdmitted`                | Reauthorize the exact establishment request under current policy, then idempotently admit the intended child                                                                                                   |
-| Requested, direct admission result `indeterminate`              | Wait/retry direct resolution; never infer absence from a projection                                                                                                                                            |
-| Child admitted, its Conversation lacks or has divergent lineage | The child lane defers or rejects readiness; the worker claim gate releases/refuses the head, and only the parent's reauthorized idempotent establishment may complete exact lineage — no child Turn runs first |
-| Child admitted, parent start record missing                     | Resolve by idempotency key and append the exact `SubagentStarted` link                                                                                                                                         |
-| Started, child nonterminal                                      | Enter/restore `waitingForChild`; never spawn a replacement invocation                                                                                                                                          |
-| Child lost Attempt ownership before unsafe work                 | Child recovery proceeds under its own higher ownership token and epoch                                                                                                                                         |
-| Child has unresolved ordinary Tool outcome                      | Child enters operator-resolution state; parent waits and no result is fabricated                                                                                                                               |
-| Child terminal, parent join missing                             | Verify the child Settlement and append the parent join/result batch                                                                                                                                            |
-| Parent join canonical, budget release incomplete                | Apply the canonical accounting decision idempotently, then mark the reservation released                                                                                                                       |
-| Parent Attempt ownership lost while child continues             | Fence stale parent; replacement observes the same child without holding a worker permit                                                                                                                        |
-| Required child Binding digest unavailable                       | Write framework `ChildCompatibilityFailure`; never run different code                                                                                                                                          |
-| Required parent declaration/projection digest unavailable       | Record framework `SubagentExecutionFailure`; never invent an application result                                                                                                                                |
-| Parent abort canonical, child abort absent                      | Idempotently append the child abort command and wait                                                                                                                                                           |
-| Child abort canonical, parent propagation marker absent         | Repair the parent marker; do not issue a distinct command                                                                                                                                                      |
-| Child terminal concurrently with abort                          | Preserve the one winning child Settlement and join that exact outcome                                                                                                                                          |
+| Parent/child evidence                                           | Recovery action                                                                                                                                                          |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No reservation and no `SubagentRequested`                       | No child obligation exists; normal Tool preparation rules apply                                                                                                          |
+| Reservation exists, request absent                              | Under the parent fence, append the fixed request or release the unused reservation                                                                                       |
+| Requested, direct admission result `notAdmitted`                | Authorize the exact establishment request under current policy, then idempotently admit the intended child; admission commits that authorization                         |
+| Requested, direct admission result `indeterminate`              | Wait/retry direct resolution; never infer absence from a projection                                                                                                      |
+| Child admitted, its Conversation lacks or has divergent lineage | Exact missing materialization/lineage/readiness is completed as recovery of the already-authorized admission; divergent lineage is rejected and no child Turn runs first |
+| Child admitted, parent start record missing                     | Validate the admission/request binding and append the exact `SubagentStarted` link without a second admission-policy decision                                            |
+| Started, child nonterminal                                      | Enter/restore `waitingForChild`; never spawn a replacement invocation                                                                                                    |
+| Child lost Attempt ownership before unsafe work                 | Child recovery proceeds under its own higher ownership token and epoch                                                                                                   |
+| Child has unresolved ordinary Tool outcome                      | Child enters operator-resolution state; parent waits and no result is fabricated                                                                                         |
+| Child terminal, parent join missing                             | Verify the child Settlement and append the parent join/result batch                                                                                                      |
+| Parent join canonical, budget release incomplete                | Apply the canonical accounting decision idempotently, then mark the reservation released                                                                                 |
+| Parent Attempt ownership lost while child continues             | Fence stale parent; replacement observes the same child without holding a worker permit                                                                                  |
+| Required child Binding digest unavailable                       | Write framework `ChildCompatibilityFailure`; never run different code                                                                                                    |
+| Required parent declaration/projection digest unavailable       | Record framework `SubagentExecutionFailure`; never invent an application result                                                                                          |
+| Parent abort canonical, child abort absent                      | Idempotently append the child abort command and wait                                                                                                                     |
+| Child abort canonical, parent propagation marker absent         | Repair the parent marker; do not issue a distinct command                                                                                                                |
+| Child terminal concurrently with abort                          | Preserve the one winning child Settlement and join that exact outcome                                                                                                    |
 
 An attached durable parent does not settle while its child join obligation is unresolved.
 An unresolved external outcome stops active child running time and transitions to an explicit
@@ -703,10 +708,10 @@ capability because they weaken structured ownership and complicate accepted-work
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Before parent budget reservation                              | No request or child obligation exists                                                                                                                                  |
 | After reservation, before request append                      | Fenced recovery appends the fixed request or releases the reservation exactly once                                                                                     |
-| After request append, before child admission                  | Parent-owned establishment reauthorizes current policy, then direct idempotency resolution classifies admission before one child is admitted                           |
+| After request append, before child admission                  | Parent-owned establishment resolves admission directly; only proven `notAdmitted` reauthorizes current policy before one child is admitted                             |
 | While admission resolution is indeterminate                   | No second admission occurs; recovery waits/retries the authoritative owner                                                                                             |
-| After child admission, before readiness                       | Child-lane recovery defers; parent-owned establishment reauthorizes current policy before completing materialization/readiness                                         |
-| After child readiness, before parent start append             | Parent-owned establishment reauthorizes current policy, resolves the same Receipt, and records the link                                                                |
+| After child admission, before readiness                       | Child-lane recovery defers; parent-owned establishment validates the admitted binding and unconditionally completes its already-authorized materialization/readiness   |
+| After child readiness, before parent start append             | Parent-owned establishment validates the admitted binding, resolves the same Receipt, and records the exact link without a second admission-policy decision            |
 | After parent start, before `waitingForChild` checkpoint       | Recovery checkpoints waiting state and releases execution permits                                                                                                      |
 | During child model response                                   | Normal durable model recovery applies inside the child                                                                                                                 |
 | During child ordinary Tool                                    | Normal prepared/settled/operator-resolution classification applies inside the child                                                                                    |
@@ -792,7 +797,8 @@ consequence, and durable Settlement mapping in the executable state-machine fixt
 - attempts to address undeclared Agents fail before start;
 - a parent allowed to delegate but forbidden from a concrete child resource cannot reach it;
 - revoking policy, Tenant membership, resource authority, or approval after admission denies the
-  next affected child action and durable resume;
+  next separately protected child action or observation, without undoing exact repair of the
+  already-accepted establishment;
 - a parent approval cannot be replayed for a child Tool, sibling, descendant, or recovered Attempt;
 - parent/child/Receipt IDOR and unauthorized observer reconnect/page reads fail closed;
 - artifact digest substitution, cross-tenant deduplication leakage, content-type confusion, and
@@ -911,7 +917,8 @@ Require separate proposals:
 - **SUB-015**: Full child history remains in the child Conversation and is not copied into parent
   model context.
 - **SUB-016**: Durable child establishment is idempotent by parent Run and Tool Call identity,
-  reauthorizes current policy before replayed admission and materialization/readiness, and validates
+  authorizes current policy before a replayed first admission, treats exact durable admission as
+  the committed authorization boundary for completing materialization/readiness, and validates
   exact immutable lineage before readiness and execution.
 - **SUB-017**: A durable child Receipt exists before `SubagentStarted` becomes canonical or
   externally durable-visible.

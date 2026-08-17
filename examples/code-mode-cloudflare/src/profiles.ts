@@ -15,8 +15,15 @@ const usage = { inputTokens: {}, outputTokens: {} };
  * its own program instead.
  */
 const scriptedProgram = `async () => {
-  const result = await warehouse.listInvoices({ minimumRevenue: 10000 });
-  const top = result.invoices.filter((row) => row.revenue > 10000);
+  const result = await warehouse.listInvoices({});
+  const totals = new Map();
+  for (const row of result.invoices) {
+    totals.set(row.customer, (totals.get(row.customer) ?? 0) + row.revenue);
+  }
+  const top = [...totals.entries()]
+    .map(([customer, revenue]) => ({ customer, revenue }))
+    .filter((row) => row.revenue > 10000)
+    .sort((left, right) => right.revenue - left.revenue);
   console.log("matched", top.length, "high-revenue customers");
   return {
     topCustomers: top.map((row) => row.customer),
@@ -26,7 +33,7 @@ const scriptedProgram = `async () => {
 
 const scriptedAnswer = JSON.stringify({
   answer:
-    "The customers above $10k in revenue are Stellar Freight, Vertex Robotics, and Nimbus Analytics.",
+    "The customers above $10k in revenue are Stellar Freight, Vertex Robotics, Nimbus Analytics, and Atlas Components.",
 });
 
 /**

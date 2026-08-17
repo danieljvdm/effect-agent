@@ -184,8 +184,9 @@ export const noopOperationMutationPreparerLayer: Layer.Layer<OperationMutationPr
   operationMutationPreparerLayer(noopOperationMutationPreparer);
 
 /**
- * Current-policy question asked immediately before each durable child establishment attempt. The
- * opaque grant digest remains capabilities-owned; session binds it without interpreting it.
+ * Current-policy question asked immediately before the transition that first admits a durable
+ * child. The opaque grant digest remains capabilities-owned; session binds it without
+ * interpreting it.
  */
 export class ChildAdmissionAuthorizationRequest extends Schema.Class<ChildAdmissionAuthorizationRequest>(
   "@effect-agent/session/ChildAdmissionAuthorizationRequest",
@@ -206,7 +207,7 @@ export class ChildAdmissionAuthorizationRequest extends Schema.Class<ChildAdmiss
   reservationDigest: Digest,
 }) {}
 
-/** Current policy denied this exact child admission/establishment attempt. */
+/** Current policy denied the exact transition that would first admit this child obligation. */
 export class ChildAdmissionDenied extends Schema.TaggedError<ChildAdmissionDenied>()(
   "ChildAdmissionDenied",
   {
@@ -225,7 +226,12 @@ export interface ChildAdmissionAuthorizerService {
   ) => Effect.Effect<void, ChildAdmissionDenied>;
 }
 
-/** Narrow required authority for durable child admission; it grants no later child action. */
+/**
+ * Narrow required authority for the first durable child admission. A matching admitted row is
+ * durable evidence that this decision already committed, so recovery completes its exact
+ * materialization/lineage/readiness without asking policy to revoke an accepted obligation. It
+ * grants no later child action.
+ */
 export class ChildAdmissionAuthorizer extends Context.Service<
   ChildAdmissionAuthorizer,
   ChildAdmissionAuthorizerService
