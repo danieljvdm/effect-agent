@@ -1,5 +1,6 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Crypto, Effect, Layer, Ref, Schema, Stream } from "effect";
 import { IdGenerator, ToolExecutionClass } from "effect-agent";
 import { LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
 
@@ -8,12 +9,15 @@ import {
   CodeReview,
   compileIgnoreGlobs,
   enforceFindingsBound,
+  type ExecuteReviewOptions,
   PrReview,
   PullRequestMetadata,
   PullRequestSource,
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewPublisher,
+  type ReviewSelection,
+  ReviewStateAuthenticator,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -167,7 +171,7 @@ const runFactoryReviewer = <E, R>(
       ),
     );
     return { outcome, published: yield* Ref.get(published) };
-  });
+  }).pipe(Effect.provide(NodeCrypto.layer));
 
 describe("PrReview.make", () => {
   it.effect("injects guidance between the mission framing and the intact contract", () =>
@@ -332,7 +336,7 @@ describe("PrReview.make", () => {
       expect(prompts[1]).toContain(GUIDELINES);
       expect(outcome.review).toEqual(singleFindingReview);
       expect(yield* Ref.get(published)).toHaveLength(1);
-    }),
+    }).pipe(Effect.provide(NodeCrypto.layer)),
   );
 });
 
@@ -378,6 +382,19 @@ type FanOutSourceProof = Assert<
 // Framework plumbing is satisfied internally.
 type PlainIdGeneratorExcludedProof = Assert<Equal<Extract<PlainServices, IdGenerator>, never>>;
 type FanOutIdGeneratorExcludedProof = Assert<Equal<Extract<FanOutServices, IdGenerator>, never>>;
+type PlainCryptoVisibleProof = Assert<Equal<Extract<PlainServices, Crypto.Crypto>, Crypto.Crypto>>;
+type FanOutCryptoVisibleProof = Assert<
+  Equal<Extract<FanOutServices, Crypto.Crypto>, Crypto.Crypto>
+>;
+type ExplicitSelectionProof = Assert<
+  Equal<NonNullable<ExecuteReviewOptions["selection"]>, ReviewSelection>
+>;
+type ExplicitStateRendererProof = Assert<
+  Equal<
+    NonNullable<ExecuteReviewOptions["renderState"]>,
+    ReviewStateAuthenticator["Service"]["render"]
+  >
+>;
 // An extra tool's handler is the caller's dependency, visible in `R` — and
 // absent when no extra tool is configured.
 type ExtraHandlerProof = Assert<
@@ -397,6 +414,10 @@ describe("factory type proofs", () => {
     const fanOutSourceProof: FanOutSourceProof = true;
     const plainIdGeneratorExcludedProof: PlainIdGeneratorExcludedProof = true;
     const fanOutIdGeneratorExcludedProof: FanOutIdGeneratorExcludedProof = true;
+    const plainCryptoVisibleProof: PlainCryptoVisibleProof = true;
+    const fanOutCryptoVisibleProof: FanOutCryptoVisibleProof = true;
+    const explicitSelectionProof: ExplicitSelectionProof = true;
+    const explicitStateRendererProof: ExplicitStateRendererProof = true;
     const extraHandlerProof: ExtraHandlerProof = true;
     const plainHandlerExcludedProof: PlainHandlerExcludedProof = true;
     expect([
@@ -405,9 +426,13 @@ describe("factory type proofs", () => {
       fanOutSourceProof,
       plainIdGeneratorExcludedProof,
       fanOutIdGeneratorExcludedProof,
+      plainCryptoVisibleProof,
+      fanOutCryptoVisibleProof,
+      explicitSelectionProof,
+      explicitStateRendererProof,
       extraHandlerProof,
       plainHandlerExcludedProof,
-    ]).toEqual([true, true, true, true, true, true, true]);
+    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true]);
   });
 });
 

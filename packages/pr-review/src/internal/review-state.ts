@@ -280,8 +280,6 @@ export interface ReviewSelection {
   readonly baselineSha: string | undefined;
   readonly priorState: ReviewState | undefined;
   readonly profileFingerprint: string;
-  /** Action-owned authentication capability, constructed at the composition root. */
-  readonly stateAuthenticator?: ReviewStateAuthenticator["Service"] | undefined;
 }
 
 const fullSelection = (input: {
@@ -424,12 +422,6 @@ export const selectReviewRange = (input: {
     profileFingerprint: input.profileFingerprint,
   };
 };
-
-/** Per-run context consumed by orchestration and publication, not by the model. */
-export class ReviewExecutionContext extends Context.Service<
-  ReviewExecutionContext,
-  ReviewSelection
->()("@effect-agent/pr-review/ReviewExecutionContext") {}
 
 /**
  * Decorate the full source with the selected review range. Full anchor files

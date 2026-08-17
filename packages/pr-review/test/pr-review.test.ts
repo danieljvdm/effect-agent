@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Ref, Schema } from "effect";
 import { Agent, IdGenerator } from "effect-agent";
@@ -30,7 +31,6 @@ import {
   ReadFileDiff,
   ReviewConcern,
   ReviewCoverage,
-  ReviewExecutionContext,
   ReviewFinding,
   ReviewHeadComparison,
   ReviewPublicationPlan,
@@ -53,6 +53,8 @@ import {
   scriptedFinalParts,
   scriptedToolTurn,
 } from "../src/testing.ts";
+
+const testIdGeneratorLayer = IdGenerator.layer.pipe(Layer.provide(NodeCrypto.layer));
 
 describe("OpenAI tool schema compatibility", () => {
   it("encodes every reviewer tool as a strict OpenAI object schema", () => {
@@ -1001,7 +1003,7 @@ describe("offline review run", () => {
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
+            testIdGeneratorLayer,
           ),
         ),
         Effect.scoped,
@@ -1063,7 +1065,7 @@ describe("offline review run", () => {
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
+            testIdGeneratorLayer,
           ),
         ),
         Effect.scoped,
@@ -1114,7 +1116,7 @@ describe("offline review run", () => {
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
+            testIdGeneratorLayer,
           ),
         ),
         Effect.scoped,
@@ -1222,15 +1224,15 @@ describe("offline review run", () => {
         post: false,
         applyVerdict: false,
         reviewShape: "flat",
+        selection,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(selectedSource)),
             collectingReviewPublisherLayer(published),
-            IdGenerator.layer,
+            testIdGeneratorLayer,
           ),
         ),
-        Effect.provideService(ReviewExecutionContext, selection),
         Effect.scoped,
       );
 
@@ -1268,7 +1270,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
               collectingReviewPublisherLayer(published),
               openAiClientLayer,
-              IdGenerator.layer,
+              testIdGeneratorLayer,
             ),
           ),
           Effect.scoped,

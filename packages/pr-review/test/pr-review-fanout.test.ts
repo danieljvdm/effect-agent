@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
 import {
@@ -61,6 +62,8 @@ import {
   type OfflineUnitCall,
   type OfflineUnitScript,
 } from "../src/testing.ts";
+
+const testIdGeneratorLayer = IdGenerator.layer.pipe(Layer.provide(NodeCrypto.layer));
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -208,7 +211,7 @@ const runOfflineFanOut = (script: {
     const childSupportLayer = Layer.mergeAll(
       FileReviewToolkitLayer,
       SubagentReservationsMemoryLive,
-      IdGenerator.layer,
+      testIdGeneratorLayer,
     ).pipe(Layer.provideMerge(sourceLayer));
     const program = executeReview(parentBinding, {
       post: true,
@@ -221,7 +224,7 @@ const runOfflineFanOut = (script: {
           FanOutCoordinatorToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
           fanOutHandlersLayer(childBinding).pipe(Layer.provide(childSupportLayer)),
           collectingReviewPublisherLayer(published),
-          IdGenerator.layer,
+          testIdGeneratorLayer,
         ),
       ),
       Effect.scoped,

@@ -1,4 +1,4 @@
-import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Config, Console, Effect, FileSystem, Layer, Option, Redacted, Schema } from "effect";
 import { BudgetExceeded, UsageBudgetLimits } from "effect-agent";
 import { FetchHttpClient } from "effect/unstable/http";
@@ -20,7 +20,6 @@ import {
 } from "./internal/providers.ts";
 import { retireStaleReviews } from "./internal/retirement.ts";
 import {
-  ReviewExecutionContext,
   ReviewHeadComparison,
   ReviewStateAuthenticator,
   type ReviewMode,
@@ -439,6 +438,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
       let selection: ReturnType<typeof selectReviewRange> | undefined;
+      let stateAuthenticator: ReviewStateAuthenticator["Service"] | undefined;
       if (reviewer.profileFingerprint !== undefined) {
         const source = yield* PullRequestSource;
         const [snapshot, profileFingerprint] = yield* Effect.all([
@@ -447,7 +447,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         ]);
         const { metadata, files: fullFiles } = snapshot;
         const history = options.priorReviews ?? (yield* PriorReviews);
-        const stateAuthenticator = yield* ReviewStateAuthenticator;
+        stateAuthenticator = yield* ReviewStateAuthenticator;
         const recovered =
           stateAuthenticator.status === "unavailable"
             ? {
@@ -503,19 +503,16 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             }
           }
         }
-        selection = {
-          ...selectReviewRange({
-            requestedMode: options.reviewMode ?? "incremental",
-            current: metadata,
-            fullFiles,
-            profileFingerprint,
-            priorState: recovered.state,
-            comparison,
-            baseComparison,
-            lookupFailure: recovered.failure,
-          }),
-          stateAuthenticator,
-        };
+        selection = selectReviewRange({
+          requestedMode: options.reviewMode ?? "incremental",
+          current: metadata,
+          fullFiles,
+          profileFingerprint,
+          priorState: recovered.state,
+          comparison,
+          baseComparison,
+          lookupFailure: recovered.failure,
+        });
         if (
           options.skipUnchanged !== false &&
           selection.mode === "incremental" &&
@@ -594,7 +591,18 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           runUrl,
         });
       }
-      const runReview = reviewer.run({ post: options.post ?? true, runUrl });
+      const runReview = reviewer.run({
+        post: options.post ?? true,
+        runUrl,
+        selection,
+        renderState:
+          stateAuthenticator?.status === "available" ? stateAuthenticator.render : undefined,
+        stateUnavailableReason:
+          stateAuthenticator?.status === "unavailable"
+            ? (stateAuthenticator.unavailableReason ??
+              "authenticated continuity state is unavailable")
+            : undefined,
+      });
       const reviewEffect = Option.isSome(progress)
         ? runReview.pipe(
             Effect.tapCause(() =>
@@ -608,10 +616,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         : runReview;
       const outcome = yield* selection === undefined
         ? reviewEffect
-        : reviewEffect.pipe(
-            Effect.provide(selectedPullRequestSourceLayer(selection)),
-            Effect.provideService(ReviewExecutionContext, selection),
-          );
+        : reviewEffect.pipe(Effect.provide(selectedPullRequestSourceLayer(selection)));
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
@@ -740,7 +745,12 @@ export const main = (): void =>
       ),
       Effect.scoped,
       Effect.provide(
-        Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer, compactReviewLoggingLayer),
+        Layer.mergeAll(
+          NodeServices.layer,
+          NodeCrypto.layer,
+          FetchHttpClient.layer,
+          compactReviewLoggingLayer,
+        ),
       ),
     ),
     { disableErrorReporting: true },

@@ -12,74 +12,17 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeRuntime.js
-var exports_NodeRuntime = {};
-__export(exports_NodeRuntime, {
-  runMain: () => runMain2
+// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeCrypto.js
+var exports_NodeCrypto = {};
+__export(exports_NodeCrypto, {
+  layer: () => layer2
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Cause.js
-var exports_Cause = {};
-__export(exports_Cause, {
-  squash: () => squash,
-  reasonAnnotations: () => reasonAnnotations2,
-  prettyErrors: () => prettyErrors,
-  pretty: () => pretty,
-  map: () => map6,
-  makeInterruptReason: () => makeInterruptReason2,
-  makeFailReason: () => makeFailReason,
-  makeDieReason: () => makeDieReason,
-  isUnknownError: () => isUnknownError2,
-  isTimeoutError: () => isTimeoutError2,
-  isReason: () => isReason,
-  isNoSuchElementError: () => isNoSuchElementError2,
-  isInterruptReason: () => isInterruptReason2,
-  isIllegalArgumentError: () => isIllegalArgumentError2,
-  isFailReason: () => isFailReason2,
-  isExceededCapacityError: () => isExceededCapacityError2,
-  isDone: () => isDone2,
-  isDieReason: () => isDieReason2,
-  isCause: () => isCause2,
-  isAsyncFiberError: () => isAsyncFiberError2,
-  interruptors: () => interruptors,
-  interrupt: () => interrupt2,
-  hasInterruptsOnly: () => hasInterruptsOnly2,
-  hasInterrupts: () => hasInterrupts2,
-  hasFails: () => hasFails2,
-  hasDies: () => hasDies2,
-  fromReasons: () => fromReasons,
-  findInterrupt: () => findInterrupt2,
-  findFail: () => findFail2,
-  findErrorOption: () => findErrorOption2,
-  findError: () => findError2,
-  findDie: () => findDie2,
-  findDefect: () => findDefect2,
-  filterInterruptors: () => filterInterruptors,
-  fail: () => fail4,
-  empty: () => empty4,
-  done: () => done2,
-  die: () => die2,
-  combine: () => combine2,
-  annotations: () => annotations,
-  annotate: () => annotate,
-  UnknownErrorTypeId: () => UnknownErrorTypeId2,
-  UnknownError: () => UnknownError2,
-  TypeId: () => TypeId5,
-  TimeoutErrorTypeId: () => TimeoutErrorTypeId2,
-  TimeoutError: () => TimeoutError2,
-  StackTrace: () => StackTrace,
-  ReasonTypeId: () => ReasonTypeId,
-  NoSuchElementErrorTypeId: () => NoSuchElementErrorTypeId2,
-  NoSuchElementError: () => NoSuchElementError2,
-  InterruptorStackTrace: () => InterruptorStackTrace2,
-  IllegalArgumentErrorTypeId: () => IllegalArgumentErrorTypeId2,
-  IllegalArgumentError: () => IllegalArgumentError2,
-  ExceededCapacityErrorTypeId: () => ExceededCapacityErrorTypeId2,
-  ExceededCapacityError: () => ExceededCapacityError2,
-  DoneTypeId: () => DoneTypeId2,
-  Done: () => Done2,
-  AsyncFiberErrorTypeId: () => AsyncFiberErrorTypeId2,
-  AsyncFiberError: () => AsyncFiberError2
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Crypto.js
+var exports_Crypto = {};
+__export(exports_Crypto, {
+  make: () => make10,
+  Crypto: () => Crypto
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Context.js
@@ -2145,430 +2088,237 @@ var omit = (...keys) => (self) => withFlat(self, (map2) => {
 });
 var Reference = Service;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/array.js
-var isArrayNonEmpty = (self) => self.length > 0;
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Result.js
-var exports_Result = {};
-__export(exports_Result, {
-  void: () => void_2,
-  try: () => try_,
-  transposeOption: () => transposeOption,
-  transposeMapOption: () => transposeMapOption,
-  tap: () => tap2,
-  succeedSome: () => succeedSome,
-  succeedNone: () => succeedNone,
-  succeed: () => succeed2,
-  orElse: () => orElse2,
-  merge: () => merge2,
-  match: () => match2,
-  mapError: () => mapError,
-  mapBoth: () => mapBoth,
-  map: () => map2,
-  makeEquivalence: () => makeEquivalence2,
-  liftPredicate: () => liftPredicate2,
-  let: () => let_3,
-  isSuccess: () => isSuccess2,
-  isResult: () => isResult2,
-  isFailure: () => isFailure2,
-  getSuccess: () => getSuccess3,
-  getOrUndefined: () => getOrUndefined3,
-  getOrThrowWith: () => getOrThrowWith2,
-  getOrThrow: () => getOrThrow2,
-  getOrNull: () => getOrNull2,
-  getOrElse: () => getOrElse3,
-  getFailure: () => getFailure3,
-  gen: () => gen2,
-  fromOption: () => fromOption2,
-  fromNullishOr: () => fromNullishOr2,
-  flip: () => flip,
-  flatMap: () => flatMap2,
-  filterOrFail: () => filterOrFail,
-  failVoid: () => failVoid,
-  fail: () => fail2,
-  bindTo: () => bindTo3,
-  bind: () => bind3,
-  andThen: () => andThen2,
-  all: () => all2,
-  Do: () => Do2
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Effect.js
+var exports_Effect = {};
+__export(exports_Effect, {
+  zipWith: () => zipWith3,
+  zip: () => zip2,
+  yieldNowWith: () => yieldNowWith2,
+  yieldNow: () => yieldNow2,
+  withTracerTiming: () => withTracerTiming2,
+  withTracerEnabled: () => withTracerEnabled2,
+  withTracer: () => withTracer2,
+  withSpanScoped: () => withSpanScoped2,
+  withSpan: () => withSpan3,
+  withParentSpan: () => withParentSpan3,
+  withLogger: () => withLogger,
+  withLogSpan: () => withLogSpan,
+  withFiber: () => withFiber2,
+  withExecutionPlan: () => withExecutionPlan2,
+  withErrorReporting: () => withErrorReporting2,
+  whileLoop: () => whileLoop2,
+  when: () => when2,
+  void: () => void_5,
+  validate: () => validate2,
+  useSpan: () => useSpan2,
+  updateServiceScoped: () => updateServiceScoped2,
+  updateService: () => updateService3,
+  updateContext: () => updateContext2,
+  unwrapReason: () => unwrapReason2,
+  uninterruptibleMask: () => uninterruptibleMask2,
+  uninterruptible: () => uninterruptible2,
+  undefined: () => undefined_2,
+  txRetry: () => txRetry,
+  tx: () => tx,
+  tryPromise: () => tryPromise2,
+  try: () => try_3,
+  transposeOption: () => transposeOption3,
+  trackSuccesses: () => trackSuccesses,
+  trackErrors: () => trackErrors,
+  trackDuration: () => trackDuration,
+  trackDefects: () => trackDefects,
+  track: () => track,
+  tracer: () => tracer2,
+  timeoutOrElse: () => timeoutOrElse2,
+  timeoutOption: () => timeoutOption2,
+  timeout: () => timeout2,
+  timed: () => timed2,
+  tapErrorTag: () => tapErrorTag2,
+  tapError: () => tapError3,
+  tapDefect: () => tapDefect2,
+  tapCauseIf: () => tapCauseIf2,
+  tapCauseFilter: () => tapCauseFilter2,
+  tapCause: () => tapCause3,
+  tap: () => tap5,
+  sync: () => sync3,
+  suspend: () => suspend3,
+  succeedSome: () => succeedSome3,
+  succeedNone: () => succeedNone3,
+  succeed: () => succeed6,
+  spanLinks: () => spanLinks2,
+  spanAnnotations: () => spanAnnotations2,
+  sleep: () => sleep2,
+  setContext: () => setContext2,
+  serviceOption: () => serviceOption2,
+  service: () => service2,
+  scopedWith: () => scopedWith2,
+  scoped: () => scoped2,
+  scope: () => scope2,
+  scheduleFrom: () => scheduleFrom2,
+  schedule: () => schedule,
+  satisfiesSuccessType: () => satisfiesSuccessType2,
+  satisfiesServicesType: () => satisfiesServicesType2,
+  satisfiesErrorType: () => satisfiesErrorType2,
+  sandbox: () => sandbox2,
+  runSyncWith: () => runSyncWith2,
+  runSyncExitWith: () => runSyncExitWith2,
+  runSyncExit: () => runSyncExit2,
+  runSync: () => runSync2,
+  runPromiseWith: () => runPromiseWith2,
+  runPromiseExitWith: () => runPromiseExitWith2,
+  runPromiseExit: () => runPromiseExit2,
+  runPromise: () => runPromise2,
+  runForkWith: () => runForkWith2,
+  runFork: () => runFork2,
+  runCallbackWith: () => runCallbackWith2,
+  runCallback: () => runCallback2,
+  retryOrElse: () => retryOrElse2,
+  retry: () => retry2,
+  result: () => result2,
+  requestUnsafe: () => requestUnsafe2,
+  request: () => request2,
+  replicateEffect: () => replicateEffect2,
+  replicate: () => replicate2,
+  repeatOrElse: () => repeatOrElse2,
+  repeat: () => repeat3,
+  reduce: () => reduce2,
+  raceFirst: () => raceFirst2,
+  raceAllFirst: () => raceAllFirst2,
+  raceAll: () => raceAll2,
+  race: () => race2,
+  provideServiceEffect: () => provideServiceEffect2,
+  provideService: () => provideService2,
+  provideContext: () => provideContext2,
+  provide: () => provide4,
+  promise: () => promise2,
+  partition: () => partition3,
+  orElseSucceed: () => orElseSucceed2,
+  orDie: () => orDie3,
+  option: () => option2,
+  onInterrupt: () => onInterrupt2,
+  onExitPrimitive: () => onExitPrimitive2,
+  onExitIf: () => onExitIf2,
+  onExitFilter: () => onExitFilter2,
+  onExit: () => onExit2,
+  onErrorIf: () => onErrorIf2,
+  onErrorFilter: () => onErrorFilter2,
+  onError: () => onError2,
+  never: () => never2,
+  matchEffect: () => matchEffect3,
+  matchEager: () => matchEager2,
+  matchCauseEffectEager: () => matchCauseEffectEager2,
+  matchCauseEffect: () => matchCauseEffect2,
+  matchCauseEager: () => matchCauseEager2,
+  matchCause: () => matchCause2,
+  match: () => match7,
+  mapErrorEager: () => mapErrorEager2,
+  mapError: () => mapError4,
+  mapEager: () => mapEager2,
+  mapBothEager: () => mapBothEager2,
+  mapBoth: () => mapBoth4,
+  map: () => map8,
+  makeSpanScoped: () => makeSpanScoped2,
+  makeSpan: () => makeSpan2,
+  logWithLevel: () => logWithLevel2,
+  logWarning: () => logWarning,
+  logTrace: () => logTrace,
+  logInfo: () => logInfo,
+  logFatal: () => logFatal,
+  logError: () => logError,
+  logDebug: () => logDebug,
+  log: () => log,
+  linkSpans: () => linkSpans2,
+  let: () => let_5,
+  isSuccess: () => isSuccess5,
+  isFailure: () => isFailure5,
+  isEffect: () => isEffect2,
+  interruptibleMask: () => interruptibleMask2,
+  interruptible: () => interruptible2,
+  interrupt: () => interrupt4,
+  ignoreCause: () => ignoreCause2,
+  ignore: () => ignore2,
+  gen: () => gen4,
+  fromResult: () => fromResult2,
+  fromOption: () => fromOption4,
+  fromNullishOr: () => fromNullishOr4,
+  forkScoped: () => forkScoped2,
+  forkIn: () => forkIn2,
+  forkDetach: () => forkDetach2,
+  forkChild: () => forkChild2,
+  forever: () => forever4,
+  forEach: () => forEach2,
+  fnUntracedEager: () => fnUntracedEager2,
+  fnUntraced: () => fnUntraced2,
+  fn: () => fn2,
+  flip: () => flip3,
+  flatten: () => flatten5,
+  flatMapEager: () => flatMapEager2,
+  flatMap: () => flatMap5,
+  firstSuccessOf: () => firstSuccessOf2,
+  findFirstFilter: () => findFirstFilter2,
+  findFirst: () => findFirst2,
+  filterOrFail: () => filterOrFail3,
+  filterOrElse: () => filterOrElse2,
+  filterMapOrFail: () => filterMapOrFail2,
+  filterMapOrElse: () => filterMapOrElse2,
+  filterMapEffect: () => filterMapEffect2,
+  filterMap: () => filterMap3,
+  filter: () => filter5,
+  fiberId: () => fiberId2,
+  fiber: () => fiber2,
+  failSync: () => failSync2,
+  failCauseSync: () => failCauseSync2,
+  failCause: () => failCause4,
+  fail: () => fail6,
+  exit: () => exit2,
+  eventually: () => eventually2,
+  ensuring: () => ensuring2,
+  effectify: () => effectify,
+  die: () => die4,
+  delay: () => delay2,
+  currentSpan: () => currentSpan2,
+  currentParentSpan: () => currentParentSpan2,
+  contextWith: () => contextWith2,
+  context: () => context2,
+  clockWith: () => clockWith3,
+  catchTags: () => catchTags2,
+  catchTag: () => catchTag3,
+  catchReasons: () => catchReasons2,
+  catchReason: () => catchReason2,
+  catchNoSuchElement: () => catchNoSuchElement2,
+  catchIf: () => catchIf2,
+  catchFilter: () => catchFilter2,
+  catchEager: () => catchEager2,
+  catchDefect: () => catchDefect2,
+  catchCauseIf: () => catchCauseIf2,
+  catchCauseFilter: () => catchCauseFilter2,
+  catchCause: () => catchCause3,
+  catch: () => catch_3,
+  callback: () => callback2,
+  cachedWithTTL: () => cachedWithTTL2,
+  cachedInvalidateWithTTL: () => cachedInvalidateWithTTL2,
+  cached: () => cached2,
+  bindTo: () => bindTo5,
+  bind: () => bind5,
+  awaitAllChildren: () => awaitAllChildren2,
+  asVoid: () => asVoid4,
+  asSome: () => asSome2,
+  as: () => as3,
+  annotateSpans: () => annotateSpans2,
+  annotateLogsScoped: () => annotateLogsScoped2,
+  annotateLogs: () => annotateLogs,
+  annotateCurrentSpan: () => annotateCurrentSpan2,
+  andThen: () => andThen4,
+  all: () => all4,
+  addFinalizer: () => addFinalizer3,
+  acquireUseRelease: () => acquireUseRelease2,
+  acquireRelease: () => acquireRelease2,
+  acquireDisposable: () => acquireDisposable2,
+  abortSignal: () => abortSignal2,
+  TypeId: () => TypeId13,
+  Transaction: () => Transaction,
+  Do: () => Do4
 });
-var succeed2 = succeed;
-var fail2 = fail;
-var void_2 = /* @__PURE__ */ succeed2(undefined);
-var failVoid = /* @__PURE__ */ fail2(undefined);
-var fromNullishOr2 = /* @__PURE__ */ dual(2, (self, onNullish) => self == null ? fail2(onNullish(self)) : succeed2(self));
-var fromOption2 = fromOption;
-var try_ = (evaluate2) => {
-  if (isFunction(evaluate2)) {
-    try {
-      return succeed2(evaluate2());
-    } catch (e) {
-      return fail2(e);
-    }
-  } else {
-    try {
-      return succeed2(evaluate2.try());
-    } catch (e) {
-      return fail2(evaluate2.catch(e));
-    }
-  }
-};
-var isResult2 = isResult;
-var isFailure2 = isFailure;
-var isSuccess2 = isSuccess;
-var getSuccess3 = getSuccess;
-var getFailure3 = getFailure;
-var makeEquivalence2 = (success, failure) => make3((x, y) => isFailure2(x) ? isFailure2(y) && failure(x.failure, y.failure) : isSuccess2(y) && success(x.success, y.success));
-var mapBoth = /* @__PURE__ */ dual(2, (self, {
-  onFailure,
-  onSuccess
-}) => isFailure2(self) ? fail2(onFailure(self.failure)) : succeed2(onSuccess(self.success)));
-var mapError = /* @__PURE__ */ dual(2, (self, f) => isFailure2(self) ? fail2(f(self.failure)) : self);
-var map2 = /* @__PURE__ */ dual(2, (self, f) => isSuccess2(self) ? succeed2(f(self.success)) : self);
-var match2 = /* @__PURE__ */ dual(2, (self, {
-  onFailure,
-  onSuccess
-}) => isFailure2(self) ? onFailure(self.failure) : onSuccess(self.success));
-var liftPredicate2 = /* @__PURE__ */ dual(3, (a, predicate, orFailWith) => predicate(a) ? succeed2(a) : fail2(orFailWith(a)));
-var filterOrFail = /* @__PURE__ */ dual(3, (self, predicate, orFailWith) => flatMap2(self, (a) => predicate(a) ? succeed2(a) : fail2(orFailWith(a))));
-var merge2 = /* @__PURE__ */ match2({
-  onFailure: identity,
-  onSuccess: identity
-});
-var getOrElse3 = /* @__PURE__ */ dual(2, (self, onFailure) => isFailure2(self) ? onFailure(self.failure) : self.success);
-var getOrNull2 = /* @__PURE__ */ getOrElse3(constNull);
-var getOrUndefined3 = /* @__PURE__ */ getOrElse3(constUndefined);
-var getOrThrowWith2 = /* @__PURE__ */ dual(2, (self, onFailure) => {
-  if (isSuccess2(self)) {
-    return self.success;
-  }
-  throw onFailure(self.failure);
-});
-var getOrThrow2 = /* @__PURE__ */ getOrThrowWith2(identity);
-var orElse2 = /* @__PURE__ */ dual(2, (self, that) => isFailure2(self) ? that(self.failure) : succeed2(self.success));
-var flatMap2 = /* @__PURE__ */ dual(2, (self, f) => isFailure2(self) ? fail2(self.failure) : f(self.success));
-var andThen2 = /* @__PURE__ */ dual(2, (self, f) => flatMap2(self, (a) => {
-  const out = isFunction(f) ? f(a) : f;
-  return isResult2(out) ? out : succeed2(out);
-}));
-var all2 = (input) => {
-  if (Symbol.iterator in input) {
-    const out2 = [];
-    for (const e of input) {
-      if (isFailure2(e)) {
-        return e;
-      }
-      out2.push(e.success);
-    }
-    return succeed2(out2);
-  }
-  const out = {};
-  for (const key of Object.keys(input)) {
-    const e = input[key];
-    if (isFailure2(e)) {
-      return e;
-    }
-    assignProperty(out, key, e.success);
-  }
-  return succeed2(out);
-};
-var flip = (self) => isFailure2(self) ? succeed2(self.failure) : fail2(self.success);
-var gen2 = (...args2) => {
-  const f = args2.length === 1 ? args2[0] : args2[1].bind(args2[0]);
-  const iterator = f();
-  let state = iterator.next();
-  while (!state.done) {
-    const current = state.value;
-    if (isFailure2(current)) {
-      return current;
-    }
-    state = iterator.next(current.success);
-  }
-  return succeed2(state.value);
-};
-var Do2 = /* @__PURE__ */ succeed2({});
-var bind3 = /* @__PURE__ */ bind(map2, flatMap2);
-var bindTo3 = /* @__PURE__ */ bindTo(map2);
-var let_3 = /* @__PURE__ */ let_(map2);
-var transposeOption = (self) => {
-  return isNone(self) ? succeedNone : map2(self.value, some2);
-};
-var transposeMapOption = /* @__PURE__ */ dual(2, (self, f) => isNone(self) ? succeedNone : map2(f(self.value), some2));
-var succeedNone = /* @__PURE__ */ succeed2(none);
-var succeedSome = (a) => succeed2(some2(a));
-var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
-  if (isSuccess2(self)) {
-    f(self.success);
-  }
-  return self;
-});
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tuple.js
-var makeEquivalence3 = Tuple2;
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Iterable.js
-var makeBy = (f, options) => {
-  const max3 = options?.length !== undefined ? Math.max(1, Math.floor(options.length)) : Infinity;
-  return {
-    [Symbol.iterator]() {
-      let i = 0;
-      return {
-        next() {
-          if (i < max3) {
-            return {
-              value: f(i++),
-              done: false
-            };
-          }
-          return {
-            done: true,
-            value: undefined
-          };
-        }
-      };
-    }
-  };
-};
-var repeat = /* @__PURE__ */ dual(2, (self, n) => flatten3(makeBy(() => self, {
-  length: n
-})));
-var forever = (self) => repeat(self, Infinity);
-var headUnsafe = (self) => {
-  const iterator = self[Symbol.iterator]();
-  const result = iterator.next();
-  if (result.done)
-    throw new Error("headUnsafe: empty iterable");
-  return result.value;
-};
-var constEmpty = {
-  [Symbol.iterator]() {
-    return constEmptyIterator;
-  }
-};
-var constEmptyIterator = {
-  next() {
-    return {
-      done: true,
-      value: undefined
-    };
-  }
-};
-var empty2 = () => constEmpty;
-var flatten3 = (self) => ({
-  [Symbol.iterator]() {
-    const outerIterator = self[Symbol.iterator]();
-    let innerIterator;
-    function next() {
-      while (true) {
-        if (innerIterator === undefined) {
-          const next2 = outerIterator.next();
-          if (next2.done) {
-            return next2;
-          }
-          innerIterator = next2.value[Symbol.iterator]();
-        }
-        const result = innerIterator.next();
-        if (!result.done) {
-          return result;
-        }
-        innerIterator = undefined;
-      }
-    }
-    return {
-      next
-    };
-  }
-});
-var filter2 = /* @__PURE__ */ dual(2, (self, predicate) => ({
-  [Symbol.iterator]() {
-    const iterator = self[Symbol.iterator]();
-    let i = 0;
-    return {
-      next() {
-        let result = iterator.next();
-        while (!result.done) {
-          if (predicate(result.value, i++)) {
-            return {
-              done: false,
-              value: result.value
-            };
-          }
-          result = iterator.next();
-        }
-        return {
-          done: true,
-          value: undefined
-        };
-      }
-    };
-  }
-}));
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Record.js
-var isEmptyRecord = (self) => Object.keys(self).length === 0;
-var has = /* @__PURE__ */ dual(2, (self, key) => Object.hasOwn(self, key));
-var map3 = /* @__PURE__ */ dual(2, (self, f) => {
-  const out = {
-    ...self
-  };
-  for (const key of keys(self)) {
-    assignProperty(out, key, f(self[key], key));
-  }
-  return out;
-});
-var keys = (self) => Object.keys(self);
-var isSubrecordBy = (equivalence) => dual(2, (self, that) => {
-  for (const key of keys(self)) {
-    if (!has(that, key) || !equivalence(self[key], that[key])) {
-      return false;
-    }
-  }
-  return true;
-});
-var makeEquivalence4 = (equivalence) => {
-  const is = isSubrecordBy(equivalence);
-  return (self, that) => is(self, that) && is(that, self);
-};
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Array.js
-var Array2 = globalThis.Array;
-var allocate = (n) => new Array2(n);
-var makeBy2 = /* @__PURE__ */ dual(2, (n, f) => {
-  const max3 = Math.max(1, Math.floor(n));
-  const out = new Array2(max3);
-  for (let i = 0;i < max3; i++) {
-    out[i] = f(i);
-  }
-  return out;
-});
-var range = (start, end) => start <= end ? makeBy2(end - start + 1, (i) => start + i) : [start];
-var fromIterable2 = (collection) => Array2.isArray(collection) ? collection : Array2.from(collection);
-var ensure = (self) => Array2.isArray(self) ? self : [self];
-var append = /* @__PURE__ */ dual(2, (self, last) => [...self, last]);
-var appendAll = /* @__PURE__ */ dual(2, (self, that) => fromIterable2(self).concat(fromIterable2(that)));
-var isArray = Array2.isArray;
-var isArrayNonEmpty2 = isArrayNonEmpty;
-var isReadonlyArrayNonEmpty = isArrayNonEmpty;
-function isOutOfBounds(i, as2) {
-  return !Number.isFinite(i) || i < 0 || i >= as2.length;
-}
-var getUnsafe2 = /* @__PURE__ */ dual(2, (self, index) => {
-  const i = Math.floor(index);
-  if (isOutOfBounds(i, self)) {
-    throw new Error(`Index out of bounds: ${i}`);
-  }
-  return self[i];
-});
-var last = (self) => isReadonlyArrayNonEmpty(self) ? some3(lastNonEmpty(self)) : none2();
-var lastNonEmpty = (self) => self[self.length - 1];
-var takeWhile = /* @__PURE__ */ dual(2, (self, predicate) => {
-  let i = 0;
-  const out = [];
-  for (const a of self) {
-    if (!predicate(a, i)) {
-      break;
-    }
-    out.push(a);
-    i++;
-  }
-  return out;
-});
-var sort = /* @__PURE__ */ dual(2, (self, O) => {
-  const out = Array2.from(self);
-  out.sort(O);
-  return out;
-});
-var sortWith = /* @__PURE__ */ dual(3, (self, f, order) => Array2.from(self).map((a) => [a, f(a)]).sort(([, a], [, b]) => order(a, b)).map(([_]) => _));
-var groupBy = /* @__PURE__ */ dual(2, (self, f) => {
-  const out = {};
-  for (const a of self) {
-    const k = f(a);
-    if (Object.hasOwn(out, k)) {
-      out[k].push(a);
-    } else {
-      assignProperty(out, k, [a]);
-    }
-  }
-  return out;
-});
-var hashBucketsAdd = (buckets, value) => {
-  const hash2 = hash(value);
-  const bucket = buckets.get(hash2);
-  if (bucket === undefined) {
-    buckets.set(hash2, [value]);
-    return true;
-  }
-  for (const previous of bucket) {
-    if (equals(previous, value)) {
-      return false;
-    }
-  }
-  bucket.push(value);
-  return true;
-};
-var union = /* @__PURE__ */ dual(2, (self, that) => {
-  const a = fromIterable2(self);
-  const b = fromIterable2(that);
-  if (isReadonlyArrayNonEmpty(a)) {
-    return isReadonlyArrayNonEmpty(b) ? dedupe(appendAll(a, b)) : a;
-  }
-  return b;
-});
-var empty3 = () => [];
-var of = (a) => [a];
-var map4 = /* @__PURE__ */ dual(2, (self, f) => self.map(f));
-var getSomes = (self) => {
-  const out = [];
-  for (const a of self) {
-    if (isSome2(a)) {
-      out.push(a.value);
-    }
-  }
-  return out;
-};
-var filter3 = /* @__PURE__ */ dual(2, (self, predicate) => {
-  const as2 = fromIterable2(self);
-  const out = [];
-  for (let i = 0;i < as2.length; i++) {
-    if (predicate(as2[i], i)) {
-      out.push(as2[i]);
-    }
-  }
-  return out;
-});
-var partition = /* @__PURE__ */ dual(2, (self, f) => {
-  const excluded = [];
-  const satisfying = [];
-  let i = 0;
-  for (const a of self) {
-    const result = f(a, i++);
-    if (isSuccess2(result)) {
-      satisfying.push(result.success);
-    } else {
-      excluded.push(result.failure);
-    }
-  }
-  return [excluded, satisfying];
-});
-var makeEquivalence5 = Array_;
-var dedupe = (self) => {
-  const input = fromIterable2(self);
-  if (input.length < 2) {
-    return [...input];
-  }
-  const buckets = new Map;
-  const out = [];
-  for (const value of input) {
-    if (hashBucketsAdd(buckets, value)) {
-      out.push(value);
-    }
-  }
-  return out;
-};
-var reducer = /* @__PURE__ */ make2((a, b) => a.concat(b), []);
-function makeReducerConcat() {
-  return reducer;
-}
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Duration.js
 var exports_Duration = {};
@@ -2598,7 +2348,7 @@ __export(exports_Duration, {
   micros: () => micros,
   max: () => max3,
   matchPair: () => matchPair,
-  match: () => match3,
+  match: () => match2,
   isZero: () => isZero,
   isPositive: () => isPositive,
   isNegative: () => isNegative,
@@ -2668,10 +2418,10 @@ var fromInputUnsafe = (input) => {
       if (input === "-Infinity") {
         return negativeInfinity;
       }
-      const match3 = DURATION_REGEXP.exec(input);
-      if (!match3)
+      const match2 = DURATION_REGEXP.exec(input);
+      if (!match2)
         break;
-      const [_, valueStr, unit] = match3;
+      const [_, valueStr, unit] = match2;
       if (unit === "nano" || unit === "nanos") {
         return nanos(parseNanos(valueStr, bigint1));
       }
@@ -2917,37 +2667,37 @@ var minutes = (minutes2) => make6(minutes2 * 60000);
 var hours = (hours2) => make6(hours2 * 3600000);
 var days = (days2) => make6(days2 * 86400000);
 var weeks = (weeks2) => make6(weeks2 * 604800000);
-var toMillis = (self) => match3(fromInputUnsafe(self), {
+var toMillis = (self) => match2(fromInputUnsafe(self), {
   onMillis: identity,
   onNanos: (nanos2) => Number(nanos2) / 1e6,
   onInfinity: () => Infinity,
   onNegativeInfinity: () => -Infinity
 });
-var toSeconds = (self) => match3(fromInputUnsafe(self), {
+var toSeconds = (self) => match2(fromInputUnsafe(self), {
   onMillis: (millis2) => millis2 / 1000,
   onNanos: (nanos2) => Number(nanos2) / 1e9,
   onInfinity: () => Infinity,
   onNegativeInfinity: () => -Infinity
 });
-var toMinutes = (self) => match3(fromInputUnsafe(self), {
+var toMinutes = (self) => match2(fromInputUnsafe(self), {
   onMillis: (millis2) => millis2 / 60000,
   onNanos: (nanos2) => Number(nanos2) / 60000000000,
   onInfinity: () => Infinity,
   onNegativeInfinity: () => -Infinity
 });
-var toHours = (self) => match3(fromInputUnsafe(self), {
+var toHours = (self) => match2(fromInputUnsafe(self), {
   onMillis: (millis2) => millis2 / 3600000,
   onNanos: (nanos2) => Number(nanos2) / 3600000000000,
   onInfinity: () => Infinity,
   onNegativeInfinity: () => -Infinity
 });
-var toDays = (self) => match3(fromInputUnsafe(self), {
+var toDays = (self) => match2(fromInputUnsafe(self), {
   onMillis: (millis2) => millis2 / 86400000,
   onNanos: (nanos2) => Number(nanos2) / 86400000000000,
   onInfinity: () => Infinity,
   onNegativeInfinity: () => -Infinity
 });
-var toWeeks = (self) => match3(fromInputUnsafe(self), {
+var toWeeks = (self) => match2(fromInputUnsafe(self), {
   onMillis: (millis2) => millis2 / 604800000,
   onNanos: (nanos2) => Number(nanos2) / 604800000000000,
   onInfinity: () => Infinity,
@@ -2979,7 +2729,7 @@ var toHrTime = (input) => {
       return nanosToHrTime(roundMillisToNanos(self.value.millis));
   }
 };
-var match3 = /* @__PURE__ */ dual(2, (self, options) => {
+var match2 = /* @__PURE__ */ dual(2, (self, options) => {
   switch (self.value._tag) {
     case "Millis":
       return options.onMillis(self.value.millis);
@@ -3029,7 +2779,7 @@ var divide = /* @__PURE__ */ dual(2, (self, by) => {
     return none2();
   if (by === 0 || Object.is(by, -0))
     return none2();
-  return match3(self, {
+  return match2(self, {
     onMillis: (millis2) => some3(make6(millis2 / by)),
     onNanos: (nanos2) => {
       try {
@@ -3045,7 +2795,7 @@ var divide = /* @__PURE__ */ dual(2, (self, by) => {
 var divideUnsafe = /* @__PURE__ */ dual(2, (self, by) => {
   if (!Number.isFinite(by))
     return zero;
-  return match3(self, {
+  return match2(self, {
     onMillis: (millis2) => make6(millis2 / by),
     onNanos: (nanos2) => {
       if (Object.is(by, 0) || Object.is(by, -0)) {
@@ -3065,7 +2815,7 @@ var divideUnsafe = /* @__PURE__ */ dual(2, (self, by) => {
     onNegativeInfinity: () => by > 0 ? negativeInfinity : by < 0 ? infinity : zero
   });
 });
-var times = /* @__PURE__ */ dual(2, (self, times2) => match3(self, {
+var times = /* @__PURE__ */ dual(2, (self, times2) => match2(self, {
   onMillis: (millis2) => make6(millis2 * times2),
   onNanos: (nanos2) => make6(nanos2 * BigInt(times2)),
   onInfinity: () => times2 > 0 ? infinity : times2 < 0 ? negativeInfinity : zero,
@@ -3183,6 +2933,463 @@ var format2 = (self) => {
 var ReducerSum = /* @__PURE__ */ make2(sum, zero);
 var CombinerMax = /* @__PURE__ */ max(Order);
 var CombinerMin = /* @__PURE__ */ min(Order);
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Exit.js
+var exports_Exit = {};
+__export(exports_Exit, {
+  void: () => void_4,
+  succeed: () => succeed4,
+  match: () => match5,
+  mapError: () => mapError3,
+  mapBoth: () => mapBoth3,
+  map: () => map6,
+  isSuccess: () => isSuccess4,
+  isFailure: () => isFailure4,
+  isExit: () => isExit2,
+  interrupt: () => interrupt2,
+  hasInterrupts: () => hasInterrupts2,
+  hasFails: () => hasFails2,
+  hasDies: () => hasDies2,
+  getSuccess: () => getSuccess4,
+  getCause: () => getCause,
+  findErrorOption: () => findErrorOption2,
+  findError: () => findError2,
+  findDefect: () => findDefect2,
+  filterValue: () => filterValue,
+  filterSuccess: () => filterSuccess,
+  filterFailure: () => filterFailure,
+  filterCause: () => filterCause,
+  failCause: () => failCause2,
+  fail: () => fail4,
+  die: () => die2,
+  asVoidAll: () => asVoidAll,
+  asVoid: () => asVoid3
+});
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/array.js
+var isArrayNonEmpty = (self) => self.length > 0;
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Result.js
+var exports_Result = {};
+__export(exports_Result, {
+  void: () => void_2,
+  try: () => try_,
+  transposeOption: () => transposeOption,
+  transposeMapOption: () => transposeMapOption,
+  tap: () => tap2,
+  succeedSome: () => succeedSome,
+  succeedNone: () => succeedNone,
+  succeed: () => succeed2,
+  orElse: () => orElse2,
+  merge: () => merge2,
+  match: () => match3,
+  mapError: () => mapError,
+  mapBoth: () => mapBoth,
+  map: () => map2,
+  makeEquivalence: () => makeEquivalence2,
+  liftPredicate: () => liftPredicate2,
+  let: () => let_3,
+  isSuccess: () => isSuccess2,
+  isResult: () => isResult2,
+  isFailure: () => isFailure2,
+  getSuccess: () => getSuccess3,
+  getOrUndefined: () => getOrUndefined3,
+  getOrThrowWith: () => getOrThrowWith2,
+  getOrThrow: () => getOrThrow2,
+  getOrNull: () => getOrNull2,
+  getOrElse: () => getOrElse3,
+  getFailure: () => getFailure3,
+  gen: () => gen2,
+  fromOption: () => fromOption2,
+  fromNullishOr: () => fromNullishOr2,
+  flip: () => flip,
+  flatMap: () => flatMap2,
+  filterOrFail: () => filterOrFail,
+  failVoid: () => failVoid,
+  fail: () => fail2,
+  bindTo: () => bindTo3,
+  bind: () => bind3,
+  andThen: () => andThen2,
+  all: () => all2,
+  Do: () => Do2
+});
+var succeed2 = succeed;
+var fail2 = fail;
+var void_2 = /* @__PURE__ */ succeed2(undefined);
+var failVoid = /* @__PURE__ */ fail2(undefined);
+var fromNullishOr2 = /* @__PURE__ */ dual(2, (self, onNullish) => self == null ? fail2(onNullish(self)) : succeed2(self));
+var fromOption2 = fromOption;
+var try_ = (evaluate2) => {
+  if (isFunction(evaluate2)) {
+    try {
+      return succeed2(evaluate2());
+    } catch (e) {
+      return fail2(e);
+    }
+  } else {
+    try {
+      return succeed2(evaluate2.try());
+    } catch (e) {
+      return fail2(evaluate2.catch(e));
+    }
+  }
+};
+var isResult2 = isResult;
+var isFailure2 = isFailure;
+var isSuccess2 = isSuccess;
+var getSuccess3 = getSuccess;
+var getFailure3 = getFailure;
+var makeEquivalence2 = (success, failure) => make3((x, y) => isFailure2(x) ? isFailure2(y) && failure(x.failure, y.failure) : isSuccess2(y) && success(x.success, y.success));
+var mapBoth = /* @__PURE__ */ dual(2, (self, {
+  onFailure,
+  onSuccess
+}) => isFailure2(self) ? fail2(onFailure(self.failure)) : succeed2(onSuccess(self.success)));
+var mapError = /* @__PURE__ */ dual(2, (self, f) => isFailure2(self) ? fail2(f(self.failure)) : self);
+var map2 = /* @__PURE__ */ dual(2, (self, f) => isSuccess2(self) ? succeed2(f(self.success)) : self);
+var match3 = /* @__PURE__ */ dual(2, (self, {
+  onFailure,
+  onSuccess
+}) => isFailure2(self) ? onFailure(self.failure) : onSuccess(self.success));
+var liftPredicate2 = /* @__PURE__ */ dual(3, (a, predicate, orFailWith) => predicate(a) ? succeed2(a) : fail2(orFailWith(a)));
+var filterOrFail = /* @__PURE__ */ dual(3, (self, predicate, orFailWith) => flatMap2(self, (a) => predicate(a) ? succeed2(a) : fail2(orFailWith(a))));
+var merge2 = /* @__PURE__ */ match3({
+  onFailure: identity,
+  onSuccess: identity
+});
+var getOrElse3 = /* @__PURE__ */ dual(2, (self, onFailure) => isFailure2(self) ? onFailure(self.failure) : self.success);
+var getOrNull2 = /* @__PURE__ */ getOrElse3(constNull);
+var getOrUndefined3 = /* @__PURE__ */ getOrElse3(constUndefined);
+var getOrThrowWith2 = /* @__PURE__ */ dual(2, (self, onFailure) => {
+  if (isSuccess2(self)) {
+    return self.success;
+  }
+  throw onFailure(self.failure);
+});
+var getOrThrow2 = /* @__PURE__ */ getOrThrowWith2(identity);
+var orElse2 = /* @__PURE__ */ dual(2, (self, that) => isFailure2(self) ? that(self.failure) : succeed2(self.success));
+var flatMap2 = /* @__PURE__ */ dual(2, (self, f) => isFailure2(self) ? fail2(self.failure) : f(self.success));
+var andThen2 = /* @__PURE__ */ dual(2, (self, f) => flatMap2(self, (a) => {
+  const out = isFunction(f) ? f(a) : f;
+  return isResult2(out) ? out : succeed2(out);
+}));
+var all2 = (input) => {
+  if (Symbol.iterator in input) {
+    const out2 = [];
+    for (const e of input) {
+      if (isFailure2(e)) {
+        return e;
+      }
+      out2.push(e.success);
+    }
+    return succeed2(out2);
+  }
+  const out = {};
+  for (const key of Object.keys(input)) {
+    const e = input[key];
+    if (isFailure2(e)) {
+      return e;
+    }
+    assignProperty(out, key, e.success);
+  }
+  return succeed2(out);
+};
+var flip = (self) => isFailure2(self) ? succeed2(self.failure) : fail2(self.success);
+var gen2 = (...args2) => {
+  const f = args2.length === 1 ? args2[0] : args2[1].bind(args2[0]);
+  const iterator = f();
+  let state = iterator.next();
+  while (!state.done) {
+    const current = state.value;
+    if (isFailure2(current)) {
+      return current;
+    }
+    state = iterator.next(current.success);
+  }
+  return succeed2(state.value);
+};
+var Do2 = /* @__PURE__ */ succeed2({});
+var bind3 = /* @__PURE__ */ bind(map2, flatMap2);
+var bindTo3 = /* @__PURE__ */ bindTo(map2);
+var let_3 = /* @__PURE__ */ let_(map2);
+var transposeOption = (self) => {
+  return isNone(self) ? succeedNone : map2(self.value, some2);
+};
+var transposeMapOption = /* @__PURE__ */ dual(2, (self, f) => isNone(self) ? succeedNone : map2(f(self.value), some2));
+var succeedNone = /* @__PURE__ */ succeed2(none);
+var succeedSome = (a) => succeed2(some2(a));
+var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
+  if (isSuccess2(self)) {
+    f(self.success);
+  }
+  return self;
+});
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tuple.js
+var makeEquivalence3 = Tuple2;
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Iterable.js
+var makeBy = (f, options) => {
+  const max4 = options?.length !== undefined ? Math.max(1, Math.floor(options.length)) : Infinity;
+  return {
+    [Symbol.iterator]() {
+      let i = 0;
+      return {
+        next() {
+          if (i < max4) {
+            return {
+              value: f(i++),
+              done: false
+            };
+          }
+          return {
+            done: true,
+            value: undefined
+          };
+        }
+      };
+    }
+  };
+};
+var repeat = /* @__PURE__ */ dual(2, (self, n) => flatten3(makeBy(() => self, {
+  length: n
+})));
+var forever = (self) => repeat(self, Infinity);
+var headUnsafe = (self) => {
+  const iterator = self[Symbol.iterator]();
+  const result = iterator.next();
+  if (result.done)
+    throw new Error("headUnsafe: empty iterable");
+  return result.value;
+};
+var constEmpty = {
+  [Symbol.iterator]() {
+    return constEmptyIterator;
+  }
+};
+var constEmptyIterator = {
+  next() {
+    return {
+      done: true,
+      value: undefined
+    };
+  }
+};
+var empty2 = () => constEmpty;
+var flatten3 = (self) => ({
+  [Symbol.iterator]() {
+    const outerIterator = self[Symbol.iterator]();
+    let innerIterator;
+    function next() {
+      while (true) {
+        if (innerIterator === undefined) {
+          const next2 = outerIterator.next();
+          if (next2.done) {
+            return next2;
+          }
+          innerIterator = next2.value[Symbol.iterator]();
+        }
+        const result = innerIterator.next();
+        if (!result.done) {
+          return result;
+        }
+        innerIterator = undefined;
+      }
+    }
+    return {
+      next
+    };
+  }
+});
+var filter2 = /* @__PURE__ */ dual(2, (self, predicate) => ({
+  [Symbol.iterator]() {
+    const iterator = self[Symbol.iterator]();
+    let i = 0;
+    return {
+      next() {
+        let result = iterator.next();
+        while (!result.done) {
+          if (predicate(result.value, i++)) {
+            return {
+              done: false,
+              value: result.value
+            };
+          }
+          result = iterator.next();
+        }
+        return {
+          done: true,
+          value: undefined
+        };
+      }
+    };
+  }
+}));
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Record.js
+var isEmptyRecord = (self) => Object.keys(self).length === 0;
+var has = /* @__PURE__ */ dual(2, (self, key) => Object.hasOwn(self, key));
+var map3 = /* @__PURE__ */ dual(2, (self, f) => {
+  const out = {
+    ...self
+  };
+  for (const key of keys(self)) {
+    assignProperty(out, key, f(self[key], key));
+  }
+  return out;
+});
+var keys = (self) => Object.keys(self);
+var isSubrecordBy = (equivalence) => dual(2, (self, that) => {
+  for (const key of keys(self)) {
+    if (!has(that, key) || !equivalence(self[key], that[key])) {
+      return false;
+    }
+  }
+  return true;
+});
+var makeEquivalence4 = (equivalence) => {
+  const is = isSubrecordBy(equivalence);
+  return (self, that) => is(self, that) && is(that, self);
+};
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Array.js
+var Array2 = globalThis.Array;
+var allocate = (n) => new Array2(n);
+var makeBy2 = /* @__PURE__ */ dual(2, (n, f) => {
+  const max4 = Math.max(1, Math.floor(n));
+  const out = new Array2(max4);
+  for (let i = 0;i < max4; i++) {
+    out[i] = f(i);
+  }
+  return out;
+});
+var range = (start, end) => start <= end ? makeBy2(end - start + 1, (i) => start + i) : [start];
+var fromIterable2 = (collection) => Array2.isArray(collection) ? collection : Array2.from(collection);
+var ensure = (self) => Array2.isArray(self) ? self : [self];
+var append = /* @__PURE__ */ dual(2, (self, last) => [...self, last]);
+var appendAll = /* @__PURE__ */ dual(2, (self, that) => fromIterable2(self).concat(fromIterable2(that)));
+var isArray = Array2.isArray;
+var isArrayNonEmpty2 = isArrayNonEmpty;
+var isReadonlyArrayNonEmpty = isArrayNonEmpty;
+function isOutOfBounds(i, as2) {
+  return !Number.isFinite(i) || i < 0 || i >= as2.length;
+}
+var getUnsafe2 = /* @__PURE__ */ dual(2, (self, index) => {
+  const i = Math.floor(index);
+  if (isOutOfBounds(i, self)) {
+    throw new Error(`Index out of bounds: ${i}`);
+  }
+  return self[i];
+});
+var last = (self) => isReadonlyArrayNonEmpty(self) ? some3(lastNonEmpty(self)) : none2();
+var lastNonEmpty = (self) => self[self.length - 1];
+var takeWhile = /* @__PURE__ */ dual(2, (self, predicate) => {
+  let i = 0;
+  const out = [];
+  for (const a of self) {
+    if (!predicate(a, i)) {
+      break;
+    }
+    out.push(a);
+    i++;
+  }
+  return out;
+});
+var sort = /* @__PURE__ */ dual(2, (self, O) => {
+  const out = Array2.from(self);
+  out.sort(O);
+  return out;
+});
+var sortWith = /* @__PURE__ */ dual(3, (self, f, order) => Array2.from(self).map((a) => [a, f(a)]).sort(([, a], [, b]) => order(a, b)).map(([_]) => _));
+var groupBy = /* @__PURE__ */ dual(2, (self, f) => {
+  const out = {};
+  for (const a of self) {
+    const k = f(a);
+    if (Object.hasOwn(out, k)) {
+      out[k].push(a);
+    } else {
+      assignProperty(out, k, [a]);
+    }
+  }
+  return out;
+});
+var hashBucketsAdd = (buckets, value) => {
+  const hash2 = hash(value);
+  const bucket = buckets.get(hash2);
+  if (bucket === undefined) {
+    buckets.set(hash2, [value]);
+    return true;
+  }
+  for (const previous of bucket) {
+    if (equals(previous, value)) {
+      return false;
+    }
+  }
+  bucket.push(value);
+  return true;
+};
+var union = /* @__PURE__ */ dual(2, (self, that) => {
+  const a = fromIterable2(self);
+  const b = fromIterable2(that);
+  if (isReadonlyArrayNonEmpty(a)) {
+    return isReadonlyArrayNonEmpty(b) ? dedupe(appendAll(a, b)) : a;
+  }
+  return b;
+});
+var empty3 = () => [];
+var of = (a) => [a];
+var map4 = /* @__PURE__ */ dual(2, (self, f) => self.map(f));
+var getSomes = (self) => {
+  const out = [];
+  for (const a of self) {
+    if (isSome2(a)) {
+      out.push(a.value);
+    }
+  }
+  return out;
+};
+var filter3 = /* @__PURE__ */ dual(2, (self, predicate) => {
+  const as2 = fromIterable2(self);
+  const out = [];
+  for (let i = 0;i < as2.length; i++) {
+    if (predicate(as2[i], i)) {
+      out.push(as2[i]);
+    }
+  }
+  return out;
+});
+var partition = /* @__PURE__ */ dual(2, (self, f) => {
+  const excluded = [];
+  const satisfying = [];
+  let i = 0;
+  for (const a of self) {
+    const result = f(a, i++);
+    if (isSuccess2(result)) {
+      satisfying.push(result.success);
+    } else {
+      excluded.push(result.failure);
+    }
+  }
+  return [excluded, satisfying];
+});
+var makeEquivalence5 = Array_;
+var dedupe = (self) => {
+  const input = fromIterable2(self);
+  if (input.length < 2) {
+    return [...input];
+  }
+  const buckets = new Map;
+  const out = [];
+  for (const value of input) {
+    if (hashBucketsAdd(buckets, value)) {
+      out.push(value);
+    }
+  }
+  return out;
+};
+var reducer = /* @__PURE__ */ make2((a, b) => a.concat(b), []);
+function makeReducerConcat() {
+  return reducer;
+}
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Filter.js
 var toPredicate = (self) => (input) => !isFailure2(self(input));
@@ -4142,7 +4349,7 @@ var suspend = /* @__PURE__ */ makePrimitive({
   }
 });
 var fromOption3 = /* @__PURE__ */ dual((args2) => args2.length >= 2 || isOption2(args2[0]), (option, onNone) => isNone2(option) ? fail3(onNone ? onNone() : new NoSuchElementError("Effect.fromOption: Option.none")) : succeed3(option.value));
-var fromResult = /* @__PURE__ */ match2({
+var fromResult = /* @__PURE__ */ match3({
   onFailure: fail3,
   onSuccess: succeed3
 });
@@ -6351,361 +6558,34 @@ var reportCauseUnsafe = (fiber2, cause, defectsOnly) => {
   reporters.forEach((reporter) => reporter.report(opts));
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Cause.js
-var TypeId5 = CauseTypeId;
-var ReasonTypeId = CauseReasonTypeId;
-var isCause2 = isCause;
-var isReason = isCauseReason;
-var isFailReason2 = isFailReason;
-var isDieReason2 = isDieReason;
-var isInterruptReason2 = isInterruptReason;
-var fromReasons = causeFromReasons;
-var empty4 = causeEmpty;
-var fail4 = causeFail;
-var die2 = causeDie;
-var interrupt2 = causeInterrupt;
-var makeFailReason = (error) => new Fail(error);
-var makeDieReason = (defect) => new Die(defect);
-var makeInterruptReason2 = makeInterruptReason;
-var hasInterruptsOnly2 = hasInterruptsOnly;
-var map6 = causeMap;
-var combine2 = causeCombine;
-var squash = causeSquash;
-var hasFails2 = hasFails;
-var findFail2 = findFail;
-var findError2 = findError;
-var findErrorOption2 = findErrorOption;
-var hasDies2 = hasDies;
-var findDie2 = findDie;
-var findDefect2 = findDefect;
-var hasInterrupts2 = hasInterrupts;
-var findInterrupt2 = findInterrupt;
-var interruptors = causeInterruptors;
-var filterInterruptors = causeFilterInterruptors;
-var prettyErrors = causePrettyErrors;
-var pretty = causePretty;
-var isNoSuchElementError2 = isNoSuchElementError;
-var NoSuchElementErrorTypeId2 = NoSuchElementErrorTypeId;
-var NoSuchElementError2 = NoSuchElementError;
-var isDone2 = isDone;
-var DoneTypeId2 = DoneTypeId;
-var Done2 = Done;
-var done2 = done;
-var TimeoutErrorTypeId2 = TimeoutErrorTypeId;
-var isTimeoutError2 = isTimeoutError;
-var TimeoutError2 = TimeoutError;
-var IllegalArgumentErrorTypeId2 = IllegalArgumentErrorTypeId;
-var isIllegalArgumentError2 = isIllegalArgumentError;
-var IllegalArgumentError2 = IllegalArgumentError;
-var isExceededCapacityError2 = isExceededCapacityError;
-var ExceededCapacityErrorTypeId2 = ExceededCapacityErrorTypeId;
-var ExceededCapacityError2 = ExceededCapacityError;
-var AsyncFiberErrorTypeId2 = AsyncFiberErrorTypeId;
-var isAsyncFiberError2 = isAsyncFiberError;
-var AsyncFiberError2 = AsyncFiberError;
-var UnknownErrorTypeId2 = UnknownErrorTypeId;
-var isUnknownError2 = isUnknownError;
-var UnknownError2 = UnknownError;
-var annotate = causeAnnotate;
-var reasonAnnotations2 = reasonAnnotations;
-var annotations = causeAnnotations;
-
-class StackTrace extends (/* @__PURE__ */ Service()("effect/Cause/StackTrace")) {
-}
-
-class InterruptorStackTrace2 extends (/* @__PURE__ */ Service()("effect/Cause/InterruptorStackTrace")) {
-}
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Effect.js
-var exports_Effect = {};
-__export(exports_Effect, {
-  zipWith: () => zipWith3,
-  zip: () => zip2,
-  yieldNowWith: () => yieldNowWith2,
-  yieldNow: () => yieldNow2,
-  withTracerTiming: () => withTracerTiming2,
-  withTracerEnabled: () => withTracerEnabled2,
-  withTracer: () => withTracer2,
-  withSpanScoped: () => withSpanScoped2,
-  withSpan: () => withSpan3,
-  withParentSpan: () => withParentSpan3,
-  withLogger: () => withLogger,
-  withLogSpan: () => withLogSpan,
-  withFiber: () => withFiber2,
-  withExecutionPlan: () => withExecutionPlan2,
-  withErrorReporting: () => withErrorReporting2,
-  whileLoop: () => whileLoop2,
-  when: () => when2,
-  void: () => void_5,
-  validate: () => validate2,
-  useSpan: () => useSpan2,
-  updateServiceScoped: () => updateServiceScoped2,
-  updateService: () => updateService3,
-  updateContext: () => updateContext2,
-  unwrapReason: () => unwrapReason2,
-  uninterruptibleMask: () => uninterruptibleMask2,
-  uninterruptible: () => uninterruptible2,
-  undefined: () => undefined_2,
-  txRetry: () => txRetry,
-  tx: () => tx,
-  tryPromise: () => tryPromise2,
-  try: () => try_3,
-  transposeOption: () => transposeOption3,
-  trackSuccesses: () => trackSuccesses,
-  trackErrors: () => trackErrors,
-  trackDuration: () => trackDuration,
-  trackDefects: () => trackDefects,
-  track: () => track,
-  tracer: () => tracer2,
-  timeoutOrElse: () => timeoutOrElse2,
-  timeoutOption: () => timeoutOption2,
-  timeout: () => timeout2,
-  timed: () => timed2,
-  tapErrorTag: () => tapErrorTag2,
-  tapError: () => tapError3,
-  tapDefect: () => tapDefect2,
-  tapCauseIf: () => tapCauseIf2,
-  tapCauseFilter: () => tapCauseFilter2,
-  tapCause: () => tapCause3,
-  tap: () => tap5,
-  sync: () => sync3,
-  suspend: () => suspend3,
-  succeedSome: () => succeedSome3,
-  succeedNone: () => succeedNone3,
-  succeed: () => succeed6,
-  spanLinks: () => spanLinks2,
-  spanAnnotations: () => spanAnnotations2,
-  sleep: () => sleep2,
-  setContext: () => setContext2,
-  serviceOption: () => serviceOption2,
-  service: () => service2,
-  scopedWith: () => scopedWith2,
-  scoped: () => scoped2,
-  scope: () => scope2,
-  scheduleFrom: () => scheduleFrom2,
-  schedule: () => schedule,
-  satisfiesSuccessType: () => satisfiesSuccessType2,
-  satisfiesServicesType: () => satisfiesServicesType2,
-  satisfiesErrorType: () => satisfiesErrorType2,
-  sandbox: () => sandbox2,
-  runSyncWith: () => runSyncWith2,
-  runSyncExitWith: () => runSyncExitWith2,
-  runSyncExit: () => runSyncExit2,
-  runSync: () => runSync2,
-  runPromiseWith: () => runPromiseWith2,
-  runPromiseExitWith: () => runPromiseExitWith2,
-  runPromiseExit: () => runPromiseExit2,
-  runPromise: () => runPromise2,
-  runForkWith: () => runForkWith2,
-  runFork: () => runFork2,
-  runCallbackWith: () => runCallbackWith2,
-  runCallback: () => runCallback2,
-  retryOrElse: () => retryOrElse2,
-  retry: () => retry2,
-  result: () => result2,
-  requestUnsafe: () => requestUnsafe2,
-  request: () => request2,
-  replicateEffect: () => replicateEffect2,
-  replicate: () => replicate2,
-  repeatOrElse: () => repeatOrElse2,
-  repeat: () => repeat3,
-  reduce: () => reduce2,
-  raceFirst: () => raceFirst2,
-  raceAllFirst: () => raceAllFirst2,
-  raceAll: () => raceAll2,
-  race: () => race2,
-  provideServiceEffect: () => provideServiceEffect2,
-  provideService: () => provideService2,
-  provideContext: () => provideContext2,
-  provide: () => provide4,
-  promise: () => promise2,
-  partition: () => partition3,
-  orElseSucceed: () => orElseSucceed2,
-  orDie: () => orDie3,
-  option: () => option2,
-  onInterrupt: () => onInterrupt2,
-  onExitPrimitive: () => onExitPrimitive2,
-  onExitIf: () => onExitIf2,
-  onExitFilter: () => onExitFilter2,
-  onExit: () => onExit2,
-  onErrorIf: () => onErrorIf2,
-  onErrorFilter: () => onErrorFilter2,
-  onError: () => onError2,
-  never: () => never2,
-  matchEffect: () => matchEffect3,
-  matchEager: () => matchEager2,
-  matchCauseEffectEager: () => matchCauseEffectEager2,
-  matchCauseEffect: () => matchCauseEffect2,
-  matchCauseEager: () => matchCauseEager2,
-  matchCause: () => matchCause2,
-  match: () => match7,
-  mapErrorEager: () => mapErrorEager2,
-  mapError: () => mapError4,
-  mapEager: () => mapEager2,
-  mapBothEager: () => mapBothEager2,
-  mapBoth: () => mapBoth4,
-  map: () => map8,
-  makeSpanScoped: () => makeSpanScoped2,
-  makeSpan: () => makeSpan2,
-  logWithLevel: () => logWithLevel2,
-  logWarning: () => logWarning,
-  logTrace: () => logTrace,
-  logInfo: () => logInfo,
-  logFatal: () => logFatal,
-  logError: () => logError,
-  logDebug: () => logDebug,
-  log: () => log,
-  linkSpans: () => linkSpans2,
-  let: () => let_5,
-  isSuccess: () => isSuccess5,
-  isFailure: () => isFailure5,
-  isEffect: () => isEffect2,
-  interruptibleMask: () => interruptibleMask2,
-  interruptible: () => interruptible2,
-  interrupt: () => interrupt4,
-  ignoreCause: () => ignoreCause2,
-  ignore: () => ignore2,
-  gen: () => gen4,
-  fromResult: () => fromResult2,
-  fromOption: () => fromOption4,
-  fromNullishOr: () => fromNullishOr4,
-  forkScoped: () => forkScoped2,
-  forkIn: () => forkIn2,
-  forkDetach: () => forkDetach2,
-  forkChild: () => forkChild2,
-  forever: () => forever4,
-  forEach: () => forEach2,
-  fnUntracedEager: () => fnUntracedEager2,
-  fnUntraced: () => fnUntraced2,
-  fn: () => fn2,
-  flip: () => flip3,
-  flatten: () => flatten5,
-  flatMapEager: () => flatMapEager2,
-  flatMap: () => flatMap5,
-  firstSuccessOf: () => firstSuccessOf2,
-  findFirstFilter: () => findFirstFilter2,
-  findFirst: () => findFirst2,
-  filterOrFail: () => filterOrFail3,
-  filterOrElse: () => filterOrElse2,
-  filterMapOrFail: () => filterMapOrFail2,
-  filterMapOrElse: () => filterMapOrElse2,
-  filterMapEffect: () => filterMapEffect2,
-  filterMap: () => filterMap3,
-  filter: () => filter5,
-  fiberId: () => fiberId2,
-  fiber: () => fiber2,
-  failSync: () => failSync2,
-  failCauseSync: () => failCauseSync2,
-  failCause: () => failCause4,
-  fail: () => fail6,
-  exit: () => exit2,
-  eventually: () => eventually2,
-  ensuring: () => ensuring2,
-  effectify: () => effectify,
-  die: () => die4,
-  delay: () => delay2,
-  currentSpan: () => currentSpan2,
-  currentParentSpan: () => currentParentSpan2,
-  contextWith: () => contextWith2,
-  context: () => context2,
-  clockWith: () => clockWith3,
-  catchTags: () => catchTags2,
-  catchTag: () => catchTag3,
-  catchReasons: () => catchReasons2,
-  catchReason: () => catchReason2,
-  catchNoSuchElement: () => catchNoSuchElement2,
-  catchIf: () => catchIf2,
-  catchFilter: () => catchFilter2,
-  catchEager: () => catchEager2,
-  catchDefect: () => catchDefect2,
-  catchCauseIf: () => catchCauseIf2,
-  catchCauseFilter: () => catchCauseFilter2,
-  catchCause: () => catchCause3,
-  catch: () => catch_3,
-  callback: () => callback2,
-  cachedWithTTL: () => cachedWithTTL2,
-  cachedInvalidateWithTTL: () => cachedInvalidateWithTTL2,
-  cached: () => cached2,
-  bindTo: () => bindTo5,
-  bind: () => bind5,
-  awaitAllChildren: () => awaitAllChildren2,
-  asVoid: () => asVoid4,
-  asSome: () => asSome2,
-  as: () => as3,
-  annotateSpans: () => annotateSpans2,
-  annotateLogsScoped: () => annotateLogsScoped2,
-  annotateLogs: () => annotateLogs,
-  annotateCurrentSpan: () => annotateCurrentSpan2,
-  andThen: () => andThen4,
-  all: () => all4,
-  addFinalizer: () => addFinalizer3,
-  acquireUseRelease: () => acquireUseRelease2,
-  acquireRelease: () => acquireRelease2,
-  acquireDisposable: () => acquireDisposable2,
-  abortSignal: () => abortSignal2,
-  TypeId: () => TypeId13,
-  Transaction: () => Transaction,
-  Do: () => Do4
-});
-
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Exit.js
-var exports_Exit = {};
-__export(exports_Exit, {
-  void: () => void_4,
-  succeed: () => succeed4,
-  match: () => match5,
-  mapError: () => mapError3,
-  mapBoth: () => mapBoth3,
-  map: () => map7,
-  isSuccess: () => isSuccess4,
-  isFailure: () => isFailure4,
-  isExit: () => isExit2,
-  interrupt: () => interrupt3,
-  hasInterrupts: () => hasInterrupts3,
-  hasFails: () => hasFails3,
-  hasDies: () => hasDies3,
-  getSuccess: () => getSuccess4,
-  getCause: () => getCause,
-  findErrorOption: () => findErrorOption3,
-  findError: () => findError3,
-  findDefect: () => findDefect3,
-  filterValue: () => filterValue,
-  filterSuccess: () => filterSuccess,
-  filterFailure: () => filterFailure,
-  filterCause: () => filterCause,
-  failCause: () => failCause2,
-  fail: () => fail5,
-  die: () => die3,
-  asVoidAll: () => asVoidAll,
-  asVoid: () => asVoid3
-});
 var isExit2 = isExit;
 var succeed4 = exitSucceed;
 var failCause2 = exitFailCause;
-var fail5 = exitFail;
-var die3 = exitDie;
-var interrupt3 = exitInterrupt;
+var fail4 = exitFail;
+var die2 = exitDie;
+var interrupt2 = exitInterrupt;
 var void_4 = exitVoid;
 var isSuccess4 = exitIsSuccess;
 var isFailure4 = exitIsFailure;
-var hasFails3 = exitHasFails;
-var hasDies3 = exitHasDies;
-var hasInterrupts3 = exitHasInterrupts;
+var hasFails2 = exitHasFails;
+var hasDies2 = exitHasDies;
+var hasInterrupts2 = exitHasInterrupts;
 var filterSuccess = exitFilterSuccess;
 var filterValue = exitFilterValue;
 var filterFailure = exitFilterFailure;
 var filterCause = exitFilterCause;
-var findError3 = exitFindError;
-var findDefect3 = exitFindDefect;
+var findError2 = exitFindError;
+var findDefect2 = exitFindDefect;
 var match5 = exitMatch;
-var map7 = exitMap;
+var map6 = exitMap;
 var mapError3 = exitMapError;
 var mapBoth3 = exitMapBoth;
 var asVoid3 = exitAsVoid;
 var asVoidAll = exitAsVoidAll;
 var getSuccess4 = exitGetSuccess;
 var getCause = exitGetCause;
-var findErrorOption3 = exitFindErrorOption;
+var findErrorOption2 = exitFindErrorOption;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Layer.js
 var exports_Layer = {};
@@ -6743,7 +6623,7 @@ __export(exports_Layer, {
   forkMemoMapUnsafe: () => forkMemoMapUnsafe,
   forkMemoMap: () => forkMemoMap,
   flatMap: () => flatMap4,
-  empty: () => empty5,
+  empty: () => empty4,
   effectDiscard: () => effectDiscard,
   effectContext: () => effectContext,
   effect: () => effect,
@@ -6757,9 +6637,9 @@ __export(exports_Layer, {
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Deferred.js
-var TypeId6 = "~effect/Deferred";
+var TypeId5 = "~effect/Deferred";
 var DeferredProto = {
-  [TypeId6]: {
+  [TypeId5]: {
     _A: identity,
     _E: identity
   },
@@ -6784,10 +6664,10 @@ var _await = (self) => callback((resume) => {
   });
 });
 var completeWith = /* @__PURE__ */ dual(2, (self, effect) => sync(() => doneUnsafe(self, effect)));
-var done3 = completeWith;
-var failCause3 = /* @__PURE__ */ dual(2, (self, cause) => done3(self, exitFailCause(cause)));
+var done2 = completeWith;
+var failCause3 = /* @__PURE__ */ dual(2, (self, cause) => done2(self, exitFailCause(cause)));
 var interruptWith = /* @__PURE__ */ dual(2, (self, fiberId2) => failCause3(self, causeInterrupt(fiberId2)));
-var isDone3 = (self) => sync(() => isDoneUnsafe(self));
+var isDone2 = (self) => sync(() => isDoneUnsafe(self));
 var isDoneUnsafe = (self) => self.effect !== undefined;
 var doneUnsafe = (self, effect) => {
   if (self.effect)
@@ -6801,7 +6681,7 @@ var doneUnsafe = (self, effect) => {
   }
   return true;
 };
-var into = /* @__PURE__ */ dual(2, (self, deferred) => uninterruptibleMask((restore) => flatMap3(exit(restore(self)), (exit2) => done3(deferred, exit2))));
+var into = /* @__PURE__ */ dual(2, (self, deferred) => uninterruptibleMask((restore) => flatMap3(exit(restore(self)), (exit2) => done2(deferred, exit2))));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/References.js
 var exports_References = {};
@@ -6867,15 +6747,15 @@ var closeUnsafe = scopeCloseUnsafe;
 var use = scopeUse;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Layer.js
-var TypeId7 = "~effect/Layer";
+var TypeId6 = "~effect/Layer";
 var MemoMapTypeId = "~effect/Layer/MemoMap";
 var memoMapReuse = (entry, scope2) => {
   entry.observers++;
   return andThen3(scopeAddFinalizerExit(scope2, (exit2) => entry.finalizer(exit2)), entry.effect);
 };
-var isLayer = (u) => hasProperty(u, TypeId7);
+var isLayer = (u) => hasProperty(u, TypeId6);
 var LayerProto = {
-  [TypeId7]: {
+  [TypeId6]: {
     _ROut: identity,
     _E: identity,
     _RIn: identity
@@ -6915,7 +6795,7 @@ var memoMapBuild = (memoMap, layer, scope2, build) => {
   memoMap.map.set(layer, entry);
   return scopeAddFinalizerExit(scope2, entry.finalizer).pipe(flatMap3(() => build(memoMap, layerScope)), onExit((exit2) => {
     entry.effect = exit2;
-    return done3(deferred, exit2);
+    return done2(deferred, exit2);
   }));
 };
 
@@ -6966,7 +6846,7 @@ var succeed5 = function() {
   return succeedContext(make5(arguments[0], arguments[1]));
 };
 var succeedContext = (context2) => fromBuildUnsafe(constant(succeed3(context2)));
-var empty5 = /* @__PURE__ */ succeedContext(/* @__PURE__ */ empty());
+var empty4 = /* @__PURE__ */ succeedContext(/* @__PURE__ */ empty());
 var sync2 = function() {
   if (arguments.length === 1) {
     return (evaluate2) => syncContext(() => make5(arguments[0], evaluate2()));
@@ -7097,9 +6977,9 @@ var provideSpanStackFrame2 = (name, stack) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ExecutionPlan.js
-var TypeId8 = "~effect/ExecutionPlan";
+var TypeId7 = "~effect/ExecutionPlan";
 var Proto2 = {
-  [TypeId8]: TypeId8,
+  [TypeId7]: TypeId7,
   get captureRequirements() {
     const self = this;
     return contextWith((context2) => succeed3(makeProto(self.steps.map((step) => ({
@@ -7122,6 +7002,133 @@ var CurrentMetadata = /* @__PURE__ */ Reference("effect/ExecutionPlan/CurrentMet
     stepIndex: 0
   })
 });
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Cause.js
+var exports_Cause = {};
+__export(exports_Cause, {
+  squash: () => squash,
+  reasonAnnotations: () => reasonAnnotations2,
+  prettyErrors: () => prettyErrors,
+  pretty: () => pretty,
+  map: () => map7,
+  makeInterruptReason: () => makeInterruptReason2,
+  makeFailReason: () => makeFailReason,
+  makeDieReason: () => makeDieReason,
+  isUnknownError: () => isUnknownError2,
+  isTimeoutError: () => isTimeoutError2,
+  isReason: () => isReason,
+  isNoSuchElementError: () => isNoSuchElementError2,
+  isInterruptReason: () => isInterruptReason2,
+  isIllegalArgumentError: () => isIllegalArgumentError2,
+  isFailReason: () => isFailReason2,
+  isExceededCapacityError: () => isExceededCapacityError2,
+  isDone: () => isDone3,
+  isDieReason: () => isDieReason2,
+  isCause: () => isCause2,
+  isAsyncFiberError: () => isAsyncFiberError2,
+  interruptors: () => interruptors,
+  interrupt: () => interrupt3,
+  hasInterruptsOnly: () => hasInterruptsOnly2,
+  hasInterrupts: () => hasInterrupts3,
+  hasFails: () => hasFails3,
+  hasDies: () => hasDies3,
+  fromReasons: () => fromReasons,
+  findInterrupt: () => findInterrupt2,
+  findFail: () => findFail2,
+  findErrorOption: () => findErrorOption3,
+  findError: () => findError3,
+  findDie: () => findDie2,
+  findDefect: () => findDefect3,
+  filterInterruptors: () => filterInterruptors,
+  fail: () => fail5,
+  empty: () => empty5,
+  done: () => done3,
+  die: () => die3,
+  combine: () => combine2,
+  annotations: () => annotations,
+  annotate: () => annotate,
+  UnknownErrorTypeId: () => UnknownErrorTypeId2,
+  UnknownError: () => UnknownError2,
+  TypeId: () => TypeId8,
+  TimeoutErrorTypeId: () => TimeoutErrorTypeId2,
+  TimeoutError: () => TimeoutError2,
+  StackTrace: () => StackTrace,
+  ReasonTypeId: () => ReasonTypeId,
+  NoSuchElementErrorTypeId: () => NoSuchElementErrorTypeId2,
+  NoSuchElementError: () => NoSuchElementError2,
+  InterruptorStackTrace: () => InterruptorStackTrace2,
+  IllegalArgumentErrorTypeId: () => IllegalArgumentErrorTypeId2,
+  IllegalArgumentError: () => IllegalArgumentError2,
+  ExceededCapacityErrorTypeId: () => ExceededCapacityErrorTypeId2,
+  ExceededCapacityError: () => ExceededCapacityError2,
+  DoneTypeId: () => DoneTypeId2,
+  Done: () => Done2,
+  AsyncFiberErrorTypeId: () => AsyncFiberErrorTypeId2,
+  AsyncFiberError: () => AsyncFiberError2
+});
+var TypeId8 = CauseTypeId;
+var ReasonTypeId = CauseReasonTypeId;
+var isCause2 = isCause;
+var isReason = isCauseReason;
+var isFailReason2 = isFailReason;
+var isDieReason2 = isDieReason;
+var isInterruptReason2 = isInterruptReason;
+var fromReasons = causeFromReasons;
+var empty5 = causeEmpty;
+var fail5 = causeFail;
+var die3 = causeDie;
+var interrupt3 = causeInterrupt;
+var makeFailReason = (error) => new Fail(error);
+var makeDieReason = (defect) => new Die(defect);
+var makeInterruptReason2 = makeInterruptReason;
+var hasInterruptsOnly2 = hasInterruptsOnly;
+var map7 = causeMap;
+var combine2 = causeCombine;
+var squash = causeSquash;
+var hasFails3 = hasFails;
+var findFail2 = findFail;
+var findError3 = findError;
+var findErrorOption3 = findErrorOption;
+var hasDies3 = hasDies;
+var findDie2 = findDie;
+var findDefect3 = findDefect;
+var hasInterrupts3 = hasInterrupts;
+var findInterrupt2 = findInterrupt;
+var interruptors = causeInterruptors;
+var filterInterruptors = causeFilterInterruptors;
+var prettyErrors = causePrettyErrors;
+var pretty = causePretty;
+var isNoSuchElementError2 = isNoSuchElementError;
+var NoSuchElementErrorTypeId2 = NoSuchElementErrorTypeId;
+var NoSuchElementError2 = NoSuchElementError;
+var isDone3 = isDone;
+var DoneTypeId2 = DoneTypeId;
+var Done2 = Done;
+var done3 = done;
+var TimeoutErrorTypeId2 = TimeoutErrorTypeId;
+var isTimeoutError2 = isTimeoutError;
+var TimeoutError2 = TimeoutError;
+var IllegalArgumentErrorTypeId2 = IllegalArgumentErrorTypeId;
+var isIllegalArgumentError2 = isIllegalArgumentError;
+var IllegalArgumentError2 = IllegalArgumentError;
+var isExceededCapacityError2 = isExceededCapacityError;
+var ExceededCapacityErrorTypeId2 = ExceededCapacityErrorTypeId;
+var ExceededCapacityError2 = ExceededCapacityError;
+var AsyncFiberErrorTypeId2 = AsyncFiberErrorTypeId;
+var isAsyncFiberError2 = isAsyncFiberError;
+var AsyncFiberError2 = AsyncFiberError;
+var UnknownErrorTypeId2 = UnknownErrorTypeId;
+var isUnknownError2 = isUnknownError;
+var UnknownError2 = UnknownError;
+var annotate = causeAnnotate;
+var reasonAnnotations2 = reasonAnnotations;
+var annotations = causeAnnotations;
+
+class StackTrace extends (/* @__PURE__ */ Service()("effect/Cause/StackTrace")) {
+}
+
+class InterruptorStackTrace2 extends (/* @__PURE__ */ Service()("effect/Cause/InterruptorStackTrace")) {
+}
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Data.js
 var Class3 = class extends Class {
@@ -7885,9 +7892,9 @@ var Random = /* @__PURE__ */ Reference("effect/Random", {
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Pull.js
 var catchDone = /* @__PURE__ */ dual(2, (effect2, f) => catchCauseFilter(effect2, filterDoneLeftover, (l) => f(l)));
 var isDoneCause = (cause) => cause.reasons.some(isDoneFailure);
-var isDoneFailure = (failure) => failure._tag === "Fail" && isDone2(failure.error);
-var filterDone = /* @__PURE__ */ composePassthrough(findError2, (e) => isDone2(e) ? succeed2(e) : fail2(e));
-var filterDoneLeftover = /* @__PURE__ */ composePassthrough(findError2, (e) => isDone2(e) ? succeed2(e.value) : fail2(e));
+var isDoneFailure = (failure) => failure._tag === "Fail" && isDone3(failure.error);
+var filterDone = /* @__PURE__ */ composePassthrough(findError3, (e) => isDone3(e) ? succeed2(e) : fail2(e));
+var filterDoneLeftover = /* @__PURE__ */ composePassthrough(findError3, (e) => isDone3(e) ? succeed2(e.value) : fail2(e));
 var doneExitFromCause = (cause) => {
   const halt = filterDone(cause);
   return !isFailure2(halt) ? succeed4(halt.success.value) : failCause2(halt.failure);
@@ -7971,7 +7978,7 @@ var toStepWithSleep = (schedule) => map5(toStepWithMetadata(schedule), (step) =>
 var passthrough = (self) => fromStep(map5(toStep(self), (step) => (now2, input) => matchEffect2(step(now2, input), {
   onSuccess: (result2) => succeed3([input, result2[1]]),
   onFailure: failCause,
-  onDone: () => done2(input)
+  onDone: () => done3(input)
 })));
 var recurs = (times2) => while_(forever3, ({
   attempt
@@ -7989,7 +7996,7 @@ var while_ = /* @__PURE__ */ dual(2, (self, predicate) => fromStep(map5(toStep(s
       output,
       duration
     });
-    return flatMap3(isEffect(eff) ? eff : succeed3(eff), (check) => check ? succeed3(result2) : done2(output));
+    return flatMap3(isEffect(eff) ? eff : succeed3(eff), (check) => check ? succeed3(result2) : done3(output));
   });
 })));
 var forever3 = /* @__PURE__ */ spaced(zero);
@@ -9206,6 +9213,161 @@ var flatMapEager2 = flatMapEager;
 var catchEager2 = catchEager;
 var fnUntracedEager2 = fnUntracedEager;
 
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PlatformError.js
+var TypeId14 = "~effect/platform/PlatformError";
+
+class BadArgument extends (/* @__PURE__ */ TaggedError2("BadArgument")) {
+  get message() {
+    return `${this.module}.${this.method}${this.description ? `: ${this.description}` : ""}`;
+  }
+}
+
+class SystemError extends Error3 {
+  get message() {
+    return `${this._tag}: ${this.module}.${this.method}${this.pathOrDescriptor !== undefined ? ` (${this.pathOrDescriptor})` : ""}${this.description ? `: ${this.description}` : ""}`;
+  }
+}
+
+class PlatformError extends (/* @__PURE__ */ TaggedError2("PlatformError")) {
+  constructor(reason) {
+    if ("cause" in reason) {
+      super({
+        reason,
+        cause: reason.cause
+      });
+    } else {
+      super({
+        reason
+      });
+    }
+  }
+  [TypeId14] = TypeId14;
+  get message() {
+    return this.reason.message;
+  }
+}
+var systemError = (options) => new PlatformError(new SystemError(options));
+var badArgument = (options) => new PlatformError(new BadArgument(options));
+
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Crypto.js
+var TypeId15 = "~effect/platform/Crypto";
+var Crypto = /* @__PURE__ */ Service("effect/Crypto");
+var make10 = (impl) => {
+  const randomBytesUnsafe = impl.randomBytes;
+  const randomBytes = (size) => map8(validateSize("randomBytes", size), randomBytesUnsafe);
+  const readUint53 = (bytes) => (bytes[0] & 31) * 2 ** 48 + bytes[1] * 2 ** 40 + bytes[2] * 2 ** 32 + bytes[3] * 2 ** 24 + bytes[4] * 2 ** 16 + bytes[5] * 2 ** 8 + bytes[6];
+  const nextDoubleUnsafe = () => readUint53(randomBytesUnsafe(7)) / 2 ** 53;
+  const nextIntUnsafe = () => {
+    while (true) {
+      const bytes = randomBytesUnsafe(7);
+      const value2 = readUint53(bytes);
+      if ((bytes[0] & 32) === 0) {
+        return value2 + Number.MIN_SAFE_INTEGER;
+      }
+      if (value2 < Number.MAX_SAFE_INTEGER) {
+        return value2 + 1;
+      }
+    }
+  };
+  return Crypto.of({
+    [TypeId15]: TypeId15,
+    randomBytes,
+    nextDoubleUnsafe,
+    nextIntUnsafe,
+    digest: impl.digest,
+    random: sync3(() => nextDoubleUnsafe()),
+    randomBoolean: sync3(() => nextDoubleUnsafe() > 0.5),
+    randomInt: sync3(() => nextIntUnsafe()),
+    randomBetween: (min5, max5) => sync3(() => nextDoubleUnsafe() * (max5 - min5) + min5),
+    randomIntBetween(min5, max5, options) {
+      const extra = options?.halfOpen === true ? 0 : 1;
+      return sync3(() => {
+        const minInt = Math.ceil(min5);
+        const maxInt = Math.floor(max5);
+        return Math.floor(nextDoubleUnsafe() * (maxInt - minInt + extra)) + minInt;
+      });
+    },
+    randomShuffle: (elements) => sync3(() => {
+      const buffer = Array.from(elements);
+      for (let i = buffer.length - 1;i >= 1; i = i - 1) {
+        const index = Math.min(i, Math.floor(nextDoubleUnsafe() * (i + 1)));
+        const value2 = buffer[i];
+        buffer[i] = buffer[index];
+        buffer[index] = value2;
+      }
+      return buffer;
+    }),
+    randomUUIDv4: sync3(() => formatUUIDv4(randomBytesUnsafe(16))),
+    randomUUIDv7: clockWith3((clock) => succeed6(formatUUIDv7(clock.currentTimeMillisUnsafe(), randomBytesUnsafe(16))))
+  });
+};
+var validateSize = (method, size) => Number.isSafeInteger(size) && size >= 0 ? succeed6(size) : fail6(badArgument({
+  module: "Crypto",
+  method,
+  description: "size must be a non-negative safe integer"
+}));
+var hex = (byte) => byte.toString(16).padStart(2, "0");
+var formatUUID = (bytes) => {
+  const segments = [bytes.subarray(0, 4), bytes.subarray(4, 6), bytes.subarray(6, 8), bytes.subarray(8, 10), bytes.subarray(10, 16)];
+  return segments.map((segment) => Array.from(segment, hex).join("")).join("-");
+};
+var formatUUIDv4 = (bytes) => {
+  bytes[6] = bytes[6] & 15 | 64;
+  bytes[8] = bytes[8] & 63 | 128;
+  return formatUUID(bytes);
+};
+var maxUUIDv7Timestamp = 2 ** 48 - 1;
+var formatUUIDv7 = (timestampMillis, bytes) => {
+  const timestamp = Math.min(Math.max(0, Math.trunc(timestampMillis)), maxUUIDv7Timestamp);
+  bytes[0] = Math.floor(timestamp / 2 ** 40);
+  bytes[1] = Math.floor(timestamp / 2 ** 32) & 255;
+  bytes[2] = Math.floor(timestamp / 2 ** 24) & 255;
+  bytes[3] = Math.floor(timestamp / 2 ** 16) & 255;
+  bytes[4] = Math.floor(timestamp / 2 ** 8) & 255;
+  bytes[5] = timestamp & 255;
+  bytes[6] = bytes[6] & 15 | 112;
+  bytes[8] = bytes[8] & 63 | 128;
+  return formatUUID(bytes);
+};
+
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeCrypto.js
+import * as NodeCrypto from "node:crypto";
+var toHashAlgorithm = (algorithm) => {
+  switch (algorithm) {
+    case "SHA-1":
+      return "sha1";
+    case "SHA-256":
+      return "sha256";
+    case "SHA-384":
+      return "sha384";
+    case "SHA-512":
+      return "sha512";
+  }
+};
+var digest = (algorithm, data) => try_3({
+  try: () => Uint8Array.from(NodeCrypto.createHash(toHashAlgorithm(algorithm)).update(data).digest()),
+  catch: (cause) => systemError({
+    module: "Crypto",
+    method: "digest",
+    _tag: "Unknown",
+    description: "Could not compute digest",
+    cause
+  })
+});
+var make11 = /* @__PURE__ */ make10({
+  randomBytes: NodeCrypto.randomBytes,
+  digest
+});
+var layer = /* @__PURE__ */ succeed5(Crypto, make11);
+
+// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeCrypto.js
+var layer2 = layer;
+// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeRuntime.js
+var exports_NodeRuntime = {};
+__export(exports_NodeRuntime, {
+  runMain: () => runMain2
+});
+
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Runtime.js
 var defaultTeardown = (exit3, onExit3) => {
   if (isSuccess4(exit3))
@@ -9289,7 +9451,7 @@ __export(exports_NodeServices, {
 var exports_FileSystem = {};
 __export(exports_FileSystem, {
   makeNoop: () => makeNoop,
-  make: () => make20,
+  make: () => make22,
   layerNoop: () => layerNoop,
   isFile: () => isFile,
   WatchBackend: () => WatchBackend,
@@ -9303,44 +9465,8 @@ __export(exports_FileSystem, {
   FileSystem: () => FileSystem
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PlatformError.js
-var TypeId14 = "~effect/platform/PlatformError";
-
-class BadArgument extends (/* @__PURE__ */ TaggedError2("BadArgument")) {
-  get message() {
-    return `${this.module}.${this.method}${this.description ? `: ${this.description}` : ""}`;
-  }
-}
-
-class SystemError extends Error3 {
-  get message() {
-    return `${this._tag}: ${this.module}.${this.method}${this.pathOrDescriptor !== undefined ? ` (${this.pathOrDescriptor})` : ""}${this.description ? `: ${this.description}` : ""}`;
-  }
-}
-
-class PlatformError extends (/* @__PURE__ */ TaggedError2("PlatformError")) {
-  constructor(reason) {
-    if ("cause" in reason) {
-      super({
-        reason,
-        cause: reason.cause
-      });
-    } else {
-      super({
-        reason
-      });
-    }
-  }
-  [TypeId14] = TypeId14;
-  get message() {
-    return this.reason.message;
-  }
-}
-var systemError = (options) => new PlatformError(new SystemError(options));
-var badArgument = (options) => new PlatformError(new BadArgument(options));
-
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Chunk.js
-var TypeId15 = "~effect/collections/Chunk";
+var TypeId16 = "~effect/collections/Chunk";
 function copy(src, srcPos, dest, destPos, len) {
   for (let i = srcPos;i < Math.min(src.length, srcPos + len); i++) {
     dest[destPos + i - srcPos] = src[i];
@@ -9351,7 +9477,7 @@ var emptyArray = [];
 var makeEquivalence6 = (isEquivalent) => make3((self, that) => self.length === that.length && toReadonlyArray(self).every((value2, i) => isEquivalent(value2, getUnsafe3(that, i))));
 var _equivalence = /* @__PURE__ */ makeEquivalence6(equals);
 var ChunkProto = {
-  [TypeId15]: {
+  [TypeId16]: {
     _A: (_) => _
   },
   toString() {
@@ -9431,7 +9557,7 @@ var makeChunk = (backing) => {
   }
   return chunk;
 };
-var isChunk = (u) => hasProperty(u, TypeId15);
+var isChunk = (u) => hasProperty(u, TypeId16);
 var _empty = /* @__PURE__ */ makeChunk({
   _tag: "IEmpty"
 });
@@ -9552,12 +9678,12 @@ var runIn = fiberRunIn;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Latch.js
 var makeUnsafe5 = makeLatchUnsafe;
-var make10 = makeLatch;
+var make12 = makeLatch;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/MutableRef.js
-var TypeId16 = "~effect/MutableRef";
+var TypeId17 = "~effect/MutableRef";
 var MutableRefProto = {
-  [TypeId16]: TypeId16,
+  [TypeId17]: TypeId17,
   ...PipeInspectableProto,
   toJSON() {
     return {
@@ -9566,7 +9692,7 @@ var MutableRefProto = {
     };
   }
 };
-var make11 = (value2) => {
+var make13 = (value2) => {
   const ref = Object.create(MutableRefProto);
   ref.current = value2;
   return ref;
@@ -9597,7 +9723,7 @@ __export(exports_PubSub, {
   publish: () => publish,
   makeAtomicUnbounded: () => makeAtomicUnbounded,
   makeAtomicBounded: () => makeAtomicBounded,
-  make: () => make13,
+  make: () => make15,
   isShutdownUnsafe: () => isShutdownUnsafe,
   isShutdown: () => isShutdown,
   isFull: () => isFull,
@@ -9613,7 +9739,7 @@ __export(exports_PubSub, {
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/MutableList.js
 var Empty = /* @__PURE__ */ Symbol.for("effect/MutableList/Empty");
-var make12 = () => ({
+var make14 = () => ({
   head: undefined,
   tail: undefined,
   length: 0
@@ -9784,22 +9910,22 @@ var filter6 = (self, f) => {
 var remove2 = (self, value2) => filter6(self, (v) => v !== value2);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PubSub.js
-var TypeId17 = "~effect/PubSub";
+var TypeId18 = "~effect/PubSub";
 var SubscriptionTypeId = "~effect/PubSub/Subscription";
-var make13 = (options) => sync3(() => makePubSubUnsafe(options.atomicPubSub(), new Map, makeUnsafe3(), makeUnsafe5(false), make11(false), options.strategy()));
-var bounded = (capacity) => make13({
+var make15 = (options) => sync3(() => makePubSubUnsafe(options.atomicPubSub(), new Map, makeUnsafe3(), makeUnsafe5(false), make13(false), options.strategy()));
+var bounded = (capacity) => make15({
   atomicPubSub: () => makeAtomicBounded(capacity),
   strategy: () => new BackPressureStrategy
 });
-var dropping = (capacity) => make13({
+var dropping = (capacity) => make15({
   atomicPubSub: () => makeAtomicBounded(capacity),
   strategy: () => new DroppingStrategy
 });
-var sliding = (capacity) => make13({
+var sliding = (capacity) => make15({
   atomicPubSub: () => makeAtomicBounded(capacity),
   strategy: () => new SlidingStrategy
 });
-var unbounded = (options) => make13({
+var unbounded = (options) => make15({
   atomicPubSub: () => makeAtomicUnbounded(options),
   strategy: () => new DroppingStrategy
 });
@@ -9830,7 +9956,7 @@ var isFull = (self) => map8(size2(self), (size3) => size3 === self.pubsub.capaci
 var isEmpty = (self) => map8(size2(self), (size3) => size3 === 0);
 var shutdown = (self) => uninterruptible2(withFiber2((fiber3) => {
   set(self.shutdownFlag, true);
-  return close(self.scope, interrupt3(fiber3.id)).pipe(andThen4(self.strategy.shutdown), when2(self.shutdownHook.open), asVoid4);
+  return close(self.scope, interrupt2(fiber3.id)).pipe(andThen4(self.strategy.shutdown), when2(self.shutdownHook.open), asVoid4);
 }));
 var isShutdown = (self) => sync3(() => isShutdownUnsafe(self));
 var isShutdownUnsafe = (self) => self.shutdownFlag.current;
@@ -9992,7 +10118,7 @@ var removeSubscribers = (subscribers, subscription, pollers) => {
     subscribers.delete(subscription);
   }
 };
-var makeSubscriptionUnsafe = (pubsub, subscribers, strategy) => new SubscriptionImpl(pubsub, subscribers, pubsub.subscribe(), make12(), makeUnsafe5(false), make11(false), strategy, pubsub.replayWindow());
+var makeSubscriptionUnsafe = (pubsub, subscribers, strategy) => new SubscriptionImpl(pubsub, subscribers, pubsub.subscribe(), make14(), makeUnsafe5(false), make13(false), strategy, pubsub.replayWindow());
 
 class BoundedPubSubArb {
   array;
@@ -10666,7 +10792,7 @@ class SubscriptionImpl {
 }
 
 class PubSubImpl {
-  [TypeId17] = {
+  [TypeId18] = {
     _A: identity
   };
   pubsub;
@@ -10695,7 +10821,7 @@ var ensureCapacity = (capacity2) => {
 };
 
 class BackPressureStrategy {
-  publishers = /* @__PURE__ */ make12();
+  publishers = /* @__PURE__ */ make14();
   get shutdown() {
     return withFiber2((fiber3) => forEach2(takeAll(this.publishers), ([_, deferred, last2]) => last2 ? interruptWith(deferred, fiber3.id) : void_5, {
       concurrency: "unbounded",
@@ -10983,7 +11109,7 @@ __export(exports_Queue, {
   offerAllUnsafe: () => offerAllUnsafe,
   offerAll: () => offerAll,
   offer: () => offer,
-  make: () => make14,
+  make: () => make16,
   isQueue: () => isQueue,
   isFullUnsafe: () => isFullUnsafe,
   isFull: () => isFull2,
@@ -11004,10 +11130,10 @@ __export(exports_Queue, {
   asEnqueue: () => asEnqueue,
   asDequeue: () => asDequeue
 });
-var TypeId18 = "~effect/Queue";
+var TypeId19 = "~effect/Queue";
 var EnqueueTypeId = "~effect/Queue/Enqueue";
 var DequeueTypeId = "~effect/Queue/Dequeue";
-var isQueue = (u) => hasProperty(u, TypeId18);
+var isQueue = (u) => hasProperty(u, TypeId19);
 var isEnqueue = (u) => hasProperty(u, EnqueueTypeId);
 var isDequeue = (u) => hasProperty(u, DequeueTypeId);
 var asEnqueue = (self) => self;
@@ -11017,7 +11143,7 @@ var variance = {
   _E: identity
 };
 var QueueProto = {
-  [TypeId18]: variance,
+  [TypeId19]: variance,
   [EnqueueTypeId]: variance,
   [DequeueTypeId]: variance,
   ...PipeInspectableProto,
@@ -11029,12 +11155,12 @@ var QueueProto = {
     };
   }
 };
-var make14 = (options) => withFiber((fiber3) => {
+var make16 = (options) => withFiber((fiber3) => {
   const self = Object.create(QueueProto);
   self.dispatcher = fiber3.currentDispatcher;
   self.capacity = options?.capacity ?? Number.POSITIVE_INFINITY;
   self.strategy = options?.strategy ?? "suspend";
-  self.messages = make12();
+  self.messages = make14();
   self.scheduleRunning = false;
   self.state = {
     _tag: "Open",
@@ -11044,18 +11170,18 @@ var make14 = (options) => withFiber((fiber3) => {
   };
   return succeed3(self);
 });
-var bounded2 = (capacity2) => make14({
+var bounded2 = (capacity2) => make16({
   capacity: capacity2
 });
-var sliding2 = (capacity2) => make14({
+var sliding2 = (capacity2) => make16({
   capacity: capacity2,
   strategy: "sliding"
 });
-var dropping2 = (capacity2) => make14({
+var dropping2 = (capacity2) => make16({
   capacity: capacity2,
   strategy: "dropping"
 });
-var unbounded2 = () => make14();
+var unbounded2 = () => make16();
 var offer = (self, message) => suspend(() => {
   if (self.state._tag !== "Open") {
     return exitFalse;
@@ -11436,7 +11562,7 @@ __export(exports_Semaphore, {
   releaseAll: () => releaseAll,
   release: () => release,
   makeUnsafe: () => makeUnsafe6,
-  make: () => make15
+  make: () => make17
 });
 var makeUnsafe6 = (permits) => new SemaphoreImpl(permits);
 var waitForPermits = (self, n, effect2) => callback((resume) => {
@@ -11539,7 +11665,7 @@ class SemaphoreImpl {
     });
   }
 }
-var make15 = (permits) => sync(() => new SemaphoreImpl(permits));
+var make17 = (permits) => sync(() => new SemaphoreImpl(permits));
 var resize = /* @__PURE__ */ dual(2, (self, permits) => self.resize(permits));
 var withPermits = (self, permits, effect2) => {
   const withPermits2 = self.withPermits(permits);
@@ -11560,13 +11686,13 @@ var release = /* @__PURE__ */ dual(2, (self, permits) => self.release(permits));
 var releaseAll = (self) => self.releaseAll;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Take.js
-var toPull = (take5) => isExit2(take5) ? isSuccess4(take5) ? done2(take5.value) : take5 : succeed6(take5);
+var toPull = (take5) => isExit2(take5) ? isSuccess4(take5) ? done3(take5.value) : take5 : succeed6(take5);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Channel.js
-var TypeId19 = "~effect/Channel";
-var isChannel = (u) => hasProperty(u, TypeId19);
+var TypeId20 = "~effect/Channel";
+var isChannel = (u) => hasProperty(u, TypeId20);
 var ChannelProto = {
-  [TypeId19]: {
+  [TypeId20]: {
     _Env: identity,
     _InErr: identity,
     _InElem: identity,
@@ -11592,7 +11718,7 @@ var fromTransformBracket = (f) => fromTransform(fnUntraced2(function* (upstream,
 }));
 var toTransform = (channel) => channel.transform;
 var DefaultChunkSize = 4096;
-var asyncQueue = (scope3, f, options) => make14({
+var asyncQueue = (scope3, f, options) => make16({
   capacity: options?.bufferSize,
   strategy: options?.strategy
 }).pipe(tap5((queue) => addFinalizer2(scope3, shutdown2(queue))), tap5((queue) => forkIn2(provide(f(queue), scope3), scope3)));
@@ -11607,20 +11733,20 @@ var acquireUseRelease3 = (acquire, use2, release2) => fromTransformBracket(fnUnt
 }));
 var fromArray = (array2) => fromPull(sync3(() => {
   let index = 0;
-  return suspend3(() => index >= array2.length ? done2() : succeed6(array2[index++]));
+  return suspend3(() => index >= array2.length ? done3() : succeed6(array2[index++]));
 }));
 var fromIteratorArray = (iterator, chunkSize = DefaultChunkSize) => fromPull(sync3(() => {
   const iter = iterator();
   let done4 = none2();
   return suspend3(() => {
     if (done4._tag === "Some")
-      return done2(done4.value);
+      return done3(done4.value);
     const buffer = [];
     while (buffer.length < chunkSize) {
       const state = iter.next();
       if (state.done) {
         if (buffer.length === 0) {
-          return done2(state.value);
+          return done3(state.value);
         }
         done4 = some3(state.value);
         break;
@@ -11632,28 +11758,28 @@ var fromIteratorArray = (iterator, chunkSize = DefaultChunkSize) => fromPull(syn
 }));
 var fromIterableArray = (iterable, chunkSize = DefaultChunkSize) => fromIteratorArray(() => iterable[Symbol.iterator](), chunkSize);
 var succeed7 = (value2) => fromEffect(succeed6(value2));
-var end2 = (value2) => fromPull(succeed6(done2(value2)));
+var end2 = (value2) => fromPull(succeed6(done3(value2)));
 var sync4 = (evaluate2) => fromEffect(sync3(evaluate2));
-var empty7 = /* @__PURE__ */ fromPull(/* @__PURE__ */ succeed6(/* @__PURE__ */ done2()));
+var empty7 = /* @__PURE__ */ fromPull(/* @__PURE__ */ succeed6(/* @__PURE__ */ done3()));
 var never3 = /* @__PURE__ */ fromPull(/* @__PURE__ */ succeed6(never2));
 var fail8 = (error) => fromPull(succeed6(fail6(error)));
 var failSync3 = (evaluate2) => fromPull(failSync2(evaluate2));
 var failCause6 = (cause) => fromPull(failCause4(cause));
 var failCauseSync3 = (evaluate2) => fromPull(failCauseSync2(evaluate2));
-var die5 = (defect) => failCause6(die2(defect));
+var die5 = (defect) => failCause6(die3(defect));
 var fromEffect = (effect2) => fromPull(sync3(() => {
   let done4 = false;
   return suspend3(() => {
     if (done4)
-      return done2();
+      return done3();
     done4 = true;
     return effect2;
   });
 }));
-var fromEffectDrain = (effect2) => fromPull(flatMap5(effect2, () => done2()));
+var fromEffectDrain = (effect2) => fromPull(flatMap5(effect2, () => done3()));
 var fromEffectTake = (effect2) => fromPull(succeed6(flatMap5(effect2, toPull)));
 var fromQueueArray = (queue) => fromPull(succeed6(takeAll3(queue)));
-var fromSubscriptionArray = (subscription) => fromPull(succeed6(onInterrupt2(takeAll2(subscription), () => done2())));
+var fromSubscriptionArray = (subscription) => fromPull(succeed6(onInterrupt2(takeAll2(subscription), () => done3())));
 var fromPubSubArray = (pubsub) => unwrap2(map8(subscribe(pubsub), fromSubscriptionArray));
 var fromPubSubTake = (pubsub) => unwrap2(map8(subscribe(pubsub), (sub) => fromEffectTake(take2(sub))));
 var fromReadableStream = (options) => fromTransform((_, scope3) => readableStreamToPullUnsafe({
@@ -11664,7 +11790,7 @@ var fromReadableStream = (options) => fromTransform((_, scope3) => readableStrea
 }));
 var readableStreamToPullUnsafe = (options) => {
   const reader = options.readable.getReader();
-  const exit3 = options.exit ?? make11(undefined);
+  const exit3 = options.exit ?? make13(undefined);
   const pull = suspend3(() => {
     if (exit3.current)
       return exit3.current;
@@ -11679,7 +11805,7 @@ var readableStreamToPullUnsafe = (options) => {
       }) => {
         if (exit3.current)
           return exit3.current;
-        return done4 ? done2() : succeed6(of(value2));
+        return done4 ? done3() : succeed6(of(value2));
       }
     });
   });
@@ -11693,7 +11819,7 @@ var fromAsyncIterable = (iterable, onError3) => fromTransform(fnUntraced2(functi
   return flatMap5(tryPromise2({
     try: () => iter.next(),
     catch: onError3
-  }), (result3) => result3.done ? done2(result3.value) : succeed6(result3.value));
+  }), (result3) => result3.done ? done3(result3.value) : succeed6(result3.value));
 }));
 var fromAsyncIterableArray = (iterable, onError3) => map9(fromAsyncIterable(iterable, onError3), of);
 var map9 = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => sync3(() => {
@@ -11701,7 +11827,7 @@ var map9 = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => sy
   return map8(pull, (o) => f(o, i++));
 })));
 var mapDone = /* @__PURE__ */ dual(2, (self, f) => mapDoneEffect(self, (o) => succeed6(f(o))));
-var mapDoneEffect = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => succeed6(catchDone(pull, (done4) => flatMap5(f(done4), done2)))));
+var mapDoneEffect = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => succeed6(catchDone(pull, (done4) => flatMap5(f(done4), done3)))));
 var concurrencyIsSequential = (concurrency) => concurrency === undefined || concurrency !== "unbounded" && concurrency <= 1;
 var mapEffect = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, f, options) => concurrencyIsSequential(options?.concurrency) ? mapEffectSequential(self, f) : mapEffectConcurrent(self, f, options));
 var mapEffectSequential = (self, f) => fromTransform((upstream, scope3) => {
@@ -11974,8 +12100,8 @@ var catchCauseFilter3 = /* @__PURE__ */ dual(3, (self, filter8, f) => catchCause
   const result3 = filter8(cause);
   return isFailure2(result3) ? failCause6(result3.failure) : f(result3.success, cause);
 }));
-var catch_4 = /* @__PURE__ */ dual(2, (self, f) => catchCauseFilter3(self, findError2, (e) => f(e)));
-var tapError4 = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => succeed6(tapError3(pull, (err) => isDone2(err) ? void_5 : asVoid4(f(err))))));
+var catch_4 = /* @__PURE__ */ dual(2, (self, f) => catchCauseFilter3(self, findError3, (e) => f(e)));
+var tapError4 = /* @__PURE__ */ dual(2, (self, f) => transformPull(self, (pull) => succeed6(tapError3(pull, (err) => isDone3(err) ? void_5 : asVoid4(f(err))))));
 var catchIf3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, predicate, f, orElse3) => catch_4(self, (err) => {
   return predicate(err) ? f(err) : orElse3 ? orElse3(err) : fail8(err);
 }));
@@ -12014,7 +12140,7 @@ var ignore3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, option
     return catch_4(self, () => empty7);
   }
   const logEffect = logWithLevel2(options.log === true ? undefined : options.log);
-  return catch_4(tapCause4(self, (cause) => hasFails2(cause) ? logEffect(cause) : void_5), () => empty7);
+  return catch_4(tapCause4(self, (cause) => hasFails3(cause) ? logEffect(cause) : void_5), () => empty7);
 });
 var ignoreCause_ = (self) => catchCause4(self, () => empty7);
 var ignoreCause3 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, options) => {
@@ -12053,7 +12179,7 @@ var mergeAll3 = /* @__PURE__ */ dual(2, (channels, {
 }) => fromTransformBracket(fnUntraced2(function* (upstream, scope3, forkedScope) {
   const concurrencyN = concurrency === "unbounded" ? Number.MAX_SAFE_INTEGER : Math.max(1, concurrency);
   const semaphore = switch_ ? undefined : makeUnsafe6(concurrencyN);
-  const doneLatch = yield* make10(true);
+  const doneLatch = yield* make12(true);
   const fibers = new Set;
   const queue = yield* bounded2(bufferSize);
   yield* addFinalizer2(forkedScope, shutdown2(queue));
@@ -12196,7 +12322,7 @@ var splitLines = () => fromTransform((upstream, _scope) => sync3(() => {
   }
   const pullOrFlush = suspend3(() => {
     if (done4._tag === "Some") {
-      return done2(done4.value);
+      return done3(done4.value);
     }
     return matchEffect2(upstream, {
       onSuccess: loop,
@@ -12209,7 +12335,7 @@ var splitLines = () => fromTransform((upstream, _scope) => sync3(() => {
           midCRLF = false;
           return succeed6([last2]);
         }
-        return done2(leftover);
+        return done3(leftover);
       }
     });
   });
@@ -12222,7 +12348,7 @@ var splitLines = () => fromTransform((upstream, _scope) => sync3(() => {
 var pipeTo = /* @__PURE__ */ dual(2, (self, that) => fromTransform((upstream, scope3) => flatMap5(toTransform(self)(upstream, scope3), (upstream2) => toTransform(that)(upstream2, scope3))));
 var pipeToOrFail = /* @__PURE__ */ dual(2, (self, that) => fromTransform((upstream, scope3) => flatMap5(toTransform(self)(upstream, scope3), (upstream2) => {
   const upstreamPull = catchCause3(upstream2, (cause) => isDoneCause(cause) ? failCause4(cause) : die4(Done2(cause)));
-  return map8(toTransform(that)(upstreamPull, scope3), (pull) => catchDefect2(pull, (defect) => isDone2(defect) ? failCause4(defect.value) : die4(defect)));
+  return map8(toTransform(that)(upstreamPull, scope3), (pull) => catchDefect2(pull, (defect) => isDone3(defect) ? failCause4(defect.value) : die4(defect)));
 })));
 var unwrap2 = (channel) => fromTransform((upstream, scope3) => {
   let pull;
@@ -12235,7 +12361,7 @@ var unwrap2 = (channel) => fromTransform((upstream, scope3) => {
 var scoped3 = (self) => fromTransformBracket((upstream, scope3, forkedScope) => map8(provide(toTransform(self)(upstream, scope3), forkedScope), provide(forkedScope)));
 var buffer = /* @__PURE__ */ dual(2, (self, options) => fromTransform(fnUntraced2(function* (upstream, scope3) {
   const pull = yield* toTransform(self)(upstream, scope3);
-  const queue = yield* make14({
+  const queue = yield* make16({
     capacity: options.capacity === "unbounded" ? undefined : options.capacity,
     strategy: options.capacity === "unbounded" ? undefined : options.strategy
   });
@@ -12247,7 +12373,7 @@ var buffer = /* @__PURE__ */ dual(2, (self, options) => fromTransform(fnUntraced
 })));
 var bufferArray = /* @__PURE__ */ dual(2, (self, options) => fromTransform(fnUntraced2(function* (upstream, scope3) {
   const pull = yield* toTransform(self)(upstream, scope3);
-  const queue = yield* make14({
+  const queue = yield* make16({
     capacity: options.capacity === "unbounded" ? undefined : options.capacity,
     strategy: options.capacity === "unbounded" ? undefined : options.strategy
   });
@@ -12257,7 +12383,7 @@ var bufferArray = /* @__PURE__ */ dual(2, (self, options) => fromTransform(fnUnt
   }), onError2((cause) => failCause5(queue, cause)), forkIn2(scope3));
   return takeAll3(queue);
 })));
-var interruptWhen = /* @__PURE__ */ dual(2, (self, effect2) => merge4(self, fromPull(succeed6(flatMap5(effect2, done2))), {
+var interruptWhen = /* @__PURE__ */ dual(2, (self, effect2) => merge4(self, fromPull(succeed6(flatMap5(effect2, done3))), {
   haltStrategy: "either"
 }));
 var haltWhen = /* @__PURE__ */ dual(2, (self, effect2) => fromTransformBracket(fnUntraced2(function* (upstream, scope3, forkedScope) {
@@ -12269,7 +12395,7 @@ var haltWhen = /* @__PURE__ */ dual(2, (self, effect2) => fromTransformBracket(f
     const exit3 = fiber3.pollUnsafe();
     return exit3 === undefined ? pull : match5(exit3, {
       onFailure: failCause4,
-      onSuccess: done2
+      onSuccess: done3
     });
   });
 })));
@@ -12284,17 +12410,17 @@ var onFirst = /* @__PURE__ */ dual(2, (self, onFirst2) => transformPull(self, (p
   });
   return suspend3(() => isFirst ? pullFirst : pull);
 })));
-var onEnd = /* @__PURE__ */ dual(2, (self, onEnd2) => transformPull(self, (pull) => succeed6(catchDone(pull, (leftover) => flatMap5(onEnd2, () => done2(leftover))))));
+var onEnd = /* @__PURE__ */ dual(2, (self, onEnd2) => transformPull(self, (pull) => succeed6(catchDone(pull, (leftover) => flatMap5(onEnd2, () => done3(leftover))))));
 var ensuring3 = /* @__PURE__ */ dual(2, (self, finalizer) => onExit3(self, (_) => finalizer));
 var runWith = (self, f, onHalt) => suspend3(() => {
   const scope3 = makeUnsafe3();
-  const makePull = toTransform(self)(done2(), scope3);
+  const makePull = toTransform(self)(done3(), scope3);
   return catchDone(flatMap5(makePull, f), onHalt ? onHalt : succeed6).pipe(onExit2((exit3) => close(scope3, exit3)));
 });
 var provideContext3 = /* @__PURE__ */ dual(2, (self, context3) => fromTransform((upstream, scope3) => map8(provideContext2(toTransform(self)(upstream, scope3), context3), provideContext2(context3))));
 var provideService3 = /* @__PURE__ */ dual(3, (self, key, service3) => fromTransform((upstream, scope3) => map8(provideService2(toTransform(self)(upstream, scope3), key, service3), provideService2(key, service3))));
 var provideServiceEffect3 = /* @__PURE__ */ dual(3, (self, key, service3) => fromTransform((upstream, scope3) => flatMap5(service3, (s) => toTransform(provideService3(self, key, s))(upstream, scope3))));
-var provide5 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, layer, options) => isContext(layer) ? provideContext3(self, layer) : fromTransform((upstream, scope3) => flatMap5(options?.local ? buildWithMemoMap(layer, makeMemoMapUnsafe(), scope3) : buildWithScope(layer, scope3), (context3) => map8(provideContext2(toTransform(self)(upstream, scope3), context3), provideContext2(context3)))));
+var provide5 = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, layer3, options) => isContext(layer3) ? provideContext3(self, layer3) : fromTransform((upstream, scope3) => flatMap5(options?.local ? buildWithMemoMap(layer3, makeMemoMapUnsafe(), scope3) : buildWithScope(layer3, scope3), (context3) => map8(provideContext2(toTransform(self)(upstream, scope3), context3), provideContext2(context3)))));
 var updateContext3 = /* @__PURE__ */ dual(2, (self, f) => fromTransform((upstream, scope3) => contextWith2((context3) => {
   const toProvide = f(context3);
   return toTransform(provideContext3(self, toProvide))(upstream, scope3);
@@ -12320,7 +12446,7 @@ var runDrain = (self) => runWith(self, (pull) => forever4(pull, {
 var runForEach = /* @__PURE__ */ dual(2, (self, f) => runWith(self, (pull) => forever4(flatMap5(pull, f), {
   disableYield: true
 })));
-var runForEachWhile = /* @__PURE__ */ dual(2, (self, f) => runWith(self, (pull) => pull.pipe(flatMap5(f), flatMap5((cont) => cont ? void_5 : done2()), forever4({
+var runForEachWhile = /* @__PURE__ */ dual(2, (self, f) => runWith(self, (pull) => pull.pipe(flatMap5(f), flatMap5((cont) => cont ? void_5 : done3()), forever4({
   disableYield: true
 }))));
 var mkUint8Array = (self) => map8(runFold(self, () => ({
@@ -12349,7 +12475,7 @@ var runHead = (self) => suspend3(() => {
   let head = none2();
   return runWith(self, (pull) => pull.pipe(asSome2, flatMap5((head_) => {
     head = head_;
-    return done2();
+    return done3();
   })), () => succeed6(head));
 });
 var runLast = (self) => suspend3(() => {
@@ -12386,10 +12512,10 @@ var toPull2 = /* @__PURE__ */ fnUntraced2(function* (self) {
   const semaphore = makeUnsafe6(1);
   const context3 = yield* context2();
   const scope3 = get(context3, Scope);
-  const pull = yield* toTransform(self)(done2(), scope3);
+  const pull = yield* toTransform(self)(done3(), scope3);
   return pull.pipe(provideContext2(context3), semaphore.withPermits(1));
 }, /* @__PURE__ */ catchCause3((cause) => succeed6(failCause4(cause))));
-var toPullScoped = (self, scope3) => toTransform(self)(done2(), scope3);
+var toPullScoped = (self, scope3) => toTransform(self)(done3(), scope3);
 var runIntoQueueArray = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (self, queue) => uninterruptibleMask2((restore) => runForEach(self, (value2) => offerAll(queue, value2)).pipe(restore, exit2, flatMap5((exit3) => {
   if (isSuccess4(exit3)) {
     endUnsafe(queue);
@@ -12400,7 +12526,7 @@ var runIntoQueueArray = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), (se
 }))));
 var toQueueArray = /* @__PURE__ */ dual((args2) => isChannel(args2[0]), /* @__PURE__ */ fnUntraced2(function* (self, options) {
   const scope3 = yield* scope2;
-  const queue = yield* make14({
+  const queue = yield* make16({
     capacity: typeof options.capacity === "number" ? options.capacity : undefined,
     strategy: typeof options.capacity === "number" ? options.strategy : undefined
   });
@@ -12424,14 +12550,14 @@ var toPubSubTake = /* @__PURE__ */ dual(2, /* @__PURE__ */ fnUntraced2(function*
 }));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/stream.js
-var TypeId20 = "~effect/Stream";
+var TypeId21 = "~effect/Stream";
 var streamVariance = {
   _R: identity,
   _E: identity,
   _A: identity
 };
 var StreamProto = {
-  [TypeId20]: streamVariance,
+  [TypeId21]: streamVariance,
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -12443,7 +12569,7 @@ var fromChannel = (channel) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Sink.js
-var TypeId21 = "~effect/Sink";
+var TypeId22 = "~effect/Sink";
 var endVoid = /* @__PURE__ */ succeed6([undefined]);
 var sinkVariance = {
   _A: identity,
@@ -12453,12 +12579,12 @@ var sinkVariance = {
   _R: identity
 };
 var SinkProto = {
-  [TypeId21]: sinkVariance,
+  [TypeId22]: sinkVariance,
   pipe() {
     return pipeArguments(this, arguments);
   }
 };
-var isSink = (u) => hasProperty(u, TypeId21);
+var isSink = (u) => hasProperty(u, TypeId22);
 var fromChannel2 = (channel) => fromTransform2((upstream, scope3) => toTransform(channel)(upstream, scope3).pipe(flatMap5(forever4({
   disableYield: true
 })), catchDone(succeed6)));
@@ -12467,7 +12593,7 @@ var fromTransform2 = (transform) => {
   self.transform = transform;
   return self;
 };
-var toChannel = (self) => fromTransform((upstream, scope3) => succeed6(flatMap5(self.transform(upstream, scope3), done2)));
+var toChannel = (self) => fromTransform((upstream, scope3) => succeed6(flatMap5(self.transform(upstream, scope3), done3)));
 var fromEffectEnd = (effect2) => fromTransform2(() => effect2);
 var fail9 = (e) => fromEffectEnd(fail6(e));
 var drain2 = /* @__PURE__ */ fromTransform2((upstream) => catchDone(forever4(upstream, {
@@ -12483,7 +12609,7 @@ var take5 = (n) => fromTransform2((upstream) => {
     if (taken.length + arr.length <= n) {
       taken.push(...arr);
       if (taken.length === n) {
-        return done2();
+        return done3();
       }
       return void_5;
     }
@@ -12493,7 +12619,7 @@ var take5 = (n) => fromTransform2((upstream) => {
         if (i + 1 < arr.length) {
           leftover = arr.slice(i + 1);
         }
-        return done2();
+        return done3();
       }
     }
     return void_5;
@@ -12652,7 +12778,7 @@ __export(exports_Stream, {
   mapAccumArray: () => mapAccumArray,
   mapAccum: () => mapAccum3,
   map: () => map10,
-  make: () => make19,
+  make: () => make21,
   limitBytes: () => limitBytes,
   let: () => let_6,
   iterate: () => iterate,
@@ -12752,15 +12878,15 @@ __export(exports_Stream, {
   aggregateWithin: () => aggregateWithin,
   aggregate: () => aggregate,
   accumulate: () => accumulate,
-  TypeId: () => TypeId25,
+  TypeId: () => TypeId26,
   Do: () => Do5,
   DefaultChunkSize: () => DefaultChunkSize2
 });
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/MutableHashMap.js
-var TypeId22 = "~effect/collections/MutableHashMap";
+var TypeId23 = "~effect/collections/MutableHashMap";
 var MutableHashMapProto = {
-  [TypeId22]: TypeId22,
+  [TypeId23]: TypeId23,
   [Symbol.iterator]() {
     return this.backing[Symbol.iterator]();
   },
@@ -12881,9 +13007,9 @@ var clear3 = (self) => {
 var size4 = (self) => self.backing.size;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/RcMap.js
-var TypeId23 = "~effect/RcMap";
+var TypeId24 = "~effect/RcMap";
 var makeUnsafe7 = (options) => ({
-  [TypeId23]: TypeId23,
+  [TypeId24]: TypeId24,
   lookup: options.lookup,
   context: options.context,
   scope: options.scope,
@@ -12897,7 +13023,7 @@ var makeUnsafe7 = (options) => ({
     return pipeArguments(this, arguments);
   }
 });
-var make16 = (options) => withFiber2((fiber3) => {
+var make18 = (options) => withFiber2((fiber3) => {
   const context3 = fiber3.context;
   const scope3 = get(context3, Scope);
   const self = makeUnsafe7({
@@ -13000,7 +13126,7 @@ var touch = /* @__PURE__ */ dual(2, (self, key) => clockWith3((clock) => {
 }));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/rcRef.js
-var TypeId24 = "~effect/RcRef";
+var TypeId25 = "~effect/RcRef";
 var stateEmpty = {
   _tag: "Empty"
 };
@@ -13013,7 +13139,7 @@ var variance2 = {
 };
 
 class RcRefImpl {
-  [TypeId24] = variance2;
+  [TypeId25] = variance2;
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -13030,7 +13156,7 @@ class RcRefImpl {
     this.idleTimeToLive = idleTimeToLive;
   }
 }
-var make17 = (options) => withFiber2((fiber3) => {
+var make19 = (options) => withFiber2((fiber3) => {
   const context3 = fiber3.context;
   const scope3 = get(context3, Scope);
   const ref = new RcRefImpl(options.acquire, context3, scope3, options.idleTimeToLive ? fromInputUnsafe(options.idleTimeToLive) : undefined);
@@ -13120,19 +13246,19 @@ var invalidate = (self_) => {
 };
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/RcRef.js
-var make18 = make17;
+var make20 = make19;
 var get6 = get5;
 var invalidate2 = invalidate;
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Stream.js
-var TypeId25 = "~effect/Stream";
-var isStream = (u) => hasProperty(u, TypeId25);
+var TypeId26 = "~effect/Stream";
+var isStream = (u) => hasProperty(u, TypeId26);
 var DefaultChunkSize2 = DefaultChunkSize;
 var fromChannel3 = fromChannel;
 var fromEffect2 = (effect2) => fromChannel3(fromEffect(map8(effect2, of)));
 var service3 = (service4) => fromEffect2(service2(service4));
 var serviceOption3 = (service4) => fromEffect2(serviceOption2(service4));
-var fromEffectDrain2 = (effect2) => fromPull2(succeed6(flatMap5(effect2, () => done2())));
+var fromEffectDrain2 = (effect2) => fromPull2(succeed6(flatMap5(effect2, () => done3())));
 var fromEffectRepeat = (effect2) => fromPull2(succeed6(map8(effect2, of)));
 var fromEffectSchedule = (effect2, schedule3) => fromPull2(gen4(function* () {
   const step = yield* toStepWithMetadata(schedule3);
@@ -13169,7 +13295,7 @@ var toChannel2 = (stream) => stream.channel;
 var callback3 = (f, options) => fromChannel3(callbackArray(f, options));
 var empty9 = /* @__PURE__ */ fromChannel3(empty7);
 var succeed8 = (value2) => fromChannel3(succeed7(of(value2)));
-var make19 = (...values) => fromArray2(values);
+var make21 = (...values) => fromArray2(values);
 var sync5 = (evaluate2) => fromChannel3(sync4(() => of(evaluate2())));
 var suspend5 = (stream) => fromChannel3(suspend4(() => stream().channel));
 var fail10 = (error) => fromChannel3(fail8(error));
@@ -13189,7 +13315,7 @@ var fromPubSub = (pubsub) => fromChannel3(fromPubSubArray(pubsub));
 var fromPubSubTake2 = (pubsub) => fromChannel3(fromPubSubTake(pubsub));
 var fromReadableStream2 = (options) => fromChannel3(fromReadableStream(options));
 var fromAsyncIterable2 = (iterable, onError4) => fromChannel3(fromAsyncIterableArray(iterable, onError4));
-var fromSchedule = (schedule3) => fromPull2(map8(toStepWithSleep(schedule3), (step) => catchDone(map8(step(undefined), of), () => done2())));
+var fromSchedule = (schedule3) => fromPull2(map8(toStepWithSleep(schedule3), (step) => catchDone(map8(step(undefined), of), () => done3())));
 var fromSubscription = (pubsub) => fromChannel3(fromSubscriptionArray(pubsub));
 var fromEventListener = (target, type, options) => callback3((queue) => {
   function emit(event) {
@@ -13203,7 +13329,7 @@ var unfold = (s, f) => fromPull2(sync3(() => {
   let state = s;
   return flatMap5(suspend3(() => f(state)), (next) => {
     if (next === undefined)
-      return done2();
+      return done3();
     state = next[1];
     return succeed6(of(next[0]));
   });
@@ -13213,7 +13339,7 @@ var paginate = (s, f) => fromPull2(sync3(() => {
   let done4 = false;
   return suspend3(function loop() {
     if (done4)
-      return done2();
+      return done3();
     return flatMap5(f(state), ([a, s2]) => {
       if (isNone2(s2)) {
         done4 = true;
@@ -13233,7 +13359,7 @@ var range2 = (min5, max5, chunkSize = DefaultChunkSize) => min5 > max5 ? empty9 
   let done4 = false;
   return suspend3(() => {
     if (done4)
-      return done2();
+      return done3();
     const remaining2 = max5 - start + 1;
     if (remaining2 > size5) {
       const chunk2 = range(start, start + size5 - 1);
@@ -13277,7 +13403,7 @@ var tapSink = /* @__PURE__ */ dual(2, (self, sink) => transformPullBracket(self,
         upstreamLatch.closeUnsafe();
       return as3(sinkLatch.open, arr);
     }
-    return done2();
+    return done3();
   }));
   yield* suspend3(() => sink.transform(sinkUpstream, scope3)).pipe((eff) => onExitPrimitive2(eff, (exit3) => {
     sinkDone = true;
@@ -13295,7 +13421,7 @@ var tapSink = /* @__PURE__ */ dual(2, (self, sink) => transformPullBracket(self,
     streamDone = true;
     sinkLatch.closeUnsafe();
     upstreamLatch.openUnsafe();
-    return flatMap5(sinkLatch.await, () => done2());
+    return flatMap5(sinkLatch.await, () => done3());
   }));
   return suspend3(() => {
     if (causeSink) {
@@ -13549,10 +13675,10 @@ var partitionQueue = /* @__PURE__ */ dual((args2) => isStream(args2[0]), /* @__P
   const scope3 = yield* scope2;
   const pull = yield* toPullScoped(self.channel, scope3);
   const capacity2 = options?.capacity === "unbounded" ? undefined : options?.capacity ?? DefaultChunkSize2;
-  const passes = yield* make14({
+  const passes = yield* make16({
     capacity: capacity2
   });
-  const fails = yield* make14({
+  const fails = yield* make16({
     capacity: capacity2
   });
   yield* gen4(function* () {
@@ -13733,7 +13859,7 @@ var limitBytes = /* @__PURE__ */ dual(3, (self, bytes, onLimitReached) => suspen
     return true;
   }), suspend5(() => limitReached ? onLimitReached() : empty9));
 }));
-var takeRight = /* @__PURE__ */ dual(2, (self, n) => mapAccumArray(self, make12, (list, arr) => {
+var takeRight = /* @__PURE__ */ dual(2, (self, n) => mapAccumArray(self, make14, (list, arr) => {
   appendAll2(list, arr);
   if (list.length > n) {
     takeNVoid(list, list.length - n);
@@ -13747,12 +13873,12 @@ var takeRight = /* @__PURE__ */ dual(2, (self, n) => mapAccumArray(self, make12,
 var takeUntil = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, predicate, options) => transformPull2(self, (pull, _scope) => sync3(() => {
   let i = 0;
   let done4 = false;
-  const pump = flatMap5(suspend3(() => done4 ? done2() : pull), (chunk) => {
+  const pump = flatMap5(suspend3(() => done4 ? done3() : pull), (chunk) => {
     const index = chunk.findIndex((a) => predicate(a, i++));
     if (index >= 0) {
       done4 = true;
       const arr = chunk.slice(0, options?.excludeLast ? index : index + 1);
-      return isReadonlyArrayNonEmpty(arr) ? succeed6(arr) : done2();
+      return isReadonlyArrayNonEmpty(arr) ? succeed6(arr) : done3();
     }
     return succeed6(chunk);
   });
@@ -13763,13 +13889,13 @@ var takeUntilEffect = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self,
   let done4 = false;
   return gen4(function* () {
     if (done4)
-      return yield* done2();
+      return yield* done3();
     const chunk = yield* pull;
     for (let j = 0;j < chunk.length; j++) {
       if (yield* predicate(chunk[j], i++)) {
         done4 = true;
         const arr = chunk.slice(0, options?.excludeLast ? j : j + 1);
-        return isReadonlyArrayNonEmpty(arr) ? arr : yield* done2();
+        return isReadonlyArrayNonEmpty(arr) ? arr : yield* done3();
       }
     }
     return chunk;
@@ -13778,7 +13904,7 @@ var takeUntilEffect = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self,
 var takeWhile2 = /* @__PURE__ */ dual(2, (self, predicate) => transformPull2(self, (pull, _scope) => sync3(() => {
   let i = 0;
   let done4 = false;
-  const pump = flatMap5(suspend3(() => done4 ? done2() : pull), (chunk) => {
+  const pump = flatMap5(suspend3(() => done4 ? done3() : pull), (chunk) => {
     const out = [];
     for (let j = 0;j < chunk.length; j++) {
       if (!predicate(chunk[j], i++)) {
@@ -13787,13 +13913,13 @@ var takeWhile2 = /* @__PURE__ */ dual(2, (self, predicate) => transformPull2(sel
       }
       out.push(chunk[j]);
     }
-    return isReadonlyArrayNonEmpty(out) ? succeed6(out) : done4 ? done2() : pump;
+    return isReadonlyArrayNonEmpty(out) ? succeed6(out) : done4 ? done3() : pump;
   });
   return pump;
 })));
 var takeWhileFilter = /* @__PURE__ */ dual(2, (self, filter9) => transformPull2(self, (pull, _scope) => sync3(() => {
   let done4 = false;
-  const pump = flatMap5(suspend3(() => done4 ? done2() : pull), (chunk) => {
+  const pump = flatMap5(suspend3(() => done4 ? done3() : pull), (chunk) => {
     const out = [];
     for (let j = 0;j < chunk.length; j++) {
       const result4 = filter9(chunk[j]);
@@ -13803,7 +13929,7 @@ var takeWhileFilter = /* @__PURE__ */ dual(2, (self, filter9) => transformPull2(
       }
       out.push(result4.success);
     }
-    return isReadonlyArrayNonEmpty(out) ? succeed6(out) : done4 ? done2() : pump;
+    return isReadonlyArrayNonEmpty(out) ? succeed6(out) : done4 ? done3() : pump;
   });
   return pump;
 })));
@@ -13868,7 +13994,7 @@ var dropRight = /* @__PURE__ */ dual(2, (self, n) => {
   if (n <= 0)
     return self;
   return transformPull2(self, (pull, _scope) => sync3(() => {
-    const list = make12();
+    const list = make14();
     const emit = flatMap5(pull, (arr) => {
       appendAllUnsafe(list, arr);
       const toTake = list.length - n;
@@ -13888,7 +14014,7 @@ var rechunk = /* @__PURE__ */ dual(2, (self, target) => {
     let done4 = false;
     return suspend3(function loop() {
       if (done4)
-        return done2();
+        return done3();
       else if (current === undefined) {
         return flatMap5(pull, (arr) => {
           if (chunk.length === 0 && arr.length === target) {
@@ -13914,7 +14040,7 @@ var rechunk = /* @__PURE__ */ dual(2, (self, target) => {
       return loop();
     }).pipe(catchDone(() => {
       if (chunk.length === 0)
-        return done2();
+        return done3();
       const result4 = chunk;
       done4 = true;
       chunk = [];
@@ -13925,7 +14051,7 @@ var rechunk = /* @__PURE__ */ dual(2, (self, target) => {
 var sliding3 = /* @__PURE__ */ dual(2, (self, chunkSize) => slidingSize(self, chunkSize, 1));
 var slidingSize = /* @__PURE__ */ dual(3, (self, chunkSize, stepSize) => transformPull2(self, (upstream, _scope) => sync3(() => {
   let cause = null;
-  const list = make12();
+  const list = make14();
   let emitted = false;
   let skip = 0;
   const pull = matchCauseEffect2(upstream, {
@@ -14194,8 +14320,8 @@ var groupByImpl = (self, f, options) => transformPullBracket(self, fnUntraced2(f
   const out = yield* unbounded2();
   yield* addFinalizer2(scope3, shutdown2(out));
   const queueMap = empty8();
-  const queues = yield* make16({
-    lookup: (key) => acquireRelease2(make14({
+  const queues = yield* make18({
+    lookup: (key) => acquireRelease2(make16({
       capacity: options?.bufferSize ?? 4096
     }).pipe(tap5((queue) => {
       set2(queueMap, key, queue);
@@ -14241,11 +14367,11 @@ var groupAdjacentBy = /* @__PURE__ */ dual(2, (self, f) => transformPull2(self, 
     return loop;
   }));
   let done4 = false;
-  return catchDone(suspend3(() => done4 ? done2() : loop), () => {
+  return catchDone(suspend3(() => done4 ? done3() : loop), () => {
     done4 = true;
     const out = group;
     group = undefined;
-    return out && isArrayNonEmpty2(out) ? succeed6(of([currentKey, out])) : done2();
+    return out && isArrayNonEmpty2(out) ? succeed6(of([currentKey, out])) : done3();
   });
 })));
 var transduce = /* @__PURE__ */ dual(2, (self, sink) => transformPull2(self, (upstream, scope3) => sync3(() => {
@@ -14259,8 +14385,8 @@ var transduce = /* @__PURE__ */ dual(2, (self, sink) => transformPull2(self, (up
     }
     return upstream;
   }).pipe(catch_3((error) => {
-    done4 = fail5(error);
-    return done2();
+    done4 = fail4(error);
+    return done3();
   }));
   const pull = map8(suspend3(() => sink.transform(upstreamWithLeftover, scope3)), ([value2, leftover_]) => {
     leftover = leftover_;
@@ -14273,7 +14399,7 @@ var aggregateWithin = /* @__PURE__ */ dual(3, (self, sink, schedule4) => fromCha
   const pull = yield* toPullScoped(self.channel, _);
   const pullLatch = makeUnsafe5(false);
   const scheduleStep = Symbol();
-  const buffer3 = yield* make14({
+  const buffer3 = yield* make16({
     capacity: 0
   });
   yield* pull.pipe(pullLatch.whenOpen, flatMap5((arr) => {
@@ -14287,10 +14413,10 @@ var aggregateWithin = /* @__PURE__ */ dual(3, (self, sink, schedule4) => fromCha
   const stepLoop = suspend3(function loop() {
     return flatMap5(step(lastOutput), () => !sinkHasInput ? loop() : offer(buffer3, scheduleStep));
   });
-  const stepToBuffer = stepLoop.pipe(flatMap5(() => never2), catchDone(() => done2()));
+  const stepToBuffer = stepLoop.pipe(flatMap5(() => never2), catchDone(() => done3()));
   const pullFromBuffer = take3(buffer3).pipe(flatMap5((arr) => {
     if (arr === scheduleStep) {
-      return done2();
+      return done3();
     }
     sinkHasInput = true;
     return succeed6(arr);
@@ -14307,7 +14433,7 @@ var aggregateWithin = /* @__PURE__ */ dual(3, (self, sink, schedule4) => fromCha
   });
   const catchSinkHalt = flatMap5(([value2, leftover_]) => {
     if (!sinkHasInput && buffer3.state._tag === "Done")
-      return done2();
+      return done3();
     lastOutput = some3(value2);
     leftover = leftover_;
     return succeed6(of(value2));
@@ -14334,7 +14460,7 @@ var broadcastN = /* @__PURE__ */ dual(2, /* @__PURE__ */ fnUntraced2(function* (
 }));
 var makePubSub2 = (options) => acquireRelease2(options.capacity === "unbounded" ? unbounded(options) : options.strategy === "dropping" ? dropping(options) : options.strategy === "sliding" ? sliding(options) : bounded(options), shutdown);
 var broadcast = /* @__PURE__ */ dual(2, (self, options) => map8(toPubSubTake2(self, options), fromPubSubTake2));
-var share = /* @__PURE__ */ dual(2, (self, options) => map8(make18({
+var share = /* @__PURE__ */ dual(2, (self, options) => map8(make20({
   acquire: broadcast(self, options),
   idleTimeToLive: options.idleTimeToLive
 }), (ref) => unwrap4(get6(ref))));
@@ -14432,7 +14558,7 @@ var interleaveWith = /* @__PURE__ */ dual(3, (self, that, decider) => fromChanne
   return gen4(function* () {
     while (true) {
       if (leftDone && rightDone) {
-        return yield* done2();
+        return yield* done3();
       }
       const side = yield* pullDecider;
       if (side && leftDone)
@@ -14454,7 +14580,7 @@ var onStart2 = /* @__PURE__ */ dual(2, (self, onStart3) => fromChannel3(onStart(
 var onFirst2 = /* @__PURE__ */ dual(2, (self, onFirst3) => fromChannel3(onFirst(self.channel, (arr) => onFirst3(arr[0]))));
 var onEnd2 = /* @__PURE__ */ dual(2, (self, onEnd3) => fromChannel3(onEnd(self.channel, onEnd3)));
 var ensuring4 = /* @__PURE__ */ dual(2, (self, finalizer) => fromChannel3(ensuring3(self.channel, finalizer)));
-var provide6 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, layer, options) => fromChannel3(provide5(self.channel, layer, options)));
+var provide6 = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, layer3, options) => fromChannel3(provide5(self.channel, layer3, options)));
 var provideContext4 = /* @__PURE__ */ dual(2, (self, context3) => fromChannel3(provideContext3(self.channel, context3)));
 var provideService4 = /* @__PURE__ */ dual(3, (self, key, service4) => fromChannel3(provideService3(self.channel, key, service4)));
 var provideServiceEffect4 = /* @__PURE__ */ dual(3, (self, key, service4) => fromChannel3(provideServiceEffect3(self.channel, key, service4)));
@@ -14645,7 +14771,7 @@ var toAsyncIterableWith = /* @__PURE__ */ dual(2, (self, context3) => ({
         return close2(void_4);
       },
       async throw(error) {
-        await closeAndReportError(die3(error));
+        await closeAndReportError(die2(error));
         throw error;
       }
     };
@@ -14660,7 +14786,7 @@ var toQueue = /* @__PURE__ */ dual(2, (self, options) => toQueueArray(self.chann
 var runIntoQueue = /* @__PURE__ */ dual(2, (self, queue) => runIntoQueueArray(self.channel, queue));
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FileSystem.js
-var TypeId26 = "~effect/platform/FileSystem";
+var TypeId27 = "~effect/platform/FileSystem";
 var Size = (bytes) => typeof bytes === "bigint" ? bytes : BigInt(bytes);
 var KiB = (n) => Size(n * 1024);
 var MiB = (n) => Size(n * 1024 * 1024);
@@ -14670,9 +14796,9 @@ var bigint1024 = /* @__PURE__ */ BigInt(1024);
 var bigintPiB = bigint1024 * bigint1024 * bigint1024 * bigint1024 * bigint1024;
 var PiB = (n) => Size(BigInt(n) * bigintPiB);
 var FileSystem = /* @__PURE__ */ Service("effect/platform/FileSystem");
-var make20 = (impl) => FileSystem.of({
+var make22 = (impl) => FileSystem.of({
   ...impl,
-  [TypeId26]: TypeId26,
+  [TypeId27]: TypeId27,
   exists: (path) => pipe(impl.access(path), as3(true), catchTag3("PlatformError", (e) => e.reason._tag === "NotFound" ? succeed6(false) : fail6(e))),
   readFileString: (path, encoding) => flatMap5(impl.readFile(path), (_) => try_3({
     try: () => new TextDecoder(encoding).decode(_),
@@ -14696,11 +14822,11 @@ var make20 = (impl) => FileSystem.of({
     const readChunk = file.readAlloc(chunkSize);
     return fromPull2(succeed6(flatMap5(suspend3(() => {
       if (bytesToRead !== undefined && bytesToRead <= totalBytesRead) {
-        return done2();
+        return done3();
       }
       return bytesToRead !== undefined && bytesToRead - totalBytesRead < chunkSize ? file.readAlloc(bytesToRead - totalBytesRead) : readChunk;
     }), match({
-      onNone: () => done2(),
+      onNone: () => done3(),
       onSome: (buf) => {
         totalBytesRead += BigInt(buf.length);
         return succeed6(of(buf));
@@ -14729,7 +14855,7 @@ var notFound2 = (method, path) => systemError({
   pathOrDescriptor: path
 });
 var makeNoop = (fileSystem) => FileSystem.of({
-  [TypeId26]: TypeId26,
+  [TypeId27]: TypeId27,
   access(path) {
     return fail6(notFound2("access", path));
   },
@@ -14830,7 +14956,7 @@ class WatchBackend extends (/* @__PURE__ */ Service()("effect/platform/FileSyste
 }
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Path.js
-var TypeId27 = "~effect/platform/Path";
+var TypeId28 = "~effect/platform/Path";
 var Path = /* @__PURE__ */ Service("effect/Path");
 function normalizeStringPosix(path, allowAboveRoot) {
   let res = "";
@@ -15007,7 +15133,7 @@ function encodePathChars(filepath) {
   return filepath;
 }
 var posixImpl = /* @__PURE__ */ Path.of({
-  [TypeId27]: TypeId27,
+  [TypeId28]: TypeId28,
   resolve,
   normalize(path) {
     if (path.length === 0)
@@ -15347,16 +15473,16 @@ var toOption2 = (value2) => value2 === missing ? none2() : some3(value2);
 var fromOptionExit = (option3) => option3._tag === "None" ? missingExit : succeed9(option3.value);
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaIssue.js
-var TypeId28 = "~effect/SchemaIssue/Issue";
+var TypeId29 = "~effect/SchemaIssue/Issue";
 function isIssue(u) {
-  return hasProperty(u, TypeId28) && u[TypeId28] === TypeId28;
+  return hasProperty(u, TypeId29) && u[TypeId29] === TypeId29;
 }
 function hasInput(issue) {
   return Object.hasOwn(issue, "input");
 }
 
 class Base {
-  [TypeId28] = TypeId28;
+  [TypeId29] = TypeId29;
   constructor(input, options) {
     if (options?.reportInput === true && input !== missing) {
       this.input = input;
@@ -15718,7 +15844,7 @@ __export(exports_DateTime, {
   makeZonedFromString: () => makeZonedFromString2,
   makeZoned: () => makeZoned2,
   makeUnsafe: () => makeUnsafe8,
-  make: () => make21,
+  make: () => make23,
   layerCurrentZoneOffset: () => layerCurrentZoneOffset,
   layerCurrentZoneNamed: () => layerCurrentZoneNamed,
   layerCurrentZoneLocal: () => layerCurrentZoneLocal,
@@ -15774,7 +15900,7 @@ var makeUnsafe8 = makeUnsafe4;
 var fromEpochSeconds2 = fromEpochSeconds;
 var makeZonedUnsafe2 = makeZonedUnsafe;
 var makeZoned2 = makeZoned;
-var make21 = make9;
+var make23 = make9;
 var makeZonedFromString2 = makeZonedFromString;
 var now2 = now;
 var nowAsDate2 = nowAsDate;
@@ -16161,7 +16287,7 @@ function decodeBase642() {
   }, input, options)));
 }
 function decodeBase64String2() {
-  return transformOrFail((input, options) => match2(decodeBase64String(input), {
+  return transformOrFail((input, options) => match3(decodeBase64String(input), {
     onFailure: () => fail6(new InvalidValue({
       expected: "a valid Base64 string"
     }, input, options)),
@@ -16169,7 +16295,7 @@ function decodeBase64String2() {
   }));
 }
 function decodeBase64Url2() {
-  return transformOrFail((input, options) => match2(decodeBase64Url(input), {
+  return transformOrFail((input, options) => match3(decodeBase64Url(input), {
     onFailure: () => fail6(new InvalidValue({
       expected: "a valid Base64Url string"
     }, input, options)),
@@ -16177,7 +16303,7 @@ function decodeBase64Url2() {
   }));
 }
 function decodeBase64UrlString2() {
-  return transformOrFail((input, options) => match2(decodeBase64UrlString(input), {
+  return transformOrFail((input, options) => match3(decodeBase64UrlString(input), {
     onFailure: () => fail6(new InvalidValue({
       expected: "a valid Base64Url string"
     }, input, options)),
@@ -16185,7 +16311,7 @@ function decodeBase64UrlString2() {
   }));
 }
 function decodeHex2() {
-  return transformOrFail((input, options) => match2(decodeHex(input), {
+  return transformOrFail((input, options) => match3(decodeHex(input), {
     onFailure: () => fail6(new InvalidValue({
       expected: "a valid hexadecimal string"
     }, input, options)),
@@ -16193,7 +16319,7 @@ function decodeHex2() {
   }));
 }
 function decodeHexString2() {
-  return transformOrFail((input, options) => match2(decodeHexString(input), {
+  return transformOrFail((input, options) => match3(decodeHexString(input), {
     onFailure: () => fail6(new InvalidValue({
       expected: "a valid hexadecimal string"
     }, input, options)),
@@ -16216,7 +16342,7 @@ function decodeUriComponent() {
 }
 function dateTimeUtcFromInput() {
   return transformOrFail((input, options) => {
-    return match(make21(input), {
+    return match(make23(input), {
       onNone: () => fail6(new InvalidValue({
         message: "Invalid DateTime input"
       }, input, options)),
@@ -16339,9 +16465,9 @@ function collectBracketPathEntries(isLeaf) {
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/BigDecimal.js
 var FINITE_INT_REGEXP = /^[+-]?\d+$/;
-var TypeId29 = "~effect/BigDecimal";
+var TypeId30 = "~effect/BigDecimal";
 var BigDecimalProto = {
-  [TypeId29]: TypeId29,
+  [TypeId30]: TypeId30,
   [symbol]() {
     const normalized = normalize(this);
     return combine(hash(normalized.value), number(normalized.scale));
@@ -16366,8 +16492,8 @@ var BigDecimalProto = {
     return pipeArguments(this, arguments);
   }
 };
-var isBigDecimal = (u) => hasProperty(u, TypeId29);
-var make22 = (value2, scale) => {
+var isBigDecimal = (u) => hasProperty(u, TypeId30);
+var make24 = (value2, scale) => {
   const o = Object.create(BigDecimalProto);
   o.value = value2;
   o.scale = scale;
@@ -16377,7 +16503,7 @@ var makeNormalizedUnsafe = (value2, scale) => {
   if (value2 !== bigint04 && value2 % bigint102 === bigint04) {
     throw new RangeError("Value must be normalized");
   }
-  const o = make22(value2, scale);
+  const o = make24(value2, scale);
   o.normalized = o;
   return o;
 };
@@ -16412,10 +16538,10 @@ var normalize = (self) => {
 };
 var scale = /* @__PURE__ */ dual(2, (self, scale2) => {
   if (scale2 > self.scale) {
-    return make22(self.value * bigint102 ** BigInt(scale2 - self.scale), scale2);
+    return make24(self.value * bigint102 ** BigInt(scale2 - self.scale), scale2);
   }
   if (scale2 < self.scale) {
-    return make22(self.value / bigint102 ** BigInt(self.scale - scale2), scale2);
+    return make24(self.value / bigint102 ** BigInt(self.scale - scale2), scale2);
   }
   return self;
 });
@@ -16427,12 +16553,12 @@ var sum2 = /* @__PURE__ */ dual(2, (self, that) => {
     return that;
   }
   if (self.scale > that.scale) {
-    return make22(scale(that, self.scale).value + self.value, self.scale);
+    return make24(scale(that, self.scale).value + self.value, self.scale);
   }
   if (self.scale < that.scale) {
-    return make22(scale(self, that.scale).value + that.value, that.scale);
+    return make24(scale(self, that.scale).value + that.value, that.scale);
   }
-  return make22(self.value + that.value, self.scale);
+  return make24(self.value + that.value, self.scale);
 });
 var Order5 = /* @__PURE__ */ make4((self, that) => {
   const scmp = Number2(sign(self), sign(that));
@@ -16450,7 +16576,7 @@ var Order5 = /* @__PURE__ */ make4((self, that) => {
 var isLessThan5 = /* @__PURE__ */ isLessThan(Order5);
 var isGreaterThan5 = /* @__PURE__ */ isGreaterThan(Order5);
 var sign = (n) => n.value === bigint04 ? 0 : n.value < bigint04 ? -1 : 1;
-var abs2 = (n) => n.value < bigint04 ? make22(-n.value, n.scale) : n;
+var abs2 = (n) => n.value < bigint04 ? make24(-n.value, n.scale) : n;
 var Equivalence4 = /* @__PURE__ */ make3((self, that) => {
   if (self.scale > that.scale) {
     return scale(that, self.scale).value === self.value;
@@ -16498,7 +16624,7 @@ var fromString = (s) => {
   if (!Number.isSafeInteger(scale2)) {
     return none2();
   }
-  return some3(make22(BigInt(digits), scale2));
+  return some3(make24(BigInt(digits), scale2));
 };
 var format6 = (n) => {
   const normalized = normalize(n);
@@ -16549,19 +16675,19 @@ var truncate = /* @__PURE__ */ dual(isBigDecimalArgs, (self, scale2 = 0) => {
   if (self.scale <= scale2) {
     return self;
   }
-  return make22(self.value / bigint102 ** BigInt(self.scale - scale2), scale2);
+  return make24(self.value / bigint102 ** BigInt(self.scale - scale2), scale2);
 });
 var ceil = /* @__PURE__ */ dual(isBigDecimalArgs, (self, scale2 = 0) => {
   const truncated = truncate(self, scale2);
   if (isPositive2(self) && isLessThan5(truncated, self)) {
-    return sum2(truncated, make22(bigint12, scale2));
+    return sum2(truncated, make24(bigint12, scale2));
   }
   return truncated;
 });
 var floor = /* @__PURE__ */ dual(isBigDecimalArgs, (self, scale2 = 0) => {
   const truncated = truncate(self, scale2);
   if (isNegative2(self) && isGreaterThan5(truncated, self)) {
-    return sum2(truncated, make22(bigint_1, scale2));
+    return sum2(truncated, make24(bigint_1, scale2));
   }
   return truncated;
 });
@@ -16579,10 +16705,10 @@ class Middleware {
     return new Middleware(this.encode, this.decode);
   }
 }
-var TypeId30 = "~effect/SchemaTransformation/Transformation";
+var TypeId31 = "~effect/SchemaTransformation/Transformation";
 
 class Transformation {
-  [TypeId30] = TypeId30;
+  [TypeId31] = TypeId31;
   _tag = "Transformation";
   decode;
   encode;
@@ -16598,9 +16724,9 @@ class Transformation {
   }
 }
 function isTransformation(u) {
-  return hasProperty(u, TypeId30) && u[TypeId30] === TypeId30;
+  return hasProperty(u, TypeId31) && u[TypeId31] === TypeId31;
 }
-var make23 = (options) => {
+var make25 = (options) => {
   if (isTransformation(options)) {
     return options;
   }
@@ -16792,7 +16918,7 @@ var timeZoneFromString = /* @__PURE__ */ transformOrFail2({
 });
 var dateTimeUtcFromString = /* @__PURE__ */ transformOrFail2({
   decode: (s, options) => {
-    return match(make21(s), {
+    return match(make23(s), {
       onNone: () => fail6(new InvalidValue({
         expected: "a valid UTC DateTime string"
       }, s, options)),
@@ -16848,10 +16974,10 @@ class Context {
     this.annotations = annotations2;
   }
 }
-var TypeId31 = "~effect/Schema";
+var TypeId32 = "~effect/Schema";
 
 class Base2 {
-  [TypeId31] = TypeId31;
+  [TypeId32] = TypeId32;
   annotations;
   checks;
   encoding;
@@ -17385,7 +17511,7 @@ var parseArray = /* @__PURE__ */ iterateEager()({
         else
           s.issues = [issue];
       } else {
-        return fail5(new Composite(s.ast, [issue], s.input, s.options));
+        return fail4(new Composite(s.ast, [issue], s.input, s.options));
       }
     }
   }
@@ -17402,7 +17528,7 @@ var wrapPropertyKeyIssue = (s, ast, key, exit3) => {
   }
   const issue = getSchemaIssue(exit3.cause);
   if (issue === undefined) {
-    return failCause2(map6(exit3.cause, (issue2) => new Composite(ast, [new Pointer([key], issue2)], s.input, s.options)));
+    return failCause2(map7(exit3.cause, (issue2) => new Composite(ast, [new Pointer([key], issue2)], s.input, s.options)));
   }
   const pointer = new Pointer([key], issue);
   if (s.options.errors === "all") {
@@ -17411,7 +17537,7 @@ var wrapPropertyKeyIssue = (s, ast, key, exit3) => {
     else
       s.issues = [pointer];
   } else {
-    return fail5(new Composite(ast, [pointer], s.input, s.options));
+    return fail4(new Composite(ast, [pointer], s.input, s.options));
   }
 };
 var FINITE_PATTERN = "[+-]?\\d*\\.?\\d+(?:[Ee][+-]?\\d+)?";
@@ -17701,7 +17827,7 @@ var parseProperties = /* @__PURE__ */ iterateEager()({
           s.issues = [issue];
         return;
       } else {
-        return fail5(new Composite(s.ast, [issue], s.input, s.options));
+        return fail4(new Composite(s.ast, [issue], s.input, s.options));
       }
     }
   }
@@ -18055,7 +18181,7 @@ function failSingleUnionCandidate(ast, cause, input, options) {
   const issue = getSchemaIssue(cause);
   if (!issue)
     return failCause2(cause);
-  return fail5(new AnyOf(ast, [issue], input, options));
+  return fail4(new AnyOf(ast, [issue], input, options));
 }
 var parseUnion = /* @__PURE__ */ iterateEager()({
   onItem(s, ast) {
@@ -18075,7 +18201,7 @@ var parseUnion = /* @__PURE__ */ iterateEager()({
     } else {
       if (s.out && s.successes) {
         s.successes.push(candidate);
-        return fail5(new OneOf(s.ast, s.successes, s.input, s.options));
+        return fail4(new OneOf(s.ast, s.successes, s.input, s.options));
       }
       s.out = exit3;
       if (s.successes) {
@@ -18811,7 +18937,7 @@ var HandleProto = {
 var makeHandle = (params) => Object.setPrototypeOf({
   ...params
 }, HandleProto);
-var make24 = (spawn) => {
+var make26 = (spawn) => {
   const streamString = (command, options) => spawn(command).pipe(map8((handle) => decodeText(options?.includeStderr === true ? handle.all : handle.stdout)), unwrap4);
   const streamLines = (command, options) => splitLines2(streamString(command, options));
   return ChildProcessSpawner.of({
@@ -18828,7 +18954,7 @@ class ChildProcessSpawner extends (/* @__PURE__ */ Service()("effect/process/Chi
 }
 
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/process/ChildProcess.js
-var TypeId32 = "~effect/unstable/process/ChildProcess";
+var TypeId33 = "~effect/unstable/process/ChildProcess";
 var Proto4 = {
   .../* @__PURE__ */ Prototype2({
     label: "Command",
@@ -18836,7 +18962,7 @@ var Proto4 = {
       return getUnsafe(fiber3.context, ChildProcessSpawner).spawn(this);
     }
   }),
-  [TypeId32]: TypeId32
+  [TypeId33]: TypeId33
 };
 var makeStandardCommand = (command, args2, options) => Object.assign(Object.create(Proto4), {
   _tag: "StandardCommand",
@@ -18844,7 +18970,7 @@ var makeStandardCommand = (command, args2, options) => Object.assign(Object.crea
   args: args2,
   options
 });
-var make25 = function make26(...args2) {
+var make27 = function make28(...args2) {
   if (isTemplateString(args2[0])) {
     const [templates, ...expressions] = args2;
     const tokens = parseTemplates(templates, expressions);
@@ -19037,10 +19163,10 @@ var pullIntoWritable = (options) => options.pull.pipe(flatMap5((chunk) => {
   });
 })), options.endOnDone !== false ? catchDone((_) => {
   if ("closed" in options.writable && options.writable.closed) {
-    return done2(_);
+    return done3(_);
   }
   return callback2((resume) => {
-    options.writable.once("finish", () => resume(done2(_)));
+    options.writable.once("finish", () => resume(done3(_)));
     options.writable.end();
   });
 }) : identity);
@@ -19057,17 +19183,17 @@ var fromReadableChannel = (options) => fromTransform((_, scope3) => readableToPu
 var readableToPullUnsafe = (options) => {
   const readable = options.readable;
   const closeOnDone = options.closeOnDone ?? true;
-  const exit3 = options.exit ?? make11(undefined);
+  const exit3 = options.exit ?? make13(undefined);
   const latch = makeUnsafe5(false);
   function onReadable() {
     latch.openUnsafe();
   }
   function onError5(error) {
-    exit3.current = fail5(options.onError(error));
+    exit3.current = fail4(options.onError(error));
     latch.openUnsafe();
   }
   function onEnd3() {
-    exit3.current = fail5(Done2());
+    exit3.current = fail4(Done2());
     latch.openUnsafe();
   }
   readable.on("readable", onReadable);
@@ -19120,7 +19246,7 @@ var toPlatformError = (method, error, command) => {
 var taskkill = (childProcess, onExit5 = () => {}) => NodeChildProcess.execFile("taskkill", ["/pid", String(childProcess.pid), "/T", "/F"], {
   windowsHide: true
 }, onExit5);
-var make27 = /* @__PURE__ */ gen4(function* () {
+var make29 = /* @__PURE__ */ gen4(function* () {
   const fs = yield* FileSystem;
   const path = yield* Path;
   const resolveWorkingDirectory = fnUntraced2(function* (options) {
@@ -19412,7 +19538,7 @@ var make27 = /* @__PURE__ */ gen4(function* () {
           env,
           stdio
         }, process.platform)), fnUntraced2(function* ([childProcess2, exitSignal2]) {
-          const exited = yield* isDone3(exitSignal2);
+          const exited = yield* isDone2(exitSignal2);
           const killWithTimeout = withTimeout(childProcess2, cmd, cmd.options);
           if (exited) {
             const [code] = yield* _await(exitSignal2);
@@ -19455,7 +19581,7 @@ var make27 = /* @__PURE__ */ gen4(function* () {
           getInputFd,
           getOutputFd
         } = yield* setupAdditionalFds(cmd, childProcess, resolvedAdditionalFds);
-        const isRunning = map8(isDone3(exitSignal), (done4) => !done4);
+        const isRunning = map8(isDone2(exitSignal), (done4) => !done4);
         const exitCode = flatMap5(_await(exitSignal), ([code, signal]) => {
           if (isNotNull(code)) {
             return succeed6(ExitCode(code));
@@ -19495,7 +19621,7 @@ var make27 = /* @__PURE__ */ gen4(function* () {
           const sourceStream = unwrap4(succeed6(getSourceStream(handles[handles.length - 1], options.from)));
           const toOption3 = options.to ?? "stdin";
           if (toOption3 === "stdin") {
-            handles.push(yield* spawnCommand(make25(command.command, command.args, {
+            handles.push(yield* spawnCommand(make27(command.command, command.args, {
               ...command.options,
               stdin: {
                 ...stdinConfig,
@@ -19507,7 +19633,7 @@ var make27 = /* @__PURE__ */ gen4(function* () {
             if (isNotUndefined(fd)) {
               const fdName2 = fdName(fd);
               const existingFds = command.options.additionalFds ?? {};
-              handles.push(yield* spawnCommand(make25(command.command, command.args, {
+              handles.push(yield* spawnCommand(make27(command.command, command.args, {
                 ...command.options,
                 additionalFds: {
                   ...existingFds,
@@ -19518,7 +19644,7 @@ var make27 = /* @__PURE__ */ gen4(function* () {
                 }
               })));
             } else {
-              handles.push(yield* spawnCommand(make25(command.command, command.args, {
+              handles.push(yield* spawnCommand(make27(command.command, command.args, {
                 ...command.options,
                 stdin: {
                   ...stdinConfig,
@@ -19557,9 +19683,9 @@ var make27 = /* @__PURE__ */ gen4(function* () {
       }
     }
   });
-  return make24(spawnCommand);
+  return make26(spawnCommand);
 });
-var layer = /* @__PURE__ */ effect(ChildProcessSpawner, make27);
+var layer3 = /* @__PURE__ */ effect(ChildProcessSpawner, make29);
 var flattenCommand = (command) => {
   const commands = [];
   const pipeOptions = [];
@@ -19588,125 +19714,6 @@ var flattenCommand = (command) => {
     pipeOptions
   };
 };
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Crypto.js
-var exports_Crypto = {};
-__export(exports_Crypto, {
-  make: () => make28,
-  Crypto: () => Crypto
-});
-var TypeId33 = "~effect/platform/Crypto";
-var Crypto = /* @__PURE__ */ Service("effect/Crypto");
-var make28 = (impl) => {
-  const randomBytesUnsafe = impl.randomBytes;
-  const randomBytes = (size5) => map8(validateSize("randomBytes", size5), randomBytesUnsafe);
-  const readUint53 = (bytes) => (bytes[0] & 31) * 2 ** 48 + bytes[1] * 2 ** 40 + bytes[2] * 2 ** 32 + bytes[3] * 2 ** 24 + bytes[4] * 2 ** 16 + bytes[5] * 2 ** 8 + bytes[6];
-  const nextDoubleUnsafe = () => readUint53(randomBytesUnsafe(7)) / 2 ** 53;
-  const nextIntUnsafe = () => {
-    while (true) {
-      const bytes = randomBytesUnsafe(7);
-      const value2 = readUint53(bytes);
-      if ((bytes[0] & 32) === 0) {
-        return value2 + Number.MIN_SAFE_INTEGER;
-      }
-      if (value2 < Number.MAX_SAFE_INTEGER) {
-        return value2 + 1;
-      }
-    }
-  };
-  return Crypto.of({
-    [TypeId33]: TypeId33,
-    randomBytes,
-    nextDoubleUnsafe,
-    nextIntUnsafe,
-    digest: impl.digest,
-    random: sync3(() => nextDoubleUnsafe()),
-    randomBoolean: sync3(() => nextDoubleUnsafe() > 0.5),
-    randomInt: sync3(() => nextIntUnsafe()),
-    randomBetween: (min6, max6) => sync3(() => nextDoubleUnsafe() * (max6 - min6) + min6),
-    randomIntBetween(min6, max6, options) {
-      const extra = options?.halfOpen === true ? 0 : 1;
-      return sync3(() => {
-        const minInt = Math.ceil(min6);
-        const maxInt = Math.floor(max6);
-        return Math.floor(nextDoubleUnsafe() * (maxInt - minInt + extra)) + minInt;
-      });
-    },
-    randomShuffle: (elements) => sync3(() => {
-      const buffer3 = Array.from(elements);
-      for (let i = buffer3.length - 1;i >= 1; i = i - 1) {
-        const index = Math.min(i, Math.floor(nextDoubleUnsafe() * (i + 1)));
-        const value2 = buffer3[i];
-        buffer3[i] = buffer3[index];
-        buffer3[index] = value2;
-      }
-      return buffer3;
-    }),
-    randomUUIDv4: sync3(() => formatUUIDv4(randomBytesUnsafe(16))),
-    randomUUIDv7: clockWith3((clock) => succeed6(formatUUIDv7(clock.currentTimeMillisUnsafe(), randomBytesUnsafe(16))))
-  });
-};
-var validateSize = (method, size5) => Number.isSafeInteger(size5) && size5 >= 0 ? succeed6(size5) : fail6(badArgument({
-  module: "Crypto",
-  method,
-  description: "size must be a non-negative safe integer"
-}));
-var hex = (byte) => byte.toString(16).padStart(2, "0");
-var formatUUID = (bytes) => {
-  const segments = [bytes.subarray(0, 4), bytes.subarray(4, 6), bytes.subarray(6, 8), bytes.subarray(8, 10), bytes.subarray(10, 16)];
-  return segments.map((segment) => Array.from(segment, hex).join("")).join("-");
-};
-var formatUUIDv4 = (bytes) => {
-  bytes[6] = bytes[6] & 15 | 64;
-  bytes[8] = bytes[8] & 63 | 128;
-  return formatUUID(bytes);
-};
-var maxUUIDv7Timestamp = 2 ** 48 - 1;
-var formatUUIDv7 = (timestampMillis, bytes) => {
-  const timestamp = Math.min(Math.max(0, Math.trunc(timestampMillis)), maxUUIDv7Timestamp);
-  bytes[0] = Math.floor(timestamp / 2 ** 40);
-  bytes[1] = Math.floor(timestamp / 2 ** 32) & 255;
-  bytes[2] = Math.floor(timestamp / 2 ** 24) & 255;
-  bytes[3] = Math.floor(timestamp / 2 ** 16) & 255;
-  bytes[4] = Math.floor(timestamp / 2 ** 8) & 255;
-  bytes[5] = timestamp & 255;
-  bytes[6] = bytes[6] & 15 | 112;
-  bytes[8] = bytes[8] & 63 | 128;
-  return formatUUID(bytes);
-};
-
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeCrypto.js
-import * as NodeCrypto from "node:crypto";
-var toHashAlgorithm = (algorithm) => {
-  switch (algorithm) {
-    case "SHA-1":
-      return "sha1";
-    case "SHA-256":
-      return "sha256";
-    case "SHA-384":
-      return "sha384";
-    case "SHA-512":
-      return "sha512";
-  }
-};
-var digest = (algorithm, data) => try_3({
-  try: () => Uint8Array.from(NodeCrypto.createHash(toHashAlgorithm(algorithm)).update(data).digest()),
-  catch: (cause) => systemError({
-    module: "Crypto",
-    method: "digest",
-    _tag: "Unknown",
-    description: "Could not compute digest",
-    cause
-  })
-});
-var make29 = /* @__PURE__ */ make28({
-  randomBytes: NodeCrypto.randomBytes,
-  digest
-});
-var layer2 = /* @__PURE__ */ succeed5(Crypto, make29);
-
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeCrypto.js
-var layer3 = layer2;
 
 // node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeFileSystem.js
 import * as Crypto2 from "node:crypto";
@@ -20031,7 +20038,7 @@ var watchNode = (path, options) => callback3((queue) => acquireRelease2(sync3(()
     }
   });
   watcher.on("error", (error) => {
-    failCauseUnsafe(queue, fail4(systemError({
+    failCauseUnsafe(queue, fail5(systemError({
       module: "FileSystem",
       _tag: "Unknown",
       method: "watch",
@@ -20062,7 +20069,7 @@ var writeFile2 = (path, data, options) => callback2((resume, signal) => {
     resume(fail6(handleBadArgument("writeFile")(err)));
   }
 });
-var makeFileSystem = /* @__PURE__ */ map8(/* @__PURE__ */ serviceOption2(WatchBackend), (backend) => make20({
+var makeFileSystem = /* @__PURE__ */ map8(/* @__PURE__ */ serviceOption2(WatchBackend), (backend) => make22({
   access: access2,
   chmod: chmod2,
   chown: chown2,
@@ -20122,17 +20129,17 @@ var fileUrlOps = (windows) => ({
   })
 });
 var layerPosix = /* @__PURE__ */ succeed5(Path)({
-  [TypeId27]: TypeId27,
+  [TypeId28]: TypeId28,
   ...NodePath.posix,
   .../* @__PURE__ */ fileUrlOps(false)
 });
 var layerWin32 = /* @__PURE__ */ succeed5(Path)({
-  [TypeId27]: TypeId27,
+  [TypeId28]: TypeId28,
   ...NodePath.win32,
   .../* @__PURE__ */ fileUrlOps(true)
 });
 var layer6 = /* @__PURE__ */ succeed5(Path)({
-  [TypeId27]: TypeId27,
+  [TypeId28]: TypeId28,
   ...NodePath,
   .../* @__PURE__ */ fileUrlOps(undefined)
 });
@@ -21549,7 +21556,7 @@ function makeParser(ast, compile, compileConstructorDefault2, constructorDefault
       const local = parseLocal(value2, options);
       return local === sameExit ? result4 : local;
     }
-    result4 = catchCause3(result4, (cause) => failCauseSync2(() => map6(cause, (issue) => new Encoding(ast, issue, input, options))));
+    result4 = catchCause3(result4, (cause) => failCauseSync2(() => map7(cause, (issue) => new Encoding(ast, issue, input, options))));
     return flatMapEager2(result4, (value2) => {
       const local = parseLocal(value2, options);
       return local === sameExit ? succeed9(value2) : local;
@@ -24261,7 +24268,7 @@ function decodeUnknownEffect2(schema, options) {
   };
 }
 function fromIssueEffect(self) {
-  return catchCause3(self, (cause) => failCauseSync2(() => map6(cause, (issue) => new SchemaError(issue))));
+  return catchCause3(self, (cause) => failCauseSync2(() => map7(cause, (issue) => new SchemaError(issue))));
 }
 var decodeEffect2 = decodeUnknownEffect2;
 function getSchemaErrorOrThrow(cause, message) {
@@ -24303,7 +24310,7 @@ function decodeUnknownExit2(schema, options) {
   };
 }
 function fromIssueExit(exit3) {
-  return isSuccess4(exit3) ? exit3 : failCause2(map6(exit3.cause, (issue) => new SchemaError(issue)));
+  return isSuccess4(exit3) ? exit3 : failCause2(map7(exit3.cause, (issue) => new SchemaError(issue)));
 }
 var decodeExit = decodeUnknownExit2;
 var decodeUnknownOption2 = decodeUnknownOption;
@@ -24652,7 +24659,7 @@ function catchEncodingWithContext(f) {
 }
 function decodeTo2(to, transformation) {
   return (from) => {
-    return make37(decodeTo(from.ast, to.ast, transformation ? make23(transformation) : passthrough3()), {
+    return make37(decodeTo(from.ast, to.ast, transformation ? make25(transformation) : passthrough3()), {
       from,
       to
     });
@@ -24679,7 +24686,7 @@ function withConstructorDefault2(defaultValue) {
   });
 }
 function toIssueEffect(self) {
-  return catchCause3(self, (cause) => failCauseSync2(() => map6(cause, (error) => error.issue)));
+  return catchCause3(self, (cause) => failCauseSync2(() => map7(cause, (error) => error.issue)));
 }
 function withDecodingDefaultKey(defaultValue, options) {
   const encode2 = options?.encodingStrategy === "omit" ? omit2() : passthrough2();
@@ -24808,7 +24815,7 @@ function instanceOf(constructor, annotations2) {
 }
 function link3() {
   return (encodeTo2, transformation) => {
-    return new Link(encodeTo2.ast, make23(transformation));
+    return new Link(encodeTo2.ast, make25(transformation));
   };
 }
 var makeFilter2 = makeFilter;
@@ -26284,7 +26291,7 @@ function Result(success, failure) {
       return withRecursion(fc, ctx, terminal, arbitrary);
     },
     toEquivalence: ([success2, failure2]) => makeEquivalence2(success2, failure2),
-    toFormatter: ([success2, failure2]) => match2({
+    toFormatter: ([success2, failure2]) => match3({
       onSuccess: (t) => `success(${success2(t)})`,
       onFailure: (t) => `failure(${failure2(t)})`
     })
@@ -26549,7 +26556,7 @@ var CauseReviver = /* @__PURE__ */ makeDeclarationReviver("effect/schema/Cause",
 function causeToArbitrary(error, defect) {
   return (fc, ctx) => {
     const reason = causeReasonToArbitrary(error, defect)(fc, ctx);
-    const terminal = fc.constant(empty4);
+    const terminal = fc.constant(empty5);
     const arbitrary = fc.array(reason.arbitrary).map(fromReasons);
     return withRecursion(fc, ctx, terminal, arbitrary);
   };
@@ -27248,14 +27255,14 @@ var BigDecimal = /* @__PURE__ */ declare(isBigDecimal, {
       return fc.tuple(fc.bigInt(), fc.integer({
         min: 0,
         max: bigDecimalDefaultMaxScale
-      })).map(([value4, scale2]) => make22(value4, scale2));
+      })).map(([value4, scale2]) => make24(value4, scale2));
     }
     return fc.integer(bigDecimalScaleConstraints(ordered)).chain((scale2) => {
       const constraints = bigDecimalValueConstraintsAtScale(ordered, scale2);
       if (constraints === undefined) {
         throw new globalThis.Error(bigDecimalInvalidOrderedConstraintsError);
       }
-      return fc.bigInt(constraints).map((value4) => make22(value4, scale2));
+      return fc.bigInt(constraints).map((value4) => make24(value4, scale2));
     });
   },
   toFormatter: () => (bd) => format6(bd),
@@ -27287,7 +27294,7 @@ var File = /* @__PURE__ */ instanceOf(globalThis.File, {
     name: String6,
     lastModified: Int
   }), transformOrFail2({
-    decode: (e, options) => match2(decodeBase64(e.data), {
+    decode: (e, options) => match3(decodeBase64(e.data), {
       onFailure: () => fail6(new InvalidValue({
         expected: "a valid Base64 string"
       }, e.data, options)),
@@ -28259,7 +28266,7 @@ function toIsoFocus(_) {
 function overrideToCodecIso(to, transformation) {
   return (schema) => {
     return make37(annotate2(schema.ast, {
-      toCodecIso: () => new Link(to.ast, make23(transformation))
+      toCodecIso: () => new Link(to.ast, make25(transformation))
     }), {
       schema
     });
@@ -28332,7 +28339,7 @@ import * as readline from "node:readline";
 var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQuit) {
   const stdin = process.stdin;
   const stdout = process.stdout;
-  const lines = yield* make14();
+  const lines = yield* make16();
   let inputEnded = stdin.readableEnded;
   let readlineActive = false;
   const onStdinEnd = () => {
@@ -28343,7 +28350,7 @@ var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQu
   };
   stdin.once("end", onStdinEnd);
   yield* addFinalizer3(() => sync3(() => stdin.off("end", onStdinEnd)));
-  const rlRef = yield* make18({
+  const rlRef = yield* make20({
     acquire: acquireRelease2(sync3(() => {
       const rl = readline.createInterface({
         input: stdin,
@@ -28387,7 +28394,7 @@ var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQu
   const columns = sync3(() => stdout.columns ?? 0);
   const rows = sync3(() => stdout.rows ?? 0);
   const readInput = gen4(function* () {
-    const queue = yield* make14();
+    const queue = yield* make16();
     const handleKeypress = (s, k) => {
       const userInput = {
         input: fromUndefinedOr(s),
@@ -28451,7 +28458,7 @@ function defaultShouldQuit(input) {
 var layer11 = layer10;
 
 // node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeServices.js
-var layer12 = /* @__PURE__ */ provideMerge(layer, /* @__PURE__ */ mergeAll2(layer5, layer3, layer7, layer9, layer11));
+var layer12 = /* @__PURE__ */ provideMerge(layer3, /* @__PURE__ */ mergeAll2(layer5, layer2, layer7, layer9, layer11));
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Config.js
 var exports_Config = {};
 __export(exports_Config, {
@@ -29315,7 +29322,7 @@ var RefProto = {
 };
 var makeUnsafe9 = (value4) => {
   const self = Object.create(RefProto);
-  self.ref = make11(value4);
+  self.ref = make13(value4);
   return self;
 };
 var make44 = (value4) => sync3(() => makeUnsafe9(value4));
@@ -29598,14 +29605,24 @@ class CompactionPerformed extends exports_Schema.TaggedClass()("CompactionPerfor
 }) {
 }
 var ExhaustedLimit = exports_Schema.Literals(["tokens", "tool-calls", "turns"]);
+var CompletionMetadata = exports_Schema.Struct({
+  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
+  exhausted: exports_Schema.optionalKey(ExhaustedLimit)
+}).check(exports_Schema.makeFilter((completion) => {
+  const isBudgetExhausted = completion.finishReason === "budget-exhausted";
+  const hasExhaustedLimit = completion.exhausted !== undefined;
+  return isBudgetExhausted === hasExhaustedLimit ? undefined : {
+    path: ["exhausted"],
+    issue: 'exhausted must be present exactly when finishReason is "budget-exhausted"'
+  };
+}));
 
-class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", {
+class RunCompleted extends exports_Schema.TaggedClass()("RunCompleted", CompletionMetadata.mapFields((fields) => ({
   ...RunEventBase,
   output: exports_Schema.Json,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-  exhausted: exports_Schema.optionalKey(ExhaustedLimit)
-}) {
+  ...fields
+}), { unsafePreserveChecks: true })) {
 }
 
 class RunFailed extends exports_Schema.TaggedClass()("RunFailed", {
@@ -29650,12 +29667,11 @@ class SubagentProgress extends exports_Schema.TaggedClass()("SubagentProgress", 
 }) {
 }
 
-class SubagentCompleted extends exports_Schema.TaggedClass()("SubagentCompleted", {
+class SubagentCompleted extends exports_Schema.TaggedClass()("SubagentCompleted", CompletionMetadata.mapFields((fields) => ({
   ...SubagentEventBase,
   turns: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
-  finishReason: exports_Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
-  exhausted: exports_Schema.optionalKey(ExhaustedLimit)
-}) {
+  ...fields
+}), { unsafePreserveChecks: true })) {
 }
 
 class SubagentFailed extends exports_Schema.TaggedClass()("SubagentFailed", {
@@ -29864,11 +29880,15 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
 }
 // packages/core/src/services.ts
 class IdGenerator extends exports_Context.Service()("@effect-agent/core/IdGenerator") {
-  static layer = exports_Layer.succeed(IdGenerator, {
-    nextConversationId: exports_Effect.sync(() => `conversation-${crypto.randomUUID()}`).pipe(exports_Effect.map(exports_Schema.decodeSync(ConversationId))),
-    nextRunId: exports_Effect.sync(() => `run-${crypto.randomUUID()}`).pipe(exports_Effect.map(exports_Schema.decodeSync(RunId))),
-    nextTurnId: exports_Effect.sync(() => `turn-${crypto.randomUUID()}`).pipe(exports_Effect.map(exports_Schema.decodeSync(TurnId)))
-  });
+  static layer = exports_Layer.effect(IdGenerator, exports_Effect.gen(function* () {
+    const crypto2 = yield* exports_Crypto.Crypto;
+    const randomUuid = crypto2.randomUUIDv4.pipe(exports_Effect.orDie);
+    return {
+      nextConversationId: randomUuid.pipe(exports_Effect.map((uuid) => exports_Schema.decodeSync(ConversationId)(`conversation-${uuid}`))),
+      nextRunId: randomUuid.pipe(exports_Effect.map((uuid) => exports_Schema.decodeSync(RunId)(`run-${uuid}`))),
+      nextTurnId: randomUuid.pipe(exports_Effect.map((uuid) => exports_Schema.decodeSync(TurnId)(`turn-${uuid}`)))
+    };
+  }));
 }
 // packages/capabilities/src/redaction.ts
 var MAX_REDACTED_PREVIEW_BYTES = 8 * 1024;
@@ -31963,7 +31983,7 @@ var Proto10 = {
             description: cause.message
           })
         })));
-        const queue = yield* make14();
+        const queue = yield* make16();
         const context3 = {
           toolCallId,
           preliminary: (result4) => asVoid4(offer(queue, {
@@ -32559,13 +32579,13 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }
     const ResponseSchema = NonEmptyArray(StreamPart(toolkit));
     const decodeParts = decodeEffect2(ResponseSchema);
-    const queue = yield* make14();
+    const queue = yield* make16();
     const deferredFinishParts = [];
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
     const toolCallFibers = yield* make46();
-    const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make15(concurrency);
+    const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make17(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
       if (!tool)
@@ -33170,6 +33190,55 @@ var EmptyParams = /* @__PURE__ */ Record(String6, Never2);
 function isEmptyParamsRecord(indexSignature) {
   return indexSignature.parameter === string2 && isNever2(indexSignature.type);
 }
+// packages/engine/src/safe-diagnostic-internal.ts
+var SAFE_DIAGNOSTIC_MESSAGE_LIMIT = 2048;
+var SAFE_DIAGNOSTIC_TAG_LIMIT = 128;
+var MessageProjection = exports_Schema.Struct({ message: exports_Schema.String });
+var TagProjection = exports_Schema.Struct({
+  _tag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(SAFE_DIAGNOSTIC_TAG_LIMIT))
+});
+var decodeMessageTotal = (value4) => {
+  try {
+    return exports_Option.getOrUndefined(exports_Schema.decodeUnknownOption(MessageProjection)(value4));
+  } catch {
+    return;
+  }
+};
+var decodeTagTotal = (value4) => {
+  try {
+    return exports_Option.getOrUndefined(exports_Schema.decodeUnknownOption(TagProjection)(value4));
+  } catch {
+    return;
+  }
+};
+var primitiveMessage = (value4) => {
+  if (value4 === null)
+    return "null";
+  if (value4 === undefined)
+    return "undefined";
+  if (exports_Predicate.isString(value4))
+    return value4;
+  if (exports_Predicate.isNumber(value4) || exports_Predicate.isBoolean(value4) || exports_Predicate.isBigInt(value4)) {
+    return `${value4}`;
+  }
+  if (exports_Predicate.isSymbol(value4)) {
+    try {
+      return String(value4);
+    } catch {
+      return "Unknown failure";
+    }
+  }
+  return "Unknown failure";
+};
+var safeDiagnostic = (value4) => {
+  const projectedMessage = decodeMessageTotal(value4)?.message;
+  const projectedTag = decodeTagTotal(value4)?._tag;
+  return {
+    errorTag: projectedTag ?? "UnknownError",
+    message: (projectedMessage ?? primitiveMessage(value4)).slice(0, SAFE_DIAGNOSTIC_MESSAGE_LIMIT)
+  };
+};
+
 // packages/engine/src/output-contract-internal.ts
 var contractDirective = "Final output contract: when the task is complete, the final assistant message must be only " + "JSON that is valid against this JSON Schema — no prose, no Markdown code fences, nothing " + "before or after the JSON.";
 var outputSchemaContract = (definition) => {
@@ -33184,7 +33253,7 @@ ${JSON.stringify(jsonSchema, undefined, 2)}`
   } catch (cause) {
     return {
       _tag: "unrenderable",
-      reason: cause instanceof Error ? cause.message : String(cause)
+      reason: safeDiagnostic(cause).message
     };
   }
 };
@@ -33935,6 +34004,8 @@ ${previousSummary}`;
 // packages/engine/src/durable-step.ts
 var ToolExecutionClass = exports_Context.Reference("@effect-agent/engine/ToolExecutionClass", { defaultValue: () => "uncertain" });
 var getToolExecutionClass = (tool) => exports_Context.get(tool.annotations, ToolExecutionClass);
+var ToolExecutionKind = exports_Context.Reference("@effect-agent/engine/ToolExecutionKind", { defaultValue: () => "application" });
+var getToolExecutionKind = (tool) => exports_Context.get(tool.annotations, ToolExecutionKind);
 
 class DurableStepError extends exports_Schema.TaggedError()("DurableStepError", {
   stepName: exports_Schema.String,
@@ -34421,7 +34492,8 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
           toolCallId: call.toolCallId,
           toolName: call.name,
           parameters: call.nativeHandlerParams,
-          executionClass
+          executionClass,
+          executionKind: getToolExecutionKind(call.tool)
         }
       ];
     });
@@ -34473,7 +34545,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
     }).pipe(exports_Stream.provideService(DurableStep, stepServiceFor(call)), exports_Stream.provideService(ToolBroker, brokerFor(call).service), exports_Stream.ensuring(exports_Effect.sync(() => brokerFor(call).close()))))), { concurrency: "unbounded" });
     return stream.pipe(exports_Stream.concat(next2));
   }, exports_Stream.empty);
-  const sinkQueue = yield* exports_Queue.unbounded();
+  const sinkQueue = yield* exports_Queue.bounded(256);
   const batchSink = {
     emit: (payload) => exports_Queue.offer(sinkQueue, payload).pipe(exports_Effect.flatMap((accepted) => accepted ? exports_Effect.void : exports_Effect.fail(RunEventSinkClosedError.make({
       message: `Subagent event ${payload._tag} was emitted after its Tool batch settled`
@@ -34507,16 +34579,8 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
   })).pipe(exports_Stream.drain)));
   return approvalPreflight.pipe(exports_Stream.concat(preparation), exports_Stream.concat(settled));
 }));
-var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
-var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
-var errorMessage = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorMessage)(error2), {
-  onNone: () => String(error2),
-  onSome: ({ message }) => message
-});
-var errorTag = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorTag)(error2), {
-  onNone: () => "UnknownError",
-  onSome: ({ _tag }) => _tag
-});
+var errorMessage = (error2) => safeDiagnostic(error2).message;
+var errorTag = (error2) => safeDiagnostic(error2).errorTag;
 var schedulingConcurrency = (configured, scheduling) => {
   const override = scheduling?.runOverride;
   if (override === undefined) {
@@ -35152,7 +35216,8 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
           toolCallId,
           toolName: part.name,
           parameters,
-          executionClass: getToolExecutionClass(tool)
+          executionClass: getToolExecutionClass(tool),
+          executionKind: getToolExecutionKind(tool)
         });
       }
       const declared = ToolCallDeclared.make({
@@ -35704,7 +35769,8 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
       toolCallId,
       toolName: call.name,
       parameters,
-      executionClass: getToolExecutionClass(tool)
+      executionClass: getToolExecutionClass(tool),
+      executionKind: getToolExecutionKind(tool)
     });
   }
   const settledIds = new Set;
@@ -35934,14 +36000,28 @@ var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, optio
   yield* exports_Scope.Scope;
   return yield* reduceRunEvents(agent2, stream(agent2, input, options));
 });
+var MAX_DETACHED_RUN_EVENTS = 4096;
+
+class RunEventBufferOverflow extends exports_Schema.TaggedError()("RunEventBufferOverflow", {
+  maxEvents: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
+  message: exports_Schema.String
+}) {
+}
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options = {}) {
   yield* exports_Scope.Scope;
   const captured = [];
-  const pubsub = yield* exports_PubSub.unbounded({
-    replay: Number.MAX_SAFE_INTEGER
+  const pubsub = yield* exports_PubSub.bounded({
+    capacity: MAX_DETACHED_RUN_EVENTS + 1,
+    replay: MAX_DETACHED_RUN_EVENTS + 1
   });
   yield* exports_Effect.addFinalizer(() => exports_PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(agent2, stream(agent2, input, options).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
+    if (captured.length >= MAX_DETACHED_RUN_EVENTS) {
+      return exports_Effect.fail(RunEventBufferOverflow.make({
+        maxEvents: MAX_DETACHED_RUN_EVENTS,
+        message: `Detached Run exceeded its ${MAX_DETACHED_RUN_EVENTS} semantic event replay limit`
+      }));
+    }
     captured.push(event);
     return exports_PubSub.publish(pubsub, [event]);
   })))).pipe(exports_Effect.ensuring(exports_PubSub.publish(pubsub, exports_Exit.void)));
@@ -36378,7 +36458,6 @@ var makeAgentSpawner = (parent, depth) => ({
   spawn: spawnWithParent(parent, depth)
 });
 var AgentRuntime = {
-  layer: exports_Layer.empty,
   run: run4,
   start,
   stream
@@ -37112,6 +37191,7 @@ var makeRunCommandQueue = exports_Effect.fn("makeRunCommandQueue")(function* (ru
 });
 // packages/capabilities/src/context.ts
 var MAX_CONTEXT_MESSAGES = 1024;
+var MAX_CONTEXT_MESSAGE_CHARACTERS = 64 * 1024;
 var MAX_CONTEXT_MESSAGE_BYTES = 4 * 1024 * 1024;
 var MAX_SOURCE_SEQUENCES = 1024;
 var MAX_RETAINED_FACTS = 256;
@@ -37268,6 +37348,12 @@ var toRunApprovalHook = (policy2) => ({
       message: `Approval adapter policy is invalid: ${error2.message}`
     })));
     const now3 = yield* exports_Clock.currentTimeMillis;
+    const expiresAt = exports_DateTime.make(now3 + validatedPolicy.expiresInMillis);
+    if (exports_Option.isNone(expiresAt)) {
+      return yield* ApprovalAdapterError.make({
+        message: "Approval adapter policy produces a deadline outside the supported date range"
+      });
+    }
     const metadata = yield* exports_Effect.try({
       try: () => ({
         actionSummary: policy2.actionSummary(engineRequest),
@@ -37286,7 +37372,7 @@ var toRunApprovalHook = (policy2) => ({
       actionSummary: metadata.actionSummary,
       resourceTargets: metadata.resourceTargets,
       risk: validatedPolicy.risk,
-      expiresAt: exports_DateTime.formatIso(exports_DateTime.toUtc(exports_DateTime.makeUnsafe(now3 + validatedPolicy.expiresInMillis))),
+      expiresAt: exports_DateTime.formatIso(exports_DateTime.toUtc(expiresAt.value)),
       denial: validatedPolicy.denial
     }).pipe(exports_Effect.mapError((error2) => ApprovalAdapterError.make({
       message: `Approval adapter policy is invalid: ${error2.message}`
@@ -37843,7 +37929,7 @@ class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2(
 }))) {
 }
 
-class Tool2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
+class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -37856,7 +37942,7 @@ class Tool2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
 
 class ListToolsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListToolsResult")({
   ...PaginatedResultMeta.fields,
-  tools: /* @__PURE__ */ ArraySchema(Tool2)
+  tools: /* @__PURE__ */ ArraySchema(Tool)
 })) {
 }
 class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallToolResult")({
@@ -38028,7 +38114,7 @@ class McpToolkitMismatch extends exports_Schema.TaggedError()("McpToolkitMismatc
 class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpDiscovery")({
   identity: McpServerIdentity,
   capabilities: ServerCapabilities,
-  tools: exports_Schema.Array(Tool2).check(exports_Schema.isMaxLength(MAX_MCP_TOOLS)),
+  tools: exports_Schema.Array(Tool).check(exports_Schema.isMaxLength(MAX_MCP_TOOLS)),
   encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
   toolkitSchemaDigest: Sha256Digest
 }) {
@@ -38141,7 +38227,7 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
   const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Struct({
     identity: McpServerIdentity,
     capabilities: ServerCapabilities,
-    tools: exports_Schema.Array(Tool2)
+    tools: exports_Schema.Array(Tool)
   }))({
     identity: server.identity,
     capabilities: server.capabilities,
@@ -38763,7 +38849,7 @@ var define = (name, options) => {
     ]),
     needsApproval: options.needsApproval
   });
-  const tool = (failureMode === "return" ? returnModeTool : errorModeTool).addDependency(AgentSpawner).addDependency(RunEventSink).addDependency(SubagentDurability).addDependency(IdGenerator);
+  const tool = (failureMode === "return" ? returnModeTool : errorModeTool).annotate(ToolExecutionKind, "delegation").addDependency(AgentSpawner).addDependency(RunEventSink).addDependency(SubagentDurability).addDependency(IdGenerator);
   return Object.freeze({
     ...options,
     name,
@@ -38806,13 +38892,13 @@ class SubagentDurableAccounting extends exports_Schema.Class("@effect-agent/capa
 }
 var maxEventTextLength = 4 * 1024;
 var boundedEventText = (text) => text.length <= maxEventTextLength ? text : `${text.slice(0, maxEventTextLength - 1)}…`;
-var ErrorMessage2 = exports_Schema.Struct({ message: exports_Schema.String });
-var ErrorTag2 = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
-var errorMessageOf = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorMessage2)(error2), {
+var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
+var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
+var errorMessageOf = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorMessage)(error2), {
   onNone: () => String(error2),
   onSome: ({ message }) => message
 });
-var errorTagOf = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorTag2)(error2), {
+var errorTagOf = (error2) => exports_Option.match(exports_Schema.decodeUnknownOption(ErrorTag)(error2), {
   onNone: () => "UnknownError",
   onSome: ({ _tag }) => _tag
 });
@@ -38948,7 +39034,7 @@ var layer15 = (delegation, childBinding, options) => {
           return yield* prestartDenied("nested-delegation", `Child Toolkit exposes delegation Tool ${childToolName}; S1 rejects every nested delegation`);
         }
         if (!delegation.grant.allowedToolNames.includes(childToolName)) {
-          return yield* prestartDenied("grant-violation", `Child Tool ${childToolName} is outside the delegation grant ceiling`);
+          return yield* prestartDenied("grant-violation", `Child Tool ${childToolName} is outside the structural delegation ceiling`);
         }
       }
       const prepared = yield* delegation.prepareInput(parameters, {
@@ -39079,7 +39165,7 @@ var layer15 = (delegation, childBinding, options) => {
           return yield* prestartDenied("nested-delegation", `Child Toolkit exposes delegation Tool ${childToolName}; S2 rejects every nested delegation`);
         }
         if (!delegation.grant.allowedToolNames.includes(childToolName)) {
-          return yield* prestartDenied("grant-violation", `Child Tool ${childToolName} is outside the delegation grant ceiling`);
+          return yield* prestartDenied("grant-violation", `Child Tool ${childToolName} is outside the structural delegation ceiling`);
         }
       }
       const prepared = yield* delegation.prepareInput(parameters, {
@@ -40538,7 +40624,7 @@ var make57 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withF
         return succeed6(new InterruptibleResponse(response, controller));
       },
       onFailure(cause) {
-        if (hasInterrupts2(cause)) {
+        if (hasInterrupts3(cause)) {
           controller.abort();
         }
         return failCause4(cause);
@@ -40586,7 +40672,7 @@ var make57 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withF
         return succeed6(new InterruptibleResponse(response, controller));
       },
       onFailure(cause) {
-        if (!scopedController && hasInterrupts2(cause)) {
+        if (!scopedController && hasInterrupts3(cause)) {
           controller.abort();
         }
         return failCause4(cause);
@@ -42136,9 +42222,6 @@ var selectReviewRange = (input) => {
     profileFingerprint: input.profileFingerprint
   };
 };
-
-class ReviewExecutionContext extends exports_Context.Service()("@effect-agent/pr-review/ReviewExecutionContext") {
-}
 var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const selectedPaths = new Set(selection.files.map((file2) => file2.path));
@@ -43399,7 +43482,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
   const anchorFiles = yield* source.anchorFiles;
-  const executionContext = exports_Option.getOrUndefined(yield* exports_Effect.serviceOption(ReviewExecutionContext));
+  const selection = options3.selection;
   const mission = buildReviewMission(metadata, files);
   const fullMission = buildReviewMission(metadata, anchorFiles);
   const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
@@ -43424,8 +43507,8 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   })();
   const review = enforceFindingsBound(verifiedReview, clampMaxFindings(options3.maxFindings));
   const usage = yield* budget2.snapshot;
-  const affectedPaths = new Set(executionContext?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
-  const priorState = executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+  const affectedPaths = new Set(selection?.affectedPaths ?? files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]));
+  const priorState = selection?.mode === "incremental" ? selection.priorState : undefined;
   const carriedCandidates = priorState?.unresolvedFindings.filter((finding) => !affectedPaths.has(finding.path)).map(fromStoredFinding) ?? [];
   const activeFindings = rankAndDedupeFindings([...carriedCandidates, ...review.findings]).slice(0, clampMaxFindings(options3.maxFindings));
   const activeFindingKeys = new Set(activeFindings.map(findingKey));
@@ -43442,7 +43525,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     const key = `${concern.title}\x00${concern.body}`;
     return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
   });
-  const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+  const reviewTotalFiles = selection?.totalFiles ?? metadata.totalChangedFiles;
   const coverage = assessReviewCoverage({
     shape: options3.reviewShape ?? "flat",
     files,
@@ -43451,7 +43534,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     totalAnchorFiles: metadata.totalChangedFiles,
     events: events2
   });
-  const stateCandidate = executionContext !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && executionContext.stateAuthenticator?.status === "available" ? ReviewState.make({
+  const stateCandidate = selection !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && options3.renderState !== undefined ? ReviewState.make({
     version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
@@ -43459,18 +43542,18 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     baseSha: metadata.baseSha,
     headRef: metadata.headRef,
     reviewedHeadSha: metadata.headSha,
-    profileFingerprint: executionContext.profileFingerprint,
+    profileFingerprint: selection.profileFingerprint,
     acceptedScopeFingerprint: fingerprint,
     reviewedPathCount: anchorFiles.length,
     unresolvedFindings: activeFindings.map(toStoredFinding),
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
-    lastReviewMode: executionContext.mode
+    lastReviewMode: selection.mode
   }) : undefined;
-  const continuity = stateCandidate === undefined || executionContext?.stateAuthenticator === undefined ? {
+  const continuity = stateCandidate === undefined || options3.renderState === undefined ? {
     state: undefined,
     marker: undefined,
-    notice: executionContext?.stateAuthenticator?.status === "unavailable" && coverage.status === "complete" ? executionContext.stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
-  } : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
+    notice: selection !== undefined && coverage.status === "complete" && options3.stateUnavailableReason !== undefined ? options3.stateUnavailableReason : undefined
+  } : yield* options3.renderState(stateCandidate).pipe(exports_Effect.match({
     onFailure: (error2) => ({
       state: undefined,
       marker: undefined,
@@ -43492,9 +43575,9 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     coverage,
     carriedFindings,
     carriedConcerns,
-    reviewMode: executionContext?.mode,
-    reviewReason: executionContext?.reason,
-    baselineSha: executionContext?.baselineSha,
+    reviewMode: selection?.mode,
+    reviewReason: selection?.reason,
+    baselineSha: selection?.baselineSha,
     reviewFilesVisible: files.length,
     reviewTotalFiles,
     stateMarker: continuity.marker,
@@ -43511,7 +43594,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
       turns: result4.turns,
       usage,
       ...scope3,
-      ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
+      ...selection === undefined ? {} : { reviewMode: selection.mode, reviewReason: selection.reason },
       ...continuity.state === undefined ? {} : { state: continuity.state }
     });
   }
@@ -43527,7 +43610,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     turns: result4.turns,
     usage,
     ...scope3,
-    ...executionContext === undefined ? {} : { reviewMode: executionContext.mode, reviewReason: executionContext.reason },
+    ...selection === undefined ? {} : { reviewMode: selection.mode, reviewReason: selection.reason },
     ...continuity.state === undefined ? {} : { state: continuity.state }
   });
 });
@@ -43602,7 +43685,10 @@ var make58 = (options3) => {
     modelLabel: options3.modelLabel,
     runUrl: runOptions.runUrl,
     usageScope: "run",
-    reviewShape: "flat"
+    reviewShape: "flat",
+    selection: runOptions.selection,
+    renderState: runOptions.renderState,
+    stateUnavailableReason: runOptions.stateUnavailableReason
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition,
@@ -43649,7 +43735,10 @@ var makeFanOut = (options3) => {
     modelLabel: options3.modelLabel,
     runUrl: runOptions.runUrl,
     usageScope: "coordinator",
-    reviewShape: "fan-out"
+    reviewShape: "fan-out",
+    selection: runOptions.selection,
+    renderState: runOptions.renderState,
+    stateUnavailableReason: runOptions.stateUnavailableReason
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition: suite.parent,
@@ -52206,7 +52295,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
   });
   const makeWebSocket2 = yield* WebSocketConstructor;
   const decoder3 = new TextDecoder;
-  const queueRef = yield* make18({
+  const queueRef = yield* make20({
     idleTimeToLive: 60000,
     acquire: gen4(function* () {
       const scope3 = yield* scope2;
@@ -54819,6 +54908,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
   const target = yield* resolveReviewTarget({});
   return yield* exports_Effect.gen(function* () {
     let selection;
+    let stateAuthenticator;
     if (reviewer.profileFingerprint !== undefined) {
       const source = yield* PullRequestSource;
       const [snapshot2, profileFingerprint] = yield* exports_Effect.all([
@@ -54827,7 +54917,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       ]);
       const { metadata, files: fullFiles } = snapshot2;
       const history = options3.priorReviews ?? (yield* PriorReviews);
-      const stateAuthenticator = yield* ReviewStateAuthenticator;
+      stateAuthenticator = yield* ReviewStateAuthenticator;
       const recovered = stateAuthenticator.status === "unavailable" ? {
         state: undefined,
         failure: stateAuthenticator.unavailableReason ?? "an authenticated review-state secret is not configured"
@@ -54873,19 +54963,16 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
           }
         }
       }
-      selection = {
-        ...selectReviewRange({
-          requestedMode: options3.reviewMode ?? "incremental",
-          current: metadata,
-          fullFiles,
-          profileFingerprint,
-          priorState: recovered.state,
-          comparison,
-          baseComparison,
-          lookupFailure: recovered.failure
-        }),
-        stateAuthenticator
-      };
+      selection = selectReviewRange({
+        requestedMode: options3.reviewMode ?? "incremental",
+        current: metadata,
+        fullFiles,
+        profileFingerprint,
+        priorState: recovered.state,
+        comparison,
+        baseComparison,
+        lookupFailure: recovered.failure
+      });
       if (options3.skipUnchanged !== false && selection.mode === "incremental" && selection.files.length === 0 && selection.priorState !== undefined) {
         const result4 = concludeReviewState(selection.priorState);
         const reason = "no changed review scope since the last successfully reviewed head";
@@ -54945,13 +55032,19 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
         runUrl
       });
     }
-    const runReview = reviewer.run({ post: options3.post ?? true, runUrl });
+    const runReview = reviewer.run({
+      post: options3.post ?? true,
+      runUrl,
+      selection,
+      renderState: stateAuthenticator?.status === "available" ? stateAuthenticator.render : undefined,
+      stateUnavailableReason: stateAuthenticator?.status === "unavailable" ? stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+    });
     const reviewEffect = exports_Option.isSome(progress) ? runReview.pipe(exports_Effect.tapCause(() => progress.value.settle({
       outcome: "failed",
       runUrl,
       modelLabel: options3.modelLabel
     }))) : runReview;
-    const outcome = yield* selection === undefined ? reviewEffect : reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)), exports_Effect.provideService(ReviewExecutionContext, selection));
+    const outcome = yield* selection === undefined ? reviewEffect : reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)));
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);
@@ -55033,7 +55126,7 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   const reviewer = inputs.fanOut ? PrReview.makeFanOut({ ...shared, model: model3 }) : PrReview.make({ ...shared, model: model3 });
   return yield* runReviewAction(reviewer, harness).pipe(exports_Effect.provide(exports_Layer.merge(stateAuthenticatorLayer, openAiClientLayer)));
 });
-var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_FetchHttpClient.layer, compactReviewLoggingLayer))), { disableErrorReporting: true });
+var main = () => exports_NodeRuntime.runMain(reviewActionProgram.pipe(exports_Effect.tapError((error2) => exports_Console.error(exports_Schema.is(BudgetExceeded)(error2) ? `Budget exceeded: ${error2.limit} observed ${error2.observedValue}, limit ${error2.limitValue}.` : String(error2))), exports_Effect.scoped, exports_Effect.provide(exports_Layer.mergeAll(exports_NodeServices.layer, exports_NodeCrypto.layer, exports_FetchHttpClient.layer, compactReviewLoggingLayer))), { disableErrorReporting: true });
 
 // packages/pr-review/src/internal/action-entry.ts
 var INPUT_TO_ENV = [

@@ -1,4 +1,4 @@
-import { Effect, Option, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   makeUsageBudget,
   toRunBudgetHook,
@@ -29,8 +29,9 @@ import {
 import {
   fromStoredConcern,
   fromStoredFinding,
-  ReviewExecutionContext,
   ReviewState,
+  type ReviewSelection,
+  type ReviewStateAuthenticator,
   toStoredConcern,
   toStoredFinding,
 } from "./review-state.ts";
@@ -136,6 +137,16 @@ export interface ExecuteReviewOptions {
   readonly usageScope?: "run" | "coordinator" | undefined;
   /** Host-owned coverage shape; defaults to the flat reviewer. */
   readonly reviewShape?: ReviewShape | undefined;
+  /**
+   * Explicit host-selected review range. Callers that provide a selection
+   * also decorate `PullRequestSource` with `selectedPullRequestSourceLayer` so
+   * the model sees exactly this range while publication retains full anchors.
+   */
+  readonly selection?: ReviewSelection | undefined;
+  /** Explicit continuity-signing operation selected by the host. */
+  readonly renderState?: ReviewStateAuthenticator["Service"]["render"] | undefined;
+  /** Visible fallback notice when the host cannot authenticate continuity state. */
+  readonly stateUnavailableReason?: string | undefined;
 }
 
 /** Build the mission one review run frames from the source's snapshot. */
@@ -224,9 +235,7 @@ export const executeReview = <
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
-    const executionContext = Option.getOrUndefined(
-      yield* Effect.serviceOption(ReviewExecutionContext),
-    );
+    const selection = options.selection;
     const mission = buildReviewMission(metadata, files);
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =
@@ -273,13 +282,12 @@ export const executeReview = <
     const review = enforceFindingsBound(verifiedReview, clampMaxFindings(options.maxFindings));
     const usage = yield* budget.snapshot;
     const affectedPaths = new Set(
-      executionContext?.affectedPaths ??
+      selection?.affectedPaths ??
         files.flatMap((file) =>
           file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
         ),
     );
-    const priorState =
-      executionContext?.mode === "incremental" ? executionContext.priorState : undefined;
+    const priorState = selection?.mode === "incremental" ? selection.priorState : undefined;
     const carriedCandidates =
       priorState?.unresolvedFindings
         .filter((finding) => !affectedPaths.has(finding.path))
@@ -311,7 +319,7 @@ export const executeReview = <
       const key = `${concern.title}\u0000${concern.body}`;
       return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
     });
-    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+    const reviewTotalFiles = selection?.totalFiles ?? metadata.totalChangedFiles;
     const coverage = assessReviewCoverage({
       shape: options.reviewShape ?? "flat",
       files,
@@ -321,11 +329,11 @@ export const executeReview = <
       events,
     });
     const stateCandidate =
-      executionContext !== undefined &&
+      selection !== undefined &&
       coverage.status === "complete" &&
       fingerprint !== undefined &&
       metadata.baseSha !== undefined &&
-      executionContext.stateAuthenticator?.status === "available"
+      options.renderState !== undefined
         ? ReviewState.make({
             version: 1,
             repository: metadata.repository,
@@ -334,27 +342,27 @@ export const executeReview = <
             baseSha: metadata.baseSha,
             headRef: metadata.headRef,
             reviewedHeadSha: metadata.headSha,
-            profileFingerprint: executionContext.profileFingerprint,
+            profileFingerprint: selection.profileFingerprint,
             acceptedScopeFingerprint: fingerprint,
             reviewedPathCount: anchorFiles.length,
             unresolvedFindings: activeFindings.map(toStoredFinding),
             unresolvedConcerns: activeConcerns.map(toStoredConcern),
-            lastReviewMode: executionContext.mode,
+            lastReviewMode: selection.mode,
           })
         : undefined;
     const continuity =
-      stateCandidate === undefined || executionContext?.stateAuthenticator === undefined
+      stateCandidate === undefined || options.renderState === undefined
         ? {
             state: undefined,
             marker: undefined,
             notice:
-              executionContext?.stateAuthenticator?.status === "unavailable" &&
-              coverage.status === "complete"
-                ? (executionContext.stateAuthenticator.unavailableReason ??
-                  "authenticated continuity state is unavailable")
+              selection !== undefined &&
+              coverage.status === "complete" &&
+              options.stateUnavailableReason !== undefined
+                ? options.stateUnavailableReason
                 : undefined,
           }
-        : yield* executionContext.stateAuthenticator.render(stateCandidate).pipe(
+        : yield* options.renderState(stateCandidate).pipe(
             Effect.match({
               onFailure: (error) => ({
                 state: undefined,
@@ -381,9 +389,9 @@ export const executeReview = <
       coverage,
       carriedFindings,
       carriedConcerns,
-      reviewMode: executionContext?.mode,
-      reviewReason: executionContext?.reason,
-      baselineSha: executionContext?.baselineSha,
+      reviewMode: selection?.mode,
+      reviewReason: selection?.reason,
+      baselineSha: selection?.baselineSha,
       reviewFilesVisible: files.length,
       reviewTotalFiles,
       stateMarker: continuity.marker,
@@ -402,9 +410,9 @@ export const executeReview = <
         turns: result.turns,
         usage,
         ...scope,
-        ...(executionContext === undefined
+        ...(selection === undefined
           ? {}
-          : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
+          : { reviewMode: selection.mode, reviewReason: selection.reason }),
         ...(continuity.state === undefined ? {} : { state: continuity.state }),
       });
     }
@@ -420,9 +428,9 @@ export const executeReview = <
       turns: result.turns,
       usage,
       ...scope,
-      ...(executionContext === undefined
+      ...(selection === undefined
         ? {}
-        : { reviewMode: executionContext.mode, reviewReason: executionContext.reason }),
+        : { reviewMode: selection.mode, reviewReason: selection.reason }),
       ...(continuity.state === undefined ? {} : { state: continuity.state }),
     });
   });

@@ -1,4 +1,4 @@
-import { NodeRuntime, NodeServices } from "@effect/platform-node";
+import { NodeCrypto, NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Option, Schema } from "effect";
 import { BudgetExceeded } from "effect-agent";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
@@ -208,7 +208,7 @@ const program = CliCommand.run(command, { version: "0.0.0" }).pipe(
     ),
   ),
   Effect.scoped,
-  Effect.provide(Layer.merge(NodeServices.layer, FetchHttpClient.layer)),
+  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer)),
 );
 
 NodeRuntime.runMain(program, { disableErrorReporting: true });

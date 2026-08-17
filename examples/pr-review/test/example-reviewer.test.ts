@@ -14,6 +14,7 @@ import {
   scriptedFinalParts,
   scriptedToolTurn,
 } from "@effect-agent/pr-review/testing";
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Layer, Ref, Schema } from "effect";
 
@@ -110,6 +111,7 @@ describe("example reviewer", () => {
               fixturePullRequestSourceLayer(fixture),
               collectingReviewPublisherLayer(published),
               ReadReviewConventionsLayer,
+              NodeCrypto.layer,
             ),
           ),
         );
