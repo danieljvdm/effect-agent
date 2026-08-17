@@ -1,5 +1,19 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.15
+
+### Patch Changes
+
+- Updated dependencies [[`38ac06e`](https://github.com/danieljvdm/effect-agent/commit/38ac06eea0956d7bef4576c5e527c6053f5a86f0)]:
+  - @effect-agent/session@0.1.0-beta.15
+  - @effect-agent/storage-memory@0.1.0-beta.15
+  - @effect-agent/storage-sqlite@0.1.0-beta.15
+  - @effect-agent/platform-node@0.1.0-beta.15
+  - @effect-agent/capabilities@0.1.0-beta.15
+  - @effect-agent/core@0.1.0-beta.15
+  - @effect-agent/engine@0.1.0-beta.15
+  - @effect-agent/sandbox@0.1.0-beta.15
+
 ## 0.1.0-beta.14
 
 ### Patch Changes

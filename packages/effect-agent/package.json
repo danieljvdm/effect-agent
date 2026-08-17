@@ -1,6 +1,6 @@
 {
   "name": "effect-agent",
-  "version": "0.1.0-beta.14",
+  "version": "0.1.0-beta.15",
   "description": "Effect-native autonomous agents: the complete pure authoring and running surface of the Effect Agent framework in one package — schema-first definitions, the bounded interpreter, and operational capabilities.",
   "license": "MIT",
   "repository": {
