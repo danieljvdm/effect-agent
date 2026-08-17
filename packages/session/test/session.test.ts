@@ -426,7 +426,7 @@ describe("phase 4 durable canonical payloads", () => {
   it("RUN-029: round-trips an application run disposition on ordinary completion", () => {
     const payload = {
       ...encodedSubmissionSettled,
-      runDisposition: "answered-without-cloud-task",
+      runDisposition: "application-complete",
     } as const;
     const record = decodeRecord("record-run029", payload);
 

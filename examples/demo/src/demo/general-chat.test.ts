@@ -1,5 +1,4 @@
 import {
-  AgentRunDispositionError,
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
@@ -52,7 +51,6 @@ type ExpectedFailure =
   | AiError.AiError
   | AgentInputError
   | AgentOutputError
-  | AgentRunDispositionError
   | AgentPolicyError
   | ContextOverflowError
   | ModelProtocolError

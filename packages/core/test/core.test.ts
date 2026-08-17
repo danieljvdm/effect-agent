@@ -179,13 +179,13 @@ describe("core schemas", () => {
       output: { itinerary: "Kyoto" },
       turns: 1,
       finishReason: "model-stop",
-      runDisposition: "answered-without-cloud-task",
+      runDisposition: "application-complete",
     } satisfies typeof RunCompleted.Encoded;
 
     const event = Schema.decodeSync(RunEvent)(encodedEvent);
     expect(event).toMatchObject({
       _tag: "RunCompleted",
-      runDisposition: "answered-without-cloud-task",
+      runDisposition: "application-complete",
     });
     expect(Schema.encodeSync(RunEvent)(event)).toEqual(encodedEvent);
   });

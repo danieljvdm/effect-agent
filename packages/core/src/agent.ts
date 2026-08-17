@@ -158,6 +158,13 @@ export namespace Agent {
     ? never
     : RunDispositionSchema<AgentValue>["Type"];
 
+  /** Validation failure admitted only by definitions that declare a run disposition. */
+  export type RunDispositionFailure<AgentValue extends AnyDefinition | Any> = [
+    RunDispositionSchemaOf<DefinitionOf<AgentValue>>,
+  ] extends [never]
+    ? never
+    : AgentRunDispositionError;
+
   /** Effect AI tool map carried by a definition or binding. */
   export type Tools<AgentValue extends AnyDefinition | Any> = Toolkit.Tools<
     DefinitionOf<AgentValue>["toolkit"]
@@ -189,7 +196,7 @@ export namespace Agent {
     | AiError.AiError
     | AgentInputError
     | AgentOutputError
-    | AgentRunDispositionError;
+    | RunDispositionFailure<AgentValue>;
 
   /** Validate an agent ID and return a shallowly frozen, model-agnostic definition. */
   export function define<

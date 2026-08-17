@@ -88,7 +88,7 @@ const definition = Agent.define("type-proof", {
 });
 const agent = Agent.withModel(definition, model);
 
-const RunDisposition = Schema.Literal("answered-without-cloud-task");
+const RunDisposition = Schema.Literal("application-complete");
 const dispositionDefinition = Agent.define("disposition-type-proof", {
   input: Schema.Struct({ destination: Schema.String }),
   output: Schema.Struct({
@@ -123,8 +123,7 @@ type ExpectedFailure =
   | AvailabilityFailure
   | AiError.AiError
   | AgentInputError
-  | AgentOutputError
-  | AgentRunDispositionError;
+  | AgentOutputError;
 
 type RequirementsProof = Assert<Equal<Agent.Requirements<typeof agent>, ExpectedRequirements>>;
 type DefinitionRequirementsProof = Assert<
@@ -142,10 +141,16 @@ type OutputProjectionProof = Assert<
   Equal<Agent.Output<typeof agent>, { readonly summary: string }>
 >;
 type RunDispositionProjectionProof = Assert<
-  Equal<Agent.RunDisposition<typeof dispositionDefinition>, "answered-without-cloud-task">
+  Equal<Agent.RunDisposition<typeof dispositionDefinition>, "application-complete">
 >;
 type RunDispositionRequirementsProof = Assert<
   Equal<Agent.DefinitionRequirements<typeof dispositionDefinition>, never>
+>;
+type PlainRunDispositionFailureProof = Assert<
+  Equal<Agent.RunDispositionFailure<typeof definition>, never>
+>;
+type DeclaredRunDispositionFailureProof = Assert<
+  Equal<Agent.RunDispositionFailure<typeof dispositionDefinition>, AgentRunDispositionError>
 >;
 type RunDispositionFailureProof = Assert<
   Equal<
@@ -179,6 +184,8 @@ describe("Agent type inference", () => {
     const outputProjectionProof: OutputProjectionProof = true;
     const runDispositionProjectionProof: RunDispositionProjectionProof = true;
     const runDispositionRequirementsProof: RunDispositionRequirementsProof = true;
+    const plainRunDispositionFailureProof: PlainRunDispositionFailureProof = true;
+    const declaredRunDispositionFailureProof: DeclaredRunDispositionFailureProof = true;
     const runDispositionFailureProof: RunDispositionFailureProof = true;
     const policyExhaustionModeProof: PolicyExhaustionModeProof = true;
     const policyRunStatusProof: PolicyRunStatusProof = true;
@@ -202,6 +209,8 @@ describe("Agent type inference", () => {
     expect(outputProjectionProof).toBe(true);
     expect(runDispositionProjectionProof).toBe(true);
     expect(runDispositionRequirementsProof).toBe(true);
+    expect(plainRunDispositionFailureProof).toBe(true);
+    expect(declaredRunDispositionFailureProof).toBe(true);
     expect(runDispositionFailureProof).toBe(true);
     expect(Object.isFrozen(dispositionDefinition.runDisposition)).toBe(true);
     expect(agent.definition).toBe(definition);

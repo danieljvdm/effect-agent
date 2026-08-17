@@ -2530,7 +2530,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
   });
 
   it.effect("RUN-029 validates and exposes an application run disposition", () => {
-    const RunDisposition = Schema.Literal("answered-without-cloud-task");
+    const RunDisposition = Schema.Literal("application-complete");
     const definition = Agent.define("run-disposition", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({
@@ -2554,9 +2554,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     return Effect.gen(function* () {
       const valid = Agent.withModel(
         definition,
-        modelFromParts(
-          finalParts('{"answer":"done","runDisposition":"answered-without-cloud-task"}'),
-        ),
+        modelFromParts(finalParts('{"answer":"done","runDisposition":"application-complete"}')),
       );
       const events = yield* AgentRuntime.stream(valid, { question: "done?" }).pipe(
         Stream.runCollect,
@@ -2565,9 +2563,9 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
       expect(events.at(-1)).toMatchObject({
         _tag: "RunCompleted",
-        runDisposition: "answered-without-cloud-task",
+        runDisposition: "application-complete",
       });
-      expect(result.runDisposition).toBe("answered-without-cloud-task");
+      expect(result.runDisposition).toBe("application-complete");
 
       const invalid = Agent.withModel(
         definition,

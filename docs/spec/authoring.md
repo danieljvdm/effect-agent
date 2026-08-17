@@ -78,7 +78,7 @@ Schema boundary on the Definition. The application owns the vocabulary; the fram
 validation and persistence.
 
 ```ts
-const TaskRunDisposition = Schema.Literal("answered-without-cloud-task");
+const TaskRunDisposition = Schema.Literal("application-complete");
 
 const TaskAgent = Agent.define("task-agent", {
   input: TaskInput,
@@ -93,13 +93,14 @@ const TaskAgent = Agent.define("task-agent", {
 });
 
 type TaskDisposition = Agent.RunDisposition<typeof TaskAgent>;
-// "answered-without-cloud-task"
+// "application-complete"
 ```
 
 `fromOutput` receives the decoded output and returns an untrusted candidate or `undefined`. The
 runtime Schema-encodes the candidate before it emits `RunCompleted`; validation failure is the
 typed `AgentRunDispositionError`. The disposition Schema's decoding and encoding services remain
-visible in the Definition and runtime requirement projections.
+visible in the Definition and runtime requirement projections. `Agent.Failure` admits
+`AgentRunDispositionError` only for a Definition that declares this boundary.
 
 The selector runs only at ordinary completion. Final-answer budget exhaustion, failure,
 interruption, abort, unresolved recovery, and run-less joined settlement never acquire a run

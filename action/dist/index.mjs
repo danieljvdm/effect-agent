@@ -35311,7 +35311,7 @@ var decodeFinalOutput = exports_Effect.fn("AgentRuntime.decodeFinalOutput")(func
   })));
   return { encoded: eventJson, decoded };
 });
-var encodeRunDisposition = exports_Effect.fn("AgentRuntime.encodeRunDisposition")(function* (declaration, output) {
+var encodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.encodeRunDisposition")(function* (declaration, output) {
   const selected = yield* exports_Effect.try({
     try: () => declaration.fromOutput(output),
     catch: (cause) => AgentRunDispositionError.make({
@@ -35327,11 +35327,21 @@ var encodeRunDisposition = exports_Effect.fn("AgentRuntime.encodeRunDisposition"
     message: `Run disposition did not encode as durable JSON: ${cause.message}`
   })));
 });
-var decodeRunDisposition = exports_Effect.fn("AgentRuntime.decodeRunDisposition")(function* (declaration, encoded) {
+function encodeRunDisposition(agent2, output) {
+  const declaration = agent2.definition.runDisposition;
+  return declaration === undefined ? exports_Effect.void : encodeRunDispositionCandidate(declaration, output);
+}
+var decodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.decodeRunDisposition")(function* (declaration, encoded) {
   return yield* exports_Schema.decodeUnknownEffect(declaration.schema)(encoded).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
     message: cause.message
   })));
 });
+function decodeRunDisposition(agent2, encoded) {
+  const declaration = agent2.definition.runDisposition;
+  return declaration === undefined ? exports_Effect.fail(ModelProtocolError.make({
+    message: "RunCompleted declared a run disposition without a definition-owned Schema"
+  })) : decodeRunDispositionCandidate(declaration, encoded);
+}
 var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const ids = yield* IdGenerator;
   const turnId = yield* ids.nextTurnId;
@@ -35572,7 +35582,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
       }
       const output = yield* decodeFinalOutput(agent2, trace2.text.join(""));
       const declaration = agent2.definition.runDisposition;
-      const runDisposition = finalAnswerOnly || declaration === undefined ? undefined : yield* encodeRunDisposition(declaration, output.decoded);
+      const runDisposition = finalAnswerOnly || declaration === undefined ? undefined : yield* encodeRunDisposition(agent2, output.decoded);
       return exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => RunCompleted.make({
         ...base2,
         output: output.encoded,
@@ -35961,7 +35971,7 @@ var reduceRunEvents = (agent2, events2) => exports_Effect.gen(function* () {
     message: "A budget-exhausted RunCompleted event cannot declare a run disposition"
   }) : declaration === undefined ? yield* ModelProtocolError.make({
     message: "RunCompleted declared a run disposition without a definition-owned Schema"
-  }) : yield* decodeRunDisposition(declaration, completed.runDisposition);
+  }) : yield* decodeRunDisposition(agent2, completed.runDisposition);
   return {
     output,
     conversationId: completed.conversationId,

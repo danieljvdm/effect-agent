@@ -168,7 +168,7 @@ const plannerDefinition = Agent.define("durable-planner", {
   }),
 });
 
-const RunDisposition = Schema.Literal("answered-without-cloud-task");
+const RunDisposition = Schema.Literal("application-complete");
 const dispositionDefinition = Agent.define("durable-run-disposition", {
   input: Schema.Struct({ question: Schema.String }),
   output: Schema.Struct({
@@ -834,7 +834,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
         for (const scenario of scenarios) {
           const scripted = yield* makeScriptedModel(() =>
-            finalParts('{"answer":"done","runDisposition":"answered-without-cloud-task"}'),
+            finalParts('{"answer":"done","runDisposition":"application-complete"}'),
           );
           const agent = Agent.withModel(dispositionDefinition, scripted.model);
           const conversationId = decodeConversationId(scenario.conversation);
@@ -860,7 +860,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(projection.settlements).toHaveLength(1);
           const disposition = projection.settlements[0]?.runDisposition;
           const decodedDisposition = yield* Schema.decodeUnknownEffect(RunDisposition)(disposition);
-          expect(decodedDisposition).toBe("answered-without-cloud-task");
+          expect(decodedDisposition).toBe("application-complete");
         }
       }),
   );
@@ -952,7 +952,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
                 { type: "finish", reason: "tool-calls", usage },
               ]
             : finalParts(
-                '{"answer":"partial, budget exhausted","runDisposition":"answered-without-cloud-task"}',
+                '{"answer":"partial, budget exhausted","runDisposition":"application-complete"}',
               ),
         );
         const agent = Agent.withModel(definition, scripted.model);
@@ -1024,7 +1024,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(settled.runDisposition).toBeUndefined();
           expect(settled.result).toEqual({
             answer: "partial, budget exhausted",
-            runDisposition: "answered-without-cloud-task",
+            runDisposition: "application-complete",
           });
         }
 
@@ -1115,7 +1115,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
                   { type: "finish", reason: "tool-calls", usage },
                 ]
               : finalParts(
-                  '{"answer":"recovered partial","runDisposition":"answered-without-cloud-task"}',
+                  '{"answer":"recovered partial","runDisposition":"application-complete"}',
                 ),
           );
           const agent = Agent.withModel(definition, scripted.model);

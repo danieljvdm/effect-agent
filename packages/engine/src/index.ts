@@ -2810,7 +2810,7 @@ const decodeFinalOutput = Effect.fn("AgentRuntime.decodeFinalOutput")(function* 
   return { encoded: eventJson, decoded };
 });
 
-const encodeRunDisposition = Effect.fn("AgentRuntime.encodeRunDisposition")(function* <
+const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDisposition")(function* <
   Output,
   DispositionSchema extends Schema.Top,
 >(
@@ -2845,7 +2845,33 @@ const encodeRunDisposition = Effect.fn("AgentRuntime.encodeRunDisposition")(func
   );
 });
 
-const decodeRunDisposition = Effect.fn("AgentRuntime.decodeRunDisposition")(function* <
+function encodeRunDisposition<AgentValue extends Agent.Any>(
+  agent: AgentValue,
+  output: Agent.Output<AgentValue>,
+): Effect.Effect<
+  Schema.Json | undefined,
+  Agent.RunDispositionFailure<AgentValue>,
+  Agent.RunDispositionSchema<AgentValue>["EncodingServices"]
+>;
+function encodeRunDisposition<Output, DispositionSchema extends Schema.Top>(
+  agent: {
+    readonly definition: {
+      readonly runDisposition?: RunDispositionDeclaration<Output, DispositionSchema> | undefined;
+    };
+  },
+  output: Output,
+): Effect.Effect<
+  Schema.Json | void,
+  AgentRunDispositionError,
+  DispositionSchema["EncodingServices"]
+> {
+  const declaration = agent.definition.runDisposition;
+  return declaration === undefined
+    ? Effect.void
+    : encodeRunDispositionCandidate(declaration, output);
+}
+
+const decodeRunDispositionCandidate = Effect.fn("AgentRuntime.decodeRunDisposition")(function* <
   Output,
   DispositionSchema extends Schema.Top,
 >(
@@ -2864,6 +2890,36 @@ const decodeRunDisposition = Effect.fn("AgentRuntime.decodeRunDisposition")(func
     ),
   );
 });
+
+function decodeRunDisposition<AgentValue extends Agent.Any>(
+  agent: AgentValue,
+  encoded: Schema.Json,
+): Effect.Effect<
+  Agent.RunDisposition<AgentValue>,
+  Agent.RunDispositionFailure<AgentValue> | ModelProtocolError,
+  Agent.RunDispositionSchema<AgentValue>["DecodingServices"]
+>;
+function decodeRunDisposition<DispositionSchema extends Schema.Top>(
+  agent: {
+    readonly definition: {
+      readonly runDisposition?: RunDispositionDeclaration<never, DispositionSchema> | undefined;
+    };
+  },
+  encoded: Schema.Json,
+): Effect.Effect<
+  DispositionSchema["Type"],
+  AgentRunDispositionError | ModelProtocolError,
+  DispositionSchema["DecodingServices"]
+> {
+  const declaration = agent.definition.runDisposition;
+  return declaration === undefined
+    ? Effect.fail(
+        ModelProtocolError.make({
+          message: "RunCompleted declared a run disposition without a definition-owned Schema",
+        }),
+      )
+    : decodeRunDispositionCandidate(declaration, encoded);
+}
 
 const makeTurn = <
   InputSchema extends Schema.Top,
@@ -3444,7 +3500,7 @@ const makeTurn = <
               const runDisposition =
                 finalAnswerOnly || declaration === undefined
                   ? undefined
-                  : yield* encodeRunDisposition(declaration, output.decoded);
+                  : yield* encodeRunDisposition(agent, output.decoded);
               return Stream.fromEffect(
                 Effect.map(eventBase(context), (base) =>
                   RunCompleted.make({
@@ -4237,7 +4293,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
   events: Stream.Stream<RunEvent, Error, Requirements>,
 ): Effect.Effect<
   AgentResult<Agent.Output<AgentValue>>,
-  Error | ModelProtocolError | AgentOutputError | AgentRunDispositionError,
+  Error | ModelProtocolError | AgentOutputError | Agent.RunDispositionFailure<AgentValue>,
   | Requirements
   | AgentValue["definition"]["output"]["DecodingServices"]
   | Agent.RunDispositionSchema<AgentValue>["DecodingServices"]
@@ -4275,7 +4331,7 @@ const reduceRunEvents = <AgentValue extends Agent.Any, Error, Requirements>(
                 message:
                   "RunCompleted declared a run disposition without a definition-owned Schema",
               })
-            : yield* decodeRunDisposition(declaration, completed.runDisposition);
+            : yield* decodeRunDisposition(agent, completed.runDisposition);
     return {
       output,
       conversationId: completed.conversationId,

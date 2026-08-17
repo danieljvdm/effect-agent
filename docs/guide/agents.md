@@ -67,7 +67,7 @@ Use an optional run-disposition boundary when a record reader needs an applicati
 classification beyond the framework's `completed | failed | aborted` settlement outcome.
 
 ```ts
-const RunDisposition = Schema.Literal("answered-without-cloud-task");
+const RunDisposition = Schema.Literal("application-complete");
 
 const definition = Agent.define("support-triage", {
   input: SupportRequest,
@@ -83,11 +83,11 @@ const definition = Agent.define("support-triage", {
 ```
 
 The selector sees decoded output and may return `undefined`. Its candidate is untrusted until the
-Schema validates and encodes it; invalid selection fails with `AgentRunDispositionError`. An
-ordinary completed durable Run persists the encoded value on `SubmissionSettled.runDisposition`,
-where readers decode it with the same application Schema. Budget exhaustion, failure, abort, and
-incomplete recovery never receive one. Do not parse summary prose or infer finality from successful
-Tool Calls.
+Schema validates and encodes it; invalid selection fails with `AgentRunDispositionError`, which
+joins `Agent.Failure` only for Definitions that declare this boundary. An ordinary completed
+durable Run persists the encoded value on `SubmissionSettled.runDisposition`, where readers decode
+it with the same application Schema. Budget exhaustion, failure, abort, and incomplete recovery
+never receive one. Do not parse summary prose or infer finality from successful Tool Calls.
 
 ## Stable identity
 
