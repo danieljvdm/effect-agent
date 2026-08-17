@@ -12,13 +12,13 @@ var __export = (target, all) => {
       set: __exportSetter.bind(all, name)
     });
 };
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeRuntime.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeRuntime.js
 var exports_NodeRuntime = {};
 __export(exports_NodeRuntime, {
   runMain: () => runMain2
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Cause.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Cause.js
 var exports_Cause = {};
 __export(exports_Cause, {
   squash: () => squash,
@@ -82,7 +82,7 @@ __export(exports_Cause, {
   AsyncFiberError: () => AsyncFiberError2
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Context.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Context.js
 var exports_Context = {};
 __export(exports_Context, {
   pick: () => pick,
@@ -102,6 +102,7 @@ __export(exports_Context, {
   getOption: () => getOption,
   get: () => get,
   empty: () => empty,
+  addUnsafe: () => addUnsafe,
   addOrOmit: () => addOrOmit,
   add: () => add,
   ServiceTypeId: () => ServiceTypeId,
@@ -109,7 +110,7 @@ __export(exports_Context, {
   Reference: () => Reference
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Pipeable.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Pipeable.js
 var pipeArguments = (self, args) => {
   switch (args.length) {
     case 0:
@@ -152,7 +153,7 @@ var Class = /* @__PURE__ */ function() {
   return PipeableBase;
 }();
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Function.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Function.js
 var dual = function(arity, body) {
   if (typeof arity === "function") {
     return function() {
@@ -266,7 +267,7 @@ function memoizeIdempotent(f) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/equal.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/equal.js
 var getAllObjectKeys = (obj) => {
   const keys = new Set(Reflect.ownKeys(obj));
   if (obj.constructor === Object)
@@ -290,7 +291,7 @@ var getAllObjectKeys = (obj) => {
 };
 var byReferenceInstances = /* @__PURE__ */ new WeakSet;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Predicate.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Predicate.js
 var exports_Predicate = {};
 __export(exports_Predicate, {
   xor: () => xor,
@@ -486,7 +487,7 @@ function some(collection) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Hash.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Hash.js
 var symbol = "~effect/interfaces/Hash";
 var hash = (self) => {
   switch (typeof self) {
@@ -610,7 +611,7 @@ function withVisitedTracking(obj, fn) {
   return result;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Equal.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Equal.js
 var symbol2 = "~effect/interfaces/Equal";
 function equals() {
   if (arguments.length === 1) {
@@ -812,7 +813,7 @@ var byReferenceUnsafe = (obj) => {
   return obj;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Redactable.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Redactable.js
 var symbolRedactable = /* @__PURE__ */ Symbol.for("~effect/Redactable");
 var isRedactable = (u) => hasProperty(u, symbolRedactable);
 function redact(u) {
@@ -835,7 +836,7 @@ var emptyContext = {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Formatter.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Formatter.js
 function format(input, options) {
   const space = options?.space ?? 0;
   const ancestors = new WeakSet;
@@ -853,26 +854,6 @@ function format(input, options) {
     }
   };
   function recur(v, d = 0) {
-    if (Array.isArray(v)) {
-      if (ancestors.has(v))
-        return CIRCULAR;
-      ancestors.add(v);
-      const output = !gap || v.length <= 1 ? `[${v.map((x) => recur(x, d)).join(",")}]` : `[
-${ind(d + 1)}${v.map((x) => recur(x, d + 1)).join(`,
-` + ind(d + 1))}
-${ind(d)}]`;
-      ancestors.delete(v);
-      return output;
-    }
-    if (v instanceof Date)
-      return formatDate(v);
-    if (!options?.ignoreToString && hasProperty(v, "toString") && typeof v["toString"] === "function" && v["toString"] !== Object.prototype.toString && v["toString"] !== Array.prototype.toString) {
-      const s = safeToString(v);
-      if (v instanceof Error && v.cause) {
-        return `${s} (cause: ${recur(v.cause, d)})`;
-      }
-      return s;
-    }
     if (typeof v === "string")
       return JSON.stringify(v);
     if (typeof v === "number" || v == null || typeof v === "boolean" || typeof v === "symbol")
@@ -885,7 +866,17 @@ ${ind(d)}]`;
       ancestors.add(v);
       let output;
       if (symbolRedactable in v) {
-        output = format(getRedacted(v));
+        output = recur(getRedacted(v), d);
+      } else if (Array.isArray(v)) {
+        output = !gap || v.length <= 1 ? `[${v.map((x) => recur(x, d)).join(",")}]` : `[
+${ind(d + 1)}${v.map((x) => recur(x, d + 1)).join(`,
+` + ind(d + 1))}
+${ind(d)}]`;
+      } else if (v instanceof Date) {
+        output = formatDate(v);
+      } else if (!options?.ignoreToString && hasProperty(v, "toString") && typeof v["toString"] === "function" && v["toString"] !== Object.prototype.toString && v["toString"] !== Array.prototype.toString) {
+        const s = safeToString(v);
+        output = v instanceof Error && v.cause ? `${s} (cause: ${recur(v.cause, d)})` : s;
       } else if (Symbol.iterator in v) {
         output = `${v.constructor.name}(${recur(Array.from(v), d)})`;
       } else {
@@ -932,8 +923,12 @@ function safeToString(input) {
 }
 function formatJson(input, options) {
   const ancestors = [];
-  return JSON.stringify(input, function(_key, value) {
-    const redacted = redact(value);
+  return JSON.stringify(input, function(key, value) {
+    const original = Object.getOwnPropertyDescriptor(this, key)?.value;
+    const redacted = hasProperty(original, symbolRedactable) ? redact(original) : redact(value);
+    if (typeof redacted === "bigint") {
+      return format(redacted);
+    }
     if (typeof redacted !== "object" || redacted === null) {
       return redacted;
     }
@@ -948,19 +943,20 @@ function formatJson(input, options) {
   }, options?.space) ?? "null";
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Inspectable.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Inspectable.js
 var NodeInspectSymbol = /* @__PURE__ */ Symbol.for("nodejs.util.inspect.custom");
 var toJson = (input) => {
   try {
+    input = redact(input);
     if (hasProperty(input, "toJSON") && isFunction(input["toJSON"]) && input["toJSON"].length === 0) {
       return input.toJSON();
     } else if (Array.isArray(input)) {
       return input.map(toJson);
     }
+    return input;
   } catch {
     return "[toJSON threw]";
   }
-  return redact(input);
 };
 var toStringUnknown = (u, whitespace = 2) => {
   if (typeof u === "string") {
@@ -969,7 +965,9 @@ var toStringUnknown = (u, whitespace = 2) => {
   try {
     return typeof u === "object" ? formatJson(u, {
       space: whitespace
-    }) : String(u);
+    }) : format(u, {
+      space: whitespace
+    });
   } catch {
     return String(u);
   }
@@ -995,7 +993,7 @@ class Class2 {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Utils.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Utils.js
 class SingleShotGen {
   called = false;
   self;
@@ -1034,7 +1032,7 @@ var pickInternalCall = () => {
 };
 var internalCall = /* @__PURE__ */ pickInternalCall();
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/record.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/record.js
 function assignProperty(self, key, value) {
   if (key === "__proto__") {
     Object.defineProperty(self, key, {
@@ -1055,7 +1053,7 @@ function assignProperties(self, source) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/core.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/core.js
 var EffectTypeId = `~effect/Effect`;
 var ExitTypeId = `~effect/Exit`;
 var effectVariance = {
@@ -1428,13 +1426,13 @@ var done = (value) => {
   return exitFail(Done(value));
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Effectable.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Effectable.js
 var Prototype2 = (options) => makePrimitiveProto({
   op: options.label,
   [evaluate]: options.evaluate
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Option.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Option.js
 var exports_Option = {};
 __export(exports_Option, {
   zipWith: () => zipWith,
@@ -1499,7 +1497,7 @@ __export(exports_Option, {
   Do: () => Do
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Combiner.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Combiner.js
 function make(combine2) {
   return {
     combine: combine2
@@ -1512,7 +1510,7 @@ function max(order) {
   return make((self, that) => order(self, that) === 1 ? self : that);
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Reducer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Reducer.js
 function make2(combine2, initialValue, combineAll) {
   return {
     combine: combine2,
@@ -1527,7 +1525,7 @@ function make2(combine2, initialValue, combineAll) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Equivalence.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Equivalence.js
 var make3 = (isEquivalent) => (self, that) => self === that || isEquivalent(self, that);
 var isStrictEquivalent = (x, y) => x === y;
 var strictEqual = () => isStrictEquivalent;
@@ -1556,7 +1554,7 @@ function Array_(item) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/doNotation.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/doNotation.js
 var let_ = (map) => dual(3, (self, name, f) => map(self, (a) => ({
   ...a,
   [name]: f(a)
@@ -1569,7 +1567,7 @@ var bind = (map, flatMap) => dual(3, (self, name, f) => flatMap(self, (a) => map
   [name]: b
 }))));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/option.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/option.js
 var TypeId = "~effect/data/Option";
 var CommonProto = {
   [TypeId]: {
@@ -1635,7 +1633,7 @@ var some2 = (value) => {
   return a;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/result.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/result.js
 var TypeId2 = "~effect/data/Result";
 var CommonProto2 = {
   [TypeId2]: {
@@ -1704,7 +1702,7 @@ var getFailure = (self) => isSuccess(self) ? none : some2(self.failure);
 var getSuccess = (self) => isFailure(self) ? none : some2(self.success);
 var fromOption = /* @__PURE__ */ dual(2, (self, onNone) => isNone(self) ? fail(onNone()) : succeed(self.value));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Order.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Order.js
 function make4(compare) {
   return (self, that) => self === that ? 0 : compare(self, that);
 }
@@ -1730,7 +1728,7 @@ var max2 = (O) => dual(2, (self, that) => self === that || O(self, that) > -1 ? 
 var clamp = (O) => dual(2, (self, options) => min2(O)(options.maximum, max2(O)(options.minimum, self)));
 var isBetween = (O) => dual(2, (self, options) => !isLessThan(O)(self, options.minimum) && !isGreaterThan(O)(self, options.maximum));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Option.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Option.js
 var none2 = () => none;
 var some3 = some2;
 var isOption2 = isOption;
@@ -1912,7 +1910,7 @@ function makeReducerFailFast(reducer) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Context.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Context.js
 var ServiceTypeId = "~effect/Context/Service";
 var Service = function() {
   function KeyClass() {}
@@ -2055,20 +2053,21 @@ var isReference = (u) => !!u[ReferenceTypeId];
 var empty = () => emptyContext2;
 var emptyContext2 = /* @__PURE__ */ makeUnsafe(/* @__PURE__ */ new Map);
 var make5 = (key, service) => makeUnsafe(new Map([[key.key, service]]));
-var add = /* @__PURE__ */ dual(3, (self, key, service) => {
+var add = /* @__PURE__ */ dual(3, (self, key, service) => addUnsafe(self, key.key, service));
+var addUnsafe = (self, key, service) => {
   const impl = self;
-  const cacheRoot = cacheKeys.has(key.key) ? undefined : impl.cacheRoot;
+  const cacheRoot = cacheKeys.has(key) ? undefined : impl.cacheRoot;
   if (impl.depth >= MaxDepth) {
     const map2 = new Map(impl.mapUnsafe);
-    map2.set(key.key, service);
+    map2.set(key, service);
     return makeImpl(cacheRoot, map2, undefined, 0);
   }
   return makeImpl(cacheRoot, impl.base, {
-    key: key.key,
+    key,
     value: service,
     parent: impl.overlay
   }, impl.depth + 1);
-});
+};
 var addOrOmit = /* @__PURE__ */ dual(3, (self, key, service) => service._tag === "None" ? omit(key)(self) : add(self, key, service.value));
 var getOrElse2 = /* @__PURE__ */ dual(3, (self, key, orElse2) => {
   const value = lookup(self, key.key);
@@ -2145,10 +2144,10 @@ var omit = (...keys) => (self) => withFlat(self, (map2) => {
 });
 var Reference = Service;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/array.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/array.js
 var isArrayNonEmpty = (self) => self.length > 0;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Result.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Result.js
 var exports_Result = {};
 __export(exports_Result, {
   void: () => void_2,
@@ -2303,10 +2302,10 @@ var tap2 = /* @__PURE__ */ dual(2, (self, f) => {
   return self;
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tuple.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Tuple.js
 var makeEquivalence3 = Tuple2;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Iterable.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Iterable.js
 var makeBy = (f, options) => {
   const max3 = options?.length !== undefined ? Math.max(1, Math.floor(options.length)) : Infinity;
   return {
@@ -2404,7 +2403,7 @@ var filter2 = /* @__PURE__ */ dual(2, (self, predicate) => ({
   }
 }));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Record.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Record.js
 var isEmptyRecord = (self) => Object.keys(self).length === 0;
 var has = /* @__PURE__ */ dual(2, (self, key) => Object.hasOwn(self, key));
 var map3 = /* @__PURE__ */ dual(2, (self, f) => {
@@ -2430,7 +2429,7 @@ var makeEquivalence4 = (equivalence) => {
   return (self, that) => is(self, that) && is(that, self);
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Array.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Array.js
 var Array2 = globalThis.Array;
 var allocate = (n) => new Array2(n);
 var makeBy2 = /* @__PURE__ */ dual(2, (n, f) => {
@@ -2570,7 +2569,7 @@ function makeReducerConcat() {
   return reducer;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Duration.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Duration.js
 var exports_Duration = {};
 __export(exports_Duration, {
   zero: () => zero,
@@ -3184,7 +3183,7 @@ var ReducerSum = /* @__PURE__ */ make2(sum, zero);
 var CombinerMax = /* @__PURE__ */ max(Order);
 var CombinerMin = /* @__PURE__ */ min(Order);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Filter.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Filter.js
 var toPredicate = (self) => (input) => !isFailure2(self(input));
 var has2 = (key) => (input) => input.has(key) ? succeed2(input) : fail2(input);
 var compose2 = /* @__PURE__ */ dual(2, (left, right) => (input) => {
@@ -3207,7 +3206,7 @@ var toOption = (self) => (input) => {
   return isFailure2(result) ? none2() : some3(result.success);
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Scheduler.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Scheduler.js
 var Scheduler = /* @__PURE__ */ Reference("effect/Scheduler", {
   fiberCached: true,
   defaultValue: () => new MixedScheduler
@@ -3221,7 +3220,7 @@ var setImmediate = "setImmediate" in globalThis ? (f) => {
 };
 var setMicrotask = (f) => {
   let cancelled = false;
-  queueMicrotask(() => {
+  Promise.resolve().then(() => {
     if (!cancelled)
       f();
   });
@@ -3317,7 +3316,7 @@ var PreventSchedulerYield = /* @__PURE__ */ Reference("effect/Scheduler/PreventS
   defaultValue: () => false
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Tracer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Tracer.js
 var exports_Tracer = {};
 __export(exports_Tracer, {
   make: () => make7,
@@ -3331,6 +3330,215 @@ __export(exports_Tracer, {
   DisablePropagation: () => DisablePropagation,
   CurrentTraceLevel: () => CurrentTraceLevel
 });
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Encoding.js
+var exports_Encoding = {};
+__export(exports_Encoding, {
+  randomHex: () => randomHex,
+  isEncodingError: () => isEncodingError,
+  encodeHex: () => encodeHex,
+  encodeBase64Url: () => encodeBase64Url,
+  encodeBase64: () => encodeBase64,
+  decodeHexString: () => decodeHexString,
+  decodeHex: () => decodeHex,
+  decodeBase64UrlString: () => decodeBase64UrlString,
+  decodeBase64Url: () => decodeBase64Url,
+  decodeBase64String: () => decodeBase64String,
+  decodeBase64: () => decodeBase64,
+  EncodingErrorTypeId: () => EncodingErrorTypeId,
+  EncodingError: () => EncodingError
+});
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Data.js
+var Class3 = class extends Class {
+  constructor(props) {
+    super();
+    if (props) {
+      assignProperties(this, props);
+    }
+  }
+};
+var TaggedClass = (tag) => class extends Class3 {
+  _tag = tag;
+};
+var Error3 = Error2;
+var TaggedError2 = TaggedError;
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Encoding.js
+var EncodingErrorTypeId = "~effect/encoding/EncodingError";
+
+class EncodingError extends (/* @__PURE__ */ TaggedError2("EncodingError")) {
+  [EncodingErrorTypeId] = EncodingErrorTypeId;
+}
+var isEncodingError = (u) => hasProperty(u, EncodingErrorTypeId);
+var encodeBase64 = (input) => typeof input === "string" ? base64EncodeUint8Array(encoder.encode(input)) : base64EncodeUint8Array(input);
+var decodeBase64 = (str) => {
+  const stripped = stripCrlf(str);
+  const length = stripped.length;
+  if (length % 4 !== 0) {
+    return fail2(new EncodingError({
+      kind: "Decode",
+      module: "Base64",
+      input: stripped,
+      message: `Length must be a multiple of 4, but is ${length}`
+    }));
+  }
+  const index = stripped.indexOf("=");
+  if (index !== -1 && (index < length - 2 || index === length - 2 && stripped[length - 1] !== "=")) {
+    return fail2(new EncodingError({
+      kind: "Decode",
+      module: "Base64",
+      input: stripped,
+      message: `Found a '=' character, but it is not at the end`
+    }));
+  }
+  try {
+    const missingOctets = stripped.endsWith("==") ? 2 : stripped.endsWith("=") ? 1 : 0;
+    const result = new Uint8Array(3 * (length / 4) - missingOctets);
+    for (let i = 0, j = 0;i < length; i += 4, j += 3) {
+      const buffer = getBase64Code(stripped.charCodeAt(i)) << 18 | getBase64Code(stripped.charCodeAt(i + 1)) << 12 | getBase64Code(stripped.charCodeAt(i + 2)) << 6 | getBase64Code(stripped.charCodeAt(i + 3));
+      result[j] = buffer >> 16;
+      result[j + 1] = buffer >> 8 & 255;
+      result[j + 2] = buffer & 255;
+    }
+    return succeed2(result);
+  } catch (e) {
+    return fail2(new EncodingError({
+      kind: "Decode",
+      module: "Base64",
+      input: stripped,
+      message: e instanceof Error ? e.message : "Invalid input"
+    }));
+  }
+};
+var decodeBase64String = (str) => map2(decodeBase64(str), (_) => decoder.decode(_));
+var encodeBase64Url = (input) => typeof input === "string" ? base64UrlEncodeUint8Array(encoder.encode(input)) : base64UrlEncodeUint8Array(input);
+var decodeBase64Url = (str) => {
+  const stripped = stripCrlf(str);
+  const length = stripped.length;
+  if (length % 4 === 1) {
+    return fail2(new EncodingError({
+      module: "Base64Url",
+      kind: "Decode",
+      input: stripped,
+      message: `Length should be a multiple of 4, but is ${length}`
+    }));
+  }
+  if (!/^[-_A-Z0-9]*?={0,2}$/i.test(stripped)) {
+    return fail2(new EncodingError({
+      module: "Base64Url",
+      kind: "Decode",
+      input: stripped,
+      message: "Invalid input"
+    }));
+  }
+  let sanitized = length % 4 === 2 ? `${stripped}==` : length % 4 === 3 ? `${stripped}=` : stripped;
+  sanitized = sanitized.replace(/-/g, "+").replace(/_/g, "/");
+  return decodeBase64(sanitized);
+};
+var decodeBase64UrlString = (str) => map2(decodeBase64Url(str), (_) => decoder.decode(_));
+var encodeHex = (input) => typeof input === "string" ? hexEncodeUint8Array(encoder.encode(input)) : hexEncodeUint8Array(input);
+var randomHex = (length) => {
+  let result = "";
+  for (let i = length >>> 3;i > 0; i--) {
+    const word = Math.random() * 4294967296 >>> 0;
+    result += byteToHex[word >>> 24] + byteToHex[word >>> 16 & 255] + byteToHex[word >>> 8 & 255] + byteToHex[word & 255];
+  }
+  return result;
+};
+var decodeHex = (str) => {
+  const bytes = new TextEncoder().encode(str);
+  if (bytes.length % 2 !== 0) {
+    return fail2(new EncodingError({
+      module: "Hex",
+      kind: "Decode",
+      input: str,
+      message: `Length must be a multiple of 2, but is ${bytes.length}`
+    }));
+  }
+  try {
+    const length = bytes.length / 2;
+    const result = new Uint8Array(length);
+    for (let i = 0;i < length; i++) {
+      const a = fromHexChar(bytes[i * 2]);
+      const b = fromHexChar(bytes[i * 2 + 1]);
+      result[i] = a << 4 | b;
+    }
+    return succeed2(result);
+  } catch (e) {
+    return fail2(new EncodingError({
+      module: "Hex",
+      kind: "Decode",
+      input: str,
+      message: e instanceof Error ? e.message : "Invalid input"
+    }));
+  }
+};
+var decodeHexString = (str) => map2(decodeHex(str), (_) => decoder.decode(_));
+var encoder = /* @__PURE__ */ new TextEncoder;
+var decoder = /* @__PURE__ */ new TextDecoder;
+var stripCrlf = (str) => str.replace(/[\n\r]/g, "");
+var base64EncodeUint8Array = (bytes) => {
+  const length = bytes.length;
+  let result = "";
+  let i;
+  for (i = 2;i < length; i += 3) {
+    result += base64abc[bytes[i - 2] >> 2];
+    result += base64abc[(bytes[i - 2] & 3) << 4 | bytes[i - 1] >> 4];
+    result += base64abc[(bytes[i - 1] & 15) << 2 | bytes[i] >> 6];
+    result += base64abc[bytes[i] & 63];
+  }
+  if (i === length + 1) {
+    result += base64abc[bytes[i - 2] >> 2];
+    result += base64abc[(bytes[i - 2] & 3) << 4];
+    result += "==";
+  }
+  if (i === length) {
+    result += base64abc[bytes[i - 2] >> 2];
+    result += base64abc[(bytes[i - 2] & 3) << 4 | bytes[i - 1] >> 4];
+    result += base64abc[(bytes[i - 1] & 15) << 2];
+    result += "=";
+  }
+  return result;
+};
+function getBase64Code(charCode) {
+  if (charCode >= base64codes.length) {
+    throw new TypeError(`Invalid character ${String.fromCharCode(charCode)}`);
+  }
+  const code = base64codes[charCode];
+  if (code === 255) {
+    throw new TypeError(`Invalid character ${String.fromCharCode(charCode)}`);
+  }
+  return code;
+}
+var base64abc = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "+", "/"];
+var base64codes = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 255, 255, 255, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 255, 255, 255, 0, 255, 255, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 255, 255, 255, 255, 255, 255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51];
+var base64UrlEncodeUint8Array = (data) => base64EncodeUint8Array(data).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
+var byteToHex = [];
+for (let i = 0;i < 256; i++) {
+  byteToHex.push(i.toString(16).padStart(2, "0"));
+}
+var hexEncodeUint8Array = (bytes) => {
+  let result = "";
+  for (let i = 0;i < bytes.length; i++) {
+    result += byteToHex[bytes[i]];
+  }
+  return result;
+};
+var fromHexChar = (byte) => {
+  if (48 <= byte && byte <= 57) {
+    return byte - 48;
+  }
+  if (97 <= byte && byte <= 102) {
+    return byte - 97 + 10;
+  }
+  if (65 <= byte && byte <= 70) {
+    return byte - 65 + 10;
+  }
+  throw new TypeError("Invalid input");
+};
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Tracer.js
 var ParentSpanKey = "effect/Tracer/ParentSpan";
 
 class ParentSpan extends (/* @__PURE__ */ Service()(ParentSpanKey, {
@@ -3389,8 +3597,8 @@ class NativeSpan {
       startTime: options.startTime
     };
     this.attributes = new Map;
-    this.traceId = getOrUndefined(options.parent)?.traceId ?? randomHexString(32);
-    this.spanId = randomHexString(16);
+    this.traceId = getOrUndefined(options.parent)?.traceId ?? randomHex(32);
+    this.spanId = randomHex(16);
   }
   end(endTime, exit) {
     this.status = {
@@ -3410,22 +3618,11 @@ class NativeSpan {
     this.links.push(...links);
   }
 }
-var randomHexString = /* @__PURE__ */ function() {
-  const characters = "abcdef0123456789";
-  const charactersLength = characters.length;
-  return function(length) {
-    let result = "";
-    for (let i = 0;i < length; i++) {
-      result += characters.charAt(Math.floor(Math.random() * charactersLength));
-    }
-    return result;
-  };
-}();
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/metric.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/metric.js
 var FiberRuntimeMetricsKey = "effect/observability/Metric/FiberRuntimeMetricsKey";
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/references.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/references.js
 var CurrentErrorReporters = /* @__PURE__ */ Reference("effect/ErrorReporter/CurrentErrorReporters", {
   defaultValue: () => new Set
 });
@@ -3463,7 +3660,7 @@ var CurrentLogSpans = /* @__PURE__ */ Reference("effect/References/CurrentLogSpa
   defaultValue: () => []
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/stackTraceLimit.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/stackTraceLimit.js
 var isStackTraceLimitWritable = () => {
   const desc = Object.getOwnPropertyDescriptor(Error, "stackTraceLimit");
   if (desc === undefined) {
@@ -3479,7 +3676,7 @@ var setStackTraceLimit = (value) => {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/tracer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/tracer.js
 var addSpanStackTrace = (options) => {
   if (options?.captureStackTrace === false) {
     return options;
@@ -3513,7 +3710,7 @@ var makeStackCleaner = (line) => (stack) => {
 };
 var spanCleaner = /* @__PURE__ */ makeStackCleaner(3);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/effect.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/effect.js
 class Interrupt extends ReasonBase {
   fiberId;
   constructor(fiberId, annotations = constEmptyAnnotations) {
@@ -4550,7 +4747,7 @@ var exitFindErrorOption = (self) => {
 };
 var service = (service2) => service2;
 var serviceOption = (service2) => withFiber((fiber2) => succeed3(getOption(fiber2.context, service2)));
-var serviceOptional = (service2) => withFiber((fiber2) => fiber2.context.mapUnsafe.has(service2.key) ? succeed3(getUnsafe(fiber2.context, service2)) : fail3(new NoSuchElementError));
+var serviceOptional = (service2) => withFiber((fiber2) => fromOption3(getOption(fiber2.context, service2)));
 var updateContext = /* @__PURE__ */ dual(2, (self, f) => withFiber((fiber2) => {
   const prevContext = fiber2.context;
   const nextContext = f(prevContext);
@@ -4602,12 +4799,7 @@ var provideService = function() {
   }
   return dual(3, (self, service2, impl) => provideServiceImpl(self, service2, impl)).apply(this, arguments);
 };
-var provideServiceImpl = (self, service2, implementation) => updateContext(self, (s) => {
-  const prev = s.mapUnsafe.get(service2.key);
-  if (prev === implementation)
-    return s;
-  return add(s, service2, implementation);
-});
+var provideServiceImpl = (self, service2, implementation) => updateContext(self, add(service2, implementation));
 var provideServiceEffect = /* @__PURE__ */ dual(3, (self, service2, acquire) => flatMap3(acquire, (implementation) => provideService(self, service2, implementation)));
 var zip = /* @__PURE__ */ dual((args2) => isEffect(args2[1]), (self, that, options) => zipWith2(self, that, (a, a2) => [a, a2], options));
 var zipWith2 = /* @__PURE__ */ dual((args2) => isEffect(args2[1]), (self, that, f, options) => options?.concurrent ? map5(all3([self, that], {
@@ -5214,6 +5406,10 @@ var forEach = /* @__PURE__ */ dual((args2) => typeof args2[1] === "function", (i
   });
   return eff ? as2(eff, out) : succeed3(out);
 }));
+var head = (self) => flatMap3(self, (elements) => {
+  const result2 = elements[Symbol.iterator]().next();
+  return result2.done ? fail3(new NoSuchElementError) : succeed3(result2.value);
+});
 var forEachSequential = (iterable, f, options) => suspend(() => {
   const out = options?.discard ? undefined : [];
   const iterator = iterable[Symbol.iterator]();
@@ -5721,7 +5917,7 @@ var makeSpanUnsafe = (fiber2, name, options) => {
     const annotationsFromEnv = fiber2.getRef(TracerSpanAnnotations);
     const linksFromEnv = fiber2.getRef(TracerSpanLinks);
     const level = options?.level ?? fiber2.getRef(CurrentTraceLevel);
-    const links = options?.links !== undefined ? [...linksFromEnv, ...options.links] : linksFromEnv.slice();
+    const links = options?.links !== undefined ? [...linksFromEnv, ...options.links] : linksFromEnv.length === 0 ? [] : linksFromEnv.slice();
     span = tracer2.span({
       name,
       parent,
@@ -5732,12 +5928,12 @@ var makeSpanUnsafe = (fiber2, name, options) => {
       root: options?.root ?? isNone2(parent),
       sampled: options?.sampled ?? (isSome2(parent) && parent.value.sampled === false ? false : !isLogLevelGreaterThan(fiber2.getRef(MinimumTraceLevel), level))
     });
-    for (const [key, value] of Object.entries(annotationsFromEnv)) {
-      span.attribute(key, value);
+    for (const key in annotationsFromEnv) {
+      span.attribute(key, annotationsFromEnv[key]);
     }
     if (options?.attributes !== undefined) {
-      for (const [key, value] of Object.entries(options.attributes)) {
-        span.attribute(key, value);
+      for (const key in options.attributes) {
+        span.attribute(key, options.attributes[key]);
       }
     }
   }
@@ -6069,7 +6265,6 @@ var formatLogSpan = (self, now) => {
 };
 var structuredMessage = (u) => {
   switch (typeof u) {
-    case "bigint":
     case "function":
     case "symbol": {
       return String(u);
@@ -6351,7 +6546,7 @@ var reportCauseUnsafe = (fiber2, cause, defectsOnly) => {
   reporters.forEach((reporter) => reporter.report(opts));
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Cause.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Cause.js
 var TypeId5 = CauseTypeId;
 var ReasonTypeId = CauseReasonTypeId;
 var isCause2 = isCause;
@@ -6416,7 +6611,7 @@ class StackTrace extends (/* @__PURE__ */ Service()("effect/Cause/StackTrace")) 
 class InterruptorStackTrace2 extends (/* @__PURE__ */ Service()("effect/Cause/InterruptorStackTrace")) {
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Effect.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Effect.js
 var exports_Effect = {};
 __export(exports_Effect, {
   zipWith: () => zipWith3,
@@ -6565,6 +6760,7 @@ __export(exports_Effect, {
   interrupt: () => interrupt4,
   ignoreCause: () => ignoreCause2,
   ignore: () => ignore2,
+  head: () => head2,
   gen: () => gen4,
   fromResult: () => fromResult2,
   fromOption: () => fromOption4,
@@ -6648,7 +6844,7 @@ __export(exports_Effect, {
   Do: () => Do4
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Exit.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Exit.js
 var exports_Exit = {};
 __export(exports_Exit, {
   void: () => void_4,
@@ -6707,7 +6903,7 @@ var getSuccess4 = exitGetSuccess;
 var getCause = exitGetCause;
 var findErrorOption3 = exitFindErrorOption;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Layer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Layer.js
 var exports_Layer = {};
 __export(exports_Layer, {
   withSpan: () => withSpan2,
@@ -6756,7 +6952,7 @@ __export(exports_Layer, {
   CurrentMemoMap: () => CurrentMemoMap
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Deferred.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Deferred.js
 var TypeId6 = "~effect/Deferred";
 var DeferredProto = {
   [TypeId6]: {
@@ -6779,8 +6975,12 @@ var _await = (self) => callback((resume) => {
   self.resumes ??= [];
   self.resumes.push(resume);
   return sync(() => {
-    const index = self.resumes.indexOf(resume);
-    self.resumes.splice(index, 1);
+    const resumes = self.resumes;
+    if (resumes === undefined)
+      return;
+    const index = resumes.indexOf(resume);
+    if (index >= 0)
+      resumes.splice(index, 1);
   });
 });
 var completeWith = /* @__PURE__ */ dual(2, (self, effect) => sync(() => doneUnsafe(self, effect)));
@@ -6803,7 +7003,7 @@ var doneUnsafe = (self, effect) => {
 };
 var into = /* @__PURE__ */ dual(2, (self, deferred) => uninterruptibleMask((restore) => flatMap3(exit(restore(self)), (exit2) => done3(deferred, exit2))));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/References.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/References.js
 var exports_References = {};
 __export(exports_References, {
   UnhandledLogLevel: () => UnhandledLogLevel2,
@@ -6839,7 +7039,7 @@ var UnhandledLogLevel2 = UnhandledLogLevel;
 var CurrentLoggers2 = CurrentLoggers;
 var LogToStderr2 = LogToStderr;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Scope.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Scope.js
 var exports_Scope = {};
 __export(exports_Scope, {
   use: () => use,
@@ -6866,7 +7066,7 @@ var close = scopeClose;
 var closeUnsafe = scopeCloseUnsafe;
 var use = scopeUse;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Layer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Layer.js
 var TypeId7 = "~effect/Layer";
 var MemoMapTypeId = "~effect/Layer/MemoMap";
 var memoMapReuse = (entry, scope2) => {
@@ -7096,7 +7296,7 @@ var provideSpanStackFrame2 = (name, stack) => {
   }));
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ExecutionPlan.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ExecutionPlan.js
 var TypeId8 = "~effect/ExecutionPlan";
 var Proto2 = {
   [TypeId8]: TypeId8,
@@ -7123,22 +7323,7 @@ var CurrentMetadata = /* @__PURE__ */ Reference("effect/ExecutionPlan/CurrentMet
   })
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Data.js
-var Class3 = class extends Class {
-  constructor(props) {
-    super();
-    if (props) {
-      assignProperties(this, props);
-    }
-  }
-};
-var TaggedClass = (tag) => class extends Class3 {
-  _tag = tag;
-};
-var Error3 = Error2;
-var TaggedError2 = TaggedError;
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Clock.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Clock.js
 var exports_Clock = {};
 __export(exports_Clock, {
   monotonicTimeNanos: () => monotonicTimeNanos2,
@@ -7153,7 +7338,7 @@ var currentTimeMillis2 = currentTimeMillis;
 var currentTimeNanos2 = currentTimeNanos;
 var monotonicTimeNanos2 = monotonicTimeNanos;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/dateTime.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/dateTime.js
 var TypeId9 = "~effect/time/DateTime";
 var TimeZoneTypeId = "~effect/time/DateTime/TimeZone";
 var Proto3 = {
@@ -7802,7 +7987,7 @@ var formatIsoOffset = (self) => {
 };
 var formatIsoZoned = (self) => self.zone._tag === "Offset" ? formatIsoOffset(self) : `${formatIsoOffset(self)}[${self.zone.id}]`;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Number.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Number.js
 var Number3 = globalThis.Number;
 var remainder = /* @__PURE__ */ dual(2, (self, divisor) => {
   const selfString = self.toString();
@@ -7863,14 +8048,14 @@ var parse = (s) => {
 var ReducerMax = /* @__PURE__ */ make2((a, b) => Math.max(a, b), -Infinity);
 var ReducerMin = /* @__PURE__ */ make2((a, b) => Math.min(a, b), Infinity);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/String.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/String.js
 var String3 = globalThis.String;
 var isString2 = isString;
 var Order3 = String2;
 var trim = (self) => self.trim();
 var camelToSnake = (self) => self.replace(/([A-Z])/g, "_$1").toLowerCase();
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/random.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/random.js
 var Random = /* @__PURE__ */ Reference("effect/Random", {
   defaultValue: () => ({
     nextIntUnsafe() {
@@ -7882,7 +8067,7 @@ var Random = /* @__PURE__ */ Reference("effect/Random", {
   })
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Pull.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Pull.js
 var catchDone = /* @__PURE__ */ dual(2, (effect2, f) => catchCauseFilter(effect2, filterDoneLeftover, (l) => f(l)));
 var isDoneCause = (cause) => cause.reasons.some(isDoneFailure);
 var isDoneFailure = (failure) => failure._tag === "Fail" && isDone2(failure.error);
@@ -7900,7 +8085,7 @@ var matchEffect2 = /* @__PURE__ */ dual(2, (self, options) => matchCauseEffect(s
   }
 }));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Schedule.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Schedule.js
 var TypeId10 = "~effect/Schedule";
 var CurrentMetadata2 = /* @__PURE__ */ Reference("effect/Schedule/CurrentMetadata", {
   defaultValue: /* @__PURE__ */ constant({
@@ -7994,11 +8179,11 @@ var while_ = /* @__PURE__ */ dual(2, (self, predicate) => fromStep(map5(toStep(s
 })));
 var forever3 = /* @__PURE__ */ spaced(zero);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/layer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/layer.js
 var provideLayer = (self, layer, options) => scopedWith((scope2) => flatMap3(options?.local ? buildWithMemoMap(layer, makeMemoMapUnsafe(), scope2) : buildWithScope(layer, scope2), (context2) => provideContext(self, context2)));
 var provide3 = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, source, options) => isContext(source) ? provideContext(self, source) : provideLayer(self, Array.isArray(source) ? mergeAll2(...source) : source, options));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schedule.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schedule.js
 var repeatOrElse = /* @__PURE__ */ dual(3, (self, schedule, orElse3) => flatMap3(toStepWithMetadata(schedule), (step) => {
   let meta = CurrentMetadata2.defaultValue();
   return catch_(forever2(tap3(flatMap3(suspend(() => provideService(self, CurrentMetadata2, meta)), step), (meta_) => sync(() => {
@@ -8069,7 +8254,7 @@ var buildFromOptions = (options) => {
   return schedule;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/executionPlan.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/executionPlan.js
 var makeEventEmitter = (onEvent, currentMetadata) => {
   let lastStepIndex = -1;
   let stepAttempt = 0;
@@ -8175,7 +8360,7 @@ var scheduleFromStep = (step, first) => {
 };
 var scheduleOnce = /* @__PURE__ */ recurs(1);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Request.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Request.js
 var TypeId11 = "~effect/Request";
 var requestVariance = /* @__PURE__ */ byReferenceUnsafe({
   _E: (_) => _,
@@ -8188,7 +8373,7 @@ var RequestPrototype = {
 };
 var makeEntry = (options) => options;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/request.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/request.js
 var request = /* @__PURE__ */ dual(2, (self, resolver) => {
   const withResolver = (resolver2) => callback((resume) => {
     const entry = addEntry(resolver2, self, resume, getCurrentFiber());
@@ -8304,7 +8489,7 @@ function runBatch(batch) {
   return batch.run;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Metric.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Metric.js
 var exports_Metric = {};
 __export(exports_Metric, {
   withConstantInput: () => withConstantInput,
@@ -8567,7 +8752,7 @@ class SummaryMetric extends Metric$ {
         throw new Error(`Quantile must be between 0 and 1, found: ${quantile}`);
       }
     }
-    let head = 0;
+    let head2 = 0;
     let count = 0;
     let sum2 = 0;
     let min5 = Number.MAX_VALUE;
@@ -8602,9 +8787,9 @@ class SummaryMetric extends Metric$ {
     };
     const observe = (value, timestamp) => {
       if (this.#maxSize > 0) {
-        const target = head % this.#maxSize;
+        const target = head2 % this.#maxSize;
         observations[target] = [timestamp, value];
-        head = head + 1;
+        head2 = head2 + 1;
       }
       count = count + 1;
       sum2 = sum2 + value;
@@ -8849,7 +9034,7 @@ function addAttributesToContext(context2, attributes) {
   return add(context2, CurrentMetricAttributes, updated);
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Effect.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Effect.js
 var TypeId13 = EffectTypeId;
 var isEffect2 = isEffect;
 var all4 = all3;
@@ -8859,6 +9044,7 @@ var validate2 = validate;
 var findFirst2 = findFirst;
 var findFirstFilter2 = findFirstFilter;
 var forEach2 = forEach;
+var head2 = head;
 var whileLoop2 = whileLoop;
 var promise2 = promise;
 var tryPromise2 = tryPromise;
@@ -9104,10 +9290,11 @@ var trackDuration = /* @__PURE__ */ dual((args2) => isEffect2(args2[0]), (self, 
 class Transaction extends (/* @__PURE__ */ Service()("effect/Effect/Transaction")) {
 }
 var tx = (effect2) => withFiber2((fiber3) => {
-  if (fiber3.context.mapUnsafe.has(Transaction.key)) {
+  let state = getOrUndefined2(fiber3.context, Transaction);
+  if (state) {
     return effect2;
   }
-  const state = {
+  state = {
     journal: new Map,
     retry: false
   };
@@ -9206,7 +9393,7 @@ var flatMapEager2 = flatMapEager;
 var catchEager2 = catchEager;
 var fnUntracedEager2 = fnUntracedEager;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Runtime.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Runtime.js
 var defaultTeardown = (exit3, onExit3) => {
   if (isSuccess4(exit3))
     return onExit3(0);
@@ -9254,7 +9441,7 @@ var getErrorReported = (u) => {
   return true;
 };
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeRuntime.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeRuntime.js
 var runMain = /* @__PURE__ */ makeRunMain(({
   fiber: fiber3,
   teardown
@@ -9277,15 +9464,15 @@ var runMain = /* @__PURE__ */ makeRunMain(({
   process.on("SIGTERM", onSigint);
 });
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeRuntime.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeRuntime.js
 var runMain2 = runMain;
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeServices.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeServices.js
 var exports_NodeServices = {};
 __export(exports_NodeServices, {
   layer: () => layer12
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FileSystem.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/FileSystem.js
 var exports_FileSystem = {};
 __export(exports_FileSystem, {
   makeNoop: () => makeNoop,
@@ -9303,7 +9490,7 @@ __export(exports_FileSystem, {
   FileSystem: () => FileSystem
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PlatformError.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PlatformError.js
 var TypeId14 = "~effect/platform/PlatformError";
 
 class BadArgument extends (/* @__PURE__ */ TaggedError2("BadArgument")) {
@@ -9339,7 +9526,7 @@ class PlatformError extends (/* @__PURE__ */ TaggedError2("PlatformError")) {
 var systemError = (options) => new PlatformError(new SystemError(options));
 var badArgument = (options) => new PlatformError(new BadArgument(options));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Chunk.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Chunk.js
 var TypeId15 = "~effect/collections/Chunk";
 function copy(src, srcPos, dest, destPos, len) {
   for (let i = srcPos;i < Math.min(src.length, srcPos + len); i++) {
@@ -9523,7 +9710,7 @@ var getUnsafe3 = /* @__PURE__ */ dual(2, (self, index) => {
 });
 var size = (self) => self.length;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Fiber.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Fiber.js
 var exports_Fiber = {};
 __export(exports_Fiber, {
   runIn: () => runIn,
@@ -9550,11 +9737,11 @@ var isFiber = (u) => hasProperty(u, FiberTypeId);
 var getCurrent = getCurrentFiber;
 var runIn = fiberRunIn;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Latch.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Latch.js
 var makeUnsafe5 = makeLatchUnsafe;
 var make10 = makeLatch;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/MutableRef.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/MutableRef.js
 var TypeId16 = "~effect/MutableRef";
 var MutableRefProto = {
   [TypeId16]: TypeId16,
@@ -9577,7 +9764,7 @@ var set = /* @__PURE__ */ dual(2, (self, value2) => {
   return self;
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PubSub.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PubSub.js
 var exports_PubSub = {};
 __export(exports_PubSub, {
   unbounded: () => unbounded,
@@ -9611,7 +9798,7 @@ __export(exports_PubSub, {
   BackPressureStrategy: () => BackPressureStrategy
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/MutableList.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/MutableList.js
 var Empty = /* @__PURE__ */ Symbol.for("effect/MutableList/Empty");
 var make12 = () => ({
   head: undefined,
@@ -9783,7 +9970,7 @@ var filter6 = (self, f) => {
 };
 var remove2 = (self, value2) => filter6(self, (v) => v !== value2);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PubSub.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PubSub.js
 var TypeId17 = "~effect/PubSub";
 var SubscriptionTypeId = "~effect/PubSub/Subscription";
 var make13 = (options) => sync3(() => makePubSubUnsafe(options.atomicPubSub(), new Map, makeUnsafe3(), makeUnsafe5(false), make11(false), options.strategy()));
@@ -9817,7 +10004,10 @@ var makeAtomicBounded = (capacity) => {
     return new BoundedPubSubArb(options.capacity, replayBuffer);
   }
 };
-var makeAtomicUnbounded = (options) => new UnboundedPubSub(options?.replay ? new ReplayBuffer(options.replay) : undefined);
+var makeAtomicUnbounded = (options) => {
+  const replay = options?.replay;
+  return new UnboundedPubSub(replay && replay > 0 ? new ReplayBuffer(Math.ceil(replay)) : undefined);
+};
 var capacity = (self) => self.pubsub.capacity;
 var size2 = (self) => sync3(() => sizeUnsafe(self));
 var sizeUnsafe = (self) => {
@@ -10964,7 +11154,7 @@ var emptyReplayWindow = {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Queue.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Queue.js
 var exports_Queue = {};
 __export(exports_Queue, {
   unbounded: () => unbounded2,
@@ -11245,16 +11435,14 @@ var takeUnsafe = (self) => {
   return;
 };
 var await_2 = (self) => callback((resume) => {
+  const awaiter = (effect2) => resume(catchDone(effect2, () => exitVoid));
   if (self.state._tag === "Done") {
-    if (isDoneCause(self.state.exit.cause)) {
-      return resume(exitVoid);
-    }
-    return resume(self.state.exit);
+    return awaiter(self.state.exit);
   }
-  self.state.awaiters.add(resume);
+  self.state.awaiters.add(awaiter);
   return sync(() => {
     if (self.state._tag !== "Done") {
-      self.state.awaiters.delete(resume);
+      self.state.awaiters.delete(awaiter);
     }
   });
 });
@@ -11424,7 +11612,7 @@ var finalize = (self, exit3) => {
   openState.awaiters.clear();
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Semaphore.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Semaphore.js
 var exports_Semaphore = {};
 __export(exports_Semaphore, {
   withPermitsIfAvailable: () => withPermitsIfAvailable,
@@ -11559,10 +11747,10 @@ var takeIfAvailable = /* @__PURE__ */ dual(2, (self, permits) => self.takeIfAvai
 var release = /* @__PURE__ */ dual(2, (self, permits) => self.release(permits));
 var releaseAll = (self) => self.releaseAll;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Take.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Take.js
 var toPull = (take5) => isExit2(take5) ? isSuccess4(take5) ? done2(take5.value) : take5 : succeed6(take5);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Channel.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Channel.js
 var TypeId19 = "~effect/Channel";
 var isChannel = (u) => hasProperty(u, TypeId19);
 var ChannelProto = {
@@ -12346,11 +12534,11 @@ var mkUint8Array = (self) => map8(runFold(self, () => ({
   return result3;
 });
 var runHead = (self) => suspend3(() => {
-  let head = none2();
+  let head3 = none2();
   return runWith(self, (pull) => pull.pipe(asSome2, flatMap5((head_) => {
-    head = head_;
+    head3 = head_;
     return done2();
-  })), () => succeed6(head));
+  })), () => succeed6(head3));
 });
 var runLast = (self) => suspend3(() => {
   const absent = Symbol();
@@ -12423,7 +12611,7 @@ var toPubSubTake = /* @__PURE__ */ dual(2, /* @__PURE__ */ fnUntraced2(function*
   return pubsub;
 }));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/stream.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/stream.js
 var TypeId20 = "~effect/Stream";
 var streamVariance = {
   _R: identity,
@@ -12442,7 +12630,7 @@ var fromChannel = (channel) => {
   return self;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Sink.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Sink.js
 var TypeId21 = "~effect/Sink";
 var endVoid = /* @__PURE__ */ succeed6([undefined]);
 var sinkVariance = {
@@ -12520,7 +12708,7 @@ var forEachArray = (f) => fromTransform2((upstream) => upstream.pipe(flatMap5(f)
 }), catchDone(() => endVoid)));
 var unwrap3 = (effect2) => fromChannel2(unwrap2(map8(effect2, toChannel)));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Stream.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Stream.js
 var exports_Stream = {};
 __export(exports_Stream, {
   zipWithPreviousAndNext: () => zipWithPreviousAndNext,
@@ -12757,7 +12945,7 @@ __export(exports_Stream, {
   DefaultChunkSize: () => DefaultChunkSize2
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/MutableHashMap.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/MutableHashMap.js
 var TypeId22 = "~effect/collections/MutableHashMap";
 var MutableHashMapProto = {
   [TypeId22]: TypeId22,
@@ -12880,7 +13068,7 @@ var clear3 = (self) => {
 };
 var size4 = (self) => self.backing.size;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/RcMap.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/RcMap.js
 var TypeId23 = "~effect/RcMap";
 var makeUnsafe7 = (options) => ({
   [TypeId23]: TypeId23,
@@ -12999,7 +13187,7 @@ var touch = /* @__PURE__ */ dual(2, (self, key) => clockWith3((clock) => {
   return void_5;
 }));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/rcRef.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/rcRef.js
 var TypeId24 = "~effect/RcRef";
 var stateEmpty = {
   _tag: "Empty"
@@ -13119,12 +13307,12 @@ var invalidate = (self_) => {
   }));
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/RcRef.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/RcRef.js
 var make18 = make17;
 var get6 = get5;
 var invalidate2 = invalidate;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Stream.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Stream.js
 var TypeId25 = "~effect/Stream";
 var isStream = (u) => hasProperty(u, TypeId25);
 var DefaultChunkSize2 = DefaultChunkSize;
@@ -14392,14 +14580,14 @@ var changesWithEffect = /* @__PURE__ */ dual(2, (self, f) => transformPull2(self
   }));
 })));
 var decodeText = /* @__PURE__ */ dual((args2) => isStream(args2[0]), (self, options) => suspend5(() => {
-  const decoder = new TextDecoder(options?.encoding);
-  return map10(self, (chunk) => decoder.decode(chunk, {
+  const decoder2 = new TextDecoder(options?.encoding);
+  return map10(self, (chunk) => decoder2.decode(chunk, {
     stream: true
   }));
 }));
 var encodeText = (self) => suspend5(() => {
-  const encoder = new TextEncoder;
-  return map10(self, (chunk) => encoder.encode(chunk));
+  const encoder2 = new TextEncoder;
+  return map10(self, (chunk) => encoder2.encode(chunk));
 });
 var splitLines2 = (self) => self.channel.pipe(pipeTo(splitLines()), fromChannel3);
 var intersperse = /* @__PURE__ */ dual(2, (self, element) => mapArray(self, (arr, i) => {
@@ -14659,7 +14847,7 @@ var toPubSubTake2 = /* @__PURE__ */ dual(2, (self, options) => toPubSubTake(self
 var toQueue = /* @__PURE__ */ dual(2, (self, options) => toQueueArray(self.channel, options));
 var runIntoQueue = /* @__PURE__ */ dual(2, (self, queue) => runIntoQueueArray(self.channel, queue));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FileSystem.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/FileSystem.js
 var TypeId26 = "~effect/platform/FileSystem";
 var Size = (bytes) => typeof bytes === "bigint" ? bytes : BigInt(bytes);
 var KiB = (n) => Size(n * 1024);
@@ -14829,7 +15017,7 @@ var isFile = (u) => hasProperty(u, FileTypeId);
 class WatchBackend extends (/* @__PURE__ */ Service()("effect/platform/FileSystem/WatchBackend")) {
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Path.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Path.js
 var TypeId27 = "~effect/platform/Path";
 var Path = /* @__PURE__ */ Service("effect/Path");
 function normalizeStringPosix(path, allowAboveRoot) {
@@ -15313,7 +15501,7 @@ var posixImpl = /* @__PURE__ */ Path.of({
   toNamespacedPath: identity
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/annotations.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/annotations.js
 function resolve3(ast) {
   return ast.checks ? ast.checks[ast.checks.length - 1].annotations : ast.annotations;
 }
@@ -15331,14 +15519,14 @@ var resolveTitle = /* @__PURE__ */ resolveAt("title");
 var resolveDescription = /* @__PURE__ */ resolveAt("description");
 var resolveBrands = /* @__PURE__ */ resolveAt("brands");
 var getExpected = /* @__PURE__ */ memoize((ast) => {
-  const identifier2 = resolveIdentifier(ast);
+  const identifier2 = resolve3(ast)?.identifier;
   if (typeof identifier2 === "string")
     return identifier2;
   return ast.getExpected(getExpected);
 });
 var annotationExcludedKeys = /* @__PURE__ */ new Set([SENTINELS_ANNOTATION_KEY, STRUCTURAL_ANNOTATION_KEY, "representation", "arbitrary", "brands", "toJsonSchema", "toCode", "toArbitrary", "toEquivalence", "toFormatter", "toCodec", "toCodecJson", "toCodecStringTree", "toCodecIso"]);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/parser.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/parser.js
 var missing = /* @__PURE__ */ Symbol();
 var succeed9 = succeed4;
 var missingExit = /* @__PURE__ */ succeed9(missing);
@@ -15346,7 +15534,7 @@ var sameExit = /* @__PURE__ */ succeed9(missing);
 var toOption2 = (value2) => value2 === missing ? none2() : some3(value2);
 var fromOptionExit = (option3) => option3._tag === "None" ? missingExit : succeed9(option3.value);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaIssue.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaIssue.js
 var TypeId28 = "~effect/SchemaIssue/Issue";
 function isIssue(u) {
   return hasProperty(u, TypeId28) && u[TypeId28] === TypeId28;
@@ -15607,46 +15795,57 @@ function formatCheck(check) {
   }
 }
 function makeFormatterDefault() {
-  return (issue) => toDefaultIssues(issue, [], defaultLeafHook, defaultCheckHook).map(formatDefaultIssue).join(`
-`);
+  return (issue) => formatIssue(issue, "");
 }
 var defaultFormatter = /* @__PURE__ */ makeFormatterDefault();
-function formatDefaultIssue(issue) {
-  let out = issue.message;
-  if (issue.path && issue.path.length > 0) {
-    const path = formatPath(issue.path);
-    out += `
-  at ${path}`;
+function formatIssue(issue, path) {
+  let message;
+  switch (issue._tag) {
+    case "Filter": {
+      const annotated = defaultCheckHook(issue);
+      if (annotated !== undefined) {
+        message = annotated;
+      } else {
+        if (issue.issue._tag !== "InvalidValue") {
+          return formatIssue(issue.issue, path);
+        }
+        const expected = findExpected(issue.issue);
+        message = expected === undefined ? getExpectedMessage(formatCheck(issue.filter), issue) : getExpectedMessage(expected, issue.issue);
+      }
+      break;
+    }
+    case "Encoding":
+      return formatIssue(issue.issue, path);
+    case "Pointer":
+      return formatIssue(issue.issue, path + formatPath(issue.path));
+    case "Composite":
+    case "AnyOf": {
+      if (issue._tag === "Composite" || issue.issues.length > 0) {
+        return issue.issues.map((issue2) => formatIssue(issue2, path)).join(`
+`);
+      }
+      message = findMessage(issue) ?? getExpectedMessage(getExpected(issue.ast), issue);
+      break;
+    }
+    default:
+      message = defaultLeafHook(issue);
+      break;
   }
-  return out;
+  return path ? `${message}
+  at ${path}` : message;
 }
 function findMessage(issue) {
-  switch (issue._tag) {
-    case "InvalidType":
-    case "OneOf":
-    case "Composite":
-    case "AnyOf":
-      return getMessageAnnotation(issue.ast.annotations);
-    case "InvalidValue":
-    case "Forbidden":
-      return getMessageAnnotation(issue.annotations);
-    case "MissingKey":
-      return getMessageAnnotation(issue.annotations, "messageMissingKey");
-    case "UnexpectedKey":
-      return getMessageAnnotation(issue.ast.annotations, "messageUnexpectedKey");
-    case "Filter":
-      return getMessageAnnotation(issue.filter.annotations);
-    case "Encoding":
-      return findMessage(issue.issue);
-  }
-}
-function getMessageAnnotation(annotations2, type = "message") {
-  const message = annotations2?.[type];
+  if (issue._tag === "Pointer")
+    return;
+  if (issue._tag === "Encoding")
+    return findMessage(issue.issue);
+  const annotations2 = issue._tag === "Filter" ? issue.filter.annotations : ("annotations" in issue) ? issue.annotations : issue.ast.annotations;
+  const message = annotations2?.[issue._tag === "MissingKey" ? "messageMissingKey" : issue._tag === "UnexpectedKey" ? "messageUnexpectedKey" : "message"];
   if (typeof message === "string")
     return message;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/cause.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/cause.js
 function getSchemaIssue(cause) {
   let issue;
   for (const reason of cause.reasons) {
@@ -15667,7 +15866,7 @@ function getSchemaIssueOrThrow(cause, message) {
   return issue;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/DateTime.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/DateTime.js
 var exports_DateTime = {};
 __export(exports_DateTime, {
   zonedOffsetIso: () => zonedOffsetIso2,
@@ -15852,185 +16051,7 @@ var layerCurrentZoneOffset = (offset) => succeed5(CurrentTimeZone)(zoneMakeOffse
 var layerCurrentZoneNamed = /* @__PURE__ */ flow(zoneMakeNamedEffect, /* @__PURE__ */ effect(CurrentTimeZone));
 var layerCurrentZoneLocal = /* @__PURE__ */ sync2(CurrentTimeZone)(zoneMakeLocal2);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Encoding.js
-var exports_Encoding = {};
-__export(exports_Encoding, {
-  isEncodingError: () => isEncodingError,
-  encodeHex: () => encodeHex,
-  encodeBase64Url: () => encodeBase64Url,
-  encodeBase64: () => encodeBase64,
-  decodeHexString: () => decodeHexString,
-  decodeHex: () => decodeHex,
-  decodeBase64UrlString: () => decodeBase64UrlString,
-  decodeBase64Url: () => decodeBase64Url,
-  decodeBase64String: () => decodeBase64String,
-  decodeBase64: () => decodeBase64,
-  EncodingErrorTypeId: () => EncodingErrorTypeId,
-  EncodingError: () => EncodingError
-});
-var EncodingErrorTypeId = "~effect/encoding/EncodingError";
-
-class EncodingError extends (/* @__PURE__ */ TaggedError2("EncodingError")) {
-  [EncodingErrorTypeId] = EncodingErrorTypeId;
-}
-var isEncodingError = (u) => hasProperty(u, EncodingErrorTypeId);
-var encodeBase64 = (input) => typeof input === "string" ? base64EncodeUint8Array(encoder.encode(input)) : base64EncodeUint8Array(input);
-var decodeBase64 = (str) => {
-  const stripped = stripCrlf(str);
-  const length = stripped.length;
-  if (length % 4 !== 0) {
-    return fail2(new EncodingError({
-      kind: "Decode",
-      module: "Base64",
-      input: stripped,
-      message: `Length must be a multiple of 4, but is ${length}`
-    }));
-  }
-  const index = stripped.indexOf("=");
-  if (index !== -1 && (index < length - 2 || index === length - 2 && stripped[length - 1] !== "=")) {
-    return fail2(new EncodingError({
-      kind: "Decode",
-      module: "Base64",
-      input: stripped,
-      message: `Found a '=' character, but it is not at the end`
-    }));
-  }
-  try {
-    const missingOctets = stripped.endsWith("==") ? 2 : stripped.endsWith("=") ? 1 : 0;
-    const result4 = new Uint8Array(3 * (length / 4) - missingOctets);
-    for (let i = 0, j = 0;i < length; i += 4, j += 3) {
-      const buffer3 = getBase64Code(stripped.charCodeAt(i)) << 18 | getBase64Code(stripped.charCodeAt(i + 1)) << 12 | getBase64Code(stripped.charCodeAt(i + 2)) << 6 | getBase64Code(stripped.charCodeAt(i + 3));
-      result4[j] = buffer3 >> 16;
-      result4[j + 1] = buffer3 >> 8 & 255;
-      result4[j + 2] = buffer3 & 255;
-    }
-    return succeed2(result4);
-  } catch (e) {
-    return fail2(new EncodingError({
-      kind: "Decode",
-      module: "Base64",
-      input: stripped,
-      message: e instanceof Error ? e.message : "Invalid input"
-    }));
-  }
-};
-var decodeBase64String = (str) => map2(decodeBase64(str), (_) => decoder.decode(_));
-var encodeBase64Url = (input) => typeof input === "string" ? base64UrlEncodeUint8Array(encoder.encode(input)) : base64UrlEncodeUint8Array(input);
-var decodeBase64Url = (str) => {
-  const stripped = stripCrlf(str);
-  const length = stripped.length;
-  if (length % 4 === 1) {
-    return fail2(new EncodingError({
-      module: "Base64Url",
-      kind: "Decode",
-      input: stripped,
-      message: `Length should be a multiple of 4, but is ${length}`
-    }));
-  }
-  if (!/^[-_A-Z0-9]*?={0,2}$/i.test(stripped)) {
-    return fail2(new EncodingError({
-      module: "Base64Url",
-      kind: "Decode",
-      input: stripped,
-      message: "Invalid input"
-    }));
-  }
-  let sanitized = length % 4 === 2 ? `${stripped}==` : length % 4 === 3 ? `${stripped}=` : stripped;
-  sanitized = sanitized.replace(/-/g, "+").replace(/_/g, "/");
-  return decodeBase64(sanitized);
-};
-var decodeBase64UrlString = (str) => map2(decodeBase64Url(str), (_) => decoder.decode(_));
-var encodeHex = (input) => typeof input === "string" ? hexEncodeUint8Array(encoder.encode(input)) : hexEncodeUint8Array(input);
-var decodeHex = (str) => {
-  const bytes = new TextEncoder().encode(str);
-  if (bytes.length % 2 !== 0) {
-    return fail2(new EncodingError({
-      module: "Hex",
-      kind: "Decode",
-      input: str,
-      message: `Length must be a multiple of 2, but is ${bytes.length}`
-    }));
-  }
-  try {
-    const length = bytes.length / 2;
-    const result4 = new Uint8Array(length);
-    for (let i = 0;i < length; i++) {
-      const a = fromHexChar(bytes[i * 2]);
-      const b = fromHexChar(bytes[i * 2 + 1]);
-      result4[i] = a << 4 | b;
-    }
-    return succeed2(result4);
-  } catch (e) {
-    return fail2(new EncodingError({
-      module: "Hex",
-      kind: "Decode",
-      input: str,
-      message: e instanceof Error ? e.message : "Invalid input"
-    }));
-  }
-};
-var decodeHexString = (str) => map2(decodeHex(str), (_) => decoder.decode(_));
-var encoder = /* @__PURE__ */ new TextEncoder;
-var decoder = /* @__PURE__ */ new TextDecoder;
-var stripCrlf = (str) => str.replace(/[\n\r]/g, "");
-var base64EncodeUint8Array = (bytes) => {
-  const length = bytes.length;
-  let result4 = "";
-  let i;
-  for (i = 2;i < length; i += 3) {
-    result4 += base64abc[bytes[i - 2] >> 2];
-    result4 += base64abc[(bytes[i - 2] & 3) << 4 | bytes[i - 1] >> 4];
-    result4 += base64abc[(bytes[i - 1] & 15) << 2 | bytes[i] >> 6];
-    result4 += base64abc[bytes[i] & 63];
-  }
-  if (i === length + 1) {
-    result4 += base64abc[bytes[i - 2] >> 2];
-    result4 += base64abc[(bytes[i - 2] & 3) << 4];
-    result4 += "==";
-  }
-  if (i === length) {
-    result4 += base64abc[bytes[i - 2] >> 2];
-    result4 += base64abc[(bytes[i - 2] & 3) << 4 | bytes[i - 1] >> 4];
-    result4 += base64abc[(bytes[i - 1] & 15) << 2];
-    result4 += "=";
-  }
-  return result4;
-};
-function getBase64Code(charCode) {
-  if (charCode >= base64codes.length) {
-    throw new TypeError(`Invalid character ${String.fromCharCode(charCode)}`);
-  }
-  const code = base64codes[charCode];
-  if (code === 255) {
-    throw new TypeError(`Invalid character ${String.fromCharCode(charCode)}`);
-  }
-  return code;
-}
-var base64abc = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z", "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "+", "/"];
-var base64codes = [255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 255, 255, 255, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 255, 255, 255, 0, 255, 255, 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 255, 255, 255, 255, 255, 255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51];
-var base64UrlEncodeUint8Array = (data) => base64EncodeUint8Array(data).replace(/=/g, "").replace(/\+/g, "-").replace(/\//g, "_");
-var hexEncodeUint8Array = (bytes) => {
-  let result4 = "";
-  for (let i = 0;i < bytes.length; ++i) {
-    result4 += bytesToHex[bytes[i]];
-  }
-  return result4;
-};
-var fromHexChar = (byte) => {
-  if (48 <= byte && byte <= 57) {
-    return byte - 48;
-  }
-  if (97 <= byte && byte <= 102) {
-    return byte - 97 + 10;
-  }
-  if (65 <= byte && byte <= 70) {
-    return byte - 65 + 10;
-  }
-  throw new TypeError("Invalid input");
-};
-var bytesToHex = ["00", "01", "02", "03", "04", "05", "06", "07", "08", "09", "0a", "0b", "0c", "0d", "0e", "0f", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "1a", "1b", "1c", "1d", "1e", "1f", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "2a", "2b", "2c", "2d", "2e", "2f", "30", "31", "32", "33", "34", "35", "36", "37", "38", "39", "3a", "3b", "3c", "3d", "3e", "3f", "40", "41", "42", "43", "44", "45", "46", "47", "48", "49", "4a", "4b", "4c", "4d", "4e", "4f", "50", "51", "52", "53", "54", "55", "56", "57", "58", "59", "5a", "5b", "5c", "5d", "5e", "5f", "60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "6a", "6b", "6c", "6d", "6e", "6f", "70", "71", "72", "73", "74", "75", "76", "77", "78", "79", "7a", "7b", "7c", "7d", "7e", "7f", "80", "81", "82", "83", "84", "85", "86", "87", "88", "89", "8a", "8b", "8c", "8d", "8e", "8f", "90", "91", "92", "93", "94", "95", "96", "97", "98", "99", "9a", "9b", "9c", "9d", "9e", "9f", "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "aa", "ab", "ac", "ad", "ae", "af", "b0", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "b8", "b9", "ba", "bb", "bc", "bd", "be", "bf", "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "ca", "cb", "cc", "cd", "ce", "cf", "d0", "d1", "d2", "d3", "d4", "d5", "d6", "d7", "d8", "d9", "da", "db", "dc", "dd", "de", "df", "e0", "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "ea", "eb", "ec", "ed", "ee", "ef", "f0", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "fa", "fb", "fc", "fd", "fe", "ff"];
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaGetter.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaGetter.js
 class Getter extends Class {
   run;
   constructor(run2) {
@@ -16337,7 +16358,7 @@ function collectBracketPathEntries(isLeaf) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/BigDecimal.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/BigDecimal.js
 var FINITE_INT_REGEXP = /^[+-]?\d+$/;
 var TypeId29 = "~effect/BigDecimal";
 var BigDecimalProto = {
@@ -16532,9 +16553,9 @@ var toExponential = (n) => {
   }
   const normalized = normalize(n);
   const digits = `${abs2(normalized).value}`;
-  const head = digits.slice(0, 1);
+  const head3 = digits.slice(0, 1);
   const tail = digits.slice(1);
-  let output = `${isNegative2(normalized) ? "-" : ""}${head}`;
+  let output = `${isNegative2(normalized) ? "-" : ""}${head3}`;
   if (tail !== "") {
     output += `.${tail}`;
   }
@@ -16566,7 +16587,7 @@ var floor = /* @__PURE__ */ dual(isBigDecimalArgs, (self, scale2 = 0) => {
   return truncated;
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaTransformation.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaTransformation.js
 class Middleware {
   _tag = "Middleware";
   decode;
@@ -16813,7 +16834,7 @@ var dateTimeZonedFromString = /* @__PURE__ */ transformOrFail2({
   encode: (zoned) => succeed6(formatIsoZoned2(zoned))
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaAST.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaAST.js
 function makeGuard(tag) {
   return (ast) => ast._tag === tag;
 }
@@ -17839,6 +17860,12 @@ function collectSentinels(ast) {
         }
         return [];
       });
+    case "Union": {
+      if (ast.types.length === 0)
+        return [];
+      const members = ast.types.map((type) => collectSentinels(toCandidate(type)));
+      return members[0].filter((s) => members.every((sentinels) => sentinels.some((o) => o.key === s.key && o.literal === s.literal)));
+    }
     case "Suspend":
       return collectSentinels(ast.thunk());
   }
@@ -17846,17 +17873,20 @@ function collectSentinels(ast) {
 var candidateIndexCache = /* @__PURE__ */ new WeakMap;
 var emptyCandidates = /* @__PURE__ */ Object.freeze([]);
 function getIndex(types) {
-  let idx = candidateIndexCache.get(types);
-  if (idx)
-    return idx;
-  idx = {};
+  let index = candidateIndexCache.get(types);
+  if (index)
+    return index;
+  let bySentinel;
+  let sentinelCandidateCount = 0;
+  let otherwise;
   let literalCandidates;
+  let onlyLiterals = true;
   for (let i = 0;i < types.length; i++) {
     const a = types[i];
     const encoded = toCandidate(a);
     if (isNever2(encoded))
       continue;
-    if (literalCandidates !== null) {
+    if (onlyLiterals) {
       if (isLiteral(encoded) || isUniqueSymbol(encoded)) {
         literalCandidates ??= new Map;
         const literal = isLiteral(encoded) ? encoded.literal : encoded.symbol;
@@ -17865,55 +17895,118 @@ function getIndex(types) {
           literalCandidates.set(literal, arr = []);
         arr.push(a);
       } else {
-        literalCandidates = null;
+        onlyLiterals = false;
       }
     }
     const sentinels = collectSentinels(encoded);
     if (sentinels.length) {
-      idx.bySentinel ??= new Map;
+      bySentinel ??= new Map;
+      sentinelCandidateCount++;
       for (const {
         key,
         literal
       } of sentinels) {
-        let m = idx.bySentinel.get(key);
-        if (!m)
-          idx.bySentinel.set(key, m = new Map);
-        let arr = m.get(literal);
-        if (!arr)
-          m.set(literal, arr = []);
-        if (arr[arr.length - 1] !== i)
-          arr.push(i);
+        let entry = bySentinel.get(key);
+        if (!entry)
+          bySentinel.set(key, entry = [new Map, new Set]);
+        entry[1].add(i);
+        let indexes = entry[0].get(literal);
+        if (!indexes)
+          entry[0].set(literal, indexes = new Set);
+        indexes.add(i);
       }
     } else {
-      idx.otherwise ??= {};
+      otherwise ??= {};
       const candidateTypes = getCandidateTypes(encoded);
       for (const t of candidateTypes)
-        (idx.otherwise[t] ??= []).push(i);
+        (otherwise[t] ??= []).push(i);
     }
   }
-  if (literalCandidates) {
+  if (onlyLiterals && literalCandidates) {
     literalCandidates.forEach(Object.freeze);
-    idx = (input) => literalCandidates.get(input) ?? emptyCandidates;
-  } else if (idx.bySentinel?.size === 1 && !idx.otherwise) {
-    for (const [key, byValue] of idx.bySentinel) {
-      const candidates = byValue;
-      for (const [literal, indexes] of byValue) {
-        candidates.set(literal, Object.freeze(indexes.map((index) => types[index])));
-      }
-      idx = (input, isConstructor) => {
-        if (isObjectKeyword(input)) {
-          const value2 = Object.hasOwn(input, key) ? input[key] : undefined;
-          if (value2 !== undefined)
-            return candidates.get(value2) ?? emptyCandidates;
-          if (isConstructor)
-            return types;
-        }
-        return emptyCandidates;
-      };
+    index = (input) => literalCandidates.get(input) ?? emptyCandidates;
+  } else if (bySentinel?.size === 1 && !otherwise) {
+    const [key, [byValue]] = bySentinel.entries().next().value;
+    const candidates = byValue;
+    for (const [literal, indexes] of byValue) {
+      candidates.set(literal, Object.freeze(Array.from(indexes, (index2) => types[index2])));
     }
+    index = (input, isConstructor) => {
+      if (isObjectKeyword(input)) {
+        const value2 = Object.hasOwn(input, key) ? input[key] : undefined;
+        if (value2 !== undefined)
+          return candidates.get(value2) ?? emptyCandidates;
+        if (isConstructor)
+          return types;
+      }
+      return emptyCandidates;
+    };
+  } else if (bySentinel) {
+    let commonSentinel;
+    for (const entry of bySentinel) {
+      if ((!commonSentinel || entry[1][0].size > commonSentinel[1][0].size) && entry[1][1].size === sentinelCandidateCount) {
+        commonSentinel = entry;
+      }
+    }
+    index = (input, isConstructor) => {
+      const runtimeType = input === null ? "null" : Array.isArray(input) ? "array" : typeof input;
+      const base = otherwise?.[runtimeType] ?? emptyCandidates;
+      if (!isObjectKeyword(input))
+        return base.map((i) => types[i]);
+      const selected = new Set(base);
+      let directKey;
+      if (commonSentinel) {
+        const [key, [byValue]] = commonSentinel;
+        const hasKey = Object.hasOwn(input, key);
+        const value2 = hasKey ? input[key] : undefined;
+        if (hasKey && (!isConstructor || value2 !== undefined)) {
+          const match9 = byValue.get(value2);
+          if (!match9)
+            return base.map((i) => types[i]);
+          for (const i of match9)
+            selected.add(i);
+          directKey = key;
+        }
+      }
+      if (directKey === undefined) {
+        for (const [key, [byValue, all5]] of bySentinel) {
+          const hasKey = Object.hasOwn(input, key);
+          const value2 = hasKey ? input[key] : undefined;
+          if (hasKey && (!isConstructor || value2 !== undefined)) {
+            const match9 = byValue.get(value2);
+            if (match9) {
+              for (const i of match9)
+                selected.add(i);
+            }
+          } else if (isConstructor) {
+            for (const i of all5)
+              selected.add(i);
+          }
+        }
+      }
+      for (const [key, [byValue, all5]] of bySentinel) {
+        if (key === directKey)
+          continue;
+        const hasKey = Object.hasOwn(input, key);
+        const value2 = hasKey ? input[key] : undefined;
+        if (hasKey && (!isConstructor || value2 !== undefined)) {
+          const match9 = byValue.get(value2);
+          for (const i of selected) {
+            if (all5.has(i) && !match9?.has(i))
+              selected.delete(i);
+          }
+        }
+      }
+      return Array.from(selected).sort((a, b) => a - b).map((i) => types[i]);
+    };
+  } else {
+    index = (input) => {
+      const runtimeType = input === null ? "null" : Array.isArray(input) ? "array" : typeof input;
+      return (otherwise?.[runtimeType] ?? emptyCandidates).map((i) => types[i]).filter(filterLiterals(input));
+    };
   }
-  candidateIndexCache.set(types, idx);
-  return idx;
+  candidateIndexCache.set(types, index);
+  return index;
 }
 function filterLiterals(input) {
   return (ast) => {
@@ -17922,34 +18015,7 @@ function filterLiterals(input) {
   };
 }
 function getCandidates(input, types, isConstructor = false) {
-  const idx = getIndex(types);
-  if (typeof idx === "function")
-    return idx(input, isConstructor);
-  const runtimeType = input === null ? "null" : Array.isArray(input) ? "array" : typeof input;
-  if (idx.bySentinel) {
-    const base = idx.otherwise?.[runtimeType] ?? emptyCandidates;
-    if (isObjectKeyword(input)) {
-      const selected = new Set(base);
-      for (const [k, m] of idx.bySentinel) {
-        const value2 = Object.hasOwn(input, k) ? input[k] : undefined;
-        if (value2 !== undefined) {
-          const match9 = m.get(value2);
-          if (match9) {
-            for (const candidate of match9)
-              selected.add(candidate);
-          }
-        } else if (isConstructor) {
-          for (const indexes of m.values()) {
-            for (const candidate of indexes)
-              selected.add(candidate);
-          }
-        }
-      }
-      return Array.from(selected).sort((a, b) => a - b).map((i) => types[i]);
-    }
-    return base.map((i) => types[i]);
-  }
-  return (idx.otherwise?.[runtimeType] ?? emptyCandidates).map((i) => types[i]).filter(filterLiterals(input));
+  return getIndex(types)(input, isConstructor);
 }
 
 class Union extends Base2 {
@@ -18785,7 +18851,7 @@ var StringTree = /* @__PURE__ */ new Declaration([], () => (input, ast, options)
 });
 var unknownToStringTree = /* @__PURE__ */ new Link(StringTree, /* @__PURE__ */ passthrough3());
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Brand.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Brand.js
 function nominal() {
   return Object.assign((input) => input, {
     option: (input) => some3(input),
@@ -18794,7 +18860,7 @@ function nominal() {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/process/ChildProcessSpawner.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/process/ChildProcessSpawner.js
 var ExitCode = /* @__PURE__ */ nominal();
 var ProcessId = /* @__PURE__ */ nominal();
 var HandleTypeId = "~effect/ChildProcessSpawner/ChildProcessHandle";
@@ -18827,7 +18893,7 @@ var make24 = (spawn) => {
 class ChildProcessSpawner extends (/* @__PURE__ */ Service()("effect/process/ChildProcessSpawner")) {
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/process/ChildProcess.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/process/ChildProcess.js
 var TypeId32 = "~effect/unstable/process/ChildProcess";
 var Proto4 = {
   .../* @__PURE__ */ Prototype2({
@@ -18954,11 +19020,11 @@ var splitByWhitespaces = (template, rawTemplate) => {
 };
 var concatTokens = (prevTokens, nextTokens, isSeparated) => isSeparated || prevTokens.length === 0 || nextTokens.length === 0 ? [...prevTokens, ...nextTokens] : [...prevTokens.slice(0, -1), `${prevTokens.at(-1)}${nextTokens.at(0)}`, ...nextTokens.slice(1)];
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
 import * as NodeChildProcess from "node:child_process";
 import { PassThrough } from "node:stream";
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/internal/nodeChildProcessSpawner.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/internal/nodeChildProcessSpawner.js
 var buildSpawnOptions = (options, base, platform) => {
   const detached = options.detached ?? platform !== "win32";
   return {
@@ -18969,7 +19035,7 @@ var buildSpawnOptions = (options, base, platform) => {
   };
 };
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/internal/utils.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/internal/utils.js
 var handleErrnoException = (module, method) => (err, [path]) => {
   let reason = "Unknown";
   switch (err.code) {
@@ -19005,7 +19071,7 @@ var handleErrnoException = (module, method) => (err, [path]) => {
   });
 };
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeSink.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeSink.js
 var fromWritable = (options) => fromChannel2(mapDone(fromWritableChannel(options), (_) => [_]));
 var fromWritableChannel = (options) => fromTransform((pull) => {
   const writable = options.evaluate();
@@ -19045,7 +19111,7 @@ var pullIntoWritable = (options) => options.pull.pipe(flatMap5((chunk) => {
   });
 }) : identity);
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeStream.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeStream.js
 var fromReadable = (options) => fromChannel3(fromReadableChannel(options));
 var fromReadableChannel = (options) => fromTransform((_, scope3) => readableToPullUnsafe({
   scope: scope3,
@@ -19105,7 +19171,7 @@ var readableToPullUnsafe = (options) => {
 };
 var defaultOnError = (error) => new UnknownError2(error);
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeChildProcessSpawner.js
 var toError = (error) => error instanceof globalThis.Error ? error : new globalThis.Error(String(error));
 var toPlatformError = (method, error, command) => {
   const {
@@ -19589,17 +19655,47 @@ var flattenCommand = (command) => {
   };
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Crypto.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Crypto.js
 var exports_Crypto = {};
 __export(exports_Crypto, {
   make: () => make28,
   Crypto: () => Crypto
 });
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/uuid.js
+var hex = (byte) => byte.toString(16).padStart(2, "0");
+var stringify = (bytes) => {
+  const segments = [bytes.subarray(0, 4), bytes.subarray(4, 6), bytes.subarray(6, 8), bytes.subarray(8, 10), bytes.subarray(10, 16)];
+  return segments.map((segment) => Array.from(segment, hex).join("")).join("-");
+};
+var randomBytes = () => globalThis.crypto.getRandomValues(new Uint8Array(16));
+function v4Bytes(bytes = randomBytes()) {
+  bytes[6] = bytes[6] & 15 | 64;
+  bytes[8] = bytes[8] & 63 | 128;
+  return bytes;
+}
+var v4String = (bytes) => stringify(bytes === undefined ? v4Bytes() : v4Bytes(bytes));
+var maxV7Timestamp = 2 ** 48 - 1;
+function v7Bytes(timestampMillis, bytes = randomBytes()) {
+  const timestamp = Math.min(Math.max(0, Math.trunc(timestampMillis)), maxV7Timestamp);
+  bytes[0] = Math.floor(timestamp / 2 ** 40);
+  bytes[1] = Math.floor(timestamp / 2 ** 32) & 255;
+  bytes[2] = Math.floor(timestamp / 2 ** 24) & 255;
+  bytes[3] = Math.floor(timestamp / 2 ** 16) & 255;
+  bytes[4] = Math.floor(timestamp / 2 ** 8) & 255;
+  bytes[5] = timestamp & 255;
+  bytes[6] = bytes[6] & 15 | 112;
+  bytes[8] = bytes[8] & 63 | 128;
+  return bytes;
+}
+var v7String = (timestampMillis, bytes) => stringify(bytes === undefined ? v7Bytes(timestampMillis) : v7Bytes(timestampMillis, bytes));
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Crypto.js
 var TypeId33 = "~effect/platform/Crypto";
 var Crypto = /* @__PURE__ */ Service("effect/Crypto");
 var make28 = (impl) => {
   const randomBytesUnsafe = impl.randomBytes;
-  const randomBytes = (size5) => map8(validateSize("randomBytes", size5), randomBytesUnsafe);
+  const randomBytes2 = (size5) => map8(validateSize("randomBytes", size5), randomBytesUnsafe);
   const readUint53 = (bytes) => (bytes[0] & 31) * 2 ** 48 + bytes[1] * 2 ** 40 + bytes[2] * 2 ** 32 + bytes[3] * 2 ** 24 + bytes[4] * 2 ** 16 + bytes[5] * 2 ** 8 + bytes[6];
   const nextDoubleUnsafe = () => readUint53(randomBytesUnsafe(7)) / 2 ** 53;
   const nextIntUnsafe = () => {
@@ -19616,7 +19712,7 @@ var make28 = (impl) => {
   };
   return Crypto.of({
     [TypeId33]: TypeId33,
-    randomBytes,
+    randomBytes: randomBytes2,
     nextDoubleUnsafe,
     nextIntUnsafe,
     digest: impl.digest,
@@ -19642,8 +19738,8 @@ var make28 = (impl) => {
       }
       return buffer3;
     }),
-    randomUUIDv4: sync3(() => formatUUIDv4(randomBytesUnsafe(16))),
-    randomUUIDv7: clockWith3((clock) => succeed6(formatUUIDv7(clock.currentTimeMillisUnsafe(), randomBytesUnsafe(16))))
+    randomUUIDv4: sync3(() => v4String(randomBytesUnsafe(16))),
+    randomUUIDv7: clockWith3((clock) => succeed6(v7String(clock.currentTimeMillisUnsafe(), randomBytesUnsafe(16))))
   });
 };
 var validateSize = (method, size5) => Number.isSafeInteger(size5) && size5 >= 0 ? succeed6(size5) : fail6(badArgument({
@@ -19651,31 +19747,8 @@ var validateSize = (method, size5) => Number.isSafeInteger(size5) && size5 >= 0 
   method,
   description: "size must be a non-negative safe integer"
 }));
-var hex = (byte) => byte.toString(16).padStart(2, "0");
-var formatUUID = (bytes) => {
-  const segments = [bytes.subarray(0, 4), bytes.subarray(4, 6), bytes.subarray(6, 8), bytes.subarray(8, 10), bytes.subarray(10, 16)];
-  return segments.map((segment) => Array.from(segment, hex).join("")).join("-");
-};
-var formatUUIDv4 = (bytes) => {
-  bytes[6] = bytes[6] & 15 | 64;
-  bytes[8] = bytes[8] & 63 | 128;
-  return formatUUID(bytes);
-};
-var maxUUIDv7Timestamp = 2 ** 48 - 1;
-var formatUUIDv7 = (timestampMillis, bytes) => {
-  const timestamp = Math.min(Math.max(0, Math.trunc(timestampMillis)), maxUUIDv7Timestamp);
-  bytes[0] = Math.floor(timestamp / 2 ** 40);
-  bytes[1] = Math.floor(timestamp / 2 ** 32) & 255;
-  bytes[2] = Math.floor(timestamp / 2 ** 24) & 255;
-  bytes[3] = Math.floor(timestamp / 2 ** 16) & 255;
-  bytes[4] = Math.floor(timestamp / 2 ** 8) & 255;
-  bytes[5] = timestamp & 255;
-  bytes[6] = bytes[6] & 15 | 112;
-  bytes[8] = bytes[8] & 63 | 128;
-  return formatUUID(bytes);
-};
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeCrypto.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeCrypto.js
 import * as NodeCrypto from "node:crypto";
 var toHashAlgorithm = (algorithm) => {
   switch (algorithm) {
@@ -19705,10 +19778,10 @@ var make29 = /* @__PURE__ */ make28({
 });
 var layer2 = /* @__PURE__ */ succeed5(Crypto, make29);
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeCrypto.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeCrypto.js
 var layer3 = layer2;
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeFileSystem.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeFileSystem.js
 import * as Crypto2 from "node:crypto";
 import * as NFS from "node:fs";
 import * as OS from "node:os";
@@ -20093,10 +20166,10 @@ var makeFileSystem = /* @__PURE__ */ map8(/* @__PURE__ */ serviceOption2(WatchBa
 }));
 var layer4 = /* @__PURE__ */ effect(FileSystem)(makeFileSystem);
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeFileSystem.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeFileSystem.js
 var layer5 = layer4;
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodePath.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodePath.js
 import * as NodePath from "node:path";
 import * as NodeUrl from "node:url";
 var fileUrlOps = (windows) => ({
@@ -20137,10 +20210,10 @@ var layer6 = /* @__PURE__ */ succeed5(Path)({
   .../* @__PURE__ */ fileUrlOps(undefined)
 });
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodePath.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodePath.js
 var layer7 = layer6;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Stdio.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Stdio.js
 var TypeId34 = "~effect/Stdio";
 var Stdio = /* @__PURE__ */ Service(TypeId34);
 var make30 = (options) => ({
@@ -20150,7 +20223,7 @@ var make30 = (options) => ({
   ...options
 });
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeStdio.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeStdio.js
 var layer8 = /* @__PURE__ */ succeed5(Stdio, /* @__PURE__ */ make30({
   args: /* @__PURE__ */ sync3(() => process.argv.slice(2)),
   stdinIsTerminal: /* @__PURE__ */ sync3(() => process.stdin.isTTY === true),
@@ -20187,10 +20260,10 @@ var layer8 = /* @__PURE__ */ succeed5(Stdio, /* @__PURE__ */ make30({
   })
 }));
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeStdio.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeStdio.js
 var layer9 = layer8;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Schema.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Schema.js
 var exports_Schema = {};
 __export(exports_Schema, {
   withDecodingDefaultTypeKey: () => withDecodingDefaultTypeKey,
@@ -20246,7 +20319,7 @@ __export(exports_Schema, {
   makeIsBetween: () => makeIsBetween,
   makeFilterGroup: () => makeFilterGroup,
   makeFilter: () => makeFilter2,
-  make: () => make37,
+  make: () => make38,
   link: () => link3,
   isUppercasedReviver: () => isUppercasedReviver,
   isUppercased: () => isUppercased,
@@ -20490,6 +20563,8 @@ __export(exports_Schema, {
   HashSet: () => HashSet,
   HashMapReviver: () => HashMapReviver,
   HashMap: () => HashMap,
+  GraphReviver: () => GraphReviver,
+  Graph: () => Graph,
   FormDataReviver: () => FormDataReviver,
   FormData: () => FormData2,
   FiniteFromString: () => FiniteFromString,
@@ -20540,7 +20615,131 @@ __export(exports_Schema, {
   Any: () => Any2
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/hashMap.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/graph.js
+var TypeId35 = "~effect/collections/Graph";
+var toImpl = (graph) => graph;
+var edgeEquals = (type, self, that) => (type === "directed" ? self.source === that.source && self.target === that.target : self.source === that.source && self.target === that.target || self.source === that.target && self.target === that.source) && equals(self.data, that.data);
+var edgeHash = (type, edge) => type === "directed" ? hash(edge) : optimize(hash(edge.data) ^ hash(edge.source) + hash(edge.target));
+var ProtoGraph = {
+  [TypeId35]: {
+    _N: (_) => _,
+    _E: (_) => _
+  },
+  [Symbol.iterator]() {
+    return this.nodes[Symbol.iterator]();
+  },
+  [NodeInspectSymbol]() {
+    return this.toJSON();
+  },
+  [symbol2](that) {
+    if (hasProperty(that, TypeId35)) {
+      const thatImpl = toImpl(that);
+      if (this.nodes.size !== thatImpl.nodes.size || this.edges.size !== thatImpl.edges.size || this.type !== thatImpl.type) {
+        return false;
+      }
+      for (const [nodeIndex, nodeData] of this.nodes) {
+        if (!thatImpl.nodes.has(nodeIndex) || !equals(nodeData, thatImpl.nodes.get(nodeIndex))) {
+          return false;
+        }
+      }
+      for (const [edgeIndex, edgeData] of this.edges) {
+        const otherEdge = thatImpl.edges.get(edgeIndex);
+        if (otherEdge === undefined || !edgeEquals(this.type, edgeData, otherEdge)) {
+          return false;
+        }
+      }
+      return true;
+    }
+    return false;
+  },
+  [symbol]() {
+    let hash2 = string("Graph");
+    hash2 = hash2 ^ string(this.type);
+    hash2 = hash2 ^ number(this.nodes.size);
+    hash2 = hash2 ^ number(this.edges.size);
+    for (const [nodeIndex, nodeData] of this.nodes) {
+      hash2 = hash2 ^ hash(nodeIndex) + hash(nodeData);
+    }
+    for (const [edgeIndex, edgeData] of this.edges) {
+      hash2 = hash2 ^ hash(edgeIndex) + edgeHash(this.type, edgeData);
+    }
+    return hash2;
+  },
+  toJSON() {
+    return {
+      _id: "Graph",
+      nodeCount: this.nodes.size,
+      edgeCount: this.edges.size,
+      type: this.type
+    };
+  },
+  toString() {
+    return `Graph(${this.type}, ${this.nodes.size}, ${this.edges.size})`;
+  },
+  pipe() {
+    return pipeArguments(this, arguments);
+  }
+};
+var make31 = (type, mutable) => {
+  const graph = Object.create(ProtoGraph);
+  graph.type = type;
+  graph.mutable = mutable;
+  graph.nodes = new Map;
+  graph.edges = new Map;
+  graph.adjacency = new Map;
+  graph.reverseAdjacency = new Map;
+  graph.nextNodeIndex = 0;
+  graph.nextEdgeIndex = 0;
+  graph.acyclic = some3(true);
+  return graph;
+};
+var snapshot2 = (graph) => {
+  const impl = toImpl(graph);
+  return {
+    type: graph.type,
+    nodes: Array.from(impl.nodes, ([index, data]) => ({
+      index,
+      data
+    })).sort((a, b) => a.index - b.index),
+    edges: Array.from(impl.edges, ([index, edge]) => ({
+      index,
+      source: edge.source,
+      target: edge.target,
+      data: edge.data
+    })).sort((a, b) => a.index - b.index)
+  };
+};
+var hydrate = (snapshot3) => {
+  const graph = make31(snapshot3.type, false);
+  for (const node of snapshot3.nodes) {
+    graph.nodes.set(node.index, node.data);
+    graph.adjacency.set(node.index, []);
+    graph.reverseAdjacency.set(node.index, []);
+  }
+  for (const edge of snapshot3.edges) {
+    graph.edges.set(edge.index, {
+      source: edge.source,
+      target: edge.target,
+      data: edge.data
+    });
+    graph.adjacency.get(edge.source).push(edge.index);
+    graph.reverseAdjacency.get(edge.target).push(edge.index);
+    if (snapshot3.type === "undirected") {
+      graph.adjacency.get(edge.target).push(edge.index);
+      graph.reverseAdjacency.get(edge.source).push(edge.index);
+    }
+  }
+  graph.nextNodeIndex = snapshot3.nodes.length === 0 ? 0 : snapshot3.nodes[snapshot3.nodes.length - 1].index + 1;
+  graph.nextEdgeIndex = snapshot3.edges.length === 0 ? 0 : snapshot3.edges[snapshot3.edges.length - 1].index + 1;
+  graph.acyclic = none2();
+  return graph;
+};
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Graph.js
+var TypeId36 = TypeId35;
+var isGraph = (u) => hasProperty(u, TypeId36);
+
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/hashMap.js
 var HashMapTypeId = "~effect/collections/HashMap";
 var SHIFT = 5;
 var BUCKET_SIZE = 1 << SHIFT;
@@ -21189,14 +21388,14 @@ var entries = (self) => {
 };
 var size5 = (self) => self.size;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/HashMap.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/HashMap.js
 var isHashMap2 = isHashMap;
 var fromIterable6 = fromIterable5;
 var entries2 = entries;
 var toEntries = (self) => Array.from(entries2(self));
 var size6 = size5;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/hashSet.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/hashSet.js
 var HashSetTypeId = "~effect/collections/HashSet";
 var HashSetProto = {
   [symbol]() {
@@ -21250,12 +21449,12 @@ var every3 = (self, predicate) => {
   return true;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/HashSet.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/HashSet.js
 var fromIterable8 = fromIterable7;
 var isHashSet2 = isHashSet;
 var size8 = size7;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaParser.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/SchemaParser.js
 function makeEffect(schema) {
   const parser = runWithCompiler(constructorCompiler, toType(schema.ast));
   return (input, options) => {
@@ -21278,7 +21477,7 @@ function makeOption(schema) {
     return none2();
   };
 }
-function make33(schema) {
+function make34(schema) {
   const parser = makeEffect(schema);
   return (input, options) => {
     const exit3 = runSyncExit2(parser(input, options));
@@ -21557,8 +21756,8 @@ function makeParser(ast, compile, compileConstructorDefault2, constructorDefault
   };
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/schema.js
-var TypeId35 = "~effect/Schema/Schema";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/schema.js
+var TypeId37 = "~effect/Schema/Schema";
 function makeDeclarationReviver(id, payloadSchema, revive) {
   return {
     id,
@@ -21574,7 +21773,7 @@ function makeFilterReviver(id, payloadSchema, revive) {
   };
 }
 var SchemaProto = {
-  [TypeId35]: TypeId35,
+  [TypeId37]: TypeId37,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -21588,24 +21787,24 @@ var SchemaProto = {
     return this.rebuild(appendChecks(this.ast, checks));
   }
 };
-function make34(ast, options) {
+function make35(ast, options) {
   function Schema() {}
   const self = Object.defineProperties(Object.setPrototypeOf(Schema, SchemaProto), Object.getOwnPropertyDescriptors({
     ...options
   }));
   self.ast = ast;
-  self.rebuild = (ast2) => make34(ast2, options);
+  self.rebuild = (ast2) => make35(ast2, options);
   self.makeEffect = makeEffect(self);
-  self.make = make33(self);
+  self.make = make34(self);
   self.makeOption = makeOption(self);
   return self;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Boolean.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Boolean.js
 var Boolean2 = globalThis.Boolean;
 var ReducerOr = /* @__PURE__ */ make2((a, b) => a || b, false);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Struct.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Struct.js
 var pick2 = /* @__PURE__ */ dual(2, (self, keys4) => {
   return buildStruct(self, (k, v) => keys4.includes(k) ? [k, v] : undefined);
 });
@@ -21650,7 +21849,7 @@ function makeCombiner(combiners, options) {
   });
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/UndefinedOr.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/UndefinedOr.js
 function makeReducer2(combiner) {
   return make2((self, that) => {
     if (self === undefined)
@@ -21661,7 +21860,7 @@ function makeReducer2(combiner) {
   }, undefined);
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/errors.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/errors.js
 function errorWithPath(message, path) {
   if (path.length > 0) {
     message += `
@@ -21670,7 +21869,7 @@ function errorWithPath(message, path) {
   return new Error(message);
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/toArbitrary.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toArbitrary.js
 var arbitraryMemoMap = /* @__PURE__ */ new WeakMap;
 var suspendDepthIdentifierMap = /* @__PURE__ */ new WeakMap;
 var emptyRecursionStack = [];
@@ -22112,10 +22311,10 @@ function base(ast, path) {
         }
         let out = fc.tuple(...elementArbitraries).map(getSomes);
         if (isReadonlyArrayNonEmpty(rest)) {
-          const [head, ...tail] = rest;
+          const [head3, ...tail] = rest;
           const restCtx = ast.elements.length === 0 ? ctx : reset;
           const minRestLength = Math.max(0, minLength - length - tail.length);
-          const headArbitrary = minRestLength === 0 ? undefined : head.arbitrary.terminal(fc, reset, recursionStack);
+          const headArbitrary = minRestLength === 0 ? undefined : head3.arbitrary.terminal(fc, reset, recursionStack);
           if (minRestLength > 0 && headArbitrary === undefined) {
             return;
           }
@@ -22153,10 +22352,10 @@ function base(ast, path) {
         });
         let out = fc.tuple(...elementArbitraries).map((elements2) => getSomes(takeWhile(elements2, isSome2)));
         if (isReadonlyArrayNonEmpty(rest)) {
-          const [head, ...tail] = rest.map(({
+          const [head3, ...tail] = rest.map(({
             arbitrary
           }) => arbitrary(fc, reset, recursionStack));
-          const restArbitrary = array2(fc, ast.elements.length === 0 ? ctx : reset, head);
+          const restArbitrary = array2(fc, ast.elements.length === 0 ? ctx : reset, head3);
           out = appendArray(fc, out, len, restArbitrary);
           if (tail.length > 0) {
             const t = fc.tuple(...tail);
@@ -22333,7 +22532,7 @@ function base(ast, path) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/toEquivalence.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toEquivalence.js
 var toEquivalence = /* @__PURE__ */ memoize((ast) => {
   return recur2(ast, []);
 });
@@ -22381,9 +22580,9 @@ function recur2(ast, path) {
           }
         }
         if (rest.length > 0) {
-          const [head, ...tail] = rest;
+          const [head3, ...tail] = rest;
           for (;i < len2 - tail.length; i++) {
-            if (!head(a[i], b[i])) {
+            if (!head3(a[i], b[i])) {
               return false;
             }
           }
@@ -22457,7 +22656,7 @@ function recur2(ast, path) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/JsonPointer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonPointer.js
 function escapeToken(token) {
   return token.replace(/~/g, "~0").replace(/\//g, "~1");
 }
@@ -22465,7 +22664,7 @@ function unescapeToken(token) {
   return token.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/JsonSchema.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonSchema.js
 var RE_DEFS = /^#\/\$defs(?=\/|$)/;
 var DRAFT_04_COPY_KEYWORDS = /* @__PURE__ */ new Set(["$ref", "type", "required", "enum", "title", "description", "default", "format", "pattern", "minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties", "multipleOf", "uniqueItems"]);
 var DRAFT_07_COPY_KEYWORDS = /* @__PURE__ */ new Set([...DRAFT_04_COPY_KEYWORDS, "const", "examples", "readOnly", "writeOnly", "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum"]);
@@ -22600,11 +22799,11 @@ function resolveTopLevel$ref(document) {
   return document;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/RegExp.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/RegExp.js
 var RegExp2 = globalThis.RegExp;
 var escape = (string3) => string3.replace(/[/\\^$*+?.()|[\]{}]/g, "\\$&");
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/toJsonSchemaDocument.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toJsonSchemaDocument.js
 var jsonSchemaAnnotationExcludedKeys = /* @__PURE__ */ new Set([...annotationExcludedKeys, IDENTIFIER_FALLBACK_KEY, ...jsonSchemaAnnotationKeys]);
 var toRepresentationOptions = {
   isAnonymousReferenceAllowed: (ast) => !isDeclaration(ast)
@@ -23149,7 +23348,7 @@ function toJsonSchemaDocument(document, options) {
   };
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/schema/toRepresentation.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/schema/toRepresentation.js
 function toRepresentation(ast, options) {
   const {
     references,
@@ -23505,7 +23704,7 @@ function fromASTs(asts, options) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/JsonPatch.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/JsonPatch.js
 function get8(oldValue, newValue) {
   const patches = [];
   getLoop(oldValue, newValue, "", patches);
@@ -23698,12 +23897,12 @@ function rebuildFromStack(stack, newParent) {
   return acc;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Optic.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Optic.js
 function makeIso(get9, set4) {
-  return make35(primitiveNode("Iso", get9, set4));
+  return make36(primitiveNode("Iso", get9, set4));
 }
 function makeLens(get9, replace) {
-  return make35(primitiveNode("Lens", get9, replace));
+  return make36(primitiveNode("Lens", get9, replace));
 }
 function primitiveNode(kind, get9, set4) {
   return [{
@@ -23780,7 +23979,7 @@ function compose3(a, b) {
   return nodes;
 }
 function makeOptional(getResult, set4) {
-  return make35(primitiveNode("Optional", getResult, set4));
+  return make36(primitiveNode("Optional", getResult, set4));
 }
 
 class OptionalImpl {
@@ -23799,13 +23998,13 @@ class OptionalImpl {
     return (s) => getOrElse3(flatMap2(this.getResult(s), (a) => this.replaceResult(f(a), s)), () => s);
   }
   compose(that) {
-    return make35(compose3(this.node, that.node));
+    return make36(compose3(this.node, that.node));
   }
   key(key) {
-    return make35(compose3(this.node, [new PathNode([key])]));
+    return make36(compose3(this.node, [new PathNode([key])]));
   }
   optionalKey(key) {
-    return make35(compose3(this.node, primitiveNode("Lens", (s) => s[key], (a, s) => {
+    return make36(compose3(this.node, primitiveNode("Lens", (s) => s[key], (a, s) => {
       const copy3 = cloneShallow(s);
       if (a === undefined) {
         if (Array.isArray(copy3) && typeof key === "number") {
@@ -23820,20 +24019,20 @@ class OptionalImpl {
     })));
   }
   check(...checks) {
-    return make35(compose3(this.node, [new CheckNode(checks)]));
+    return make36(compose3(this.node, [new CheckNode(checks)]));
   }
   refine(refinement, annotations2) {
-    return make35(compose3(this.node, [new CheckNode([makeFilterByGuard(refinement, annotations2)])]));
+    return make36(compose3(this.node, [new CheckNode([makeFilterByGuard(refinement, annotations2)])]));
   }
   tag(tag) {
     const err = fail2(new InvalidValue({
       expected: `${JSON.stringify(tag)} tag`
     }));
-    return make35(compose3(this.node, primitiveNode("Prism", (s) => s._tag === tag ? succeed2(s) : err, identity)));
+    return make36(compose3(this.node, primitiveNode("Prism", (s) => s._tag === tag ? succeed2(s) : err, identity)));
   }
   at(key, ..._rest) {
     const err = fail2(new Pointer([key], new MissingKey(undefined)));
-    return make35(compose3(this.node, primitiveNode("Optional", (s) => Object.hasOwn(s, key) ? succeed2(s[key]) : err, (a, s) => {
+    return make36(compose3(this.node, primitiveNode("Optional", (s) => Object.hasOwn(s, key) ? succeed2(s[key]) : err, (a, s) => {
       if (Object.hasOwn(s, key)) {
         const copy3 = cloneShallow(s);
         assignProperty(copy3, key, a);
@@ -23939,7 +24138,7 @@ class PrismImpl extends OptionalImpl {
     return (s) => getOrElse3(map2(this.getResult(s), (a) => this.set(f(a))), () => s);
   }
 }
-function make35(node) {
+function make36(node) {
   let op = node[0] ?? identityOperation;
   if (node.length > 1) {
     const kind = node.reduce((kind2, step) => composeKind(kind2, step.kind), "Iso");
@@ -24046,22 +24245,22 @@ function composeKind(a, b) {
     return a;
   return "Optional";
 }
-var identityIso = /* @__PURE__ */ make35([]);
+var identityIso = /* @__PURE__ */ make36([]);
 function id() {
   return identityIso;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Redacted.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Redacted.js
 var exports_Redacted = {};
 __export(exports_Redacted, {
   wipeUnsafe: () => wipeUnsafe,
   value: () => value3,
   makeEquivalence: () => makeEquivalence7,
-  make: () => make36,
+  make: () => make37,
   isRedacted: () => isRedacted
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/internal/redacted.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/internal/redacted.js
 var redactedRegistry = /* @__PURE__ */ new WeakMap;
 var value2 = (self) => {
   if (redactedRegistry.has(self)) {
@@ -24072,10 +24271,10 @@ var value2 = (self) => {
 };
 var stringOrRedacted = (val) => typeof val === "string" ? val : value2(val);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Redacted.js
-var TypeId36 = "~effect/data/Redacted";
-var isRedacted = (u) => hasProperty(u, TypeId36);
-var make36 = (value3, options) => {
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Redacted.js
+var TypeId38 = "~effect/data/Redacted";
+var isRedacted = (u) => hasProperty(u, TypeId38);
+var make37 = (value3, options) => {
   const self = Object.create(Proto5);
   if (options?.label) {
     self.label = options.label;
@@ -24084,7 +24283,7 @@ var make36 = (value3, options) => {
   return self;
 };
 var Proto5 = {
-  [TypeId36]: {
+  [TypeId38]: {
     _A: (_) => _
   },
   label: undefined,
@@ -24106,32 +24305,11 @@ var value3 = value2;
 var wipeUnsafe = (self) => redactedRegistry.delete(self);
 var makeEquivalence7 = (isEquivalent) => make3((x, y) => isEquivalent(value3(x), value3(y)));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/SchemaError.js
-var TypeId37 = "~effect/SchemaError/SchemaError";
-
-class SchemaError extends (/* @__PURE__ */ TaggedError2("SchemaError")) {
-  [TypeId37] = TypeId37;
-  constructor(issue) {
-    super({
-      issue
-    });
-  }
-  get message() {
-    return defaultFormatter(this.issue);
-  }
-  toString() {
-    return `SchemaError(${this.message})`;
-  }
-}
-function isSchemaError(u) {
-  return hasProperty(u, TypeId37) && u[TypeId37] === TypeId37;
-}
-
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Schema.js
-var TypeId38 = TypeId35;
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Schema.js
+var TypeId39 = TypeId37;
 function declareConstructor() {
   return (typeParameters, run3, annotations2) => {
-    return make37(new Declaration(typeParameters.map(getAST), (typeParameters2) => run3(typeParameters2.map((ast) => make37(ast))), annotations2));
+    return make38(new Declaration(typeParameters.map(getAST), (typeParameters2) => run3(typeParameters2.map((ast) => make38(ast))), annotations2));
   };
 }
 function declare(is2, annotations2) {
@@ -24153,6 +24331,25 @@ function annotateKey2(annotations2) {
 }
 function revealCodec(codec) {
   return codec;
+}
+var SchemaErrorTypeId = "~effect/SchemaError/SchemaError";
+
+class SchemaError extends (/* @__PURE__ */ TaggedError2("SchemaError")) {
+  [SchemaErrorTypeId] = SchemaErrorTypeId;
+  constructor(issue) {
+    super({
+      issue
+    });
+  }
+  get message() {
+    return defaultFormatter(this.issue);
+  }
+  toString() {
+    return `SchemaError(${this.message})`;
+  }
+}
+function isSchemaError(u) {
+  return hasProperty(u, SchemaErrorTypeId) && u[SchemaErrorTypeId] === SchemaErrorTypeId;
 }
 function makeStandardResult(exit3) {
   return isSuccess4(exit3) ? exit3.value : {
@@ -24366,29 +24563,29 @@ function encodeUnknownSync2(schema, options) {
   };
 }
 var encodeSync2 = encodeUnknownSync2;
-var make37 = make34;
+var make38 = make35;
 function isSchema(u) {
-  return hasProperty(u, TypeId38) && u[TypeId38] === TypeId38;
+  return hasProperty(u, TypeId39) && u[TypeId39] === TypeId39;
 }
-var optionalKey2 = /* @__PURE__ */ lambda((schema) => make37(optionalKey(schema.ast), {
+var optionalKey2 = /* @__PURE__ */ lambda((schema) => make38(optionalKey(schema.ast), {
   schema
 }));
 var requiredKey = /* @__PURE__ */ lambda((self) => self.schema);
 var optional2 = /* @__PURE__ */ lambda((self) => {
   const schema = UndefinedOr(self);
-  return make37(optional(self.ast), {
+  return make38(optional(self.ast), {
     schema
   });
 });
 var required = /* @__PURE__ */ lambda((self) => self.schema.members[0]);
-var mutableKey2 = /* @__PURE__ */ lambda((schema) => make37(mutableKey(schema.ast), {
+var mutableKey2 = /* @__PURE__ */ lambda((schema) => make38(mutableKey(schema.ast), {
   schema
 }));
 var readonlyKey = /* @__PURE__ */ lambda((self) => self.schema);
-var toType2 = /* @__PURE__ */ lambda((schema) => make37(toType(schema.ast), {
+var toType2 = /* @__PURE__ */ lambda((schema) => make38(toType(schema.ast), {
   schema
 }));
-var toEncoded2 = /* @__PURE__ */ lambda((schema) => make37(toEncoded(schema.ast), {
+var toEncoded2 = /* @__PURE__ */ lambda((schema) => make38(toEncoded(schema.ast), {
   schema
 }));
 var FlipTypeId = "~effect/Schema/flip";
@@ -24399,13 +24596,13 @@ function flip5(schema) {
   if (isFlip$(schema)) {
     return schema.schema.rebuild(flip4(schema.ast));
   }
-  return make37(flip4(schema.ast), {
+  return make38(flip4(schema.ast), {
     [FlipTypeId]: FlipTypeId,
     schema
   });
 }
 function Literal2(literal) {
-  const out = make37(new Literal(literal), {
+  const out = make38(new Literal(literal), {
     literal,
     transform(to) {
       return out.pipe(decodeTo2(Literal2(to), {
@@ -24420,37 +24617,37 @@ function templateLiteralFromParts(parts2) {
   return new TemplateLiteral(parts2.map((part) => isSchema(part) ? part.ast : new Literal(part)));
 }
 function TemplateLiteral2(parts2) {
-  return make37(templateLiteralFromParts(parts2), {
+  return make38(templateLiteralFromParts(parts2), {
     parts: parts2
   });
 }
 function TemplateLiteralParser(parts2) {
-  return make37(templateLiteralFromParts(parts2).asTemplateLiteralParser(), {
+  return make38(templateLiteralFromParts(parts2).asTemplateLiteralParser(), {
     parts: parts2
   });
 }
 function Enum2(enums) {
-  return make37(new Enum(Object.keys(enums).filter((key) => typeof enums[enums[key]] !== "number").map((key) => [key, enums[key]])), {
+  return make38(new Enum(Object.keys(enums).filter((key) => typeof enums[enums[key]] !== "number").map((key) => [key, enums[key]])), {
     enums
   });
 }
-var Never2 = /* @__PURE__ */ make37(never5);
-var Any2 = /* @__PURE__ */ make37(any);
-var Unknown2 = /* @__PURE__ */ make37(unknown);
-var Null2 = /* @__PURE__ */ make37(null_);
-var Undefined2 = /* @__PURE__ */ make37(undefined_3);
-var String6 = /* @__PURE__ */ make37(string2);
-var Number6 = /* @__PURE__ */ make37(number2);
-var Boolean3 = /* @__PURE__ */ make37(boolean);
-var Symbol3 = /* @__PURE__ */ make37(symbol3);
-var BigInt5 = /* @__PURE__ */ make37(bigInt);
-var Void2 = /* @__PURE__ */ make37(void_6);
-var ObjectKeyword2 = /* @__PURE__ */ make37(objectKeyword);
+var Never2 = /* @__PURE__ */ make38(never5);
+var Any2 = /* @__PURE__ */ make38(any);
+var Unknown2 = /* @__PURE__ */ make38(unknown);
+var Null2 = /* @__PURE__ */ make38(null_);
+var Undefined2 = /* @__PURE__ */ make38(undefined_3);
+var String6 = /* @__PURE__ */ make38(string2);
+var Number6 = /* @__PURE__ */ make38(number2);
+var Boolean3 = /* @__PURE__ */ make38(boolean);
+var Symbol3 = /* @__PURE__ */ make38(symbol3);
+var BigInt5 = /* @__PURE__ */ make38(bigInt);
+var Void2 = /* @__PURE__ */ make38(void_6);
+var ObjectKeyword2 = /* @__PURE__ */ make38(objectKeyword);
 function UniqueSymbol2(symbol4) {
-  return make37(new UniqueSymbol(symbol4));
+  return make38(new UniqueSymbol(symbol4));
 }
 function makeStruct(ast, fields) {
-  return make37(ast, {
+  return make38(ast, {
     fields,
     mapFields(f, options) {
       const fields2 = f(this.fields);
@@ -24526,19 +24723,19 @@ function extendTo(fields, derive) {
   };
 }
 function Record(key, value4) {
-  return make37(record(key.ast, value4.ast), {
+  return make38(record(key.ast, value4.ast), {
     key,
     value: value4
   });
 }
 function StructWithRest(schema, records) {
-  return make37(structWithRest(schema.ast, records.map(getAST)), {
+  return make38(structWithRest(schema.ast, records.map(getAST)), {
     schema,
     records
   });
 }
 function makeTuple(ast, elements) {
-  return make37(ast, {
+  return make38(ast, {
     elements,
     mapElements(f, options) {
       const elements2 = f(this.elements);
@@ -24550,15 +24747,15 @@ function Tuple3(elements) {
   return makeTuple(tuple(elements), elements);
 }
 function TupleWithRest(schema, rest) {
-  return make37(tupleWithRest(schema.ast, rest.map(getAST)), {
+  return make38(tupleWithRest(schema.ast, rest.map(getAST)), {
     schema,
     rest
   });
 }
-var ArraySchema = /* @__PURE__ */ lambda((schema) => make37(new Arrays(false, [], [schema.ast]), {
+var ArraySchema = /* @__PURE__ */ lambda((schema) => make38(new Arrays(false, [], [schema.ast]), {
   value: schema
 }));
-var NonEmptyArray = /* @__PURE__ */ lambda((schema) => make37(new Arrays(false, [schema.ast], [schema.ast]), {
+var NonEmptyArray = /* @__PURE__ */ lambda((schema) => make38(new Arrays(false, [schema.ast], [schema.ast]), {
   value: schema
 }));
 function ArrayEnsure(schema) {
@@ -24571,12 +24768,12 @@ function UniqueArray(item) {
   return ArraySchema(item).check(isUnique());
 }
 var mutable = /* @__PURE__ */ lambda((schema) => {
-  return make37(new Arrays(true, schema.ast.elements, schema.ast.rest), {
+  return make38(new Arrays(true, schema.ast.elements, schema.ast.rest), {
     schema
   });
 });
 function makeUnion(ast, members) {
-  return make37(ast, {
+  return make38(ast, {
     members,
     mapMembers(f, options) {
       const members2 = f(this.members);
@@ -24589,7 +24786,7 @@ function Union2(members, options) {
 }
 function Literals(literals) {
   const members = literals.map(Literal2);
-  return make37(union2(members, "anyOf", undefined), {
+  return make38(union2(members, "anyOf", undefined), {
     literals,
     members,
     mapMembers(f) {
@@ -24607,18 +24804,18 @@ var NullOr = /* @__PURE__ */ lambda((self) => Union2([self, Null2]));
 var UndefinedOr = /* @__PURE__ */ lambda((self) => Union2([self, Undefined2]));
 var NullishOr = /* @__PURE__ */ lambda((self) => Union2([self, Null2, Undefined2]));
 function suspend6(f) {
-  return make37(new Suspend(() => f().ast));
+  return make38(new Suspend(() => f().ast));
 }
 function check(...checks) {
   return (self) => self.check(...checks);
 }
 function refine(refinement, annotations2) {
-  return (schema) => make37(appendChecks(schema.ast, [makeFilterByGuard(refinement, annotations2)]), {
+  return (schema) => make38(appendChecks(schema.ast, [makeFilterByGuard(refinement, annotations2)]), {
     schema
   });
 }
 function brand2(identifier2) {
-  return (schema) => make37(brand(schema.ast, identifier2), {
+  return (schema) => make38(brand(schema.ast, identifier2), {
     schema,
     identifier: identifier2
   });
@@ -24629,12 +24826,12 @@ function fromBrand(identifier2, ctor) {
   };
 }
 function middlewareDecoding2(decode) {
-  return (schema) => make37(middlewareDecoding(schema.ast, new Middleware(decode, identity)), {
+  return (schema) => make38(middlewareDecoding(schema.ast, new Middleware(decode, identity)), {
     schema
   });
 }
 function middlewareEncoding2(encode) {
-  return (schema) => make37(middlewareEncoding(schema.ast, new Middleware(identity, encode)), {
+  return (schema) => make38(middlewareEncoding(schema.ast, new Middleware(identity, encode)), {
     schema
   });
 }
@@ -24652,7 +24849,7 @@ function catchEncodingWithContext(f) {
 }
 function decodeTo2(to, transformation) {
   return (from) => {
-    return make37(decodeTo(from.ast, to.ast, transformation ? make23(transformation) : passthrough3()), {
+    return make38(decodeTo(from.ast, to.ast, transformation ? make23(transformation) : passthrough3()), {
       from,
       to
     });
@@ -24674,7 +24871,7 @@ function encode(transformation) {
   };
 }
 function withConstructorDefault2(defaultValue) {
-  return (schema) => make37(withConstructorDefault(schema.ast, defaultValue), {
+  return (schema) => make38(withConstructorDefault(schema.ast, defaultValue), {
     schema
   });
 }
@@ -24791,7 +24988,7 @@ function TaggedUnion(casesByTag) {
     isAnyOf,
     match: match9
   } = toTaggedUnion("_tag")(union5);
-  return make37(union5.ast, {
+  return make38(union5.ast, {
     cases,
     isAnyOf,
     guards,
@@ -25213,7 +25410,7 @@ function isUncapitalized(annotations2) {
 var isUncapitalizedReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isUncapitalized", Null2, ({
   annotations: annotations2
 }) => isUncapitalized(annotations2));
-var Finite = /* @__PURE__ */ make37(finite);
+var Finite = /* @__PURE__ */ make38(finite);
 var isFinite3 = isFinite2;
 var isFiniteReviver = /* @__PURE__ */ makeFilterReviver("effect/schema/isFinite", Null2, ({
   annotations: annotations2
@@ -26198,7 +26395,7 @@ function Option(value4) {
       onSome: (t) => `some(${value5(t)})`
     })
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     value: value4
   });
 }
@@ -26289,7 +26486,7 @@ function Result(success, failure) {
       onFailure: (t) => `failure(${failure2(t)})`
     })
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     success,
     failure
   });
@@ -26355,23 +26552,23 @@ function Redacted(value4, options) {
     }),
     expected: "Redacted",
     toCodecJson: ([value5]) => link3()(value5, {
-      decode: transform((e) => make36(e, {
+      decode: transform((e) => make37(e, {
         label
       })),
       encode: disallowJsonEncode ? forbidden((oe) => "Cannot serialize Redacted" + (isSome2(oe) && typeof oe.value.label === "string" ? ` with label: "${oe.value.label}"` : "")) : transform(value3)
     }),
     toArbitrary: ([value5]) => () => ({
-      arbitrary: value5.arbitrary.map((a) => make36(a, {
+      arbitrary: value5.arbitrary.map((a) => make37(a, {
         label
       })),
-      terminal: value5.terminal?.map((a) => make36(a, {
+      terminal: value5.terminal?.map((a) => make37(a, {
         label
       }))
     }),
     toFormatter: () => globalThis.String,
     toEquivalence: ([value5]) => makeEquivalence7(value5)
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     value: value4
   });
 }
@@ -26388,7 +26585,7 @@ function RedactedFromValue(value4, options) {
     label: options?.label,
     disallowJsonEncode: options?.disallowEncode
   }), {
-    decode: transform((t) => make36(t, {
+    decode: transform((t) => make37(t, {
       label: options?.label
     })),
     encode: options?.disallowEncode ? forbidden((oe) => "Cannot encode Redacted" + (isSome2(oe) && typeof oe.value.label === "string" ? ` with label: "${oe.value.label}"` : "")) : transform(value3)
@@ -26452,7 +26649,7 @@ function CauseReason(error, defect) {
     toEquivalence: ([error2, defect2]) => causeReasonToEquivalence(error2, defect2),
     toFormatter: ([error2, defect2]) => causeReasonToFormatter(error2, defect2)
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     error,
     defect
   });
@@ -26534,7 +26731,7 @@ function Cause(error, defect) {
     toEquivalence: ([error2, defect2]) => causeToEquivalence(error2, defect2),
     toFormatter: ([error2, defect2]) => causeToFormatter(error2, defect2)
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     error,
     defect
   });
@@ -26712,7 +26909,7 @@ function Exit(value4, error, defect) {
       };
     }
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     value: value4,
     error,
     defect
@@ -26806,7 +27003,7 @@ function ReadonlyMap(key, value4) {
       return `ReadonlyMap(${size9}) { ${entries3.join(", ")} }`;
     }
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     key,
     value: value4
   });
@@ -26816,6 +27013,161 @@ var ReadonlyMapReviver = /* @__PURE__ */ makeDeclarationReviver("effect/schema/R
   typeParameters
 }) => {
   const schema = ReadonlyMap(typeParameters[0], typeParameters[1]);
+  return annotations2 === undefined ? schema : schema.annotate(annotations2);
+});
+function graphEncodedSchema(type, node, edge) {
+  return Struct2({
+    type: Literal2(type),
+    nodes: ArraySchema(Struct2({
+      index: Natural,
+      data: node
+    })),
+    edges: ArraySchema(Struct2({
+      index: Natural,
+      source: Natural,
+      target: Natural,
+      data: edge
+    }))
+  });
+}
+function graphDecode(input, options) {
+  let previous = -1;
+  const indexes = new Set;
+  for (let i = 0;i < input.nodes.length; i++) {
+    const index2 = input.nodes[i].index;
+    if (index2 <= previous) {
+      return fail6(new Pointer(["nodes", i, "index"], new InvalidValue({
+        expected: "a strictly increasing node index"
+      }, index2, options)));
+    }
+    previous = index2;
+    indexes.add(index2);
+  }
+  previous = -1;
+  for (let i = 0;i < input.edges.length; i++) {
+    const edge = input.edges[i];
+    if (edge.index <= previous) {
+      return fail6(new Pointer(["edges", i, "index"], new InvalidValue({
+        expected: "a strictly increasing edge index"
+      }, edge.index, options)));
+    }
+    previous = edge.index;
+    if (!indexes.has(edge.source)) {
+      return fail6(new Pointer(["edges", i, "source"], new InvalidValue({
+        expected: "an encoded node index"
+      }, edge.source, options)));
+    }
+    if (!indexes.has(edge.target)) {
+      return fail6(new Pointer(["edges", i, "target"], new InvalidValue({
+        expected: "an encoded node index"
+      }, edge.target, options)));
+    }
+  }
+  return succeed6(hydrate(input));
+}
+function graphEncode(input, type, options) {
+  if (!isGraph(input) || input.mutable || input.type !== type) {
+    return fail6(new InvalidValue({
+      expected: `an immutable ${type} Graph`
+    }, input, options));
+  }
+  return succeed6(snapshot2(input));
+}
+function graphToEquivalence(node, edge) {
+  return (self, that) => {
+    const a = snapshot2(self);
+    const b = snapshot2(that);
+    if (a.type !== b.type || a.nodes.length !== b.nodes.length || a.edges.length !== b.edges.length)
+      return false;
+    for (let i = 0;i < a.nodes.length; i++) {
+      if (a.nodes[i].index !== b.nodes[i].index || !node(a.nodes[i].data, b.nodes[i].data))
+        return false;
+    }
+    for (let i = 0;i < a.edges.length; i++) {
+      const ae = a.edges[i];
+      const be = b.edges[i];
+      const sameEndpoints = a.type === "directed" ? ae.source === be.source && ae.target === be.target : ae.source === be.source && ae.target === be.target || ae.source === be.target && ae.target === be.source;
+      if (ae.index !== be.index || !sameEndpoints || !edge(ae.data, be.data))
+        return false;
+    }
+    return true;
+  };
+}
+function graphToArbitrary(type, node, edge) {
+  return (fc, ctx) => {
+    const empty12 = hydrate({
+      type,
+      nodes: [],
+      edges: []
+    });
+    const terminal = fc.constant(empty12);
+    const arbitrary = fc.array(node.arbitrary).chain((values2) => {
+      const nodes = values2.map((data, index2) => ({
+        index: index2,
+        data
+      }));
+      if (nodes.length === 0)
+        return terminal;
+      const endpoint = fc.integer({
+        min: 0,
+        max: nodes.length - 1
+      });
+      return fc.array(fc.tuple(endpoint, endpoint, edge.arbitrary)).map((values3) => hydrate({
+        type,
+        nodes,
+        edges: values3.map(([source, target, data], index2) => ({
+          index: index2,
+          source,
+          target,
+          data
+        }))
+      }));
+    });
+    return withRecursion(fc, ctx, terminal, arbitrary);
+  };
+}
+function Graph(type, node, edge) {
+  const schema = declareConstructor()([node, edge], ([node2, edge2]) => {
+    const encoded = graphEncodedSchema(type, node2, edge2);
+    return (input, ast, options) => {
+      if (!isGraph(input) || input.mutable || input.type !== type) {
+        return fail6(new InvalidType(ast, input, options));
+      }
+      return flatMap5(decodeUnknownEffect(encoded)(snapshot2(input), options), (snapshot3) => graphDecode(snapshot3, options));
+    };
+  }, {
+    representation: {
+      id: "effect/schema/Graph",
+      payload: type
+    },
+    toCode: ({
+      typeParameters
+    }) => ({
+      runtime: `Schema.Graph(${format(type)}, ${typeParameters[0].runtime}, ${typeParameters[1].runtime})`,
+      Type: `Graph.Graph<${typeParameters[0].Type}, ${typeParameters[1].Type}, ${format(type)}>`,
+      importDeclarations: [`import * as Graph from "effect/Graph"`]
+    }),
+    expected: `an immutable ${type} Graph`,
+    toCodec: ([node2, edge2]) => link3()(graphEncodedSchema(type, node2, edge2), transformOrFail2({
+      decode: graphDecode,
+      encode: (graph, options) => graphEncode(graph, type, options)
+    })),
+    toArbitrary: ([node2, edge2]) => graphToArbitrary(type, node2, edge2),
+    toEquivalence: ([node2, edge2]) => graphToEquivalence(node2, edge2),
+    toFormatter: () => globalThis.String
+  });
+  return make38(schema.ast, {
+    type,
+    node,
+    edge
+  });
+}
+var GraphReviver = /* @__PURE__ */ makeDeclarationReviver("effect/schema/Graph", /* @__PURE__ */ Literals(["directed", "undirected"]), ({
+  annotations: annotations2,
+  payload,
+  typeParameters
+}) => {
+  const schema = Graph(payload, typeParameters[0], typeParameters[1]);
   return annotations2 === undefined ? schema : schema.annotate(annotations2);
 });
 function HashMap(key, value4) {
@@ -26858,7 +27210,7 @@ function HashMap(key, value4) {
       return `HashMap(${size9}) { ${entries3.join(", ")} }`;
     }
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     key,
     value: value4
   });
@@ -26909,7 +27261,7 @@ function ReadonlySet(value4) {
       return `ReadonlySet(${size9}) { ${values2.join(", ")} }`;
     }
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     value: value4
   });
 }
@@ -26959,7 +27311,7 @@ function HashSet(value4) {
       return `HashSet(${size9}) { ${values2.join(", ")} }`;
     }
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     value: value4
   });
 }
@@ -27009,7 +27361,7 @@ function Chunk(value4) {
       return `Chunk(${size9}) { ${values2.join(", ")} }`;
     }
   });
-  return make37(schema.ast, {
+  return make38(schema.ast, {
     value: value4
   });
 }
@@ -27388,7 +27740,7 @@ var NumberFromString = /* @__PURE__ */ String6.annotate({
 var FiniteFromString = /* @__PURE__ */ String6.annotate({
   expected: "a string that will be decoded as a finite number"
 }).pipe(/* @__PURE__ */ decodeTo2(Finite, numberFromString));
-var BigIntFromString = /* @__PURE__ */ make37(bigIntString).pipe(/* @__PURE__ */ decodeTo2(BigInt5, bigintFromString));
+var BigIntFromString = /* @__PURE__ */ make38(bigIntString).pipe(/* @__PURE__ */ decodeTo2(BigInt5, bigintFromString));
 var Trimmed = /* @__PURE__ */ String6.check(/* @__PURE__ */ isTrimmed());
 var Trim = /* @__PURE__ */ String6.annotate({
   expected: "a string that will be decoded as a trimmed string"
@@ -27591,7 +27943,7 @@ function makeClass(Inherited, identifier2, struct2, annotations2, proto) {
         }
       });
     }
-    static [TypeId38] = TypeId38;
+    static [TypeId39] = TypeId39;
     get [ClassTypeId]() {
       return ClassTypeId;
     }
@@ -27667,7 +28019,7 @@ function getClassSchemaFactory(from, identifier2, annotations2) {
     const ClassTypeId = getClassTypeId(identifier2);
     const isClassValue = (input) => input instanceof self || hasProperty(input, ClassTypeId);
     const transformation = getClassTransformation(self);
-    const to = make37(new Declaration([from.ast], () => (input, ast, options) => {
+    const to = make38(new Declaration([from.ast], () => (input, ast, options) => {
       return isClassValue(input) ? succeed6(input) : fail6(new InvalidType(ast, input, options));
     }, {
       identifier: identifier2,
@@ -27779,9 +28131,9 @@ function toFormatter(schema, options) {
             }
           }
           if (rest.length > 0) {
-            const [head, ...tail] = rest;
+            const [head3, ...tail] = rest;
             for (;i < t.length - tail.length; i++) {
-              out.push(head(t[i]));
+              out.push(head3(t[i]));
             }
             for (let j = 0;j < tail.length; j++) {
               out.push(tail[j](t[i + j]));
@@ -27859,7 +28211,7 @@ function toJsonSchemaDocument2(schema, options) {
   return toJsonSchemaDocument(document, options);
 }
 function toCodecJson(schema) {
-  return make37(toCodecJsonAST(schema.ast), {
+  return make38(toCodecJsonAST(schema.ast), {
     schema
   });
 }
@@ -27918,7 +28270,7 @@ function toCodecJsonASTStep(ast, recur3) {
       if (!isFunction(getLink)) {
         return replaceEncoding(ast, [unknownToJson]);
       }
-      const typeParameters = ast.typeParameters.map((tp) => make34(toEncoded(tp)));
+      const typeParameters = ast.typeParameters.map((tp) => make35(toEncoded(tp)));
       const link4 = getLink(typeParameters);
       return link4 === undefined ? ast : replaceEncoding(ast, [mapLink(link4, recur3)]);
     }
@@ -27953,7 +28305,7 @@ function toCodecJsonASTStep(ast, recur3) {
   return ast;
 }
 function toCodecIso(schema) {
-  return make37(toCodecIsoAST(toType(schema.ast)));
+  return make38(toCodecIsoAST(toType(schema.ast)));
 }
 var toCodecIsoAST = /* @__PURE__ */ memoize((ast) => {
   const out = toCodecIsoASTStep(ast, toCodecIsoAST);
@@ -27964,7 +28316,7 @@ function toCodecIsoASTStep(ast, recur3) {
     case "Declaration": {
       const getLink = ast.annotations?.toCodecIso ?? ast.annotations?.toCodec;
       if (isFunction(getLink)) {
-        const link4 = getLink(ast.typeParameters.map((tp) => make34(tp)));
+        const link4 = getLink(ast.typeParameters.map((tp) => make35(tp)));
         return replaceEncoding(ast, [mapLink(link4, recur3)]);
       }
       return ast;
@@ -27978,12 +28330,12 @@ function toCodecIsoASTStep(ast, recur3) {
   return ast;
 }
 function toCodecStringTree(schema) {
-  return make37(toCodecStringTreeAST(schema.ast), {
+  return make38(toCodecStringTreeAST(schema.ast), {
     schema
   });
 }
 function toCodecArrayFromSingle(schema) {
-  return make37(toCodecArrayFromSingleAST(schema.ast));
+  return make38(toCodecArrayFromSingleAST(schema.ast));
 }
 function toEncoderXml(codec, options) {
   const rootName = resolveIdentifier(codec.ast) ?? resolveTitle(codec.ast);
@@ -28104,7 +28456,7 @@ var toStringTreeReorder = /* @__PURE__ */ makeReorder((ast) => {
 function toCodecStringTreeASTStep(ast, recur3, onMissingAnnotation) {
   switch (ast._tag) {
     case "Declaration": {
-      const typeParameters = ast.typeParameters.map((tp) => make37(recur3(toEncoded(tp))));
+      const typeParameters = ast.typeParameters.map((tp) => make38(recur3(toEncoded(tp))));
       const getStringTreeLink = ast.annotations?.toCodecStringTree;
       if (isFunction(getStringTreeLink)) {
         const link5 = getStringTreeLink(typeParameters);
@@ -28258,7 +28610,7 @@ function toIsoFocus(_) {
 }
 function overrideToCodecIso(to, transformation) {
   return (schema) => {
-    return make37(annotate2(schema.ast, {
+    return make38(annotate2(schema.ast, {
       toCodecIso: () => new Link(to.ast, make23(transformation))
     }), {
       schema
@@ -28285,7 +28637,7 @@ function Tree(node) {
   const Tree2 = Union2([node, ArraySchema(Tree$ref), Record(String6, Tree$ref)]);
   return Tree2;
 }
-var Json2 = /* @__PURE__ */ make37(/* @__PURE__ */ annotate2(Json, {
+var Json2 = /* @__PURE__ */ make38(/* @__PURE__ */ annotate2(Json, {
   toCode: () => ({
     runtime: "Schema.Json",
     Type: "Schema.Json"
@@ -28298,7 +28650,7 @@ var JsonError = /* @__PURE__ */ Struct2({
   stack: /* @__PURE__ */ optionalKey2(String6),
   cause: /* @__PURE__ */ optionalKey2(Json2)
 });
-var MutableJson2 = /* @__PURE__ */ make37(/* @__PURE__ */ annotate2(MutableJson, {
+var MutableJson2 = /* @__PURE__ */ make38(/* @__PURE__ */ annotate2(MutableJson, {
   toCode: () => ({
     runtime: "Schema.MutableJson",
     Type: "Schema.MutableJson"
@@ -28312,8 +28664,8 @@ function resolveAnnotationsKey(schema) {
   return schema.ast.context?.annotations;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Terminal.js
-var TypeId39 = "~effect/platform/Terminal";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Terminal.js
+var TypeId40 = "~effect/platform/Terminal";
 var QuitErrorTypeId = "effect/platform/Terminal/QuitError";
 
 class QuitError extends (/* @__PURE__ */ Error4("QuitError")({
@@ -28322,14 +28674,14 @@ class QuitError extends (/* @__PURE__ */ Error4("QuitError")({
   [QuitErrorTypeId] = QuitErrorTypeId;
 }
 var Terminal = /* @__PURE__ */ Service("effect/platform/Terminal");
-var make38 = (impl) => Terminal.of({
+var make39 = (impl) => Terminal.of({
   ...impl,
-  [TypeId39]: TypeId39
+  [TypeId40]: TypeId40
 });
 
-// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.109+572e5a9a9ccc3c07/node_modules/@effect/platform-node-shared/dist/NodeTerminal.js
+// node_modules/.bun/@effect+platform-node-shared@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/platform-node-shared/dist/NodeTerminal.js
 import * as readline from "node:readline";
-var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQuit) {
+var make40 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQuit) {
   const stdin = process.stdin;
   const stdout = process.stdout;
   const lines = yield* make14();
@@ -28434,7 +28786,7 @@ var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQu
       cause: err
     }))));
   }));
-  return make38({
+  return make39({
     columns,
     rows,
     readInput,
@@ -28442,17 +28794,17 @@ var make39 = /* @__PURE__ */ fnUntraced2(function* (shouldQuit = defaultShouldQu
     display
   });
 });
-var layer10 = /* @__PURE__ */ effect(Terminal, /* @__PURE__ */ make39(defaultShouldQuit));
+var layer10 = /* @__PURE__ */ effect(Terminal, /* @__PURE__ */ make40(defaultShouldQuit));
 function defaultShouldQuit(input) {
   return input.key.ctrl && (input.key.name === "c" || input.key.name === "d");
 }
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeTerminal.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeTerminal.js
 var layer11 = layer10;
 
-// node_modules/.bun/@effect+platform-node@4.0.0-beta.107+d3e3fa2dfed79334/node_modules/@effect/platform-node/dist/NodeServices.js
+// node_modules/.bun/@effect+platform-node@4.0.0-rc.110+7e0ee2f47f532612/node_modules/@effect/platform-node/dist/NodeServices.js
 var layer12 = /* @__PURE__ */ provideMerge(layer, /* @__PURE__ */ mergeAll2(layer5, layer3, layer7, layer9, layer11));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Config.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Config.js
 var exports_Config = {};
 __export(exports_Config, {
   withDefault: () => withDefault2,
@@ -28491,7 +28843,7 @@ __export(exports_Config, {
   Array: () => ArrayConfig
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ConfigProvider.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ConfigProvider.js
 function makeValue(value4) {
   return {
     _tag: "Value",
@@ -28533,7 +28885,7 @@ function makeProvider(load, mapInput4) {
 function makeSource(get9, transform3) {
   return makeProvider((path) => get9(transform3(path)), (f) => makeSource(get9, flow(transform3, f)));
 }
-function make40(get9) {
+function make41(get9) {
   return makeSource(get9, identityPath);
 }
 function emptyStringAsMissing(value4, preserveEmptyStrings) {
@@ -28542,7 +28894,7 @@ function emptyStringAsMissing(value4, preserveEmptyStrings) {
 function fromEnvRecord(env, options) {
   const preserveEmptyStrings = options?.preserveEmptyStrings === true;
   const trie = buildEnvTrie(env);
-  return make40((path) => succeed6(nodeAtEnv(trie, env, path, preserveEmptyStrings)));
+  return make41((path) => succeed6(nodeAtEnv(trie, env, path, preserveEmptyStrings)));
 }
 function fromEnv(options) {
   const env = options?.env ?? {
@@ -28595,12 +28947,12 @@ function trieNodeAt(root, path) {
   return node;
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/LogLevel.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/LogLevel.js
 var values2 = ["All", "Fatal", "Error", "Warn", "Info", "Debug", "Trace", "None"];
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Config.js
-var TypeId40 = "~effect/Config";
-var isConfig = (u) => hasProperty(u, TypeId40);
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Config.js
+var TypeId41 = "~effect/Config";
+var isConfig = (u) => hasProperty(u, TypeId41);
 
 class ConfigError {
   _tag = "ConfigError";
@@ -28623,14 +28975,14 @@ var Proto7 = {
       return this.parse(fiber3.getRef(ConfigProvider));
     }
   }),
-  [TypeId40]: TypeId40,
+  [TypeId41]: TypeId41,
   toJSON() {
     return {
       _id: "Config"
     };
   }
 };
-function make41(evaluator) {
+function make42(evaluator) {
   const self = Object.create(Proto7);
   self.evaluator = evaluator;
   self.parse = (provider) => evaluator(provider, []).pipe(mapErrorEager2((failure) => failure.error), flatMapEager2((resolution) => resolution._tag === "Resolved" ? succeed6(resolution.value) : fail6(resolution.error)));
@@ -28658,13 +29010,13 @@ var preserveInputEvidence = (self, hasInput2) => {
   return self.pipe(mapErrorEager2((failure) => evaluationFailure(failure.error, true)), flatMapEager2((resolution) => resolution._tag === "Resolved" ? succeed6(resolved(resolution.value, true)) : fail6(evaluationFailure(resolution.error, true))));
 };
 var map13 = /* @__PURE__ */ dual(2, (self, f) => {
-  return make41((provider, pathPrefix) => map8(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Resolved" ? resolved(f(resolution.value), resolution.hasInput) : resolution));
+  return make42((provider, pathPrefix) => map8(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Resolved" ? resolved(f(resolution.value), resolution.hasInput) : resolution));
 });
 var mapOrFail = /* @__PURE__ */ dual(2, (self, f) => {
-  return make41((provider, pathPrefix) => flatMap5(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Resolved" ? f(resolution.value).pipe(mapEager2((value4) => resolved(value4, resolution.hasInput)), mapErrorEager2((error) => evaluationFailure(error, resolution.hasInput))) : succeed6(resolution)));
+  return make42((provider, pathPrefix) => flatMap5(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Resolved" ? f(resolution.value).pipe(mapEager2((value4) => resolved(value4, resolution.hasInput)), mapErrorEager2((error) => evaluationFailure(error, resolution.hasInput))) : succeed6(resolution)));
 });
 var orElse3 = /* @__PURE__ */ dual(2, (self, that) => {
-  return make41((provider, pathPrefix) => matchEffect3(evaluateAt(self, provider, pathPrefix), {
+  return make42((provider, pathPrefix) => matchEffect3(evaluateAt(self, provider, pathPrefix), {
     onFailure: (failure) => preserveInputEvidence(evaluateAt(that(failure.error), provider, pathPrefix), failure.hasInput),
     onSuccess: (resolution) => resolution._tag === "Absent" ? evaluateAt(that(resolution.error), provider, pathPrefix) : succeed6(resolution)
   }));
@@ -28672,9 +29024,9 @@ var orElse3 = /* @__PURE__ */ dual(2, (self, that) => {
 function all5(arg) {
   const configs = Array.isArray(arg) ? arg : (Symbol.iterator in arg) ? [...arg] : arg;
   if (Array.isArray(configs)) {
-    return make41((provider, pathPrefix) => flatMapEager2(all4(configs.map((config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveArray));
+    return make42((provider, pathPrefix) => flatMapEager2(all4(configs.map((config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveArray));
   } else {
-    return make41((provider, pathPrefix) => flatMapEager2(all4(map3(configs, (config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveRecord));
+    return make42((provider, pathPrefix) => flatMapEager2(all4(map3(configs, (config) => result2(evaluateAt(config, provider, pathPrefix)))), resolveRecord));
   }
 }
 var resolveArray = (results) => {
@@ -28733,7 +29085,7 @@ var resolveRecord = (results) => {
   return succeed6(resolved(values3, hasInput2));
 };
 var withDefault2 = /* @__PURE__ */ dual(2, (self, defaultValue) => {
-  return make41((provider, pathPrefix) => mapEager2(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Absent" ? resolved(defaultValue, false) : resolution));
+  return make42((provider, pathPrefix) => mapEager2(evaluateAt(self, provider, pathPrefix), (resolution) => resolution._tag === "Absent" ? resolved(defaultValue, false) : resolution));
 });
 var option3 = (self) => self.pipe(map13(some3), withDefault2(none2()));
 var unwrap5 = (wrapped) => {
@@ -28848,9 +29200,9 @@ var toConfigCursorAST = /* @__PURE__ */ memoize((root) => {
 function schema(codec, path) {
   const codecStringTree = toCodecStringTree(codec);
   const encodedAst = toEncoded(codecStringTree.ast);
-  const decodeCursor = decodeUnknownEffect(make37(toConfigCursorAST(codecStringTree.ast)));
+  const decodeCursor = decodeUnknownEffect(make38(toConfigCursorAST(codecStringTree.ast)));
   const localPath = typeof path === "string" ? [path] : path ?? [];
-  return make41((provider, pathPrefix) => {
+  return make42((provider, pathPrefix) => {
     const fullPath = [...pathPrefix, ...localPath];
     return catchSourceError(loadCursor(provider, fullPath), false).pipe(flatMapEager2((cursor) => {
       const hasInput2 = hasProviderInput(encodedAst, cursor.node);
@@ -28895,10 +29247,10 @@ var ArrayConfig = (value4, options) => {
   return Union2([arrayString, array3]);
 };
 function fail12(err) {
-  return make41(() => fail6(evaluationFailure(new ConfigError(err), false)));
+  return make42(() => fail6(evaluationFailure(new ConfigError(err), false)));
 }
 function succeed10(value4) {
-  return make41(() => succeed6(resolved(value4, false)));
+  return make42(() => succeed6(resolved(value4, false)));
 }
 function string3(name) {
   return schema(String6, name);
@@ -28942,8 +29294,8 @@ function url(name) {
 function date(name) {
   return schema(Date4, name);
 }
-var nested = /* @__PURE__ */ dual(2, (self, name) => make41((provider, pathPrefix) => evaluateAt(self, provider, [...pathPrefix, name])));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Console.js
+var nested = /* @__PURE__ */ dual(2, (self, name) => make42((provider, pathPrefix) => evaluateAt(self, provider, [...pathPrefix, name])));
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Console.js
 var exports_Console = {};
 __export(exports_Console, {
   withTime: () => withTime,
@@ -29039,26 +29391,26 @@ var withTime = /* @__PURE__ */ dual((args2) => isEffect(args2[0]), (self, label)
 }), () => self, () => sync(() => {
   console.timeEnd(label);
 }))));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ErrorReporter.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ErrorReporter.js
 var exports_ErrorReporter = {};
 __export(exports_ErrorReporter, {
   severity: () => severity,
   report: () => report,
-  make: () => make42,
+  make: () => make43,
   layer: () => layer13,
   isIgnored: () => isIgnored,
   ignore: () => ignore5,
   getSeverity: () => getSeverity,
   getAttributes: () => getAttributes,
   attributes: () => attributes,
-  TypeId: () => TypeId41,
+  TypeId: () => TypeId42,
   CurrentErrorReporters: () => CurrentErrorReporters2
 });
-var TypeId41 = "~effect/ErrorReporter";
-var make42 = (report) => {
+var TypeId42 = "~effect/ErrorReporter";
+var make43 = (report) => {
   const reported = new WeakSet;
   return {
-    [TypeId41]: TypeId41,
+    [TypeId42]: TypeId42,
     report(options) {
       if (reported.has(options.cause))
         return;
@@ -29113,7 +29465,7 @@ var getAttributes = (error2) => {
   return attributes in error2 ? error2[attributes] : emptyAttributes;
 };
 var emptyAttributes = {};
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Logger.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Logger.js
 var exports_Logger = {};
 __export(exports_Logger, {
   withLeveledConsole: () => withLeveledConsole,
@@ -29122,7 +29474,7 @@ __export(exports_Logger, {
   tracerLogger: () => tracerLogger2,
   toFile: () => toFile,
   map: () => map14,
-  make: () => make43,
+  make: () => make44,
   layer: () => layer14,
   isLogger: () => isLogger,
   formatStructured: () => formatStructured,
@@ -29138,8 +29490,8 @@ __export(exports_Logger, {
   LogToStderr: () => LogToStderr3,
   CurrentLoggers: () => CurrentLoggers3
 });
-var TypeId42 = "~effect/Logger";
-var isLogger = (u) => hasProperty(u, TypeId42);
+var TypeId43 = "~effect/Logger";
+var isLogger = (u) => hasProperty(u, TypeId43);
 var CurrentLoggers3 = CurrentLoggers;
 var LogToStderr3 = LogToStderr;
 var map14 = /* @__PURE__ */ dual(2, (self, f) => loggerMake((options) => f(self.log(options))));
@@ -29187,7 +29539,7 @@ var format7 = (quoteValue, space) => ({
   const format8 = (label, value4) => `${formatLabel(label)}=${formatValue(value4)}`;
   const append3 = (label, value4) => " " + format8(label, value4);
   let out = format8("timestamp", date2.toISOString());
-  out += append3("level", logLevel2);
+  out += append3("level", logLevel2.toUpperCase());
   out += append3("fiber", formatFiberId(fiber3.id));
   const messages = ensure(message);
   for (let i = 0;i < messages.length; i++) {
@@ -29207,7 +29559,7 @@ var format7 = (quoteValue, space) => ({
   }
   return out;
 };
-var make43 = loggerMake;
+var make44 = loggerMake;
 var defaultLogger2 = defaultLogger;
 var formatSimple = /* @__PURE__ */ loggerMake(/* @__PURE__ */ format7(escapeDoubleQuotes));
 var formatLogFmt = /* @__PURE__ */ loggerMake(/* @__PURE__ */ format7(JSON.stringify, 0));
@@ -29281,7 +29633,7 @@ var toFile = /* @__PURE__ */ dual((args2) => isLogger(args2[0]), (self, path, op
 `)))
   });
 }));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Ref.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Ref.js
 var exports_Ref = {};
 __export(exports_Ref, {
   updateSomeAndGet: () => updateSomeAndGet,
@@ -29293,16 +29645,16 @@ __export(exports_Ref, {
   modifySome: () => modifySome,
   modify: () => modify4,
   makeUnsafe: () => makeUnsafe9,
-  make: () => make44,
+  make: () => make45,
   getUnsafe: () => getUnsafe5,
   getAndUpdateSome: () => getAndUpdateSome,
   getAndUpdate: () => getAndUpdate,
   getAndSet: () => getAndSet,
   get: () => get9
 });
-var TypeId43 = "~effect/Ref";
+var TypeId44 = "~effect/Ref";
 var RefProto = {
-  [TypeId43]: {
+  [TypeId44]: {
     _A: identity
   },
   ...PipeInspectableProto,
@@ -29318,7 +29670,7 @@ var makeUnsafe9 = (value4) => {
   self.ref = make11(value4);
   return self;
 };
-var make44 = (value4) => sync3(() => makeUnsafe9(value4));
+var make45 = (value4) => sync3(() => makeUnsafe9(value4));
 var get9 = (self) => sync3(() => self.ref.current);
 var set4 = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => set(self.ref, value4)));
 var getAndSet = /* @__PURE__ */ dual(2, (self, value4) => sync3(() => {
@@ -29806,7 +30158,7 @@ var applyToolResultBounds = (encodedJson, bounds) => {
   const originalBytes = utf8ByteLength(encodedJson);
   if (originalBytes <= bounds.maxBytes)
     return encodedJson;
-  const render = (head, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head, tail })));
+  const render = (head3, tail) => JSON.stringify(exports_Schema.encodeSync(TruncatedToolResult)(TruncatedToolResult.make({ truncatedToolResult: true, originalBytes, head: head3, tail })));
   const minimal = render("", "");
   const contentBudget = bounds.maxBytes - utf8ByteLength(minimal);
   if (contentBudget <= 0)
@@ -29814,9 +30166,9 @@ var applyToolResultBounds = (encodedJson, bounds) => {
   let headBudget = Math.floor(contentBudget / 2);
   let tailBudget = contentBudget - headBudget;
   for (;; ) {
-    const head = takePrefixWithinBytes(encodedJson, headBudget);
+    const head3 = takePrefixWithinBytes(encodedJson, headBudget);
     const tail = takeSuffixWithinBytes(encodedJson, tailBudget);
-    const output = render(head, tail);
+    const output = render(head3, tail);
     const outputBytes = utf8ByteLength(output);
     if (outputBytes <= bounds.maxBytes)
       return output;
@@ -30333,7 +30685,7 @@ var durationExceeded = (node, now3) => {
 };
 var makeNode = (ledger, key, ancestors, config) => {
   const hierarchy = [...ancestors, key];
-  const snapshot2 = exports_Effect.gen(function* () {
+  const snapshot3 = exports_Effect.gen(function* () {
     const now3 = yield* exports_Clock.currentTimeMillis;
     const state = yield* exports_Ref.get(ledger);
     const node = state.nodes.get(key);
@@ -30432,7 +30784,7 @@ var makeNode = (ledger, key, ancestors, config) => {
       const value4 = updates.get(key)?.totals ?? emptyTotals();
       return [{ _tag: "success", value: value4 }, { nodes: nextNodes }];
     }).pipe(exports_Effect.flatMap((result4) => result4._tag === "success" ? exports_Effect.succeed(result4.value) : exports_Effect.fail(result4.error))))),
-    snapshot: snapshot2,
+    snapshot: snapshot3,
     guard
   };
 };
@@ -30458,11 +30810,11 @@ var makeUsageBudget = (limits) => makeUsageBudgetRoot(UsageBudgetNodeConfig.make
   id: "standalone-run",
   limits
 }));
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/AiError.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AiError.js
 var exports_AiError = {};
 __export(exports_AiError, {
   reasonFromHttpStatus: () => reasonFromHttpStatus,
-  make: () => make45,
+  make: () => make46,
   isAiErrorReason: () => isAiErrorReason,
   isAiError: () => isAiError,
   UsageInfo: () => UsageInfo,
@@ -30490,7 +30842,7 @@ __export(exports_AiError, {
   AiError: () => AiError
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Response.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Response.js
 var exports_Response = {};
 __export(exports_Response, {
   toolResultPart: () => toolResultPart,
@@ -30803,7 +31155,7 @@ var ErrorPart = /* @__PURE__ */ Struct2({
   identifier: "ErrorPart"
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/AiError.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AiError.js
 var ReasonTypeId2 = "~effect/unstable/ai/AiError/Reason";
 var providerMetadataWithDefaults = () => ProviderMetadata2.pipe(withConstructorDefault2(succeed6({})), withDecodingDefault(succeed6({})));
 var redactHeaders = (headers) => {
@@ -31165,7 +31517,7 @@ class InvalidUserInputError extends (/* @__PURE__ */ Error4("effect/ai/AiError/I
   }
 }
 var AiErrorReason = /* @__PURE__ */ Union2([RateLimitError, QuotaExhaustedError, AuthenticationError, ContentPolicyError, InvalidRequestError, InternalProviderError, NetworkError, InvalidOutputError, StructuredOutputError, UnsupportedSchemaError, UnknownError3, ToolNotFoundError, ToolParameterValidationError, InvalidToolResultError, ToolResultEncodingError, ToolConfigurationError, ToolkitRequiredError, InvalidUserInputError]);
-var TypeId44 = "~effect/unstable/ai/AiError/AiError";
+var TypeId45 = "~effect/unstable/ai/AiError/AiError";
 
 class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
   _tag: /* @__PURE__ */ tag("AiError"),
@@ -31173,7 +31525,7 @@ class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
   method: String6,
   reason: AiErrorReason
 })) {
-  [TypeId44] = TypeId44;
+  [TypeId45] = TypeId45;
   cause = this.reason;
   get isRetryable() {
     return this.reason.isRetryable;
@@ -31185,9 +31537,9 @@ class AiError extends (/* @__PURE__ */ Error4("effect/ai/AiError/AiError")({
     return `${this.module}.${this.method}: ${this.reason.message}`;
   }
 }
-var isAiError = (u) => hasProperty(u, TypeId44);
+var isAiError = (u) => hasProperty(u, TypeId45);
 var isAiErrorReason = (u) => hasProperty(u, ReasonTypeId2);
-var make45 = (params) => new AiError(params);
+var make46 = (params) => new AiError(params);
 var reasonFromHttpStatus = (params) => {
   const {
     status,
@@ -31229,11 +31581,11 @@ var reasonFromHttpStatus = (params) => {
       return new UnknownError3(common);
   }
 };
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/LanguageModel.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/LanguageModel.js
 var exports_LanguageModel = {};
 __export(exports_LanguageModel, {
   streamText: () => streamText,
-  make: () => make50,
+  make: () => make51,
   getObjectName: () => getObjectName,
   generateText: () => generateText,
   generateObject: () => generateObject,
@@ -31243,11 +31595,11 @@ __export(exports_LanguageModel, {
   GenerateObjectResponse: () => GenerateObjectResponse
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/FiberSet.js
-var TypeId45 = "~effect/FiberSet";
-var isFiberSet = (u) => hasProperty(u, TypeId45);
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/FiberSet.js
+var TypeId46 = "~effect/FiberSet";
+var isFiberSet = (u) => hasProperty(u, TypeId46);
 var Proto8 = {
-  [TypeId45]: TypeId45,
+  [TypeId46]: TypeId46,
   [Symbol.iterator]() {
     if (this.state._tag === "Closed") {
       return empty2();
@@ -31271,7 +31623,7 @@ var makeUnsafe10 = (backing, deferred) => {
   self.deferred = deferred;
   return self;
 };
-var make46 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
+var make47 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2())), (set5) => suspend3(() => {
   const state = set5.state;
   if (state._tag === "Closed")
     return void_5;
@@ -31283,7 +31635,7 @@ var make46 = () => acquireRelease2(sync3(() => makeUnsafe10(new Set, makeUnsafe2
 }));
 var internalFiberId = -1;
 var isInternalInterruption = /* @__PURE__ */ toPredicate(/* @__PURE__ */ compose2(filterInterruptors, /* @__PURE__ */ has2(internalFiberId)));
-var addUnsafe = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
+var addUnsafe2 = /* @__PURE__ */ dual((args2) => isFiberSet(args2[0]), (self, fiber3, options) => {
   if (self.state._tag === "Closed") {
     fiber3.interruptUnsafe(internalFiberId);
     return;
@@ -31323,7 +31675,7 @@ var runImpl = (self, effect2, options) => withFiber2((parent) => {
     return sync3(constInterruptedFiber);
   }
   const fiber3 = runForkWith2(parent.context)(effect2);
-  addUnsafe(self, fiber3, options);
+  addUnsafe2(self, fiber3, options);
   return succeed6(fiber3);
 });
 var runtime = (self) => () => map8(context2(), (services2) => {
@@ -31333,7 +31685,7 @@ var runtime = (self) => () => map8(context2(), (services2) => {
       return constInterruptedFiber();
     }
     const fiber3 = runFork3(effect2, options);
-    addUnsafe(self, fiber3, options);
+    addUnsafe2(self, fiber3, options);
     return fiber3;
   };
 });
@@ -31344,12 +31696,12 @@ var awaitEmpty = (self) => whileLoop2({
   step: constVoid
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Random.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/Random.js
 var Random3 = Random;
 var randomWith = (f) => withFiber2((fiber3) => succeed6(f(fiber3.getRef(Random3))));
 var next = /* @__PURE__ */ randomWith((r) => r.nextDoubleUnsafe());
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/IdGenerator.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/IdGenerator.js
 class IdGenerator2 extends (/* @__PURE__ */ Service()("@effect/ai/IdGenerator")) {
 }
 var DEFAULT_ALPHABET = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
@@ -31381,7 +31733,7 @@ var defaultIdGenerator = {
   })
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/internal/codec-transformer.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/internal/codec-transformer.js
 var makeDefaultCodecTransformer = (toJsonSchemaDocument3) => {
   return (codec) => {
     const document = resolveTopLevel$ref(toJsonSchemaDocument3(codec));
@@ -31399,7 +31751,7 @@ var makeDefaultCodecTransformer = (toJsonSchemaDocument3) => {
 };
 var defaultCodecTransformer = /* @__PURE__ */ makeDefaultCodecTransformer(toJsonSchemaDocument2);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Prompt.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Prompt.js
 var exports_Prompt = {};
 __export(exports_Prompt, {
   userMessage: () => userMessage,
@@ -31415,7 +31767,7 @@ __export(exports_Prompt, {
   prependSystem: () => prependSystem,
   makePart: () => makePart2,
   makeMessage: () => makeMessage,
-  make: () => make47,
+  make: () => make48,
   isPrompt: () => isPrompt,
   isPart: () => isPart2,
   isMessage: () => isMessage,
@@ -31586,8 +31938,8 @@ var ToolMessage = /* @__PURE__ */ Struct2({
 });
 var toolMessage = (params) => makeMessage("tool", params);
 var Message = /* @__PURE__ */ Union2([SystemMessage, UserMessage, AssistantMessage, ToolMessage]);
-var TypeId46 = "~effect/unstable/ai/Prompt";
-var isPrompt = (u) => hasProperty(u, TypeId46);
+var TypeId47 = "~effect/unstable/ai/Prompt";
+var isPrompt = (u) => hasProperty(u, TypeId47);
 var $Prompt = /* @__PURE__ */ declare((u) => isPrompt(u), {
   identifier: "Prompt"
 });
@@ -31610,7 +31962,7 @@ var Prompt = /* @__PURE__ */ Struct2({
   })
 })));
 var Proto9 = {
-  [TypeId46]: TypeId46,
+  [TypeId47]: TypeId47,
   pipe() {
     return pipeArguments(this, arguments);
   }
@@ -31620,7 +31972,7 @@ var makePrompt = (content) => Object.assign(Object.create(Proto9), {
 });
 var decodeMessagesSync = /* @__PURE__ */ decodeSync2(/* @__PURE__ */ ArraySchema(Message));
 var empty12 = /* @__PURE__ */ makePrompt([]);
-var make47 = (input) => {
+var make48 = (input) => {
   if (typeof input === "string") {
     const part = makePart2("text", {
       text: input
@@ -31768,7 +32120,7 @@ var fromResponseParts = (parts2) => {
   return makePrompt(messages);
 };
 var concat3 = /* @__PURE__ */ dual(2, (self, input) => {
-  const other = make47(input);
+  const other = make48(input);
   if (self.content.length === 0) {
     return other;
   }
@@ -31823,10 +32175,10 @@ var appendSystem = /* @__PURE__ */ dual(2, (self, content) => {
   return makePrompt([system, ...self.content]);
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/ResponseIdTracker.js
 class ResponseIdTracker extends (/* @__PURE__ */ Service()("effect/ai/ResponseIdTracker")) {
 }
-var make48 = /* @__PURE__ */ sync3(() => {
+var make49 = /* @__PURE__ */ sync3(() => {
   const sentParts = new Map;
   const none3 = () => {
     sentParts.clear();
@@ -31882,7 +32234,7 @@ var make48 = /* @__PURE__ */ sync3(() => {
   };
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Telemetry.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Telemetry.js
 var addSpanAttributes = (keyPrefix, transformKey) => (span2, attributes2) => {
   for (const [key, value4] of Object.entries(attributes2)) {
     if (isNotNullish(value4)) {
@@ -31915,14 +32267,14 @@ var addGenAIAnnotations = /* @__PURE__ */ dual(2, (span2, options) => {
 class CurrentSpanTransformer extends (/* @__PURE__ */ Service()("effect/ai/Telemetry/CurrentSpanTransformer")) {
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Toolkit.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Toolkit.js
 var exports_Toolkit = {};
 __export(exports_Toolkit, {
   merge: () => merge6,
-  make: () => make49,
+  make: () => make50,
   empty: () => empty13
 });
-var TypeId47 = "~effect/ai/Toolkit";
+var TypeId48 = "~effect/ai/Toolkit";
 var Proto10 = {
   .../* @__PURE__ */ Prototype2({
     label: "Toolkit",
@@ -31956,7 +32308,7 @@ var Proto10 = {
           parameters: params
         });
         if (isUndefined(tool)) {
-          return yield* make45({
+          return yield* make46({
             module: "Toolkit",
             method: `${name}.handle`,
             reason: new ToolNotFoundError({
@@ -31966,7 +32318,7 @@ var Proto10 = {
           });
         }
         const schemas = getSchemas(tool);
-        const decodedParams = yield* schemas.decodeParameters(params).pipe(mapError4((cause) => make45({
+        const decodedParams = yield* schemas.decodeParameters(params).pipe(mapError4((cause) => make46({
           module: "Toolkit",
           method: `${name}.handle`,
           reason: new ToolParameterValidationError({
@@ -31992,7 +32344,7 @@ var Proto10 = {
           onFailure: (cause) => failCause5(queue, cause),
           onSuccess: () => end(queue)
         }), forkChild2);
-        const encodeResult2 = (result4) => schemas.encodeResult(result4).pipe(mapError4((cause) => make45({
+        const encodeResult2 = (result4) => schemas.encodeResult(result4).pipe(mapError4((cause) => make46({
           module: "Toolkit",
           method: `${name}.handle`,
           reason: new ToolResultEncodingError({
@@ -32002,14 +32354,14 @@ var Proto10 = {
           })
         })));
         const normalizeError = (error2) => {
-          const normalizedError = isSchemaError(error2) ? make45({
+          const normalizedError = isSchemaError(error2) ? make46({
             module: "Toolkit",
             method: `${name}.handle`,
             reason: new InvalidToolResultError({
               toolName: name,
               description: `Tool handler returned invalid result: ${error2.message}`
             })
-          }) : isAiErrorReason(error2) ? make45({
+          }) : isAiErrorReason(error2) ? make46({
             module: "Toolkit",
             method: `${name}.handle`,
             reason: error2
@@ -32037,7 +32389,7 @@ var Proto10 = {
       };
     })
   }),
-  [TypeId47]: TypeId47,
+  [TypeId48]: TypeId48,
   of: identity,
   toHandlers(build2) {
     return gen4({
@@ -32080,7 +32432,7 @@ var resolveInput = (...tools) => {
   return output;
 };
 var empty13 = /* @__PURE__ */ makeProto2({});
-var make49 = (...tools) => makeProto2(resolveInput(...tools));
+var make50 = (...tools) => makeProto2(resolveInput(...tools));
 var merge6 = (...toolkits) => {
   const tools = {};
   for (const toolkit of toolkits) {
@@ -32091,7 +32443,7 @@ var merge6 = (...toolkits) => {
   return makeProto2(tools);
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/LanguageModel.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/LanguageModel.js
 class LanguageModel extends (/* @__PURE__ */ Service()("effect/unstable/ai/LanguageModel")) {
 }
 var defaultCodecTransformer2 = defaultCodecTransformer;
@@ -32160,7 +32512,7 @@ class GenerateObjectResponse extends GenerateTextResponse {
     this.value = value4;
   }
 }
-var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
+var make51 = /* @__PURE__ */ fnUntraced2(function* (params) {
   const codecTransformer = params.codecTransformer ?? defaultCodecTransformer2;
   const parentSpanTransformer = yield* serviceOption2(CurrentSpanTransformer);
   const getSpanTransformer = serviceOption2(CurrentSpanTransformer).pipe(map8(orElse(() => parentSpanTransformer)));
@@ -32173,7 +32525,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
   }, fnUntraced2(function* (span2) {
     const spanTransformer = yield* getSpanTransformer;
     const providerOptions = {
-      prompt: make47(options.prompt),
+      prompt: make48(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -32186,7 +32538,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const content = yield* generateContent(options, providerOptions);
     applySpanTransformer(spanTransformer, content, providerOptions);
     return new GenerateTextResponse(content);
-  }, catchTag3("SchemaError", (error2) => fail6(make45({
+  }, catchTag3("SchemaError", (error2) => fail6(make46({
     module: "LanguageModel",
     method: "generateText",
     reason: InvalidOutputError.fromSchemaError(error2)
@@ -32204,7 +32556,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     }, fnUntraced2(function* (span2) {
       const spanTransformer = yield* getSpanTransformer;
       const providerOptions = {
-        prompt: make47(options.prompt),
+        prompt: make48(options.prompt),
         tools: [],
         toolChoice: "none",
         responseFormat: {
@@ -32222,7 +32574,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
         codec
       } = yield* try_3({
         try: () => codecTransformer(options.schema),
-        catch: (error2) => make45({
+        catch: (error2) => make46({
           module: "LanguageModel",
           method: "generateObject",
           reason: new UnsupportedSchemaError({
@@ -32232,7 +32584,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
       });
       const value4 = yield* resolveStructuredOutput(content, codec);
       return new GenerateObjectResponse(value4, content);
-    }, catchTag3("SchemaError", (error2) => fail6(make45({
+    }, catchTag3("SchemaError", (error2) => fail6(make46({
       module: "LanguageModel",
       method: "generateObject",
       reason: InvalidOutputError.fromSchemaError(error2)
@@ -32248,7 +32600,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
       }
     });
     const providerOptions = {
-      prompt: make47(options.prompt),
+      prompt: make48(options.prompt),
       tools: [],
       toolChoice: "none",
       responseFormat: {
@@ -32273,7 +32625,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
         response: content
       });
     })));
-  }, unwrap4, mapError6((error2) => isSchemaError(error2) ? make45({
+  }, unwrap4, mapError6((error2) => isSchemaError(error2) ? make46({
     module: "LanguageModel",
     method: "streamText",
     reason: InvalidOutputError.fromSchemaError(error2)
@@ -32305,7 +32657,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const hasPendingApprovals = approved.length > 0 || denied.length > 0;
     if (isUndefined(options.toolkit)) {
       if (hasPendingApprovals) {
-        return yield* make45({
+        return yield* make46({
           module: "LanguageModel",
           method: "generateText",
           reason: new ToolkitRequiredError({
@@ -32334,7 +32686,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const toolkit = yield* resolveToolkit(options.toolkit);
     if (Object.values(toolkit.tools).length === 0) {
       if (hasPendingApprovals) {
-        return yield* make45({
+        return yield* make46({
           module: "LanguageModel",
           method: "generateText",
           reason: new ToolkitRequiredError({
@@ -32363,7 +32715,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (hasPendingApprovals) {
       for (const approval of approved) {
         if (approval.toolCall && !toolkit.tools[approval.toolCall.name]) {
-          return yield* make45({
+          return yield* make46({
             module: "LanguageModel",
             method: "generateText",
             reason: new ToolNotFoundError({
@@ -32451,7 +32803,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const hasPendingApprovals = pendingApproved.length > 0 || pendingDenied.length > 0;
     if (isUndefined(options.toolkit)) {
       if (hasPendingApprovals) {
-        return yield* make45({
+        return yield* make46({
           module: "LanguageModel",
           method: "streamText",
           reason: new ToolkitRequiredError({
@@ -32480,7 +32832,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     const toolkit = yield* resolveToolkit(options.toolkit);
     if (Object.values(toolkit.tools).length === 0) {
       if (hasPendingApprovals) {
-        return yield* make45({
+        return yield* make46({
           module: "LanguageModel",
           method: "streamText",
           reason: new ToolkitRequiredError({
@@ -32510,7 +32862,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (hasPendingApprovals) {
       for (const approval of pendingApproved) {
         if (approval.toolCall && !toolkit.tools[approval.toolCall.name]) {
-          return yield* make45({
+          return yield* make46({
             module: "LanguageModel",
             method: "streamText",
             reason: new ToolNotFoundError({
@@ -32576,7 +32928,7 @@ var make50 = /* @__PURE__ */ fnUntraced2(function* (params) {
     if (preResolvedStreamParts.length > 0) {
       yield* offerAll(queue, preResolvedStreamParts);
     }
-    const toolCallFibers = yield* make46();
+    const toolCallFibers = yield* make47();
     const toolCallSemaphore = concurrency === "unbounded" ? undefined : yield* make15(concurrency);
     const handleToolCall = fnUntraced2(function* (part) {
       const tool = toolkit.tools[part.name];
@@ -32752,7 +33104,7 @@ var executeApprovedToolCalls = (approvals, toolkit, concurrency) => {
     }
     const tool = toolkit.tools[toolCall.name];
     if (isUndefined(tool)) {
-      return yield* make45({
+      return yield* make46({
         module: "LanguageModel",
         method: "generateText",
         reason: new ToolNotFoundError({
@@ -32886,7 +33238,7 @@ var resolveStructuredOutput = /* @__PURE__ */ fnUntraced2(function* (response, s
   }
   const text = texts.join("");
   if (text.length === 0) {
-    return yield* make45({
+    return yield* make46({
       module: "LanguageModel",
       method: "generateObject",
       reason: new StructuredOutputError({
@@ -32896,7 +33248,7 @@ var resolveStructuredOutput = /* @__PURE__ */ fnUntraced2(function* (response, s
     });
   }
   const decode2 = decodeEffect2(fromJsonString2(schema2));
-  return yield* mapError4(decode2(text), (error2) => make45({
+  return yield* mapError4(decode2(text), (error2) => make46({
     module: "LanguageModel",
     method: "generateObject",
     reason: StructuredOutputError.fromSchemaError(error2, text)
@@ -32910,12 +33262,12 @@ var applySpanTransformer = (transformer, response, options) => {
     });
   }
 };
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Tool.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Tool.js
 var exports_Tool = {};
 __export(exports_Tool, {
   unsafeSecureJsonParse: () => unsafeSecureJsonParse,
   providerDefined: () => providerDefined,
-  make: () => make51,
+  make: () => make52,
   isUserDefined: () => isUserDefined,
   isProviderDefined: () => isProviderDefined,
   isEmptyParamsRecord: () => isEmptyParamsRecord,
@@ -32925,7 +33277,7 @@ __export(exports_Tool, {
   getJsonSchema: () => getJsonSchema,
   getDescription: () => getDescription,
   dynamic: () => dynamic,
-  TypeId: () => TypeId48,
+  TypeId: () => TypeId49,
   Title: () => Title,
   Strict: () => Strict,
   Readonly: () => Readonly,
@@ -32938,50 +33290,50 @@ __export(exports_Tool, {
   DynamicTypeId: () => DynamicTypeId,
   Destructive: () => Destructive
 });
-var TypeId48 = "~effect/ai/Tool";
+var TypeId49 = "~effect/ai/Tool";
 var ProviderDefinedTypeId = "~effect/ai/Tool/ProviderDefined";
 var DynamicTypeId = "~effect/ai/Tool/Dynamic";
-var isUserDefined = (u) => hasProperty(u, TypeId48) && !isProviderDefined(u) && !isDynamic(u);
+var isUserDefined = (u) => hasProperty(u, TypeId49) && !isProviderDefined(u) && !isDynamic(u);
 var isProviderDefined = (u) => hasProperty(u, ProviderDefinedTypeId);
 var isDynamic = (u) => hasProperty(u, DynamicTypeId);
-var clone = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
+var clone2 = (self, overrides) => Object.assign(Object.create(Object.getPrototypeOf(self)), self, overrides);
 var Proto11 = {
-  [TypeId48]: {
+  [TypeId49]: {
     _Requirements: identity
   },
   pipe() {
     return pipeArguments(this, arguments);
   },
   addDependency() {
-    return clone(this);
+    return clone2(this);
   },
   setParameters(parametersSchema) {
-    return clone(this, {
+    return clone2(this, {
       parametersSchema
     });
   },
   setSuccess(successSchema) {
-    return clone(this, {
+    return clone2(this, {
       successSchema
     });
   },
   setFailure(failureSchema) {
-    return clone(this, {
+    return clone2(this, {
       failureSchema
     });
   },
   setNeedsApproval(needsApproval) {
-    return clone(this, {
+    return clone2(this, {
       needsApproval
     });
   },
   annotate(tag2, value4) {
-    return clone(this, {
+    return clone2(this, {
       annotations: add(this.annotations, tag2, value4)
     });
   },
   annotateMerge(context3) {
-    return clone(this, {
+    return clone2(this, {
       annotations: merge(this.annotations, context3)
     });
   }
@@ -33008,7 +33360,7 @@ var dynamicProto = (options) => {
   self.id = `effect/ai/Tool/${options.name}`;
   return self;
 };
-var make51 = (name, options) => {
+var make52 = (name, options) => {
   const successSchema = options?.success ?? Void2;
   const failureSchema = options?.failure ?? Never2;
   return userDefinedProto({
@@ -33301,7 +33653,7 @@ var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
             }
             if (!add5(1))
               return FailedSnapshot;
-            const snapshot3 = [];
+            const snapshot4 = [];
             for (let index2 = 0;index2 < lengthDescriptor.value; index2 += 1) {
               if (index2 > 0 && !add5(1))
                 return FailedSnapshot;
@@ -33309,7 +33661,7 @@ var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
               if (descriptor === undefined) {
                 if (!add5(4))
                   return FailedSnapshot;
-                snapshot3.push(null);
+                snapshot4.push(null);
                 continue;
               }
               if (!("value" in descriptor))
@@ -33317,12 +33669,12 @@ var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
               const item = visit(descriptor.value, depth + 1);
               if (item === FailedSnapshot)
                 return FailedSnapshot;
-              snapshot3.push(item);
+              snapshot4.push(item);
             }
             if (!add5(1))
               return FailedSnapshot;
-            Object.setPrototypeOf(snapshot3, null);
-            return Object.freeze(snapshot3);
+            Object.setPrototypeOf(snapshot4, null);
+            return Object.freeze(snapshot4);
           }
           if (!add5(1))
             return FailedSnapshot;
@@ -33346,9 +33698,9 @@ var boundedJsonSnapshot = (root, maxBytes, maxDepth = MAX_JSON_DEPTH) => {
           }
           if (!add5(1))
             return FailedSnapshot;
-          const snapshot2 = Object.fromEntries(entries3);
-          Object.setPrototypeOf(snapshot2, null);
-          return Object.freeze(snapshot2);
+          const snapshot3 = Object.fromEntries(entries3);
+          Object.setPrototypeOf(snapshot3, null);
+          return Object.freeze(snapshot3);
         } finally {
           ancestors.delete(value4);
         }
@@ -33909,7 +34261,7 @@ ${previousSummary}`;
     total += block.length + joiner.length;
   }
   if (total > budget) {
-    const head = [];
+    const head3 = [];
     const tail = [];
     let headLength = 0;
     let tailLength = 0;
@@ -33920,7 +34272,7 @@ ${previousSummary}`;
       const candidate = blocks[start];
       if (candidate === undefined || headLength + candidate.length + joiner.length > half)
         break;
-      head.push(candidate);
+      head3.push(candidate);
       headLength += candidate.length + joiner.length;
       start += 1;
     }
@@ -33934,7 +34286,7 @@ ${previousSummary}`;
       end3 -= 1;
     }
     const omitted = end3 - start + 1;
-    selected = omitted > 0 ? [...head, `[… ${omitted} messages omitted from summary input …]`, ...tail] : [...head, ...tail];
+    selected = omitted > 0 ? [...head3, `[… ${omitted} messages omitted from summary input …]`, ...tail] : [...head3, ...tail];
   }
   const lines = [];
   if (previousBlock !== undefined) {
@@ -34777,17 +35129,17 @@ var snapshotStagedProviderEvent = (trace2, payload) => exports_Effect.suspend(()
       message: `Model response exceeded the ${MAX_STAGED_PROVIDER_EVENTS}-event staged provider event limit`
     }));
   }
-  const snapshot2 = boundedJsonSnapshot(payload, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
-  if (snapshot2 === undefined) {
+  const snapshot3 = boundedJsonSnapshot(payload, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
+  if (snapshot3 === undefined) {
     return exports_Effect.fail(ModelProtocolError.make({
       message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`
     }));
   }
-  return exports_Effect.succeed(snapshot2);
+  return exports_Effect.succeed(snapshot3);
 });
 var stageProviderResultPayload = (trace2, payload) => exports_Effect.gen(function* () {
-  const snapshot2 = yield* snapshotStagedProviderEvent(trace2, payload);
-  const snapshotObject = snapshot2.value;
+  const snapshot3 = yield* snapshotStagedProviderEvent(trace2, payload);
+  const snapshotObject = snapshot3.value;
   if (snapshotObject === null || typeof snapshotObject !== "object" || Array.isArray(snapshotObject) || Object.getPrototypeOf(snapshotObject) !== null) {
     return yield* ModelProtocolError.make({
       message: "Provider Tool result could not be normalized as JSON"
@@ -34802,23 +35154,23 @@ var stageProviderResultPayload = (trace2, payload) => exports_Effect.gen(functio
   }
   const normalized = payload._tag === "ToolCallFailed" ? Object.freeze({ ...payload }) : Object.freeze({ ...payload, result: exports_Option.getOrThrow(normalizedResult) });
   trace2.providerResultPayloads.push(normalized);
-  trace2.providerStagedPayloadBytes += snapshot2.bytes;
+  trace2.providerStagedPayloadBytes += snapshot3.bytes;
 });
 var ProviderToolResultSnapshot = exports_Schema.Struct({
   result: exports_Schema.Json,
   metadata: exports_Schema.Record(exports_Schema.String, exports_Schema.Json)
 });
 var snapshotProviderToolResultPart = exports_Effect.fnUntraced(function* (trace2, part) {
-  const snapshot2 = boundedJsonSnapshot({ result: part.encodedResult, metadata: part.metadata }, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
-  if (snapshot2 === undefined) {
+  const snapshot3 = boundedJsonSnapshot({ result: part.encodedResult, metadata: part.metadata }, MAX_STAGED_PROVIDER_BYTES - trace2.providerStagedPayloadBytes);
+  if (snapshot3 === undefined) {
     return yield* ModelProtocolError.make({
       message: `Model response exceeded the ${MAX_STAGED_PROVIDER_BYTES}-byte staged provider event limit`
     });
   }
-  const normalized = yield* exports_Schema.decodeUnknownEffect(ProviderToolResultSnapshot)(snapshot2.value).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
+  const normalized = yield* exports_Schema.decodeUnknownEffect(ProviderToolResultSnapshot)(snapshot3.value).pipe(exports_Effect.mapError(() => ModelProtocolError.make({
     message: "Provider Tool result could not be normalized as JSON"
   })));
-  trace2.providerStagedPayloadBytes += snapshot2.bytes;
+  trace2.providerStagedPayloadBytes += snapshot3.bytes;
   return normalized;
 });
 var stampProviderResultEvent = (context3, turnId, payload) => exports_Effect.map(eventBase(context3), (base2) => {
@@ -35281,12 +35633,12 @@ var eventsForPart = exports_Effect.fnUntraced(function* (context3, turnId, turn,
       trace2.usage = part.usage;
       if (Array.from(trace2.toolCalls.values()).some(({ providerExecuted }) => providerExecuted)) {
         const turnCompletion = { finishReason: part.reason };
-        const snapshot2 = yield* snapshotStagedProviderEvent(trace2, {
+        const snapshot3 = yield* snapshotStagedProviderEvent(trace2, {
           _tag: "TurnCompleted",
           ...turnCompletion
         });
         trace2.turnCompletion = turnCompletion;
-        trace2.providerStagedPayloadBytes += snapshot2.bytes;
+        trace2.providerStagedPayloadBytes += snapshot3.bytes;
         return [];
       }
       return [
@@ -36959,7 +37311,7 @@ class ConversationHistoryDiverged extends exports_Schema.TaggedError()("Conversa
 
 class ConversationEncodingError extends exports_Schema.TaggedError()("ConversationEncodingError", { conversationId: ConversationId, message: exports_Schema.String }) {
 }
-var conversationPrompt = (snapshot2) => exports_Prompt.fromMessages(snapshot2.messages.map((entry) => entry.message));
+var conversationPrompt = (snapshot3) => exports_Prompt.fromMessages(snapshot3.messages.map((entry) => entry.message));
 
 class EphemeralConversations extends exports_Context.Service()("@effect-agent/capabilities/EphemeralConversations") {
 }
@@ -36969,13 +37321,13 @@ var encodeMessage = (conversationId, message) => exports_Schema.encodeEffect(exp
   message: `Could not encode native Effect AI message: ${error2.message}`
 })));
 var findSnapshot = (state, conversationId) => {
-  const snapshot2 = state.get(conversationId);
-  return snapshot2 === undefined ? exports_Effect.fail(ConversationNotFound.make({ conversationId })) : exports_Effect.succeed(snapshot2);
+  const snapshot3 = state.get(conversationId);
+  return snapshot3 === undefined ? exports_Effect.fail(ConversationNotFound.make({ conversationId })) : exports_Effect.succeed(snapshot3);
 };
 var totalStoreBytes = (conversations) => {
   let total = 0;
-  for (const snapshot2 of conversations.values())
-    total += snapshot2.contentBytes;
+  for (const snapshot3 of conversations.values())
+    total += snapshot3.contentBytes;
   return total;
 };
 var appendEncoded = (conversations, conversationId, append3, encoded, timestamp) => {
@@ -37055,7 +37407,7 @@ var commitHistorySuffix = (conversations, conversationId, base2, suffix, timesta
   if (current !== base2)
     return [{ _tag: "stale" }, conversations];
   let next2 = conversations;
-  let snapshot2 = current;
+  let snapshot3 = current;
   for (const entry of suffix) {
     const [result4, updated] = appendEncoded(next2, conversationId, entry.append, entry.encoded, timestamp);
     if (result4._tag === "not-found") {
@@ -37067,10 +37419,10 @@ var commitHistorySuffix = (conversations, conversationId, base2, suffix, timesta
     if (result4._tag === "failure") {
       return [{ _tag: "failure", error: result4.error }, conversations];
     }
-    snapshot2 = result4.value;
+    snapshot3 = result4.value;
     next2 = updated;
   }
-  return [{ _tag: "success", value: snapshot2 }, next2];
+  return [{ _tag: "success", value: snapshot3 }, next2];
 };
 var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, exports_Effect.gen(function* () {
   const state = yield* exports_Ref.make(new Map);
@@ -37150,11 +37502,11 @@ var EphemeralConversationsLive = exports_Layer.effect(EphemeralConversations, ex
     }),
     snapshot: (conversationId) => exports_Ref.get(state).pipe(exports_Effect.flatMap((all6) => findSnapshot(all6, conversationId))),
     export: (conversationId) => exports_Effect.gen(function* () {
-      const snapshot2 = yield* findSnapshot(yield* exports_Ref.get(state), conversationId);
+      const snapshot3 = yield* findSnapshot(yield* exports_Ref.get(state), conversationId);
       return ConversationExport.make({
         format: "effect-agent/ephemeral-conversation@1",
         exportedAt: exports_DateTime.toUtc(exports_DateTime.makeUnsafe(yield* exports_Clock.currentTimeMillis)),
-        snapshot: snapshot2
+        snapshot: snapshot3
       });
     })
   });
@@ -37277,7 +37629,7 @@ var messageText = (message) => {
 `);
   return content.slice(0, 64 * 1024);
 };
-var asModelMessages = (snapshot2) => snapshot2.messages.map((entry) => ModelContextMessage.make({
+var asModelMessages = (snapshot3) => snapshot3.messages.map((entry) => ModelContextMessage.make({
   role: entry.message.role,
   content: messageText(entry.message),
   sourceSequences: [entry.sequence]
@@ -37295,18 +37647,18 @@ var validateModelView = (messages, transformId) => {
     message: `Transform produced ${bytes} UTF-8 bytes; maximum is ${MAX_CONTEXT_MESSAGE_BYTES}`
   })) : exports_Effect.succeed(messages);
 };
-var prepareModelContext = (snapshot2, transforms = []) => transforms.reduce((messages, transform3) => messages.pipe(exports_Effect.flatMap(transform3.apply), exports_Effect.flatMap((transformed) => validateModelView(transformed, transform3.id))), exports_Effect.succeed(asModelMessages(snapshot2))).pipe(exports_Effect.map((messages) => PreparedModelContext.make({
-  source: snapshot2,
+var prepareModelContext = (snapshot3, transforms = []) => transforms.reduce((messages, transform3) => messages.pipe(exports_Effect.flatMap(transform3.apply), exports_Effect.flatMap((transformed) => validateModelView(transformed, transform3.id))), exports_Effect.succeed(asModelMessages(snapshot3))).pipe(exports_Effect.map((messages) => PreparedModelContext.make({
+  source: snapshot3,
   messages,
   compactions: []
 })));
-var exactSourceRange = (snapshot2, coversFrom, coversThrough) => {
-  if (coversFrom > coversThrough || coversThrough >= snapshot2.nextSequence) {
+var exactSourceRange = (snapshot3, coversFrom, coversThrough) => {
+  if (coversFrom > coversThrough || coversThrough >= snapshot3.nextSequence) {
     return exports_Effect.fail(InvalidCompactionArtifact.make({
       message: "Compaction artifact covers an invalid source range"
     }));
   }
-  const selected = snapshot2.messages.filter((message) => message.sequence >= coversFrom && message.sequence <= coversThrough);
+  const selected = snapshot3.messages.filter((message) => message.sequence >= coversFrom && message.sequence <= coversThrough);
   const expectedCount = coversThrough - coversFrom + 1;
   if (selected.length !== expectedCount || selected[0]?.sequence !== coversFrom || selected[selected.length - 1]?.sequence !== coversThrough) {
     return exports_Effect.fail(InvalidCompactionArtifact.make({
@@ -37323,8 +37675,8 @@ var utf8Bytes3 = (value4) => {
   }
   return bytes;
 };
-var digestCompactionSource = exports_Effect.fn("digestCompactionSource")(function* (snapshot2, coversFrom, coversThrough) {
-  const selected = yield* exactSourceRange(snapshot2, coversFrom, coversThrough);
+var digestCompactionSource = exports_Effect.fn("digestCompactionSource")(function* (snapshot3, coversFrom, coversThrough) {
+  const selected = yield* exactSourceRange(snapshot3, coversFrom, coversThrough);
   const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Array(ConversationMessage))(selected).pipe(exports_Effect.mapError((error2) => CompactionDigestError.make({
     message: `Could not encode compaction source: ${error2.message}`
   })));
@@ -37446,10 +37798,10 @@ var toRunBudgetHook = (budget) => ({
   })), exports_Effect.flatMap((usage) => budget.consume(usage)), exports_Effect.asVoid)
 });
 var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(function* (conversations, conversationId, runId) {
-  const snapshot2 = yield* conversations.snapshot(conversationId);
+  const snapshot3 = yield* conversations.snapshot(conversationId);
   return {
     conversationId,
-    history: conversationPrompt(snapshot2),
+    history: conversationPrompt(snapshot3),
     onHistory: (history) => conversations.recordHistory(conversationId, runId, history).pipe(exports_Effect.asVoid)
   };
 });
@@ -37482,15 +37834,15 @@ var snapshotFromRunContext = exports_Effect.fn("snapshotFromRunContext")(functio
     encodedBytes: encodedBytes2(encoded),
     timestamp: DETERMINISTIC_CONTEXT_TIMESTAMP
   }))));
-  const snapshot2 = ConversationSnapshot.make({
+  const snapshot3 = ConversationSnapshot.make({
     version: 1,
     conversationId: request3.conversationId,
     nextSequence: messages.length,
     contentBytes: messages.reduce((total, message) => total + message.encodedBytes, 0),
     messages
   });
-  yield* exports_Schema.encodeEffect(ConversationSnapshot)(snapshot2);
-  return snapshot2;
+  yield* exports_Schema.encodeEffect(ConversationSnapshot)(snapshot3);
+  return snapshot3;
 });
 var summaryPromptMessage = (summary2) => {
   switch (summary2.role) {
@@ -37529,9 +37881,9 @@ var validateCompactionBoundary = (prompt, coversFrom, coversThrough) => {
   return exports_Effect.void;
 };
 var prepareWithContextCompactor = exports_Effect.fn("prepareWithContextCompactor")(function* (request3, compactor) {
-  const snapshot2 = yield* snapshotFromRunContext(request3);
-  const source = yield* prepareModelContext(snapshot2);
-  const artifact = yield* compactor.compact(snapshot2);
+  const snapshot3 = yield* snapshotFromRunContext(request3);
+  const source = yield* prepareModelContext(snapshot3);
+  const artifact = yield* compactor.compact(snapshot3);
   yield* exports_Schema.encodeEffect(CompactionArtifact)(artifact);
   yield* applyCompaction(source, artifact);
   yield* validateCompactionBoundary(request3.source, artifact.coversFrom, artifact.coversThrough);
@@ -37558,24 +37910,24 @@ var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
   risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
   denial: exports_Schema.Literals(["terminal", "recoverable"])
 });
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/PrimaryKey.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/PrimaryKey.js
 var symbol4 = "~effect/interfaces/PrimaryKey";
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/RpcSchema.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/RpcSchema.js
 var StreamSchemaTypeId = "~effect/rpc/RpcSchema/StreamSchema";
 var schema2 = /* @__PURE__ */ declare(isStream);
 function Stream2(success, error2) {
-  return make37(schema2.ast, {
+  return make38(schema2.ast, {
     [StreamSchemaTypeId]: StreamSchemaTypeId,
     success,
     error: error2
   });
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/rpc/Rpc.js
-var TypeId49 = "~effect/rpc/Rpc";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/rpc/Rpc.js
+var TypeId50 = "~effect/rpc/Rpc";
 var Proto12 = {
-  [TypeId49]: TypeId49,
+  [TypeId50]: TypeId50,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -37664,7 +38016,7 @@ var makeProto3 = (options) => {
   Rpc.key = `effect/rpc/Rpc/${options._tag}`;
   return Rpc;
 };
-var make52 = (tag2, options) => {
+var make53 = (tag2, options) => {
   const successSchema = options?.success ?? Void2;
   const errorSchema = options?.error ?? Never2;
   const defectSchema = options?.defect ?? Defect();
@@ -37689,7 +38041,7 @@ var make52 = (tag2, options) => {
   });
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/McpSchema.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/McpSchema.js
 var optionalWithDefault = (schema3, defaultValue) => {
   const effect2 = sync3(defaultValue);
   return optionalKey2(schema3).pipe(decode({
@@ -37740,14 +38092,26 @@ class Annotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   priority: /* @__PURE__ */ optional3(/* @__PURE__ */ Finite.check(/* @__PURE__ */ isBetween2({
     minimum: 0,
     maximum: 1
-  })))
+  }))),
+  lastModified: /* @__PURE__ */ optional3(String6)
 }))) {
+}
+
+class Icon extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Icon")({
+  src: String6,
+  mimeType: /* @__PURE__ */ optional3(String6),
+  sizes: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
+  theme: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["light", "dark"]))
+})) {
 }
 
 class Implementation extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
-  version: String6
+  version: String6,
+  icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
+  description: /* @__PURE__ */ optional3(String6),
+  websiteUrl: /* @__PURE__ */ optional3(String6)
 }))) {
 }
 
@@ -37757,8 +38121,14 @@ class ClientCapabilities extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/C
   roots: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
     listChanged: /* @__PURE__ */ optional3(Boolean3)
   })),
-  sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
-  elicitation: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({}))
+  sampling: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
+    context: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
+    tools: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({}))
+  })),
+  elicitation: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({
+    form: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({})),
+    url: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2({}))
+  }))
 })) {
 }
 
@@ -37839,7 +38209,7 @@ class InitializeResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2
 }))) {
 }
 
-class Initialize extends (/* @__PURE__ */ make52("initialize", {
+class Initialize extends (/* @__PURE__ */ make53("initialize", {
   success: InitializeResult,
   error: McpError,
   payload: {
@@ -37850,7 +38220,7 @@ class Initialize extends (/* @__PURE__ */ make52("initialize", {
   }
 })) {
 }
-class CancelledNotification extends (/* @__PURE__ */ make52("notifications/cancelled", {
+class CancelledNotification extends (/* @__PURE__ */ make53("notifications/cancelled", {
   payload: {
     ...NotificationMeta.fields,
     requestId: RequestId,
@@ -37859,11 +38229,11 @@ class CancelledNotification extends (/* @__PURE__ */ make52("notifications/cance
 })) {
 }
 
-class ProgressNotification extends (/* @__PURE__ */ make52("notifications/progress", {
+class ProgressNotification extends (/* @__PURE__ */ make53("notifications/progress", {
   payload: {
     ...NotificationMeta.fields,
     progressToken: ProgressToken,
-    progress: /* @__PURE__ */ optional3(Finite),
+    progress: Finite,
     total: /* @__PURE__ */ optional3(Finite),
     message: /* @__PURE__ */ optional3(String6)
   }
@@ -37877,6 +38247,7 @@ class Resource2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Resource")
   description: /* @__PURE__ */ optional3(String6),
   mimeType: /* @__PURE__ */ optional3(String6),
   annotations: /* @__PURE__ */ optional3(Annotations),
+  icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
   size: /* @__PURE__ */ optional3(Int),
   _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 })) {
@@ -37889,6 +38260,7 @@ class ResourceTemplate extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Res
   description: /* @__PURE__ */ optional3(String6),
   mimeType: /* @__PURE__ */ optional3(String6),
   annotations: /* @__PURE__ */ optional3(Annotations),
+  icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
   _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 })) {
 }
@@ -37908,7 +38280,7 @@ class TextResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Str
 
 class BlobResourceContents extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   ...ResourceContents.fields,
-  blob: Uint8Array2
+  blob: Uint8ArrayFromBase64
 }))) {
 }
 
@@ -37928,7 +38300,7 @@ class ReadResourceResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struc
 }))) {
 }
 
-class ReadResource extends (/* @__PURE__ */ make52("resources/read", {
+class ReadResource extends (/* @__PURE__ */ make53("resources/read", {
   success: ReadResourceResult,
   error: McpError,
   payload: {
@@ -37937,7 +38309,7 @@ class ReadResource extends (/* @__PURE__ */ make52("resources/read", {
   }
 })) {
 }
-class Subscribe extends (/* @__PURE__ */ make52("resources/subscribe", {
+class Subscribe extends (/* @__PURE__ */ make53("resources/subscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
@@ -37947,7 +38319,7 @@ class Subscribe extends (/* @__PURE__ */ make52("resources/subscribe", {
 })) {
 }
 
-class Unsubscribe extends (/* @__PURE__ */ make52("resources/unsubscribe", {
+class Unsubscribe extends (/* @__PURE__ */ make53("resources/unsubscribe", {
   success: /* @__PURE__ */ Struct2({}),
   error: McpError,
   payload: {
@@ -37957,7 +38329,7 @@ class Unsubscribe extends (/* @__PURE__ */ make52("resources/unsubscribe", {
 })) {
 }
 
-class ResourceUpdatedNotification extends (/* @__PURE__ */ make52("notifications/resources/updated", {
+class ResourceUpdatedNotification extends (/* @__PURE__ */ make53("notifications/resources/updated", {
   payload: {
     ...NotificationMeta.fields,
     uri: String6
@@ -37977,37 +38349,43 @@ class Prompt2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Prompt")({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
-  arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(PromptArgument))
+  arguments: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(PromptArgument)),
+  icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 })) {
 }
 
 class TextContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("text"),
   text: String6,
-  annotations: /* @__PURE__ */ optional3(Annotations)
+  annotations: /* @__PURE__ */ optional3(Annotations),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 
 class ImageContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("image"),
-  data: Uint8Array2,
+  data: Uint8ArrayFromBase64,
   mimeType: String6,
-  annotations: /* @__PURE__ */ optional3(Annotations)
+  annotations: /* @__PURE__ */ optional3(Annotations),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 
 class AudioContent extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("audio"),
-  data: Uint8Array2,
+  data: Uint8ArrayFromBase64,
   mimeType: String6,
-  annotations: /* @__PURE__ */ optional3(Annotations)
+  annotations: /* @__PURE__ */ optional3(Annotations),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 
 class EmbeddedResource extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ tag("resource"),
   resource: /* @__PURE__ */ Union2([TextResourceContents, BlobResourceContents]),
-  annotations: /* @__PURE__ */ optional3(Annotations)
+  annotations: /* @__PURE__ */ optional3(Annotations),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
 }
 
@@ -38036,7 +38414,7 @@ class GetPromptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/GetP
 })) {
 }
 
-class GetPrompt extends (/* @__PURE__ */ make52("prompts/get", {
+class GetPrompt extends (/* @__PURE__ */ make53("prompts/get", {
   success: GetPromptResult,
   error: McpError,
   payload: {
@@ -38055,14 +38433,20 @@ class ToolAnnotations extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2(
   openWorldHint: /* @__PURE__ */ optionalWithDefault(Boolean3, constTrue)
 }))) {
 }
+var ToolJsonSchema = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
+  type: /* @__PURE__ */ Literal2("object"),
+  properties: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Record(String6, Json2))),
+  required: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
+}), [/* @__PURE__ */ Record(String6, Json2)]);
 
 class Tool2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
-  inputSchema: Any2,
-  outputSchema: /* @__PURE__ */ optional3(Any2),
+  inputSchema: ToolJsonSchema,
+  outputSchema: /* @__PURE__ */ optional3(ToolJsonSchema),
   annotations: /* @__PURE__ */ optional3(ToolAnnotations),
+  icons: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(Icon)),
   _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 })) {
 }
@@ -38075,12 +38459,12 @@ class ListToolsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/List
 class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallToolResult")({
   ...ResultMeta.fields,
   content: /* @__PURE__ */ ArraySchema(ContentBlock),
-  structuredContent: /* @__PURE__ */ optional3(Any2),
+  structuredContent: /* @__PURE__ */ optional3(Json2),
   isError: /* @__PURE__ */ optional3(Boolean3)
 })) {
 }
 
-class CallTool extends (/* @__PURE__ */ make52("tools/call", {
+class CallTool extends (/* @__PURE__ */ make53("tools/call", {
   success: CallToolResult,
   error: McpError,
   payload: {
@@ -38092,7 +38476,7 @@ class CallTool extends (/* @__PURE__ */ make52("tools/call", {
 }
 var LoggingLevel = /* @__PURE__ */ Literals(["debug", "info", "notice", "warning", "error", "critical", "alert", "emergency"]);
 
-class SetLevel extends (/* @__PURE__ */ make52("logging/setLevel", {
+class SetLevel extends (/* @__PURE__ */ make53("logging/setLevel", {
   payload: {
     ...RequestMeta.fields,
     level: LoggingLevel
@@ -38102,7 +38486,7 @@ class SetLevel extends (/* @__PURE__ */ make52("logging/setLevel", {
 })) {
 }
 
-class LoggingMessageNotification extends (/* @__PURE__ */ make52("notifications/message", {
+class LoggingMessageNotification extends (/* @__PURE__ */ make53("notifications/message", {
   payload: /* @__PURE__ */ Struct2({
     ...NotificationMeta.fields,
     level: LoggingLevel,
@@ -38112,10 +38496,36 @@ class LoggingMessageNotification extends (/* @__PURE__ */ make52("notifications/
 })) {
 }
 
+class ToolUseContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolUseContent")({
+  type: /* @__PURE__ */ tag("tool_use"),
+  id: String6,
+  name: String6,
+  input: /* @__PURE__ */ Record(String6, Unknown2),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+})) {
+}
+
+class ToolResultContent extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolResultContent")({
+  type: /* @__PURE__ */ tag("tool_result"),
+  toolUseId: String6,
+  content: /* @__PURE__ */ ArraySchema(ContentBlock),
+  structuredContent: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2)),
+  isError: /* @__PURE__ */ optional3(Boolean3),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
+})) {
+}
+var SamplingMessageContentBlock = /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent, ToolUseContent, ToolResultContent]);
+
 class SamplingMessage extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
   role: Role,
-  content: /* @__PURE__ */ Union2([TextContent, ImageContent, AudioContent])
+  content: /* @__PURE__ */ Union2([SamplingMessageContentBlock, /* @__PURE__ */ ArraySchema(SamplingMessageContentBlock)]),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2))
 }))) {
+}
+
+class ToolChoice extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ToolChoice")({
+  mode: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["auto", "required", "none"]))
+})) {
 }
 
 class ModelHint extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
@@ -38141,13 +38551,15 @@ class ModelPreferences extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Mod
 }
 
 class CreateMessageResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CreateMessageResult")({
-  ...SamplingMessage.fields,
+  role: Role,
+  content: /* @__PURE__ */ Union2([SamplingMessageContentBlock, /* @__PURE__ */ ArraySchema(SamplingMessageContentBlock)]),
+  _meta: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Json2)),
   model: String6,
   stopReason: /* @__PURE__ */ optional3(String6)
 })) {
 }
 
-class CreateMessage extends (/* @__PURE__ */ make52("sampling/createMessage", {
+class CreateMessage extends (/* @__PURE__ */ make53("sampling/createMessage", {
   success: CreateMessageResult,
   error: McpError,
   payload: {
@@ -38158,14 +38570,150 @@ class CreateMessage extends (/* @__PURE__ */ make52("sampling/createMessage", {
     temperature: /* @__PURE__ */ optional3(Finite),
     maxTokens: Int,
     stopSequences: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
-    metadata: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2))
+    metadata: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2)),
+    tools: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct2(Tool2.fields))),
+    toolChoice: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2(ToolChoice.fields))
   }
 })) {
 }
+class CompleteResult extends (/* @__PURE__ */ Opaque()(/* @__PURE__ */ Struct2({
+  ...ResultMeta.fields,
+  completion: /* @__PURE__ */ Struct2({
+    values: /* @__PURE__ */ ArraySchema(String6),
+    total: /* @__PURE__ */ optional3(Int),
+    hasMore: /* @__PURE__ */ optional3(Boolean3)
+  })
+}))) {
+  static empty = /* @__PURE__ */ CompleteResult.make({
+    completion: {
+      values: [],
+      total: 0,
+      hasMore: false
+    }
+  });
+}
+class StringSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/StringSchema")({
+  type: /* @__PURE__ */ tag("string"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  minLength: /* @__PURE__ */ optional3(Int),
+  maxLength: /* @__PURE__ */ optional3(Int),
+  format: /* @__PURE__ */ optional3(/* @__PURE__ */ Literals(["email", "uri", "date", "date-time"])),
+  default: /* @__PURE__ */ optional3(String6)
+})) {
+}
+
+class NumberSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/NumberSchema")({
+  type: /* @__PURE__ */ Literals(["number", "integer"]),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  minimum: /* @__PURE__ */ optional3(Finite),
+  maximum: /* @__PURE__ */ optional3(Finite),
+  default: /* @__PURE__ */ optional3(Finite)
+})) {
+}
+
+class BooleanSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/BooleanSchema")({
+  type: /* @__PURE__ */ tag("boolean"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  default: /* @__PURE__ */ optional3(Boolean3)
+})) {
+}
+
+class UntitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/UntitledSingleSelectEnumSchema")({
+  type: /* @__PURE__ */ tag("string"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  enum: /* @__PURE__ */ ArraySchema(String6),
+  default: /* @__PURE__ */ optional3(String6)
+})) {
+}
+
+class TitledSingleSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/TitledSingleSelectEnumSchema")({
+  type: /* @__PURE__ */ tag("string"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  oneOf: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct2({
+    const: String6,
+    title: String6
+  })),
+  default: /* @__PURE__ */ optional3(String6)
+})) {
+}
+var SingleSelectEnumSchema = /* @__PURE__ */ Union2([UntitledSingleSelectEnumSchema, TitledSingleSelectEnumSchema]);
+
+class UntitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/UntitledMultiSelectEnumSchema")({
+  type: /* @__PURE__ */ tag("array"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  minItems: /* @__PURE__ */ optional3(Int),
+  maxItems: /* @__PURE__ */ optional3(Int),
+  items: /* @__PURE__ */ Struct2({
+    type: /* @__PURE__ */ tag("string"),
+    enum: /* @__PURE__ */ ArraySchema(String6)
+  }),
+  default: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
+})) {
+}
+
+class TitledMultiSelectEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/TitledMultiSelectEnumSchema")({
+  type: /* @__PURE__ */ tag("array"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  minItems: /* @__PURE__ */ optional3(Int),
+  maxItems: /* @__PURE__ */ optional3(Int),
+  items: /* @__PURE__ */ Struct2({
+    anyOf: /* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct2({
+      const: String6,
+      title: String6
+    }))
+  }),
+  default: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
+})) {
+}
+var MultiSelectEnumSchema = /* @__PURE__ */ Union2([UntitledMultiSelectEnumSchema, TitledMultiSelectEnumSchema]);
+
+class LegacyTitledEnumSchema extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/LegacyTitledEnumSchema")({
+  type: /* @__PURE__ */ tag("string"),
+  title: /* @__PURE__ */ optional3(String6),
+  description: /* @__PURE__ */ optional3(String6),
+  enum: /* @__PURE__ */ ArraySchema(String6),
+  enumNames: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
+  default: /* @__PURE__ */ optional3(String6)
+})) {
+}
+var EnumSchema = /* @__PURE__ */ Union2([SingleSelectEnumSchema, MultiSelectEnumSchema, LegacyTitledEnumSchema]);
+var PrimitiveSchemaDefinition = /* @__PURE__ */ Union2([StringSchema, NumberSchema, BooleanSchema, EnumSchema]);
+var ElicitationFormSchema = /* @__PURE__ */ Struct2({
+  $schema: /* @__PURE__ */ optional3(String6),
+  type: /* @__PURE__ */ tag("object"),
+  properties: /* @__PURE__ */ Record(String6, PrimitiveSchemaDefinition),
+  required: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
+});
+
+class ElicitRequestFormParams extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitRequestFormParams")({
+  ...RequestMeta.fields,
+  mode: /* @__PURE__ */ optional3(/* @__PURE__ */ Literal2("form")),
+  message: String6,
+  requestedSchema: ElicitationFormSchema
+})) {
+}
+
+class ElicitRequestURLParams extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitRequestURLParams")({
+  ...RequestMeta.fields,
+  mode: /* @__PURE__ */ Literal2("url"),
+  message: String6,
+  elicitationId: String6,
+  url: String6
+})) {
+}
+var ElicitRequestParams = /* @__PURE__ */ Union2([ElicitRequestFormParams, ElicitRequestURLParams]);
+
 class ElicitAcceptResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ElicitAcceptResult")({
   ...ResultMeta.fields,
   action: /* @__PURE__ */ Literal2("accept"),
-  content: Any2
+  content: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, /* @__PURE__ */ Union2([String6, Finite, Boolean3, /* @__PURE__ */ ArraySchema(String6)])))
 })) {
 }
 
@@ -38176,16 +38724,12 @@ class ElicitDeclineResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/
 }
 var ElicitResult = /* @__PURE__ */ Union2([ElicitAcceptResult, ElicitDeclineResult]);
 
-class Elicit extends (/* @__PURE__ */ make52("elicitation/create", {
+class Elicit extends (/* @__PURE__ */ make53("elicitation/create", {
   success: ElicitResult,
   error: McpError,
-  payload: {
-    message: String6,
-    requestedSchema: Any2
-  }
+  payload: ElicitRequestParams
 })) {
 }
-
 class ElicitationDeclined extends (/* @__PURE__ */ Error4("@effect/ai/McpSchema/ElicitationDeclined")({
   _tag: /* @__PURE__ */ tag("ElicitationDeclined"),
   request: Elicit.payloadSchema,
@@ -39418,7 +39962,7 @@ var layer15 = (delegation, childBinding, options) => {
   return toolkit.toLayer(build2);
 };
 var SubagentRuntime = { layer: layer15 };
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/FetchHttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var exports_FetchHttpClient = {};
 __export(exports_FetchHttpClient, {
   layer: () => layer16,
@@ -39426,11 +39970,11 @@ __export(exports_FetchHttpClient, {
   Fetch: () => Fetch
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Headers.js
-var TypeId50 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Headers.js
+var TypeId51 = /* @__PURE__ */ Symbol.for("~effect/http/Headers");
 var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.create(null), {
-  [TypeId50]: {
-    value: TypeId50
+  [TypeId51]: {
+    value: TypeId51
   },
   [symbolRedactable]: {
     value(context4) {
@@ -39459,7 +40003,7 @@ var Proto13 = /* @__PURE__ */ Object.defineProperties(/* @__PURE__ */ Object.cre
     value: BaseProto[NodeInspectSymbol]
   }
 });
-var make53 = (input) => Object.assign(Object.create(Proto13), input);
+var make54 = (input) => Object.assign(Object.create(Proto13), input);
 var Equivalence6 = /* @__PURE__ */ makeEquivalence4(/* @__PURE__ */ strictEqual());
 var empty14 = /* @__PURE__ */ Object.create(Proto13);
 var fromInput2 = (input) => {
@@ -39484,21 +40028,21 @@ var fromInput2 = (input) => {
 };
 var fromRecordUnsafe = (input) => Object.setPrototypeOf(input, Proto13);
 var set5 = /* @__PURE__ */ dual(3, (self, key, value4) => {
-  const out = make53(self);
+  const out = make54(self);
   out[key.toLowerCase()] = value4;
   return out;
 });
-var setAll = /* @__PURE__ */ dual(2, (self, headers) => make53({
+var setAll = /* @__PURE__ */ dual(2, (self, headers) => make54({
   ...self,
   ...fromInput2(headers)
 }));
 var merge7 = /* @__PURE__ */ dual(2, (self, headers) => {
-  const out = make53(self);
+  const out = make54(self);
   Object.assign(out, headers);
   return out;
 });
 var remove7 = /* @__PURE__ */ dual(2, (self, key) => {
-  const out = make53(self);
+  const out = make54(self);
   delete out[key.toLowerCase()];
   return out;
 });
@@ -39510,12 +40054,12 @@ var redact2 = /* @__PURE__ */ dual(2, (self, key) => {
     if (typeof key2 === "string") {
       const k = key2.toLowerCase();
       if (k in self) {
-        out[k] = make36(self[k]);
+        out[k] = make37(self[k]);
       }
     } else {
       for (const name in self) {
         if (key2.test(name)) {
-          out[name] = make36(self[name]);
+          out[name] = make37(self[name]);
         }
       }
     }
@@ -39529,11 +40073,24 @@ var redact2 = /* @__PURE__ */ dual(2, (self, key) => {
   }
   return out;
 });
+var isRedactedName = (name, patterns) => {
+  for (let i = 0;i < patterns.length; i++) {
+    const pattern = patterns[i];
+    if (typeof pattern === "string") {
+      if (pattern.toLowerCase() === name) {
+        return true;
+      }
+    } else if (pattern.test(name)) {
+      return true;
+    }
+  }
+  return false;
+};
 var CurrentRedactedNames = /* @__PURE__ */ Reference("effect/Headers/CurrentRedactedNames", {
   defaultValue: () => ["authorization", "cookie", "set-cookie", "x-api-key"]
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClient.js
 var exports_HttpClient = {};
 __export(exports_HttpClient, {
   withScope: () => withScope,
@@ -39555,10 +40112,10 @@ __export(exports_HttpClient, {
   mapRequestEffect: () => mapRequestEffect,
   mapRequest: () => mapRequest,
   makeWith: () => makeWith2,
-  make: () => make57,
+  make: () => make58,
   layerMergedContext: () => layerMergedContext,
   isHttpClient: () => isHttpClient,
-  head: () => head2,
+  head: () => head4,
   get: () => get11,
   followRedirects: () => followRedirects,
   filterStatusOk: () => filterStatusOk2,
@@ -39577,11 +40134,11 @@ __export(exports_HttpClient, {
   HttpClient: () => HttpClient
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Cookies.js
-var TypeId51 = "~effect/http/Cookies";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Cookies.js
+var TypeId52 = "~effect/http/Cookies";
 var CookieTypeId = "~effect/http/Cookies/Cookie";
 var Proto14 = {
-  [TypeId51]: TypeId51,
+  [TypeId52]: TypeId52,
   ...BaseProto,
   toJSON() {
     return {
@@ -39766,12 +40323,12 @@ var tryDecodeURIComponent = (str) => {
   }
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/UrlParams.js
-var TypeId52 = "~effect/http/UrlParams";
-var isUrlParams = (u) => hasProperty(u, TypeId52);
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/UrlParams.js
+var TypeId53 = "~effect/http/UrlParams";
+var isUrlParams = (u) => hasProperty(u, TypeId53);
 var Proto15 = {
   ...PipeInspectableProto,
-  [TypeId52]: TypeId52,
+  [TypeId53]: TypeId53,
   [Symbol.iterator]() {
     return this.params[Symbol.iterator]();
   },
@@ -39788,7 +40345,7 @@ var Proto15 = {
     return array(this.params.flat());
   }
 };
-var make54 = (params) => {
+var make55 = (params) => {
   const self = Object.create(Proto15);
   self.params = params;
   return self;
@@ -39807,7 +40364,7 @@ var fromInput3 = (input) => {
       out.push(parsed[i]);
     }
   }
-  return make54(out);
+  return make55(out);
 };
 var fromInputNested = (input) => {
   const entries3 = typeof input[Symbol.iterator] === "function" ? fromIterable2(input) : Object.entries(input);
@@ -39845,13 +40402,13 @@ var UrlParamsSchema = /* @__PURE__ */ declare(isUrlParams, {
   expected: "UrlParams",
   toEquivalence: () => Equivalence7,
   toCodec: () => link3()(ArraySchema(Tuple3([String6, String6])), transform2({
-    decode: make54,
+    decode: make55,
     encode: (self) => self.params
   }))
 });
-var empty15 = /* @__PURE__ */ make54([]);
-var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make54(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
-var transform3 = /* @__PURE__ */ dual(2, (self, f) => make54(f(self.params)));
+var empty15 = /* @__PURE__ */ make55([]);
+var set7 = /* @__PURE__ */ dual(3, (self, key, value4) => make55(append(filter3(self.params, ([k]) => k !== key), [key, String(value4)])));
+var transform3 = /* @__PURE__ */ dual(2, (self, f) => make55(f(self.params)));
 var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   const out = fromInput3(input);
   const params = out.params;
@@ -39866,7 +40423,7 @@ var setAll2 = /* @__PURE__ */ dual(2, (self, input) => {
   }
   return out;
 });
-var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make54(append(self.params, [key, String(value4)])));
+var append3 = /* @__PURE__ */ dual(3, (self, key, value4) => make55(append(self.params, [key, String(value4)])));
 var appendAll3 = /* @__PURE__ */ dual(2, (self, input) => transform3(self, appendAll(fromInput3(input).params)));
 var toString = (input) => new URLSearchParams(fromInput3(input).params).toString();
 var toRecord = (self) => {
@@ -39891,8 +40448,8 @@ var schemaRecord = /* @__PURE__ */ UrlParamsSchema.pipe(/* @__PURE__ */ decodeTo
   encode: fromInput3
 })));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpBody.js
-var TypeId53 = "~effect/http/HttpBody";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpBody.js
+var TypeId54 = "~effect/http/HttpBody";
 var HttpBodyErrorTypeId = "~effect/http/HttpBody/HttpBodyError";
 
 class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
@@ -39900,9 +40457,9 @@ class HttpBodyError extends (/* @__PURE__ */ TaggedError2("HttpBodyError")) {
 }
 
 class Proto16 {
-  [TypeId53];
+  [TypeId54];
   constructor() {
-    this[TypeId53] = TypeId53;
+    this[TypeId54] = TypeId54;
   }
   [NodeInspectSymbol]() {
     return this.toJSON();
@@ -40064,9 +40621,9 @@ var fileContentLength = (size9, options) => {
 };
 var file = (path, options) => flatMap5(FileSystem, (fs) => map8(fs.stat(path), (info2) => stream2(fs.stream(path, options), options?.contentType, fileContentLength(info2.size, options))));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientError.js
-var TypeId54 = "~effect/http/HttpClientError";
-var isHttpClientError = (u) => hasProperty(u, TypeId54);
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientError.js
+var TypeId55 = "~effect/http/HttpClientError";
+var isHttpClientError = (u) => hasProperty(u, TypeId55);
 
 class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) {
   constructor(props) {
@@ -40079,7 +40636,7 @@ class HttpClientError extends (/* @__PURE__ */ TaggedError2("HttpClientError")) 
       super(props);
     }
   }
-  [TypeId54] = TypeId54;
+  [TypeId55] = TypeId55;
   get request() {
     return this.reason.request;
   }
@@ -40140,7 +40697,7 @@ class EmptyBodyError extends (/* @__PURE__ */ TaggedError2("EmptyBodyError")) {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientRequest.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientRequest.js
 var exports_HttpClientRequest = {};
 __export(exports_HttpClientRequest, {
   updateUrl: () => updateUrl,
@@ -40167,9 +40724,9 @@ __export(exports_HttpClientRequest, {
   options: () => options,
   modify: () => modify5,
   makeWith: () => makeWith,
-  make: () => make56,
+  make: () => make57,
   isHttpClientRequest: () => isHttpClientRequest,
-  head: () => head,
+  head: () => head3,
   get: () => get10,
   fromWeb: () => fromWeb,
   empty: () => empty17,
@@ -40192,11 +40749,11 @@ __export(exports_HttpClientRequest, {
   accept: () => accept
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpMethod.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpMethod.js
 var hasBody = (method) => method !== "GET" && method !== "HEAD" && method !== "OPTIONS" && method !== "TRACE";
 var allShort = [["GET", "get"], ["POST", "post"], ["PUT", "put"], ["DELETE", "del"], ["PATCH", "patch"], ["HEAD", "head"], ["OPTIONS", "options"], ["TRACE", "trace"]];
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/internal/httpBody.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/internal/httpBody.js
 var updateHeaders = (headers, body) => {
   if (body._tag === "Empty" || body._tag === "FormData") {
     return remove7(remove7(headers, "content-type"), "content-length");
@@ -40205,10 +40762,10 @@ var updateHeaders = (headers, body) => {
   return body.contentLength === undefined ? remove7(headers, "content-length") : set5(headers, "content-length", body.contentLength.toString());
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/Url.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/Url.js
 class UrlError extends (/* @__PURE__ */ TaggedError2("UrlError")) {
 }
-var make55 = (url2, params, hash2) => try_({
+var make56 = (url2, params, hash2) => try_({
   try: () => {
     const urlInstance = new URL(url2, baseUrl());
     for (let i = 0;i < params.params.length; i++) {
@@ -40233,11 +40790,11 @@ var baseUrl = () => {
   return;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientRequest.js
-var TypeId55 = "~effect/http/HttpClientRequest";
-var isHttpClientRequest = (u) => hasProperty(u, TypeId55);
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientRequest.js
+var TypeId56 = "~effect/http/HttpClientRequest";
+var isHttpClientRequest = (u) => hasProperty(u, TypeId56);
 var Proto17 = {
-  [TypeId55]: TypeId55,
+  [TypeId56]: TypeId56,
   ...BaseProto,
   toJSON() {
     return {
@@ -40265,19 +40822,19 @@ function makeWith(method, url2, urlParams2, hash2, headers, body) {
   return self;
 }
 var empty17 = /* @__PURE__ */ makeWith("GET", "", empty15, /* @__PURE__ */ none2(), empty14, empty16);
-var make56 = (method) => (url2, options) => modify5(empty17, {
+var make57 = (method) => (url2, options) => modify5(empty17, {
   method,
   url: url2,
   ...options ?? undefined
 });
-var get10 = /* @__PURE__ */ make56("GET");
-var post = /* @__PURE__ */ make56("POST");
-var patch = /* @__PURE__ */ make56("PATCH");
-var put = /* @__PURE__ */ make56("PUT");
-var del = /* @__PURE__ */ make56("DELETE");
-var head = /* @__PURE__ */ make56("HEAD");
-var options = /* @__PURE__ */ make56("OPTIONS");
-var trace2 = /* @__PURE__ */ make56("TRACE");
+var get10 = /* @__PURE__ */ make57("GET");
+var post = /* @__PURE__ */ make57("POST");
+var patch = /* @__PURE__ */ make57("PATCH");
+var put = /* @__PURE__ */ make57("PUT");
+var del = /* @__PURE__ */ make57("DELETE");
+var head3 = /* @__PURE__ */ make57("HEAD");
+var options = /* @__PURE__ */ make57("OPTIONS");
+var trace2 = /* @__PURE__ */ make57("TRACE");
 var modify5 = /* @__PURE__ */ dual(2, (self, options2) => {
   let result4 = self;
   if (options2.method) {
@@ -40319,12 +40876,12 @@ var setUrl = /* @__PURE__ */ dual(2, (self, url2) => {
   if (typeof url2 === "string") {
     return makeWith(self.method, url2, self.urlParams, self.hash, self.headers, self.body);
   }
-  const clone2 = new URL(url2.toString());
-  const urlParams2 = fromInput3(clone2.searchParams);
-  const hash2 = fromNullishOr(clone2.hash === "" ? undefined : clone2.hash.slice(1));
-  clone2.search = "";
-  clone2.hash = "";
-  return makeWith(self.method, clone2.toString(), urlParams2, hash2, self.headers, self.body);
+  const clone3 = new URL(url2.toString());
+  const urlParams2 = fromInput3(clone3.searchParams);
+  const hash2 = fromNullishOr(clone3.hash === "" ? undefined : clone3.hash.slice(1));
+  clone3.search = "";
+  clone3.hash = "";
+  return makeWith(self.method, clone3.toString(), urlParams2, hash2, self.headers, self.body);
 });
 var prependUrl = /* @__PURE__ */ dual(2, (self, path) => {
   if (path === "")
@@ -40367,7 +40924,7 @@ var bodyFormDataRecord = /* @__PURE__ */ dual(2, (self, entries3) => setBody(sel
 var bodyStream = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, body, options2) => setBody(self, stream2(body, options2?.contentType, options2?.contentLength)));
 var bodyFile = /* @__PURE__ */ dual((args2) => isHttpClientRequest(args2[0]), (self, path, options2) => map8(file(path, options2), (body) => setBody(self, body)));
 function toUrl(self) {
-  const r = make55(self.url, self.urlParams, getOrUndefined(self.hash));
+  const r = make56(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isSuccess2(r)) {
     return some3(r.success);
   }
@@ -40399,7 +40956,7 @@ var parseContentLength = (contentLength) => {
   return Number.isNaN(parsed) ? undefined : parsed;
 };
 var toWebResult = (self, options2) => {
-  const url2 = make55(self.url, self.urlParams, getOrUndefined(self.hash));
+  const url2 = make56(self.url, self.urlParams, getOrUndefined(self.hash));
   if (isFailure2(url2)) {
     return fail2(url2.failure);
   }
@@ -40450,7 +41007,7 @@ var toWeb = (self, options2) => contextWith2((context4) => fromResult2(toWebResu
   signal: options2?.signal
 })));
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientResponse.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientResponse.js
 var exports_HttpClientResponse = {};
 __export(exports_HttpClientResponse, {
   stream: () => stream3,
@@ -40463,14 +41020,15 @@ __export(exports_HttpClientResponse, {
   fromWeb: () => fromWeb2,
   filterStatusOk: () => filterStatusOk,
   filterStatus: () => filterStatus,
-  TypeId: () => TypeId57
+  TypeId: () => TypeId58
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
-var TypeId56 = "~effect/http/HttpIncomingMessage";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpIncomingMessage.js
+var TypeId57 = "~effect/http/HttpIncomingMessage";
 var schemaBodyJson2 = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3));
-  return (self) => flatMap5(self.json, (u) => decode2(u, options2));
+  const decodeJson = options2?.reviver === undefined ? undefined : decodeEffect2(fromJsonString2(toCodecJson(schema3), options2));
+  return (self) => decodeJson === undefined ? flatMap5(self.json, (u) => decode2(u, options2)) : flatMap5(self.text, (body) => body === "" ? flatMap5(self.json, (u) => decode2(u, options2)) : decodeJson(body, options2));
 };
 var schemaBodyUrlParams = (schema3, options2) => {
   const decode2 = schemaRecord.pipe(decodeTo2(schema3), decodeEffect2);
@@ -40503,14 +41061,15 @@ var inspect = (self, that) => {
   return obj;
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClientResponse.js
-var TypeId57 = "~effect/http/HttpClientResponse";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClientResponse.js
+var TypeId58 = "~effect/http/HttpClientResponse";
 var fromWeb2 = (request3, source) => new WebHttpClientResponse(request3, source);
 var schemaJson = (schema3, options2) => {
   const decode2 = decodeEffect2(toCodecJson(schema3).annotate({
     options: options2
   }));
-  return (self) => flatMap5(self.json, (body) => decode2({
+  const decodeBody = schemaBodyJson2(Unknown2, options2);
+  return (self) => flatMap5(decodeBody(self), (body) => decode2({
     status: self.status,
     headers: self.headers,
     body
@@ -40557,16 +41116,16 @@ var filterStatusOk = (self) => self.status >= 200 && self.status < 300 ? succeed
 }));
 
 class WebHttpClientResponse extends Class2 {
-  [TypeId56];
   [TypeId57];
+  [TypeId58];
   request;
   source;
   constructor(request3, source) {
     super();
     this.request = request3;
     this.source = source;
-    this[TypeId56] = TypeId56;
     this[TypeId57] = TypeId57;
+    this[TypeId58] = TypeId58;
   }
   toJSON() {
     return inspect(this, {
@@ -40672,7 +41231,7 @@ class WebHttpClientResponse extends Class2 {
   }
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpTraceContext.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpTraceContext.js
 var toHeaders = (span2) => fromRecordUnsafe({
   b3: `${span2.traceId}-${span2.spanId}-${span2.sampled ? "1" : "0"}${match(span2.parent, {
     onNone: () => "",
@@ -40681,14 +41240,14 @@ var toHeaders = (span2) => fromRecordUnsafe({
   traceparent: `00-${span2.traceId}-${span2.spanId}-${span2.sampled ? "01" : "00"}`
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/HttpClient.js
-var TypeId58 = "~effect/http/HttpClient";
-var isHttpClient = (u) => hasProperty(u, TypeId58);
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/HttpClient.js
+var TypeId59 = "~effect/http/HttpClient";
+var isHttpClient = (u) => hasProperty(u, TypeId59);
 var HttpClient = /* @__PURE__ */ Service("effect/HttpClient");
 var accessor = (method) => (...args2) => flatMap5(HttpClient, (client) => client[method](...args2));
 var execute = /* @__PURE__ */ accessor("execute");
 var get11 = /* @__PURE__ */ accessor("get");
-var head2 = /* @__PURE__ */ accessor("head");
+var head4 = /* @__PURE__ */ accessor("head");
 var post2 = /* @__PURE__ */ accessor("post");
 var patch2 = /* @__PURE__ */ accessor("patch");
 var put2 = /* @__PURE__ */ accessor("put");
@@ -40713,7 +41272,7 @@ var makeWith2 = (postprocess, preprocess) => {
   return self;
 };
 var Proto18 = {
-  [TypeId58]: TypeId58,
+  [TypeId59]: TypeId59,
   pipe() {
     return pipeArguments(this, arguments);
   },
@@ -40724,13 +41283,13 @@ var Proto18 = {
     };
   },
   .../* @__PURE__ */ Object.fromEntries(/* @__PURE__ */ allShort.map(([fullMethod, method]) => [method, function(url2, options3) {
-    return this.execute(make56(fullMethod)(url2, options3));
+    return this.execute(make57(fullMethod)(url2, options3));
   }]))
 };
-var make57 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
+var make58 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withFiber2((fiber3) => {
   const scopedController = scopedRequests.get(request3);
   const controller = scopedController ?? new AbortController;
-  const urlResult = make55(request3.url, request3.urlParams, getOrUndefined(request3.hash));
+  const urlResult = make56(request3.url, request3.urlParams, getOrUndefined(request3.hash));
   if (isFailure2(urlResult)) {
     return fail6(new HttpClientError({
       reason: new InvalidUrlError({
@@ -40775,11 +41334,10 @@ var make57 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withF
     }
     const redactedHeaderNames = fiber3.getRef(CurrentRedactedNames);
     const headerFilter = fiber3.getRef(TracerHeaderFilter);
-    const redactedHeaders = redact2(request3.headers, redactedHeaderNames);
-    for (const name in redactedHeaders) {
+    for (const name in request3.headers) {
       if (!headerFilter(name, "request"))
         continue;
-      span2.attribute(`http.request.header.${name}`, String(redactedHeaders[name]));
+      span2.attribute(`http.request.header.${name}`, isRedactedName(name, redactedHeaderNames) ? "<redacted>" : request3.headers[name]);
     }
     request3 = fiber3.getRef(TracerPropagationEnabled) ? setHeaders(request3, toHeaders(span2)) : request3;
     return uninterruptibleMask2((restore) => restore(f(request3, url2, controller.signal, fiber3)).pipe(withParentSpan3(span2, {
@@ -40787,11 +41345,10 @@ var make57 = (f) => makeWith2((effect2) => flatMap5(effect2, (request3) => withF
     }), matchCauseEffect2({
       onSuccess: (response) => {
         span2.attribute("http.response.status_code", response.status);
-        const redactedHeaders2 = redact2(response.headers, redactedHeaderNames);
-        for (const name in redactedHeaders2) {
+        for (const name in response.headers) {
           if (!headerFilter(name, "response"))
             continue;
-          span2.attribute(`http.response.header.${name}`, String(redactedHeaders2[name]));
+          span2.attribute(`http.response.header.${name}`, isRedactedName(name, redactedHeaderNames) ? "<redacted>" : response.headers[name]);
         }
         if (scopedController)
           return succeed6(response);
@@ -41116,8 +41673,8 @@ class InterruptibleResponse {
     this.original = original;
     this.controller = controller;
   }
+  [TypeId58] = TypeId58;
   [TypeId57] = TypeId57;
-  [TypeId56] = TypeId56;
   applyInterrupt(effect2) {
     return suspend3(() => {
       responseRegistry.unregister(this.original);
@@ -41179,16 +41736,16 @@ var isTransientHttpError = (error2) => isHttpClientError(error2) && (error2.reas
 var isTooManyRequestsHttpClientError = (error2) => isHttpClientError(error2) && error2.reason._tag === "StatusCodeError" && error2.reason.response.status === 429;
 var isTransientResponse = (response) => response.status === 408 || response.status === 429 || response.status === 500 || response.status === 502 || response.status === 503 || response.status === 504;
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/http/FetchHttpClient.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/http/FetchHttpClient.js
 var Fetch = /* @__PURE__ */ Reference("effect/http/FetchHttpClient/Fetch", {
   defaultValue: () => globalThis.fetch
 });
 
 class RequestInit extends (/* @__PURE__ */ Service()("effect/http/FetchHttpClient/RequestInit")) {
 }
-var fetch = /* @__PURE__ */ make57((request3, url2, signal, fiber3) => {
+var fetch = /* @__PURE__ */ make58((request3, url2, signal, fiber3) => {
   const fetch2 = fiber3.getRef(Fetch);
-  const options3 = fiber3.context.mapUnsafe.get(RequestInit.key) ?? {};
+  const options3 = getOrUndefined2(fiber3.context, RequestInit) ?? {};
   let headers = options3.headers ? merge7(fromInput2(options3.headers), request3.headers) : request3.headers;
   if (headers["content-length"]) {
     headers = remove7(headers, "content-length");
@@ -42968,11 +43525,11 @@ var gitHubPullRequestSourceLayer = exports_Layer.effect(PullRequestSource)(expor
         return exports_Effect.succeed(file2);
       const basePath = file2.previousPath ?? file2.path;
       const base2 = file2.status === "added" ? exports_Effect.succeed(exports_Option.none()) : readRepositoryFile(basePath, pullRequest.baseSha ?? pullRequest.baseRef).pipe(exports_Effect.option);
-      const head3 = file2.status === "removed" ? exports_Effect.succeed(exports_Option.none()) : readRepositoryFile(file2.path, pullRequest.headSha).pipe(exports_Effect.option);
-      return exports_Effect.all({ base: base2, head: head3 }).pipe(exports_Effect.map(({ base: base3, head: head4 }) => ChangedFile.make({
+      const head5 = file2.status === "removed" ? exports_Effect.succeed(exports_Option.none()) : readRepositoryFile(file2.path, pullRequest.headSha).pipe(exports_Effect.option);
+      return exports_Effect.all({ base: base2, head: head5 }).pipe(exports_Effect.map(({ base: base3, head: head6 }) => ChangedFile.make({
         ...file2,
         ...exports_Option.isSome(base3) ? { reviewBaseContent: base3.value } : {},
-        ...exports_Option.isSome(head4) ? { reviewHeadContent: head4.value } : {}
+        ...exports_Option.isSome(head6) ? { reviewHeadContent: head6.value } : {}
       })));
     }, { concurrency: 4 });
   }));
@@ -42988,8 +43545,8 @@ var gitHubPullRequestSourceLayer = exports_Layer.effect(PullRequestSource)(expor
     }
     if (file2.reviewHeadContent !== undefined)
       return file2.reviewHeadContent;
-    const head3 = yield* metadata;
-    return yield* readRepositoryFile(relative, head3.headSha);
+    const head5 = yield* metadata;
+    return yield* readRepositoryFile(relative, head5.headSha);
   });
   return PullRequestSource.of({ metadata, changedFiles, anchorFiles: changedFiles, readFile: readFile3 });
 }));
@@ -43518,8 +44075,8 @@ var planPublication = (review, files, options3) => {
   let omitted = 0;
   let walkthroughKept = true;
   let promptsKept = true;
-  let head3 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
-  while (head3.length > headBudget && (promptsKept && consolidatedPromptWanted || walkthroughKept && walkthrough.length > 0 || demotedKept > 0 || concernsKept > 0)) {
+  let head5 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
+  while (head5.length > headBudget && (promptsKept && consolidatedPromptWanted || walkthroughKept && walkthrough.length > 0 || demotedKept > 0 || concernsKept > 0)) {
     if (promptsKept && consolidatedPromptWanted) {
       promptsKept = false;
     } else if (walkthroughKept && walkthrough.length > 0) {
@@ -43531,9 +44088,9 @@ var planPublication = (review, files, options3) => {
       concernsKept -= 1;
       omitted += 1;
     }
-    head3 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
+    head5 = renderHead(concernsKept, demotedKept, omitted, walkthroughKept, promptsKept);
   }
-  const body = `${head3.slice(0, headBudget)}
+  const body = `${head5.slice(0, headBudget)}
 ${tail}`;
   return ReviewPublicationPlan.make({
     event,
@@ -43776,7 +44333,7 @@ var makeReviewSnapshot = (ignore6) => provideIgnore(exports_Effect.gen(function*
     files: yield* source.anchorFiles
   };
 }), ignore6);
-var make58 = (options3) => {
+var make59 = (options3) => {
   const extraTools = options3.extraTools ?? EMPTY_TOOLS;
   requireReadonly(extraTools);
   const definition = Agent.define("pr-reviewer", {
@@ -43879,7 +44436,7 @@ var makeFanOut = (options3) => {
     }
   };
 };
-var PrReview = { make: make58, makeFanOut };
+var PrReview = { make: make59, makeFanOut };
 
 // packages/pr-review/src/internal/progress.ts
 var PROGRESS_COMMENT_MARKER_PREFIX = "<!-- effect-agent-pr-review progress";
@@ -44194,22 +44751,22 @@ var compactReviewLoggingLayer = exports_Layer.unwrap(exports_Effect.gen(function
   return exports_Layer.merge(exports_Logger.layer([exports_Logger.withLeveledConsole(compactReviewLogger)]), exports_Layer.succeed(exports_References.MinimumLogLevel, level));
 }));
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 var exports_AnthropicClient = {};
 __export(exports_AnthropicClient, {
-  make: () => make60,
+  make: () => make61,
   layerConfig: () => layerConfig,
   layer: () => layer17,
   AnthropicClient: () => AnthropicClient
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/ChannelSchema.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/ChannelSchema.js
 var decode2 = (schema3) => () => {
   const decode3 = decodeEffect2(NonEmptyArray(schema3));
   return fromTransform((upstream, _scope) => succeed6(flatMap5(upstream, (chunk) => decode3(chunk))));
 };
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/encoding/Sse.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/encoding/Sse.js
 var SseErrorTypeId = "~effect/encoding/Sse/SseError";
 
 class EventTooLarge extends (/* @__PURE__ */ TaggedError2("EventTooLarge")) {
@@ -44410,12 +44967,12 @@ class Retry extends (/* @__PURE__ */ TaggedClass("Retry")) {
   }
 }
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicConfig.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicConfig.js
 class AnthropicConfig extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicConfig")) {
-  static getOrUndefined = /* @__PURE__ */ map8(/* @__PURE__ */ context2(), (services2) => services2.mapUnsafe.get(AnthropicConfig.key));
+  static getOrUndefined = /* @__PURE__ */ map8(/* @__PURE__ */ context2(), /* @__PURE__ */ getOrUndefined2(AnthropicConfig));
 }
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/Generated.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/Generated.js
 var APIError = /* @__PURE__ */ Struct2({
   message: String6.annotate({
     title: "Message",
@@ -47997,7 +48554,7 @@ var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet200 = BetaGetSkillVersio
 var BetaGetSkillVersionV1SkillsSkillIdVersionsVersionGet4XX = BetaErrorResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete200 = BetaDeleteSkillVersionResponse;
 var BetaDeleteSkillVersionV1SkillsSkillIdVersionsVersionDelete4XX = BetaErrorResponse;
-var make59 = (httpClient, options3 = {}) => {
+var make60 = (httpClient, options3 = {}) => {
   const unexpectedStatus = (response) => flatMap5(orElseSucceed2(response.json, () => "Unexpected status code"), (description) => fail6(new HttpClientError({
     reason: new StatusCodeError({
       request: response.request,
@@ -48468,7 +49025,7 @@ var AnthropicClientError = (tag2, cause, response) => new AnthropicClientErrorIm
   request: response.request
 });
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/internal/errors.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/internal/errors.js
 var AnthropicErrorBody = /* @__PURE__ */ Struct2({
   type: /* @__PURE__ */ Literal2("error"),
   error: /* @__PURE__ */ Struct2({
@@ -48476,12 +49033,12 @@ var AnthropicErrorBody = /* @__PURE__ */ Struct2({
     message: String6
   })
 });
-var mapSchemaError = /* @__PURE__ */ dual(2, (error2, method) => make45({
+var mapSchemaError = /* @__PURE__ */ dual(2, (error2, method) => make46({
   module: "AnthropicClient",
   method,
   reason: InvalidOutputError.fromSchemaError(error2)
 }));
-var mapSseError = /* @__PURE__ */ dual(2, (error2, method) => make45({
+var mapSseError = /* @__PURE__ */ dual(2, (error2, method) => make46({
   module: "AnthropicClient",
   method,
   reason: new InvalidOutputError({
@@ -48512,7 +49069,7 @@ var mapClientError = /* @__PURE__ */ dual(2, (error2, method) => {
     metadata,
     http
   });
-  return make45({
+  return make46({
     module: "AnthropicClient",
     method,
     reason
@@ -48522,7 +49079,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
   const reason = error2.reason;
   switch (reason._tag) {
     case "TransportError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "AnthropicClient",
         method,
         reason: new NetworkError({
@@ -48533,7 +49090,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EncodeError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "AnthropicClient",
         method,
         reason: new NetworkError({
@@ -48544,7 +49101,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "InvalidUrlError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "AnthropicClient",
         method,
         reason: new NetworkError({
@@ -48558,7 +49115,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       return mapStatusCodeError(reason, method);
     }
     case "DecodeError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "AnthropicClient",
         method,
         reason: new InvalidOutputError({
@@ -48567,7 +49124,7 @@ var mapHttpClientError = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EmptyBodyError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "AnthropicClient",
         method,
         reason: new InvalidOutputError({
@@ -48614,7 +49171,7 @@ var mapStatusCodeError = /* @__PURE__ */ fnUntraced2(function* (error2, method) 
       requestId: requestId ?? null
     }
   });
-  return yield* make45({
+  return yield* make46({
     module: "AnthropicClient",
     method,
     reason
@@ -48779,18 +49336,18 @@ var mapStatusCodeToReason = ({
   }
 };
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicClient.js
 class AnthropicClient extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicClient")) {
 }
 var RedactedAnthropicHeaders = {
   AnthropicApiKey: "x-api-key"
 };
 var withRedactedHeaders = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedAnthropicHeaders)));
-var make60 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make61 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiVersion = options3.apiVersion ?? "2023-06-01";
   const httpClient = baseClient.pipe(mapRequest((request3) => request3.pipe(prependUrl(options3.apiUrl ?? "https://api.anthropic.com"), isNotUndefined(options3.apiKey) ? setHeader(RedactedAnthropicHeaders.AnthropicApiKey, value3(options3.apiKey)) : identity, setHeader("anthropic-version", apiVersion), acceptJson)), isNotUndefined(options3.transformClient) ? options3.transformClient : identity);
-  const client = make59(httpClient, {
+  const client = make60(httpClient, {
     transformClient: fnUntraced2(function* (client2) {
       const config = yield* AnthropicConfig.getOrUndefined;
       if (isNotUndefined(config?.transformClient)) {
@@ -48844,29 +49401,29 @@ var make60 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createMessageStream
   });
 }, withRedactedHeaders);
-var layer17 = (options3) => effect(AnthropicClient, make60(options3));
+var layer17 = (options3) => effect(AnthropicClient, make61(options3));
 var layerConfig = (options3) => effect(AnthropicClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const apiVersion = isNotUndefined(options3?.apiVersion) ? yield* options3.apiVersion : undefined;
-  return yield* make60({
+  return yield* make61({
     apiKey,
     apiUrl,
     apiVersion,
     transformClient: options3?.transformClient
   });
 }));
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
 var exports_AnthropicLanguageModel = {};
 __export(exports_AnthropicLanguageModel, {
   withConfigOverride: () => withConfigOverride,
   model: () => model,
-  make: () => make62,
+  make: () => make63,
   layer: () => layer18,
   Config: () => Config
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/internal/structured-output.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/internal/structured-output.js
 var REST_PROPERTY_NAME = "__rest__";
 var TAIL_PROPERTY_PREFIX = "__tail_";
 var RECORD_DESCRIPTION = "Object encoded as array of [key, value] pairs. Apply object constraints to the decoded object";
@@ -48879,7 +49436,7 @@ function toCodec(schema3) {
   if (from === encoded) {
     return jsonCodec.ast === schema3.ast ? schema3 : jsonCodec;
   }
-  return make37(decodeTo(from, jsonCodec.ast, passthrough3()));
+  return make38(decodeTo(from, jsonCodec.ast, passthrough3()));
 }
 function transform5(root) {
   let cache;
@@ -49175,7 +49732,7 @@ function isJsonSchema(input) {
   return typeof input === "object" && input !== null && !Array.isArray(input);
 }
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/OpenAiStructuredOutput.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/OpenAiStructuredOutput.js
 function toCodecOpenAI(schema3) {
   const codec = toCodec(schema3);
   const document = resolveTopLevel$ref(toJsonSchemaDocument2(codec, {
@@ -49395,7 +49952,7 @@ var supportedKeywords = /* @__PURE__ */ new Set(["$ref", "type", "title", "descr
 var normalizableAllOfKeywords = /* @__PURE__ */ new Set(["$ref", "title", "enum", "anyOf", "format", "multipleOf"]);
 var formats = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "ipv4", "ipv6", "uuid"]);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/AnthropicStructuredOutput.js
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/AnthropicStructuredOutput.js
 function toCodecAnthropic(schema3) {
   const codec = toCodec(schema3);
   const unresolvedDocument = toJsonSchemaDocument2(codec, {
@@ -49500,8 +50057,8 @@ function hoistAllOfDescriptions(schema3) {
 var supportedKeywords2 = /* @__PURE__ */ new Set(["$ref", "type", "title", "description", "enum", "const", "anyOf", "allOf", "properties", "required", "additionalProperties", "items", "pattern"]);
 var formats2 = /* @__PURE__ */ new Set(["date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"]);
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/ai/Model.js
-var TypeId59 = "~effect/ai/Model";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/ai/Model.js
+var TypeId60 = "~effect/ai/Model";
 
 class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ProviderName")) {
 }
@@ -49509,7 +50066,7 @@ class ProviderName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/
 class ModelName extends (/* @__PURE__ */ Service()("effect/unstable/ai/Model/ModelName")) {
 }
 var Proto19 = {
-  [TypeId59]: TypeId59,
+  [TypeId60]: TypeId60,
   ["~effect/Layer"]: {
     _ROut: identity,
     _E: identity,
@@ -49527,11 +50084,11 @@ var Proto19 = {
     };
   }
 };
-var make61 = (provider, modelName, layer18) => Object.assign(Object.create(Proto19), {
+var make62 = (provider, modelName, layer18) => Object.assign(Object.create(Proto19), {
   provider
 }, merge3(layer18, succeedContext(ProviderName.context(provider).pipe(add(ModelName, modelName)))));
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicTelemetry.js
 var addAnthropicRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.request", camelToSnake);
 var addAnthropicResponseAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.anthropic.response", camelToSnake);
 var addGenAIAnnotations2 = /* @__PURE__ */ dual(2, (span2, options3) => {
@@ -49546,7 +50103,7 @@ var addGenAIAnnotations2 = /* @__PURE__ */ dual(2, (span2, options3) => {
   }
 });
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/internal/utilities.js
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/internal/utilities.js
 var finishReasonMap = {
   end_turn: "stop",
   max_tokens: "length",
@@ -49566,35 +50123,36 @@ var resolveFinishReason = (finishReason, isJsonResponse = false) => {
   return reason;
 };
 
-// node_modules/.bun/@effect+ai-anthropic@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
-var formatIssue = /* @__PURE__ */ makeFormatterDefault();
+// node_modules/.bun/@effect+ai-anthropic@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-anthropic/dist/AnthropicLanguageModel.js
+var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
 
 class Config extends (/* @__PURE__ */ Service()("@effect/ai-anthropic/AnthropicLanguageModel/Config")) {
 }
-var model = (model2, config) => make61("anthropic", model2, layer18({
+var model = (model2, config) => make62("anthropic", model2, layer18({
   model: model2,
   config
 }));
-var make62 = /* @__PURE__ */ fnUntraced2(function* ({
+var make63 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model2,
   config: providerConfig
 }) {
   const client = yield* AnthropicClient;
-  const makeConfig = gen4(function* () {
-    const services2 = yield* context2();
-    return {
-      model: model2,
-      ...providerConfig,
-      ...services2.mapUnsafe.get(Config.key)
-    };
-  });
+  const makeConfig = contextWith2((services2) => succeed6({
+    model: model2,
+    ...providerConfig,
+    ...getOrUndefined2(services2, Config)
+  }));
   const makeRequest = fnUntraced2(function* ({
     config,
     options: options3,
     toolNameMapper
   }) {
     const betas = new Set;
-    const capabilities2 = getModelCapabilities(config.model);
+    const modelCapabilities = getModelCapabilities(config.model);
+    const capabilities2 = isNotUndefined(config.structuredOutputs) ? {
+      ...modelCapabilities,
+      supportsStructuredOutput: config.structuredOutputs
+    } : modelCapabilities;
     const {
       messages,
       system
@@ -49623,6 +50181,7 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* ({
     const {
       disableParallelToolCalls: _,
       output_config,
+      structuredOutputs: _structuredOutputs,
       ...requestConfig
     } = config;
     const payload = {
@@ -49654,7 +50213,7 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* ({
       payload
     };
   });
-  return yield* make50({
+  return yield* make51({
     codecTransformer: toCodecAnthropic,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -49696,7 +50255,7 @@ var make62 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer18 = (options3) => effect(LanguageModel, make62(options3));
+var layer18 = (options3) => effect(LanguageModel, make63(options3));
 var withConfigOverride = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config), (config) => provideService2(self, Config, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -50209,7 +50768,7 @@ var prepareTools = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         default: {
-          return yield* make45({
+          return yield* make46({
             module: "AnthropicLanguageModel",
             method: "prepareTools",
             reason: new InvalidUserInputError({
@@ -51381,57 +51940,44 @@ var processCitation = /* @__PURE__ */ fnUntraced2(function* (citation, citableDo
   return;
 });
 var getModelCapabilities = (modelId) => {
-  if (modelId.includes("claude-opus-4-6") || modelId.includes("claude-sonnet-4-6") || modelId.includes("claude-opus-4-7") || modelId.includes("claude-opus-4-8")) {
-    return {
-      maxOutputTokens: 128000,
-      supportsStructuredOutput: true,
-      isKnownModel: true
-    };
-  } else if (modelId.includes("claude-sonnet-4-5") || modelId.includes("claude-opus-4-5") || modelId.includes("claude-haiku-4-5")) {
+  if (modelId.includes("claude-sonnet-4-5") || modelId.includes("claude-opus-4-5") || modelId.includes("claude-haiku-4-5")) {
     return {
       maxOutputTokens: 64000,
-      supportsStructuredOutput: true,
-      isKnownModel: true
+      supportsStructuredOutput: true
     };
   } else if (modelId.includes("claude-opus-4-1")) {
     return {
       maxOutputTokens: 32000,
-      supportsStructuredOutput: true,
-      isKnownModel: true
+      supportsStructuredOutput: true
     };
-  } else if (modelId.includes("claude-sonnet-4-") || modelId.includes("claude-3-7-sonnet")) {
+  } else if (modelId.includes("claude-sonnet-4-0") || modelId.includes("claude-sonnet-4-20250514") || modelId.includes("claude-3-7-sonnet")) {
     return {
       maxOutputTokens: 64000,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     };
-  } else if (modelId.includes("claude-opus-4-")) {
+  } else if (modelId.includes("claude-opus-4-0") || modelId.includes("claude-opus-4-20250514")) {
     return {
       maxOutputTokens: 32000,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     };
   } else if (modelId.includes("claude-3-5-haiku")) {
     return {
       maxOutputTokens: 8192,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     };
-  } else if (modelId.includes("claude-3-haiku")) {
+  } else if (modelId.includes("claude-3-")) {
     return {
       maxOutputTokens: 4096,
-      supportsStructuredOutput: false,
-      isKnownModel: true
+      supportsStructuredOutput: false
     };
   } else {
     return {
-      maxOutputTokens: 4096,
-      supportsStructuredOutput: false,
-      isKnownModel: false
+      maxOutputTokens: 128000,
+      supportsStructuredOutput: true
     };
   }
 };
-var unsupportedSchemaError = (error2, method) => make45({
+var unsupportedSchemaError = (error2, method) => make46({
   module: "AnthropicLanguageModel",
   method,
   reason: new UnsupportedSchemaError({
@@ -51470,7 +52016,7 @@ var getOutputFormat = /* @__PURE__ */ fnUntraced2(function* ({
 var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, toolName, toolParams) {
   const tool = tools.find((tool2) => tool2.name === toolName);
   if (isUndefined(tool)) {
-    return yield* make45({
+    return yield* make46({
       module: "AnthropicLanguageModel",
       method: "makeResponse",
       reason: new ToolNotFoundError({
@@ -51483,21 +52029,21 @@ var transformToolCallParams = /* @__PURE__ */ fnUntraced2(function* (tools, tool
     codec
   } = yield* tryCodecTransform(tool.parametersSchema, "makeResponse");
   const transform6 = decodeEffect2(codec);
-  return yield* transform6(toolParams).pipe(mapError4((error2) => make45({
+  return yield* transform6(toolParams).pipe(mapError4((error2) => make46({
     module: "AnthropicLanguageModel",
     method: "makeResponse",
     reason: new ToolParameterValidationError({
       toolName,
       toolParams,
-      description: formatIssue(error2.issue)
+      description: formatIssue2(error2.issue)
     })
   })));
 });
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiClient.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiClient.js
 var exports_OpenAiClient = {};
 __export(exports_OpenAiClient, {
   withWebSocketMode: () => withWebSocketMode,
-  make: () => make64,
+  make: () => make65,
   layerWebSocketMode: () => layerWebSocketMode,
   layerConfig: () => layerConfig2,
   layer: () => layer19,
@@ -51505,11 +52051,11 @@ __export(exports_OpenAiClient, {
   OpenAiClient: () => OpenAiClient
 });
 
-// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/unstable/socket/Socket.js
-var TypeId60 = "~effect/socket/Socket";
+// node_modules/.bun/effect@4.0.0-rc.110/node_modules/effect/dist/unstable/socket/Socket.js
+var TypeId61 = "~effect/socket/Socket";
 var Socket = /* @__PURE__ */ Service("effect/socket/Socket");
-var make63 = (options3) => Socket.of({
-  [TypeId60]: TypeId60,
+var make64 = (options3) => Socket.of({
+  [TypeId61]: TypeId61,
   runRaw: options3.runRaw,
   run: options3.run ?? ((handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(encoder3.encode(data)) : data instanceof Uint8Array ? handler(data) : handler(new Uint8Array(data)), opts)),
   runString: options3.runString ?? (options3.run ? (handler, opts) => options3.run((data) => handler(decoder2.decode(data)), opts) : (handler, opts) => options3.runRaw((data) => typeof data === "string" ? handler(data) : data instanceof Uint8Array ? handler(decoder2.decode(data)) : handler(decoder2.decode(new Uint8Array(data))), opts)),
@@ -51600,7 +52146,7 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
   const acquireContext = fiber3.context;
   const closeCodeIsError = options3?.closeCodeIsError ?? defaultCloseCodeIsError;
   const runRaw = (handler, opts) => scopedWith2(fnUntraced2(function* (scope3) {
-    const fiberSet = yield* make46().pipe(provide(scope3));
+    const fiberSet = yield* make47().pipe(provide(scope3));
     const ws = yield* provide(acquire, scope3);
     const run5 = yield* provideService2(runtime(fiberSet)(), WebSocket, ws);
     let open3 = false;
@@ -51698,13 +52244,13 @@ var fromWebSocket = (acquire, options3) => withFiber2((fiber3) => {
     }
   }));
   const writer = succeed6(write2);
-  return succeed6(make63({
+  return succeed6(make64({
     runRaw,
     writer
   }));
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/internal/errors.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/internal/errors.js
 var OpenAiErrorBody = /* @__PURE__ */ Struct2({
   error: /* @__PURE__ */ Struct2({
     message: String6,
@@ -51713,12 +52259,16 @@ var OpenAiErrorBody = /* @__PURE__ */ Struct2({
     code: /* @__PURE__ */ optional2(/* @__PURE__ */ NullOr(String6))
   })
 });
-var mapSchemaError2 = /* @__PURE__ */ dual(2, (error2, method) => make45({
+var OpenAiCompatibleErrorBody = /* @__PURE__ */ Struct2({
+  error: String6,
+  code: /* @__PURE__ */ optional2(String6)
+});
+var mapSchemaError2 = /* @__PURE__ */ dual(2, (error2, method) => make46({
   module: "OpenAiClient",
   method,
   reason: InvalidOutputError.fromSchemaError(error2)
 }));
-var mapSseError2 = /* @__PURE__ */ dual(2, (error2, method) => make45({
+var mapSseError2 = /* @__PURE__ */ dual(2, (error2, method) => make46({
   module: "OpenAiClient",
   method,
   reason: new InvalidOutputError({
@@ -51729,7 +52279,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
   const reason = error2.reason;
   switch (reason._tag) {
     case "TransportError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "OpenAiClient",
         method,
         reason: new NetworkError({
@@ -51740,7 +52290,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EncodeError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "OpenAiClient",
         method,
         reason: new NetworkError({
@@ -51751,7 +52301,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "InvalidUrlError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "OpenAiClient",
         method,
         reason: new NetworkError({
@@ -51765,7 +52315,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       return mapStatusCodeError2(reason, method);
     }
     case "DecodeError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "OpenAiClient",
         method,
         reason: new InvalidOutputError({
@@ -51774,7 +52324,7 @@ var mapHttpClientError2 = /* @__PURE__ */ dual(2, (error2, method) => {
       }));
     }
     case "EmptyBodyError": {
-      return fail6(make45({
+      return fail6(make46({
         module: "OpenAiClient",
         method,
         reason: new InvalidOutputError({
@@ -51807,22 +52357,25 @@ var mapStatusCodeError2 = /* @__PURE__ */ fnUntraced2(function* (error2, method)
     json2 = undefined;
   }
   const decoded = decodeUnknownOption2(OpenAiErrorBody)(json2);
+  const compatibleDecoded = decodeUnknownOption2(OpenAiCompatibleErrorBody)(json2);
+  const message = isSome2(decoded) ? decoded.value.error.message : isSome2(compatibleDecoded) ? compatibleDecoded.value.error : undefined;
+  const errorCode = isSome2(decoded) ? decoded.value.error.code ?? null : isSome2(compatibleDecoded) ? compatibleDecoded.value.code ?? null : null;
   const reason = mapStatusCodeToReason2({
     status,
     headers,
-    message: isSome2(decoded) ? decoded.value.error.message : undefined,
+    message,
     http: buildHttpContext2({
       request: request3,
       response,
       body
     }),
     metadata: {
-      errorCode: isSome2(decoded) ? decoded.value.error.code ?? null : null,
+      errorCode,
       errorType: isSome2(decoded) ? decoded.value.error.type ?? null : null,
       requestId: requestId ?? null
     }
   });
-  return yield* make45({
+  return yield* make46({
     module: "OpenAiClient",
     method,
     reason
@@ -51939,8 +52492,15 @@ var mapStatusCodeToReason2 = ({
         },
         http
       });
+    case 402:
+      return new QuotaExhaustedError({
+        metadata: {
+          openai: metadata
+        },
+        http
+      });
     case 429: {
-      if (metadata.errorCode === "insufficient_quota" || metadata.errorType === "insufficient_quota") {
+      if (metadata.errorCode === "insufficient_quota" || metadata.errorType === "insufficient_quota" || metadata.errorCode === "billing_insufficient_balance" || metadata.errorType === "billing_insufficient_balance") {
         return new QuotaExhaustedError({
           metadata: {
             openai: metadata
@@ -51979,12 +52539,12 @@ var mapStatusCodeToReason2 = ({
   }
 };
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiConfig.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiConfig.js
 class OpenAiConfig extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiConfig")) {
-  static getOrUndefined = /* @__PURE__ */ map8(/* @__PURE__ */ context2(), (context4) => context4.mapUnsafe.get(OpenAiConfig.key));
+  static getOrUndefined = /* @__PURE__ */ map8(/* @__PURE__ */ context2(), /* @__PURE__ */ getOrUndefined2(OpenAiConfig));
 }
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiSchema.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiSchema.js
 var UnknownRecord = /* @__PURE__ */ Record(String6, Unknown2);
 var ImageDetail = /* @__PURE__ */ Literals(["low", "high", "auto"]);
 var MessageStatus = /* @__PURE__ */ Literals(["in_progress", "completed", "incomplete"]);
@@ -52339,7 +52899,7 @@ var CreateEmbeddingResponse = /* @__PURE__ */ Struct2({
   }))
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiClient.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiClient.js
 class OpenAiClient extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiClient")) {
 }
 var RedactedOpenAiHeaders = {
@@ -52347,7 +52907,7 @@ var RedactedOpenAiHeaders = {
   OpenAiProject: "OpenAI-Project"
 };
 var withRedactedHeaders2 = /* @__PURE__ */ updateService3(CurrentRedactedNames, /* @__PURE__ */ appendAll(/* @__PURE__ */ Object.values(RedactedOpenAiHeaders)));
-var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
+var make65 = /* @__PURE__ */ fnUntraced2(function* (options3) {
   const baseClient = yield* HttpClient;
   const apiUrl = options3.apiUrl ?? "https://api.openai.com/v1";
   const httpClient = baseClient.pipe(mapRequest(flow(prependUrl(apiUrl), options3.apiKey ? bearerToken(value3(options3.apiKey)) : identity, options3.organizationId ? setHeader(RedactedOpenAiHeaders.OpenAiOrganization, value3(options3.organizationId)) : identity, options3.projectId ? setHeader(RedactedOpenAiHeaders.OpenAiProject, value3(options3.projectId)) : identity, acceptJson)), filterStatusOk2, options3.transformClient ? options3.transformClient : identity);
@@ -52393,13 +52953,13 @@ var make64 = /* @__PURE__ */ fnUntraced2(function* (options3) {
     createEmbedding
   });
 }, withRedactedHeaders2);
-var layer19 = (options3) => effect(OpenAiClient, make64(options3));
+var layer19 = (options3) => effect(OpenAiClient, make65(options3));
 var layerConfig2 = (options3) => effect(OpenAiClient, gen4(function* () {
   const apiKey = isNotUndefined(options3?.apiKey) ? yield* options3.apiKey : undefined;
   const apiUrl = isNotUndefined(options3?.apiUrl) ? yield* options3.apiUrl : undefined;
   const organizationId = isNotUndefined(options3?.organizationId) ? yield* options3.organizationId : undefined;
   const projectId = isNotUndefined(options3?.projectId) ? yield* options3.projectId : undefined;
-  return yield* make64({
+  return yield* make65({
     apiKey,
     apiUrl,
     organizationId,
@@ -52412,7 +52972,7 @@ class OpenAiSocket extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiC
 }
 var makeSocket = /* @__PURE__ */ gen4(function* () {
   const client = yield* OpenAiClient;
-  const tracker = yield* make48;
+  const tracker = yield* make49;
   const socketScope = yield* scope2;
   const makeRequest = flatMap5(OpenAiConfig.getOrUndefined, (config) => {
     const httpClient = isNotUndefined(config?.transformClient) ? config.transformClient(client.client) : client.client;
@@ -52437,7 +52997,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
       const send = (message) => write2(JSON.stringify({
         type: "response.create",
         ...message
-      })).pipe(mapError4((_error) => make45({
+      })).pipe(mapError4((_error) => make46({
         module: "OpenAiClient",
         method: "createResponseStream",
         reason: new NetworkError({
@@ -52460,7 +53020,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
             const status = Number(event.status);
             const error2 = "error" in event ? event.error : event;
             const json2 = JSON.stringify(error2);
-            return fail6(make45({
+            return fail6(make46({
               module: "OpenAiClient",
               method: "createResponseStream",
               reason: reasonFromHttpStatus({
@@ -52482,7 +53042,7 @@ var makeSocket = /* @__PURE__ */ gen4(function* () {
           }
           offerUnsafe(incoming, event);
         } catch {}
-      }).pipe(catchTag3("SocketError", (error2) => make45({
+      }).pipe(catchTag3("SocketError", (error2) => make46({
         module: "OpenAiClient",
         method: "createResponseStream",
         reason: new NetworkError({
@@ -52554,21 +53114,21 @@ var AllEvents = /* @__PURE__ */ Union2([ErrorEvent, ResponseStreamEvent]);
 var decodeEvent2 = /* @__PURE__ */ decodeUnknownSync2(/* @__PURE__ */ fromJsonString2(AllEvents));
 var withWebSocketMode = (effect2) => scopedWith2((scope3) => flatMap5(provide(makeSocket, scope3), (services2) => provideContext2(effect2, services2)));
 var layerWebSocketMode = /* @__PURE__ */ effectContext(makeSocket);
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
 var exports_OpenAiLanguageModel = {};
 __export(exports_OpenAiLanguageModel, {
   withConfigOverride: () => withConfigOverride2,
   model: () => model2,
-  make: () => make65,
+  make: () => make66,
   layer: () => layer20,
   Config: () => Config2
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/Generated.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/Generated.js
 var ModelIdsShared = /* @__PURE__ */ Union2([String6, /* @__PURE__ */ Literals(["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.4-mini-2026-03-17", "gpt-5.4-nano-2026-03-17", "gpt-5.3-chat-latest", "gpt-5.2", "gpt-5.2-2025-12-11", "gpt-5.2-chat-latest", "gpt-5.2-pro", "gpt-5.2-pro-2025-12-11", "gpt-5.1", "gpt-5.1-2025-11-13", "gpt-5.1-codex", "gpt-5.1-mini", "gpt-5.1-chat-latest", "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-2025-08-07", "gpt-5-mini-2025-08-07", "gpt-5-nano-2025-08-07", "gpt-5-chat-latest", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "gpt-4.1-2025-04-14", "gpt-4.1-mini-2025-04-14", "gpt-4.1-nano-2025-04-14", "o4-mini", "o4-mini-2025-04-16", "o3", "o3-2025-04-16", "o3-mini", "o3-mini-2025-01-31", "o1", "o1-2024-12-17", "o1-preview", "o1-preview-2024-09-12", "o1-mini", "o1-mini-2024-09-12", "gpt-4o", "gpt-4o-2024-11-20", "gpt-4o-2024-08-06", "gpt-4o-2024-05-13", "gpt-4o-audio-preview", "gpt-4o-audio-preview-2024-10-01", "gpt-4o-audio-preview-2024-12-17", "gpt-4o-audio-preview-2025-06-03", "gpt-4o-mini-audio-preview", "gpt-4o-mini-audio-preview-2024-12-17", "gpt-4o-search-preview", "gpt-4o-mini-search-preview", "gpt-4o-search-preview-2025-03-11", "gpt-4o-mini-search-preview-2025-03-11", "chatgpt-4o-latest", "codex-mini-latest", "gpt-4o-mini", "gpt-4o-mini-2024-07-18", "gpt-4-turbo", "gpt-4-turbo-2024-04-09", "gpt-4-0125-preview", "gpt-4-turbo-preview", "gpt-4-1106-preview", "gpt-4-vision-preview", "gpt-4", "gpt-4-0314", "gpt-4-0613", "gpt-4-32k", "gpt-4-32k-0314", "gpt-4-32k-0613", "gpt-3.5-turbo", "gpt-3.5-turbo-16k", "gpt-3.5-turbo-0301", "gpt-3.5-turbo-0613", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-16k-0613"])]);
 var ModelIdsResponses = /* @__PURE__ */ Union2([ModelIdsShared, /* @__PURE__ */ Literals(["o1-pro", "o1-pro-2025-03-19", "o3-pro", "o3-pro-2025-06-10", "o3-deep-research", "o3-deep-research-2025-06-26", "o4-mini-deep-research", "o4-mini-deep-research-2025-06-26", "computer-use-preview", "computer-use-preview-2025-03-11", "gpt-5-codex", "gpt-5-pro", "gpt-5-pro-2025-10-06", "gpt-5.1-codex-max"]).annotate({ title: "ResponsesOnlyModel" })]);
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/internal/utilities.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/internal/utilities.js
 var finishReasonMap2 = {
   content_filter: "content-filter",
   function_call: "tool-calls",
@@ -52588,7 +53148,7 @@ var resolveFinishReason2 = (finishReason, hasToolCalls) => {
   return reason;
 };
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiTelemetry.js
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiTelemetry.js
 var addOpenAiRequestAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.openai.request", camelToSnake);
 var addOpenAiResponseAttributes = /* @__PURE__ */ addSpanAttributes("gen_ai.openai.response", camelToSnake);
 var addGenAIAnnotations3 = /* @__PURE__ */ dual(2, (span2, options3) => {
@@ -52603,18 +53163,18 @@ var addGenAIAnnotations3 = /* @__PURE__ */ dual(2, (span2, options3) => {
   }
 });
 
-// node_modules/.bun/@effect+ai-openai@4.0.0-beta.107+572e5a9a9ccc3c07/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
-var formatIssue2 = /* @__PURE__ */ makeFormatterDefault();
+// node_modules/.bun/@effect+ai-openai@4.0.0-rc.110+1d1b44bb2cb1f9cf/node_modules/@effect/ai-openai/dist/OpenAiLanguageModel.js
+var formatIssue3 = /* @__PURE__ */ makeFormatterDefault();
 var ResponseModelIds = ModelIdsResponses.members[1];
 var SharedModelIds = ModelIdsShared.members[1];
 
 class Config2 extends (/* @__PURE__ */ Service()("@effect/ai-openai/OpenAiLanguageModel/Config")) {
 }
-var model2 = (model3, config) => make61("openai", model3, layer20({
+var model2 = (model3, config) => make62("openai", model3, layer20({
   model: model3,
   config
 }));
-var make65 = /* @__PURE__ */ fnUntraced2(function* ({
+var make66 = /* @__PURE__ */ fnUntraced2(function* ({
   model: model3,
   config: providerConfig
 }) {
@@ -52624,7 +53184,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* ({
     return {
       model: model3,
       ...providerConfig,
-      ...services2.mapUnsafe.get(Config2.key)
+      ...getOrUndefined2(services2, Config2)
     };
   });
   const makeRequest = fnUntraced2(function* ({
@@ -52675,7 +53235,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* ({
       request3.previous_response_id = options3.previousResponseId;
     return request3;
   });
-  return yield* make50({
+  return yield* make51({
     codecTransformer: toCodecOpenAI,
     generateText: fnUntraced2(function* (options3) {
       const config = yield* makeConfig;
@@ -52718,7 +53278,7 @@ var make65 = /* @__PURE__ */ fnUntraced2(function* ({
     })))
   });
 });
-var layer20 = (options3) => effect(LanguageModel, make65(options3));
+var layer20 = (options3) => effect(LanguageModel, make66(options3));
 var withConfigOverride2 = /* @__PURE__ */ dual(2, (self, overrides) => flatMap5(serviceOption2(Config2), (config) => provideService2(self, Config2, {
   ...config._tag === "Some" ? config.value : {},
   ...overrides
@@ -52828,7 +53388,7 @@ var prepareMessages2 = /* @__PURE__ */ fnUntraced2(function* ({
                   });
                 }
               } else {
-                return yield* make45({
+                return yield* make46({
                   module: "OpenAiLanguageModel",
                   method: "prepareMessages",
                   reason: new InvalidRequestError({
@@ -52941,7 +53501,7 @@ var prepareMessages2 = /* @__PURE__ */ fnUntraced2(function* ({
               }
               const toolName = toolNameMapper.getProviderName(part.name);
               if (isNotUndefined(localShellTool) && toolName === "local_shell") {
-                const params = yield* decodeUnknownEffect2(localShellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make45({
+                const params = yield* decodeUnknownEffect2(localShellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make46({
                   module: "OpenAiLanguageModel",
                   method: "prepareMessages",
                   reason: new ToolParameterValidationError({
@@ -52960,7 +53520,7 @@ var prepareMessages2 = /* @__PURE__ */ fnUntraced2(function* ({
                 break;
               }
               if (isNotUndefined(shellTool) && toolName === "shell") {
-                const params = yield* decodeUnknownEffect2(shellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make45({
+                const params = yield* decodeUnknownEffect2(shellTool.parametersSchema)(part.params).pipe(mapError4((error2) => make46({
                   module: "OpenAiLanguageModel",
                   method: "prepareMessages",
                   reason: new ToolParameterValidationError({
@@ -53189,7 +53749,7 @@ var makeResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
         const toolName = part.name;
         const toolParams = yield* try_3({
           try: () => unsafeSecureJsonParse(part.arguments),
-          catch: (cause) => make45({
+          catch: (cause) => make46({
             module: "OpenAiLanguageModel",
             method: "makeResponse",
             reason: new ToolParameterValidationError({
@@ -53874,7 +54434,7 @@ var makeStreamResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
             const toolArgs = event.item.arguments;
             const toolParams = yield* try_3({
               try: () => unsafeSecureJsonParse(toolArgs),
-              catch: (cause) => make45({
+              catch: (cause) => make46({
                 module: "OpenAiLanguageModel",
                 method: "makeStreamResponse",
                 reason: new ToolParameterValidationError({
@@ -54175,7 +54735,7 @@ var makeStreamResponse2 = /* @__PURE__ */ fnUntraced2(function* ({
           hasToolCalls = true;
           const toolParams = yield* try_3({
             try: () => unsafeSecureJsonParse(event.arguments),
-            catch: (cause) => make45({
+            catch: (cause) => make46({
               module: "OpenAiLanguageModel",
               method: "makeStreamResponse",
               reason: new ToolParameterValidationError({
@@ -54466,7 +55026,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiCodeInterpreter": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -54481,7 +55041,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiFileSearch": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -54502,7 +55062,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiImageGeneration": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -54523,7 +55083,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiMcp": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -54538,7 +55098,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiWebSearch": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -54553,7 +55113,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         case "OpenAiWebSearchPreview": {
-          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make45({
+          const args2 = yield* decodeUnknownEffect2(openAiTool.argsSchema)(tool.args).pipe(mapError4((error2) => make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new ToolConfigurationError({
@@ -54568,7 +55128,7 @@ var prepareTools2 = /* @__PURE__ */ fnUntraced2(function* ({
           break;
         }
         default: {
-          return yield* make45({
+          return yield* make46({
             module: "OpenAiLanguageModel",
             method: "prepareTools",
             reason: new InvalidRequestError({
@@ -54612,7 +55172,7 @@ var makeItemIdMetadata = (itemId) => isNotUndefined(itemId) ? {
 var makeEncryptedContentMetadata = (encryptedContent) => isNotNullish(encryptedContent) ? {
   encryptedContent
 } : undefined;
-var unsupportedSchemaError2 = (error2, method) => make45({
+var unsupportedSchemaError2 = (error2, method) => make46({
   module: "OpenAiLanguageModel",
   method,
   reason: new UnsupportedSchemaError({
@@ -54701,7 +55261,7 @@ var normalizeMcpToolCall = /* @__PURE__ */ fnUntraced2(function* ({
   }
   const params = yield* try_3({
     try: () => unsafeSecureJsonParse(toolParams),
-    catch: (cause) => make45({
+    catch: (cause) => make46({
       module: "OpenAiLanguageModel",
       method,
       reason: new ToolParameterValidationError({
@@ -54773,7 +55333,7 @@ var getUsageTokenDetail = (details, key) => hasProperty(details, key) && typeof 
 var transformToolCallParams2 = /* @__PURE__ */ fnUntraced2(function* (tools, toolName, toolParams) {
   const tool = tools.find((tool2) => tool2.name === toolName);
   if (isUndefined(tool)) {
-    return yield* make45({
+    return yield* make46({
       module: "OpenAiLanguageModel",
       method: "makeResponse",
       reason: new ToolNotFoundError({
@@ -54786,13 +55346,13 @@ var transformToolCallParams2 = /* @__PURE__ */ fnUntraced2(function* (tools, too
     codec
   } = yield* tryCodecTransform2(tool.parametersSchema, "makeResponse");
   const transform6 = decodeEffect2(codec);
-  return yield* transform6(toolParams).pipe(mapError4((error2) => make45({
+  return yield* transform6(toolParams).pipe(mapError4((error2) => make46({
     module: "OpenAiLanguageModel",
     method: "makeResponse",
     reason: new ToolParameterValidationError({
       toolName,
       toolParams,
-      description: formatIssue2(error2.issue)
+      description: formatIssue3(error2.issue)
     })
   })));
 });
@@ -55059,14 +55619,14 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     let selection;
     if (reviewer.profileFingerprint !== undefined) {
       const source = yield* PullRequestSource;
-      const [snapshot2, profileFingerprint, currentFingerprint] = yield* exports_Effect.all([
+      const [snapshot3, profileFingerprint, currentFingerprint] = yield* exports_Effect.all([
         reviewer.snapshot ?? exports_Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
         reviewer.profileFingerprint,
         reviewer.fingerprint === undefined ? exports_Effect.succeed(undefined) : reviewer.fingerprint.pipe(exports_Effect.map((fingerprint) => fingerprint), exports_Effect.orElseSucceed(() => {
           return;
         }))
       ]);
-      const { metadata, files: fullFiles } = snapshot2;
+      const { metadata, files: fullFiles } = snapshot3;
       const history = options3.priorReviews ?? (yield* PriorReviews);
       const stateAuthenticator = yield* ReviewStateAuthenticator;
       const recovered = stateAuthenticator.status === "unavailable" ? {
