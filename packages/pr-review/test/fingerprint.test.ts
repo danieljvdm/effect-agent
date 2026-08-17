@@ -78,6 +78,27 @@ describe("computeChangesetFingerprint", () => {
       );
     }),
   );
+
+  it.effect("ignores rebase-only hunk coordinate shifts", () =>
+    Effect.gen(function* () {
+      const beforeRebase = ChangedFile.make({
+        ...fileA,
+        patch: "@@ -10,2 +10,3 @@ function configure() {\n const a = 1;\n+const b = 2;",
+      });
+      const afterRebase = ChangedFile.make({
+        ...beforeRebase,
+        patch: "@@ -27,2 +27,3 @@ function configure() {\n const a = 1;\n+const b = 2;",
+      });
+      const changedPatch = ChangedFile.make({
+        ...afterRebase,
+        patch: "@@ -27,2 +27,3 @@ function configure() {\n const a = 1;\n+const b = 3;",
+      });
+
+      const before = yield* computeChangesetFingerprint([beforeRebase], "sig");
+      expect(yield* computeChangesetFingerprint([afterRebase], "sig")).toBe(before);
+      expect(yield* computeChangesetFingerprint([changedPatch], "sig")).not.toBe(before);
+    }),
+  );
 });
 
 describe("plan fingerprint embedding", () => {

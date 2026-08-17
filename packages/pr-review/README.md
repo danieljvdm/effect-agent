@@ -150,8 +150,14 @@ and comparison checks are fail-closed for scope selection: missing, stale,
 incompatible, or truncated state/comparisons produce a visible full-diff
 fallback. An ancestor base advance remains incremental and adds overlapping
 PR paths as affected context; a materially changed base lineage falls back to
-full. Re-running the same covered head skips model execution by default while
-preserving its stored blocking/success conclusion.
+full unless the authenticated accepted-scope fingerprint still matches. That
+fingerprint hashes the ignore-filtered effective diff, patchless base/head
+evidence, PR framing, and review-shaping profile while excluding commit IDs,
+base ancestry, and unified-diff hunk coordinates. Re-running the same covered
+head or a patch-equivalent rebase skips model execution by default while
+preserving its stored blocking/success conclusion and posting no duplicate
+review comments. Missing/corrupt state and any fingerprint or profile mismatch
+review conservatively.
 
 After a new state-bearing Action review posts, prior marker-bearing bot reviews
 are retired by default: their bodies become collapsed, superseded history,
@@ -172,6 +178,9 @@ and with a bounded warning, so the next run safely performs a full review.
 `review-mode: final` is the explicit bounded merge-readiness audit. It reviews
 the full current PR diff and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
+Because equivalence is based on the textual review surface, a base change that
+alters runtime meaning without changing the diff/context is not detectable;
+request `final` mode (or disable unchanged skipping) for that case.
 
 ## Hosts
 

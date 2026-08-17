@@ -85,9 +85,10 @@ inputs:
     default: "never"
   skip-unchanged:
     description: >-
-      Skip model execution when the current head is already the last
-      successfully reviewed head ('true', default), while preserving the
-      stored blocking/success conclusion. Set 'false' to force execution.
+      Skip model execution when the current effective patch matches the last
+      completely reviewed patch ('true', default), including commit-ID-only
+      rebases, while preserving the stored blocking/success conclusion. Set
+      'false' to force execution.
     required: false
     default: "true"
   retire-stale-reviews:
@@ -126,7 +127,7 @@ inputs:
     default: "Info"
 outputs:
   skipped:
-    description: "'true' when the event is not reviewable or the head already has stored coverage."
+    description: "'true' when the event is not reviewable or the effective patch already has stored coverage."
   skip-reason:
     description: "Why the run skipped (set only when skipped is 'true')."
   fingerprint:

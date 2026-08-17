@@ -50,6 +50,15 @@ const RECORD = "\u0001";
 const SECTION = "\u0002";
 
 /**
+ * Unified-diff hunk coordinates describe where a patch applies, not what it
+ * changes. A content-equivalent rebase can shift both coordinates while
+ * leaving every context/addition/deletion line unchanged, so exclude only
+ * those coordinates from the canonical patch representation.
+ */
+const canonicalPatch = (patch: string): string =>
+  patch.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/gm, "@@ -_ +_ @@");
+
+/**
  * Canonical changeset encoding: sorted by path so provider ordering never
  * matters, with every review-relevant field of every file.
  */
@@ -57,7 +66,7 @@ const canonicalChangeset = (files: ReadonlyArray<ChangedFile>): string =>
   files
     .map(
       (file) =>
-        `${file.path}${FIELD}${file.status}${FIELD}${String(file.additions)}${FIELD}${String(file.deletions)}${FIELD}${file.patch ?? ""}${FIELD}${file.reviewBaseContent ?? ""}${FIELD}${file.reviewHeadContent ?? ""}`,
+        `${file.path}${FIELD}${file.status}${FIELD}${String(file.additions)}${FIELD}${String(file.deletions)}${FIELD}${file.patch === undefined ? "" : canonicalPatch(file.patch)}${FIELD}${file.reviewBaseContent ?? ""}${FIELD}${file.reviewHeadContent ?? ""}`,
     )
     .sort()
     .join(RECORD);

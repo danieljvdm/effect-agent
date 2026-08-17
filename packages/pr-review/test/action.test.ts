@@ -26,6 +26,7 @@ import {
   type ReviewActionResult,
 } from "../src/action.ts";
 import {
+  ChangedFile,
   CodeReview,
   InvalidEffortInput,
   planPublication,
@@ -588,6 +589,134 @@ describe("runReviewAction", () => {
       const outputs = yield* Ref.get(harness.written);
       expect(outputs).toContain("skipped=true");
       expect(outputs).toContain("conclusion=blocking");
+    }),
+  );
+
+  it.effect("skips a patch-equivalent rebase without requiring head ancestry", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const reviewedHeadSha = "1".repeat(40);
+      const currentHeadSha = "2".repeat(40);
+      const profileFingerprint = "a".repeat(64);
+      const patchFingerprint = "b".repeat(64);
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 5,
+        title: "Review target",
+        body: "",
+        baseRef: "main",
+        baseSha: "3".repeat(40),
+        headRef: "fix/review",
+        headSha: currentHeadSha,
+        totalChangedFiles: 1,
+      });
+      const file = ChangedFile.make({
+        path: "src/a.ts",
+        status: "modified",
+        additions: 1,
+        deletions: 1,
+        patch: "@@ -8 +8 @@\n-before\n+after",
+      });
+      const state = ReviewState.make({
+        version: 1,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha: "4".repeat(40),
+        headRef: metadata.headRef,
+        reviewedHeadSha,
+        profileFingerprint,
+        acceptedScopeFingerprint: patchFingerprint,
+        reviewedPathCount: 1,
+        unresolvedFindings: [],
+        unresolvedConcerns: [],
+        lastReviewMode: "full",
+      });
+      const invoked = yield* Ref.make(0);
+      const result = yield* runReviewAction(
+        {
+          run: () =>
+            Ref.update(invoked, (count) => count + 1).pipe(
+              Effect.map(() => fakeOutcome("comment")),
+            ),
+          fingerprint: Effect.succeed(patchFingerprint),
+          profileFingerprint: Effect.succeed(profileFingerprint),
+          snapshot: Effect.succeed({ metadata, files: [file] }),
+        },
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.none(), { state: Option.some(state) }),
+        },
+      ).pipe(Effect.provide(harness.layer));
+
+      expect(result._tag).toBe("Skipped");
+      expect(yield* Ref.get(invoked)).toBe(0);
+      const outputs = yield* Ref.get(harness.written);
+      expect(outputs).toContain("effective pull-request patch is unchanged");
+      expect(outputs).toContain("conclusion=success");
+    }),
+  );
+
+  it.effect("reviews a rebased head when the effective patch changed", () =>
+    Effect.gen(function* () {
+      const harness = yield* actionHarness(
+        JSON.stringify({
+          pull_request: { number: 5 },
+          repository: { full_name: "acme/widgets" },
+        }),
+      );
+      const profileFingerprint = "a".repeat(64);
+      const metadata = PullRequestMetadata.make({
+        repository: "acme/widgets",
+        number: 5,
+        title: "Review target",
+        body: "",
+        baseRef: "main",
+        baseSha: "3".repeat(40),
+        headRef: "fix/review",
+        headSha: "2".repeat(40),
+        totalChangedFiles: 0,
+      });
+      const state = ReviewState.make({
+        version: 1,
+        repository: metadata.repository,
+        pullRequestNumber: metadata.number,
+        baseRef: metadata.baseRef,
+        baseSha: "4".repeat(40),
+        headRef: metadata.headRef,
+        reviewedHeadSha: "1".repeat(40),
+        profileFingerprint,
+        acceptedScopeFingerprint: "b".repeat(64),
+        reviewedPathCount: 0,
+        unresolvedFindings: [],
+        unresolvedConcerns: [],
+        lastReviewMode: "full",
+      });
+      const invoked = yield* Ref.make(0);
+      const result = yield* runReviewAction(
+        {
+          run: () =>
+            Ref.update(invoked, (count) => count + 1).pipe(
+              Effect.map(() => fakeOutcome("comment")),
+            ),
+          fingerprint: Effect.succeed("c".repeat(64)),
+          profileFingerprint: Effect.succeed(profileFingerprint),
+          snapshot: Effect.succeed({ metadata, files: [] }),
+        },
+        {
+          post: false,
+          priorReviews: staticPriorReviews(Option.none(), { state: Option.some(state) }),
+        },
+      ).pipe(Effect.provide(harness.layer));
+
+      expect(result._tag).toBe("Completed");
+      expect(yield* Ref.get(invoked)).toBe(1);
+      expect(yield* Ref.get(harness.written)).toContain("skipped=false");
     }),
   );
 });
