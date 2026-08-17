@@ -262,16 +262,27 @@ effectful Tool without durable evidence is forbidden.
 
 Context preparation:
 
-1. Project canonical/ephemeral Conversation Messages.
-2. Apply stable system instructions.
-3. Apply ordered context transforms.
-4. Calculate window/budget.
-5. Compact if policy requires.
-6. Produce normalized Model Input.
+1. Reconstruct canonical/ephemeral Conversation Messages and append stable instructions/input.
+2. On a durable resume, replace the re-evaluated history prefix with the canonical run-journal
+   projection.
+3. Apply the optional host `RunContextPreparation` service to the resulting immutable source.
+4. Calculate window/budget over that model-visible result.
+5. Compact with the engine-native policy if required.
+6. Append derived run status and the final-output contract and produce normalized Model Input.
 
 Official prior history remains the exact prefix of the newly materialized Run history. Evaluated
 instructions and the current decoded input append after that prefix; a new Run must never prepend,
 rewrite, or reorder already-official messages.
+
+`RunContextPreparation` is a generic Effect service, not a Conversation store. Its optional hook
+receives stable Run/Turn identities, the immutable source `Prompt`, and the rendered
+output-contract text when available; it returns only the prompt for the next model call. An absent
+hook is the original pass-through behavior. `DurableAgentRuntime.layerWithContext` exposes the
+service in its Layer requirement; `DurableAgentRuntime.layer` explicitly supplies
+`RunContextPreparationPassthrough` for compatibility. Coordinators always apply journal
+reconstruction before a host hook, so an ownership retry or a new host incarnation cannot let a
+transform bypass canonical committed Turns. The returned prompt is never assigned to official
+history and cannot enter canonical records.
 
 ### Window and budget calculation
 
@@ -323,7 +334,9 @@ than the record; the record is canonical. A threshold compaction with no prior-R
 cover commits no record and applies only in-view. Compaction appends or emits a summary representation and
 preserves the source history; failed compaction leaves the original history authoritative.
 Host-supplied, digest-bound compaction artifacts remain available through the capabilities layer
-([capabilities §6](./capabilities.md)).
+([capabilities §6](./capabilities.md)). They shape each model request through
+`RunContextPreparation`; unlike `CompactionCreated`, the supplied artifact itself is not canonical
+and is recomputed after restart from the canonical source.
 
 ### Budget warnings and the token soft landing
 

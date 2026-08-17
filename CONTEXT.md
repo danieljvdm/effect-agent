@@ -163,6 +163,9 @@ Limit — pruning old Tool results, then summarizing through one metered model c
 each compaction in the DN and DC assemblies as a canonical `CompactionCreated` record that
 projections fold
 (RUN-026). Host-supplied, digest-bound compaction artifacts remain a separate capability.
+Cloudflare Conversation Objects may install that capability through a scoped, generic
+`RunContextPreparation` Layer; it runs after canonical resume reconstruction and changes only the
+model-visible prompt, so eviction rebuilds it without making its artifact authoritative.
 
 **Context Token Limit**  
 The optional `AgentPolicy.contextTokenLimit` bound on one model call's live context, supplied by

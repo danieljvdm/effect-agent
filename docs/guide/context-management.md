@@ -130,6 +130,32 @@ and issues at most one framework-level retry (transport ambiguity can still dupl
 external call); a second rejection — or overflow with no `contextTokenLimit` configured — fails
 typed with `ContextOverflowError` instead of an opaque provider error.
 
+### Supplying a Cloudflare compactor
+
+Cloudflare Conversation Objects can install a host compactor without putting it in global state.
+Build your `ContextCompactor` as a Layer, close its model/configuration dependencies from the Worker
+environment, and adapt it through `contextCompactorRunContextLayer`:
+
+```ts
+export class Conversations extends makeConversationObjectClass({
+  namespaceBinding: "CONVERSATIONS",
+  deploymentId: "production",
+  producerPrefix: "conversation",
+  bindings: makeBindings,
+  runContext: ({ env }) =>
+    contextCompactorRunContextLayer.pipe(
+      Layer.provide(makeContextCompactorLayer(env)),
+    ),
+});
+```
+
+The returned Layer may still require `Crypto.Crypto`; the Cloudflare assembly supplies
+`BrowserCrypto`. Everything specific to your compactor must already be provided. The Layer is
+acquired once per Durable Object incarnation and rebuilt after eviction. Each call receives the
+canonical reconstructed prompt, and its digest-bound artifact changes only the next model request;
+the original messages remain in canonical history. Expected compactor failures settle as
+`RunContextPreparationError`; defects remain defects for the host to supervise.
+
 ## Observing usage
 
 The budget hook's snapshot is cache-aware and context-aware:

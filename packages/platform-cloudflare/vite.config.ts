@@ -50,6 +50,10 @@ export default defineConfig({
                   className: "TelemetryConversationObject",
                   useSQLite: true,
                 },
+                CONTEXT_COMPACTOR: {
+                  className: "ContextCompactorConversationObject",
+                  useSQLite: true,
+                },
               },
             },
           }),

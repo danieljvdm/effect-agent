@@ -33973,6 +33973,17 @@ class RunEventSinkClosedError extends exports_Schema.TaggedError()("RunEventSink
 
 class RunEventSink extends exports_Context.Service()("@effect-agent/engine/RunEventSink") {
 }
+// packages/engine/src/run-options.ts
+class RunContextPreparationError extends exports_Schema.TaggedError()("RunContextPreparationError", {
+  preparerId: exports_Schema.NonEmptyString,
+  message: exports_Schema.String.check(exports_Schema.isMaxLength(4096)),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+
+class RunContextPreparation extends exports_Context.Service()("@effect-agent/engine/RunContextPreparation") {
+}
+var RunContextPreparationPassthrough = exports_Layer.succeed(RunContextPreparation)({});
 // packages/engine/src/tool-broker.ts
 class ToolBrokerUnavailableError extends exports_Schema.TaggedError()("ToolBrokerUnavailableError", {
   message: exports_Schema.String
@@ -37255,6 +37266,22 @@ class ContextLimitExceeded extends exports_Schema.TaggedError()("ContextLimitExc
 
 class ContextCompactor extends exports_Context.Service()("@effect-agent/capabilities/ContextCompactor") {
 }
+var messageText = (message) => {
+  if (message.role === "system")
+    return message.content;
+  const content = message.content.map((part) => {
+    if (part.type === "text" || part.type === "reasoning")
+      return part.text;
+    return `[${part.type}]`;
+  }).join(`
+`);
+  return content.slice(0, 64 * 1024);
+};
+var asModelMessages = (snapshot2) => snapshot2.messages.map((entry) => ModelContextMessage.make({
+  role: entry.message.role,
+  content: messageText(entry.message),
+  sourceSequences: [entry.sequence]
+}));
 var validateModelView = (messages, transformId) => {
   if (messages.length > MAX_CONTEXT_MESSAGES) {
     return exports_Effect.fail(ContextTransformError.make({
@@ -37268,6 +37295,11 @@ var validateModelView = (messages, transformId) => {
     message: `Transform produced ${bytes} UTF-8 bytes; maximum is ${MAX_CONTEXT_MESSAGE_BYTES}`
   })) : exports_Effect.succeed(messages);
 };
+var prepareModelContext = (snapshot2, transforms = []) => transforms.reduce((messages, transform3) => messages.pipe(exports_Effect.flatMap(transform3.apply), exports_Effect.flatMap((transformed) => validateModelView(transformed, transform3.id))), exports_Effect.succeed(asModelMessages(snapshot2))).pipe(exports_Effect.map((messages) => PreparedModelContext.make({
+  source: snapshot2,
+  messages,
+  compactions: []
+})));
 var exactSourceRange = (snapshot2, coversFrom, coversThrough) => {
   if (coversFrom > coversThrough || coversThrough >= snapshot2.nextSequence) {
     return exports_Effect.fail(InvalidCompactionArtifact.make({
@@ -37421,6 +37453,106 @@ var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(fun
     onHistory: (history) => conversations.recordHistory(conversationId, runId, history).pipe(exports_Effect.asVoid)
   };
 });
+var CONTEXT_COMPACTOR_PREPARER_ID = "@effect-agent/capabilities/ContextCompactor";
+var DETERMINISTIC_CONTEXT_TIMESTAMP = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(0));
+var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var failureTag = (error2) => {
+  if (exports_Schema.isSchemaError(error2))
+    return "SchemaError";
+  if (exports_Schema.is(ContextTransformError)(error2))
+    return "ContextTransformError";
+  if (exports_Schema.is(CompactionDigestError)(error2))
+    return "CompactionDigestError";
+  if (exports_Schema.is(InvalidCompactionArtifact)(error2))
+    return "InvalidCompactionArtifact";
+  if (exports_Schema.is(ContextLimitExceeded)(error2))
+    return "ContextLimitExceeded";
+  return "UnknownContextPreparationFailure";
+};
+var contextPreparationError = (error2) => exports_Schema.is(RunContextPreparationError)(error2) ? error2 : RunContextPreparationError.make({
+  preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
+  message: `Context compaction failed (${failureTag(error2)})`,
+  cause: error2
+});
+var snapshotFromRunContext = exports_Effect.fn("snapshotFromRunContext")(function* (request3) {
+  const messages = yield* exports_Effect.forEach(request3.source.content, (message, sequence) => exports_Schema.encodeEffect(exports_Prompt.Message)(message).pipe(exports_Effect.map((encoded) => JSON.stringify(encoded)), exports_Effect.map((encoded) => ConversationMessage.make({
+    conversationId: request3.conversationId,
+    sequence,
+    message,
+    encodedBytes: encodedBytes2(encoded),
+    timestamp: DETERMINISTIC_CONTEXT_TIMESTAMP
+  }))));
+  const snapshot2 = ConversationSnapshot.make({
+    version: 1,
+    conversationId: request3.conversationId,
+    nextSequence: messages.length,
+    contentBytes: messages.reduce((total, message) => total + message.encodedBytes, 0),
+    messages
+  });
+  yield* exports_Schema.encodeEffect(ConversationSnapshot)(snapshot2);
+  return snapshot2;
+});
+var summaryPromptMessage = (summary2) => {
+  switch (summary2.role) {
+    case "system":
+      return exports_Effect.succeed(exports_Prompt.systemMessage({ content: summary2.content }));
+    case "user":
+      return exports_Effect.succeed(exports_Prompt.userMessage({ content: [exports_Prompt.textPart({ text: summary2.content })] }));
+    case "assistant":
+      return exports_Effect.succeed(exports_Prompt.assistantMessage({ content: [exports_Prompt.textPart({ text: summary2.content })] }));
+    case "tool":
+      return exports_Effect.fail(RunContextPreparationError.make({
+        preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
+        message: "Context compaction produced a tool-role prose summary, which cannot form a native Effect AI ToolMessage"
+      }));
+  }
+};
+var startsCorrelatedToolBlock = (message) => message.role === "assistant" && message.content.some((part) => part.type === "tool-call" || part.type === "tool-approval-request");
+var validateCompactionBoundary = (prompt, coversFrom, coversThrough) => {
+  const isCovered = (index2) => index2 >= coversFrom && index2 <= coversThrough;
+  for (let index2 = 0;index2 < prompt.content.length; index2 += 1) {
+    const message = prompt.content[index2];
+    if (message === undefined || !startsCorrelatedToolBlock(message))
+      continue;
+    const covered = isCovered(index2);
+    let following = index2 + 1;
+    while (prompt.content[following]?.role === "tool") {
+      if (isCovered(following) !== covered) {
+        return exports_Effect.fail(RunContextPreparationError.make({
+          preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
+          message: "Context compaction coverage splits a native Tool call/result or approval pair"
+        }));
+      }
+      following += 1;
+    }
+  }
+  return exports_Effect.void;
+};
+var prepareWithContextCompactor = exports_Effect.fn("prepareWithContextCompactor")(function* (request3, compactor) {
+  const snapshot2 = yield* snapshotFromRunContext(request3);
+  const source = yield* prepareModelContext(snapshot2);
+  const artifact = yield* compactor.compact(snapshot2);
+  yield* exports_Schema.encodeEffect(CompactionArtifact)(artifact);
+  yield* applyCompaction(source, artifact);
+  yield* validateCompactionBoundary(request3.source, artifact.coversFrom, artifact.coversThrough);
+  const summary2 = yield* summaryPromptMessage(artifact.summary);
+  return {
+    prompt: exports_Prompt.fromMessages([
+      ...request3.source.content.slice(0, artifact.coversFrom),
+      summary2,
+      ...request3.source.content.slice(artifact.coversThrough + 1)
+    ])
+  };
+});
+var contextCompactorRunContextLayer = exports_Layer.effect(RunContextPreparation, exports_Effect.gen(function* () {
+  const compactor = yield* ContextCompactor;
+  const crypto2 = yield* exports_Crypto.Crypto;
+  return RunContextPreparation.of({
+    hook: {
+      prepare: (request3) => prepareWithContextCompactor(request3, compactor).pipe(exports_Effect.provideService(exports_Crypto.Crypto, crypto2), exports_Effect.mapError(contextPreparationError))
+    }
+  });
+}));
 var RunApprovalAdapterPolicySchema = exports_Schema.Struct({
   expiresInMillis: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
   risk: exports_Schema.Literals(["low", "medium", "high", "critical"]),
@@ -38117,7 +38249,7 @@ class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpD
 
 class McpConnector extends exports_Context.Service()("@effect-agent/capabilities/McpConnector") {
 }
-var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
+var encodedBytes3 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
 var canonicalJson = (value4) => {
   if (value4 === null || typeof value4 === "string" || typeof value4 === "boolean" || typeof value4 === "number") {
     return value4;
@@ -38173,7 +38305,7 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
     });
   }
   for (const tool of server.tools) {
-    const descriptionBytes = encodedBytes2(tool.description ?? "");
+    const descriptionBytes = encodedBytes3(tool.description ?? "");
     if (descriptionBytes > request3.maxToolDescriptionBytes) {
       return yield* McpDiscoveryLimitExceeded.make({
         serverId: request3.serverId,
@@ -38242,7 +38374,7 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
     serverId: request3.serverId,
     message: `Could not serialize MCP discovery response: ${error2.message}`
   })));
-  const discoveryBytes = encodedBytes2(discoveryText);
+  const discoveryBytes = encodedBytes3(discoveryText);
   if (discoveryBytes > request3.maxDiscoveryBytes) {
     return yield* McpDiscoveryLimitExceeded.make({
       serverId: request3.serverId,
@@ -44036,7 +44168,7 @@ var telemetryLine = (message, annotations2) => {
 var formatCompactLogLine = (record2) => {
   const time2 = record2.date.toISOString().slice(11, 19);
   const messages = Array.isArray(record2.message) ? record2.message : [record2.message];
-  const messageText = messages.map(asText).join(" ");
+  const messageText2 = messages.map(asText).join(" ");
   const mapped = messages.length === 1 && exports_Predicate.isString(messages[0]) ? telemetryLine(messages[0], record2.annotations) : undefined;
   const tag2 = levelTag[record2.logLevel];
   let line;
@@ -44045,7 +44177,7 @@ var formatCompactLogLine = (record2) => {
   } else {
     const isSevere = record2.logLevel === "Warn" || record2.logLevel === "Error" || record2.logLevel === "Fatal";
     const annotations2 = isSevere ? annotationText(record2.annotations) : "";
-    line = `[${time2}] ${tag2 === undefined ? "" : `${tag2} `}${messageText}${annotations2 === "" ? "" : ` · ${annotations2}`}`;
+    line = `[${time2}] ${tag2 === undefined ? "" : `${tag2} `}${messageText2}${annotations2 === "" ? "" : ` · ${annotations2}`}`;
   }
   return record2.cause === undefined ? line : `${line}
 ${record2.cause}`;

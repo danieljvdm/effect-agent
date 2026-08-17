@@ -18,6 +18,7 @@ import {
 import { decodeConversationId, supplierCountsFor, supplierValuesFor } from "./fixtures.ts";
 import type {
   ArrayBindingsConversationObject,
+  ContextCompactorConversationObject,
   DynamicBindingsConversationObject,
   DeniedConversationObject,
   EffectBindingsConversationObject,
@@ -40,6 +41,7 @@ declare global {
       ARRAY_BINDINGS: DurableObjectNamespace<ArrayBindingsConversationObject>;
       EFFECT_BINDINGS: DurableObjectNamespace<EffectBindingsConversationObject>;
       TELEMETRY: DurableObjectNamespace<TelemetryConversationObject>;
+      CONTEXT_COMPACTOR: DurableObjectNamespace<ContextCompactorConversationObject>;
     }
   }
 }
@@ -60,7 +62,8 @@ export type TestNamespace =
   | "DYNAMIC_BINDINGS"
   | "ARRAY_BINDINGS"
   | "EFFECT_BINDINGS"
-  | "TELEMETRY";
+  | "TELEMETRY"
+  | "CONTEXT_COMPACTOR";
 
 /** A FRESH stub for the named Conversation (never cache stubs across aborts). */
 export const stubFor = (conversation: string, namespace: TestNamespace = "CONVERSATIONS") => {

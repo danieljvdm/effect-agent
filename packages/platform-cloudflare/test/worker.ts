@@ -12,6 +12,7 @@ import {
   PRODUCER_PREFIX,
   fixtureReconcilerLayer,
   maintenanceRaceFailpoint,
+  makeContextCompactorRunContextLayer,
   makeTestBindings,
   runtimeEvictionFailpoint,
   storageEvictionFailpoint,
@@ -228,6 +229,13 @@ export class EffectBindingsConversationObject extends makeConversationObjectClas
     return "effect";
   }
 }
+
+/** Issue #49: a scoped run-context Layer captured once per Object incarnation. */
+export class ContextCompactorConversationObject extends makeConversationObjectClass({
+  ...baseOptions,
+  namespaceBinding: "CONTEXT_COMPACTOR",
+  runContext: ({ conversationId }) => makeContextCompactorRunContextLayer(conversationId),
+}) {}
 
 /** Minimal integration proof that effect-cf owns native RPC event scopes and OTLP flushing. */
 export class TelemetryConversationObject extends makeConversationObjectClass(

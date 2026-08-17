@@ -147,19 +147,35 @@ covered records into the summary or the cleared-result marker, and an invalid ra
 fail-safe. No source digest is carried: the record is appended by the fenced owner into the log
 it covers, and re-verifying a digest would re-read the whole covered range on every wake.
 
-**Host-supplied compaction artifacts** cross a trust boundary and stay digest-bound. A host
-compactor returns:
+**Host-supplied compaction artifacts** cross a trust boundary and stay digest-bound. The
+`ContextCompactor` capability returns a versioned `CompactionArtifact` with an explicit inclusive
+source range:
 
 ```ts
 interface CompactionResult {
+  readonly coversFrom: ConversationSequence;
   readonly coversThrough: ConversationSequence;
-  readonly summary: ModelMessage;
+  readonly summary: ModelContextMessage;
   readonly retainedFacts: ReadonlyArray<RetainedFact>;
   readonly tokenEstimate: number;
   readonly sourceDigest: Digest;
   readonly compactorVersion: string;
 }
 ```
+
+`contextCompactorRunContextLayer` adapts that capability to the generic engine
+`RunContextPreparation` service. The adapter captures `ContextCompactor` and `Crypto.Crypto` at
+Layer acquisition, projects the native Effect AI prompt to a deterministic `ConversationSnapshot`
+(prompt index is source sequence and timestamps are fixed), verifies the returned artifact with
+`applyCompaction`, and substitutes only the covered messages in the model-visible prompt. Native
+uncovered messages, parts, and provider options pass through unchanged. A prose summary may use
+the system, user, or assistant role; a tool-role prose summary fails typed because it cannot form a
+valid native `ToolMessage` without inventing a Tool result. Coverage that would split a native Tool
+call/result or approval request/response correlation also fails typed.
+
+The adapter maps expected capability/schema/digest failures to `RunContextPreparationError` with
+the original failure as its live `cause`. Defects remain defects. Durable settlement stores only
+the existing bounded `{ errorTag, message }` projection, never the cause object.
 
 Requirements:
 

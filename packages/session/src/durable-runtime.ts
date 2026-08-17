@@ -23,6 +23,9 @@ import {
   AgentChildPending,
   AgentRuntime,
   getToolExecutionClass,
+  RunContextPreparation,
+  RunContextPreparationPassthrough,
+  type RunContextPreparationError,
   type AgentRuntimeRequirements,
   type ChildEstablishStatus,
   type RunApprovalHook,
@@ -796,6 +799,9 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const reconciler = yield* ToolReconciler;
   const approvalResolver = yield* DurableApprovalResolver;
+  // Generic model-context preparation is an explicit Layer requirement. Compatible assemblies
+  // provide `RunContextPreparationPassthrough`; custom assemblies provide a scoped hook.
+  const runContextPreparation = yield* RunContextPreparation;
   // Possession-default authorization reference (P7 WP1): the default allows everything —
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
   // consulted fail-closed by observe, the admin operations, and the two resolution paths.
@@ -3121,6 +3127,27 @@ const make = Effect.gen(function* () {
           ),
       };
 
+      const externalContext = runContextPreparation.hook;
+      const preparedContext: RunContextHook<RunContextPreparationError, never> | undefined =
+        externalContext === undefined
+          ? journal.committedTurns === 0
+            ? undefined
+            : resumeContext
+          : {
+              prepare: (request) =>
+                (journal.committedTurns === 0
+                  ? Effect.succeed({ prompt: request.source })
+                  : resumeContext.prepare(request)
+                ).pipe(
+                  Effect.flatMap(({ prompt }) =>
+                    externalContext.prepare({
+                      ...request,
+                      source: prompt,
+                    }),
+                  ),
+                ),
+            };
+
       const durability: RunDurabilityHook<CoordinatorHalt, never> = {
         commitResponse: (commit) =>
           recordHalt(
@@ -4026,7 +4053,7 @@ const make = Effect.gen(function* () {
         join: joinSubagent,
       };
 
-      const options: RunOptions<CoordinatorHalt, never> = {
+      const options: RunOptions<CoordinatorHalt | RunContextPreparationError, never> = {
         conversationId: submission.conversationId,
         runId,
         history: pending === undefined ? journal.historyBefore : resumeProjection.historyBefore,
@@ -4052,9 +4079,8 @@ const make = Effect.gen(function* () {
                   : { leadingMessages: resumeLeadingMessages }),
               },
             }),
-        ...(journal.committedTurns === 0
-          ? {}
-          : { context: resumeContext, resumeUsage: journal.usage }),
+        ...(preparedContext === undefined ? {} : { context: preparedContext }),
+        ...(journal.committedTurns === 0 ? {} : { resumeUsage: journal.usage }),
       };
 
       const commitPendingTurn: Effect.Effect<void, DurableWorkerFailure> = Effect.gen(function* () {
@@ -6751,6 +6777,21 @@ export class DurableAgentRuntime extends Context.Service<
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
   }
 >()("@effect-agent/session/DurableAgentRuntime") {
+  /** Generic assembly whose model-context dependency remains visible in `R`. */
+  static readonly layerWithContext: Layer.Layer<
+    DurableAgentRuntime,
+    never,
+    | SubmissionLedger
+    | ConversationStore
+    | WakeScheduler
+    | DurableRuntimeFailpoint
+    | DurableRuntimeConfig
+    | ToolReconciler
+    | RunContextPreparation
+    | Crypto.Crypto
+  > = Layer.effect(DurableAgentRuntime)(make);
+
+  /** Compatible default assembly with no host context hook. */
   static readonly layer: Layer.Layer<
     DurableAgentRuntime,
     never,
@@ -6761,5 +6802,5 @@ export class DurableAgentRuntime extends Context.Service<
     | DurableRuntimeConfig
     | ToolReconciler
     | Crypto.Crypto
-  > = Layer.effect(DurableAgentRuntime)(make);
+  > = DurableAgentRuntime.layerWithContext.pipe(Layer.provide(RunContextPreparationPassthrough));
 }

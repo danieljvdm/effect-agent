@@ -1,4 +1,5 @@
 import { ConversationId } from "@effect-agent/core";
+import { RunContextPreparation, RunContextPreparationPassthrough } from "@effect-agent/engine";
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
@@ -28,7 +29,7 @@ import {
 } from "@effect-agent/storage-cloudflare";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Context, Duration, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 
 import {
   ConversationMaintenance,
@@ -117,15 +118,24 @@ export interface CloudflareDurableRuntimeOptions {
    * to the empty registration (every resolved claim fails closed).
    */
   readonly bindings?: CloudflareBindingSource | undefined;
+  /**
+   * Generic model-context preparation acquired with this Durable Object incarnation. The Layer
+   * may depend only on `Crypto.Crypto`, which this platform supplies with `BrowserCrypto`; hosts
+   * must close every application-specific service before passing it here. Default absent.
+   */
+  readonly runContext?: CloudflareRunContextSource | undefined;
 }
 
-/** Per-incarnation host values available while registered worker Bindings are captured. */
-export interface CloudflareBindingSourceContext {
+/** Per-incarnation host values available to Effect-native runtime extension factories. */
+export interface CloudflareRuntimeSourceContext {
   readonly ctx: DurableObjectState;
   readonly env: unknown;
   readonly conversationId: ConversationId;
   readonly producerId: ProducerId;
 }
+
+/** Per-incarnation host values available while registered worker Bindings are captured. */
+export interface CloudflareBindingSourceContext extends CloudflareRuntimeSourceContext {}
 
 /**
  * Registered worker Bindings, or a closed Effect/callback that captures them once for each
@@ -139,6 +149,14 @@ export type CloudflareBindingSource =
     ) =>
       | ReadonlyArray<ResolvedBinding>
       | Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>);
+
+/** A closed context-preparation service whose only remaining requirement is platform Crypto. */
+export type CloudflareRunContextLayer = Layer.Layer<RunContextPreparation, never, Crypto.Crypto>;
+
+/** One Layer or a per-incarnation factory over explicit Cloudflare host values. */
+export type CloudflareRunContextSource =
+  | CloudflareRunContextLayer
+  | ((context: CloudflareRuntimeSourceContext) => CloudflareRunContextLayer);
 
 /** Every construction failure of the assembled Cloudflare durable runtime stack. */
 export type CloudflareDurableRuntimeInitializationError =
@@ -256,6 +274,11 @@ const resolveBindings = (
           })
         : Effect.succeed(source);
 
+const resolveRunContext = (
+  source: CloudflareRunContextSource,
+  context: CloudflareRuntimeSourceContext,
+): CloudflareRunContextLayer => (typeof source === "function" ? source(context) : source);
+
 /**
  * The DC Layer assembly (deployment §12: a Layer-assembly library, not an app entrypoint;
  * plan §1.4). `layer(options)` decodes the configuration, derives this Object's Conversation
@@ -372,6 +395,12 @@ export class CloudflareDurableRuntime {
             (bindings) => AgentBindingResolver.fromBindings(bindings),
           ),
         );
+        const runContextLayer =
+          options.runContext === undefined
+            ? RunContextPreparationPassthrough
+            : resolveRunContext(options.runContext, { ctx, env, conversationId, producerId }).pipe(
+                Layer.provide(BrowserCrypto.layer),
+              );
 
         const base = Layer.mergeAll(
           identityLayer,
@@ -381,7 +410,7 @@ export class CloudflareDurableRuntime {
           ProgressWaitRegistry.layer,
         );
 
-        const runtimeStack = DurableAgentRuntime.layer.pipe(
+        const runtimeStack = DurableAgentRuntime.layerWithContext.pipe(
           Layer.provideMerge(routedPorts),
           Layer.provideMerge(cloudflareWakeSchedulerLayer),
           Layer.provideMerge(runtimeConfigLayer),
@@ -391,6 +420,7 @@ export class CloudflareDurableRuntime {
               runtimeFailpointLayer,
               reconcilerLayer,
               authorizerLayer,
+              runContextLayer,
               BrowserCrypto.layer,
             ),
           ),

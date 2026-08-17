@@ -1,3 +1,11 @@
+import {
+  CompactionArtifact,
+  ContextCompactor,
+  ContextTransformError,
+  ModelContextMessage,
+  contextCompactorRunContextLayer,
+  digestCompactionSource,
+} from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
 import { DurableStep, DurableStepError, ToolExecutionClass } from "@effect-agent/engine";
 import {
@@ -20,7 +28,7 @@ import {
   type DoStorageFailpointHandler,
   type DoStorageFailpointLocation,
 } from "@effect-agent/storage-cloudflare";
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Crypto, Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 import type {
@@ -288,6 +296,117 @@ export const submitOptions = (
 });
 
 // ---------------------------------------------------------------------------
+// Host-supplied context preparation (issue #49)
+// ---------------------------------------------------------------------------
+
+const COMPACTION_MARKER = "[host-compacted-context]";
+const COMPACTION_FAILURE_MARKER = "[host-compactor-failure]";
+
+export interface ContextCompactorProbe {
+  readonly acquisitions: number;
+  readonly releases: number;
+  readonly invocations: number;
+  readonly sourceMessageCounts: ReadonlyArray<number>;
+}
+
+const contextCompactorProbes = new Map<string, ContextCompactorProbe>();
+
+const updateContextCompactorProbe = (
+  conversationId: string,
+  update: (probe: ContextCompactorProbe) => ContextCompactorProbe,
+): void => {
+  contextCompactorProbes.set(
+    conversationId,
+    update(
+      contextCompactorProbes.get(conversationId) ?? {
+        acquisitions: 0,
+        releases: 0,
+        invocations: 0,
+        sourceMessageCounts: [],
+      },
+    ),
+  );
+};
+
+export const contextCompactorProbe = (conversationId: string): ContextCompactorProbe =>
+  contextCompactorProbes.get(conversationId) ?? {
+    acquisitions: 0,
+    releases: 0,
+    invocations: 0,
+    sourceMessageCounts: [],
+  };
+
+const contextCompactorLayer = (conversationId: string) =>
+  Layer.effect(
+    ContextCompactor,
+    Effect.acquireRelease(
+      Effect.gen(function* () {
+        const crypto = yield* Crypto.Crypto;
+        yield* Effect.sync(() =>
+          updateContextCompactorProbe(conversationId, (probe) => ({
+            ...probe,
+            acquisitions: probe.acquisitions + 1,
+          })),
+        );
+        return ContextCompactor.of({
+          compact: (snapshot) =>
+            Effect.gen(function* () {
+              yield* Effect.sync(() =>
+                updateContextCompactorProbe(conversationId, (probe) => ({
+                  ...probe,
+                  invocations: probe.invocations + 1,
+                  sourceMessageCounts: [...probe.sourceMessageCounts, snapshot.messages.length],
+                })),
+              );
+              const sourceText = JSON.stringify(snapshot.messages.map((entry) => entry.message));
+              if (sourceText.includes(COMPACTION_FAILURE_MARKER)) {
+                return yield* ContextTransformError.make({
+                  transformId: "cloudflare-test-compactor",
+                  message: "the host compactor refused this context",
+                });
+              }
+              const sourceDigest = yield* digestCompactionSource(snapshot, 0, 0).pipe(
+                Effect.provideService(Crypto.Crypto, crypto),
+                Effect.mapError((error) =>
+                  ContextTransformError.make({
+                    transformId: "cloudflare-test-compactor",
+                    message: error.message,
+                  }),
+                ),
+              );
+              return CompactionArtifact.make({
+                version: 1,
+                conversationId: snapshot.conversationId,
+                coversFrom: 0,
+                coversThrough: 0,
+                summary: ModelContextMessage.make({
+                  role: "system",
+                  content: COMPACTION_MARKER,
+                  sourceSequences: [0],
+                }),
+                retainedFacts: [],
+                tokenEstimate: 4,
+                sourceDigest,
+                compactorVersion: "cloudflare-test-compactor@1",
+              });
+            }),
+        });
+      }),
+      () =>
+        Effect.sync(() =>
+          updateContextCompactorProbe(conversationId, (probe) => ({
+            ...probe,
+            releases: probe.releases + 1,
+          })),
+        ),
+    ),
+  );
+
+/** A closed generic run-context Layer; BrowserCrypto remains owned by the platform assembly. */
+export const makeContextCompactorRunContextLayer = (conversationId: string) =>
+  contextCompactorRunContextLayer.pipe(Layer.provide(contextCompactorLayer(conversationId)));
+
+// ---------------------------------------------------------------------------
 // Scripted prompt-aware models
 // ---------------------------------------------------------------------------
 
@@ -386,6 +505,15 @@ const fixturePolicy = AgentPolicy.make({
 
 /** No tools: one final model response per Run. */
 export const plannerDefinition = Agent.define("cf-planner", {
+  input: FixtureInput,
+  output: FixtureOutput,
+  instructions: ({ question, ref }) => `Answer ${question} as JSON. [ref:${ref}]`,
+  toolkit: Toolkit.empty,
+  policy: fixturePolicy,
+});
+
+/** Issue #49 fixture: its result proves which prompt crossed the real model boundary. */
+export const contextCompactorDefinition = Agent.define("cf-context-compactor", {
   input: FixtureInput,
   output: FixtureOutput,
   instructions: ({ question, ref }) => `Answer ${question} as JSON. [ref:${ref}]`,
@@ -519,6 +647,16 @@ const plannerModel = promptAwareModel("cf-planner", () =>
   Stream.fromIterable(finalParts(FINAL_ANSWER)),
 );
 
+const contextCompactorModel = promptAwareModel("cf-context-compactor", (promptJson) =>
+  Stream.fromIterable(
+    finalParts(
+      promptJson.includes(COMPACTION_MARKER)
+        ? '{"answer":"compacted"}'
+        : '{"answer":"uncompacted"}',
+    ),
+  ),
+);
+
 const searchModel = promptAwareModel("cf-search", (promptJson) =>
   promptJson.includes(SEARCH_CALL_ID)
     ? Stream.fromIterable(finalParts(FINAL_ANSWER))
@@ -584,6 +722,10 @@ export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = E
       Agent.withModel(plannerDefinition, plannerModel),
       TEST_DIGESTS,
     );
+    const contextCompactor: ResolvedBinding = yield* DurableWorkerBinding.make(
+      Agent.withModel(contextCompactorDefinition, contextCompactorModel),
+      TEST_DIGESTS,
+    );
     const search: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(searchDefinition, searchModel),
       TEST_DIGESTS,
@@ -604,6 +746,6 @@ export const makeTestBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = E
       Agent.withModel(joinDefinition, joinModel),
       TEST_DIGESTS,
     ).pipe(Effect.provide(searchToolLayer));
-    return [planner, search, book, approval, itinerary, join];
+    return [planner, contextCompactor, search, book, approval, itinerary, join];
   },
 );
