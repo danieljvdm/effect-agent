@@ -255,6 +255,11 @@ implement.
 
 ## 10. Out of scope
 
+GitHub dispatch, durable production admission, isolation, network publication,
+and thread presentation are specified in
+[work-order ingress](pr-work-order-ingress.md). They are out of scope for this
+class E proof:
+
 - GitHub webhooks, mention parsers, reactions, Actions, and network publication;
 - automatic dispatch on review creation or every comment;
 - general PR-conversation instructions without an explicit path;

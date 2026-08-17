@@ -14,7 +14,7 @@ const generatedPaths = [
 
 export default defineConfig({
   staged: {
-    "*": "vp fmt --write",
+    "*.{js,cjs,mjs,ts,tsx}": "vp check --fix",
   },
   fmt: {
     ...recommendedOxfmtConfig,

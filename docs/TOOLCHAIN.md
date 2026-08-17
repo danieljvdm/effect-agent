@@ -7,6 +7,7 @@ This repository is a Vite+ monorepo derived from
 Its hosted and Cloudflare applications are intentionally absent. A local browser test bench lives
 under `examples/demo`; `examples/providers` is a compile-only native provider-binding leaf.
 `examples/pr-work-orders` is a private trusted-local proof of the head-bound work-order host.
+`examples/pr-work-order-ingress` is the private GitHub dispatch and isolated-publication proof.
 Cloudflare support exists as library packages (`storage-cloudflare`, `platform-cloudflare` since
 Phase 6), not as an application scaffold: there is no `wrangler` dependency or configuration,
 and the Worker entries in the repository are test fixtures.
@@ -77,7 +78,8 @@ packages/
 examples/
   demo/             Leaf TanStack Start browser bench
   pr-review/        Leaf consumer of @effect-agent/pr-review (guidance, extra tool, ignore globs)
-  pr-work-orders/   Trusted-local work-order implementer proof (private, class E)
+  pr-work-orders/           Trusted-local work-order implementer proof (private, class E)
+  pr-work-order-ingress/    GitHub dispatch, durable admission, isolated publication proof
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
 action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle)
@@ -366,5 +368,6 @@ default-branch baseline for lower post-merge compute, so a PR's first run may be
 workflow does not initialize any source submodule. On `main`, the Release workflow is the sole
 push-triggered package automation and owns version-PR maintenance and publishing.
 
-The Vite+ pre-commit hook runs the staged formatter. CI remains authoritative: hooks improve local
-feedback but are not a correctness boundary.
+The Vite+ pre-commit hook runs `vp check --fix` on staged JavaScript and
+TypeScript. CI remains authoritative for the full `check` gate, including
+per-package `tsc` and action-bundle freshness.

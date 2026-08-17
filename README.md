@@ -48,8 +48,10 @@ reviewer's read-only authority.
   each proven by named test suites in the tree
 - PR work-order evidence: `examples/pr-work-orders` admits one explicit head-bound
   work order, grants a separate implementation Agent only jailed file/patch/named-check
-  tools, and leaves admission, checks, and atomic publication to host Effect code. It is
-  local trusted evidence, not an enabled production workflow or isolation claim.
+  tools, and leaves admission, checks, and atomic publication to host Effect code.
+  `examples/pr-work-order-ingress` proves GitHub dispatch, durable admission, isolated
+  checks, and compare-and-swap publication against recorded fixtures. Neither leaf is
+  an enabled production workflow.
 - Stated plainly: completion is an engineering claim, not a stability one — no hosted-Cloudflare
   evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in live-model suites are
   implemented and gate-skipped, with live execution a release-lane action; open-source
@@ -110,6 +112,7 @@ The documentation site lives in [`docs/`](docs/index.md); run it locally with
 | Tests, fault injection, model checking                  | [Verification](docs/spec/testing.md)                        |
 | Versioning and compatibility                            | [Compatibility](docs/spec/compatibility.md)                 |
 | Pull-request work orders                                | [Work orders](docs/spec/pr-work-orders.md)                  |
+| GitHub work-order dispatch and publication              | [Work-order ingress](docs/spec/pr-work-order-ingress.md)    |
 
 ## Architecture decisions
 
