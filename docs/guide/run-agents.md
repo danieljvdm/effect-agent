@@ -19,12 +19,20 @@ const result = yield * AgentRuntime.run(agent, input);
 ```ts
 interface AgentResult<Output> {
   readonly output: Output;
+  readonly runDisposition?: Json;
   readonly conversationId: ConversationId;
   readonly runId: RunId;
   readonly turns: number;
   readonly finishReason: "completed" | "model-stop" | "budget-exhausted";
 }
 ```
+
+`runDisposition` is present only when the Definition declares a disposition Schema, its selector
+returns a value, and the Run completes ordinarily. It is the Schema-encoded JSON value; durable
+callers receive the same value from `DurableAgentRuntime.awaitSettlement` and canonical
+`SubmissionSettled` record readers, then decode it with the application Schema. The exported
+`AgentResultSchema` enforces the same boundary and rejects a `runDisposition` paired with
+`finishReason: "budget-exhausted"`.
 
 Under the default `onExhaustion: "final-answer"` policy, a Run that exhausts its Turn or Tool
 Call budget settles with one constrained final-answer Turn and reports it honestly as

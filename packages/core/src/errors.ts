@@ -10,6 +10,15 @@ export class AgentOutputError extends Schema.TaggedError<AgentOutputError>()("Ag
   message: Schema.String,
 }) {}
 
+/** An application-selected run disposition failed its definition-owned Schema boundary. */
+export class AgentRunDispositionError extends Schema.TaggedError<AgentRunDispositionError>()(
+  "AgentRunDispositionError",
+  {
+    cause: Schema.Defect(),
+    message: Schema.String,
+  },
+) {}
+
 /** The finite policy dimension a run exhausted; shared with durable settlement metadata. */
 export const PolicyLimit = Schema.Literals([
   "turns",
@@ -80,6 +89,7 @@ export class ContextOverflowError extends Schema.TaggedError<ContextOverflowErro
 export const AgentError = Schema.Union([
   AgentInputError,
   AgentOutputError,
+  AgentRunDispositionError,
   AgentPolicyError,
   AgentApprovalDenied,
   AgentApprovalPending,

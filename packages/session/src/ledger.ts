@@ -346,6 +346,8 @@ export class Settlement extends Schema.Class<Settlement>("@effect-agent/session/
   settlementId: SettlementId,
   receiptId: ReceiptId,
   outcome: SettlementOutcome,
+  /** Schema-encoded application disposition materialized from the exact canonical reservation. */
+  runDisposition: Schema.optionalKey(PersistedJson),
   settledAt: Schema.DateTimeUtcFromString,
 }) {}
 

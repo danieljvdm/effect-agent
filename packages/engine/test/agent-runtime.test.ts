@@ -4,6 +4,7 @@ import {
   AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
+  AgentRunDispositionError,
   AgentPolicy,
   AgentPolicyError,
   ConversationId,
@@ -45,6 +46,7 @@ import {
 } from "effect/unstable/ai";
 
 import {
+  AgentResultSchema,
   AgentRuntime,
   ToolExecutionClass,
   withTerminalDefectEvent,
@@ -2525,6 +2527,196 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(reduced?.conversationId).toBe(runResult.conversationId);
       expect(reduced?.runId).toBe(runResult.runId);
       expect(reduced?.turns).toBe(runResult.turns);
+    });
+  });
+
+  it("AgentResultSchema rejects a disposition on budget exhaustion", () => {
+    const Result = AgentResultSchema(Schema.Struct({ answer: Schema.String }));
+    const ordinary = {
+      output: { answer: "done" },
+      conversationId: "conversation-1",
+      runId: "run-1",
+      turns: 1,
+      finishReason: "completed",
+      runDisposition: "application-complete",
+    } as const;
+    const budgetExhausted = {
+      ...ordinary,
+      finishReason: "budget-exhausted",
+      exhausted: "turns",
+    } as const;
+    const budgetWithoutDisposition = {
+      output: ordinary.output,
+      conversationId: ordinary.conversationId,
+      runId: ordinary.runId,
+      turns: ordinary.turns,
+      finishReason: budgetExhausted.finishReason,
+      exhausted: budgetExhausted.exhausted,
+    } as const;
+
+    expect(Schema.decodeUnknownSync(Result)(ordinary).runDisposition).toBe("application-complete");
+    expect(Schema.decodeUnknownSync(Result)(budgetWithoutDisposition).finishReason).toBe(
+      "budget-exhausted",
+    );
+    expect(() => Schema.decodeUnknownSync(Result)(budgetExhausted)).toThrow(
+      /runDisposition only when finishReason is not budget-exhausted/,
+    );
+  });
+
+  it.effect("RUN-029 validates and exposes an application run disposition", () => {
+    const RunDisposition = Schema.String.check(
+      Schema.makeFilter((value) =>
+        value === "application-complete" ? undefined : `Rejected disposition: ${value}`,
+      ),
+    );
+    const definition = Agent.define("run-disposition", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({
+        answer: Schema.String,
+        runDisposition: Schema.optionalKey(Schema.String),
+      }),
+      instructions: "Answer as JSON.",
+      toolkit: Toolkit.empty,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+      runDisposition: {
+        schema: RunDisposition,
+        fromOutput: (output) => output.runDisposition,
+      },
+    });
+
+    return Effect.gen(function* () {
+      const valid = Agent.withModel(
+        definition,
+        modelFromParts(finalParts('{"answer":"done","runDisposition":"application-complete"}')),
+      );
+      const events = yield* AgentRuntime.stream(valid, { question: "done?" }).pipe(
+        Stream.runCollect,
+      );
+      const result = yield* AgentRuntime.run(valid, { question: "done?" });
+
+      expect(events.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        runDisposition: "application-complete",
+      });
+      expect(result.runDisposition).toBe("application-complete");
+
+      const secret = "sensitive-run-disposition-must-not-enter-events";
+      const invalidDefinition = Agent.define("invalid-run-disposition", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer as JSON.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+        runDisposition: {
+          schema: RunDisposition,
+          fromOutput: () => secret,
+        },
+      });
+      const invalid = Agent.withModel(
+        invalidDefinition,
+        modelFromParts(finalParts('{"answer":"done"}')),
+      );
+      const observed: Array<RunEvent> = [];
+      const invalidExit = yield* AgentRuntime.stream(invalid, { question: "done?" }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            observed.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(invalidExit);
+      const isRunDispositionError = Schema.is(AgentRunDispositionError)(failure);
+      expect(isRunDispositionError).toBe(true);
+      if (!isRunDispositionError) {
+        throw new Error("Expected AgentRunDispositionError");
+      }
+      expect(failure.message).toBe("Run disposition failed Schema encoding");
+      expect(failure.message).not.toContain(secret);
+      expect(String(failure.cause)).toContain(secret);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "AgentRunDispositionError",
+        message: "Run disposition failed Schema encoding",
+      });
+      expect(JSON.stringify(observed)).not.toContain(secret);
+    });
+  });
+
+  it.effect("keeps a thrown run-disposition selector cause out of canonical events", () => {
+    const RunDisposition = Schema.Literal("application-complete");
+    const secret = "selector-secret-must-not-enter-events";
+    const structuredCause = {
+      _tag: "SelectorDependencyFailure",
+      code: "E_SELECTOR",
+      detail: secret,
+    } as const;
+    const selectorFailure = new Error(`selector failed with ${secret}`, {
+      cause: structuredCause,
+    });
+    selectorFailure.name = "SelectorFailure";
+    const definition = Agent.define("throwing-run-disposition", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Answer as JSON.",
+      toolkit: Toolkit.empty,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+      runDisposition: {
+        schema: RunDisposition,
+        fromOutput: () => {
+          throw selectorFailure;
+        },
+      },
+    });
+    const agent = Agent.withModel(definition, modelFromParts(finalParts('{"answer":"done"}')));
+
+    return Effect.gen(function* () {
+      const observed: Array<RunEvent> = [];
+      const exit = yield* AgentRuntime.stream(agent, { question: "done?" }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            observed.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+
+      const isRunDispositionError = Schema.is(AgentRunDispositionError)(failure);
+      expect(isRunDispositionError).toBe(true);
+      if (!isRunDispositionError) {
+        throw new Error("Expected AgentRunDispositionError");
+      }
+      expect(failure.message).toBe("Run disposition selector failed");
+      expect(failure.message).not.toContain(secret);
+      expect(failure.cause).toBe(selectorFailure);
+      expect(selectorFailure.name).toBe("SelectorFailure");
+      expect(selectorFailure.stack).toContain("SelectorFailure");
+      expect(selectorFailure.cause).toBe(structuredCause);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "AgentRunDispositionError",
+        message: "Run disposition selector failed",
+      });
+      expect(observed.some((event) => event._tag === "RunCompleted")).toBe(false);
+      expect(JSON.stringify(observed)).not.toContain(secret);
     });
   });
 
