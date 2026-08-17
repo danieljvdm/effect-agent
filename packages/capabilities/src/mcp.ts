@@ -1,4 +1,4 @@
-import { Context, Crypto, Duration, Effect, Encoding, Schema } from "effect";
+import { Context, Crypto, Duration, Effect, Encoding, JsonSchema, Schema } from "effect";
 import { Tool, type Toolkit } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
@@ -95,6 +95,24 @@ export class McpConnector extends Context.Service<
 >()("@effect-agent/capabilities/McpConnector") {}
 
 const encodedBytes = (value: string): number => Encoding.encodeHex(value).length / 2;
+
+/**
+ * `Tool.getJsonSchema`/`Tool.getJsonSchemaFromSchema` hoist a named, refined
+ * type into `$defs` with a top-level `$ref`, but a real MCP server can only
+ * ever advertise a flat `{ type: "object", ... }` `inputSchema`/`outputSchema`
+ * (`McpSchema.ToolJsonSchema` has no `$ref` case). Comparing an unresolved
+ * `$ref` derivation against a real discovered schema would report every tool
+ * with a named parameter or success type as permanently drifted, so this
+ * inlines a single top-level `$ref` before either side is digested.
+ */
+const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): JsonSchema.JsonSchema => {
+  const ref = schema["$ref"];
+  const defs = schema["$defs"] as JsonSchema.Definitions | undefined;
+
+  if (typeof ref !== "string" || defs === undefined) return schema;
+
+  return JsonSchema.resolve$ref(ref, defs) ?? schema;
+};
 
 const canonicalJson = (value: Schema.Json): Schema.Json => {
   if (
@@ -212,10 +230,10 @@ export const validateMcpDiscovery = Effect.fn("validateMcpDiscovery")(function* 
     try: () =>
       Object.values(server.toolkit.tools)
         .map((tool) => {
-          const outputSchema = Tool.getJsonSchemaFromSchema(tool.successSchema);
+          const outputSchema = flattenTopLevelRef(Tool.getJsonSchemaFromSchema(tool.successSchema));
           return {
             name: tool.name,
-            inputSchema: Tool.getJsonSchema(tool),
+            inputSchema: flattenTopLevelRef(Tool.getJsonSchema(tool)),
             ...(outputSchema.type === "object" ? { outputSchema } : {}),
           };
         })
