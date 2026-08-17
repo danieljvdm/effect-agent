@@ -368,6 +368,6 @@ default-branch baseline for lower post-merge compute, so a PR's first run may be
 workflow does not initialize any source submodule. On `main`, the Release workflow is the sole
 push-triggered package automation and owns version-PR maintenance and publishing.
 
-The Vite+ pre-commit hook formats every staged file and lints staged JavaScript and
+The Vite+ pre-commit hook runs `vp check --fix` on staged JavaScript and
 TypeScript. CI remains authoritative for the full `check` gate, including
 per-package `tsc` and action-bundle freshness.
