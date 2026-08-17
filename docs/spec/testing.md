@@ -246,8 +246,20 @@ deterministic scripted implementer and a real temporary Git repository. It
 proves explicit dispatch, a jailed implementation Agent, host-collected
 patch/check validation, one attempt per work-order key, atomic head update,
 non-publication settlements, interruption cleanup, and typed release failure.
-These tests are evidence for the local host contract, not for check isolation.
-See [pull-request work orders](pr-work-orders.md).
+These tests are evidence for the local host contract, not for check isolation
+or GitHub ingress. See [pull-request work orders](pr-work-orders.md) and
+[work-order ingress](pr-work-order-ingress.md).
+
+## 8.3 Pull-request work-order ingress evidence
+
+The private `examples/pr-work-order-ingress` leaf uses recorded GitHub event
+fixtures and a fake GitHub API. It proves authenticated mention and reaction
+dispatch, unique inline targeting, actor-id authorization, same-repository
+non-fork admission, stale-anchor rejection, durable duplicate-delivery
+replay, isolated check-process credentials, independent publisher
+verification, compare-and-swap fencing, and one host-authored thread reply
+that does not resolve the thread. Tests do not call live GitHub and do not
+enable a repository workflow.
 
 ## 9. Compatibility tests
 

@@ -105,6 +105,7 @@ export default defineConfig({
           { text: "Deployment", link: "/spec/deployment" },
           { text: "Security & operations", link: "/spec/security-operations" },
           { text: "PR work orders", link: "/spec/pr-work-orders" },
+          { text: "PR work-order ingress", link: "/spec/pr-work-order-ingress" },
           { text: "Testing", link: "/spec/testing" },
           { text: "Compatibility", link: "/spec/compatibility" },
         ],

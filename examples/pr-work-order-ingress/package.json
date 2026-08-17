@@ -1,20 +1,17 @@
 {
-  "name": "@effect-agent/example-pr-work-orders",
+  "name": "@effect-agent/example-pr-work-order-ingress",
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
     "test": "vp test"
   },
   "dependencies": {
+    "@effect-agent/example-pr-work-orders": "workspace:*",
     "@effect/platform-node": "catalog:",
-    "effect": "catalog:",
-    "effect-agent": "workspace:*"
+    "effect": "catalog:"
   },
   "devDependencies": {
     "@effect/vitest": "catalog:",

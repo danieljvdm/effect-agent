@@ -66,6 +66,7 @@ examples/
   demo
   pr-review
   pr-work-orders
+  pr-work-order-ingress
   providers
   repo-ops
 action/
@@ -79,6 +80,10 @@ trusted-local proof of a head-bound work-order implementer: a distinct Agent
 receives only jailed file/patch/named-check tools, and host Effect code owns
 admission, validation, and atomic publication. It adds no package edge and
 makes only a class E claim. See [pull-request work orders](spec/pr-work-orders.md).
+`examples/pr-work-order-ingress` is the private GitHub-facing proof: recorded
+events become one work order, admission is durable, checks and publication
+stay isolated, and the publisher compare-and-swaps. It is not an enabled
+workflow. See [work-order ingress](spec/pr-work-order-ingress.md).
 Examples are outside the framework dependency graph and do not define
 a deployment boundary.
 Platform hosts are library packages that applications can assemble later.

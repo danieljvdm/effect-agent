@@ -181,10 +181,12 @@ policy.
 
 ### 9.1 Pull-request work-order authority
 
-Review, implementation, and publication stay separate. The contract is
-[pull-request work orders](pr-work-orders.md). The current local proof must not
-execute untrusted pull-request code in a process holding credentials or
-provider secrets.
+Review, implementation, and publication stay separate. The host contract is
+[pull-request work orders](pr-work-orders.md). GitHub dispatch, isolation, and
+network publication are [work-order ingress](pr-work-order-ingress.md). The
+current local proof must not execute untrusted pull-request code in a process
+holding credentials or provider secrets, and no enabled workflow may run an
+implementer until that isolation exists.
 
 ## 10. Supply chain
 

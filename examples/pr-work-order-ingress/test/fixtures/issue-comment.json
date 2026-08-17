@@ -1,0 +1,14 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 17,
+    "pull_request": { "url": "https://api.github.com/repos/acme/widgets/pulls/17" }
+  },
+  "comment": {
+    "id": 3001,
+    "body": "@effect-agent fix this",
+    "user": { "id": 42, "login": "dana" }
+  },
+  "repository": { "full_name": "acme/widgets", "fork": false },
+  "sender": { "id": 42, "login": "dana" }
+}
