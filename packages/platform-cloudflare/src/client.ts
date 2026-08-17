@@ -33,7 +33,7 @@ import {
   type DurableSubmitAgent,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 
 import { DurableAlarmError } from "./alarm.ts";
 import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
@@ -77,6 +77,10 @@ export class ConversationClientError extends Schema.TaggedError<ConversationClie
     conversationId: Schema.String,
     message: Schema.String,
     cause: Schema.optionalKey(Schema.Defect()),
+    /** Cloudflare's own classification for a failure safe to retry with a fresh stub. */
+    retryable: Schema.optionalKey(Schema.Boolean),
+    /** Cloudflare overloads are surfaced immediately instead of adding retry pressure. */
+    overloaded: Schema.optionalKey(Schema.Boolean),
   },
 ) {}
 
@@ -210,6 +214,22 @@ export class UnknownResolutionHostRequest extends Schema.Class<UnknownResolution
   caller: OperationCaller,
 }) {}
 
+/** One event-driven wait for canonical progress strictly after this sequence. */
+export class AwaitProgressRequest extends Schema.Class<AwaitProgressRequest>(
+  "@effect-agent/platform-cloudflare/AwaitProgressRequest",
+)({
+  afterSequence: CanonicalSequence,
+  waiterId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+  caller: OperationCaller,
+}) {}
+
+/** Best-effort cancellation of one in-flight progress RPC. */
+export class CancelProgressRequest extends Schema.Class<CancelProgressRequest>(
+  "@effect-agent/platform-cloudflare/CancelProgressRequest",
+)({
+  waiterId: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(256)),
+}) {}
+
 // ---------------------------------------------------------------------------
 // Responses
 // ---------------------------------------------------------------------------
@@ -261,6 +281,15 @@ export class ObservedPage extends Schema.TaggedClass<ObservedPage>(
   records: Schema.Array(CanonicalRecordEnvelope).check(Schema.isMaxLength(1_024)),
 }) {}
 
+/** A record was already committed or an incarnation-local hint says the caller should re-read. */
+export class ProgressObserved extends Schema.TaggedClass<ProgressObserved>(
+  "@effect-agent/platform-cloudflare/ProgressObserved",
+)("ProgressObserved", {}) {}
+
+export class ProgressCancelled extends Schema.TaggedClass<ProgressCancelled>(
+  "@effect-agent/platform-cloudflare/ProgressCancelled",
+)("ProgressCancelled", {}) {}
+
 export class AbortRecorded extends Schema.TaggedClass<AbortRecorded>(
   "@effect-agent/platform-cloudflare/AbortRecorded",
 )("AbortRecorded", {
@@ -291,6 +320,8 @@ export const HostResponse = Schema.Union([
   SubmitSucceeded,
   SettlementReached,
   ObservedPage,
+  ProgressObserved,
+  ProgressCancelled,
   AbortRecorded,
   ApprovalRecorded,
   UnknownResolutionRecorded,
@@ -308,6 +339,10 @@ export const decodeAwaitSettlementRequest = Schema.decodeUnknownEffect(AwaitSett
 export const encodeAwaitSettlementRequest = Schema.encodeEffect(AwaitSettlementRequest);
 export const decodeObservePageRequest = Schema.decodeUnknownEffect(ObservePageRequest);
 export const encodeObservePageRequest = Schema.encodeEffect(ObservePageRequest);
+export const decodeAwaitProgressRequest = Schema.decodeUnknownEffect(AwaitProgressRequest);
+export const encodeAwaitProgressRequest = Schema.encodeEffect(AwaitProgressRequest);
+export const decodeCancelProgressRequest = Schema.decodeUnknownEffect(CancelProgressRequest);
+export const encodeCancelProgressRequest = Schema.encodeEffect(CancelProgressRequest);
 export const decodeAbortHostRequest = Schema.decodeUnknownEffect(AbortHostRequest);
 export const encodeAbortHostRequest = Schema.encodeEffect(AbortHostRequest);
 export const decodeApprovalHostRequest = Schema.decodeUnknownEffect(ApprovalHostRequest);
@@ -347,6 +382,13 @@ export type ClientAwaitFailure =
   | ConversationClientError;
 
 export type ClientObserveFailure =
+  | ConversationStoreError
+  | ConversationNotMaterialized
+  | OperationDenied
+  | HostProtocolError
+  | ConversationClientError;
+
+export type ClientProgressFailure =
   | ConversationStoreError
   | ConversationNotMaterialized
   | OperationDenied
@@ -417,6 +459,7 @@ const OBSERVE_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "OperationDenied",
   "HostProtocolError",
 ]);
+const PROGRESS_FAILURE_TAGS = OBSERVE_FAILURE_TAGS;
 const ABORT_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "LedgerError",
   "SettlementConflict",
@@ -485,6 +528,15 @@ export class CloudflareConversationClient extends Context.Service<
       receipt: Receipt,
       caller: OperationCaller,
     ) => Effect.Effect<Settlement, ClientAwaitFailure>;
+    /**
+     * Wait without polling until progress after `afterSequence` is already durable or hinted.
+     * The result is deliberately void: canonical records remain authoritative and must be read.
+     */
+    readonly awaitProgress: (
+      conversationId: ConversationId,
+      afterSequence: CanonicalSequence,
+      caller: OperationCaller,
+    ) => Effect.Effect<void, ClientProgressFailure>;
     /** One bounded page of canonical records. */
     readonly readPage: (
       conversationId: ConversationId,
@@ -533,10 +585,37 @@ export class CloudflareConversationClient extends Context.Service<
   static readonly layer: Layer.Layer<
     CloudflareConversationClient,
     never,
-    ConversationObjectNamespace
+    ConversationObjectNamespace | Crypto.Crypto
   > = Layer.effect(CloudflareConversationClient)(
     Effect.gen(function* () {
       const { namespace } = yield* ConversationObjectNamespace;
+      const crypto = yield* Crypto.Crypto;
+
+      const platformSignals = (cause: unknown) => {
+        let retryable: boolean | undefined;
+        let overloaded: boolean | undefined;
+        if (typeof cause === "object" && cause !== null) {
+          if ("retryable" in cause && typeof cause.retryable === "boolean") {
+            retryable = cause.retryable;
+          }
+          if ("overloaded" in cause && typeof cause.overloaded === "boolean") {
+            overloaded = cause.overloaded;
+          }
+          // Miniflare's faithful `ctx.abort()` signal predates the public `retryable` field.
+          // Treat only its explicit reset marker as the same idempotent-retry classification.
+          if (
+            retryable === undefined &&
+            "durableObjectReset" in cause &&
+            cause.durableObjectReset === true
+          ) {
+            retryable = true;
+          }
+        }
+        return {
+          ...(retryable === undefined ? {} : { retryable }),
+          ...(overloaded === undefined ? {} : { overloaded }),
+        };
+      };
 
       const call = (
         conversationId: string,
@@ -554,6 +633,7 @@ export class CloudflareConversationClient extends Context.Service<
                 }`,
               ),
               cause,
+              ...platformSignals(cause),
             }),
         }).pipe(
           Effect.flatMap((raw) =>
@@ -634,6 +714,19 @@ export class CloudflareConversationClient extends Context.Service<
           return page.records;
         });
 
+      const cancelProgress = (
+        conversationId: ConversationId,
+        waiterId: string,
+      ): Effect.Effect<void> =>
+        encodeCancelProgressRequest(CancelProgressRequest.make({ waiterId })).pipe(
+          Effect.mapError(() => undefined),
+          Effect.flatMap((encoded) =>
+            call(conversationId, "cancelProgress", (stub) => stub.cancelProgressEncoded(encoded)),
+          ),
+          Effect.asVoid,
+          Effect.ignore,
+        );
+
       return CloudflareConversationClient.of({
         submit: <InputSchema extends Schema.Top>(
           agent: DurableSubmitAgent<InputSchema>,
@@ -704,6 +797,55 @@ export class CloudflareConversationClient extends Context.Service<
               AWAIT_FAILURE_TAGS,
             )(response);
             return settled.settlement;
+          }),
+
+        awaitProgress: (conversationId, afterSequence, caller) =>
+          Effect.gen(function* () {
+            const waiterId = yield* crypto.randomUUIDv4.pipe(
+              Effect.mapError((error) =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(
+                    `awaitProgress cancellation identity generation failed: ${error.message}`,
+                  ),
+                }),
+              ),
+            );
+            const request = AwaitProgressRequest.make({ afterSequence, waiterId, caller });
+            const encoded = yield* encodeAwaitProgressRequest(request).pipe(
+              Effect.mapError((error) =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(
+                    `awaitProgress request encode failed: ${error.message}`,
+                  ),
+                }),
+              ),
+            );
+
+            const attempt = (retry: number): Effect.Effect<void, ClientProgressFailure> =>
+              call(conversationId, "awaitProgress", (stub) =>
+                stub.awaitProgressEncoded(encoded),
+              ).pipe(
+                Effect.flatMap(
+                  expect<ProgressObserved, ClientProgressFailure & HostFailure>(
+                    conversationId,
+                    "awaitProgress",
+                    "ProgressObserved",
+                    PROGRESS_FAILURE_TAGS,
+                  ),
+                ),
+                Effect.asVoid,
+                Effect.catchTag("ConversationClientError", (error) =>
+                  error.retryable === true && error.overloaded !== true && retry < 5
+                    ? Effect.sleep(Duration.millis(10 * 2 ** retry)).pipe(
+                        Effect.andThen(attempt(retry + 1)),
+                      )
+                    : Effect.fail(error),
+                ),
+              );
+
+            yield* attempt(0).pipe(
+              Effect.onInterrupt(() => cancelProgress(conversationId, waiterId)),
+            );
           }),
 
         readPage,

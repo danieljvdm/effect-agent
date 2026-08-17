@@ -599,6 +599,12 @@ export type DurableWorkerFailure =
 
 export type DurableAwaitFailure = LedgerError | SettlementConflict | OperationDenied;
 
+/** Typed failures from the public canonical progress boundary. */
+export type DurableProgressFailure =
+  | ConversationStoreError
+  | ConversationNotMaterialized
+  | OperationDenied;
+
 export type DurableAbortFailure =
   | LedgerError
   | SettlementConflict
@@ -1370,6 +1376,7 @@ const make = Effect.gen(function* () {
                   )
               : Effect.fail(error),
           ),
+          Effect.andThen(wake.notify(conversationId)),
           Effect.asVoid,
         );
     },
@@ -1445,6 +1452,9 @@ const make = Effect.gen(function* () {
               sequence: result.lastSequence,
               digest: result.tailDigest,
             });
+            // Canonical storage is already committed. This hint may be lost or duplicated, but
+            // it lets scoped progress waiters re-read promptly without making memory authoritative.
+            yield* wake.notify(ctx.conversationId);
             return result;
           }
         }
@@ -2236,6 +2246,7 @@ const make = Effect.gen(function* () {
               )
             : Effect.fail(error),
         ),
+        Effect.andThen(wake.notify(request.childConversationId)),
         Effect.asVoid,
       );
   });
@@ -5002,6 +5013,7 @@ const make = Effect.gen(function* () {
           producerEpoch: tail.producerEpoch,
         }),
       );
+      yield* wake.notify(conversationId);
     }).pipe(Effect.ignore);
 
   const settleAbortedForRecovery = Effect.fn("DurableAgentRuntime.settleAbortedForRecovery")(
@@ -6004,6 +6016,40 @@ const make = Effect.gen(function* () {
     }
   });
 
+  const awaitProgress = Effect.fn("DurableAgentRuntime.awaitProgress")(function* (
+    conversationId: ConversationId,
+    afterSequence: CanonicalSequence,
+    caller: OperationCaller,
+  ): Effect.fn.Return<void, DurableProgressFailure> {
+    yield* operationAuthorizer.authorize(
+      OperationAuthorizationRequest.make({
+        operation: "observe",
+        principal: caller.principal,
+        conversationId,
+      }),
+    );
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        // Registration MUST precede the authoritative read. A notify between this acquisition
+        // and parking completes the returned one-shot Effect, so neither subscribe/check nor
+        // check/park can lose progress.
+        const awaitHint = yield* wake.subscribe(conversationId);
+        const committed = yield* Stream.runHead(
+          store.read(
+            ConversationRead.make({
+              conversationId,
+              afterSequence,
+              limit: 1,
+            }),
+          ),
+        );
+        if (Option.isSome(committed)) return;
+        // A wake is only a hint. The caller re-reads canonical records after this returns.
+        yield* awaitHint;
+      }),
+    );
+  });
+
   const observe = (receipt: Receipt, caller: OperationCaller, options?: DurableObserveOptions) =>
     Stream.unwrap(
       Effect.gen(function* () {
@@ -6708,6 +6754,7 @@ const make = Effect.gen(function* () {
   return DurableAgentRuntime.of({
     submit,
     awaitSettlement,
+    awaitProgress,
     observe,
     abort,
     resolveUnknown,
@@ -6784,8 +6831,9 @@ const make = Effect.gen(function* () {
  *   `explain` and `verify` are strictly read-only; `retry` re-drives exactly one classified
  *   repair with mandatory author/reason audit and typed refusals; `scanObligations` is the
  *   scan-based DUR-017/OPS-001 obligation surface. Every one of them (plus `observe`,
- *   `awaitSettlement`, `abort`, `resolveUnknown`, `resolveApproval`) carries an explicit caller and
- *   consults the required host-supplied `OperationAuthorizer` fail-closed. Protected mutations
+ *   `awaitSettlement`, `awaitProgress`, `abort`, `resolveUnknown`, `resolveApproval`) carries an
+ *   explicit caller and consults the required host-supplied `OperationAuthorizer` fail-closed.
+ *   Protected mutations
  *   then consult the required `OperationMutationPreparer` exactly once at their commit boundary.
  *   Durable child admission separately consults the narrow required `ChildAdmissionAuthorizer`
  *   immediately before admission and again before materialization/readiness.
@@ -6802,6 +6850,15 @@ export class DurableAgentRuntime extends Context.Service<
       receipt: Receipt,
       caller: OperationCaller,
     ) => Effect.Effect<Settlement, DurableAwaitFailure>;
+    /**
+     * Wait for an already-committed record or one incarnation-local progress hint after
+     * `afterSequence`. Canonical records remain authoritative: callers re-read after return.
+     */
+    readonly awaitProgress: (
+      conversationId: ConversationId,
+      afterSequence: CanonicalSequence,
+      caller: OperationCaller,
+    ) => Effect.Effect<void, DurableProgressFailure>;
     readonly observe: (
       receipt: Receipt,
       caller: OperationCaller,

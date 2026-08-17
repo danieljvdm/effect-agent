@@ -50,6 +50,7 @@ import {
   CloudflarePlatformConfigError,
 } from "./config.ts";
 import { cloudflareCryptoLayer } from "./crypto.ts";
+import { ProgressWaitRegistry } from "./progress-wait.ts";
 import { conversationPortTransportLayer } from "./transport.ts";
 import { cloudflareWakeSchedulerLayer } from "./wake-scheduler.ts";
 
@@ -159,7 +160,8 @@ export type CloudflareDurableRuntimeServices =
   | ConversationObjectIdentity
   | DurableAlarmService
   | ConversationMaintenance
-  | ConversationObjectPorts;
+  | ConversationObjectPorts
+  | ProgressWaitRegistry;
 
 /**
  * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
@@ -386,6 +388,7 @@ export class CloudflareDurableRuntime {
           cloudflareConfigLayer,
           DurableAlarmService.layer,
           maintenanceFailpointLayer,
+          ProgressWaitRegistry.layer,
         );
         const mutationBoundaryLayer = ConversationMutationBoundary.layer.pipe(
           Layer.provide(maintenanceBase),

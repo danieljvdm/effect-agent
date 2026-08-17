@@ -12,6 +12,7 @@ import { COMPACTION_SUMMARY_PREFIX, ToolExecutionClass } from "@effect-agent/eng
 import {
   AbortCommand,
   AdmissionConflict,
+  ApprovalDecisionCommand,
   BatchId,
   CanonicalRecordEnvelope,
   CanonicalSequence,
@@ -41,6 +42,7 @@ import {
   SubmissionLookupByKey,
   ToolReconciler,
   WakeScheduler,
+  makeWakeSubscriptionHub,
   modelResponseRecordId,
   projectRunJournal,
   promptFromCanonicalRecords,
@@ -62,6 +64,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, layer } from "@effect/vitest";
 import {
   Cause,
+  Context,
   DateTime,
   Deferred,
   Duration,
@@ -85,6 +88,7 @@ const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
+const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 
 const submitOptions = (conversationId: string, idempotencyKey: string): DurableSubmitOptions => ({
   conversationId: decodeConversationId(conversationId),
@@ -108,6 +112,17 @@ const toolCallParts: ReadonlyArray<Response.StreamPartEncoded> = [
     id: "search-1",
     name: "search",
     params: { query: "sea" },
+    providerExecuted: false,
+  },
+  { type: "finish", reason: "tool-calls", usage },
+];
+
+const approvalCallParts: ReadonlyArray<Response.StreamPartEncoded> = [
+  {
+    type: "tool-call",
+    id: "book-progress-1",
+    name: "book_progress",
+    params: { ref: "#94" },
     providerExecuted: false,
   },
   { type: "finish", reason: "tool-calls", usage },
@@ -179,6 +194,28 @@ const searchToolLayer = searchTools.toLayer({
   search: () => Effect.succeed({ available: true }),
 });
 
+const BookProgress = Tool.make("book_progress", {
+  parameters: Schema.Struct({ ref: Schema.String }),
+  success: Schema.Struct({ confirmation: Schema.String }),
+  needsApproval: true,
+});
+const progressApprovalTools = Toolkit.make(BookProgress);
+const progressApprovalDefinition = Agent.define("durable-progress-approval", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({ answer: Schema.String }),
+  instructions: "Book only after approval.",
+  toolkit: progressApprovalTools,
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 2,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+});
+const progressApprovalToolLayer = progressApprovalTools.toLayer({
+  book_progress: () => Effect.succeed({ confirmation: "confirmed-#94" }),
+});
+
 const configLayer = DurableRuntimeConfig.layer({
   deploymentId: Schema.decodeSync(DeploymentId)("deployment-durable"),
   producerId: Schema.decodeSync(ProducerId)("producer-durable"),
@@ -198,6 +235,111 @@ const baseLayer = Layer.mergeAll(
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
+
+class ProgressWaitTestControl extends Context.Service<
+  ProgressWaitTestControl,
+  {
+    readonly scheduler: WakeScheduler["Service"];
+    readonly active: Ref.Ref<number>;
+    readonly parking: Ref.Ref<number>;
+    readonly reads: Ref.Ref<ReadonlyMap<ConversationId, number>>;
+    readonly subscribeGate: Ref.Ref<Option.Option<Deferred.Deferred<void>>>;
+    readonly parkGate: Ref.Ref<Option.Option<Deferred.Deferred<void>>>;
+  }
+>()("@effect-agent/testing/ProgressWaitTestControl") {}
+
+const progressWaitControlLayer = Layer.effect(
+  ProgressWaitTestControl,
+  Effect.gen(function* () {
+    const hub = yield* makeWakeSubscriptionHub;
+    const active = yield* Ref.make(0);
+    const parking = yield* Ref.make(0);
+    const reads = yield* Ref.make<ReadonlyMap<ConversationId, number>>(new Map());
+    const subscribeGate = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none());
+    const parkGate = yield* Ref.make<Option.Option<Deferred.Deferred<void>>>(Option.none());
+
+    const scheduler = WakeScheduler.of({
+      notify: hub.notify,
+      wakes: Stream.never,
+      subscribe: (conversationId) =>
+        Effect.gen(function* () {
+          const wait = yield* hub.subscribe(conversationId);
+          yield* Ref.update(active, (count) => count + 1);
+          yield* Effect.addFinalizer(() => Ref.update(active, (count) => count - 1));
+          const beforeCheck = yield* Ref.get(subscribeGate);
+          if (Option.isSome(beforeCheck)) yield* Deferred.await(beforeCheck.value);
+          return wait;
+        }).pipe(
+          Effect.map((wait) =>
+            Effect.gen(function* () {
+              yield* Ref.update(parking, (count) => count + 1);
+              const beforePark = yield* Ref.get(parkGate);
+              if (Option.isSome(beforePark)) yield* Deferred.await(beforePark.value);
+              yield* wait;
+            }),
+          ),
+        ),
+    });
+
+    return ProgressWaitTestControl.of({
+      scheduler,
+      active,
+      parking,
+      reads,
+      subscribeGate,
+      parkGate,
+    });
+  }),
+);
+
+const progressWaitSchedulerLayer = Layer.effect(
+  WakeScheduler,
+  Effect.map(ProgressWaitTestControl, (control) => control.scheduler),
+);
+
+const progressWaitStoreLayer = Layer.effect(
+  ConversationStore,
+  Effect.gen(function* () {
+    const inner = yield* ConversationStore;
+    const control = yield* ProgressWaitTestControl;
+    return ConversationStore.of({
+      ...inner,
+      read: (request) =>
+        Stream.unwrap(
+          Ref.update(control.reads, (current) => {
+            const next = new Map(current);
+            next.set(request.conversationId, (current.get(request.conversationId) ?? 0) + 1);
+            return next;
+          }).pipe(Effect.as(inner.read(request))),
+        ),
+    });
+  }),
+).pipe(Layer.provide(MemoryConversationStoreLive));
+
+const progressWaitAdapters = Layer.merge(progressWaitSchedulerLayer, progressWaitStoreLayer).pipe(
+  Layer.provideMerge(progressWaitControlLayer),
+);
+
+const progressWaitBaseLayer = Layer.mergeAll(
+  MemorySubmissionLedgerLive,
+  progressWaitAdapters,
+  DurableRuntimeFailpoint.layerTest,
+  ToolReconciler.uncertain,
+  configLayer,
+  TrustedLocalDurableAuthorizationLayer,
+).pipe(Layer.provideMerge(NodeCrypto.layer));
+
+const progressWaitTestLayer = DurableAgentRuntime.layer.pipe(
+  Layer.provideMerge(progressWaitBaseLayer),
+);
+
+const waitForAtLeast = (ref: Ref.Ref<number>, expected: number): Effect.Effect<void> =>
+  Effect.gen(function* () {
+    while ((yield* Ref.get(ref)) < expected) yield* Effect.yieldNow;
+  });
+
+const readCount = (control: ProgressWaitTestControl["Service"], conversationId: ConversationId) =>
+  Ref.get(control.reads).pipe(Effect.map((counts) => counts.get(conversationId) ?? 0));
 
 const readLog = (conversationId: string) =>
   Effect.gen(function* () {
@@ -251,7 +393,310 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
     : "unknown";
 };
 
+layer(progressWaitTestLayer)("#94 DurableAgentRuntime progress waits", (it) => {
+  it.effect("wakes promptly when the terminal settlement append commits", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const failpoints = yield* DurableRuntimeFailpointTestControl;
+      const control = yield* ProgressWaitTestControl;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"settled"}'));
+      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const conversationId = decodeConversationId("conversation-progress-settlement");
+      yield* runtime.submit(
+        agent,
+        { question: "wake on settlement" },
+        submitOptions(conversationId, "progress-settlement-1"),
+      );
+
+      const reserved = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      yield* failpoints.setHandler((location) =>
+        location === "terminalize:after-reserve"
+          ? Deferred.succeed(reserved, undefined).pipe(Effect.andThen(Deferred.await(release)))
+          : Effect.void,
+      );
+      yield* Effect.gen(function* () {
+        const processing = yield* Effect.forkChild(
+          runtime.processConversation(agent, conversationId, DIGESTS),
+        );
+        yield* Deferred.await(reserved);
+
+        const beforeSettlement = yield* readLog(conversationId);
+        expect(logTags(beforeSettlement)).not.toContain("SubmissionSettled");
+        const cursor = beforeSettlement.at(-1)?.sequence;
+        expect(cursor).toBeDefined();
+        if (cursor === undefined) return;
+
+        const waiting = yield* Effect.forkChild(
+          runtime.awaitProgress(conversationId, cursor, CALLER),
+        );
+        yield* waitForAtLeast(control.active, 1);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(waiting);
+        yield* Fiber.join(processing);
+
+        const afterSettlement = yield* readLog(conversationId);
+        expect(afterSettlement.at(-1)?.record.payload._tag).toBe("SubmissionSettled");
+        expect(yield* Ref.get(control.active)).toBe(0);
+      }).pipe(Effect.ensuring(failpoints.clear));
+    }),
+  );
+
+  it.effect("wakes after approval request and decision records commit", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const control = yield* ProgressWaitTestControl;
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0 ? approvalCallParts : finalParts('{"answer":"approved"}'),
+      );
+      const agent = Agent.withModel(progressApprovalDefinition, scripted.model);
+      const conversationId = decodeConversationId("conversation-progress-approval");
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "wake at both approval boundaries" },
+        submitOptions(conversationId, "progress-approval-1"),
+      );
+      const submitted = yield* readLog(conversationId);
+      const submittedCursor = submitted.at(-1)?.sequence;
+      expect(submittedCursor).toBeDefined();
+      if (submittedCursor === undefined) return;
+
+      const awaitingRequest = yield* Effect.forkChild(
+        runtime.awaitProgress(conversationId, submittedCursor, CALLER),
+      );
+      yield* waitForAtLeast(control.active, 1);
+      yield* runtime
+        .processConversation(agent, conversationId, DIGESTS)
+        .pipe(Effect.provide(progressApprovalToolLayer));
+      yield* Fiber.join(awaitingRequest);
+      const requested = yield* readLog(conversationId);
+      expect(
+        requested.some(
+          (record) =>
+            record.sequence > submittedCursor &&
+            record.record.payload._tag === "ToolApprovalRequested",
+        ),
+      ).toBe(true);
+      const requestCursor = requested.at(-1)?.sequence;
+      expect(requestCursor).toBeDefined();
+      if (requestCursor === undefined) return;
+
+      const parksBeforeDecision = yield* Ref.get(control.parking);
+      const awaitingDecision = yield* Effect.forkChild(
+        Effect.gen(function* () {
+          let cursor = requestCursor;
+          for (;;) {
+            const records = yield* readLog(conversationId);
+            if (
+              records.some(
+                (record) =>
+                  record.sequence > requestCursor &&
+                  record.record.payload._tag === "ToolApprovalDecided",
+              )
+            ) {
+              return;
+            }
+            const last = records.at(-1);
+            if (last !== undefined && last.sequence > cursor) cursor = last.sequence;
+            yield* runtime.awaitProgress(conversationId, cursor, CALLER);
+          }
+        }),
+      );
+      yield* waitForAtLeast(control.parking, parksBeforeDecision + 1);
+      yield* runtime.resolveApproval(
+        ApprovalDecisionCommand.make({
+          submissionId: receipt.submissionId,
+          toolCallId: Schema.decodeSync(ToolCallId)("book-progress-1"),
+          decision: "approved",
+          resolver: "#94-runtime-test",
+          reason: "exercise the public approval progress edge",
+        }),
+        CALLER,
+      );
+      // Resolution first commits a ledger intent and emits a permitted false-positive hint.
+      // The caller re-reads, parks again, and the resumed Attempt appends the canonical decision.
+      yield* waitForAtLeast(control.parking, parksBeforeDecision + 2);
+      yield* runtime
+        .processConversation(agent, conversationId, DIGESTS)
+        .pipe(Effect.provide(progressApprovalToolLayer));
+      yield* Fiber.join(awaitingDecision);
+      const decided = yield* readLog(conversationId);
+      expect(
+        decided.some(
+          (record) =>
+            record.sequence > requestCursor && record.record.payload._tag === "ToolApprovalDecided",
+        ),
+      ).toBe(true);
+      expect(yield* Ref.get(control.active)).toBe(0);
+    }),
+  );
+
+  it.effect("closes the subscribe/check and check/park lost-wakeup windows", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scheduler = yield* WakeScheduler;
+      const control = yield* ProgressWaitTestControl;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"never"}'));
+      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const conversationId = decodeConversationId("conversation-progress-races");
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "race the wait" },
+        submitOptions(conversationId, "progress-races-1"),
+      );
+      const initial = yield* readLog(conversationId);
+      const initialCursor = initial.at(-1)?.sequence;
+      expect(initialCursor).toBeDefined();
+      if (initialCursor === undefined) return;
+
+      // Force append+notify after registration but before the authoritative check.
+      const beforeCheck = yield* Deferred.make<void>();
+      yield* Ref.set(control.subscribeGate, Option.some(beforeCheck));
+      const subscribedRace = yield* Effect.forkChild(
+        runtime.awaitProgress(conversationId, initialCursor, CALLER),
+      );
+      yield* waitForAtLeast(control.active, 1);
+      yield* runtime.abort(
+        AbortCommand.make({
+          submissionId: receipt.submissionId,
+          author: "operator",
+          reason: "force #94 subscribe/check race",
+        }),
+        CALLER,
+      );
+      yield* Deferred.succeed(beforeCheck, undefined);
+      yield* Fiber.join(subscribedRace);
+      expect(yield* Ref.get(control.active)).toBe(0);
+
+      const afterAbort = yield* readLog(conversationId);
+      const abortCursor = afterAbort.at(-1)?.sequence;
+      expect(abortCursor).toBeDefined();
+      if (abortCursor === undefined) return;
+
+      // Force a hint after the empty canonical check but before the returned wait Effect parks.
+      yield* Ref.set(control.subscribeGate, Option.none());
+      const beforePark = yield* Deferred.make<void>();
+      yield* Ref.set(control.parkGate, Option.some(beforePark));
+      const readsBeforeParkRace = yield* readCount(control, conversationId);
+      const parksBeforeParkRace = yield* Ref.get(control.parking);
+      const parkedRace = yield* Effect.forkChild(
+        runtime.awaitProgress(conversationId, abortCursor, CALLER),
+      );
+      yield* waitForAtLeast(control.parking, parksBeforeParkRace + 1);
+      yield* scheduler.notify(conversationId);
+      yield* Deferred.succeed(beforePark, undefined);
+      yield* Fiber.join(parkedRace);
+      expect(yield* readCount(control, conversationId)).toBe(readsBeforeParkRace + 1);
+      expect(yield* Ref.get(control.active)).toBe(0);
+
+      // The second wake was deliberately a false positive: storage, not the hint, is truth.
+      const final = yield* readLog(conversationId);
+      expect(final.at(-1)?.sequence).toBe(abortCursor);
+    }),
+  );
+
+  it.effect(
+    "broadcasts to concurrent waiters, stays O(1), and cleans up cancellation/timeout",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const scheduler = yield* WakeScheduler;
+        const control = yield* ProgressWaitTestControl;
+        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"never"}'));
+        const agent = Agent.withModel(plannerDefinition, scripted.model);
+        const conversationId = decodeConversationId("conversation-progress-many");
+        const unrelatedId = decodeConversationId("conversation-progress-unrelated");
+
+        yield* runtime.submit(
+          agent,
+          { question: "many waiters" },
+          submitOptions(conversationId, "progress-many-1"),
+        );
+        yield* runtime.submit(
+          agent,
+          { question: "unrelated waiter" },
+          submitOptions(unrelatedId, "progress-unrelated-1"),
+        );
+        const records = yield* readLog(conversationId);
+        const unrelatedRecords = yield* readLog(unrelatedId);
+        const cursor = records.at(-1)?.sequence;
+        const unrelatedCursor = unrelatedRecords.at(-1)?.sequence;
+        expect(cursor).toBeDefined();
+        expect(unrelatedCursor).toBeDefined();
+        if (cursor === undefined || unrelatedCursor === undefined) return;
+
+        const readsBefore = yield* readCount(control, conversationId);
+        const unrelatedReadsBefore = yield* readCount(control, unrelatedId);
+        const first = yield* Effect.forkChild(
+          runtime.awaitProgress(conversationId, cursor, CALLER),
+        );
+        const second = yield* Effect.forkChild(
+          runtime.awaitProgress(conversationId, cursor, CALLER),
+        );
+        const unrelated = yield* Effect.forkChild(
+          runtime.awaitProgress(unrelatedId, unrelatedCursor, CALLER),
+        );
+        yield* waitForAtLeast(control.active, 3);
+        yield* waitForAtLeast(control.parking, 3);
+        expect(yield* readCount(control, conversationId)).toBe(readsBefore + 2);
+        expect(yield* readCount(control, unrelatedId)).toBe(unrelatedReadsBefore + 1);
+
+        yield* TestClock.adjust(Duration.seconds(10));
+        expect(yield* readCount(control, conversationId)).toBe(readsBefore + 2);
+        expect(yield* readCount(control, unrelatedId)).toBe(unrelatedReadsBefore + 1);
+
+        yield* scheduler.notify(conversationId);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        expect(unrelated.pollUnsafe()).toBeUndefined();
+        expect(yield* Ref.get(control.active)).toBe(1);
+
+        yield* Fiber.interrupt(unrelated);
+        expect(yield* Ref.get(control.active)).toBe(0);
+
+        const timed = yield* Effect.forkChild(
+          runtime
+            .awaitProgress(conversationId, cursor, CALLER)
+            .pipe(Effect.timeoutOption(Duration.seconds(3))),
+        );
+        yield* waitForAtLeast(control.active, 1);
+        yield* TestClock.adjust(Duration.seconds(3));
+        const timedResult = yield* Fiber.join(timed);
+        expect(Option.isNone(timedResult)).toBe(true);
+        expect(yield* Ref.get(control.active)).toBe(0);
+      }),
+  );
+
+  it.effect("preserves the typed non-materialized failure and releases its registration", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const control = yield* ProgressWaitTestControl;
+      const missing = decodeConversationId("conversation-progress-missing");
+      const exit = yield* Effect.exit(runtime.awaitProgress(missing, ZERO_SEQUENCE, CALLER));
+      expect(failureTag(exit)).toBe("ConversationNotMaterialized");
+      expect(yield* Ref.get(control.active)).toBe(0);
+    }),
+  );
+});
+
 layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
+  it.effect("#94 observes already-committed durable progress without polling", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"ok"}'));
+      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const conversationId = decodeConversationId("conversation-progress-committed");
+
+      yield* runtime.submit(
+        agent,
+        { question: "already committed?" },
+        submitOptions(conversationId, "progress-committed-1"),
+      );
+
+      yield* runtime.awaitProgress(conversationId, ZERO_SEQUENCE, CALLER);
+    }),
+  );
+
   it.effect("submit returns a durable Receipt once admission and readiness commit", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;

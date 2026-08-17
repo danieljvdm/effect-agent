@@ -37,6 +37,13 @@ Each Effect service is tested with deterministic TestClock, test providers, and
 scoped resources. Tests assert typed failures and interruption cleanup, not only
 returned values.
 
+Durable progress waits additionally force both lost-wakeup interleavings (notify after subscribe
+but before the canonical check, and notify after the check but before park), count canonical reads
+over an advanced TestClock, broadcast to concurrent same-conversation waiters, isolate unrelated
+lanes, and verify cancellation cleanup. The Cloudflare suite repeats the public client/Object
+boundary with typed authorization/store failures, deterministic client cryptography, explicit
+waiter-registration latches, fiber interruption, and a real `ctx.abort()` reconstruction (#94).
+
 ### 1.4 Adapter conformance
 
 Every implementation of a framework port runs the same behavioral suite. An

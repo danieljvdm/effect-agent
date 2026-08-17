@@ -31,6 +31,7 @@
     "context-economics",
     "context-review-fixes",
     "delegation-containment",
+    "durable-progress-wait",
     "effect-agent-umbrella",
     "efficient-pr-review",
     "friendly-cloudflare-peer",

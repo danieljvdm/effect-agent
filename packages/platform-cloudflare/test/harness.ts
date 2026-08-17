@@ -1,13 +1,13 @@
 import { SubmissionId } from "@effect-agent/core";
 import {
-  OperationCaller,
+  type OperationCaller,
   submissionInputRecordId,
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, Layer, Schema } from "effect";
+import { Crypto, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
@@ -80,24 +80,80 @@ export const stubFor = (conversation: string, namespace: TestNamespace = "CONVER
   return binding.get(binding.idFromName(conversation));
 };
 
+let nextProgressWaitIdentity = 0;
+const deterministicClientCrypto = Layer.succeed(
+  Crypto.Crypto,
+  Crypto.make({
+    randomBytes: (size) => {
+      let identity = ++nextProgressWaitIdentity;
+      const bytes = new Uint8Array(size);
+      for (let index = size - 1; index >= 0 && identity > 0; index--) {
+        bytes[index] = identity & 0xff;
+        identity = Math.floor(identity / 0x100);
+      }
+      return bytes;
+    },
+    digest: (_algorithm, data) => Effect.succeed(data),
+  }),
+);
+
+const clientLayer = (namespace: TestNamespace) =>
+  CloudflareConversationClient.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ConversationObjectNamespace.layer(
+          env[namespace] as unknown as DurableObjectNamespace<ConversationObjectRpc>,
+        ),
+        deterministicClientCrypto,
+      ),
+    ),
+  );
+
 /** Run one client Effect against a namespace binding through the real Worker-side client. */
 export const runClient = <A, E>(
   effect: Effect.Effect<A, E, CloudflareConversationClient>,
   namespace: TestNamespace = "CONVERSATIONS",
-): Promise<A> =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.provide(
-        CloudflareConversationClient.layer.pipe(
-          Layer.provide(
-            ConversationObjectNamespace.layer(
-              env[namespace] as unknown as DurableObjectNamespace<ConversationObjectRpc>,
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
+): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(clientLayer(namespace))));
+
+/** Fork one client Effect so tests can interrupt the real Worker-side caller deterministically. */
+export const runClientFiber = <A, E>(
+  effect: Effect.Effect<A, E, CloudflareConversationClient>,
+  namespace: TestNamespace = "CONVERSATIONS",
+) => Effect.runFork(effect.pipe(Effect.provide(clientLayer(namespace))));
+
+const isDurableObjectReset = (cause: unknown): boolean =>
+  typeof cause === "object" &&
+  cause !== null &&
+  (("retryable" in cause && cause.retryable === true) ||
+    ("durableObjectReset" in cause && cause.durableObjectReset === true));
+
+/**
+ * Follow an aborted Object to a fresh incarnation, then park on its exact waiter count.
+ * Attempts repeat only when the transport reports a reset or still reaches the prior
+ * incarnation; the count condition itself is an Object-side latch, never a timed poll.
+ */
+export const awaitReconstructedProgressWaiter = async (
+  conversation: string,
+  previousIncarnation: number,
+  expected: number,
+): Promise<number> => {
+  let lastReset: unknown;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      const incarnation = await (
+        stubFor(conversation) as DurableObjectStub<TestConversationObject>
+      ).awaitProgressWaiterCountAfter(previousIncarnation, expected);
+      if (incarnation !== null) return incarnation;
+    } catch (cause) {
+      if (!isDurableObjectReset(cause)) throw cause;
+      lastReset = cause;
+    }
+    await Effect.runPromise(Effect.yieldNow);
+  }
+  throw new Error("#94 progress waiter did not reach a reconstructed Object", {
+    cause: lastReset,
+  });
+};
 
 /** Exit-capturing variant for rows whose client call is EXPECTED to die mid-eviction. */
 export const runClientExit = <A, E>(

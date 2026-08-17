@@ -1,5 +1,22 @@
 # @effect-agent/session
 
+## 0.1.0-beta.16
+
+### Minor Changes
+
+- [#99](https://github.com/danieljvdm/effect-agent/pull/99) [`e4b32b5`](https://github.com/danieljvdm/effect-agent/commit/e4b32b54061e58de57d5c27f06f8ef2a821ccb38) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add the Effect-native durable progress wait from [#94](https://github.com/danieljvdm/effect-agent/issues/94). Runtime and Cloudflare callers now subscribe
+  before an authoritative canonical read, wake from post-commit hints without polling, broadcast to
+  concurrent same-conversation waiters, clean up on interruption, and reconnect safely after Durable
+  Object eviction. Cloudflare observation and resolution calls also preserve typed authorization
+  denials, and the client Layer now requires an explicit `Crypto.Crypto` provider for cancellation
+  identities.
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.16
+  - @effect-agent/engine@0.1.0-beta.16
+
 ## 0.1.0-beta.15
 
 ### Patch Changes

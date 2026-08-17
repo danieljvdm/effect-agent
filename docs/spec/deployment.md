@@ -103,7 +103,10 @@ class WakeScheduler extends Context.Service<WakeScheduler, {...}>()(
   It absorbs the earlier `AttemptOwnership` prose service; claims mint Attempt identity and
   fencing evidence atomically with queue-head selection.
 - `WakeScheduler` is a pure liveness hint whose notifications may be dropped, coalesced, or
-  duplicated; consumers must pair subscriptions with ledger scans.
+  duplicated. Workers pair the all-lanes stream with ledger scans. Public progress waits use a
+  separate conversation-keyed, Scope-owned one-shot registration: subscribe first, read one
+  canonical record second, then park. The canonical read is authoritative; the notification only
+  tells the caller to read again.
 
 Earlier drafts referred to a `DurableStorage` service; that was prose shorthand and no such port
 exists. Two further ports are explicitly deferred: an `AttachmentStore` (digest-addressed durable
@@ -330,6 +333,19 @@ record is canonical but before child ledger finalization, the child routes the i
 settlement marker to the parent. That routed mutation pre-arms and dirties the parent, so child
 eviction after finalization cannot strand a quiescent parent. Same-store ledgers accept this
 notification only for the exact `terminalizing` reservation; earlier states fail closed.
+
+`CloudflareConversationClient.awaitProgress(conversationId, afterSequence)` carries that same
+Effect-native boundary across RPC. A normal wait performs no periodic read and creates no alarm
+loop. Every canonical append and the durable approval/unknown/abort/settlement transitions emit a
+best-effort hint after their authoritative commit. RPC interruption sends a scoped cancellation;
+an Object eviction rejects the old call, after which the client retries only a platform-classified
+reset with a fresh stub. The reconstructed Object subscribes and rereads canonical storage before
+parking, so disposable memory can neither strand the caller nor impersonate durable progress.
+Each logical client wait obtains one UUID from the explicit `Crypto.Crypto` capability and reuses it
+across reset attempts. That identity groups duplicate transport attempts for cancellation but
+remains disposable coordination state; canonical records alone establish durable progress.
+Host-supplied `CloudflareDurableRuntimeOptions.operationAuthorizer` decisions cross observation,
+progress, approval, and unknown-resolution RPCs as the typed `OperationDenied`.
 
 The target is no longer experimental: the generic durability conformance suite —
 the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the

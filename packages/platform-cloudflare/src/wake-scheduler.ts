@@ -1,5 +1,5 @@
 import type { ConversationId } from "@effect-agent/core";
-import { WakeScheduler } from "@effect-agent/session";
+import { makeWakeSubscriptionHub, WakeScheduler } from "@effect-agent/session";
 import { Effect, Layer, PubSub, Schema, Stream } from "effect";
 
 import { DurableAlarmService } from "./alarm.ts";
@@ -42,10 +42,12 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
     const identity = yield* ConversationObjectIdentity;
     const { namespace } = yield* ConversationObjectNamespace;
     const hints = yield* PubSub.sliding<ConversationId>(WAKE_BUFFER_CAPACITY);
+    const progress = yield* makeWakeSubscriptionHub;
     yield* Effect.addFinalizer(() => PubSub.shutdown(hints));
 
     const notifyLocal = (conversationId: ConversationId) =>
-      PubSub.publish(hints, conversationId).pipe(
+      progress.notify(conversationId).pipe(
+        Effect.andThen(PubSub.publish(hints, conversationId)),
         Effect.andThen(alarm.scheduleNow),
         Effect.catch((error) =>
           // `notify` never fails by contract; a failed alarm write degrades to "hint lost"
@@ -79,6 +81,7 @@ export const cloudflareWakeSchedulerLayer: Layer.Layer<
         conversationId === identity.conversationId
           ? notifyLocal(conversationId)
           : notifyRemote(conversationId),
+      subscribe: progress.subscribe,
       wakes: Stream.fromPubSub(hints),
     });
   }),

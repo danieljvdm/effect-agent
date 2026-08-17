@@ -1059,7 +1059,13 @@ describe("DC eviction matrix — checkpoints and export", () => {
         }),
       ),
     );
-    await expect(stubFor(conversation).portCall(request)).rejects.toThrow();
+    const failure = await runInDurableObject(stubFor(conversation), (instance) =>
+      instance.portCall(request),
+    ).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeDefined();
     expect(armConsumed(conversation)).toBe(true);
     const after = await readCanonical(conversation);
     expect(after).toEqual(before);

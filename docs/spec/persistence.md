@@ -357,8 +357,14 @@ Projection consumers checkpoint their own canonical sequence and are idempotent.
 They may lag, fail, and rebuild without blocking the engine's canonical append,
 unless a specific projection is declared part of admission or settlement.
 
-Notifications use an outbox committed with canonical state. A dropped notification
-cannot cause lost work because schedulers also scan the ledger.
+Notifications are disposable liveness hints emitted only after the relevant durable mutation. A
+dropped notification cannot cause lost work because schedulers also scan the ledger. An
+interactive progress wait does not scan periodically: it installs a conversation-specific scoped
+registration before a strongly consistent one-record canonical read, returns immediately when a
+record after the caller's sequence already exists, and otherwise parks on that registration. A
+wake is allowed to be a false positive and only asks the caller to reread canonical records.
+Eviction discards registrations; reconnect/retry reconstructs the registration and repeats the
+authoritative read.
 
 ## 15. Requirements
 
@@ -382,3 +388,5 @@ cannot cause lost work because schedulers also scan the ledger.
 - **STORE-012**: Canonical records are retained indefinitely during private development.
 - **STORE-013**: Node/SQLite and Cloudflare Durable Object adapters implement the same Effect
   service contracts and conformance suite.
+- **STORE-014**: Public progress waits close subscribe/check and check/park races without making
+  in-memory notifications authoritative or adding a periodic polling/alarm loop.

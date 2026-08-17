@@ -31,6 +31,7 @@ import {
   SettlementConflict,
   SubmissionLedger,
   SubmissionLookupByKey,
+  WakeScheduler,
   type DurableSubmitAgent,
 } from "@effect-agent/session";
 import { decodePortRequestMutation } from "@effect-agent/storage-cloudflare";
@@ -60,6 +61,8 @@ import {
   HostFailed,
   HostProtocolError,
   ObservedPage,
+  ProgressObserved,
+  ProgressCancelled,
   SettlementReached,
   SubmitSucceeded,
   UnknownResolutionRecorded,
@@ -67,6 +70,8 @@ import {
   decodeAbortHostRequest,
   decodeApprovalHostRequest,
   decodeAwaitSettlementRequest,
+  decodeAwaitProgressRequest,
+  decodeCancelProgressRequest,
   decodeObservePageRequest,
   decodeSubmitRequest,
   decodeUnknownResolutionHostRequest,
@@ -82,6 +87,7 @@ import {
   type CloudflareDurableRuntimeOptions,
   type CloudflareDurableRuntimeServices,
 } from "./layers.ts";
+import { ProgressWaitRegistry } from "./progress-wait.ts";
 
 /**
  * `makeConversationObjectClass(options, authorization, observability?)` — the Conversation Durable Object
@@ -263,6 +269,46 @@ const awaitSettlementEndpoint = (
         const runtime = yield* DurableAgentRuntime;
         const settlement = yield* runtime.awaitSettlement(request.receipt, request.caller);
         return SettlementReached.make({ settlement });
+      }),
+    ),
+    respond,
+    Effect.flatMap(encodeResponse),
+  );
+
+const awaitProgressEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeAwaitProgressRequest(encoded).pipe(
+    Effect.mapError(protocolFailure("The progress request could not be decoded")),
+    Effect.flatMap((request) =>
+      Effect.gen(function* () {
+        const identity = yield* ConversationObjectIdentity;
+        const runtime = yield* DurableAgentRuntime;
+        const registry = yield* ProgressWaitRegistry;
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const cancelled = yield* registry.subscribe(request.waiterId);
+            yield* Effect.raceFirst(
+              runtime.awaitProgress(identity.conversationId, request.afterSequence, request.caller),
+              cancelled,
+            );
+          }),
+        );
+        return ProgressObserved.make();
+      }),
+    ),
+    respond,
+    Effect.flatMap(encodeResponse),
+  );
+
+const cancelProgressEndpoint = (
+  encoded: unknown,
+): Effect.Effect<unknown, never, EndpointServices> =>
+  decodeCancelProgressRequest(encoded).pipe(
+    Effect.mapError(protocolFailure("The progress cancellation could not be decoded")),
+    Effect.flatMap((request) =>
+      Effect.gen(function* () {
+        const registry = yield* ProgressWaitRegistry;
+        yield* registry.cancel(request.waiterId);
+        return ProgressCancelled.make();
       }),
     ),
     respond,
@@ -586,12 +632,11 @@ const portCallEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpo
   });
 
 const wakeEndpoint: Effect.Effect<void, never, EndpointServices> = Effect.gen(function* () {
-  const alarm = yield* DurableAlarmService;
-  // Wake hints are droppable by contract: a failed alarm write is logged and swallowed; the
-  // sender's own alarm/scan pairing (or this Object's next entry point) restores liveness.
-  yield* alarm.scheduleNow.pipe(
-    Effect.catch((error) => Effect.logWarning("ConversationObject.wake dropped", error)),
-  );
+  const identity = yield* ConversationObjectIdentity;
+  const wake = yield* WakeScheduler;
+  // Route the remote hint through this incarnation's scheduler so scoped progress waiters and
+  // the alarm receive the same hint. Delivery remains droppable; canonical storage is authority.
+  yield* wake.notify(identity.conversationId);
 });
 
 const alarmEndpoint: Effect.Effect<void, MaintenancePassFailure, EndpointServices> = Effect.gen(
@@ -646,6 +691,8 @@ const effectCfPlatformLayer = (
 export interface ConversationObjectInstance extends CloudflareDurableObject {
   submitEncoded(encoded: unknown): Promise<unknown>;
   awaitSettlementEncoded(encoded: unknown): Promise<unknown>;
+  awaitProgressEncoded(encoded: unknown): Promise<unknown>;
+  cancelProgressEncoded(encoded: unknown): Promise<unknown>;
   observePage(encoded: unknown): Promise<unknown>;
   abortEncoded(encoded: unknown): Promise<unknown>;
   resolveApprovalEncoded(encoded: unknown): Promise<unknown>;
@@ -721,6 +768,8 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
   const rpc = {
     submitEncoded: (encoded: unknown) => submitEndpoint(encoded),
     awaitSettlementEncoded: (encoded: unknown) => awaitSettlementEndpoint(encoded),
+    awaitProgressEncoded: (encoded: unknown) => awaitProgressEndpoint(encoded),
+    cancelProgressEncoded: (encoded: unknown) => cancelProgressEndpoint(encoded),
     observePage: (encoded: unknown) => observePageEndpoint(encoded),
     abortEncoded: (encoded: unknown) => abortEndpoint(encoded),
     resolveApprovalEncoded: (encoded: unknown) => resolveApprovalEndpoint(encoded),

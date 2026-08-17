@@ -20,6 +20,7 @@ import {
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing";
+import { BrowserCrypto } from "@effect/platform-browser";
 import { Effect, Layer, Schema } from "effect";
 
 import {
@@ -161,8 +162,11 @@ const runClient = <A, E>(
       Effect.provide(
         CloudflareConversationClient.layer.pipe(
           Layer.provide(
-            ConversationObjectNamespace.layer(
-              env.CONVERSATIONS as unknown as DurableObjectNamespace<ConversationObjectRpc>,
+            Layer.mergeAll(
+              ConversationObjectNamespace.layer(
+                env.CONVERSATIONS as unknown as DurableObjectNamespace<ConversationObjectRpc>,
+              ),
+              BrowserCrypto.layer,
             ),
           ),
         ),
