@@ -68,6 +68,7 @@ const DEFINITION_PATTERN = /^- \*\*([A-Z]{2,7}-\d{3})(?:\*\*:|:\*\*)/;
 const EXCEPTIONS_HEADING = "## Coverage exceptions";
 
 const json = Flag.boolean("json").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Print the Schema-encoded coverage report as JSON instead of the summary."),
 );
 

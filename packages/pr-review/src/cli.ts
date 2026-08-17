@@ -53,14 +53,17 @@ const effortFlag = Flag.string("effort").pipe(
   ),
 );
 const postFlag = Flag.boolean("post").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Post the review to GitHub; without it the plan prints to stdout."),
 );
 const applyVerdictFlag = Flag.boolean("apply-verdict").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Map the model verdict onto APPROVE/REQUEST_CHANGES instead of always COMMENT.",
   ),
 );
 const fanOutFlag = Flag.boolean("fan-out").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Fan the review out to bounded per-unit subagent reviewers (S1 attached delegation) instead of one flat reviewer.",
   ),
@@ -76,6 +79,7 @@ const maxFindingsFlag = Flag.integer("max-findings").pipe(
   Flag.withDescription("Findings bound (1-20); the schema cap of 20 applies regardless."),
 );
 const skipUnchangedFlag = Flag.boolean("skip-unchanged").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Skip when the changeset fingerprint matches the last posted review (explicit runs review unconditionally by default).",
   ),

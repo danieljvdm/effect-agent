@@ -31,6 +31,7 @@ const modelFlag = Flag.string("model").pipe(
   Flag.withDescription("OpenAI model id (defaults to the package default)."),
 );
 const postFlag = Flag.boolean("post").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Post the review to GitHub; without it the plan prints to stdout."),
 );
 

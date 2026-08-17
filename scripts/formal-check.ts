@@ -99,10 +99,12 @@ const toolsFlag = Flag.string("tools").pipe(
 );
 
 const parseOnly = Flag.boolean("parse-only").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Run the SANY parser on both specifications and skip model checking."),
 );
 
 const skipDownload = Flag.boolean("skip-download").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Never download tla2tools.jar; fail if no local copy exists."),
 );
 

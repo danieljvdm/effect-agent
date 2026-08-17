@@ -14,12 +14,14 @@ const database = Flag.file("database").pipe(
 );
 
 const confirmPrivateDevelopment = Flag.boolean("confirm-private-development").pipe(
+  Flag.withDefault(false),
   Flag.withDescription(
     "Confirm that this is disposable private-development data and no stored-data migration is expected.",
   ),
 );
 
 const dryRun = Flag.boolean("dry-run").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Print the files that would be removed without changing them."),
 );
 
