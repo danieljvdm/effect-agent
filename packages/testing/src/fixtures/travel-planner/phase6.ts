@@ -11,7 +11,7 @@ import {
   type ResolvedBinding,
   type ToolReconciler,
 } from "@effect-agent/session";
-import { Duration, Effect, Layer, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Ref, Schema, Stream, SynchronizedRef } from "effect";
 import { LanguageModel, Model, type Response } from "effect/unstable/ai";
 
 import { TravelPlan, TripRequest } from "./definition.ts";
@@ -288,31 +288,6 @@ const plannerDecide = (promptJson: string): Stream.Stream<Response.StreamPartEnc
  */
 export const phase6PlannerModel = promptAwareModel("travel-planner-phase-4", plannerDecide);
 
-// ---------------------------------------------------------------------------
-// Deterministic test gate for the admission-limits rows. Module state is
-// intentionally NOT durable: it plays the external world's role (a slow
-// upstream model), never Conversation state.
-// ---------------------------------------------------------------------------
-
-const releasedPlannerGates = new Set<string>();
-
-/** Release the gated planner model for one `[gate:...]` marker. */
-export const releasePhase6PlannerGate = (marker: string): void => {
-  releasedPlannerGates.add(marker);
-};
-
-/** Re-close one gate marker (fresh suites reuse markers safely). */
-export const resetPhase6PlannerGate = (marker: string): void => {
-  releasedPlannerGates.delete(marker);
-};
-
-const awaitPlannerGate = (marker: string): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    while (!releasedPlannerGates.has(marker)) {
-      yield* Effect.sleep(Duration.millis(10));
-    }
-  });
-
 const gateMarkerFromPrompt = (promptJson: string): string =>
   /\[gate:([^\]]+)\]/.exec(promptJson)?.[1] ?? "unknown-gate";
 
@@ -334,59 +309,28 @@ export const phase6GatedTrip = (marker: string): TripRequest =>
  * gate before answering, keeping its lane durably busy so queue-depth admission limits can be
  * exercised deterministically.
  */
-export const phase6GatedPlannerModel = Model.make(
-  "scripted",
-  "travel-planner-phase-4-gated",
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: (options) =>
-        Stream.unwrap(
-          Effect.sync(() => {
-            const promptJson = JSON.stringify(options.prompt);
-            return promptJson.includes(phase6FlightCallId)
-              ? plannerDecide(promptJson)
-              : Stream.fromEffectDrain(awaitPlannerGate(gateMarkerFromPrompt(promptJson))).pipe(
-                  Stream.concat(plannerDecide(promptJson)),
-                );
-          }),
-        ),
-    }),
-  ),
-);
-
-// ---------------------------------------------------------------------------
-// P5 booking slice: the SAME phase-5 booking agent and supplier desk. The desk
-// is a module-level singleton because it IS the external supplier: like a real
-// supplier's ledger, its bookings and call counters survive `ctx.abort()` and
-// incarnation loss, which is exactly what the never-fabricate and
-// executed-once assertions measure.
-// ---------------------------------------------------------------------------
-
-const sharedSupplierDesk = Effect.runSync(
-  Effect.flatMap(SupplierBookingDesk, Effect.succeed).pipe(
-    Effect.provide(SupplierBookingDesk.layer),
-  ),
-);
-
-/** The shared external supplier desk instance (module-level external truth). */
-export const phase6SupplierDesk = sharedSupplierDesk;
-
-/** Layer handing the shared desk to Bindings, reconcilers, and assertions. */
-export const phase6SupplierDeskLayer: Layer.Layer<SupplierBookingDesk> = Layer.succeed(
-  SupplierBookingDesk,
-  sharedSupplierDesk,
-);
-
-/**
- * The REAL P5 supplier reconciliation policy over the shared desk, closed to no requirements
- * so a Conversation Object can install it directly: `book_flight` recovers only from supplier
- * truth (absence stays fail-closed `Uncertain` → durable Unknown Outcome), keyed Steps are
- * provably re-enterable.
- */
-export const phase6SupplierReconcilerLayer: Layer.Layer<ToolReconciler> =
-  TravelSupplierReconcilerLayer.pipe(Layer.provide(phase6SupplierDeskLayer));
+const makePhase6GatedPlannerModel = (awaitPlannerGate: (marker: string) => Effect.Effect<void>) =>
+  Model.make(
+    "scripted",
+    "travel-planner-phase-4-gated",
+    Layer.effect(
+      LanguageModel.LanguageModel,
+      LanguageModel.make({
+        generateText: () => Effect.succeed([]),
+        streamText: (options) =>
+          Stream.unwrap(
+            Effect.sync(() => {
+              const promptJson = JSON.stringify(options.prompt);
+              return promptJson.includes(phase6FlightCallId)
+                ? plannerDecide(promptJson)
+                : Stream.fromEffectDrain(awaitPlannerGate(gateMarkerFromPrompt(promptJson))).pipe(
+                    Stream.concat(plannerDecide(promptJson)),
+                  );
+            }),
+          ),
+      }),
+    ),
+  );
 
 const bookingMarkerFromPrompt = (promptJson: string): string =>
   /\[case:([^\]]+)\]/.exec(promptJson)?.[1] ?? "unknown-case";
@@ -453,28 +397,16 @@ export const phase6BookingModel = promptAwareModel("travel-planner-phase-5", (pr
     : Stream.fromIterable(bookingCallParts(marker));
 });
 
-// ---------------------------------------------------------------------------
-// S2 delegation slice: the SAME coordinator → destination-researcher pair.
-// The guide invocation counter is module state for the same reason as the
-// desk: it is the child's external side-effect record, and "the completed
-// child never re-executes" is asserted against it across evictions.
-// ---------------------------------------------------------------------------
-
-let guideInvocations = 0;
-
-/** Deterministic guide-lookup handler executions across every incarnation. */
-export const phase6GuideInvocationCount = (): number => guideInvocations;
-
-const countingGuideLayer = Layer.succeed(
-  DestinationGuide,
-  DestinationGuide.of({
-    lookup: (query) =>
-      Effect.suspend(() => {
-        guideInvocations += 1;
-        return destinationLookup(query);
-      }),
-  }),
-);
+const makeCountingGuideLayer = (guideInvocations: Ref.Ref<number>) =>
+  Layer.succeed(
+    DestinationGuide,
+    DestinationGuide.of({
+      lookup: (query) =>
+        Ref.update(guideInvocations, (count) => count + 1).pipe(
+          Effect.andThen(destinationLookup(query)),
+        ),
+    }),
+  );
 
 /** The one-candidate research mission of the DC delegation slice. */
 export const phase6ResearchMission = Schema.decodeUnknownSync(ResearchMission)({
@@ -540,24 +472,6 @@ export const phase6CoordinatorModel = promptAwareModel("travel-coordinator-p6", 
     : Stream.fromIterable(coordinatorDelegationParts),
 );
 
-let researcherGateReleased = false;
-
-/** Allow the researcher's FIRST model response to proceed (sticky across incarnations). */
-export const releasePhase6ResearcherGate = (): void => {
-  researcherGateReleased = true;
-};
-
-/** Re-close the researcher gate (each delegation scenario starts gated). */
-export const resetPhase6ResearcherGate = (): void => {
-  researcherGateReleased = false;
-};
-
-const awaitResearcherGate: Effect.Effect<void> = Effect.gen(function* () {
-  while (!researcherGateReleased) {
-    yield* Effect.sleep(Duration.millis(10));
-  }
-});
-
 /**
  * Prompt-aware S2 researcher: guide lookup first, report once it is history. The FIRST
  * response waits on the researcher gate — a stand-in for real model latency. The child's own
@@ -567,35 +481,100 @@ const awaitResearcherGate: Effect.Effect<void> = Effect.gen(function* () {
  * in seconds, so establishment always wins that race in production; the gate reproduces that
  * timing deterministically instead of relying on scheduler luck.
  */
-export const phase6ResearcherModel = promptAwareModel("destination-researcher-p6", (promptJson) =>
-  promptJson.includes(phase6ChildLookupCallId)
-    ? Stream.fromIterable(researcherReportParts)
-    : Stream.fromEffectDrain(awaitResearcherGate).pipe(
-        Stream.concat(Stream.fromIterable(researcherLookupParts)),
-      ),
-);
+const makePhase6ResearcherModel = (awaitResearcherGate: Effect.Effect<void>) =>
+  promptAwareModel("destination-researcher-p6", (promptJson) =>
+    promptJson.includes(phase6ChildLookupCallId)
+      ? Stream.fromIterable(researcherReportParts)
+      : Stream.fromEffectDrain(awaitResearcherGate).pipe(
+          Stream.concat(Stream.fromIterable(researcherLookupParts)),
+        ),
+  );
 
 // ---------------------------------------------------------------------------
 // Worker Binding registrations for the DC Conversation Object
 // ---------------------------------------------------------------------------
 
+/** Fresh, explicitly owned external truth and deterministic controls for one Phase 6 host. */
+export interface Phase6TravelPlannerHarness {
+  readonly bindings: Effect.Effect<ReadonlyArray<ResolvedBinding>>;
+  readonly supplierDesk: SupplierBookingDesk["Service"];
+  readonly supplierDeskLayer: Layer.Layer<SupplierBookingDesk>;
+  readonly supplierReconcilerLayer: Layer.Layer<ToolReconciler>;
+  readonly releasePlannerGate: (marker: string) => Effect.Effect<void>;
+  readonly resetPlannerGate: (marker: string) => Effect.Effect<void>;
+  readonly releaseResearcherGate: Effect.Effect<void>;
+  readonly resetResearcherGate: Effect.Effect<void>;
+  readonly guideInvocationCount: Effect.Effect<number>;
+}
+
 /**
- * Every phase-6 Travel Planner worker Binding, captured with its requirement Contexts
- * (spec/subagents.md §11): the P4 planner and its gated twin, the P5 booking agent over the
- * shared supplier desk, and the S2 coordinator/researcher pair wired through the durable
- * delegation Layer. A Conversation Object registers these via its `bindings` option; the
- * capture runs once per incarnation, and everything stateful the assertions rely on (desk,
- * guide counter, gates) lives at module level so it survives incarnation loss.
+ * Build one Phase 6 host harness. Every call owns fresh supplier truth,
+ * invocation counters, and Deferred gates; no state is acquired by importing
+ * the testing package. A host may reuse this explicit harness across Durable
+ * Object incarnations to model an external supplier while keeping suite
+ * isolation under its own composition root.
  */
-export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> =
-  Effect.gen(function* () {
+export const makePhase6TravelPlannerHarness = Effect.fn(
+  "TravelPlannerPhase6.makePhase6TravelPlannerHarness",
+)(function* (): Effect.fn.Return<Phase6TravelPlannerHarness> {
+  const plannerGates = yield* SynchronizedRef.make<ReadonlyMap<string, Deferred.Deferred<void>>>(
+    new Map(),
+  );
+  const plannerGate = (marker: string) =>
+    SynchronizedRef.modifyEffect(plannerGates, (current) => {
+      const existing = current.get(marker);
+      if (existing !== undefined) return Effect.succeed([existing, current] as const);
+      return Deferred.make<void>().pipe(
+        Effect.map((created) => [created, new Map(current).set(marker, created)] as const),
+      );
+    });
+  const releasePlannerGate = (marker: string) =>
+    plannerGate(marker).pipe(
+      Effect.flatMap((gate) => Deferred.succeed(gate, undefined)),
+      Effect.asVoid,
+    );
+  const resetPlannerGate = (marker: string) =>
+    Deferred.make<void>().pipe(
+      Effect.flatMap((next) =>
+        SynchronizedRef.update(plannerGates, (current) => new Map(current).set(marker, next)),
+      ),
+    );
+  const awaitPlannerGate = (marker: string) =>
+    plannerGate(marker).pipe(Effect.flatMap(Deferred.await));
+
+  const initialResearcherGate = yield* Deferred.make<void>();
+  const researcherGate = yield* SynchronizedRef.make(initialResearcherGate);
+  const releaseResearcherGate = SynchronizedRef.get(researcherGate).pipe(
+    Effect.flatMap((gate) => Deferred.succeed(gate, undefined)),
+    Effect.asVoid,
+  );
+  const resetResearcherGate = Deferred.make<void>().pipe(
+    Effect.flatMap((next) => SynchronizedRef.set(researcherGate, next)),
+  );
+  const awaitResearcherGate = SynchronizedRef.get(researcherGate).pipe(
+    Effect.flatMap(Deferred.await),
+  );
+
+  const supplierDesk = yield* Effect.flatMap(SupplierBookingDesk, Effect.succeed).pipe(
+    Effect.provide(SupplierBookingDesk.layer),
+  );
+  const supplierDeskLayer = Layer.succeed(SupplierBookingDesk, supplierDesk);
+  const supplierReconcilerLayer: Layer.Layer<ToolReconciler> = TravelSupplierReconcilerLayer.pipe(
+    Layer.provide(supplierDeskLayer),
+  );
+  const guideInvocations = yield* Ref.make(0);
+  const countingGuideLayer = makeCountingGuideLayer(guideInvocations);
+  const gatedPlannerModel = makePhase6GatedPlannerModel(awaitPlannerGate);
+  const researcherModel = makePhase6ResearcherModel(awaitResearcherGate);
+
+  const bindings: Effect.Effect<ReadonlyArray<ResolvedBinding>> = Effect.gen(function* () {
     const planner: ResolvedBinding = yield* DurableWorkerBinding.make(
       Agent.withModel(TravelPlannerPhase4, phase6PlannerModel),
       phase4TravelPlannerDefinitionDigests,
     ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
 
     const gatedPlanner: ResolvedBinding = yield* DurableWorkerBinding.make(
-      Agent.withModel(TravelPlannerPhase4, phase6GatedPlannerModel),
+      Agent.withModel(TravelPlannerPhase4, gatedPlannerModel),
       phase6GatedPlannerDefinitionDigests,
     ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
 
@@ -603,12 +582,10 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
       Agent.withModel(TravelPlannerPhase5, phase6BookingModel),
       phase5TravelPlannerDefinitionDigests,
     ).pipe(
-      Effect.provide(
-        phase5TravelPlannerWorkerLayer.pipe(Layer.provideMerge(phase6SupplierDeskLayer)),
-      ),
+      Effect.provide(phase5TravelPlannerWorkerLayer.pipe(Layer.provideMerge(supplierDeskLayer))),
     );
 
-    const researcherBinding = Agent.withModel(DestinationResearcher, phase6ResearcherModel);
+    const researcherBinding = Agent.withModel(DestinationResearcher, researcherModel);
     const childToolkitLayer = DestinationResearcherToolkitLayer.pipe(
       Layer.provideMerge(countingGuideLayer),
     );
@@ -638,6 +615,19 @@ export const makePhase6TravelPlannerBindings: Effect.Effect<ReadonlyArray<Resolv
 
     return [planner, gatedPlanner, booking, coordinator, researcher];
   });
+
+  return {
+    bindings,
+    supplierDesk,
+    supplierDeskLayer,
+    supplierReconcilerLayer,
+    releasePlannerGate,
+    resetPlannerGate,
+    releaseResearcherGate,
+    resetResearcherGate,
+    guideInvocationCount: Ref.get(guideInvocations),
+  };
+});
 
 // ---------------------------------------------------------------------------
 // The committed golden normalized-evidence fixture (D-P6-6)
