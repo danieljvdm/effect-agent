@@ -1,5 +1,19 @@
 # @effect-agent/session
 
+## 0.1.0-beta.15
+
+### Patch Changes
+
+- [#97](https://github.com/danieljvdm/effect-agent/pull/97) [`38ac06e`](https://github.com/danieljvdm/effect-agent/commit/38ac06eea0956d7bef4576c5e527c6053f5a86f0) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Make Cloudflare Conversation maintenance durably incremental and quiescent ([#93](https://github.com/danieljvdm/effect-agent/issues/93)). Stable
+  externally-driven waits now clear their alarm after acknowledging the observed maintenance
+  generation, while pre-armed public and routed mutations, restart recovery, and bounded autonomous
+  rearming preserve liveness. A caught-up forced alarm takes an O(1) maintenance-record path without
+  recovery, ledger scans, or canonical-history reads. Child settlements also commit the parent's
+  durable wake before child ledger finalization, preventing eviction from losing a quiescent join.
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.15
+  - @effect-agent/engine@0.1.0-beta.15
+
 ## 0.1.0-beta.14
 
 ### Patch Changes
