@@ -20,11 +20,6 @@ export default defineConfig({
     sourcemap: true,
   },
   test: {
-    // The eviction harness ABORTS Durable Objects mid-flight by design; the pool surfaces
-    // each abort's orphaned in-flight promise as an "unhandled error" (durableObjectReset)
-    // even when every test passes. Convergence is asserted explicitly by every row, so
-    // these by-design rejections must not fail the run. Root-level only (non-project option).
-    dangerouslyIgnoreUnhandledErrors: true,
     projects: [
       {
         plugins: [

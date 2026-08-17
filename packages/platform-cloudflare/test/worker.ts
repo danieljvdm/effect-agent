@@ -1,7 +1,11 @@
 import { OperationDenied } from "@effect-agent/session";
 import { Effect } from "effect";
 
-import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
+import {
+  makeConversationObjectClass,
+  type ConversationObjectOptions,
+  type ConversationObjectRpc,
+} from "../src/index.ts";
 import {
   CONVERSATIONS_BINDING,
   DEPLOYMENT_ID,
@@ -246,27 +250,75 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
 /**
  * The WP4 cross-Object subagent matrix's Conversation Object: parent and child Conversations
  * of one delegation are DIFFERENT Objects of this namespace by the identity rule. The
- * `portCall` override is the DO-unreachable lever — an armed transport fault makes the
- * incoming cross-Object RPC reject exactly like an unreachable Object's stub would, BEFORE
- * any owner-side execution, so the routed caller observes a `PortTransportError` (and
- * `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Unarmed, it is a passthrough.
+ * namespace wrapper is the DO-unreachable lever — an armed transport fault makes the
+ * caller-side stub throw BEFORE owner-side execution, so the routed caller observes a
+ * `PortTransportError` (and `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Wake
+ * hints fail at the same seam and remain droppable. Unarmed, every stub is a passthrough.
  */
-export class SubagentConversationObject extends makeConversationObjectClass({
+const SubagentConversationObjectBase = makeConversationObjectClass({
   ...baseOptions,
   namespaceBinding: "SUBAGENTS",
   bindings: makeSubagentTestBindings,
-}) {
-  override async portCall(encoded: unknown): Promise<unknown> {
-    const reason = transportFaultReason(this.ctx.id.name);
-    if (reason !== undefined) throw new Error(reason);
-    return super.portCall(encoded);
-  }
+});
 
-  /** An unreachable Object drops wake hints too — droppable by contract, so senders swallow. */
-  override async wake(): Promise<void> {
-    const reason = transportFaultReason(this.ctx.id.name);
-    if (reason !== undefined) throw new Error(reason);
-    return super.wake();
+const faultableStub = <RpcService extends ConversationObjectRpc>(
+  stub: DurableObjectStub<RpcService>,
+  name: string | undefined,
+): DurableObjectStub<RpcService> =>
+  new Proxy(stub, {
+    get(target, property, receiver) {
+      if (property === "portCall") {
+        return (encoded: unknown): Promise<unknown> => {
+          const reason = transportFaultReason(name);
+          if (reason !== undefined) throw new Error(reason);
+          return target.portCall(encoded);
+        };
+      }
+      if (property === "wake") {
+        return (): Promise<void> => {
+          const reason = transportFaultReason(name);
+          if (reason !== undefined) throw new Error(reason);
+          return target.wake();
+        };
+      }
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+const faultableNamespace = <RpcService extends ConversationObjectRpc>(
+  namespace: DurableObjectNamespace<RpcService>,
+): DurableObjectNamespace<RpcService> =>
+  new Proxy(namespace, {
+    get(target, property, receiver) {
+      if (property === "get") {
+        return (
+          id: DurableObjectId,
+          options?: DurableObjectNamespaceGetDurableObjectOptions,
+        ): DurableObjectStub<RpcService> => faultableStub(target.get(id, options), id.name);
+      }
+      if (property === "getByName") {
+        return (
+          name: string,
+          options?: DurableObjectNamespaceGetDurableObjectOptions,
+        ): DurableObjectStub<RpcService> => faultableStub(target.getByName(name, options), name);
+      }
+      const value: unknown = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+
+const faultableEnvironment = (env: Cloudflare.Env): Cloudflare.Env =>
+  new Proxy(env, {
+    get(target, property, receiver) {
+      if (property === "SUBAGENTS") return faultableNamespace(target.SUBAGENTS);
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+export class SubagentConversationObject extends SubagentConversationObjectBase {
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    super(ctx, faultableEnvironment(env));
   }
 }
 
