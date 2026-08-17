@@ -418,6 +418,14 @@ export const makeReviewInstructions =
 /** The default flat-reviewer instructions: no guidance, schema-cap findings. */
 export const reviewInstructions = makeReviewInstructions();
 
+/**
+ * Detached semantic trace capacity for one review Run. The engine default is
+ * intentionally smaller; a review owns a wider finite window because
+ * provider text chunks, all diff-read lifecycle events, and fan-out lifecycle
+ * events must remain available for host-side coverage verification.
+ */
+export const REVIEW_EVENT_REPLAY_LIMIT = 32_768;
+
 /** The default flat-reviewer execution bounds. */
 export const defaultReviewPolicy = AgentPolicy.make({
   maxTurns: 12,

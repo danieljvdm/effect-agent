@@ -4233,8 +4233,32 @@ export interface DetachedRun<Output, Error> {
   readonly observe: Stream.Stream<RunEvent>;
 }
 
-/** Maximum semantic events retained and replayed by one detached Run. */
+/** Default maximum semantic events retained and replayed by one detached Run. */
 export const MAX_DETACHED_RUN_EVENTS = 4_096;
+
+/** Hard ceiling for a caller-selected detached semantic event replay window. */
+export const MAX_DETACHED_RUN_EVENT_REPLAY_LIMIT = 65_536;
+
+/**
+ * Options accepted by `AgentRuntime.start`.
+ *
+ * `maxReplayEvents` lets the workload owner select a larger finite replay
+ * window when its declared model and Tool bounds can legitimately emit more
+ * than the engine default. Finite values are normalized to a positive integer
+ * and capped at `MAX_DETACHED_RUN_EVENT_REPLAY_LIMIT`; non-finite values use
+ * the default.
+ */
+export interface DetachedRunOptions<HookError = never, HookRequirements = never> extends RunOptions<
+  HookError,
+  HookRequirements
+> {
+  readonly maxReplayEvents?: number | undefined;
+}
+
+const detachedRunReplayLimit = (configured: number | undefined): number =>
+  configured === undefined || !Number.isFinite(configured)
+    ? MAX_DETACHED_RUN_EVENTS
+    : Math.min(MAX_DETACHED_RUN_EVENT_REPLAY_LIMIT, Math.max(1, Math.floor(configured)));
 
 /**
  * Typed failure raised by `AgentRuntime.start` before detached event capture
@@ -4274,7 +4298,7 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     InstructionRequirements
   >,
   input: unknown,
-  options: RunOptions<HookError, HookRequirements> = {},
+  options: DetachedRunOptions<HookError, HookRequirements> = {},
 ): Effect.fn.Return<
   DetachedRun<
     Agent.Output<typeof agent>,
@@ -4284,6 +4308,7 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   AgentRuntimeRequirements<typeof agent, HookRequirements, InstructionRequirements> | Scope.Scope
 > {
   yield* Scope.Scope;
+  const maxReplayEvents = detachedRunReplayLimit(options.maxReplayEvents);
   // Single-writer append-only trace owned by the Run fiber; readers only see
   // it after the fiber settles, so a plain array avoids the quadratic cost of
   // copying an immutable Ref array per event.
@@ -4291,8 +4316,8 @@ const start = Effect.fn("AgentRuntime.start")(function* <
   // Capacity admits the complete bounded replay plus its terminal Take. A
   // subscriber that never consumes therefore cannot backpressure completion.
   const pubsub = yield* PubSub.bounded<Take.Take<RunEvent>>({
-    capacity: MAX_DETACHED_RUN_EVENTS + 1,
-    replay: MAX_DETACHED_RUN_EVENTS + 1,
+    capacity: maxReplayEvents + 1,
+    replay: maxReplayEvents + 1,
   });
   yield* Effect.addFinalizer(() => PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(
@@ -4300,11 +4325,11 @@ const start = Effect.fn("AgentRuntime.start")(function* <
     stream(agent, input, options).pipe(
       Stream.tap((event) =>
         Effect.suspend(() => {
-          if (captured.length >= MAX_DETACHED_RUN_EVENTS) {
+          if (captured.length >= maxReplayEvents) {
             return Effect.fail(
               RunEventBufferOverflow.make({
-                maxEvents: MAX_DETACHED_RUN_EVENTS,
-                message: `Detached Run exceeded its ${MAX_DETACHED_RUN_EVENTS} semantic event replay limit`,
+                maxEvents: maxReplayEvents,
+                message: `Detached Run exceeded its ${maxReplayEvents} semantic event replay limit`,
               }),
             );
           }
@@ -5187,7 +5212,7 @@ export interface SpawnDelegation {
  * identity and the Parent Link are spawner-owned and cannot be overridden.
  */
 export interface SpawnRunOptions<HookError = never, HookRequirements = never> extends Omit<
-  RunOptions<HookError, HookRequirements>,
+  DetachedRunOptions<HookError, HookRequirements>,
   "conversationId" | "runId" | "parentLink"
 > {}
 

@@ -5011,6 +5011,36 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     }),
   );
 
+  it.effect("lets the workload owner select a larger finite detached replay bound", () =>
+    Effect.gen(function* () {
+      const answer = "x".repeat(MAX_DETACHED_RUN_EVENTS + 1);
+      const encoded = `{"answer":"${answer}"}`;
+      const parts: Array<Response.StreamPartEncoded> = [
+        { type: "text-start", id: "answer" },
+        ...Array.from(encoded, (delta) => ({
+          type: "text-delta" as const,
+          id: "answer",
+          delta,
+        })),
+        { type: "text-end", id: "answer" },
+        { type: "finish", reason: "stop", usage },
+      ];
+      const maxReplayEvents = MAX_DETACHED_RUN_EVENTS * 2;
+      const detached = yield* AgentRuntime.start(
+        makeAgent(parts),
+        { question: "retain the complete larger trace" },
+        { maxReplayEvents },
+      );
+      const result = yield* detached.await;
+      const events = yield* detached.events;
+
+      expect(result.output).toEqual({ answer });
+      expect(events.length).toBeGreaterThan(MAX_DETACHED_RUN_EVENTS);
+      expect(events.length).toBeLessThanOrEqual(maxReplayEvents);
+      expect(events.at(-1)?._tag).toBe("RunCompleted");
+    }),
+  );
+
   it.effect(
     "delivers live events to an observer attached mid-run and replays after settlement",
     () =>

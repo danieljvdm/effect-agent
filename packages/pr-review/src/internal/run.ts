@@ -25,6 +25,7 @@ import {
   ReviewConcern,
   ReviewFinding,
   ReviewMission,
+  REVIEW_EVENT_REPLAY_LIMIT,
 } from "./review-agent.ts";
 import {
   fromStoredConcern,
@@ -247,6 +248,7 @@ export const executeReview = <
     const detached = yield* AgentRuntime.start(binding, mission, {
       budget: toRunBudgetHook(budget),
       estimateCostMicrousd: () => Effect.succeed(500),
+      maxReplayEvents: REVIEW_EVENT_REPLAY_LIMIT,
     });
     const result = yield* detached.await;
     const events = yield* detached.events;

@@ -21,6 +21,7 @@ import {
   ReadFileDiff,
   readFileDiffHandler,
   readFileHandler,
+  REVIEW_EVENT_REPLAY_LIMIT,
   REVIEW_TOOL_RESULT_MAX_BYTES,
   ReviewConcern,
   ReviewFinding,
@@ -464,6 +465,7 @@ export const fanOutHandlersLayerFor =
   ) =>
     SubagentRuntime.layer(delegation, childBinding, {
       mapChildFailure: mapFileReviewChildFailure,
+      child: { maxReplayEvents: REVIEW_EVENT_REPLAY_LIMIT },
     });
 
 /** Runtime wiring over the default delegation, mirroring the leaf example. */

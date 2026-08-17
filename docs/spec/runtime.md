@@ -396,10 +396,12 @@ Local semantic event seams are bounded:
 - disconnecting/interrupting the sole ephemeral consumer interrupts the Run unless execution was
   explicitly detached.
 
-`AgentRuntime.start` retains and replays at most 4096 semantic events. Its bounded replay channel
-has one additional slot for the terminal signal, so even an observer that never consumes cannot
-backpressure Run completion. Before event 4097 could be retained, `await` fails typed with
-`RunEventBufferOverflow`; the exact 4096-event prefix remains available through `events` and
+`AgentRuntime.start` retains and replays at most `maxReplayEvents` semantic events (4096 by
+default). The workload owner may select a larger finite bound, capped at 65536, when its declared
+model and Tool budgets can legitimately produce a larger trace. The bounded replay channel has one
+additional slot for the terminal signal, so even an observer that never consumes cannot
+backpressure Run completion. Before another event could be retained, `await` fails typed with
+`RunEventBufferOverflow`; the exact retained prefix remains available through `events` and
 `observe`. Overflow is explicit and no event is silently evicted.
 
 Durable transports observe from the journal/projection and do not own execution liveness.
@@ -578,9 +580,10 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   derivation, applied after context preparation and never entered into official history; a
   Definition whose output Schema cannot be derived runs with the documented fallback and a
   diagnostic, never a silent difference.
-- **RUN-029:** Detached execution retains and replays at most 4096 semantic events; reaching the
-  bound fails `await` typed before another event is retained, preserves the exact retained prefix,
-  and cannot be blocked by a slow observer.
+- **RUN-029:** Detached execution retains and replays at most the caller-selected finite
+  `maxReplayEvents` bound (4096 by default, capped at 65536); reaching the bound fails `await`
+  typed before another event is retained, preserves the exact retained prefix, and cannot be
+  blocked by a slow observer.
 - **RUN-030:** Durable Tool descriptors carry the authoritative `ToolExecutionKind` annotation;
   unannotated Tools are `"application"`, delegation is explicit, and neither the engine nor a
   durable coordinator infers kind from Tool names.

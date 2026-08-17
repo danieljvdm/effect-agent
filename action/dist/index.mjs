@@ -36001,6 +36001,8 @@ var run4 = exports_Effect.fn("AgentRuntime.run")(function* (agent2, input, optio
   return yield* reduceRunEvents(agent2, stream(agent2, input, options));
 });
 var MAX_DETACHED_RUN_EVENTS = 4096;
+var MAX_DETACHED_RUN_EVENT_REPLAY_LIMIT = 65536;
+var detachedRunReplayLimit = (configured) => configured === undefined || !Number.isFinite(configured) ? MAX_DETACHED_RUN_EVENTS : Math.min(MAX_DETACHED_RUN_EVENT_REPLAY_LIMIT, Math.max(1, Math.floor(configured)));
 
 class RunEventBufferOverflow extends exports_Schema.TaggedError()("RunEventBufferOverflow", {
   maxEvents: exports_Schema.Int.check(exports_Schema.isGreaterThan(0)),
@@ -36009,17 +36011,18 @@ class RunEventBufferOverflow extends exports_Schema.TaggedError()("RunEventBuffe
 }
 var start = exports_Effect.fn("AgentRuntime.start")(function* (agent2, input, options = {}) {
   yield* exports_Scope.Scope;
+  const maxReplayEvents = detachedRunReplayLimit(options.maxReplayEvents);
   const captured = [];
   const pubsub = yield* exports_PubSub.bounded({
-    capacity: MAX_DETACHED_RUN_EVENTS + 1,
-    replay: MAX_DETACHED_RUN_EVENTS + 1
+    capacity: maxReplayEvents + 1,
+    replay: maxReplayEvents + 1
   });
   yield* exports_Effect.addFinalizer(() => exports_PubSub.shutdown(pubsub));
   const execution = reduceRunEvents(agent2, stream(agent2, input, options).pipe(exports_Stream.tap((event) => exports_Effect.suspend(() => {
-    if (captured.length >= MAX_DETACHED_RUN_EVENTS) {
+    if (captured.length >= maxReplayEvents) {
       return exports_Effect.fail(RunEventBufferOverflow.make({
-        maxEvents: MAX_DETACHED_RUN_EVENTS,
-        message: `Detached Run exceeded its ${MAX_DETACHED_RUN_EVENTS} semantic event replay limit`
+        maxEvents: maxReplayEvents,
+        message: `Detached Run exceeded its ${maxReplayEvents} semantic event replay limit`
       }));
     }
     captured.push(event);
@@ -41585,6 +41588,7 @@ ${mission.body}` : "The author provided no description.",
 `);
 };
 var reviewInstructions = makeReviewInstructions();
+var REVIEW_EVENT_REPLAY_LIMIT = 32768;
 var defaultReviewPolicy = AgentPolicy.make({
   maxTurns: 12,
   maxToolCalls: 24,
@@ -41895,7 +41899,8 @@ var DelegateFileReview = delegationToolFor(fileReviewDelegation);
 var FanOutReviewToolkit = FanOutReviewer.toolkit;
 var FileReviewDelegationFailure = fileReviewDelegation.containedFailure;
 var fanOutHandlersLayerFor = (delegation) => (childBinding) => SubagentRuntime.layer(delegation, childBinding, {
-  mapChildFailure: mapFileReviewChildFailure
+  mapChildFailure: mapFileReviewChildFailure,
+  child: { maxReplayEvents: REVIEW_EVENT_REPLAY_LIMIT }
 });
 var fanOutHandlersLayer = fanOutHandlersLayerFor(fileReviewDelegation);
 
@@ -43489,7 +43494,8 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const budget2 = yield* makeUsageBudget(options3.limits ?? reviewBudgetLimits);
   const detached = yield* AgentRuntime.start(binding, mission, {
     budget: toRunBudgetHook(budget2),
-    estimateCostMicrousd: () => exports_Effect.succeed(500)
+    estimateCostMicrousd: () => exports_Effect.succeed(500),
+    maxReplayEvents: REVIEW_EVENT_REPLAY_LIMIT
   });
   const result4 = yield* detached.await;
   const events2 = yield* detached.events;
