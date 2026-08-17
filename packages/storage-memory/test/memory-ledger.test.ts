@@ -63,6 +63,7 @@ const waitingChildLane = Schema.decodeSync(ConversationId)("conversation-memory-
 const indeterminateKey = Schema.decodeSync(IdempotencyKey)("indeterminate-key");
 const waitingParentKey = Schema.decodeSync(IdempotencyKey)("waiting-parent");
 const waitingChildKey = Schema.decodeSync(IdempotencyKey)("waiting-child");
+const prematureParentKey = Schema.decodeSync(IdempotencyKey)("premature-parent-key");
 const waitingParentDigest = Schema.decodeSync(Digest)("d1".padEnd(64, "0"));
 const waitingChildDigest = Schema.decodeSync(Digest)("d2".padEnd(64, "0"));
 const agentDigests = DefinitionDigests.make({
@@ -405,26 +406,29 @@ describe("MemorySubmissionLedger", () => {
   });
 
   it.layer(testLayer)((it) => {
-    it.effect("rejects a premature child settlement notification fail-closed", () =>
+    it.effect("keeps a premature local child notification mutation-free for canonical repair", () =>
       Effect.gen(function* () {
         const ledger = yield* SubmissionLedger;
-        const parent = yield* ledger.admit(admissionRequest("premature-parent-key", "b1"));
+        const parent = yield* ledger.admit(admissionRequest(prematureParentKey, "b1"));
         const child = yield* ledger.admit(admissionRequest("premature-child-key", "b2"));
 
-        // The child is admitted but NOT settled: the single-store adapter verifies the
-        // canonical settlement authority instead of trusting the caller.
-        const premature = yield* ledger
-          .recordChildSettled(
-            ChildSettledNotification.make({
-              parentSubmissionId: parent.submissionId,
-              childSubmissionId: child.submissionId,
-            }),
-          )
-          .pipe(Effect.flip);
-        expect(premature).toMatchObject({
-          _tag: "LedgerError",
-          operation: "recordChildSettled",
-        });
+        // Canonical history may already contain the child Settlement while this local
+        // projection is stale. The preflight result lets repair proceed but records no wake.
+        const premature = yield* ledger.recordChildSettled(
+          ChildSettledNotification.make({
+            parentSubmissionId: parent.submissionId,
+            childSubmissionId: child.submissionId,
+          }),
+        );
+        expect(premature).toBe("child-not-terminal");
+        const unchanged = yield* ledger.lookup(
+          SubmissionLookupByKey.make({
+            conversationId,
+            principal,
+            idempotencyKey: prematureParentKey,
+          }),
+        );
+        expect(Option.getOrThrow(unchanged).state).toBe("admitted");
       }),
     );
   });

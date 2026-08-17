@@ -582,6 +582,78 @@ describe("cross-DO port routing", () => {
     );
   });
 
+  it("prearms a foreign parent while the child owner still has a preterminal projection", async () => {
+    const parentConv = "wp2-prearm-parent";
+    const childConv = "wp2-prearm-child";
+    const state = control();
+
+    const child = await withConversationStorage(childConv, (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const admitted = yield* ledger.admit(
+          yield* admission(childConv, "wp2-prearm-child-key", { task: "repair projection" }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        return admitted;
+      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
+    );
+    const waitingReason = WaitingForChildSuspension.make({
+      children: [
+        WaitingChild.make({
+          toolCallId: toolCall("wp2-prearm-call"),
+          childSubmissionId: child.submissionId,
+        }),
+      ],
+    });
+    const parent = await withConversationStorage(parentConv, (storage) =>
+      claimedLocalLane(parentConv, "wp2-prearm-parent-key", { task: "wait" }).pipe(
+        Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer]),
+      ),
+    );
+
+    // This is the cross-Object prefix used after the canonical child Settlement append but
+    // before its owning ledger projection is repaired. The parent Object has no local child row,
+    // so it durably prearms coverage even though the child owner's projection is still ready.
+    await withRoutedPorts(
+      childConv,
+      state,
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const outcome = yield* ledger.recordChildSettled(
+          ChildSettledNotification.make({
+            parentSubmissionId: parent.admitted.submissionId,
+            childSubmissionId: child.submissionId,
+          }),
+        );
+        expect(outcome).toBe("not-waiting");
+        const staleChild = Option.getOrThrow(
+          yield* ledger.lookup(SubmissionLookupById.make({ submissionId: child.submissionId })),
+        );
+        expect(staleChild.state).toBe("ready");
+      }),
+    );
+
+    await withConversationStorage(parentConv, (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const outcome = yield* ledger.suspend(
+          SuspendRequest.make({
+            submissionId: parent.admitted.submissionId,
+            ownershipToken: parent.claim.ownershipToken,
+            reason: waitingReason,
+          }),
+        );
+        expect(outcome).toBe("resume-immediately");
+        yield* ledger.renewOwnership(
+          RenewOwnershipRequest.make({
+            submissionId: parent.admitted.submissionId,
+            ownershipToken: parent.claim.ownershipToken,
+          }),
+        );
+      }).pipe(Effect.provide([ledgerLayer({ storage }), BrowserCrypto.layer])),
+    );
+  });
+
   it("routes the conversation store subset with error-tag fidelity", async () => {
     const callerConv = "wp2-store-caller";
     const targetConv = "wp2-store-target";

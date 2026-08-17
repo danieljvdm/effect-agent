@@ -3138,6 +3138,95 @@ const recordChildSettledWake = conformanceCase(
     }),
 );
 
+const childNotificationDefersToCanonicalRepair = conformanceCase(
+  "a preterminal local child notification is inert until canonical repair makes the child visible",
+  ({ ensure, expectSome }) =>
+    Effect.gen(function* () {
+      const parentLane = decodeConversationId("ledger-conformance-child-repair-parent");
+      const childLane = decodeConversationId("ledger-conformance-child-repair-child");
+      const ledger = yield* SubmissionLedger;
+      const parent = yield* admitReady(parentLane, "child-repair-parent", { work: "parent" });
+      const child = yield* admitReady(childLane, "child-repair-child", { work: "child" });
+      const parentClaim = yield* expectSome(
+        "the parent claim before waiting",
+        yield* claimLane(parentLane, PRODUCER_A),
+      );
+      const waitingReason = WaitingForChildSuspension.make({
+        children: [
+          WaitingChild.make({
+            toolCallId: decodeToolCallId("call-child-repair"),
+            childSubmissionId: child.submissionId,
+          }),
+        ],
+      });
+      yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: parent.submissionId,
+          ownershipToken: parentClaim.ownershipToken,
+          reason: waitingReason,
+        }),
+      );
+
+      const beforeRepair = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: child.submissionId,
+        }),
+      );
+      yield* ensure(
+        beforeRepair === "child-not-terminal",
+        "A locally present preterminal child must return child-not-terminal without recording coverage",
+      );
+      const uncovered = yield* ledger.resumeSuspension(
+        ResumeSuspensionRequest.make({
+          submissionId: parent.submissionId,
+          expectedReason: waitingReason,
+        }),
+      );
+      yield* ensure(
+        uncovered === "not-covered",
+        "The child-not-terminal result must leave the parent suspension uncovered",
+      );
+
+      const canonical = yield* settlementReservation({
+        submissionId: child.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: child.receiptId,
+        outcome: "completed",
+      });
+      yield* ledger.repairSettlementFromCanonical(
+        CanonicalSettlementRepair.make({
+          submissionId: child.submissionId,
+          record: canonical.record,
+          recordDigest: canonical.recordDigest,
+        }),
+      );
+
+      // This is the crash-after-repair/before-post-notification shape: same-store coverage is
+      // derived from the repaired child row, so parent recovery can resume without a marker.
+      const resumed = yield* ledger.resumeSuspension(
+        ResumeSuspensionRequest.make({
+          submissionId: parent.submissionId,
+          expectedReason: waitingReason,
+        }),
+      );
+      yield* ensure(
+        resumed === "resumed",
+        "Canonical child repair must make same-store parent recovery converge without a notification marker",
+      );
+      const replayed = yield* ledger.recordChildSettled(
+        ChildSettledNotification.make({
+          parentSubmissionId: parent.submissionId,
+          childSubmissionId: child.submissionId,
+        }),
+      );
+      yield* ensure(
+        replayed === "not-waiting",
+        "The runtime's post-repair notification replay must remain an idempotent accepted call",
+      );
+    }),
+);
+
 const suspendResumesImmediatelyForSettledChildren = conformanceCase(
   "suspend returns resume-immediately when children already settled",
   ({ ensure, expectSome }) =>
@@ -3575,6 +3664,7 @@ export const submissionLedgerConformanceCases: ReadonlyArray<SubmissionLedgerCon
   beginReleaseFreezesAccountingOnce,
   releaseAppliedExactlyOnce,
   recordChildSettledWake,
+  childNotificationDefersToCanonicalRepair,
   suspendResumesImmediatelyForSettledChildren,
   admissionParentLinkage,
   resolveAdmissionAuthority,

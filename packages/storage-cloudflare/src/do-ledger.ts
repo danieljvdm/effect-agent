@@ -2488,10 +2488,10 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           child.value.state !== "settled" &&
           !(child.value.state === "terminalizing" && Option.isSome(childReservation))
         ) {
-          return yield* LedgerError.make({
-            operation,
-            message: `Child submission ${validated.childSubmissionId} has no recorded settlement.`,
-          });
+          // A canonical settlement may exist while this local projection is still preterminal.
+          // Admit repair without recording parent coverage; the post-repair replay observes the
+          // repaired terminal child and records the notification atomically.
+          return "child-not-terminal" as ChildSettledOutcome;
         }
         // Record the durable notification marker FIRST and unconditionally (idempotent):
         // the port's cross-store race guarantee requires that a notification committed

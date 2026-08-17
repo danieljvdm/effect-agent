@@ -12,6 +12,7 @@ import { DateTime, Schema } from "effect";
 import {
   AbortIntent,
   ApprovalDecisionIntent,
+  CanonicalSubagentJoinedEvidence,
   CanonicalSubagentStartedEvidence,
   CanonicalSequence,
   ChildAttachmentSnapshot,
@@ -301,6 +302,7 @@ interface EvidenceOverrides {
   readonly inputRecorded?: boolean;
   readonly recordedSettlementOutcome?: SettlementOutcome;
   readonly recordedSettlement?: RecordEnvelope;
+  readonly recordedSettlementDigest?: Digest;
   readonly abortRecorded?: boolean;
   readonly openToolCalls?: ReadonlyArray<OpenToolCallEvidence>;
   readonly openDelegationCalls?: ReadonlyArray<OpenDelegationCallEvidence>;
@@ -308,7 +310,7 @@ interface EvidenceOverrides {
   readonly approvalsPending?: ReadonlyArray<PendingApprovalEvidence>;
   readonly approvalRequests?: ReadonlyArray<PendingApprovalEvidence>;
   readonly subagentStarts?: ReadonlyArray<CanonicalSubagentStartedEvidence>;
-  readonly subagentJoinedToolCallIds?: ReadonlyArray<ToolCallId>;
+  readonly subagentJoins?: ReadonlyArray<CanonicalSubagentJoinedEvidence>;
   readonly joinedInputCovered?: boolean;
   readonly hostSettlementOutcome?: SettlementOutcome;
   readonly subagentLineageRecorded?: boolean;
@@ -340,10 +342,13 @@ const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence => {
             ]
           : [],
       ),
-    subagentJoinedToolCallIds: overrides.subagentJoinedToolCallIds ?? [],
+    subagentJoins: overrides.subagentJoins ?? [],
     joinedInputCovered: overrides.joinedInputCovered ?? true,
     subagentLineageRecorded: overrides.subagentLineageRecorded ?? false,
     ...(recordedSettlement === undefined ? {} : { recordedSettlement }),
+    ...(recordedSettlement === undefined
+      ? {}
+      : { recordedSettlementDigest: overrides.recordedSettlementDigest ?? SHA_A }),
     ...(overrides.declaredPendingBatch === undefined
       ? {}
       : { declaredPendingBatch: overrides.declaredPendingBatch }),
@@ -478,7 +483,7 @@ describe("recovery classifier crash matrix", () => {
 
   it("settled work needs no action, even with a stale abort intent", () => {
     const decision = classifyRecovery(
-      snapshot("settled", { abortIntent }),
+      snapshot("settled", { abortIntent, reservation: reservation("completed", true) }),
       evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
     );
     expect(decision._tag).toBe("NoAction");
@@ -497,12 +502,50 @@ describe("recovery classifier crash matrix", () => {
     expect(decision._tag).toBe("QuarantineInvalidSettlement");
   });
 
-  it("quarantines a settled projection whose outcome diverges from canonical history", () => {
+  it("repairs a settled projection whose outcome diverges from canonical history", () => {
     const decision = classifyRecovery(
       snapshot("settled", { settledOutcome: "failed" }),
       evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
     );
-    expect(decision._tag).toBe("QuarantineInvalidSettlement");
+    expect(decision._tag).toBe("FinalizeLedgerFromHistory");
+  });
+
+  it("repairs a settled projection whose finalized reservation digest is missing or divergent", () => {
+    const withoutReservation = classifyRecovery(
+      snapshot("settled"),
+      evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
+    );
+    expect(withoutReservation._tag).toBe("FinalizeLedgerFromHistory");
+
+    const divergentDigest = classifyRecovery(
+      snapshot("settled", { reservation: reservation("completed", true) }),
+      evidence({
+        inputRecorded: true,
+        recordedSettlementOutcome: "completed",
+        recordedSettlementDigest: SHA_B,
+      }),
+    );
+    expect(divergentDigest._tag).toBe("FinalizeLedgerFromHistory");
+
+    const divergentRedundantFields = classifyRecovery(
+      snapshot("settled", { reservation: reservation("failed", true) }),
+      evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
+    );
+    expect(divergentRedundantFields._tag).toBe("FinalizeLedgerFromHistory");
+
+    const divergentStoredRecord = classifyRecovery(
+      snapshot("settled", {
+        reservation: SettlementReservationSnapshot.make({
+          settlementId: submissionSettlementId(SUBMISSION_ID),
+          outcome: "completed",
+          record: wrongTagSettlementRecord(),
+          recordDigest: SHA_A,
+          finalized: true,
+        }),
+      }),
+      evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
+    );
+    expect(divergentStoredRecord._tag).toBe("FinalizeLedgerFromHistory");
   });
 });
 
@@ -578,7 +621,7 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
 
   it("settled state beats open tool calls", () => {
     const decision = classifyRecovery(
-      snapshot("settled"),
+      snapshot("settled", { reservation: reservation("completed", true) }),
       evidence({
         inputRecorded: true,
         recordedSettlementOutcome: "completed",
@@ -1037,7 +1080,12 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
             childSubmissionId: CHILD_TWO,
           }),
         ],
-        subagentJoinedToolCallIds: [CALL_DELEGATE],
+        subagentJoins: [
+          CanonicalSubagentJoinedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+        ],
       }),
     );
     expect(decision._tag).toBe("AwaitChildSettlement");
@@ -1062,10 +1110,41 @@ describe("recovery classifier S2 subagent establishment rows (spec §13)", () =>
             childSubmissionId: CHILD_TWO,
           }),
         ],
-        subagentJoinedToolCallIds: [CALL_DELEGATE],
+        subagentJoins: [
+          CanonicalSubagentJoinedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+        ],
       }),
     );
     expect(decision._tag).toBe("AwaitChildSettlement");
+  });
+
+  it("quarantines a SubagentJoined pair that names the right call but the wrong child", () => {
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension: waitingSuspension([waitingChild(CALL_DELEGATE, CHILD_ONE)]),
+        childAttachments: [childAttachment(CALL_DELEGATE, CHILD_ONE, "running")],
+      }),
+      evidence({
+        inputRecorded: true,
+        subagentStarts: [
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_ONE,
+          }),
+        ],
+        subagentJoins: [
+          CanonicalSubagentJoinedEvidence.make({
+            toolCallId: CALL_DELEGATE,
+            childSubmissionId: CHILD_TWO,
+          }),
+        ],
+      }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSuspension");
   });
 
   it("legacy settled child without a parent marker replays the idempotent wake (row 9)", () => {

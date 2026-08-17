@@ -34,6 +34,7 @@ import {
 import {
   buildProfileMission,
   computeProfileFingerprint,
+  sealedReviewSelection,
   selectedPullRequestSourceLayer,
   type ReviewSelection,
 } from "./review-state.ts";
@@ -139,7 +140,11 @@ const provideSelection = <A, E, R>(
 ) =>
   selection === undefined
     ? effect
-    : effect.pipe(Effect.provide(selectedPullRequestSourceLayer(selection)));
+    : effect.pipe(
+        Effect.provide(
+          selectedPullRequestSourceLayer(sealedReviewSelection(selection) ?? selection),
+        ),
+      );
 
 /**
  * The changeset fingerprint of what this reviewer WOULD review right now:

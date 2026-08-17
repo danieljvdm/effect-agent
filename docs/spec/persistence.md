@@ -139,6 +139,9 @@ the method atomically reconstructs or overwrites divergent operational reservati
 settles the row, clears any stale nonterminal suspension state, and releases lane ownership. An
 already-settled row preserves any parseable prior finalization time while repairing redundant
 columns; a missing/invalid timestamp or nonterminal reconstruction uses the transaction time.
+Recovery returns `NoAction` for a settled row only when its outcome, finalized reservation fields,
+exact stored record, and record digest all match the canonical Settlement; any other valid
+projection is repaired from canonical history rather than quarantined.
 
 Operational approval decisions and child-settlement notifications are evidence only: recording
 them never clears a suspended lane. The coordinator validates canonical history, then calls
@@ -150,6 +153,14 @@ and transitions the lane to `input-applied`. A corrupt or divergent stored reaso
 leaves the row byte-for-byte unchanged. `suspend` may still return `resume-immediately` when the
 same exact reason is already fully covered before the suspension transaction, closing the
 pre-suspend race without transferring post-suspend wake authority to operational writers.
+
+Before canonical settlement projection repair, `recordChildSettled` distinguishes storage
+topology. A cross-store parent records its durable marker before the child becomes terminal. A
+same-store adapter whose locally present child is still preterminal returns the typed
+`child-not-terminal` outcome without mutating parent coverage; repair then atomically makes the
+shared child row terminal, which is itself the parent's coverage source. The runtime replays the
+notification after repair. A crash before repair leaves the child nonterminal and retryable; a
+crash after repair leaves a terminal child that suspended-parent recovery observes directly.
 
 ## 4. Record envelopes
 
@@ -382,10 +393,15 @@ authoritative read.
 - **STORE-010**: Every durable adapter passes the shared conformance and
   crash-consistency suite.
 - **STORE-011**: Unsupported stored versions fail clearly; private development provides no
-  migration promise. In particular, schema-v1 `ToolCallPrepared` histories written before the
-  required `executionKind` field are reset after a clear decode failure, never defaulted or
-  inferred from the Tool name.
-- **STORE-012**: Canonical records are retained indefinitely during private development.
+  migration promise. The current schema-v1 contract is pre-release: a disposable local store
+  written by an incompatible unpublished build may be abandoned wholesale after a clear decode
+  failure, but runtime recovery never deletes, rewrites, defaults, or infers fields in canonical
+  history. Once a version is retained or deployed, its shape is immutable and an incompatible
+  payload uses a new schema version. In particular, an old development `ToolCallPrepared` without
+  required `executionKind` is never interpreted by its Tool name.
+- **STORE-012**: Canonical records in every accepted store are retained indefinitely, including
+  during private development. Explicitly abandoning an entire disposable pre-release local store
+  under STORE-011 is an environment reset, not a recovery action that mutates its canonical log.
 - **STORE-013**: Node/SQLite and Cloudflare Durable Object adapters implement the same Effect
   service contracts and conformance suite.
 - **STORE-014**: Public progress waits close subscribe/check and check/park races without making

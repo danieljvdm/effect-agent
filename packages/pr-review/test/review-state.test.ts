@@ -7,6 +7,7 @@ import {
   ReviewHeadComparison,
   ReviewState,
   ReviewStateAuthenticator,
+  selectedReviewRangeFor,
   selectReviewRange,
   StoredReviewFinding,
   webCryptoReviewStateAuthenticatorLayer,
@@ -92,6 +93,26 @@ const select = (overrides: Partial<Parameters<typeof selectReviewRange>[0]> = {}
   });
 
 describe("review state", () => {
+  it("invalidates a sealed selection when an aliased source array changes after selection", () => {
+    const fullFiles = [acceptedFile, correctiveFile];
+    const selection = selectReviewRange({
+      requestedMode: "final",
+      current: metadata,
+      fullFiles,
+      profileFingerprint: PROFILE_FINGERPRINT,
+      priorState: undefined,
+      comparison: undefined,
+    });
+
+    expect(selectedReviewRangeFor(selection, metadata)?.files.map((file) => file.path)).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
+    fullFiles[0] = correctiveFile;
+
+    expect(selectedReviewRangeFor(selection, metadata)).toBeUndefined();
+  });
+
   it.effect("authenticates only a terminal schema-validated review-body marker", () =>
     Effect.gen(function* () {
       const secret = Redacted.make("stable-state-secret");

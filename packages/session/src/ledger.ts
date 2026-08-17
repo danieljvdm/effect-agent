@@ -531,11 +531,18 @@ export class ChildSettledNotification extends Schema.Class<ChildSettledNotificat
 /**
  * This notification records operational child-settlement coverage but never makes a lane
  * runnable by itself. `still-waiting` means the parent currently has a matching suspension;
- * `not-waiting` means it does not. `woken` remains decode-compatible with stored/protocol results
- * from the earlier combined operation but conforming adapters no longer produce it; only
- * `resumeSuspension` may clear a suspension.
+ * `not-waiting` means it does not. `child-not-terminal` is a successful no-op for a locally
+ * present preterminal child: no parent coverage was recorded, and the coordinator may first
+ * repair that child's projection from canonical history. `woken` remains decode-compatible with
+ * stored/protocol results from the earlier combined operation but conforming adapters no longer
+ * produce it; only `resumeSuspension` may clear a suspension.
  */
-export const ChildSettledOutcome = Schema.Literals(["woken", "still-waiting", "not-waiting"]);
+export const ChildSettledOutcome = Schema.Literals([
+  "woken",
+  "still-waiting",
+  "not-waiting",
+  "child-not-terminal",
+]);
 export type ChildSettledOutcome = typeof ChildSettledOutcome.Type;
 
 /** Parent-owned child budget reservation identity, deterministically derived by the
@@ -1016,9 +1023,11 @@ export type SubmissionLedgerFailure =
  *   canonical Settlement is the authority. The runtime may report it after the exact reserved
  *   record is appended and before ledger finalization, so same-store adapters accept
  *   `terminalizing` only when its exact reservation exists; an earlier child is an
- *   adapter-checked caller error. It records coverage but never settles or wakes the parent and
- *   requires no ownership token. Only the coordinator's canonical-evidence-authorized
- *   `resumeSuspension` transition may make the parent runnable.
+ *   adapter-checked `child-not-terminal` result. That result records no parent coverage: it lets
+ *   canonical settlement repair proceed in the same store, where the repaired child row becomes
+ *   the parent's atomic coverage source. The operation records coverage but never settles or
+ *   wakes the parent and requires no ownership token. Only the coordinator's
+ *   canonical-evidence-authorized `resumeSuspension` transition may make the parent runnable.
  * - `reserveChildBudget` — idempotent get-or-create of the parent-owned child budget
  *   reservation (spec §12 step 2), fenced by the parent lane's live `OwnershipToken`. An
  *   identical replay returns the stored row with `replayed` set (unfenced, mirroring

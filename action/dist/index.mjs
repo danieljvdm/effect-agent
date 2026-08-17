@@ -41706,6 +41706,7 @@ var rankAndDedupeFindings = (findings) => {
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
 var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 3;
+var MAX_FILE_REVIEW_TURNS = MAX_FILE_REVIEW_TOOL_CALLS + 1;
 var FILE_REVIEW_MAX_CONCURRENCY = 5;
 var MAX_FILE_REVIEW_RETRIES = FILE_REVIEW_MAX_CONCURRENCY;
 var MAX_FILE_REVIEW_ATTEMPTS = MAX_REVIEW_UNITS + MAX_FILE_REVIEW_RETRIES;
@@ -41758,7 +41759,7 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => [
 `);
 var fileReviewerInstructions = makeFileReviewerInstructions();
 var defaultFileReviewerPolicy = AgentPolicy.make({
-  maxTurns: 12,
+  maxTurns: MAX_FILE_REVIEW_TURNS,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: 2,
@@ -41791,7 +41792,7 @@ class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitF
 var fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_FILE_REVIEW_ATTEMPTS,
   maxConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
-  maxTurns: 12,
+  maxTurns: MAX_FILE_REVIEW_TURNS,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`
 });
@@ -42145,21 +42146,69 @@ class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review
 }) {
 }
 var selectedRanges = new WeakMap;
+var selectionFingerprint = (selection) => {
+  try {
+    return JSON.stringify({
+      mode: selection.mode,
+      reason: selection.reason,
+      files: selection.files.map((file2) => exports_Schema.encodeSync(ChangedFile)(file2)),
+      affectedPaths: selection.affectedPaths,
+      totalFiles: selection.totalFiles,
+      baselineSha: selection.baselineSha,
+      priorState: selection.priorState === undefined ? undefined : exports_Schema.encodeSync(ReviewState)(selection.priorState),
+      profileFingerprint: selection.profileFingerprint
+    });
+  } catch {
+    return;
+  }
+};
+var freeze = (value4) => {
+  if (typeof value4 !== "object" || value4 === null)
+    return value4;
+  for (const nested2 of Object.values(value4))
+    freeze(nested2);
+  return Object.freeze(value4);
+};
+var selectionSnapshot = (selection) => freeze({
+  mode: selection.mode,
+  reason: selection.reason,
+  files: selection.files.map((file2) => exports_Schema.decodeUnknownSync(ChangedFile)(exports_Schema.encodeSync(ChangedFile)(file2))),
+  affectedPaths: [...selection.affectedPaths],
+  totalFiles: selection.totalFiles,
+  baselineSha: selection.baselineSha,
+  priorState: selection.priorState === undefined ? undefined : exports_Schema.decodeUnknownSync(ReviewState)(exports_Schema.encodeSync(ReviewState)(selection.priorState)),
+  profileFingerprint: selection.profileFingerprint
+});
 var sealReviewSelection = (selection, source) => {
+  const snapshot2 = selectionSnapshot(selection);
+  const fingerprint = selectionFingerprint(selection);
+  if (fingerprint === undefined)
+    throw new Error("Range selector produced an invalid selection");
   selectedRanges.set(selection, {
-    repository: source.repository,
-    number: source.number,
-    baseRef: source.baseRef,
-    ...source.baseSha === undefined ? {} : { baseSha: source.baseSha },
-    headRef: source.headRef,
-    headSha: source.headSha,
-    totalChangedFiles: source.totalChangedFiles
+    source: {
+      repository: source.repository,
+      number: source.number,
+      baseRef: source.baseRef,
+      ...source.baseSha === undefined ? {} : { baseSha: source.baseSha },
+      headRef: source.headRef,
+      headSha: source.headSha,
+      totalChangedFiles: source.totalChangedFiles
+    },
+    fingerprint,
+    snapshot: snapshot2
   });
   return selection;
 };
-var isSelectedReviewRange = (selection, current) => {
-  const source = selectedRanges.get(selection);
-  return source !== undefined && source.repository === current.repository && source.number === current.number && source.baseRef === current.baseRef && source.baseSha === current.baseSha && source.headRef === current.headRef && source.headSha === current.headSha && source.totalChangedFiles === current.totalChangedFiles;
+var sealedReviewSelection = (selection) => selectedRanges.get(selection)?.snapshot;
+var selectedReviewRangeFor = (selection, current) => {
+  const binding = selectedRanges.get(selection);
+  if (binding === undefined)
+    return;
+  const source = binding.source;
+  if (binding.fingerprint === selectionFingerprint(selection) && source.repository === current.repository && source.number === current.number && source.baseRef === current.baseRef && source.baseSha === current.baseSha && source.headRef === current.headRef && source.headSha === current.headSha && source.totalChangedFiles === current.totalChangedFiles) {
+    return binding.snapshot;
+  }
+  return;
 };
 var fullSelection = (input) => sealReviewSelection({
   mode: "full",
@@ -43521,12 +43570,18 @@ class ReviewSelectionViolation extends exports_Schema.TaggedError()("ReviewSelec
 var samePaths = (left, right) => left.length === right.length && left.every((file2, index2) => file2.path === right[index2]?.path);
 var validateSelection = (input) => {
   const { selection, files, anchorFiles, metadata } = input;
-  if (!isSelectedReviewRange(selection, metadata)) {
+  const sealed = selectedReviewRangeFor(selection, metadata);
+  if (sealed === undefined) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "review selection was not created by the host range selector"
     }));
   }
-  if (selection.totalFiles !== files.length) {
+  if (!samePaths(sealed.files, files)) {
+    return exports_Effect.fail(ReviewSelectionViolation.make({
+      reason: "review selection paths do not match the model-visible source range"
+    }));
+  }
+  if (sealed.totalFiles !== files.length) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "review selection total does not match the model-visible source range"
     }));
@@ -43537,17 +43592,17 @@ var validateSelection = (input) => {
       reason: "review selection contains a path outside the current pull-request source"
     }));
   }
-  if (selection.mode === "full" && (selection.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))) {
+  if (sealed.mode === "full" && (sealed.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "full review selection does not cover the current pull-request source"
     }));
   }
-  if (selection.mode === "incremental" && (selection.priorState === undefined || selection.baselineSha !== selection.priorState.reviewedHeadSha || selection.profileFingerprint !== selection.priorState.profileFingerprint)) {
+  if (sealed.mode === "incremental" && (sealed.priorState === undefined || sealed.baselineSha !== sealed.priorState.reviewedHeadSha || sealed.profileFingerprint !== sealed.priorState.profileFingerprint)) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "incremental review selection is not bound to its authenticated prior state"
     }));
   }
-  return exports_Effect.void;
+  return exports_Effect.succeed(sealed);
 };
 var buildReviewMission = (metadata, files) => ReviewMission.make({
   repository: metadata.repository,
@@ -43588,10 +43643,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
   const anchorFiles = yield* source.anchorFiles;
-  const selection = options3.selection;
-  if (selection !== undefined) {
-    yield* validateSelection({ selection, files, anchorFiles, metadata });
-  }
+  const selection = options3.selection === undefined ? undefined : yield* validateSelection({ selection: options3.selection, files, anchorFiles, metadata });
   const mission = buildReviewMission(metadata, files);
   const fullMission = buildReviewMission(metadata, anchorFiles);
   const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));
@@ -43736,7 +43788,7 @@ var requireReadonly = (tools) => {
   }
 };
 var provideIgnore = (effect2, ignore6) => ignore6 !== undefined && ignore6.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore6))) : effect2;
-var provideSelection = (effect2, selection) => selection === undefined ? effect2 : effect2.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)));
+var provideSelection = (effect2, selection) => selection === undefined ? effect2 : effect2.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(sealedReviewSelection(selection) ?? selection)));
 var makeFingerprint = (signature, ignore6) => provideIgnore(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;

@@ -2393,18 +2393,21 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
         // The caller may notify after the canonical Settlement append but before ledger
         // finalization. An exact reservation plus `terminalizing` is the narrow durable prefix
-        // that makes that ordering admissible; earlier states remain a caller error.
+        // that makes that ordering admissible; earlier local states are a successful no-op so
+        // canonical projection repair can proceed first.
         const child = yield* readSubmission(operation, validated.childSubmissionId);
-        const childReservation = yield* readReservation(operation, validated.childSubmissionId);
-        const announced =
-          Option.isSome(child) &&
-          (child.value.state === "settled" ||
-            (child.value.state === "terminalizing" && Option.isSome(childReservation)));
-        if (!announced) {
+        if (Option.isNone(child)) {
           return yield* LedgerError.make({
             operation,
-            message: `Child submission ${validated.childSubmissionId} has no recorded settlement.`,
+            message: `Unknown child submission ${validated.childSubmissionId}.`,
           });
+        }
+        const childReservation = yield* readReservation(operation, validated.childSubmissionId);
+        const announced =
+          child.value.state === "settled" ||
+          (child.value.state === "terminalizing" && Option.isSome(childReservation));
+        if (!announced) {
+          return "child-not-terminal" as ChildSettledOutcome;
         }
         if (parent.state !== "suspended" || parent.suspended_reason_json === null) {
           return "not-waiting" as ChildSettledOutcome;

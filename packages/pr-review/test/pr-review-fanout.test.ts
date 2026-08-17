@@ -46,6 +46,7 @@ import {
   MAX_FILE_REVIEW_ATTEMPTS,
   MAX_FILE_REVIEW_RETRIES,
   MAX_FILE_REVIEW_TOOL_CALLS,
+  MAX_FILE_REVIEW_TURNS,
   MAX_REVIEW_UNITS,
   MAX_FILE_REVIEW_WAVES,
   MAX_UNIT_FILES,
@@ -297,6 +298,10 @@ describe("coordinator instructions", () => {
 describe("file-reviewer policy", () => {
   it("budgets one diff and two context reads for every path in a maximum-size unit", () => {
     expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 3);
+    // A provider may issue those valid reads serially, followed by one terminal response.
+    expect(MAX_FILE_REVIEW_TURNS).toBe(MAX_FILE_REVIEW_TOOL_CALLS + 1);
+    expect(defaultFileReviewerPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
+    expect(fileReviewPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
     expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 3);
     expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 3);
   });

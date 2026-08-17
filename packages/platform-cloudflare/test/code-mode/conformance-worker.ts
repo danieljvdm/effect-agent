@@ -186,10 +186,23 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       );
     }
 
+    // If the expression ever escapes the generated loader, the injected assignment becomes a
+    // module side effect and the originally returned function exposes it as the pass result.
+    // Assert that observable signal is absent as well as requiring the typed source rejection.
+    const loaderEscapeSignal = "loader confinement was escaped";
     const loaderEscapeOutcome = yield* runOutcome(
-      request("async () => {});\n}\nglobalThis.pwned = true;\nif (false) {\n(async () => {}"),
+      request(
+        `async () => globalThis.__effectAgentLoaderEscape);\n}\nglobalThis.__effectAgentLoaderEscape = ${JSON.stringify(loaderEscapeSignal)};\nif (false) {\n(async () => {}`,
+      ),
       layer,
     );
+    if (
+      loaderEscapeOutcome.tag === "success" &&
+      Predicate.isObject(loaderEscapeOutcome.detail) &&
+      loaderEscapeOutcome.detail.value === loaderEscapeSignal
+    ) {
+      failures.push("loader source confinement: injected module side effect executed");
+    }
     if (loaderEscapeOutcome.tag !== "CodeSourceError") {
       failures.push(
         `loader source confinement: expected a source error, got ${JSON.stringify(loaderEscapeOutcome)}`,

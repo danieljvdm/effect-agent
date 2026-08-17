@@ -18,6 +18,7 @@ import {
   ReviewPublisher,
   type RunReviewOptions,
   type ReviewSelection,
+  ReviewState,
   ReviewStateAuthenticator,
   unavailableReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
@@ -265,7 +266,21 @@ describe("PrReview.make", () => {
         affectedPaths: [selectedFile.file.path],
         totalFiles: 1,
         baselineSha: "0".repeat(40),
-        priorState: undefined,
+        priorState: ReviewState.make({
+          version: 1,
+          repository: fixture.metadata.repository,
+          pullRequestNumber: fixture.metadata.number,
+          baseRef: fixture.metadata.baseRef,
+          baseSha: "1".repeat(40),
+          headRef: fixture.metadata.headRef,
+          reviewedHeadSha: "0".repeat(40),
+          profileFingerprint: "a".repeat(64),
+          acceptedScopeFingerprint: "b".repeat(64),
+          reviewedPathCount: 1,
+          unresolvedFindings: [],
+          unresolvedConcerns: [],
+          lastReviewMode: "full",
+        }),
         profileFingerprint: "a".repeat(64),
       };
       const ignoredPublished = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
@@ -286,6 +301,9 @@ describe("PrReview.make", () => {
 
       const prompts = yield* scripted.prompts;
       expect(error._tag).toBe("ReviewSelectionViolation");
+      if (error._tag === "ReviewSelectionViolation") {
+        expect(error.reason).toBe("review selection was not created by the host range selector");
+      }
       expect(prompts).toEqual([]);
     }),
   );

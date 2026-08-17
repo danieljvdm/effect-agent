@@ -4,10 +4,17 @@ import {
   UnknownResolutionCommand,
 } from "@effect-agent/session";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Ref, Schema } from "effect";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { CloudflareConversationClient } from "../src/index.ts";
+import {
+  CloudflareConversationClient,
+  CloudflareDurableRuntimeConfig,
+  ConversationMaintenanceFailpoint,
+  ConversationMutationBoundary,
+  DurableObjectContext,
+  cloudflareDurableRuntimeConfigFromOptions,
+} from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
   TEST_CALLER,
@@ -86,6 +93,74 @@ const maintenanceGeneration = (conversation: string) =>
   );
 
 describe("DC alarm semantics", () => {
+  it("deduplicates concurrent preparation inherited by one mutation scope", async () => {
+    const conversation = lane("concurrent-preparation");
+    const result = await runInDurableObject(stubFor(conversation), async (_instance, state) => {
+      const program = Effect.gen(function* () {
+        const firstEntered = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const secondStarted = yield* Deferred.make<void>();
+        const generationAttempts = yield* Ref.make(0);
+        const config = yield* cloudflareDurableRuntimeConfigFromOptions({
+          deploymentId: "cf-alarm-concurrent-preparation",
+          producerPrefix: "cf-alarm",
+        });
+        const failpointLayer = Layer.succeed(ConversationMaintenanceFailpoint)({
+          hit: (location) =>
+            location === "maintenance:dirty:before"
+              ? Ref.updateAndGet(generationAttempts, (count) => count + 1).pipe(
+                  Effect.flatMap((attempt) =>
+                    attempt === 1
+                      ? Deferred.succeed(firstEntered, undefined).pipe(
+                          Effect.andThen(Deferred.await(releaseFirst)),
+                        )
+                      : Effect.void,
+                  ),
+                )
+              : Effect.void,
+        });
+        const boundaryLayer = ConversationMutationBoundary.layer.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              DurableObjectContext.layer(state, {}),
+              Layer.succeed(CloudflareDurableRuntimeConfig)(config),
+              failpointLayer,
+            ),
+          ),
+        );
+
+        return yield* Effect.gen(function* () {
+          const boundary = yield* ConversationMutationBoundary;
+          const activeDuring = yield* boundary.withPreparedMutation(
+            Effect.gen(function* () {
+              const first = yield* Effect.forkChild(boundary.prepare);
+              yield* Deferred.await(firstEntered);
+              const second = yield* Effect.forkChild(
+                Deferred.succeed(secondStarted, undefined).pipe(Effect.andThen(boundary.prepare)),
+              );
+              yield* Deferred.await(secondStarted);
+              // The second preparation now gets a scheduler turn to observe the shared marker
+              // and suspend on the generation permit held by the first.
+              yield* Effect.yieldNow;
+              yield* Deferred.succeed(releaseFirst, undefined);
+              yield* Fiber.join(first);
+              yield* Fiber.join(second);
+              return yield* boundary.activeMutations;
+            }),
+          );
+          return {
+            activeDuring,
+            activeAfter: yield* boundary.activeMutations,
+            generationAttempts: yield* Ref.get(generationAttempts),
+          };
+        }).pipe(Effect.provide(boundaryLayer));
+      });
+      return Effect.runPromise(program);
+    });
+
+    expect(result).toEqual({ activeDuring: 1, activeAfter: 0, generationAttempts: 1 });
+  });
+
   it("issue #93: a stable approval wait quiesces and a forced caught-up alarm performs no SQL work", async () => {
     const conversation = lane("issue-93-quiescent-approval");
     const receipt = await submitTo(approvalDefinition, conversation);

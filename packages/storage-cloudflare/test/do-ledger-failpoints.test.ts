@@ -368,6 +368,7 @@ describe("DoSubmissionLedger failpoints", () => {
         // Corrupt one redundant reservation column while keeping the canonical envelope and
         // finalized timestamp available for repair.
         const initialFinalizedAt = (yield* reservationRows)[0]?.finalized_at;
+        yield* TestClock.adjust(1_000);
         yield* withSql(
           Effect.gen(function* () {
             const sql = yield* SqlClientService.SqlClient;

@@ -550,7 +550,8 @@ export class CloudflareConversationClient extends Context.Service<
      * Canonical records up to the CURRENT committed tail, via repeated pages and bounded by
      * `maxRecords` and cumulative canonical JSON `maxBytes`. A snapshot read, not a live
      * observation — callers wanting liveness re-read after `awaitSettlement`. Use `readPage`
-     * for histories above either bound.
+     * for histories above either bound. The convenience reads one record per host page so the
+     * adapter never transiently materializes a full 1,024-record page before applying maxBytes.
      */
     readonly readAll: (
       conversationId: ConversationId,
@@ -879,12 +880,16 @@ export class CloudflareConversationClient extends Context.Service<
             let after: CanonicalSequence | undefined;
             for (;;) {
               const remaining = maximum - all.length;
-              const pageLimit = Math.min(1_024, remaining + 1);
+              // The storage adapter materializes one requested page before exposing its Stream.
+              // A one-record page therefore bounds peak readAll materialization to one canonical
+              // record while still detecting both the cumulative byte bound and maxRecords + 1.
+              // Callers needing efficient larger-page traversal use readPage explicitly.
+              const pageLimit = 1;
               const page = yield* readPage(conversationId, caller, {
                 afterSequence: after,
                 limit: pageLimit,
               });
-              if (page.length > remaining) {
+              if (remaining === 0 && page.length > 0) {
                 return yield* ConversationReadLimitExceeded.make({
                   conversationId,
                   maximum,

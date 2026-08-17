@@ -32,7 +32,7 @@ import {
   fromStoredConcern,
   fromStoredFinding,
   ReviewState,
-  isSelectedReviewRange,
+  selectedReviewRangeFor,
   type ReviewSelection,
   ReviewStateAuthenticator,
   toStoredConcern,
@@ -162,16 +162,24 @@ const validateSelection = (input: {
   readonly files: ReadonlyArray<ChangedFile>;
   readonly anchorFiles: ReadonlyArray<ChangedFile>;
   readonly metadata: PullRequestMetadata;
-}): Effect.Effect<void, ReviewSelectionViolation> => {
+}): Effect.Effect<ReviewSelection, ReviewSelectionViolation> => {
   const { selection, files, anchorFiles, metadata } = input;
-  if (!isSelectedReviewRange(selection, metadata)) {
+  const sealed = selectedReviewRangeFor(selection, metadata);
+  if (sealed === undefined) {
     return Effect.fail(
       ReviewSelectionViolation.make({
         reason: "review selection was not created by the host range selector",
       }),
     );
   }
-  if (selection.totalFiles !== files.length) {
+  if (!samePaths(sealed.files, files)) {
+    return Effect.fail(
+      ReviewSelectionViolation.make({
+        reason: "review selection paths do not match the model-visible source range",
+      }),
+    );
+  }
+  if (sealed.totalFiles !== files.length) {
     return Effect.fail(
       ReviewSelectionViolation.make({
         reason: "review selection total does not match the model-visible source range",
@@ -187,8 +195,8 @@ const validateSelection = (input: {
     );
   }
   if (
-    selection.mode === "full" &&
-    (selection.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))
+    sealed.mode === "full" &&
+    (sealed.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))
   ) {
     return Effect.fail(
       ReviewSelectionViolation.make({
@@ -197,10 +205,10 @@ const validateSelection = (input: {
     );
   }
   if (
-    selection.mode === "incremental" &&
-    (selection.priorState === undefined ||
-      selection.baselineSha !== selection.priorState.reviewedHeadSha ||
-      selection.profileFingerprint !== selection.priorState.profileFingerprint)
+    sealed.mode === "incremental" &&
+    (sealed.priorState === undefined ||
+      sealed.baselineSha !== sealed.priorState.reviewedHeadSha ||
+      sealed.profileFingerprint !== sealed.priorState.profileFingerprint)
   ) {
     return Effect.fail(
       ReviewSelectionViolation.make({
@@ -208,7 +216,7 @@ const validateSelection = (input: {
       }),
     );
   }
-  return Effect.void;
+  return Effect.succeed(sealed);
 };
 
 /** Build the mission one review run frames from the source's snapshot. */
@@ -298,10 +306,10 @@ export const executeReview = <
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
-    const selection = options.selection;
-    if (selection !== undefined) {
-      yield* validateSelection({ selection, files, anchorFiles, metadata });
-    }
+    const selection =
+      options.selection === undefined
+        ? undefined
+        : yield* validateSelection({ selection: options.selection, files, anchorFiles, metadata });
     const mission = buildReviewMission(metadata, files);
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =

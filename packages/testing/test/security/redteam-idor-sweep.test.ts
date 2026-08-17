@@ -2,6 +2,8 @@ import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/co
 import {
   AbortCommand,
   ApprovalDecisionCommand,
+  CanonicalSequence,
+  ConversationStore,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -10,7 +12,6 @@ import {
   DurableRuntimeFailpoint,
   IdempotencyKey,
   ObligationThresholds,
-  OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
   OperationCaller,
@@ -18,6 +19,7 @@ import {
   ProducerId,
   ResolutionNeverHappened,
   RetryCommand,
+  SubmissionLedger,
   ToolReconciler,
   UnknownResolutionCommand,
   WakeScheduler,
@@ -25,6 +27,7 @@ import {
   possessionChildAdmissionAuthorizerLayer,
   type AuthorizedOperation,
   type DurableSubmitOptions,
+  type OperationAuthorizationRequest,
   type OperationAuthorizerService,
 } from "@effect-agent/session";
 import {
@@ -43,8 +46,9 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
 //
 // The threat: a caller holding a legitimate identity for conversation A tries
 // to read or mutate conversation B (or a foreign Submission) through the
-// administrative surface — observe, abort, explain, explainConversation, verify,
-// retry, wake, scanObligations, resolveUnknown, resolveApproval. Identifier
+// administrative surface — awaitSettlement, awaitProgress, observe, abort, explain,
+// explainConversation, verify, retry, wake, scanObligations, resolveUnknown, resolveApproval.
+// Identifier
 // knowledge is never a capability (D10): a non-default `OperationAuthorizer`
 // that binds each request to the CALLER's own conversation must deny every
 // cross-tenant request fail-closed (typed `OperationDenied` before any read or
@@ -65,6 +69,7 @@ const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const DENIAL_REASON = "cross-tenant access denied by the tenant-scoped authorization policy";
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-idor-sweep");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
+const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 
 /** The tenant boundary the authorizer enforces: only this Conversation is the caller's own. */
 const OWNED_CONVERSATION = "idor-owned-conversation";
@@ -208,10 +213,101 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
   }),
 );
 
+/** Records any protected storage or wait-boundary entry while the foreign-target sweep is armed. */
+class ProtectedBoundaryControl extends Context.Service<
+  ProtectedBoundaryControl,
+  {
+    readonly enable: Effect.Effect<void>;
+    readonly disable: Effect.Effect<void>;
+    readonly record: (operation: string) => Effect.Effect<void>;
+    readonly takeAccesses: Effect.Effect<ReadonlyArray<string>>;
+  }
+>()("@effect-agent/testing/IdorProtectedBoundaryControl") {}
+
+const protectedBoundaryControlLayer = Layer.effect(
+  ProtectedBoundaryControl,
+  Effect.gen(function* () {
+    const enabled = yield* Ref.make(false);
+    const accesses = yield* Ref.make<ReadonlyArray<string>>([]);
+    return ProtectedBoundaryControl.of({
+      enable: Ref.set(accesses, []).pipe(Effect.andThen(Ref.set(enabled, true))),
+      disable: Ref.set(enabled, false),
+      record: (operation) =>
+        Ref.get(enabled).pipe(
+          Effect.flatMap((isEnabled) =>
+            isEnabled ? Ref.update(accesses, (all) => [...all, operation]) : Effect.void,
+          ),
+        ),
+      takeAccesses: Ref.getAndSet(accesses, []),
+    });
+  }),
+);
+
+const guardedSubmissionLedgerLayer = Layer.effect(
+  SubmissionLedger,
+  Effect.gen(function* () {
+    const inner = yield* SubmissionLedger;
+    const control = yield* ProtectedBoundaryControl;
+    const guard = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
+      control.record(`ledger.${operation}`).pipe(Effect.andThen(effect));
+    return SubmissionLedger.of({
+      ...inner,
+      lookup: (request) => guard("lookup", inner.lookup(request)),
+      requestAbort: (request) => guard("requestAbort", inner.requestAbort(request)),
+      recordApprovalDecision: (request) =>
+        guard("recordApprovalDecision", inner.recordApprovalDecision(request)),
+      recordUnknownResolution: (request) =>
+        guard("recordUnknownResolution", inner.recordUnknownResolution(request)),
+      scanNonterminal: Stream.unwrap(
+        control.record("ledger.scanNonterminal").pipe(Effect.as(inner.scanNonterminal)),
+      ),
+      loadRecoverySnapshot: (request) =>
+        guard("loadRecoverySnapshot", inner.loadRecoverySnapshot(request)),
+    });
+  }),
+).pipe(Layer.provide(MemorySubmissionLedgerLive));
+
+const guardedConversationStoreLayer = Layer.effect(
+  ConversationStore,
+  Effect.gen(function* () {
+    const inner = yield* ConversationStore;
+    const control = yield* ProtectedBoundaryControl;
+    const guard = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
+      control.record(`store.${operation}`).pipe(Effect.andThen(effect));
+    const guardStream = <A, E, R>(operation: string, stream: Stream.Stream<A, E, R>) =>
+      Stream.unwrap(control.record(`store.${operation}`).pipe(Effect.as(stream)));
+    return ConversationStore.of({
+      ...inner,
+      read: (request) => guardStream("read", inner.read(request)),
+      observe: (request) => guardStream("observe", inner.observe(request)),
+      export: (request) => guard("export", inner.export(request)),
+    });
+  }),
+).pipe(Layer.provide(MemoryConversationStoreLive));
+
+const guardedWakeSchedulerLayer = Layer.effect(
+  WakeScheduler,
+  Effect.gen(function* () {
+    const inner = yield* WakeScheduler;
+    const control = yield* ProtectedBoundaryControl;
+    return WakeScheduler.of({
+      ...inner,
+      notify: (conversationId) =>
+        control.record("wake.notify").pipe(Effect.andThen(inner.notify(conversationId))),
+      subscribe: (conversationId) =>
+        control.record("wake.subscribe").pipe(Effect.andThen(inner.subscribe(conversationId))),
+    });
+  }),
+).pipe(Layer.provide(WakeScheduler.layerNoop));
+
+const protectedBoundaryLayer = Layer.mergeAll(
+  guardedSubmissionLedgerLayer,
+  guardedConversationStoreLayer,
+  guardedWakeSchedulerLayer,
+).pipe(Layer.provideMerge(protectedBoundaryControlLayer));
+
 const baseLayer = Layer.mergeAll(
-  MemorySubmissionLedgerLive,
-  MemoryConversationStoreLive,
-  WakeScheduler.layerNoop,
+  protectedBoundaryLayer,
   DurableRuntimeFailpoint.layerTest,
   ToolReconciler.uncertain,
   configLayer,
@@ -222,12 +318,16 @@ const baseLayer = Layer.mergeAll(
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
 
-const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
+const failure = <A, E>(exit: Exit.Exit<A, E>): unknown => {
   expect(Exit.isFailure(exit)).toBe(true);
   if (Exit.isSuccess(exit)) throw new Error("Expected the Effect to fail");
-  const failure = Cause.findErrorOption(exit.cause);
-  if (Option.isNone(failure)) throw new Error("Expected a typed failure");
-  const error: unknown = failure.value;
+  const found = Cause.findErrorOption(exit.cause);
+  if (Option.isNone(found)) throw new Error("Expected a typed failure");
+  return found.value;
+};
+
+const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
+  const error = failure(exit);
   return typeof error === "object" && error !== null && "_tag" in error
     ? String(error._tag)
     : "unknown";
@@ -275,6 +375,8 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         // does not supply to the submission-only resolution operations.
         yield* control.recordSubmissionOwner(ownReceipt.submissionId, PRINCIPAL);
         yield* control.recordSubmissionOwner(foreignReceipt.submissionId, FOREIGN_PRINCIPAL);
+        const protectedBoundaries = yield* ProtectedBoundaryControl;
+        yield* protectedBoundaries.enable;
 
         // --- Foreign target: every targeted operation is denied BEFORE any read/write. ---
         const explainForeign = yield* Effect.exit(
@@ -310,7 +412,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         );
         expect(failureTag(observeForeign)).toBe("OperationDenied");
 
-        const abortForeign = yield* Effect.flip(
+        const abortForeign = yield* Effect.exit(
           runtime.abort(
             AbortCommand.make({
               submissionId: foreignReceipt.submissionId,
@@ -320,12 +422,37 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
             CALLER,
           ),
         );
-        expect(abortForeign).toEqual(
+        expect(failure(abortForeign)).toEqual(
           OperationDenied.make({
             operation: "abort",
             principal: PRINCIPAL,
             reason: DENIAL_REASON,
             submissionId: foreignReceipt.submissionId,
+          }),
+        );
+
+        const awaitSettlementForeign = yield* Effect.exit(
+          runtime.awaitSettlement(foreignReceipt, CALLER),
+        );
+        expect(failure(awaitSettlementForeign)).toEqual(
+          OperationDenied.make({
+            operation: "awaitSettlement",
+            principal: PRINCIPAL,
+            reason: DENIAL_REASON,
+            conversationId: foreignConversationId,
+            submissionId: foreignReceipt.submissionId,
+          }),
+        );
+
+        const awaitProgressForeign = yield* Effect.exit(
+          runtime.awaitProgress(foreignConversationId, ZERO_SEQUENCE, CALLER),
+        );
+        expect(failure(awaitProgressForeign)).toEqual(
+          OperationDenied.make({
+            operation: "observe",
+            principal: PRINCIPAL,
+            reason: DENIAL_REASON,
+            conversationId: foreignConversationId,
           }),
         );
 
@@ -357,6 +484,9 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         );
         expect(failureTag(resolveApprovalForeign)).toBe("OperationDenied");
 
+        expect(yield* protectedBoundaries.takeAccesses).toEqual([]);
+        yield* protectedBoundaries.disable;
+
         // --- Own target: the caller's own Conversation is permitted (default-behavior allow). ---
         const explainOwn = yield* runtime.explain(ownReceipt.submissionId, CALLER);
         expect(explainOwn.submission.submissionId).toBe(ownReceipt.submissionId);
@@ -386,6 +516,18 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         // Every targeted operation reached the authorization seam (proof the sweep is not bypassed).
         const requests = yield* control.requests;
         expect(requests.every((request) => request.principal === CALLER.principal)).toBe(true);
+        expect(requests).toContainEqual({
+          operation: "awaitSettlement",
+          principal: CALLER.principal,
+          conversationId: foreignConversationId,
+          submissionId: foreignReceipt.submissionId,
+        });
+        // `awaitProgress` deliberately shares the read-only `observe` authorization operation.
+        expect(requests).toContainEqual({
+          operation: "observe",
+          principal: CALLER.principal,
+          conversationId: foreignConversationId,
+        });
         const operations = new Set(requests.map((request) => request.operation));
         const expectedOperations: ReadonlyArray<AuthorizedOperation> = [
           "explain",
@@ -393,6 +535,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
           "retry",
           "wake",
           "observe",
+          "awaitSettlement",
           "abort",
           "resolveUnknown",
           "resolveApproval",

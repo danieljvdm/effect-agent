@@ -297,32 +297,96 @@ interface SelectionSource {
   readonly totalChangedFiles: number;
 }
 
-const selectedRanges = new WeakMap<object, SelectionSource>();
+interface SelectionBinding {
+  readonly source: SelectionSource;
+  readonly fingerprint: string;
+  readonly snapshot: ReviewSelection;
+}
+
+const selectedRanges = new WeakMap<object, SelectionBinding>();
+
+const selectionFingerprint = (selection: ReviewSelection): string | undefined => {
+  try {
+    return JSON.stringify({
+      mode: selection.mode,
+      reason: selection.reason,
+      files: selection.files.map((file) => Schema.encodeSync(ChangedFile)(file)),
+      affectedPaths: selection.affectedPaths,
+      totalFiles: selection.totalFiles,
+      baselineSha: selection.baselineSha,
+      priorState:
+        selection.priorState === undefined
+          ? undefined
+          : Schema.encodeSync(ReviewState)(selection.priorState),
+      profileFingerprint: selection.profileFingerprint,
+    });
+  } catch {
+    return undefined;
+  }
+};
+
+const freeze = <Value>(value: Value): Value => {
+  if (typeof value !== "object" || value === null) return value;
+  for (const nested of Object.values(value)) freeze(nested);
+  return Object.freeze(value);
+};
+
+const selectionSnapshot = (selection: ReviewSelection): ReviewSelection =>
+  freeze({
+    mode: selection.mode,
+    reason: selection.reason,
+    files: selection.files.map((file) =>
+      Schema.decodeUnknownSync(ChangedFile)(Schema.encodeSync(ChangedFile)(file)),
+    ),
+    affectedPaths: [...selection.affectedPaths],
+    totalFiles: selection.totalFiles,
+    baselineSha: selection.baselineSha,
+    priorState:
+      selection.priorState === undefined
+        ? undefined
+        : Schema.decodeUnknownSync(ReviewState)(
+            Schema.encodeSync(ReviewState)(selection.priorState),
+          ),
+    profileFingerprint: selection.profileFingerprint,
+  });
 
 const sealReviewSelection = (
   selection: ReviewSelection,
   source: PullRequestMetadata,
 ): ReviewSelection => {
+  const snapshot = selectionSnapshot(selection);
+  const fingerprint = selectionFingerprint(selection);
+  if (fingerprint === undefined) throw new Error("Range selector produced an invalid selection");
   selectedRanges.set(selection, {
-    repository: source.repository,
-    number: source.number,
-    baseRef: source.baseRef,
-    ...(source.baseSha === undefined ? {} : { baseSha: source.baseSha }),
-    headRef: source.headRef,
-    headSha: source.headSha,
-    totalChangedFiles: source.totalChangedFiles,
+    source: {
+      repository: source.repository,
+      number: source.number,
+      baseRef: source.baseRef,
+      ...(source.baseSha === undefined ? {} : { baseSha: source.baseSha }),
+      headRef: source.headRef,
+      headSha: source.headSha,
+      totalChangedFiles: source.totalChangedFiles,
+    },
+    fingerprint,
+    snapshot,
   });
   return selection;
 };
 
-/** Whether this exact selection originated from this current source snapshot. */
-export const isSelectedReviewRange = (
+/** The immutable selection snapshot, if this object originated at the host range selector. */
+export const sealedReviewSelection = (selection: ReviewSelection): ReviewSelection | undefined =>
+  selectedRanges.get(selection)?.snapshot;
+
+/** Resolve an unmodified range-selector selection for this exact source snapshot. */
+export const selectedReviewRangeFor = (
   selection: ReviewSelection,
   current: PullRequestMetadata,
-): boolean => {
-  const source = selectedRanges.get(selection);
-  return (
-    source !== undefined &&
+): ReviewSelection | undefined => {
+  const binding = selectedRanges.get(selection);
+  if (binding === undefined) return undefined;
+  const source = binding.source;
+  if (
+    binding.fingerprint === selectionFingerprint(selection) &&
     source.repository === current.repository &&
     source.number === current.number &&
     source.baseRef === current.baseRef &&
@@ -330,7 +394,10 @@ export const isSelectedReviewRange = (
     source.headRef === current.headRef &&
     source.headSha === current.headSha &&
     source.totalChangedFiles === current.totalChangedFiles
-  );
+  ) {
+    return binding.snapshot;
+  }
+  return undefined;
 };
 
 const fullSelection = (input: {

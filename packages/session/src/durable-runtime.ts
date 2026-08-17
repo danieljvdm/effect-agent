@@ -199,6 +199,7 @@ import {
 } from "./records.ts";
 import {
   canonicalSuspensionMismatch,
+  CanonicalSubagentJoinedEvidence,
   CanonicalSubagentStartedEvidence,
   classifyRecovery,
   DeclaredPendingBatchEvidence,
@@ -1002,6 +1003,7 @@ const make = Effect.gen(function* () {
     let abortRecorded = false;
     let subagentLineageRecorded = false;
     let recordedSettlement: RecordEnvelope | undefined;
+    let recordedSettlementDigest: Digest | undefined;
     let hostSettlementOutcome: SettlementOutcome | undefined;
     let hostRespondedAfterInput = false;
     const prepared: Array<OpenToolCallEvidence> = [];
@@ -1199,6 +1201,30 @@ const make = Effect.gen(function* () {
         childSubmissionId: started.childSubmissionId,
       }),
     );
+    const subagentJoins = [...subagent.joined.entries()].map(([toolCallId, joined]) =>
+      CanonicalSubagentJoinedEvidence.make({
+        toolCallId,
+        childSubmissionId: joined.childSubmissionId,
+      }),
+    );
+    if (recordedSettlement !== undefined) {
+      const encoded = yield* Schema.encodeEffect(RecordEnvelope)(recordedSettlement).pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({
+            operation: "evidenceFor",
+            message: `Canonical settlement record failed Schema encoding: ${cause.message}`,
+          }),
+        ),
+      );
+      recordedSettlementDigest = yield* withCrypto(digestJson(encoded)).pipe(
+        Effect.mapError((cause) =>
+          LedgerError.make({
+            operation: "evidenceFor",
+            message: `Canonical settlement record digest failed: ${cause.message}`,
+          }),
+        ),
+      );
+    }
 
     return RecoveryEvidence.make({
       conversationMaterialized: materialized,
@@ -1210,9 +1236,10 @@ const make = Effect.gen(function* () {
       approvalsPending,
       approvalRequests: requested,
       subagentStarts,
-      subagentJoinedToolCallIds: [...subagent.joined.keys()],
+      subagentJoins,
       joinedInputCovered: hostSubmissionId === undefined ? true : hostRespondedAfterInput,
       ...(recordedSettlement === undefined ? {} : { recordedSettlement }),
+      ...(recordedSettlementDigest === undefined ? {} : { recordedSettlementDigest }),
       ...(declaredPendingBatch === undefined ? {} : { declaredPendingBatch }),
       ...(hostSettlementOutcome === undefined ? {} : { hostSettlementOutcome }),
     });
@@ -1875,12 +1902,17 @@ const make = Effect.gen(function* () {
   )(function* (submission: SubmissionSnapshot): Effect.fn.Return<void, DurableWorkerFailure> {
     const linkage = submission.parentLinkage;
     if (linkage === undefined) return;
-    yield* ledger.recordChildSettled(
+    const outcome = yield* ledger.recordChildSettled(
       ChildSettledNotification.make({
         parentSubmissionId: linkage.parentSubmissionId,
         childSubmissionId: submission.submissionId,
       }),
     );
+    // Same-store adapters derive parent coverage directly from the child row. During canonical
+    // projection repair the pre-notification therefore records nothing until repair makes that
+    // row terminal; the post-repair replay below then wakes, and a crash between those steps is
+    // recovered by the still-suspended parent's scan of the now-terminal child.
+    if (outcome === "child-not-terminal") return;
     const parent = yield* ledger.lookup(
       SubmissionLookupById.make({ submissionId: linkage.parentSubmissionId }),
     );
@@ -2121,6 +2153,11 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
+    // Cross-store parent coverage must be durable before this repair may make a child terminal.
+    // A same-store preflight may instead return child-not-terminal without recording coverage:
+    // the repair transaction makes the shared child row authoritative. The replay after repair
+    // wakes either topology and closes a concurrent parent re-suspension race.
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.repairSettlementFromCanonical(
       CanonicalSettlementRepair.make({
         submissionId: submission.submissionId,

@@ -311,18 +311,27 @@ export class ConversationMutationBoundary extends Context.Service<
 
       const prepare = Effect.gen(function* () {
         const current = yield* CurrentPreparedMutation;
-        const alreadyPrepared = Option.isSome(current) ? yield* Ref.get(current.value) : false;
-        if (alreadyPrepared) return;
-        yield* generationGate.withPermit(
+        const armed = yield* generationGate.withPermit(
           Effect.gen(function* () {
+            // Preparations in child fibers inherit the same endpoint-local marker. The marker
+            // must be checked only after acquiring the generation permit: two concurrent calls
+            // may both have observed `false` before one of them commits the durable generation.
+            if (Option.isSome(current) && (yield* Ref.get(current.value))) return false;
             yield* advanceMaintenanceGeneration(ctx, config, failpoint);
             if (Option.isSome(current)) {
-              yield* Ref.update(activeMutations, (active) => active + 1);
-              yield* Ref.set(current.value, true);
+              // The finalizer uses the marker to decide whether it owns one active count. Keep
+              // those two in-memory writes interrupt-safe so it can never observe half of the
+              // activation and either leak or over-release the count.
+              yield* Effect.uninterruptible(
+                Ref.update(activeMutations, (active) => active + 1).pipe(
+                  Effect.andThen(Ref.set(current.value, true)),
+                ),
+              );
             }
+            return true;
           }),
         );
-        yield* failpoint.hit("maintenance:mutation:armed");
+        if (armed) yield* failpoint.hit("maintenance:mutation:armed");
       });
 
       const withPreparedMutation = <A, E, R>(

@@ -4,7 +4,8 @@ import {
   possessionChildAdmissionAuthorizerLayer,
   possessionOperationAuthorizerLayer,
 } from "@effect-agent/session";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
+import { WorkerEnvironment } from "effect-cf";
 
 import {
   makeConversationObjectClass,
@@ -55,6 +56,24 @@ const baseOptions: ConversationObjectOptions = {
 const possessionAuthorizationLayer = Layer.merge(
   possessionOperationAuthorizerLayer,
   possessionChildAdmissionAuthorizerLayer,
+);
+
+class AuthorizationFixtureInitializationError extends Schema.TaggedError<AuthorizationFixtureInitializationError>()(
+  "AuthorizationFixtureInitializationError",
+  { message: Schema.String },
+) {}
+
+/** Proves policy acquisition can use effect-cf's Worker environment and fail typed. */
+const environmentAuthorizationLayer = Layer.unwrap(
+  Effect.gen(function* () {
+    const env = yield* WorkerEnvironment;
+    if (!("TELEMETRY" in env)) {
+      return yield* AuthorizationFixtureInitializationError.make({
+        message: "The TELEMETRY binding is required by the authorization fixture",
+      });
+    }
+    return possessionAuthorizationLayer;
+  }),
 );
 
 const deniedAuthorizationLayer = Layer.merge(
@@ -302,7 +321,7 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
     namespaceBinding: "TELEMETRY",
     wakeScanInterval: 60_000,
   },
-  possessionAuthorizationLayer,
+  environmentAuthorizationLayer,
   observabilityProbeLayer,
 ) {
   failNextFlush(): void {

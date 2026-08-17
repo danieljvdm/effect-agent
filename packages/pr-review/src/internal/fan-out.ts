@@ -64,6 +64,14 @@ export const MAX_CHILD_CONCERNS = 3;
  */
 export const MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 3;
 
+/**
+ * A child may serialize every permitted read across model turns, then needs
+ * one final turn to return its structured report. Keep this independent bound
+ * aligned with the full read budget: a valid maximum-size review must not
+ * fail merely because the provider did not batch calls.
+ */
+export const MAX_FILE_REVIEW_TURNS = MAX_FILE_REVIEW_TOOL_CALLS + 1;
+
 /** Parent-side concurrent child permits. */
 export const FILE_REVIEW_MAX_CONCURRENCY = 5;
 
@@ -175,7 +183,7 @@ export const fileReviewerInstructions = makeFileReviewerInstructions();
 
 /** The default per-unit child execution bounds. */
 export const defaultFileReviewerPolicy = AgentPolicy.make({
-  maxTurns: 12,
+  maxTurns: MAX_FILE_REVIEW_TURNS,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: 2,
@@ -250,7 +258,7 @@ export class FileReviewUnitFailed extends Schema.TaggedError<FileReviewUnitFaile
 export const fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_FILE_REVIEW_ATTEMPTS,
   maxConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
-  maxTurns: 12,
+  maxTurns: MAX_FILE_REVIEW_TURNS,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
 });

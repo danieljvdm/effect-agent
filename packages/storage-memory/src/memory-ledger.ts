@@ -1843,22 +1843,24 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // The caller may notify after the canonical Settlement append but before ledger
             // finalization. In a single store, an exact reservation plus `terminalizing` is the
             // narrow durable prefix that makes that ordering admissible; earlier states remain
-            // a caller error.
+            // a successful no-op so canonical projection repair can proceed first.
             const child = current.submissions.get(request.childSubmissionId);
-            const announced =
-              child !== undefined &&
-              (child.row.state === "settled" ||
-                (child.row.state === "terminalizing" && child.reservation !== undefined));
-            if (!announced) {
+            if (child === undefined) {
               return [
                 failure(
                   ledgerError(
                     "recordChildSettled",
-                    `Child Submission ${request.childSubmissionId} has no recorded settlement`,
+                    `Unknown Submission ${request.childSubmissionId}`,
                   ),
                 ),
                 current,
               ];
+            }
+            const announced =
+              child.row.state === "settled" ||
+              (child.row.state === "terminalizing" && child.reservation !== undefined);
+            if (!announced) {
+              return [success("child-not-terminal" as const), current];
             }
             if (
               parent.row.state !== "suspended" ||

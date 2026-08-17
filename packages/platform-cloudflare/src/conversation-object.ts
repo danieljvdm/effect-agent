@@ -122,10 +122,11 @@ type EndpointServices =
   | DurableObjectContext
   | OperationAuthorizer;
 type RuntimeServices = EndpointServices | ConversationObjectNamespace | ChildAdmissionAuthorizer;
-type ConversationObjectInitializationError =
+type ConversationObjectInitializationError<AuthorizationLayerError = never> =
   | CloudflareDurableRuntimeInitializationError
   | CloudflareBindingError
-  | MaintenancePassFailure;
+  | MaintenancePassFailure
+  | AuthorizationLayerError;
 
 /** The literal encoded `PortFailed(PortProtocolError)` fallback (same shape as WP2's). */
 const encodedPortProtocolFailure = (message: string): unknown => ({
@@ -717,15 +718,35 @@ export interface ConversationObjectClass {
  * OTLP flush scheduling for RPC and alarm events. The optional outer Layer is built per native
  * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
  * Effect Agent owning exporter lifecycle machinery. The required authorization Layer makes both
- * session policy ports an explicit application composition decision.
+ * session policy ports an explicit application composition decision. Policy acquisition may
+ * require effect-cf's Worker environment or Durable Object state and may fail typed; those
+ * requirements and failures remain visible in the factory's Layer composition.
  */
-export type ConversationObjectAuthorizationLayer = Layer.Layer<
-  OperationAuthorizer | ChildAdmissionAuthorizer
+/** Host services effect-cf can supply while acquiring the authorization policy Layer. */
+export type ConversationObjectAuthorizationLayerServices =
+  | EffectCfDurableObjectState.DurableObjectState
+  | WorkerEnvironment;
+
+export type ConversationObjectAuthorizationLayer<
+  AuthorizationLayerError = never,
+  AuthorizationLayerServices extends ConversationObjectAuthorizationLayerServices = never,
+> = Layer.Layer<
+  OperationAuthorizer | ChildAdmissionAuthorizer,
+  AuthorizationLayerError,
+  AuthorizationLayerServices
 >;
 
-export const makeConversationObjectClass = <EventLayerError = never, EventServices = never>(
+export const makeConversationObjectClass = <
+  EventLayerError = never,
+  EventServices = never,
+  AuthorizationLayerError = never,
+  AuthorizationLayerServices extends ConversationObjectAuthorizationLayerServices = never,
+>(
   options: ConversationObjectOptions,
-  authorization: ConversationObjectAuthorizationLayer,
+  authorization: ConversationObjectAuthorizationLayer<
+    AuthorizationLayerError,
+    AuthorizationLayerServices
+  >,
   observability?: Layer.Layer<
     EventServices,
     EventLayerError,
@@ -737,8 +758,8 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
 ): ConversationObjectClass => {
   const application: Layer.Layer<
     RuntimeServices,
-    CloudflareDurableRuntimeInitializationError | CloudflareBindingError,
-    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
+    CloudflareDurableRuntimeInitializationError | CloudflareBindingError | AuthorizationLayerError,
+    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment | AuthorizationLayerServices
   > = CloudflareDurableRuntime.layer(options).pipe(
     Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding)),
     Layer.provideMerge(authorization),
@@ -749,8 +770,8 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
   // before migration, compatibility checks, or alarm inspection touch Object storage.
   const runtime: Layer.Layer<
     RuntimeServices,
-    ConversationObjectInitializationError,
-    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
+    ConversationObjectInitializationError<AuthorizationLayerError>,
+    EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment | AuthorizationLayerServices
   > = Layer.effectContext(
     Effect.gen(function* () {
       const state = yield* EffectCfDurableObjectState.DurableObjectState;
@@ -784,7 +805,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
 
   const EffectCfConversationObject = EffectCfDurableObject.make<
     RuntimeServices,
-    ConversationObjectInitializationError,
+    ConversationObjectInitializationError<AuthorizationLayerError>,
     EventServices,
     EventLayerError,
     typeof rpc

@@ -1,5 +1,5 @@
 import { ConversationId, SettlementId, SubmissionId, ToolCallId } from "@effect-agent/core";
-import { Effect, Schema } from "effect";
+import { Effect, Equal, Schema } from "effect";
 
 import {
   ChildReservationId,
@@ -11,7 +11,7 @@ import {
   type RecoverySnapshot,
   type SuspensionReason,
 } from "./ledger.ts";
-import { RecordEnvelope, SettlementOutcome, ToolCallPrepared } from "./records.ts";
+import { Digest, RecordEnvelope, SettlementOutcome, ToolCallPrepared } from "./records.ts";
 
 /** One canonical `ToolCallPrepared` without a settling or resolving canonical record (DUR-009). */
 export class OpenToolCallEvidence extends Schema.Class<OpenToolCallEvidence>(
@@ -46,6 +46,14 @@ export class PendingApprovalEvidence extends Schema.Class<PendingApprovalEvidenc
 /** Exact canonical parent-log `SubagentStarted` identity retained for suspension provenance. */
 export class CanonicalSubagentStartedEvidence extends Schema.Class<CanonicalSubagentStartedEvidence>(
   "@effect-agent/session/CanonicalSubagentStartedEvidence",
+)({
+  toolCallId: ToolCallId,
+  childSubmissionId: SubmissionId,
+}) {}
+
+/** Exact canonical parent-log `SubagentJoined` identity retained for provenance subtraction. */
+export class CanonicalSubagentJoinedEvidence extends Schema.Class<CanonicalSubagentJoinedEvidence>(
+  "@effect-agent/session/CanonicalSubagentJoinedEvidence",
 )({
   toolCallId: ToolCallId,
   childSubmissionId: SubmissionId,
@@ -124,6 +132,8 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
    * when the canonical settlement record exists, so the flag and the outcome cannot diverge.
    */
   recordedSettlement: Schema.optionalKey(RecordEnvelope),
+  /** Digest of the exact canonical settlement envelope, computed from the canonical read. */
+  recordedSettlementDigest: Schema.optionalKey(Digest),
   /** The deterministic canonical `AbortRequested` record (`abort:{sid}`) is committed. */
   abortRecorded: Schema.Boolean,
   /** Prepared ordinary Tool Calls without a canonical settled/resolved outcome (DUR-009). */
@@ -148,8 +158,8 @@ export class RecoveryEvidence extends Schema.Class<RecoveryEvidence>(
   subagentStarts: Schema.Array(CanonicalSubagentStartedEvidence).pipe(
     Schema.withConstructorDefault(Effect.succeed([])),
   ),
-  /** Tool Calls closed by canonical `SubagentJoined` records for this Run. */
-  subagentJoinedToolCallIds: Schema.Array(ToolCallId).pipe(
+  /** Exact canonical `SubagentJoined` Tool Call/child pairs for this Run. */
+  subagentJoins: Schema.Array(CanonicalSubagentJoinedEvidence).pipe(
     Schema.withConstructorDefault(Effect.succeed([])),
   ),
   /** Joined-side prompt coverage (plan §2.5); `true` whenever the Submission is not joined. */
@@ -534,9 +544,12 @@ export const canonicalSuspensionMismatch = (
       values.slice(index + 1).some((candidate) => sameChild(value, candidate)),
     );
   const canonicalChildren = evidence.subagentStarts;
-  const joined = new Set(evidence.subagentJoinedToolCallIds);
+  const canonicalJoins = evidence.subagentJoins;
+  if (canonicalJoins.some((joined) => !includesChild(canonicalChildren, joined))) {
+    return "Canonical SubagentJoined evidence has no exact matching SubagentStarted pair";
+  }
   const canonicallyUnjoined = evidence.subagentStarts.filter(
-    (started) => !joined.has(started.toolCallId),
+    (started) => !includesChild(canonicalJoins, started),
   );
   const suspendedChildren = reason.children;
   return !hasDuplicateChild(suspendedChildren) &&
@@ -971,9 +984,7 @@ export const classifyRecovery = (
               ? `Canonical settlement payload carries non-deterministic SettlementId ${payload.settlementId}`
               : payload.receiptId !== snapshot.submission.receiptId
                 ? `Canonical settlement payload names Receipt ${payload.receiptId}; expected ${snapshot.submission.receiptId}`
-                : state === "settled" && snapshot.submission.settledOutcome !== payload.outcome
-                  ? `Settled ledger outcome ${snapshot.submission.settledOutcome ?? "missing"} disagrees with canonical outcome ${payload.outcome}`
-                  : undefined;
+                : undefined;
     if (mismatch !== undefined) {
       return QuarantineInvalidSettlement.make({ submissionId, reason: mismatch });
     }
@@ -983,11 +994,20 @@ export const classifyRecovery = (
       reason: "Settled ledger state has no deterministic canonical SubmissionSettled record",
     });
   }
-  if (state === "settled") {
-    return NoAction.make({ submissionId });
-  }
   if (recordedSettlement !== undefined && recordedSettlement.payload._tag === "SubmissionSettled") {
     const recordedSettlementPayload = recordedSettlement.payload;
+    const reservation = snapshot.reservation;
+    const projectionIsExact =
+      state === "settled" &&
+      snapshot.submission.settledOutcome === recordedSettlementPayload.outcome &&
+      reservation !== undefined &&
+      reservation.finalized &&
+      reservation.settlementId === recordedSettlementPayload.settlementId &&
+      reservation.outcome === recordedSettlementPayload.outcome &&
+      evidence.recordedSettlementDigest !== undefined &&
+      reservation.recordDigest === evidence.recordedSettlementDigest &&
+      Equal.equals(reservation.record, recordedSettlement);
+    if (projectionIsExact) return NoAction.make({ submissionId });
     return FinalizeLedgerFromHistory.make({
       submissionId,
       settlementId: recordedSettlementPayload.settlementId,

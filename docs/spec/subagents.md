@@ -610,8 +610,10 @@ parent's lane-local recovery snapshot; the owning lane's pre-armed maintenance p
 resume decision. The coordinator first validates every stored Tool Call/child pair against exact
 canonical `SubagentStarted` evidence and ensures every canonically unjoined child is still named;
 these identities are compared field-by-field as structural pairs, never as delimiter-concatenated
-strings that distinct identifiers could collide under. Only its exact-reason resume operation may
-clear the suspension after all notifications cover it.
+strings that distinct identifiers could collide under. A canonical `SubagentJoined` subtracts only
+its exact Tool Call/child pair; a join naming a different child is contradictory evidence and
+quarantines the suspension. Only the exact-reason resume operation may clear the suspension after
+all notifications cover it.
 The child uses its separate Conversation lane. S2 MUST prove this suspension/wakeup path at the
 smallest worker-pool size.
 
@@ -651,7 +653,7 @@ Recovery classifies these states:
 | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | No reservation and no `SubagentRequested`                       | No child obligation exists; normal Tool preparation rules apply                                                                                                                                                |
 | Reservation exists, request absent                              | Under the parent fence, append the fixed request or release the unused reservation                                                                                                                             |
-| Requested, direct admission result `notAdmitted`                | Idempotently admit the intended child                                                                                                                                                                          |
+| Requested, direct admission result `notAdmitted`                | Reauthorize the exact establishment request under current policy, then idempotently admit the intended child                                                                                                   |
 | Requested, direct admission result `indeterminate`              | Wait/retry direct resolution; never infer absence from a projection                                                                                                                                            |
 | Child admitted, its Conversation lacks or has divergent lineage | The child lane defers or rejects readiness; the worker claim gate releases/refuses the head, and only the parent's reauthorized idempotent establishment may complete exact lineage — no child Turn runs first |
 | Child admitted, parent start record missing                     | Resolve by idempotency key and append the exact `SubagentStarted` link                                                                                                                                         |
@@ -694,28 +696,28 @@ capability because they weaken structured ownership and complicate accepted-work
 
 ## 14. Durable crash matrix
 
-| Crash point                                                   | Required outcome                                                                            |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Before parent budget reservation                              | No request or child obligation exists                                                       |
-| After reservation, before request append                      | Fenced recovery appends the fixed request or releases the reservation exactly once          |
-| After request append, before child admission                  | Direct idempotency resolution classifies admission before one child is admitted             |
-| While admission resolution is indeterminate                   | No second admission occurs; recovery waits/retries the authoritative owner                  |
-| After child admission, before readiness                       | Child admission recovery completes materialization/readiness                                |
-| After child readiness, before parent start append             | Parent resolves the same Receipt and records the link                                       |
-| After parent start, before `waitingForChild` checkpoint       | Recovery checkpoints waiting state and releases execution permits                           |
-| During child model response                                   | Normal durable model recovery applies inside the child                                      |
-| During child ordinary Tool                                    | Normal prepared/settled/operator-resolution classification applies inside the child         |
-| Parent abort canonical, before child abort                    | Recovery emits the one idempotent child abort command                                       |
-| Child abort canonical, before parent propagation marker       | Recovery repairs the marker without a second command                                        |
-| Child terminal races with child abort                         | The one canonical child Settlement wins and is joined                                       |
-| After child Settlement append, before child ledger finalizes  | Parent marker/generation is durable first; parent wakes and reads the same Settlement       |
-| After result projection, before parent join append            | Projection is recomputed from canonical child output and fixed digests                      |
-| After join append, before budget `releasePending`             | Canonical join drives idempotent accounting repair                                          |
-| After `releasePending`, before `released`                     | The fixed consumed/released amounts are applied once                                        |
-| After release, before parent continues                        | Parent replay observes settled Tool Call and released reservation; neither is repeated      |
-| Parent and child workers stop simultaneously                  | Independent fenced recovery converges on the same link and Settlement                       |
-| Parent replacement races reservation, release, or join repair | Parent ownership token/epoch permits one transition and rejects stale writes                |
-| Stale parent resumes after replacement                        | Parent append and parent-ledger transitions are rejected by its ownership token/epoch fence |
+| Crash point                                                   | Required outcome                                                                                                                                                       |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Before parent budget reservation                              | No request or child obligation exists                                                                                                                                  |
+| After reservation, before request append                      | Fenced recovery appends the fixed request or releases the reservation exactly once                                                                                     |
+| After request append, before child admission                  | Direct idempotency resolution classifies admission before one child is admitted                                                                                        |
+| While admission resolution is indeterminate                   | No second admission occurs; recovery waits/retries the authoritative owner                                                                                             |
+| After child admission, before readiness                       | Child admission recovery completes materialization/readiness                                                                                                           |
+| After child readiness, before parent start append             | Parent resolves the same Receipt and records the link                                                                                                                  |
+| After parent start, before `waitingForChild` checkpoint       | Recovery checkpoints waiting state and releases execution permits                                                                                                      |
+| During child model response                                   | Normal durable model recovery applies inside the child                                                                                                                 |
+| During child ordinary Tool                                    | Normal prepared/settled/operator-resolution classification applies inside the child                                                                                    |
+| Parent abort canonical, before child abort                    | Recovery emits the one idempotent child abort command                                                                                                                  |
+| Child abort canonical, before parent propagation marker       | Recovery repairs the marker without a second command                                                                                                                   |
+| Child terminal races with child abort                         | The one canonical child Settlement wins and is joined                                                                                                                  |
+| After child Settlement append, before child ledger finalizes  | Cross-store parent marker/generation is durable first; same-store canonical repair atomically creates shared-row coverage; both replay notification after finalization |
+| After result projection, before parent join append            | Projection is recomputed from canonical child output and fixed digests                                                                                                 |
+| After join append, before budget `releasePending`             | Canonical join drives idempotent accounting repair                                                                                                                     |
+| After `releasePending`, before `released`                     | The fixed consumed/released amounts are applied once                                                                                                                   |
+| After release, before parent continues                        | Parent replay observes settled Tool Call and released reservation; neither is repeated                                                                                 |
+| Parent and child workers stop simultaneously                  | Independent fenced recovery converges on the same link and Settlement                                                                                                  |
+| Parent replacement races reservation, release, or join repair | Parent ownership token/epoch permits one transition and rejects stale writes                                                                                           |
+| Stale parent resumes after replacement                        | Parent append and parent-ledger transitions are rejected by its ownership token/epoch fence                                                                            |
 
 Every new durable mutation has before/after failpoints. Node tests kill actual processes; the
 Cloudflare adapter forces eviction and alarm retries.

@@ -273,10 +273,13 @@ remain outside the cached Durable Object runtime.
 `ChildAdmissionAuthorizer` as required Layer inputs; neither policy is hidden in construction
 options and there is no ambient allow default. `makeConversationObjectClass(options,
 authorization, observability?)` therefore requires an explicit Layer providing both services at
-the application composition root. Protected Worker-to-Object calls Schema-encode an explicit
-`OperationCaller`, and an authorization refusal returns `OperationDenied` through the same closed
-RPC failure union so the Worker client retains the typed denial. Trusted local deployments and
-tests may deliberately select the exported possession policy Layers.
+the application composition root. That authorization Layer may acquire the current
+`WorkerEnvironment` and Durable Object state, and its typed acquisition failures remain visible in
+Object initialization; policy configuration does not need captured globals or defects. Protected
+Worker-to-Object calls Schema-encode an explicit `OperationCaller`, and an authorization refusal
+returns `OperationDenied` through the same closed RPC failure union so the Worker client retains
+the typed denial. Trusted local deployments and tests may deliberately select the exported
+possession policy Layers.
 
 For each attempt of a protected mutation, the durable runtime performs one final authorization and
 then invokes its required `OperationMutationPreparer` once immediately before the mutation path.
@@ -293,8 +296,9 @@ mutation.
 `CloudflareConversationClient.readPage` remains the bounded pagination primitive. Its `readAll`
 convenience is also bounded by both record count and cumulative size. Callers may set `maxRecords`
 and `maxBytes`; the defaults are 4,096 records and 8 MiB. The byte total is the sum of each decoded
-record's canonical wire encoding as UTF-8 JSON, independent of page size. Reaching either bound
-fails with `ConversationReadLimitExceeded` or `ConversationReadByteLimitExceeded` before an
+record's canonical wire encoding as UTF-8 JSON. `readAll` requests one record per host page so it
+never materializes a maximum-size page before applying the cumulative byte bound. Reaching either
+bound fails with `ConversationReadLimitExceeded` or `ConversationReadByteLimitExceeded` before an
 unbounded aggregate can materialize; callers use `readPage` for larger histories.
 
 `CloudflareDurableRuntimeOptions.databasePlan` declares the deployed Durable Objects account
