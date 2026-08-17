@@ -1,6 +1,35 @@
-import { Effect, Encoding, Result } from "effect";
+import { Context, Effect, Encoding, Layer, Result } from "effect";
 
 import { DeliveryUnauthentic, type IngressPolicy, type PlatformDelivery } from "./contracts.ts";
+
+export class ObservedActionsIdentity extends Context.Service<
+  ObservedActionsIdentity,
+  {
+    readonly read: Effect.Effect<
+      { readonly repository: string; readonly eventName: string } | undefined
+    >;
+  }
+>()("@effect-agent/example-pr-work-order-ingress/ObservedActionsIdentity") {
+  static readonly layerFromEnvironment = Layer.succeed(
+    ObservedActionsIdentity,
+    ObservedActionsIdentity.of({
+      read: Effect.sync(() => {
+        if (process.env.GITHUB_ACTIONS !== "true") return undefined;
+        const repository = process.env.GITHUB_REPOSITORY;
+        const eventName = process.env.GITHUB_EVENT_NAME;
+        if (repository === undefined || eventName === undefined) return undefined;
+        return { repository, eventName };
+      }),
+    }),
+  );
+
+  static readonly layerAbsent = Layer.succeed(
+    ObservedActionsIdentity,
+    ObservedActionsIdentity.of({
+      read: Effect.succeed(undefined),
+    }),
+  );
+}
 
 const hexToBytes = (hex: string): Uint8Array | undefined => {
   const decoded = Encoding.decodeHex(hex);
@@ -62,7 +91,7 @@ const verifySignature = Effect.fn("verifySignature")(function* (
 export const authenticateDelivery = Effect.fn("authenticateDelivery")(function* (
   delivery: PlatformDelivery,
   policy: IngressPolicy["Service"],
-): Effect.fn.Return<void, DeliveryUnauthentic> {
+): Effect.fn.Return<void, DeliveryUnauthentic, ObservedActionsIdentity> {
   if (delivery.signature !== undefined) {
     const valid = yield* verifySignature(
       policy.webhookSecret,
@@ -76,10 +105,11 @@ export const authenticateDelivery = Effect.fn("authenticateDelivery")(function* 
     }
     return;
   }
+  const actions = yield* (yield* ObservedActionsIdentity).read;
   if (
-    delivery.actionsIdentity !== undefined &&
-    delivery.actionsIdentity.repository === policy.repository &&
-    delivery.actionsIdentity.eventName === delivery.eventName
+    actions !== undefined &&
+    actions.repository === policy.repository &&
+    actions.eventName === delivery.eventName
   ) {
     return;
   }

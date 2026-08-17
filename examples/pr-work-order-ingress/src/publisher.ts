@@ -1,122 +1,87 @@
-import {
-  PatchDigest,
-  StalePullRequestHead,
-  WorkspaceOperationFailure,
-} from "@effect-agent/example-pr-work-orders";
-import { Context, Crypto, Effect, Encoding, Layer, Schema } from "effect";
+import { StalePullRequestHead } from "@effect-agent/example-pr-work-orders";
+import { Context, Effect, type FileSystem, Layer, type Path, Schema, type Scope } from "effect";
+import type { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
-  type GitHubApiFailure,
-  type PublisherArtifacts,
+  GITHUB_WRITE_TOKEN_ENV,
+  IsolationViolation,
+  type PublisherRequest,
   PublisherVerificationFailure,
-  PublicationUncertainty,
+  type PublicationUncertainty,
 } from "./contracts.ts";
-import { GitHubApi } from "./github.ts";
+import { spawnIsolatedWorker } from "./isolation.ts";
 
-const digestPatch = (
-  crypto: Crypto.Crypto,
-  patch: string,
-): Effect.Effect<PatchDigest, WorkspaceOperationFailure> =>
-  crypto.digest("SHA-256", new TextEncoder().encode(patch)).pipe(
-    Effect.map(Encoding.encodeHex),
-    Effect.flatMap(Schema.decodeUnknownEffect(PatchDigest)),
-    Effect.mapError((cause) =>
-      WorkspaceOperationFailure.make({
-        operation: "digest publisher patch",
-        reason: String(cause).slice(0, 4_096),
-      }),
-    ),
-  );
+const PublisherWorkerOutcome = Schema.Union([
+  Schema.Struct({
+    _tag: Schema.Literal("published"),
+    headSha: Schema.String,
+  }),
+  PublisherVerificationFailure,
+  StalePullRequestHead,
+  IsolationViolation,
+]);
 
-export const verifyPublisherArtifacts = Effect.fn("verifyPublisherArtifacts")(function* (
-  artifacts: PublisherArtifacts,
-  currentHead: typeof artifacts.expectedHeadSha,
-  crypto: Crypto.Crypto,
-): Effect.fn.Return<
-  void,
-  PublisherVerificationFailure | StalePullRequestHead | WorkspaceOperationFailure
-> {
-  const digest = yield* digestPatch(crypto, artifacts.patch);
-  if (digest !== artifacts.patchDigest) {
-    return yield* PublisherVerificationFailure.make({
-      reason: "digest-mismatch",
-      detail: "publisher-computed patch digest differs from the host-validated digest",
-    });
+export const changedPathsFromPatch = (patch: string): ReadonlyArray<string> => {
+  const paths = new Set<string>();
+  for (const line of patch.split("\n")) {
+    const git = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+    if (git?.[2] !== undefined && git[2] !== "/dev/null") paths.add(git[2]);
   }
-  if (artifacts.changedPaths.some((path) => !artifacts.allowedPaths.includes(path))) {
-    return yield* PublisherVerificationFailure.make({
-      reason: "path-not-allowed",
-      detail: "publisher artifacts name a path outside the work-order allowlist",
-    });
-  }
-  if (artifacts.requiredChecks.some((check) => check.status !== "passed")) {
-    return yield* PublisherVerificationFailure.make({
-      reason: "check-evidence",
-      detail: "publisher artifacts do not include passing required-check evidence",
-    });
-  }
-  if (
-    artifacts.workOrderId.length === 0 ||
-    artifacts.repository.length === 0 ||
-    artifacts.pullRequestNumber <= 0
-  ) {
-    return yield* PublisherVerificationFailure.make({
-      reason: "identity-mismatch",
-      detail: "publisher artifacts do not name a complete work-order identity",
-    });
-  }
-  if (currentHead !== artifacts.expectedHeadSha) {
-    return yield* StalePullRequestHead.make({
-      expected: artifacts.expectedHeadSha,
-      actual: currentHead,
-    });
-  }
-});
+  return [...paths];
+};
 
 export class IsolatedPublisher extends Context.Service<
   IsolatedPublisher,
   {
     readonly publish: (
-      artifacts: PublisherArtifacts,
+      request: PublisherRequest,
     ) => Effect.Effect<
-      typeof artifacts.expectedHeadSha,
+      string,
       | PublisherVerificationFailure
       | StalePullRequestHead
-      | PublicationUncertainty
-      | WorkspaceOperationFailure
-      | GitHubApiFailure
+      | IsolationViolation
+      | PublicationUncertainty,
+      FileSystem.FileSystem | Path.Path | ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
     >;
   }
 >()("@effect-agent/example-pr-work-order-ingress/IsolatedPublisher") {
-  static readonly layer = Layer.effect(
-    IsolatedPublisher,
-    Effect.gen(function* () {
-      const github = yield* GitHubApi;
-      const crypto = yield* Crypto.Crypto;
-      const publish = Effect.fn("IsolatedPublisher.publish")(function* (
-        artifacts: PublisherArtifacts,
-      ) {
-        const current = yield* github.currentHead(
-          artifacts.repository,
-          artifacts.pullRequestNumber,
-        );
-        yield* verifyPublisherArtifacts(artifacts, current, crypto);
-        return yield* github
-          .updateHead({
-            repository: artifacts.repository,
-            pullRequestNumber: artifacts.pullRequestNumber,
-            expectedHeadSha: artifacts.expectedHeadSha,
-            patchDigest: artifacts.patchDigest,
-          })
-          .pipe(
-            Effect.catchTag("GitHubApiFailure", (error) =>
-              PublicationUncertainty.make({
-                reason: error.reason,
-              }),
-            ),
-          );
-      });
-      return IsolatedPublisher.of({ publish });
-    }),
-  );
+  static readonly layer = (options: {
+    readonly stateDir: string;
+    readonly writeToken?: string | undefined;
+  }) =>
+    Layer.succeed(
+      IsolatedPublisher,
+      IsolatedPublisher.of({
+        publish: (request) =>
+          Effect.gen(function* () {
+            const payload = yield* spawnIsolatedWorker({
+              role: "publish",
+              request: { ...request, stateDir: options.stateDir },
+              env:
+                options.writeToken === undefined
+                  ? {}
+                  : { [GITHUB_WRITE_TOKEN_ENV]: options.writeToken },
+            }).pipe(
+              Effect.mapError((error) =>
+                error._tag === "IsolationViolation"
+                  ? error
+                  : IsolationViolation.make({
+                      process: "publish",
+                      reason: "publisher worker failed to start",
+                    }),
+              ),
+            );
+            const decoded = yield* Schema.decodeUnknownEffect(PublisherWorkerOutcome)(payload).pipe(
+              Effect.mapError(() =>
+                IsolationViolation.make({
+                  process: "publish",
+                  reason: "publisher worker returned an invalid report",
+                }),
+              ),
+            );
+            if (decoded._tag === "published") return decoded.headSha;
+            return yield* decoded;
+          }),
+      }),
+    );
 }

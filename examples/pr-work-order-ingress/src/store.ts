@@ -53,8 +53,24 @@ export class DurableAttemptStore extends Context.Service<
         const path = yield* Path.Path;
         const eventsDir = path.join(directory, "events");
         const attemptsDir = path.join(directory, "attempts");
-        yield* fs.makeDirectory(eventsDir, { recursive: true });
-        yield* fs.makeDirectory(attemptsDir, { recursive: true });
+        const ensureDirectories = Effect.gen(function* () {
+          yield* fs.makeDirectory(eventsDir, { recursive: true }).pipe(
+            Effect.mapError((cause) =>
+              IngressStoreFailure.make({
+                operation: "create attempt store",
+                reason: String(cause).slice(0, 4_096),
+              }),
+            ),
+          );
+          yield* fs.makeDirectory(attemptsDir, { recursive: true }).pipe(
+            Effect.mapError((cause) =>
+              IngressStoreFailure.make({
+                operation: "create attempt store",
+                reason: String(cause).slice(0, 4_096),
+              }),
+            ),
+          );
+        });
         const eventPath = (eventId: string) =>
           path.join(eventsDir, `${encodeURIComponent(eventId)}.json`);
         const attemptPath = (order: PullRequestWorkOrder) =>
@@ -104,6 +120,7 @@ export class DurableAttemptStore extends Context.Service<
         const claim = Effect.fn("DurableAttemptStore.claim")(function* (
           order: PullRequestWorkOrder,
         ) {
+          yield* ensureDirectories;
           const claimed = AttemptSnapshot.make({
             eventId: order.dispatch.eventId,
             repository: order.repository,
@@ -136,6 +153,7 @@ export class DurableAttemptStore extends Context.Service<
             | { readonly _tag: "result"; readonly result: PublishedWorkOrder | SettledWorkOrder }
             | { readonly _tag: "failure"; readonly errorTag: string; readonly detail: string },
         ) {
+          yield* ensureDirectories;
           const snapshot = AttemptSnapshot.make({
             eventId: order.dispatch.eventId,
             repository: order.repository,
@@ -151,7 +169,7 @@ export class DurableAttemptStore extends Context.Service<
           yield* writeSnapshot(attemptPath(order), snapshot, false);
         });
         return DurableAttemptStore.of({ claim, complete });
-      }).pipe(Effect.orDie),
+      }),
     );
 }
 

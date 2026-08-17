@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 import {
   GitCommitSha,
   PatchDigest,
@@ -15,7 +17,7 @@ import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { type Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
 
-import { signGitHubDelivery } from "../src/authenticate.ts";
+import { ObservedActionsIdentity, signGitHubDelivery } from "../src/authenticate.ts";
 import { constructWorkOrder } from "../src/construct.ts";
 import {
   DEFAULT_MENTION_COMMAND,
@@ -24,12 +26,15 @@ import {
   type DispatchTargetRejected,
   type DispatchUnauthorized,
   GITHUB_WRITE_TOKEN_ENV,
+  IsolatedCheckRequest,
+  IsolatedCheckSpec,
   IngressPolicy,
   IngressPolicyConfig,
   MODEL_SECRET_ENV,
   PlatformDelivery,
   type PresentationFailure,
-  PublisherArtifacts,
+  PublisherRequest,
+  PublisherTrust,
   type PublisherVerificationFailure,
   PullRequestView,
   ReviewCommentView,
@@ -37,7 +42,7 @@ import {
 } from "../src/contracts.ts";
 import { makeFakeGitHub } from "../src/github.ts";
 import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts";
-import { inspectIsolatedCheckEnvironment } from "../src/isolation.ts";
+import { IsolatedChecks } from "../src/isolation.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
 import { DurableAttemptStore } from "../src/store.ts";
@@ -90,11 +95,11 @@ type HandleRequiresCrypto = Assert<
   Equal<Extract<TypedHandleServices, Crypto.Crypto>, Crypto.Crypto>
 >;
 
-const typedPublish = IsolatedPublisher.layer.pipe(
+const typedPublish = IsolatedPublisher.layer({ stateDir: "/tmp" }).pipe(
   Layer.build,
   Effect.flatMap(() =>
     Effect.flatMap(IsolatedPublisher, (publisher) =>
-      publisher.publish(null as unknown as PublisherArtifacts),
+      publisher.publish(null as unknown as PublisherRequest),
     ),
   ),
 );
@@ -251,19 +256,28 @@ const countingImplementer = () => {
   return { layer, invocations: () => invocations };
 };
 
-const artifacts = (overrides?: Partial<PublisherArtifacts>) =>
-  PublisherArtifacts.make({
-    workOrderId: "wo-1",
-    workOrderDigest: DIGEST,
-    repository: REPOSITORY,
-    pullRequestNumber: PULL,
-    expectedHeadSha: HEAD,
-    patch: "",
-    patchDigest: EMPTY_DIGEST,
-    allowedPaths: [FILE_PATH],
-    changedPaths: [FILE_PATH],
-    requiredChecks: [{ name: "fixture-check", status: "passed", summary: "ok" }],
-    ...overrides,
+const NOTES_PATCH = "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/notes.md\n";
+const NOTES_DIGEST = Schema.decodeUnknownSync(PatchDigest)(
+  createHash("sha256").update(NOTES_PATCH).digest("hex"),
+);
+
+const publisherRequest = (overrides?: {
+  readonly patch?: string;
+  readonly trust?: Partial<PublisherTrust>;
+}) =>
+  PublisherRequest.make({
+    patch: overrides?.patch ?? "",
+    trust: PublisherTrust.make({
+      workOrderId: "wo-1",
+      workOrderDigest: DIGEST,
+      repository: REPOSITORY,
+      pullRequestNumber: PULL,
+      expectedHeadSha: HEAD,
+      allowedPaths: [FILE_PATH],
+      patchDigest: EMPTY_DIGEST,
+      requiredChecks: [{ name: "fixture-check", status: "passed", summary: "ok" }],
+      ...overrides?.trust,
+    }),
   });
 
 const withIngress = <A, E, R>(
@@ -292,6 +306,8 @@ const withIngress = <A, E, R>(
           Layer.mergeAll(
             github.layer,
             IngressPolicy.layer(policyConfig),
+            ObservedActionsIdentity.layerAbsent,
+            IsolatedChecks.layer,
             DurableAttemptStore.layer(directory),
             stubHostLayer,
             WorkOrderAttemptPolicy.layerMemory,
@@ -565,59 +581,80 @@ describe("PR work-order ingress", () => {
   it.effect(
     "WOI-007 the check process environment contains neither a GitHub write token nor a provider secret",
     () =>
-      Effect.gen(function* () {
-        process.env[GITHUB_WRITE_TOKEN_ENV] = "ghs_parent_write_token";
-        process.env[MODEL_SECRET_ENV] = "sk_parent_model_secret";
-        const isolated = yield* Effect.scoped(inspectIsolatedCheckEnvironment()).pipe(
-          Effect.ensuring(
-            Effect.sync(() => {
-              delete process.env[GITHUB_WRITE_TOKEN_ENV];
-              delete process.env[MODEL_SECRET_ENV];
-            }),
-          ),
-        );
-        expect(isolated).toEqual({
-          process: "check",
-          hasWriteToken: false,
-          hasModelSecret: false,
-        });
-      }).pipe(Effect.provide(NodeServices.layer)),
+      Effect.scoped(
+        Effect.gen(function* () {
+          process.env[GITHUB_WRITE_TOKEN_ENV] = "ghs_parent_write_token";
+          process.env[MODEL_SECRET_ENV] = "sk_parent_model_secret";
+          const fs = yield* FileSystem.FileSystem;
+          const worktree = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-check-" });
+          const checks = yield* IsolatedChecks;
+          const isolated = yield* checks
+            .run(
+              IsolatedCheckRequest.make({
+                worktreeRoot: worktree,
+                checks: [
+                  IsolatedCheckSpec.make({
+                    name: "fixture-check",
+                    command: process.execPath,
+                    args: ["-e", "process.stdout.write('ok')"],
+                  }),
+                ],
+              }),
+            )
+            .pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  delete process.env[GITHUB_WRITE_TOKEN_ENV];
+                  delete process.env[MODEL_SECRET_ENV];
+                }),
+              ),
+            );
+          expect(isolated.environment).toEqual({
+            process: "check",
+            hasWriteToken: false,
+            hasModelSecret: false,
+          });
+          expect(isolated.results).toEqual([
+            { name: "fixture-check", status: "passed", summary: "ok" },
+          ]);
+        }),
+      ).pipe(Effect.provide(IsolatedChecks.layer), Effect.provide(NodeServices.layer)),
   );
 
   it.effect(
     "WOI-008 WOI-009 the publisher rejects a digest, path, or head mismatch and does not update the ref",
     () =>
-      Effect.gen(function* () {
-        const github = makeFakeGitHub({
-          repository: REPOSITORY,
-          pullRequest: pullRequest(),
-          comments: new Map([["1001", targetComment()]]),
-        });
-        const before = github.headSha();
-        const publish = (input: PublisherArtifacts, api = github) =>
-          Effect.gen(function* () {
-            const publisher = yield* IsolatedPublisher;
-            return yield* publisher.publish(input);
-          }).pipe(
-            Effect.provide(IsolatedPublisher.layer.pipe(Layer.provideMerge(api.layer))),
-            Effect.flip,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-" });
+          yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
+          const publish = (request: PublisherRequest) =>
+            Effect.gen(function* () {
+              const publisher = yield* IsolatedPublisher;
+              return yield* publisher.publish(request);
+            }).pipe(Effect.provide(IsolatedPublisher.layer({ stateDir })), Effect.flip);
+          const digest = yield* publish(
+            publisherRequest({
+              patch: "diff --git a/src/value.ts b/src/value.ts\n",
+            }),
           );
-        const digest = yield* publish(
-          artifacts({ patch: "diff --git a/src/value.ts b/src/value.ts\n" }),
-        );
-        const path = yield* publish(artifacts({ changedPaths: ["notes.md"] }));
-        const moved = makeFakeGitHub({
-          repository: REPOSITORY,
-          pullRequest: pullRequest({ headSha: STALE }),
-          comments: new Map([["1001", targetComment()]]),
-        });
-        const head = yield* publish(artifacts({ changedPaths: [] }), moved);
-        expect(digest._tag).toBe("PublisherVerificationFailure");
-        expect(path._tag).toBe("PublisherVerificationFailure");
-        expect(head._tag).toBe("StalePullRequestHead");
-        expect(github.headSha()).toBe(before);
-        expect(moved.headSha()).toBe(STALE);
-      }).pipe(Effect.provide(NodeServices.layer)),
+          const forbidden = yield* publish(
+            publisherRequest({
+              patch: NOTES_PATCH,
+              trust: { patchDigest: NOTES_DIGEST },
+            }),
+          );
+          yield* fs.writeFileString(path.join(stateDir, "head"), STALE);
+          const head = yield* publish(publisherRequest());
+          const after = yield* fs.readFileString(path.join(stateDir, "head"));
+          expect(digest._tag).toBe("PublisherVerificationFailure");
+          expect(forbidden._tag).toBe("PublisherVerificationFailure");
+          expect(head._tag).toBe("StalePullRequestHead");
+          expect(after.trim()).toBe(STALE);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(
