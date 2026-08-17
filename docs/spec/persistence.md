@@ -283,6 +283,14 @@ Rules:
 - validate data read from storage, even if the application originally wrote it;
 - store content digests over canonical encoding.
 
+`SubmissionSettled` is family-discriminated at this boundary. A `failed` record must carry exactly
+the bounded `{ errorTag, message }` diagnostic defined by durability §12; an `aborted` record must
+carry no result, while a joined `completed` record may have no independent result. Current-version
+legacy failed records that omit the diagnostic or attach additional cause/stack/application fields
+are corrupt private-development data: adapters fail clearly while reading or finalizing them and
+do not synthesize a replacement. Ledger finalization projects the failed diagnostic from the exact
+reserved record, so process-style reopen and idempotent finalization replay return the same value.
+
 Canonical encoding must be deterministic and locale-independent. Canonical JSON
 serialization orders object keys by UTF-16 code units (RFC 8785 style). Locale-aware
 collation is forbidden: it varies across hosts, and it treats canonically equivalent
@@ -343,7 +351,9 @@ authoritative read.
 - **STORE-003**: Recovery reads are strongly consistent.
 - **STORE-004**: Batch append is atomic, idempotent, conflict-checked, and fenced.
 - **STORE-005**: Every durable record carries a schema version.
-- **STORE-006**: Effect Schema validates both writes and reads.
+- **STORE-006**: Effect Schema validates both writes and reads, including the exact bounded
+  diagnostic required by every failed canonical settlement; malformed current-version legacy
+  records fail clearly rather than being repaired from non-canonical state.
 - **STORE-007**: Checkpoints are disposable and bound to a canonical digest.
 - **STORE-008**: Projections are rebuildable from canonical records.
 - **STORE-009**: Large immutable payloads use digest-addressed artifact storage.

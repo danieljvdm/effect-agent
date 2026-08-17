@@ -548,12 +548,27 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       expect(settled.outcome).toBe("failed");
 
       const byId = recordsById(yield* readLog(conversation));
+      const hostSettlement = byId.get(`settlement:${host.submissionId}`);
       const joinedSettlement = byId.get(`settlement:${joined.submissionId}`);
-      if (joinedSettlement?.record.payload._tag === "SubmissionSettled") {
+      if (
+        hostSettlement?.record.payload._tag === "SubmissionSettled" &&
+        joinedSettlement?.record.payload._tag === "SubmissionSettled"
+      ) {
+        expect(hostSettlement.record.payload.outcome).toBe("failed");
+        expect(hostSettlement.record.payload.result).toEqual({
+          errorTag: "AgentOutputError",
+          message: expect.any(String),
+        });
         expect(joinedSettlement.record.payload.outcome).toBe("failed");
         expect(joinedSettlement.record.payload.runId).toBe(runIdForSubmission(host.submissionId));
+        // Joined fanout carries the host's already-bounded diagnostic exactly — never a raw Cause.
+        expect(joinedSettlement.record.payload.result).toEqual(
+          hostSettlement.record.payload.result,
+        );
+        expect(settlements[0]?.failure).toEqual(hostSettlement.record.payload.result);
+        expect(settled.failure).toEqual(hostSettlement.record.payload.result);
       } else {
-        throw new Error("Expected a canonical joined SubmissionSettled record");
+        throw new Error("Expected canonical host and joined SubmissionSettled records");
       }
     }),
   );
@@ -678,7 +693,9 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
     () =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"history"}'));
+        // The host fails output decoding, then recovery must copy the canonical diagnostic into
+        // the joined settlement instead of reconstructing it from a live Cause.
+        const scripted = yield* makeScriptedModel(() => finalParts("not json"));
         const agent = Agent.withModel(joinDefinition, scripted.model);
         const conversation = "conversation-join-settle-history";
 
@@ -713,14 +730,23 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
 
         const settledHost = yield* runtime.awaitSettlement(host);
         const settledJoined = yield* runtime.awaitSettlement(joined);
-        expect(settledHost.outcome).toBe("completed");
-        expect(settledJoined.outcome).toBe("completed");
+        expect(settledHost.outcome).toBe("failed");
+        expect(settledJoined.outcome).toBe("failed");
         const byId = recordsById(yield* readLog(conversation));
-        const record = byId.get(`settlement:${joined.submissionId}`);
-        if (record?.record.payload._tag === "SubmissionSettled") {
-          expect(record.record.payload.runId).toBe(runIdForSubmission(host.submissionId));
+        const hostRecord = byId.get(`settlement:${host.submissionId}`);
+        const joinedRecord = byId.get(`settlement:${joined.submissionId}`);
+        if (
+          hostRecord?.record.payload._tag === "SubmissionSettled" &&
+          joinedRecord?.record.payload._tag === "SubmissionSettled"
+        ) {
+          expect(hostRecord.record.payload.outcome).toBe("failed");
+          expect(joinedRecord.record.payload.outcome).toBe("failed");
+          expect(joinedRecord.record.payload.runId).toBe(runIdForSubmission(host.submissionId));
+          expect(joinedRecord.record.payload.result).toEqual(hostRecord.record.payload.result);
+          expect(settledHost.failure).toEqual(hostRecord.record.payload.result);
+          expect(settledJoined.failure).toEqual(hostRecord.record.payload.result);
         } else {
-          throw new Error("Expected a canonical joined SubmissionSettled record");
+          throw new Error("Expected canonical host and joined SubmissionSettled records");
         }
       }),
   );
