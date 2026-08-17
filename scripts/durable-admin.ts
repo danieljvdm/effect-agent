@@ -7,15 +7,15 @@ import {
   Principal,
   RecoveryExplanation,
   RetryCommand,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
+  possessionChildAdmissionAuthorizerLayer,
+  possessionOperationAuthorizerLayer,
   renderRecoveryExplanation,
   type IntegrityReport,
   type ObligationReport,
   type RecoveryReport,
 } from "@effect-agent/session";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Console, Effect, Schema } from "effect";
+import { Console, Effect, Layer, Schema } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 
 /**
@@ -81,9 +81,11 @@ const runtimeLayerFor = (filename: string) =>
     filename,
     deploymentId: "durable-admin",
     producerId: "durable-admin",
-    operationAuthorizer: possessionOperationAuthorizer,
-    childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
-  });
+  }).pipe(
+    Layer.provide(
+      Layer.merge(possessionOperationAuthorizerLayer, possessionChildAdmissionAuthorizerLayer),
+    ),
+  );
 
 const admin = CliCommand.make("durable-admin").pipe(
   CliCommand.withSharedFlags({ database }),

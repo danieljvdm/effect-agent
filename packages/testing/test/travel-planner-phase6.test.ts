@@ -5,13 +5,12 @@ import {
   ConversationStore,
   DurableAgentRuntime,
   IdempotencyKey,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
 } from "@effect-agent/session";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, PlatformError, Schema, Stream } from "effect";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import {
   TravelPlannerCloudflareProfile,
   expectedTravelPlan,
@@ -48,13 +47,14 @@ const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
   deploymentId: phase4TravelPlannerDeploymentId,
   producerId: phase4TravelPlannerProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
 });
 
 /** One DN "host process": the full Node/SQLite runtime stack plus the deterministic services. */
 const dnLayer = (options: NodeDurableRuntimeOptions) =>
-  Layer.mergeAll(phase4TravelPlannerWorkerLayer, NodeDurableRuntime.layer(options));
+  Layer.mergeAll(
+    phase4TravelPlannerWorkerLayer,
+    NodeDurableRuntime.layer(options).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer)),
+  );
 
 /**
  * TEST-014, the DN HALF of the P6 DN/DC equivalence gate (plan §6, D-P6-6): the SAME

@@ -172,6 +172,11 @@ and with a bounded warning, so the next run safely performs a full review.
 `review-mode: final` is the explicit bounded merge-readiness audit. It reviews
 the full current PR diff and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
+The packaged fan-out planner can assign up to 16 units of 12 files, with a
+1,200 changed-line soft budget per unit. Files beyond that finite capacity or
+children that fail their bounded policy remain explicitly unreviewed and make
+the review check incomplete; the workflow never converts partial coverage
+into an approval claim.
 
 ## Hosts
 

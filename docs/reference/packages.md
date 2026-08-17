@@ -81,7 +81,10 @@ ownership drain, Agent Binding registration for durable workers
 (`NodeDurableRuntimeOptions.bindings` behind `NodeDurableHost.runResolvedWorkers`; an empty
 roster fails every claim closed), and the `NodeDurableHost` startup gates (storage compatibility,
 recovery before admission) and shutdown order (close admission → release ownership → close
-storage). It is a Layer-assembly library, not an application entrypoint.
+storage). `NodeDurableRuntime.layer` and `NodeDurableHost.layerStack` leave the required
+`OperationAuthorizer` and `ChildAdmissionAuthorizer` visible in their Layer requirement channel;
+the application composition root chooses and provides those policies. It is a Layer-assembly
+library, not an application entrypoint.
 
 ### `@effect-agent/storage-cloudflare`
 

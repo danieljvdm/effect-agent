@@ -11,7 +11,13 @@ declare const crypto: {
 export const cloudflareCryptoLayer: Layer.Layer<Crypto.Crypto> = Layer.succeed(
   Crypto.Crypto,
   Crypto.make({
-    randomBytes: (size) => crypto.getRandomValues(new Uint8Array(size)),
+    randomBytes: (size) => {
+      const bytes = new Uint8Array(size);
+      for (let offset = 0; offset < bytes.length; offset += 65_536) {
+        crypto.getRandomValues(bytes.subarray(offset, Math.min(offset + 65_536, bytes.length)));
+      }
+      return bytes;
+    },
     digest: (algorithm, data) =>
       Effect.tryPromise({
         try: async () =>

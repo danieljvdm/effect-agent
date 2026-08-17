@@ -9,7 +9,6 @@ import {
   WarehouseInvoices,
   WarehouseListRequest,
   WarehouseQueryDenied,
-  WarehouseRegion,
 } from "./warehouse-object.ts";
 
 /**
@@ -20,10 +19,7 @@ import {
 export const warehouseListTool = Tool.make("list_warehouse_invoices", {
   description:
     "List invoices from the curated warehouse, optionally filtering by minimum revenue and region. Results are ordered by revenue descending and bounded to 200 rows.",
-  parameters: Schema.Struct({
-    minimumRevenue: Schema.optionalKey(Schema.Natural),
-    region: Schema.optionalKey(WarehouseRegion),
-  }),
+  parameters: WarehouseListRequest,
   success: Schema.Struct({
     invoices: WarehouseInvoices.fields.invoices,
     truncated: Schema.Boolean,
@@ -42,24 +38,13 @@ export const warehouseHandlersLayer: Layer.Layer<
   Effect.gen(function* () {
     const warehouse = yield* Warehouse;
     return {
-      list_warehouse_invoices: ({ minimumRevenue, region }) =>
-        warehouse
-          .listInvoices(
-            WarehouseListRequest.make({
-              ...(minimumRevenue === undefined ? {} : { minimumRevenue }),
-              ...(region === undefined ? {} : { region }),
-            }),
-          )
-          .pipe(
-            Effect.flatMap((outcome) =>
-              outcome._tag === "WarehouseInvoices"
-                ? Effect.succeed({
-                    invoices: outcome.invoices,
-                    truncated: outcome.truncated,
-                  })
-                : Effect.fail(outcome),
-            ),
-          ),
+      list_warehouse_invoices: (request) =>
+        warehouse.listInvoices(request).pipe(
+          Effect.map((outcome) => ({
+            invoices: outcome.invoices,
+            truncated: outcome.truncated,
+          })),
+        ),
     };
   }),
 );

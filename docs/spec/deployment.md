@@ -178,6 +178,12 @@ Readiness for admission requires:
 - authorization configuration;
 - at least one viable routing path if the API promises immediate execution.
 
+The Node assembly keeps both security policy ports in the Layer requirement channel:
+`NodeDurableRuntime.layer(options)` requires `OperationAuthorizer` and
+`ChildAdmissionAuthorizer`. Applications provide those policy Layers at their composition root;
+the raw configuration/options object carries inert deployment data and does not capture
+authority-bearing service implementations.
+
 Readiness for workers requires:
 
 - compatible durable store;
@@ -261,6 +267,11 @@ authorization refusal returns `OperationDenied` through the same closed RPC fail
 Worker client retains the typed denial. Trusted local deployments and tests may deliberately
 select the exported possession policies.
 
+Protected mutating Object endpoints authorize before writing the pre-armed maintenance alarm,
+then the runtime reauthorizes immediately before its domain mutation. A denied request therefore
+cannot persist an alarm or replace `OperationDenied` with an alarm-write failure, while authorized
+mutations still retain the alarm-before-mutation convergence invariant.
+
 `CloudflareConversationClient.readPage` remains the bounded pagination primitive. Its `readAll`
 convenience is also bounded: callers may set `maxRecords`, the default is 4,096, and reaching a
 larger committed history fails with `ConversationReadLimitExceeded` before an unbounded array can
@@ -300,10 +311,12 @@ finalizers. Host callbacks run one at a time on retained independent root Effect
 return RPC is not coupled to the still-open guest RPC; pass teardown closes callback admission,
 interrupts and awaits active work, and settles queued calls. One absolute monotonic deadline
 applies to the worker RPC and every host callback. A synchronous runaway program is stopped by
-platform CPU limits, not only by a JavaScript timer. The generated module only defines a loader;
-the guest expression itself is evaluated after the bounded console and broker namespaces are
-installed, so an immediately invoked expression cannot perform unaccounted work during module
-initialization.
+platform CPU limits, not only by a JavaScript timer. Before interpolation, the host parses the
+complete guest source and admits exactly one JavaScript expression statement; appended statements
+or attempts to escape the generated loader fail with `CodeSourceError`. The generated module can
+therefore only define that loader. The guest expression itself is evaluated after the bounded
+console and broker namespaces are installed, so an immediately invoked expression cannot perform
+unaccounted work during module initialization.
 
 The adapter records no persistent state and adds no deployment-class claim beyond `E`: the `DN`
 and `DC` assemblies make no Code Mode claim until this specification says otherwise. The tested harness is

@@ -304,14 +304,37 @@ const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
     Effect.flatMap(encodeResponse),
   );
 
+/**
+ * Authorize the caller before the alarm write, then let the runtime authorize
+ * again immediately before its domain mutation. A denied request therefore
+ * cannot mutate the Durable Object merely by reaching a protected endpoint,
+ * while the second check keeps current policy authoritative for the commit.
+ */
+const authorizeAndPreArmMutation = (
+  operation: "abort" | "resolveApproval" | "resolveUnknown" | "retry",
+  submissionId: SubmissionId,
+  caller: OperationCaller,
+) =>
+  Effect.gen(function* () {
+    const authorizer = yield* OperationAuthorizer;
+    yield* authorizer.authorize(
+      OperationAuthorizationRequest.make({
+        operation,
+        principal: caller.principal,
+        submissionId,
+      }),
+    );
+    const maintenance = yield* ConversationMaintenance;
+    yield* maintenance.preArm;
+  });
+
 const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
   decodeAbortHostRequest(encoded).pipe(
     Effect.mapError(protocolFailure("The abort command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
-        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        yield* maintenance.preArm;
+        yield* authorizeAndPreArmMutation("abort", request.command.submissionId, request.caller);
         const intent = yield* runtime.abort(request.command, request.caller);
         return AbortRecorded.make({ intent });
       }),
@@ -327,9 +350,12 @@ const resolveApprovalEndpoint = (
     Effect.mapError(protocolFailure("The approval command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
-        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        yield* maintenance.preArm;
+        yield* authorizeAndPreArmMutation(
+          "resolveApproval",
+          request.command.submissionId,
+          request.caller,
+        );
         const intent = yield* runtime.resolveApproval(request.command, request.caller);
         return ApprovalRecorded.make({ intent });
       }),
@@ -345,9 +371,12 @@ const resolveUnknownEndpoint = (
     Effect.mapError(protocolFailure("The resolution command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
-        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        yield* maintenance.preArm;
+        yield* authorizeAndPreArmMutation(
+          "resolveUnknown",
+          request.command.submissionId,
+          request.caller,
+        );
         const intent = yield* runtime.resolveUnknown(request.command, request.caller);
         return UnknownResolutionRecorded.make({ intent });
       }),
@@ -514,11 +543,10 @@ const retryEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.mapError(protocolFailure("The retry command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
-        const maintenance = yield* ConversationMaintenance;
         const runtime = yield* DurableAgentRuntime;
-        // Alarm invariant: retry may repair durable state, so the alarm that will finish the
-        // lane commits BEFORE the mutation (D-P6-2), exactly like abort.
-        yield* maintenance.preArm;
+        // Alarm invariant: retry may repair durable state, so the authorized alarm that will
+        // finish the lane commits BEFORE the mutation (D-P6-2), exactly like abort.
+        yield* authorizeAndPreArmMutation("retry", request.command.submissionId, request.caller);
         const report = yield* runtime.retry(request.command, request.caller);
         return RetryExecuted.make({ report });
       }),

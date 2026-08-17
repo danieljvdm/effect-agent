@@ -18,6 +18,7 @@ import {
   type CodeExecutorExecute,
   type CodeExecutionRequest,
 } from "@effect-agent/sandbox";
+import { parse } from "acorn";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { Cause, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect";
 
@@ -360,6 +361,34 @@ interface ActiveHostCall {
 /** Reserved global names the harness owns inside the dynamic worker. */
 const reservedHarnessGlobals = new Set(["console"]);
 
+/**
+ * Parse the model-supplied source as a complete JavaScript program and admit
+ * only one expression statement. The expression may compute the async
+ * function (the harness checks the resulting value), but it cannot close the
+ * generated loader and append a top-level statement. Delimiter wrapping is
+ * not an isolation boundary; this host-side parse is.
+ */
+const validateGuestExpression = (source: string): Effect.Effect<void, CodeSourceError> =>
+  Effect.try({
+    try: () => parse(source, { ecmaVersion: "latest", sourceType: "script" }),
+    catch: (cause) =>
+      CodeSourceError.make({
+        implementation: dynamicWorkerImplementation,
+        reason: "invalid",
+        message: `The source is not valid JavaScript: ${String(cause).slice(0, 7_900)}`,
+      }),
+  }).pipe(
+    Effect.flatMap((program) =>
+      program.body.length === 1 && program.body[0]?.type === "ExpressionStatement"
+        ? Effect.void
+        : CodeSourceError.make({
+            implementation: dynamicWorkerImplementation,
+            reason: "invalid",
+            message: "The source must be exactly one JavaScript expression",
+          }),
+    ),
+  );
+
 export interface DynamicWorkerCodeExecutorOptions {
   /** The `worker_loader` binding. */
   readonly loader: WorkerLoader;
@@ -393,6 +422,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
         message: `Source is ${sourceBytes} bytes; the request allows ${request.limits.maxSourceBytes}`,
       });
     }
+    yield* validateGuestExpression(request.source);
     for (const namespace of request.namespaces) {
       if (reservedHarnessGlobals.has(namespace.name)) {
         return yield* CodeExecutorUnsupportedError.make({

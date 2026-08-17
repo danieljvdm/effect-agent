@@ -1,5 +1,6 @@
 import { SubmissionId } from "@effect-agent/core";
 import {
+  OperationCaller,
   submissionInputRecordId,
   submissionSettlementRecordId,
   type CanonicalRecordEnvelope,
@@ -236,11 +237,12 @@ const decodeSubmissionId = Schema.decodeSync(SubmissionId);
 export const readCanonical = (
   conversation: string,
   namespace: TestNamespace = "CONVERSATIONS",
+  caller: OperationCaller = TEST_CALLER,
 ): Promise<ReadonlyArray<CanonicalRecordEnvelope>> =>
   runClient(
     Effect.gen(function* () {
       const client = yield* CloudflareConversationClient;
-      return yield* client.readAll(decodeConversationId(conversation), TEST_CALLER);
+      return yield* client.readAll(decodeConversationId(conversation), caller);
     }),
     namespace,
   );
@@ -265,6 +267,7 @@ export const assertConvergence = async (
   options?: {
     readonly namespace?: TestNamespace;
     readonly supplier?: SupplierExpectation;
+    readonly caller?: OperationCaller;
   },
 ): Promise<void> => {
   const namespace = options?.namespace ?? "CONVERSATIONS";
@@ -273,7 +276,7 @@ export const assertConvergence = async (
   for (const row of rows) {
     expect(row.state, `submission ${row.submission_id}`).toBe("settled");
   }
-  const records = await readCanonical(conversation, namespace);
+  const records = await readCanonical(conversation, namespace, options?.caller ?? TEST_CALLER);
   const recordIds = records.map((envelope) => envelope.record.recordId);
   expect(new Set(recordIds).size).toBe(recordIds.length);
   const ordered = [...rows].sort((left, right) => left.queue_sequence - right.queue_sequence);

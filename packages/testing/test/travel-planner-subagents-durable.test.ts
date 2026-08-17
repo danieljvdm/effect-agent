@@ -25,8 +25,6 @@ import {
   SubmissionLookupById,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
@@ -42,6 +40,7 @@ import {
   Effect,
   Exit,
   FileSystem,
+  Layer,
   Option,
   PlatformError,
   Schema,
@@ -49,6 +48,7 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import {
   DestinationShortlist,
   TravelPlannerSubagentDurabilityProfile,
@@ -113,10 +113,14 @@ const runtimeOptions = (
   deploymentId: s2TravelPlannerDeploymentId,
   producerId: s2TravelPlannerProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
+
+const trustedRuntimeLayer = (options: NodeDurableRuntimeOptions) =>
+  NodeDurableRuntime.layer(options).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer));
+
+const trustedHostLayer = (options: NodeDurableRuntimeOptions) =>
+  NodeDurableHost.layerStack(options).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer));
 
 /**
  * Ownership lease for the in-process failpoint rows: a typed failpoint "kill" abandons its
@@ -383,7 +387,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(yield* harness.parentModelCalls).toBe(2);
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              trustedRuntimeLayer(
                 runtimeOptions(`${directory}/happy.sqlite`, { bindings: harness.bindings }),
               ),
             ),
@@ -447,7 +451,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(resolution._tag).toBe("Admitted");
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              trustedRuntimeLayer(
                 runtimeOptions(`${directory}/duplicate.sqlite`, {
                   bindings: harness.bindings,
                   runtimeFailpoint: armableFailpoint(arm),
@@ -507,7 +511,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               expect(reservations.map((row) => row.status)).toEqual(["released"]);
             }).pipe(
               Effect.provide(
-                NodeDurableRuntime.layer(
+                trustedRuntimeLayer(
                   runtimeOptions(`${directory}/${slug}.sqlite`, {
                     bindings: harness.bindings,
                     runtimeFailpoint: armableFailpoint(arm),
@@ -563,7 +567,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             // drains and the SQLite resources close — no fiber outlives its subscriber.
             Effect.scoped,
             Effect.provide(
-              NodeDurableHost.layerStack(
+              trustedHostLayer(
                 runtimeOptions(`${directory}/pool.sqlite`, {
                   bindings: harness.bindings,
                   workerConcurrency: 1,
@@ -606,7 +610,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             return { receipt, childConversationId, childSubmissionId: started.childSubmissionId };
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              trustedRuntimeLayer(
                 runtimeOptions(filename, {
                   bindings: harness.bindings,
                   runtimeFailpoint: armableFailpoint(arm),
@@ -685,7 +689,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(yield* shortlistFromSettlement(log)).toEqual(durableResearchShortlist("LHR"));
           }).pipe(
             Effect.provide(
-              NodeDurableHost.layerStack(runtimeOptions(filename, { bindings: harness.bindings })),
+              trustedHostLayer(runtimeOptions(filename, { bindings: harness.bindings })),
             ),
           );
         }),
@@ -795,7 +799,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             ).toEqual(["released"]);
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              trustedRuntimeLayer(
                 runtimeOptions(`${directory}/abort.sqlite`, { bindings: harness.bindings }),
               ),
             ),
@@ -877,7 +881,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(fake.state).toBe("admitted");
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              trustedRuntimeLayer(
                 runtimeOptions(`${directory}/idor.sqlite`, {
                   bindings: harness.bindings,
                   runtimeFailpoint: armableFailpoint(arm),
@@ -931,7 +935,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(observedJson).not.toContain("London favors museum mornings");
           }).pipe(
             Effect.provide(
-              NodeDurableRuntime.layer(
+              trustedRuntimeLayer(
                 runtimeOptions(`${directory}/observe.sqlite`, { bindings: harness.bindings }),
               ),
             ),

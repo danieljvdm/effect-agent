@@ -156,7 +156,8 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
 
   it("exposes only a curated Schema-decoded invoice operation over DO RPC", async () => {
     const warehouse = await runtime.getDurableObjectNamespace("WAREHOUSE");
-    const stub = warehouse.get(warehouse.idFromName("acme")) as unknown as {
+    const rawStub = warehouse.get(warehouse.idFromName("acme"));
+    const stub = rawStub as unknown as {
       listInvoices: (request: unknown) => Promise<unknown>;
     };
 
@@ -183,5 +184,18 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       _tag: "WarehouseQueryDenied",
       reason: expect.stringContaining("invalid warehouse request"),
     });
+
+    const legacy = rawStub as unknown as {
+      query: (sql: string) => Promise<unknown>;
+    };
+    let legacyFailure: unknown;
+    try {
+      await legacy.query("SELECT * FROM invoice_summary");
+    } catch (error) {
+      legacyFailure = error;
+    }
+    expect(String(legacyFailure)).toBe(
+      'TypeError: The RPC receiver does not implement the method "query".',
+    );
   });
 });

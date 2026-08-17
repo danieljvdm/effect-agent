@@ -42,7 +42,7 @@ executor, and the **actual JavaScript the model wrote**, alongside its result:
     "tool": "run_javascript",
     "executor": "cloudflare-dynamic-worker",
     "calls": 1,
-    "program": "async () => { const result = await warehouse.listInvoices({ region: \"emea\" }); return result.invoices.reduce((sum, row) => sum + row.revenue, 0); }",
+    "program": "async () => { const result = await warehouse.listInvoices({}); const totals = result.invoices.reduce((byRegion, row) => ({ ...byRegion, [row.region]: (byRegion[row.region] ?? 0) + row.revenue }), {}); const [region, total_revenue] = Object.entries(totals).sort((a, b) => b[1] - a[1])[0]; return { region, total_revenue }; }",
     "result": { "region": "emea", "total_revenue": 69250 },
     "logs": [],
   },

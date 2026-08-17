@@ -143,9 +143,9 @@ export const fileReviewerInstructions = makeFileReviewerInstructions();
 
 /** The default per-unit child execution bounds. */
 export const defaultFileReviewerPolicy = AgentPolicy.make({
-  maxTurns: 8,
+  maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "6 minutes",
+  maxDuration: "10 minutes",
   toolConcurrency: 2,
   // Same rationale as the flat reviewer's bound: read refusals are
   // model-visible results, and one parallel batch of out-of-unit probes must
@@ -217,10 +217,10 @@ export class FileReviewUnitFailed extends Schema.TaggedError<FileReviewUnitFaile
  */
 export const fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
-  maxConcurrency: 3,
-  maxTurns: 8,
+  maxConcurrency: 4,
+  maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "6 minutes",
+  maxDuration: "10 minutes",
 });
 
 const delegationDescription =
@@ -315,8 +315,8 @@ export const fanOutReviewInstructions = makeFanOutReviewInstructions();
 export const defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
-  maxDuration: "15 minutes",
-  toolConcurrency: 3,
+  maxDuration: "20 minutes",
+  toolConcurrency: 4,
   // Contained unit failures (SUB-033) are ordinary successful Tool results,
   // so they no longer fold into the repeated-failure counter; the default
   // bound suffices.

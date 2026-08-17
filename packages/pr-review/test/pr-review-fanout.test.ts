@@ -48,9 +48,11 @@ import {
   ReviewFinding,
   ReviewMission,
   ReviewPublicationPlan,
+  ReviewStateAuthenticator,
   WalkthroughEntry,
   defaultFileReviewerPolicy,
   fileReviewPolicy,
+  unavailableReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -130,8 +132,8 @@ const fixture = FixturePullRequest.make({
     totalChangedFiles: 5,
   }),
   files: [
-    fixtureSource("alpha", "src/api/alpha.ts", 350, 20),
-    fixtureSource("beta", "src/api/beta.ts", 330, 20),
+    fixtureSource("alpha", "src/api/alpha.ts", 550, 20),
+    fixtureSource("beta", "src/api/beta.ts", 530, 20),
     fixtureSource("delta", "src/core/delta.ts", 90, 10),
     fixtureSource("gamma", "src/core/gamma.ts", 190, 10),
     FixtureFile.make({
@@ -225,6 +227,7 @@ const runOfflineFanOut = (script: {
           fanOutHandlersLayer(childBinding).pipe(Layer.provide(childSupportLayer)),
           collectingReviewPublisherLayer(published),
           testIdGeneratorLayer,
+          unavailableReviewStateAuthenticatorLayer("offline fan-out test"),
         ),
       ),
       Effect.scoped,
@@ -287,8 +290,8 @@ describe("file-reviewer policy", () => {
   });
 
   it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
-    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(6 * 60_000);
-    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(6 * 60_000);
+    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(10 * 60_000);
+    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(10 * 60_000);
   });
 });
 
@@ -342,7 +345,7 @@ describe("planReviewUnits", () => {
       { unitId: "unit-001", paths: [...UNIT_ONE.paths] },
       { unitId: "unit-002", paths: [...UNIT_TWO.paths] },
     ]);
-    expect(plan.units[0]?.changedLines).toBe(720);
+    expect(plan.units[0]?.changedLines).toBe(1_120);
     expect(plan.units[1]?.changedLines).toBe(300);
     expect([...plan.undiffablePaths]).toEqual(["assets/logo.png"]);
     expect(plan.unassignedPaths).toHaveLength(0);
@@ -400,7 +403,7 @@ describe("planReviewUnits", () => {
   });
 
   it("bounds the fan-out and reports overflow files instead of dropping them", () => {
-    const many = Array.from({ length: 120 }, (_, index) =>
+    const many = Array.from({ length: MAX_REVIEW_UNITS * MAX_UNIT_FILES + 1 }, (_, index) =>
       ChangedFile.make({
         path: `src/wide/file-${String(index + 1).padStart(3, "0")}.ts`,
         status: "modified",
@@ -422,6 +425,22 @@ describe("planReviewUnits", () => {
     expect([...assigned, ...plan.unassignedPaths].sort()).toEqual(
       many.map((file) => file.path).sort(),
     );
+  });
+
+  it("assigns every path in a 141-file full audit", () => {
+    const files = Array.from({ length: 141 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/audit/file-${String(index + 1).padStart(3, "0")}.ts`,
+        status: "modified",
+        additions: 1,
+        deletions: 0,
+        patch: patchFor("audit"),
+      }),
+    );
+
+    const plan = planReviewUnits(files, { totalChangedFiles: files.length });
+    expect(plan.units.flatMap((unit) => unit.paths)).toHaveLength(files.length);
+    expect(plan.unassignedPaths).toEqual([]);
   });
 });
 
@@ -926,6 +945,9 @@ type LayerChildHandlersProof = Assert<
     Tool.HandlersFor<Toolkit.Tools<typeof FileReviewToolkit>>
   >
 >;
+type FanOutStateAuthenticatorProof = Assert<
+  Equal<Extract<FanOutProgramServices, ReviewStateAuthenticator>, ReviewStateAuthenticator>
+>;
 // Engine-provided per-batch services never surface as program requirements.
 type ProgramSpawnerExcludedProof = Assert<
   Equal<Extract<FanOutProgramServices, AgentSpawner>, never>
@@ -952,6 +974,7 @@ describe("fan-out type proofs", () => {
     const layerSourceProof: LayerSourceProof = true;
     const layerReservationsProof: LayerReservationsProof = true;
     const layerChildHandlersProof: LayerChildHandlersProof = true;
+    const fanOutStateAuthenticatorProof: FanOutStateAuthenticatorProof = true;
     const programSpawnerExcludedProof: ProgramSpawnerExcludedProof = true;
     const programSinkExcludedProof: ProgramSinkExcludedProof = true;
     const programDurabilityExcludedProof: ProgramDurabilityExcludedProof = true;
@@ -965,11 +988,12 @@ describe("fan-out type proofs", () => {
       layerSourceProof,
       layerReservationsProof,
       layerChildHandlersProof,
+      fanOutStateAuthenticatorProof,
       programSpawnerExcludedProof,
       programSinkExcludedProof,
       programDurabilityExcludedProof,
       programSourceProof,
       programIdGeneratorProof,
-    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true]);
+    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true, true]);
   });
 });

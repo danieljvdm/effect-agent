@@ -14,13 +14,13 @@ import { ReviewFinding } from "./review-agent.ts";
 // ---------------------------------------------------------------------------
 
 /** The delegation fan-out bound: one parent Run spawns at most this many children. */
-export const MAX_REVIEW_UNITS = 8;
+export const MAX_REVIEW_UNITS = 16;
 
 /** A unit never carries more files than this, regardless of their size. */
 export const MAX_UNIT_FILES = 12;
 
 /** Soft changed-line budget per unit; a single oversized file still gets its own unit. */
-export const UNIT_CHANGED_LINE_BUDGET = 800;
+export const UNIT_CHANGED_LINE_BUDGET = 1_200;
 
 /** Flat per-file cost so many tiny files still spread across units. */
 const FILE_OVERHEAD_LINES = 20;

@@ -32,7 +32,7 @@ import {
   fromStoredFinding,
   ReviewState,
   type ReviewSelection,
-  type ReviewStateAuthenticator,
+  ReviewStateAuthenticator,
   toStoredConcern,
   toStoredFinding,
 } from "./review-state.ts";
@@ -144,10 +144,6 @@ export interface ExecuteReviewOptions {
    * the model sees exactly this range while publication retains full anchors.
    */
   readonly selection?: ReviewSelection | undefined;
-  /** Explicit continuity-signing operation selected by the host. */
-  readonly renderState?: ReviewStateAuthenticator["Service"]["render"] | undefined;
-  /** Visible fallback notice when the host cannot authenticate continuity state. */
-  readonly stateUnavailableReason?: string | undefined;
 }
 
 /** Build the mission one review run frames from the source's snapshot. */
@@ -232,6 +228,7 @@ export const executeReview = <
   options: ExecuteReviewOptions,
 ) =>
   Effect.gen(function* () {
+    const stateAuthenticator = yield* ReviewStateAuthenticator;
     const source = yield* PullRequestSource;
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
@@ -335,7 +332,7 @@ export const executeReview = <
       coverage.status === "complete" &&
       fingerprint !== undefined &&
       metadata.baseSha !== undefined &&
-      options.renderState !== undefined
+      stateAuthenticator.status === "available"
         ? ReviewState.make({
             version: 1,
             repository: metadata.repository,
@@ -353,18 +350,18 @@ export const executeReview = <
           })
         : undefined;
     const continuity =
-      stateCandidate === undefined || options.renderState === undefined
+      stateCandidate === undefined || stateAuthenticator.status === "unavailable"
         ? {
             state: undefined,
             marker: undefined,
             notice:
               selection !== undefined &&
               coverage.status === "complete" &&
-              options.stateUnavailableReason !== undefined
-                ? options.stateUnavailableReason
+              stateAuthenticator.unavailableReason !== undefined
+                ? stateAuthenticator.unavailableReason
                 : undefined,
           }
-        : yield* options.renderState(stateCandidate).pipe(
+        : yield* stateAuthenticator.render(stateCandidate).pipe(
             Effect.match({
               onFailure: (error) => ({
                 state: undefined,

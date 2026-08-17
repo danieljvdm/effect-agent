@@ -3,8 +3,7 @@ import type { SubmissionId } from "@effect-agent/core";
 import {
   AdmissionRequest,
   AgentBindingResolver,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
+  type ChildAdmissionAuthorizer,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -17,6 +16,7 @@ import {
   IdempotencyKey,
   MarkReadyRequest,
   OperationCaller,
+  type OperationAuthorizer,
   Principal,
   ProducerId,
   SubmissionLedger,
@@ -62,6 +62,7 @@ import {
   type NodeDurableRuntimeOptions,
   type NodeDurableRuntimeServices,
 } from "../src/index.ts";
+import { trustedHostLayer, trustedRuntimeLayer } from "./trusted-authorization.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -75,8 +76,6 @@ const runtimeLayerProbe = NodeDurableRuntime.layer({
   filename: "unused.sqlite",
   deploymentId: "deployment-proof",
   producerId: "producer-proof",
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
 });
 type RuntimeLayerServicesProof = Assert<
   Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
@@ -84,7 +83,9 @@ type RuntimeLayerServicesProof = Assert<
 type RuntimeLayerErrorProof = Assert<
   Equal<Layer.Error<typeof runtimeLayerProbe>, NodeDurableRuntimeInitializationError>
 >;
-type RuntimeLayerRequirementsProof = Assert<Equal<Layer.Services<typeof runtimeLayerProbe>, never>>;
+type RuntimeLayerRequirementsProof = Assert<
+  Equal<Layer.Services<typeof runtimeLayerProbe>, OperationAuthorizer | ChildAdmissionAuthorizer>
+>;
 type RuntimeInitializationErrorProof = Assert<
   Equal<
     NodeDurableRuntimeInitializationError,
@@ -116,8 +117,6 @@ const runtimeOptions = (
   filename,
   deploymentId: "deployment-platform-node",
   producerId: "producer-platform-node",
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   wakeScanInterval: 1_000,
   ...overrides,
 });
@@ -197,7 +196,7 @@ const withHost = <A, E, R>(
   A,
   E | Layer.Error<typeof NodeDurableHost.layer> | NodeDurableRuntimeInitializationError,
   Exclude<R, NodeDurableHost | NodeDurableRuntimeServices>
-> => Effect.provide(effect, NodeDurableHost.layerStack(options));
+> => Effect.provide(effect, trustedHostLayer(options));
 
 const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
   expect(Exit.isFailure(exit)).toBe(true);
@@ -246,9 +245,7 @@ describe("NodeDurableRuntime", () => {
     withTemporaryDatabase((filename) =>
       Effect.gen(function* () {
         const opened = yield* Effect.service(NodeDurableRuntimeConfig).pipe(
-          Effect.provide(
-            NodeDurableRuntime.layer(runtimeOptions(filename, { workerConcurrency: 0 })),
-          ),
+          Effect.provide(trustedRuntimeLayer(runtimeOptions(filename, { workerConcurrency: 0 }))),
           Effect.exit,
         );
         const error = failureOf(opened);
@@ -269,7 +266,7 @@ describe("NodeDurableRuntime", () => {
         );
 
         const opened = yield* Effect.service(NodeDurableHost).pipe(
-          Effect.provide(NodeDurableHost.layerStack(runtimeOptions(filename))),
+          Effect.provide(trustedHostLayer(runtimeOptions(filename))),
           Effect.exit,
         );
         const error = failureOf(opened);
@@ -381,9 +378,9 @@ describe("NodeDurableRuntime", () => {
 
         // Host process 1, with an explicit Scope so shutdown ordering is observable.
         const scope = yield* Scope.make();
-        const context = yield* Layer.build(
-          NodeDurableHost.layerStack(runtimeOptions(filename)),
-        ).pipe(Scope.provide(scope));
+        const context = yield* Layer.build(trustedHostLayer(runtimeOptions(filename))).pipe(
+          Scope.provide(scope),
+        );
         const host = Context.get(context, NodeDurableHost);
         const ledger = Context.get(context, SubmissionLedger);
 

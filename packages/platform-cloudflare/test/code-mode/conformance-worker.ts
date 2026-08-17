@@ -170,6 +170,16 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       );
     }
 
+    const loaderEscapeOutcome = yield* runOutcome(
+      request("async () => {});\n}\nglobalThis.pwned = true;\nif (false) {\n(async () => {}"),
+      layer,
+    );
+    if (loaderEscapeOutcome.tag !== "CodeSourceError") {
+      failures.push(
+        `loader source confinement: expected a source error, got ${JSON.stringify(loaderEscapeOutcome)}`,
+      );
+    }
+
     const allowlistOutcome = yield* runOutcome(
       request("async () => 1", {
         network: NetworkAllowlist.make({ domains: ["example.com"], ports: [443] }),

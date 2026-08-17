@@ -35,7 +35,6 @@ import {
   buildProfileMission,
   computeProfileFingerprint,
   type ReviewSelection,
-  type ReviewStateAuthenticator,
 } from "./review-state.ts";
 import {
   buildReviewMission,
@@ -107,10 +106,6 @@ export interface RunReviewOptions {
   readonly runUrl?: string | undefined;
   /** Explicit host-selected range used by continuity-aware review hosts. */
   readonly selection?: ReviewSelection | undefined;
-  /** Explicit continuity-signing operation selected by the host. */
-  readonly renderState?: ReviewStateAuthenticator["Service"]["render"] | undefined;
-  /** Visible fallback notice when continuity authentication is unavailable. */
-  readonly stateUnavailableReason?: string | undefined;
 }
 
 const EMPTY_TOOLS: ReadonlyArray<Tool.Any> = [];
@@ -257,8 +252,6 @@ const make = <
         usageScope: "run",
         reviewShape: "flat",
         selection: runOptions.selection,
-        renderState: runOptions.renderState,
-        stateUnavailableReason: runOptions.stateUnavailableReason,
       }).pipe(Effect.provide(Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), Effect.scoped),
       options.ignore,
     );
@@ -356,8 +349,6 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
         usageScope: "coordinator",
         reviewShape: "fan-out",
         selection: runOptions.selection,
-        renderState: runOptions.renderState,
-        stateUnavailableReason: runOptions.stateUnavailableReason,
       }).pipe(
         Effect.provide(
           Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer),

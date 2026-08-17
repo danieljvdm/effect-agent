@@ -22,8 +22,6 @@ import {
   ResolutionCompletedWithResult,
   SubmissionLedger,
   SubmissionLookupById,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   ToolReconciler,
   UnknownResolutionCommand,
   WakeScheduler,
@@ -1209,8 +1207,6 @@ const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
   deploymentId: phase5TravelPlannerDeploymentId,
   producerId: phase5TravelPlannerProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
 });
 
 describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
@@ -1302,7 +1298,9 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             Layer.mergeAll(
               phase5TravelPlannerWorkerLayer,
               SupplierBookingDesk.layer,
-              NodeDurableRuntime.layer(runtimeOptions(`${directory}/p5.sqlite`)),
+              NodeDurableRuntime.layer(runtimeOptions(`${directory}/p5.sqlite`)).pipe(
+                Layer.provide(TrustedLocalDurableAuthorizationLayer),
+              ),
             ),
           ),
         ),

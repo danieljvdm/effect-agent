@@ -1,7 +1,9 @@
 import type { ConversationId, SubmissionId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
+  type ChildAdmissionAuthorizer,
   DurableAgentRuntime,
+  type OperationAuthorizer,
   type AbortCommand,
   type AbortIntent,
   type CanonicalRecordEnvelope,
@@ -222,12 +224,16 @@ export class NodeDurableHost extends Context.Service<
     DurableAgentRuntime | NodeDurableRuntimeConfig | AgentBindingResolver
   > = Layer.effect(NodeDurableHost)(makeHost);
 
-  /** The complete DN host: `NodeDurableRuntime.layer(options)` plus the host lifecycle gates. */
+  /**
+   * The complete DN host: `NodeDurableRuntime.layer(options)` plus the host lifecycle gates.
+   * Authorization policies remain requirements for the application composition root.
+   */
   static layerStack(
     options: NodeDurableRuntimeOptions,
   ): Layer.Layer<
     NodeDurableHost | NodeDurableRuntimeServices,
-    DurableWorkerFailure | NodeDurableRuntimeInitializationError
+    DurableWorkerFailure | NodeDurableRuntimeInitializationError,
+    OperationAuthorizer | ChildAdmissionAuthorizer
   > {
     return NodeDurableHost.layer.pipe(Layer.provideMerge(NodeDurableRuntime.layer(options)));
   }

@@ -1,14 +1,9 @@
 import type { ConversationId } from "@effect-agent/core";
-import {
-  AgentBindingResolver,
-  DurableAgentRuntime,
-  SubmissionLedger,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
-} from "@effect-agent/session";
+import { AgentBindingResolver, DurableAgentRuntime, SubmissionLedger } from "@effect-agent/session";
 import { Cause, Duration, Effect, Exit, Option, Schema, Stream } from "effect";
 
-import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../../src/index.ts";
+import type { NodeDurableRuntimeOptions } from "../../src/index.ts";
+import { trustedRuntimeLayer } from "../trusted-authorization.ts";
 import { SOAK_DEPLOYMENT_ID, SoakEnv, makeSoakBindings } from "./soak-fixtures.ts";
 
 /**
@@ -38,8 +33,6 @@ const options: NodeDurableRuntimeOptions = {
   filename: env[SoakEnv.database],
   deploymentId: SOAK_DEPLOYMENT_ID,
   producerId: env[SoakEnv.producer],
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ownershipLeaseDuration: env[SoakEnv.leaseMillis] ?? 750,
   leaseRenewalInterval: 200,
   abortPollInterval: 50,
@@ -84,7 +77,7 @@ const workerLoop = Effect.gen(function* () {
 });
 
 const exit = await Effect.runPromiseExit(
-  workerLoop.pipe(Effect.provide(NodeDurableRuntime.layer(options))),
+  workerLoop.pipe(Effect.provide(trustedRuntimeLayer(options))),
 );
 
 if (Exit.isFailure(exit)) {

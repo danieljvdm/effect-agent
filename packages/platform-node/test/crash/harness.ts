@@ -6,8 +6,6 @@ import type { SubmissionId } from "@effect-agent/core";
 import {
   ConversationRead,
   ConversationStore,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
@@ -31,11 +29,8 @@ import {
   type Scope,
 } from "effect";
 
-import {
-  NodeDurableHost,
-  NodeDurableRuntime,
-  type NodeDurableRuntimeOptions,
-} from "../../src/index.ts";
+import type { NodeDurableRuntimeOptions } from "../../src/index.ts";
+import { trustedHostLayer, trustedRuntimeLayer } from "../trusted-authorization.ts";
 import {
   CRASH_DEPLOYMENT_ID,
   CrashEnv,
@@ -251,8 +246,6 @@ export const runtimeOptions = (
   filename,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: HOST_PRODUCER_ID,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   settlementPollInterval: 50,
   abortPollInterval: 50,
   wakeScanInterval: 1_000,
@@ -264,14 +257,14 @@ export const withHost = <A, E, R>(
   db: string,
   effect: Effect.Effect<A, E, R>,
   overrides?: Partial<NodeDurableRuntimeOptions>,
-) => Effect.provide(effect, NodeDurableHost.layerStack(runtimeOptions(db, overrides)));
+) => Effect.provide(effect, trustedHostLayer(runtimeOptions(db, overrides)));
 
 /** A restarted "client-only" process: the DN stack WITHOUT the host recovery gate. */
 export const withRuntime = <A, E, R>(
   db: string,
   effect: Effect.Effect<A, E, R>,
   overrides?: Partial<NodeDurableRuntimeOptions>,
-) => Effect.provide(effect, NodeDurableRuntime.layer(runtimeOptions(db, overrides)));
+) => Effect.provide(effect, trustedRuntimeLayer(runtimeOptions(db, overrides)));
 
 export interface CrashSite {
   readonly db: string;

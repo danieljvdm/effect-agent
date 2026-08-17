@@ -19,6 +19,7 @@ import {
   type ReviewProvider,
 } from "./internal/providers.ts";
 import { ReviewPublicationPlan } from "./internal/render.ts";
+import { unavailableReviewStateAuthenticatorLayer } from "./internal/review-state.ts";
 import type { ReviewRunOutcome } from "./internal/run.ts";
 
 // ---------------------------------------------------------------------------
@@ -208,7 +209,16 @@ const program = CliCommand.run(command, { version: "0.0.0" }).pipe(
     ),
   ),
   Effect.scoped,
-  Effect.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer, FetchHttpClient.layer)),
+  Effect.provide(
+    Layer.mergeAll(
+      NodeServices.layer,
+      NodeCrypto.layer,
+      FetchHttpClient.layer,
+      unavailableReviewStateAuthenticatorLayer(
+        "the standalone CLI does not configure authenticated review continuity",
+      ),
+    ),
+  ),
 );
 
 NodeRuntime.runMain(program, { disableErrorReporting: true });

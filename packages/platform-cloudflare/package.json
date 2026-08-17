@@ -30,6 +30,7 @@
     "@effect-agent/session": "workspace:*",
     "@effect-agent/storage-cloudflare": "workspace:*",
     "@effect/sql-sqlite-do": "catalog:",
+    "acorn": "catalog:",
     "effect": "catalog:"
   },
   "devDependencies": {

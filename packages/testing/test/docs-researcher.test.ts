@@ -10,16 +10,15 @@ import {
   ProducerId,
   SubmissionLedger,
   SubmissionLookupById,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Option, PlatformError, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, PlatformError, Schema, Stream } from "effect";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import {
   assertDiscoveryMatchesAuthoredToolkit,
   docsCoordinatorConfidentialMarker,
@@ -59,8 +58,6 @@ const runtimeOptions = (
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -280,7 +277,7 @@ describe("SUB-030 docs-researcher durable delegation (DN)", () => {
                 runtimeOptions(`${directory}/docs-researcher.sqlite`, {
                   bindings: harness.bindings,
                 }),
-              ),
+              ).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer)),
             ),
           );
         }),

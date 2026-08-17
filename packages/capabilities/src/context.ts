@@ -148,22 +148,16 @@ const messageText = (message: Prompt.Message): string => {
 
 const asModelMessages = (
   snapshot: ConversationSnapshot,
-): Effect.Effect<ReadonlyArray<ModelContextMessage>, ContextTransformError> =>
-  Effect.try({
-    try: () =>
-      snapshot.messages.map((entry) =>
-        ModelContextMessage.make({
-          role: entry.message.role,
-          content: messageText(entry.message),
-          sourceSequences: [entry.sequence],
-        }),
-      ),
-    catch: () =>
-      ContextTransformError.make({
-        transformId: "source-projection",
-        message: "Authoritative history could not be projected into the bounded model view",
+): Effect.Effect<ReadonlyArray<ModelContextMessage>> =>
+  Effect.sync(() =>
+    snapshot.messages.map((entry) =>
+      ModelContextMessage.make({
+        role: entry.message.role,
+        content: messageText(entry.message),
+        sourceSequences: [entry.sequence],
       }),
-  });
+    ),
+  );
 
 const validateModelView = (
   messages: ReadonlyArray<ModelContextMessage>,

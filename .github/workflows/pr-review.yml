@@ -36,7 +36,7 @@ jobs:
     # internally; this guard saves the runner spin-up).
     if: ${{ !github.event.pull_request.draft && (github.event.action != 'labeled' || github.event.label.name == 'pr-review:final-audit') }}
     runs-on: ubuntu-latest
-    # Above the configured 10-minute review duration budget, so a run approaching
+    # Above the configured 18-minute final-audit duration budget, so a run approaching
     # its own budget ends gracefully instead of being killed by the runner
     # with nothing posted.
     timeout-minutes: 20
@@ -59,9 +59,9 @@ jobs:
           # Medium is the routine-review default. The deliberate full-diff
           # audit gets high effort together with fan-out.
           effort: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}
-          # Bound pathological fan-out runs below the package's 15-minute
-          # ceiling while leaving headroom under the 20-minute runner timeout.
-          max-duration-minutes: "10"
+          # A 16-unit final audit needs four bounded waves at concurrency four;
+          # leave runner-cleanup headroom under the 20-minute job timeout.
+          max-duration-minutes: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && '18' || '10' }}
           # The repository's deep Effect-architecture review profile —
           # distilled from the effect-architecture-audit skill and AGENTS.md's
           # non-negotiables. Fan-out injects it into every child reviewer.

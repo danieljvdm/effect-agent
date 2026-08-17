@@ -16,8 +16,6 @@ import {
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   ToolReconciler,
   WakeScheduler,
   type CanonicalRecordEnvelope,
@@ -73,8 +71,6 @@ const runtimeOptions = (
   deploymentId: phase4TravelPlannerDeploymentId,
   producerId: phase4TravelPlannerProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -146,7 +142,10 @@ const failureOf = <A, E>(exit: Exit.Exit<A, E>): unknown => {
 
 /** One DN "host process": the full Node/SQLite runtime stack plus the deterministic services. */
 const dnLayer = (options: NodeDurableRuntimeOptions) =>
-  Layer.mergeAll(phase4TravelPlannerWorkerLayer, NodeDurableRuntime.layer(options));
+  Layer.mergeAll(
+    phase4TravelPlannerWorkerLayer,
+    NodeDurableRuntime.layer(options).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer)),
+  );
 
 /** One expected happy-path Run: Turn 1 declares the three searches, Turn 2 emits the plan. */
 const RUN_TAGS = [
@@ -382,7 +381,13 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             expect(settlement.outcome).toBe("completed");
             expect(yield* lookupState(crashed.receipt.submissionId)).toBe("settled");
             return yield* readLog(conversationId);
-          }).pipe(Effect.provide(NodeDurableRuntime.layer(runtimeOptions(restartFile))));
+          }).pipe(
+            Effect.provide(
+              NodeDurableRuntime.layer(runtimeOptions(restartFile)).pipe(
+                Layer.provide(TrustedLocalDurableAuthorizationLayer),
+              ),
+            ),
+          );
 
           const settledEnvelope = recovered.find(
             (envelope) => envelope.record.payload._tag === "SubmissionSettled",

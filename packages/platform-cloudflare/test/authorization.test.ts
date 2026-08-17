@@ -1,10 +1,11 @@
-import { OperationDenied } from "@effect-agent/session";
+import { AbortCommand, OperationDenied } from "@effect-agent/session";
+import { runInDurableObject } from "cloudflare:test";
 import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareConversationClient } from "../src/index.ts";
 import { TEST_CALLER, decodeConversationId, plannerDefinition, submitOptions } from "./fixtures.ts";
-import { runClient } from "./harness.ts";
+import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
 describe("Cloudflare Conversation Object authorization", () => {
   it("re-decodes OperationDenied through the real DO RPC client", async () => {
@@ -50,5 +51,37 @@ describe("Cloudflare Conversation Object authorization", () => {
       _tag: "OperationDenied",
       operation: "awaitSettlement",
     });
+
+    await drainAlarmsUntil(conversation, allSettled(conversation, "DENIED"), {
+      namespace: "DENIED",
+    });
+    const alarmBefore = await runInDurableObject(
+      stubFor(conversation, "DENIED"),
+      (_instance, state) => state.storage.getAlarm(),
+    );
+    const abortFailure = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client
+          .abort(
+            decodeConversationId(conversation),
+            AbortCommand.make({
+              submissionId: receipt.submissionId,
+              author: "denied-fixture",
+              reason: "authorization must precede alarm mutation",
+            }),
+            TEST_CALLER,
+          )
+          .pipe(Effect.flip);
+      }),
+      "DENIED",
+    );
+    expect(abortFailure).toBeInstanceOf(OperationDenied);
+    expect(abortFailure).toMatchObject({ _tag: "OperationDenied", operation: "abort" });
+    const alarmAfter = await runInDurableObject(
+      stubFor(conversation, "DENIED"),
+      (_instance, state) => state.storage.getAlarm(),
+    );
+    expect(alarmAfter).toBe(alarmBefore);
   });
 });

@@ -438,7 +438,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
       let selection: ReturnType<typeof selectReviewRange> | undefined;
-      let stateAuthenticator: ReviewStateAuthenticator["Service"] | undefined;
+      const stateAuthenticator = yield* ReviewStateAuthenticator;
       if (reviewer.profileFingerprint !== undefined) {
         const source = yield* PullRequestSource;
         const [snapshot, profileFingerprint] = yield* Effect.all([
@@ -447,7 +447,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         ]);
         const { metadata, files: fullFiles } = snapshot;
         const history = options.priorReviews ?? (yield* PriorReviews);
-        stateAuthenticator = yield* ReviewStateAuthenticator;
         const recovered =
           stateAuthenticator.status === "unavailable"
             ? {
@@ -595,13 +594,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         post: options.post ?? true,
         runUrl,
         selection,
-        renderState:
-          stateAuthenticator?.status === "available" ? stateAuthenticator.render : undefined,
-        stateUnavailableReason:
-          stateAuthenticator?.status === "unavailable"
-            ? (stateAuthenticator.unavailableReason ??
-              "authenticated continuity state is unavailable")
-            : undefined,
       });
       const reviewEffect = Option.isSome(progress)
         ? runReview.pipe(

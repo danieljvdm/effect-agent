@@ -1,7 +1,7 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
-  childAdmissionAuthorizerLayer,
+  type ChildAdmissionAuthorizer,
   type ConversationStore,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
@@ -9,14 +9,12 @@ import {
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   ProducerId,
-  operationAuthorizerLayer,
+  type OperationAuthorizer,
   ReleaseOwnershipRequest,
   SubmissionLedger,
   ToolReconciler,
   type WakeScheduler,
   type DurableRuntimeFailpointHandler,
-  type ChildAdmissionAuthorizerService,
-  type OperationAuthorizerService,
   type OwnershipToken,
   type ResolvedBinding,
 } from "@effect-agent/session";
@@ -92,16 +90,13 @@ export class NodeDurableRuntimeConfig extends Context.Service<
 /**
  * Raw (unvalidated) construction options for `NodeDurableRuntime.layer`. Optional fields default
  * to the documented production values; everything is schema-decoded into
- * `NodeDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1).
+ * `NodeDurableRuntimeConfigValue` before any resource opens (deployment §5 gate 1). Security
+ * policies are deliberately absent: the Layer requires the authorizer services from its caller.
  */
 export interface NodeDurableRuntimeOptions {
   readonly filename: string;
   readonly deploymentId: string;
   readonly producerId: string;
-  /** Required current-policy authority for every protected runtime operation. */
-  readonly operationAuthorizer: OperationAuthorizerService;
-  /** Required current-policy authority for durable child establishment. */
-  readonly childAdmissionAuthorizer: ChildAdmissionAuthorizerService;
   /** Milliseconds; default `DEFAULT_OWNERSHIP_LEASE_DURATION` (30s, D5). */
   readonly ownershipLeaseDuration?: number | undefined;
   /** Default 1; bounded to 1..64. */
@@ -357,10 +352,14 @@ export class NodeDurableRuntime {
     return Layer.effect(NodeDurableRuntimeConfig)(configFromOptions(options));
   }
 
-  /** The full DN runtime stack over one SQLite file. */
+  /** The full DN runtime stack over one SQLite file, requiring both authorization policy ports. */
   static layer(
     options: NodeDurableRuntimeOptions,
-  ): Layer.Layer<NodeDurableRuntimeServices, NodeDurableRuntimeInitializationError> {
+  ): Layer.Layer<
+    NodeDurableRuntimeServices,
+    NodeDurableRuntimeInitializationError,
+    OperationAuthorizer | ChildAdmissionAuthorizer
+  > {
     const infrastructure = Layer.mergeAll(
       sqliteStorageConfigLayer,
       storageFailpointLayer({ filename: options.filename, failpoint: options.storageFailpoint }),
@@ -382,13 +381,7 @@ export class NodeDurableRuntime {
     return DurableAgentRuntime.layer.pipe(
       Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer)),
       Layer.provide(
-        Layer.mergeAll(
-          wakeSchedulerConfigLayer,
-          runtimeFailpointLayer,
-          reconcilerLayer,
-          operationAuthorizerLayer(options.operationAuthorizer),
-          childAdmissionAuthorizerLayer(options.childAdmissionAuthorizer),
-        ),
+        Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
       ),
       Layer.provideMerge(infrastructure),
       Layer.provideMerge(NodeDurableRuntime.configLayer(options)),

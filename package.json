@@ -88,6 +88,7 @@
     "@types/scheduler": "0.26.0",
     "@types/node": "26.1.2",
     "@vitejs/plugin-react": "6.0.4",
+    "acorn": "8.18.0",
     "ai": "7.0.42",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",

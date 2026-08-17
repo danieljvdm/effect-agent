@@ -12,14 +12,15 @@ import {
   OperationCaller,
   SubmissionLedger,
   SubmissionLookupById,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   runIdForSubmission,
   toolStepSettledRecordId,
   type CanonicalRecordEnvelope,
   type Receipt,
 } from "@effect-agent/session";
-import { phase7LiveProfileEnabled } from "@effect-agent/testing";
+import {
+  TrustedLocalDurableAuthorizationLayer,
+  phase7LiveProfileEnabled,
+} from "@effect-agent/testing";
 import { OpenAiClient } from "@effect/ai-openai";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -76,8 +77,6 @@ const runtimeOptions = (
   deploymentId: repoOpsDeploymentId,
   producerId: repoOpsProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -301,8 +300,8 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
               ],
             });
 
-            // Approve: the resumed batch replays the declared write without a
-            // model call, the sink writes exactly once, the Run settles.
+            // In this deterministic drive the resumed batch replays the declared write without a
+            // model call, the sink records one invocation, and the Run settles.
             yield* runtime.resolveApproval(
               ApprovalDecisionCommand.make({
                 submissionId: receipt.submissionId,
@@ -341,7 +340,9 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
           }).pipe(
             Effect.provide(
               Layer.merge(
-                NodeDurableRuntime.layer(runtimeOptions(`${directory}/audit.sqlite`)),
+                NodeDurableRuntime.layer(runtimeOptions(`${directory}/audit.sqlite`)).pipe(
+                  Layer.provide(TrustedLocalDurableAuthorizationLayer),
+                ),
                 NodeFileSystem.layer,
               ),
             ),
@@ -414,7 +415,11 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
             const report = yield* settledReport(yield* readLog(conversation));
             expect(report.documentsAudited).toBe(1);
           }).pipe(
-            Effect.provide(NodeDurableRuntime.layer(runtimeOptions(`${directory}/live.sqlite`))),
+            Effect.provide(
+              NodeDurableRuntime.layer(runtimeOptions(`${directory}/live.sqlite`)).pipe(
+                Layer.provide(TrustedLocalDurableAuthorizationLayer),
+              ),
+            ),
           );
         }),
       ),

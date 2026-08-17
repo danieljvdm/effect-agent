@@ -10,16 +10,15 @@ import {
   ConversationStore,
   DurableAgentRuntime,
   IdempotencyKey,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import { NodeCrypto, NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, type PlatformError, Schema, Stream } from "effect";
+import { Effect, FileSystem, Layer, type PlatformError, Schema, Stream } from "effect";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../../src/durable-test-authorization.ts";
 import {
   docsCoordinatorConfidentialMarker,
   docsDocumentBodySecret,
@@ -68,8 +67,6 @@ const runtimeOptions = (
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
   observationPollInterval: 1,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -198,7 +195,7 @@ describe("SUB-015 durable child exfiltration resistance (DN)", () => {
                 runtimeOptions(`${directory}/redteam-exfiltration.sqlite`, {
                   bindings: harness.bindings,
                 }),
-              ),
+              ).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer)),
             ),
           );
         }),

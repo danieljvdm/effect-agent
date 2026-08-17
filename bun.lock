@@ -214,6 +214,7 @@
         "@effect-agent/session": "workspace:*",
         "@effect-agent/storage-cloudflare": "workspace:*",
         "@effect/sql-sqlite-do": "catalog:",
+        "acorn": "catalog:",
         "effect": "catalog:",
       },
       "devDependencies": {
@@ -410,6 +411,7 @@
     "@types/react-dom": "19.2.3",
     "@types/scheduler": "0.26.0",
     "@vitejs/plugin-react": "6.0.4",
+    "acorn": "8.18.0",
     "ai": "7.0.42",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",

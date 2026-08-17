@@ -41611,9 +41611,9 @@ var PullRequestReviewer = Agent.define("pr-reviewer", {
 });
 
 // packages/pr-review/src/internal/review-units.ts
-var MAX_REVIEW_UNITS = 8;
+var MAX_REVIEW_UNITS = 16;
 var MAX_UNIT_FILES = 12;
-var UNIT_CHANGED_LINE_BUDGET = 800;
+var UNIT_CHANGED_LINE_BUDGET = 1200;
 var FILE_OVERHEAD_LINES = 20;
 var MAX_MERGED_FINDINGS = 20;
 var ReviewUnitId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32));
@@ -41749,9 +41749,9 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => [
 `);
 var fileReviewerInstructions = makeFileReviewerInstructions();
 var defaultFileReviewerPolicy = AgentPolicy.make({
-  maxTurns: 8,
+  maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "6 minutes",
+  maxDuration: "10 minutes",
   toolConcurrency: 2,
   repeatedFailureLimit: 12,
   tokenBudget: 200000,
@@ -41781,10 +41781,10 @@ class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitF
 }
 var fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
-  maxConcurrency: 3,
-  maxTurns: 8,
+  maxConcurrency: 4,
+  maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "6 minutes"
+  maxDuration: "10 minutes"
 });
 var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
 var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
@@ -41836,8 +41836,8 @@ var fanOutReviewInstructions = makeFanOutReviewInstructions();
 var defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
-  maxDuration: "15 minutes",
-  toolConcurrency: 3,
+  maxDuration: "20 minutes",
+  toolConcurrency: 4,
   repeatedFailureLimit: 3,
   tokenBudget: 300000,
   contextTokenLimit: 150000,
@@ -43483,6 +43483,7 @@ var rankAndDedupeConcerns = (concerns) => {
   return [...byContent.values()].sort((left, right) => severityRank3[left.severity] - severityRank3[right.severity]).slice(0, 10);
 };
 var executeReview = (binding, options3) => exports_Effect.gen(function* () {
+  const stateAuthenticator = yield* ReviewStateAuthenticator;
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
   const files = yield* source.changedFiles;
@@ -43540,7 +43541,7 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     totalAnchorFiles: metadata.totalChangedFiles,
     events: events2
   });
-  const stateCandidate = selection !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && options3.renderState !== undefined ? ReviewState.make({
+  const stateCandidate = selection !== undefined && coverage.status === "complete" && fingerprint !== undefined && metadata.baseSha !== undefined && stateAuthenticator.status === "available" ? ReviewState.make({
     version: 1,
     repository: metadata.repository,
     pullRequestNumber: metadata.number,
@@ -43555,11 +43556,11 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
     unresolvedConcerns: activeConcerns.map(toStoredConcern),
     lastReviewMode: selection.mode
   }) : undefined;
-  const continuity = stateCandidate === undefined || options3.renderState === undefined ? {
+  const continuity = stateCandidate === undefined || stateAuthenticator.status === "unavailable" ? {
     state: undefined,
     marker: undefined,
-    notice: selection !== undefined && coverage.status === "complete" && options3.stateUnavailableReason !== undefined ? options3.stateUnavailableReason : undefined
-  } : yield* options3.renderState(stateCandidate).pipe(exports_Effect.match({
+    notice: selection !== undefined && coverage.status === "complete" && stateAuthenticator.unavailableReason !== undefined ? stateAuthenticator.unavailableReason : undefined
+  } : yield* stateAuthenticator.render(stateCandidate).pipe(exports_Effect.match({
     onFailure: (error2) => ({
       state: undefined,
       marker: undefined,
@@ -43692,9 +43693,7 @@ var make58 = (options3) => {
     runUrl: runOptions.runUrl,
     usageScope: "run",
     reviewShape: "flat",
-    selection: runOptions.selection,
-    renderState: runOptions.renderState,
-    stateUnavailableReason: runOptions.stateUnavailableReason
+    selection: runOptions.selection
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition,
@@ -43742,9 +43741,7 @@ var makeFanOut = (options3) => {
     runUrl: runOptions.runUrl,
     usageScope: "coordinator",
     reviewShape: "fan-out",
-    selection: runOptions.selection,
-    renderState: runOptions.renderState,
-    stateUnavailableReason: runOptions.stateUnavailableReason
+    selection: runOptions.selection
   }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
   return {
     definition: suite.parent,
@@ -54914,7 +54911,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
   const target = yield* resolveReviewTarget({});
   return yield* exports_Effect.gen(function* () {
     let selection;
-    let stateAuthenticator;
+    const stateAuthenticator = yield* ReviewStateAuthenticator;
     if (reviewer.profileFingerprint !== undefined) {
       const source = yield* PullRequestSource;
       const [snapshot2, profileFingerprint] = yield* exports_Effect.all([
@@ -54923,7 +54920,6 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       ]);
       const { metadata, files: fullFiles } = snapshot2;
       const history = options3.priorReviews ?? (yield* PriorReviews);
-      stateAuthenticator = yield* ReviewStateAuthenticator;
       const recovered = stateAuthenticator.status === "unavailable" ? {
         state: undefined,
         failure: stateAuthenticator.unavailableReason ?? "an authenticated review-state secret is not configured"
@@ -55041,9 +55037,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
     const runReview = reviewer.run({
       post: options3.post ?? true,
       runUrl,
-      selection,
-      renderState: stateAuthenticator?.status === "available" ? stateAuthenticator.render : undefined,
-      stateUnavailableReason: stateAuthenticator?.status === "unavailable" ? stateAuthenticator.unavailableReason ?? "authenticated continuity state is unavailable" : undefined
+      selection
     });
     const reviewEffect = exports_Option.isSome(progress) ? runReview.pipe(exports_Effect.tapCause(() => progress.value.settle({
       outcome: "failed",

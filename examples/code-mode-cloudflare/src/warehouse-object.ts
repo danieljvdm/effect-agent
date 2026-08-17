@@ -38,11 +38,13 @@ export class WarehouseInvoices extends Schema.TaggedClass<WarehouseInvoices>(
   truncated: Schema.Boolean,
 }) {}
 
-export class WarehouseQueryDenied extends Schema.TaggedClass<WarehouseQueryDenied>(
-  "@effect-agent/example-code-mode-cloudflare/WarehouseQueryDenied",
-)("WarehouseQueryDenied", {
-  reason: Schema.String.check(Schema.isMaxLength(500)),
-}) {}
+export class WarehouseQueryDenied extends Schema.TaggedError<WarehouseQueryDenied>()(
+  "WarehouseQueryDenied",
+  {
+    reason: Schema.String.check(Schema.isMaxLength(500)),
+    cause: Schema.optionalKey(Schema.Defect()),
+  },
+) {}
 
 export const WarehouseListOutcome = Schema.Union([WarehouseInvoices, WarehouseQueryDenied]);
 export type WarehouseListOutcome = typeof WarehouseListOutcome.Type;
@@ -52,9 +54,57 @@ const decodeListOutcome = Schema.decodeUnknownEffect(WarehouseListOutcome);
 const encodeListRequest = Schema.encodeEffect(WarehouseListRequest);
 const encodeListOutcome = Schema.encodeEffect(WarehouseListOutcome);
 const decodeInvoice = Schema.decodeUnknownOption(WarehouseInvoice);
-const decodeCount = Schema.decodeUnknownOption(
-  Schema.Struct({ n: Schema.Union([Schema.Number, Schema.String]) }),
-);
+const WarehouseCount = Schema.Struct({
+  n: Schema.Union([
+    Schema.Natural,
+    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  ]),
+});
+const decodeCount = Schema.decodeUnknownEffect(WarehouseCount);
+
+const queryFailure = (reason: string, cause?: unknown): WarehouseQueryDenied =>
+  WarehouseQueryDenied.make({
+    reason: reason.slice(0, 500),
+    ...(cause === undefined ? {} : { cause }),
+  });
+
+const selectInvoiceRows = (
+  storage: DurableObjectStorage,
+  request: WarehouseListRequest,
+): Effect.Effect<ReadonlyArray<unknown>, WarehouseQueryDenied> =>
+  Effect.try({
+    try: () => {
+      const minimum = request.minimumRevenue;
+      const region = request.region;
+      const limit = MAX_ROWS + 1;
+      const cursor =
+        minimum === undefined
+          ? region === undefined
+            ? storage.sql.exec(
+                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary ORDER BY revenue DESC LIMIT ?",
+                limit,
+              )
+            : storage.sql.exec(
+                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE region = ? ORDER BY revenue DESC LIMIT ?",
+                region,
+                limit,
+              )
+          : region === undefined
+            ? storage.sql.exec(
+                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? ORDER BY revenue DESC LIMIT ?",
+                minimum,
+                limit,
+              )
+            : storage.sql.exec(
+                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? AND region = ? ORDER BY revenue DESC LIMIT ?",
+                minimum,
+                region,
+                limit,
+              );
+      return [...cursor];
+    },
+    catch: (cause) => queryFailure(`warehouse query failed: ${String(cause)}`, cause),
+  });
 
 const seedRows: ReadonlyArray<WarehouseInvoice> = [
   WarehouseInvoice.make({
@@ -92,57 +142,23 @@ const seedRows: ReadonlyArray<WarehouseInvoice> = [
 const queryInvoices = (
   storage: DurableObjectStorage,
   request: WarehouseListRequest,
-): Effect.Effect<WarehouseListOutcome> =>
-  Effect.sync(() => {
-    const minimum = request.minimumRevenue;
-    const region = request.region;
-    const limit = MAX_ROWS + 1;
-    const cursor =
-      minimum === undefined
-        ? region === undefined
-          ? storage.sql.exec(
-              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary ORDER BY revenue DESC LIMIT ?",
-              limit,
-            )
-          : storage.sql.exec(
-              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE region = ? ORDER BY revenue DESC LIMIT ?",
-              region,
-              limit,
-            )
-        : region === undefined
-          ? storage.sql.exec(
-              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? ORDER BY revenue DESC LIMIT ?",
-              minimum,
-              limit,
-            )
-          : storage.sql.exec(
-              "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? AND region = ? ORDER BY revenue DESC LIMIT ?",
-              minimum,
-              region,
-              limit,
-            );
-
-    const invoices: Array<WarehouseInvoice> = [];
-    for (const raw of cursor) {
-      if (invoices.length === MAX_ROWS) {
-        return WarehouseInvoices.make({ invoices, truncated: true });
-      }
-      const invoice = decodeInvoice(raw);
-      if (Option.isNone(invoice)) {
-        return WarehouseQueryDenied.make({
-          reason: "warehouse returned a row outside the invoice wire Schema",
-        });
-      }
-      invoices.push(invoice.value);
-    }
-    return WarehouseInvoices.make({ invoices, truncated: false });
-  }).pipe(
-    Effect.catchDefect((cause) =>
-      Effect.succeed(
-        WarehouseQueryDenied.make({
-          reason: `warehouse query failed: ${String(cause).slice(0, 450)}`,
-        }),
-      ),
+): Effect.Effect<WarehouseInvoices, WarehouseQueryDenied> =>
+  selectInvoiceRows(storage, request).pipe(
+    Effect.flatMap((rows) =>
+      Effect.gen(function* () {
+        const invoices: Array<WarehouseInvoice> = [];
+        for (const raw of rows) {
+          if (invoices.length === MAX_ROWS) {
+            return WarehouseInvoices.make({ invoices, truncated: true });
+          }
+          const invoice = decodeInvoice(raw);
+          if (Option.isNone(invoice)) {
+            return yield* queryFailure("warehouse returned a row outside the invoice wire Schema");
+          }
+          invoices.push(invoice.value);
+        }
+        return WarehouseInvoices.make({ invoices, truncated: false });
+      }),
     ),
   );
 
@@ -161,8 +177,8 @@ export class WarehouseObject extends DurableObject {
           created_at TEXT NOT NULL
         )`;
         const rows = yield* sql`SELECT COUNT(*) AS n FROM invoice_summary`;
-        const decoded = decodeCount(rows[0]);
-        const existing = Option.isSome(decoded) ? Number(decoded.value.n) : 0;
+        const decoded = yield* decodeCount(rows[0]);
+        const existing = decoded.n;
         if (existing === 0) {
           for (const row of seedRows) {
             yield* sql`INSERT INTO invoice_summary ${sql.insert({
@@ -173,10 +189,7 @@ export class WarehouseObject extends DurableObject {
             })}`;
           }
         }
-      }).pipe(
-        Effect.provide(SqliteClient.layer({ storage: this.ctx.storage })),
-        Effect.orDie,
-      ) as Effect.Effect<void>,
+      }).pipe(Effect.provide(SqliteClient.layer({ storage: this.ctx.storage }))),
     );
     this.#ready = true;
   }
@@ -186,13 +199,17 @@ export class WarehouseObject extends DurableObject {
     const outcome = await Effect.runPromise(
       decodeListRequest(encoded).pipe(
         Effect.mapError((error) =>
-          WarehouseQueryDenied.make({
-            reason: `invalid warehouse request: ${error.message.slice(0, 450)}`,
+          queryFailure(`invalid warehouse request: ${error.message.slice(0, 450)}`, error),
+        ),
+        Effect.tap(() =>
+          Effect.tryPromise({
+            try: () => this.#ensureSeeded(),
+            catch: (cause) =>
+              queryFailure(`warehouse initialization failed: ${String(cause)}`, cause),
           }),
         ),
-        Effect.tap(() => Effect.promise(() => this.#ensureSeeded())),
         Effect.flatMap((request) => queryInvoices(this.ctx.storage, request)),
-        Effect.catch((failure) => Effect.succeed(failure)),
+        Effect.match({ onFailure: (failure) => failure, onSuccess: (success) => success }),
       ),
     );
     return Effect.runPromise(
@@ -212,7 +229,9 @@ export class WarehouseObject extends DurableObject {
 export class Warehouse extends Context.Service<
   Warehouse,
   {
-    readonly listInvoices: (request: WarehouseListRequest) => Effect.Effect<WarehouseListOutcome>;
+    readonly listInvoices: (
+      request: WarehouseListRequest,
+    ) => Effect.Effect<WarehouseInvoices, WarehouseQueryDenied>;
   }
 >()("@effect-agent/example-code-mode-cloudflare/Warehouse") {}
 
@@ -234,12 +253,14 @@ export const warehouseLayer = (
           }),
         ),
         Effect.flatMap(decodeListOutcome),
-        Effect.catch((error) =>
-          Effect.succeed(
-            WarehouseQueryDenied.make({
-              reason: `warehouse unavailable or returned an invalid response: ${error.message.slice(0, 390)}`,
-            }),
+        Effect.mapError((error) =>
+          queryFailure(
+            `warehouse unavailable or returned an invalid response: ${error.message.slice(0, 390)}`,
+            error,
           ),
+        ),
+        Effect.flatMap((outcome) =>
+          outcome._tag === "WarehouseQueryDenied" ? Effect.fail(outcome) : Effect.succeed(outcome),
         ),
       ),
   });

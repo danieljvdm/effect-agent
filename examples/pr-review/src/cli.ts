@@ -4,6 +4,7 @@ import {
   openAiClientLayer,
   resolveReviewTarget,
   ReviewPublicationPlan,
+  unavailableReviewStateAuthenticatorLayer,
 } from "@effect-agent/pr-review";
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Console, Effect, Layer, Option, Schema } from "effect";
@@ -57,6 +58,9 @@ const command = CliCommand.make(
               gitHubReviewLayers(target),
               openAiClientLayer,
               ReadReviewConventionsLayer,
+              unavailableReviewStateAuthenticatorLayer(
+                "the example CLI has no configured review-state signing key",
+              ),
             ),
           ),
         );

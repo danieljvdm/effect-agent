@@ -178,7 +178,9 @@ Compaction quality is evaluated separately from persistence correctness.
 The initial source projection applies the same bounded text projection to system, user, assistant,
 and Tool messages. A valid oversized source message is truncated only in the disposable model
 view; source history remains unchanged, and projection/construction failures use the typed
-`ContextTransformError` channel rather than synchronously throwing.
+`ContextTransformError` channel when they are declared transform failures. Unexpected defects in
+the trusted canonical-source projection remain defects with their original diagnostics; they are
+not relabeled as an expected transform refusal.
 
 ## 7. Skills
 
@@ -257,10 +259,9 @@ security sandbox.
 
 Code Mode is distinct from a general code interpreter: one native Effect AI Tool accepts bounded
 JavaScript source written by the model, executes it in one isolated pass, and lets the program
-call an explicit allowlist of existing Effect AI Tools through typed sandbox globals
-The generated program is one
-async function expression invoked by a fixed harness entrypoint. The handler never invokes a
-second model.
+call an explicit allowlist of existing Effect AI Tools through typed sandbox globals. The complete
+source is one expression statement whose evaluated value must be one async function; the fixed
+harness invokes that function once. The handler never invokes a second model.
 
 The builder lives in `@effect-agent/capabilities` and follows the Delegation pattern: an explicit
 record of selected Tools plus namespace mapping at construction, returning an ordinary Effect AI

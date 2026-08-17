@@ -18,6 +18,7 @@ import {
   ReviewPublisher,
   type ReviewSelection,
   ReviewStateAuthenticator,
+  unavailableReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
 import {
   collectingReviewPublisherLayer,
@@ -164,9 +165,10 @@ const runFactoryReviewer = <E, R>(
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
     const outcome = yield* run({ post: true }).pipe(
       Effect.provide(
-        Layer.merge(
+        Layer.mergeAll(
           fixturePullRequestSourceLayer(fixture),
           collectingReviewPublisherLayer(published),
+          unavailableReviewStateAuthenticatorLayer("offline factory test"),
         ),
       ),
     );
@@ -326,6 +328,7 @@ describe("PrReview.make", () => {
               fixturePullRequestSourceLayer(fixture),
               collectingReviewPublisherLayer(published),
               guidelinesLayer,
+              unavailableReviewStateAuthenticatorLayer("offline factory test"),
             ),
           ),
         );
@@ -389,11 +392,8 @@ type FanOutCryptoVisibleProof = Assert<
 type ExplicitSelectionProof = Assert<
   Equal<NonNullable<ExecuteReviewOptions["selection"]>, ReviewSelection>
 >;
-type ExplicitStateRendererProof = Assert<
-  Equal<
-    NonNullable<ExecuteReviewOptions["renderState"]>,
-    ReviewStateAuthenticator["Service"]["render"]
-  >
+type StateAuthenticatorVisibleProof = Assert<
+  Equal<Extract<PlainServices, ReviewStateAuthenticator>, ReviewStateAuthenticator>
 >;
 // An extra tool's handler is the caller's dependency, visible in `R` — and
 // absent when no extra tool is configured.
@@ -417,7 +417,7 @@ describe("factory type proofs", () => {
     const plainCryptoVisibleProof: PlainCryptoVisibleProof = true;
     const fanOutCryptoVisibleProof: FanOutCryptoVisibleProof = true;
     const explicitSelectionProof: ExplicitSelectionProof = true;
-    const explicitStateRendererProof: ExplicitStateRendererProof = true;
+    const stateAuthenticatorVisibleProof: StateAuthenticatorVisibleProof = true;
     const extraHandlerProof: ExtraHandlerProof = true;
     const plainHandlerExcludedProof: PlainHandlerExcludedProof = true;
     expect([
@@ -429,7 +429,7 @@ describe("factory type proofs", () => {
       plainCryptoVisibleProof,
       fanOutCryptoVisibleProof,
       explicitSelectionProof,
-      explicitStateRendererProof,
+      stateAuthenticatorVisibleProof,
       extraHandlerProof,
       plainHandlerExcludedProof,
     ]).toEqual([true, true, true, true, true, true, true, true, true, true, true]);

@@ -7,8 +7,6 @@ import {
   ApprovalDecisionCommand,
   DurableAgentRuntime,
   DurableRuntimeFailpointLocation,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   ResolutionNeverHappened,
   SubmissionLedger,
   SubmissionLookupByKey,
@@ -26,11 +24,8 @@ import {
 import { Cause, Duration, Effect, Exit, Layer, Option, Schema, Stream } from "effect";
 import type { Response } from "effect/unstable/ai";
 
-import {
-  NodeDurableHost,
-  NodeDurableRuntime,
-  type NodeDurableRuntimeOptions,
-} from "../../src/index.ts";
+import { NodeDurableHost, type NodeDurableRuntimeOptions } from "../../src/index.ts";
+import { trustedRuntimeLayer } from "../trusted-authorization.ts";
 import {
   CHILD_ANSWER,
   CRASH_CALLER,
@@ -172,8 +167,6 @@ const options: NodeDurableRuntimeOptions = {
   filename: env.EFFECT_AGENT_DB,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: CHILD_PRODUCER_ID,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ownershipLeaseDuration: env.EFFECT_AGENT_LEASE_MS ?? 30_000,
   // Long enough that a deliberately expired short lease is never renewed mid-scenario.
   leaseRenewalInterval: 60_000,
@@ -603,7 +596,7 @@ const isFencedFailure = (tag: string): boolean =>
   tag === "FenceRejected" || tag === "OwnershipLost";
 
 const exit = await Effect.runPromiseExit(
-  scenario.pipe(Effect.provide(Layer.mergeAll(NodeDurableRuntime.layer(options), searchToolLayer))),
+  scenario.pipe(Effect.provide(Layer.mergeAll(trustedRuntimeLayer(options), searchToolLayer))),
 );
 
 if (Exit.isFailure(exit)) {

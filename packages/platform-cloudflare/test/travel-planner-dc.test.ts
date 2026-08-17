@@ -21,6 +21,7 @@ import {
   expectedTravelPlan,
   normalizeCrossPlatformTravelPlannerEvidence,
   phase1Trip,
+  phase4TravelPlannerPrincipal,
   phase4TravelPlannerSubmitOptions,
   phase5TravelPlannerSubmitOptions,
   phase5TravelPlannerPrincipal,
@@ -32,6 +33,7 @@ import {
   phase6TravelPlannerGoldenEvidence,
   phase6TravelPlannerProducerPrefix,
   s2TravelPlannerSubmitOptions,
+  s2TravelPlannerPrincipal,
   travelPlanFromDurableSettlement,
   TripRequest,
 } from "@effect-agent/testing";
@@ -72,7 +74,9 @@ import { travelPlannerHarness } from "./travel-planner-worker.ts";
 
 let laneCounter = 0;
 const lane = (label: string): string => `cf-tp-${label}-${laneCounter++}`;
+const PLANNER_CALLER = OperationCaller.make({ principal: phase4TravelPlannerPrincipal });
 const BOOKING_CALLER = OperationCaller.make({ principal: phase5TravelPlannerPrincipal });
+const COORDINATOR_CALLER = OperationCaller.make({ principal: s2TravelPlannerPrincipal });
 
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const encodeEnvelope = Schema.encodeSync(CanonicalRecordEnvelope);
@@ -212,7 +216,7 @@ const drainLanesUntil = async (
   const states = await Promise.all(
     lanes.map(async (conversation) => {
       const rows = await laneRows(conversation).catch(() => "unreadable");
-      const tags = await readCanonical(conversation)
+      const tags = await readCanonical(conversation, "CONVERSATIONS", COORDINATOR_CALLER)
         .then(logTags)
         .catch(() => "unreadable");
       return `${conversation}: rows=${JSON.stringify(rows)} tags=${JSON.stringify(tags)}`;
@@ -230,9 +234,9 @@ describe("DC Travel Planner — baseline settlement", () => {
     const conversation = lane("settlement");
     const receipt = await submitPlanner(conversation);
     await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation);
+    await assertConvergence(conversation, { caller: PLANNER_CALLER });
 
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(conversation, "CONVERSATIONS", PLANNER_CALLER);
     // Repair audit records (DUR-013) are host evidence, not scenario semantics: on DC even a
     // clean run carries `recovery:ApplyInput`, because every pass reconciles before it claims
     // (plan §1.4) and the ready lane's input is applied through the recovery path.
@@ -258,9 +262,9 @@ describe("DC Travel Planner — baseline settlement", () => {
     const conversation = lane("equivalence");
     const receipt = await submitPlanner(conversation);
     await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation);
+    await assertConvergence(conversation, { caller: PLANNER_CALLER });
 
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(conversation, "CONVERSATIONS", PLANNER_CALLER);
     expect(await normalizedDcEvidence(records, receipt, conversation)).toEqual(
       phase6TravelPlannerGoldenEvidence,
     );
@@ -280,9 +284,9 @@ describe("DC Travel Planner — eviction equivalence", () => {
     // NO further client call on this lane: the persisted alarm alone converges it.
     await drainAlarmsUntil(conversation, allSettled(conversation));
     expect(armedEvictionsRemaining(conversation)).toBe(0);
-    await assertConvergence(conversation);
+    await assertConvergence(conversation, { caller: PLANNER_CALLER });
 
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(conversation, "CONVERSATIONS", PLANNER_CALLER);
     const settled = settledPayloadOf(records);
     expect(settled.outcome).toBe("completed");
 
@@ -325,11 +329,11 @@ describe("DC Travel Planner — eviction equivalence", () => {
       await sleep(10);
     }
     await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation);
+    await assertConvergence(conversation, { caller: PLANNER_CALLER });
 
     // Nothing that mattered ever lived in a Durable Object memory field: the chaosed run's
     // cross-platform normalized evidence equals the committed golden of an uninterrupted run.
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(conversation, "CONVERSATIONS", PLANNER_CALLER);
     expect(await normalizedDcEvidence(records, receipt, conversation)).toEqual(
       phase6TravelPlannerGoldenEvidence,
     );
@@ -372,9 +376,9 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
       }),
     );
     await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation);
+    await assertConvergence(conversation, { caller: BOOKING_CALLER });
 
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(conversation, "CONVERSATIONS", BOOKING_CALLER);
     // Resumed from the canonical declaration and the recorded decision: exactly two model
     // responses ever became canonical (the declaring Turn and the post-batch report Turn).
     expect(modelResponseCount(records)).toBe(2);
@@ -432,7 +436,7 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
     }
     expect(await anyInState(conversation, "unknown")()).toBe(true);
     expect(await supplierCallCount(bookKey)).toBe(0);
-    const blocked = await readCanonical(conversation);
+    const blocked = await readCanonical(conversation, "CONVERSATIONS", BOOKING_CALLER);
     expect(logTags(blocked)).toContain("ToolCallUnknown");
     expect(logTags(blocked)).not.toContain("SubmissionSettled");
 
@@ -455,9 +459,9 @@ describe("DC Travel Planner — approval and uncertainty under eviction", () => 
       }),
     );
     await drainAlarmsUntil(conversation, allSettled(conversation));
-    await assertConvergence(conversation);
+    await assertConvergence(conversation, { caller: BOOKING_CALLER });
 
-    const records = await readCanonical(conversation);
+    const records = await readCanonical(conversation, "CONVERSATIONS", BOOKING_CALLER);
     expect(logTags(records)).toContain("ToolCallResolved");
     expect(settledPayloadOf(records).outcome).toBe("completed");
     expect(await supplierCallCount(bookKey)).toBe(1);
@@ -491,7 +495,7 @@ describe("DC Travel Planner — cross-Object delegation", () => {
       // A probe can land on the incarnation the armed eviction just aborted and reject with
       // the abort reason (production behavior: the next call reaches a fresh instance);
       // treat it as "not yet" and let the next round retry, as any real caller would.
-      const records = await readCanonical(conversation).catch(
+      const records = await readCanonical(conversation, "CONVERSATIONS", COORDINATOR_CALLER).catch(
         () => [] as ReadonlyArray<CanonicalRecordEnvelope>,
       );
       return logTags(records).includes("SubagentStarted");
@@ -505,20 +509,24 @@ describe("DC Travel Planner — cross-Object delegation", () => {
 
     await drainLanesUntil([conversation, childConversation], allSettled(conversation));
     expect(armedEvictionsRemaining(childConversation)).toBe(0);
-    await assertConvergence(conversation);
-    await assertConvergence(childConversation);
+    await assertConvergence(conversation, { caller: COORDINATOR_CALLER });
+    await assertConvergence(childConversation, { caller: COORDINATOR_CALLER });
 
-    // The child's external side effect happened exactly once, and the completed child was
+    // This deterministic failpoint produced one guide invocation, and the completed child was
     // never re-executed: two model Turns and one Settlement in the child's own Object.
     expect(await Effect.runPromise(travelPlannerHarness.guideInvocationCount)).toBe(1);
-    const childRecords = await readCanonical(childConversation);
+    const childRecords = await readCanonical(
+      childConversation,
+      "CONVERSATIONS",
+      COORDINATOR_CALLER,
+    );
     expect(modelResponseCount(childRecords)).toBe(2);
     expect(
       childRecords.filter((envelope) => envelope.record.payload._tag === "SubmissionSettled"),
     ).toHaveLength(1);
 
     // The parent joined the projected finding and settled on the fixture shortlist.
-    const parentRecords = await readCanonical(conversation);
+    const parentRecords = await readCanonical(conversation, "CONVERSATIONS", COORDINATOR_CALLER);
     expect(logTags(parentRecords)).toContain("SubagentRequested");
     expect(logTags(parentRecords)).toContain("SubagentStarted");
     expect(logTags(parentRecords)).toContain("SubagentJoined");
@@ -662,6 +670,6 @@ describe("DC Travel Planner — admission limits", () => {
     await drainAlarmsUntil(conversation, allSettled(conversation, "LIMITED"), {
       namespace: "LIMITED",
     });
-    await assertConvergence(conversation, { namespace: "LIMITED" });
+    await assertConvergence(conversation, { namespace: "LIMITED", caller: BOOKING_CALLER });
   }, 60_000);
 });
