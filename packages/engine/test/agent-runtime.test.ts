@@ -4,6 +4,7 @@ import {
   AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
+  AgentRunDispositionError,
   AgentPolicy,
   AgentPolicyError,
   ConversationId,
@@ -2525,6 +2526,55 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(reduced?.conversationId).toBe(runResult.conversationId);
       expect(reduced?.runId).toBe(runResult.runId);
       expect(reduced?.turns).toBe(runResult.turns);
+    });
+  });
+
+  it.effect("RUN-029 validates and exposes an application run disposition", () => {
+    const RunDisposition = Schema.Literal("answered-without-cloud-task");
+    const definition = Agent.define("run-disposition", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({
+        answer: Schema.String,
+        runDisposition: Schema.optionalKey(Schema.String),
+      }),
+      instructions: "Answer as JSON.",
+      toolkit: Toolkit.empty,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+      runDisposition: {
+        schema: RunDisposition,
+        fromOutput: (output) => output.runDisposition,
+      },
+    });
+
+    return Effect.gen(function* () {
+      const valid = Agent.withModel(
+        definition,
+        modelFromParts(
+          finalParts('{"answer":"done","runDisposition":"answered-without-cloud-task"}'),
+        ),
+      );
+      const events = yield* AgentRuntime.stream(valid, { question: "done?" }).pipe(
+        Stream.runCollect,
+      );
+      const result = yield* AgentRuntime.run(valid, { question: "done?" });
+
+      expect(events.at(-1)).toMatchObject({
+        _tag: "RunCompleted",
+        runDisposition: "answered-without-cloud-task",
+      });
+      expect(result.runDisposition).toBe("answered-without-cloud-task");
+
+      const invalid = Agent.withModel(
+        definition,
+        modelFromParts(finalParts('{"answer":"done","runDisposition":"invented"}')),
+      );
+      const invalidExit = yield* AgentRuntime.run(invalid, { question: "done?" }).pipe(Effect.exit);
+      expect(failureFrom(invalidExit)).toBeInstanceOf(AgentRunDispositionError);
     });
   });
 

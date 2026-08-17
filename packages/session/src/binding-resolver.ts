@@ -1,4 +1,4 @@
-import { AgentId, ConversationId } from "@effect-agent/core";
+import { AgentId, ConversationId, type RunDispositionDeclaration } from "@effect-agent/core";
 import type { RuntimeBinding } from "@effect-agent/engine";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import type { Tool } from "effect/unstable/ai";
@@ -87,6 +87,9 @@ export type ResolvedAttemptDriver = <
   ModelRequires,
   InstructionError,
   InstructionRequirements,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -97,7 +100,8 @@ export type ResolvedAttemptDriver = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   conversationId: ConversationId,
   claim: Claim,
@@ -114,7 +118,8 @@ export type ResolvedAttemptDriver = <
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     InstructionRequirements
   >
@@ -151,6 +156,9 @@ const capture = <
   ModelRequires,
   InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
   InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 >(
   agent: RuntimeBinding<
     InputSchema,
@@ -161,7 +169,8 @@ const capture = <
     ModelProvides,
     ModelRequires,
     InstructionError,
-    InstructionRequirements
+    InstructionRequirements,
+    RunDispositionValue
   >,
   digests: DefinitionDigests | undefined,
 ): Effect.Effect<
@@ -213,6 +222,9 @@ export const DurableWorkerBinding = {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -223,7 +235,8 @@ export const DurableWorkerBinding = {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     digests: DefinitionDigests,
   ): Effect.Effect<
@@ -241,6 +254,9 @@ export const DurableWorkerBinding = {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -251,7 +267,8 @@ export const DurableWorkerBinding = {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
   ): Effect.Effect<
     ResolvedBinding,

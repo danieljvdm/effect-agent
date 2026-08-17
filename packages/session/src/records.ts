@@ -416,6 +416,12 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
   runId: Schema.optionalKey(RunId),
   result: Schema.optionalKey(PersistedJson),
   /**
+   * Application-defined, Schema-encoded disposition for an ordinary completed
+   * Run. Absent for budget exhaustion and every non-completed or run-less
+   * settlement; consumers decode it with the application definition's Schema.
+   */
+  runDisposition: Schema.optionalKey(PersistedJson),
+  /**
    * Present only when a `completed` Run settled through the final-answer
    * exhaustion resolution (RUN-011, RUN-018): the durable log must be able to
    * distinguish honest-exhaustion completion from ordinary completion without
@@ -449,7 +455,8 @@ const isPolicyFailureProjection = Schema.is(
  * Canonical-boundary view of `SubmissionSettled`: `finishReason` is valid
  * only on a `completed` outcome, `exhausted` only alongside
  * `finishReason: "budget-exhausted"`, and `policyLimit` only on a `failed`
- * outcome whose `result` carries the `AgentPolicyError` failure projection —
+ * outcome whose `result` carries the `AgentPolicyError` failure projection,
+ * and `runDisposition` only on an ordinary completed settlement with a Run —
  * so a malformed persisted combination such as
  * `{ outcome: "failed", finishReason: "budget-exhausted" }` or a
  * `policyLimit` contradicting `result.errorTag` fails closed at decode
@@ -460,11 +467,16 @@ const SubmissionSettledRecord = SubmissionSettled.pipe(
     (settled): settled is SubmissionSettled =>
       (settled.finishReason === undefined || settled.outcome === "completed") &&
       (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
+      (settled.runDisposition === undefined ||
+        (settled.outcome === "completed" &&
+          settled.finishReason === undefined &&
+          settled.runId !== undefined &&
+          settled.result !== undefined)) &&
       (settled.policyLimit === undefined ||
         (settled.outcome === "failed" && isPolicyFailureProjection(settled.result))),
     {
       expected:
-        "finishReason only on a completed settlement, exhausted only with finishReason budget-exhausted, policyLimit only on a failed AgentPolicyError settlement",
+        "finishReason only on a completed settlement, exhausted only with finishReason budget-exhausted, runDisposition only on an ordinary completed settlement with a Run result, policyLimit only on a failed AgentPolicyError settlement",
     },
   ),
 );

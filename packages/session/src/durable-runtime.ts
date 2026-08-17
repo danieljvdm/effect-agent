@@ -16,6 +16,7 @@ import {
   type ExhaustedLimit,
   type RunEvent,
   type RunId,
+  type RunDispositionDeclaration,
   type TurnId,
 } from "@effect-agent/core";
 import {
@@ -630,6 +631,8 @@ type AttemptOutcome =
   | {
       readonly _tag: "completed";
       readonly result: PersistedJson;
+      /** Schema-encoded application disposition, only for an ordinary completed Run. */
+      readonly runDisposition?: PersistedJson;
       /** Set when the Run settled through the final-answer exhaustion resolution (RUN-018). */
       readonly finishReason?: "budget-exhausted";
       /** The dimension that bound; set exactly alongside `finishReason` (RUN-011). */
@@ -1854,6 +1857,12 @@ const make = Effect.gen(function* () {
       outcome: outcome._tag,
       ...(includeRunId ? { runId: runIdForSubmission(submissionId) } : {}),
       ...(outcome._tag === "aborted" ? {} : { result: outcome.result }),
+      ...(includeRunId &&
+      outcome._tag === "completed" &&
+      outcome.finishReason === undefined &&
+      outcome.runDisposition !== undefined
+        ? { runDisposition: outcome.runDisposition }
+        : {}),
       ...(outcome._tag === "completed" && outcome.finishReason !== undefined
         ? { finishReason: outcome.finishReason }
         : {}),
@@ -2726,6 +2735,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -2736,7 +2748,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     ctx: AttemptAppendContext,
     submission: SubmissionSnapshot,
@@ -2921,6 +2934,7 @@ const make = Effect.gen(function* () {
         readonly history: Prompt.Prompt | undefined;
         readonly pendingTurn: { readonly turn: number; readonly turnId: TurnId } | undefined;
         readonly completedOutput: PersistedJson | undefined;
+        readonly completedRunDisposition: PersistedJson | undefined;
         readonly completedFinishReason: "budget-exhausted" | undefined;
         readonly completedExhausted: ExhaustedLimit | undefined;
       }
@@ -2930,6 +2944,7 @@ const make = Effect.gen(function* () {
         history: undefined,
         pendingTurn: undefined,
         completedOutput: undefined,
+        completedRunDisposition: undefined,
         completedFinishReason: undefined,
         completedExhausted: undefined,
       });
@@ -3991,27 +4006,48 @@ const make = Effect.gen(function* () {
         output: unknown,
         finishReason: "completed" | "model-stop" | "budget-exhausted",
         exhausted: ExhaustedLimit | undefined,
+        runDisposition: unknown,
       ): Effect.Effect<void, DurableWorkerFailure> =>
-        Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
-          Effect.mapError(
-            (cause): DurableWorkerFailure =>
-              LedgerError.make({
-                operation: "recordCompleted",
-                message: "Run output exceeds canonical persistence bounds",
-                cause,
-              }),
-          ),
-          Effect.flatMap((result) =>
-            Ref.update(stateRef, (state) => ({
-              ...state,
-              completedOutput: result,
-              completedFinishReason: finishReason === "budget-exhausted" ? finishReason : undefined,
-              // The pair travels together or not at all (RUN-011 fail-safe): a
-              // divergent event never persists a lone dimension.
-              completedExhausted: finishReason === "budget-exhausted" ? exhausted : undefined,
-            })),
-          ),
-        );
+        Effect.gen(function* () {
+          const result = yield* Schema.decodeUnknownEffect(PersistedJson)(output).pipe(
+            Effect.mapError(
+              (cause): DurableWorkerFailure =>
+                LedgerError.make({
+                  operation: "recordCompleted",
+                  message: "Run output exceeds canonical persistence bounds",
+                  cause,
+                }),
+            ),
+          );
+          if (finishReason === "budget-exhausted" && runDisposition !== undefined) {
+            return yield* LedgerError.make({
+              operation: "recordCompleted",
+              message: "A budget-exhausted Run cannot declare an application run disposition",
+            });
+          }
+          const persistedRunDisposition =
+            runDisposition === undefined
+              ? undefined
+              : yield* Schema.decodeUnknownEffect(PersistedJson)(runDisposition).pipe(
+                  Effect.mapError(
+                    (cause): DurableWorkerFailure =>
+                      LedgerError.make({
+                        operation: "recordCompleted",
+                        message: "Run disposition exceeds canonical persistence bounds",
+                        cause,
+                      }),
+                  ),
+                );
+          yield* Ref.update(stateRef, (state) => ({
+            ...state,
+            completedOutput: result,
+            completedRunDisposition: persistedRunDisposition,
+            completedFinishReason: finishReason === "budget-exhausted" ? finishReason : undefined,
+            // The pair travels together or not at all (RUN-011 fail-safe): a
+            // divergent event never persists a lone dimension.
+            completedExhausted: finishReason === "budget-exhausted" ? exhausted : undefined,
+          }));
+        });
 
       const handleEvent = (event: RunEvent): Effect.Effect<void, DurableWorkerFailure> => {
         switch (event._tag) {
@@ -4027,7 +4063,14 @@ const make = Effect.gen(function* () {
           }
           case "RunCompleted": {
             return commitPendingTurn.pipe(
-              Effect.andThen(recordCompleted(event.output, event.finishReason, event.exhausted)),
+              Effect.andThen(
+                recordCompleted(
+                  event.output,
+                  event.finishReason,
+                  event.exhausted,
+                  event.runDisposition,
+                ),
+              ),
             );
           }
           case "RunFailed": {
@@ -4262,6 +4305,9 @@ const make = Effect.gen(function* () {
       return {
         _tag: "completed",
         result: state.completedOutput,
+        ...(state.completedRunDisposition === undefined
+          ? {}
+          : { runDisposition: state.completedRunDisposition }),
         ...(state.completedFinishReason === undefined
           ? {}
           : { finishReason: state.completedFinishReason }),
@@ -4288,6 +4334,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -4298,7 +4347,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     conversationId: ConversationId,
     claim: Claim,
@@ -4703,6 +4753,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -4713,7 +4766,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
     conversationId: ConversationId,
   ) =>
@@ -6244,6 +6298,9 @@ const make = Effect.gen(function* () {
     ModelRequires,
     InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
     InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+    RunDispositionValue extends
+      | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+      | undefined = undefined,
   >(
     agent: RuntimeBinding<
       InputSchema,
@@ -6254,7 +6311,8 @@ const make = Effect.gen(function* () {
       ModelProvides,
       ModelRequires,
       InstructionError,
-      InstructionRequirements
+      InstructionRequirements,
+      RunDispositionValue
     >,
   ) =>
     Effect.gen(function* () {
@@ -6458,6 +6516,9 @@ export class DurableAgentRuntime extends Context.Service<
       ModelRequires,
       InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
       InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+      RunDispositionValue extends
+        | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+        | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -6468,7 +6529,8 @@ export class DurableAgentRuntime extends Context.Service<
         ModelProvides,
         ModelRequires,
         InstructionError,
-        InstructionRequirements
+        InstructionRequirements,
+        RunDispositionValue
       >,
       conversationId: ConversationId,
     ) => Effect.Effect<
@@ -6484,7 +6546,8 @@ export class DurableAgentRuntime extends Context.Service<
           ModelProvides,
           ModelRequires,
           InstructionError,
-          InstructionRequirements
+          InstructionRequirements,
+          RunDispositionValue
         >,
         InstructionRequirements
       >
@@ -6506,6 +6569,9 @@ export class DurableAgentRuntime extends Context.Service<
       ModelRequires,
       InstructionError = InstructionErrorOf<Instructions, InputSchema["Type"]>,
       InstructionRequirements = InstructionRequirementsOf<Instructions, InputSchema["Type"]>,
+      RunDispositionValue extends
+        | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+        | undefined = undefined,
     >(
       agent: RuntimeBinding<
         InputSchema,
@@ -6516,7 +6582,8 @@ export class DurableAgentRuntime extends Context.Service<
         ModelProvides,
         ModelRequires,
         InstructionError,
-        InstructionRequirements
+        InstructionRequirements,
+        RunDispositionValue
       >,
     ) => Effect.Effect<
       void,
@@ -6531,7 +6598,8 @@ export class DurableAgentRuntime extends Context.Service<
           ModelProvides,
           ModelRequires,
           InstructionError,
-          InstructionRequirements
+          InstructionRequirements,
+          RunDispositionValue
         >,
         InstructionRequirements
       >

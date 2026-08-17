@@ -23,6 +23,11 @@ the durable runtime admits a Submission and coordinates Attempts until Settlemen
 One logical request to execute an Agent Binding against a Conversation. In ephemeral mode the Run
 lives for one Scope. In durable mode the logical Run may span multiple process Attempts.
 
+**Run Disposition**<br>
+An optional application-defined value selected from decoded Agent output and validated by a
+Definition-owned Effect Schema. It is durable only for an ordinary completed Run and is never
+inferred from prose, Tool output, or successful side effects.
+
 **Attempt**  
 One ownership period in which a worker tries to advance a durable Submission. An interruption,
 lost ownership, eviction, or redeploy may end an Attempt without ending the Run.

@@ -45,6 +45,7 @@ import {
   modelResponseRecordId,
   projectRunJournal,
   promptFromCanonicalRecords,
+  replayConversation,
   recoveryRepairRecordId,
   runIdForSubmission,
   submissionInputRecordId,
@@ -165,6 +166,27 @@ const plannerDefinition = Agent.define("durable-planner", {
     maxDuration: "30 seconds",
     toolConcurrency: 1,
   }),
+});
+
+const RunDisposition = Schema.Literal("answered-without-cloud-task");
+const dispositionDefinition = Agent.define("durable-run-disposition", {
+  input: Schema.Struct({ question: Schema.String }),
+  output: Schema.Struct({
+    answer: Schema.String,
+    runDisposition: Schema.optionalKey(Schema.String),
+  }),
+  instructions: "Answer as JSON and declare application completion explicitly.",
+  toolkit: Toolkit.empty,
+  policy: AgentPolicy.make({
+    maxTurns: 3,
+    maxToolCalls: 2,
+    maxDuration: "30 seconds",
+    toolConcurrency: 1,
+  }),
+  runDisposition: {
+    schema: RunDisposition,
+    fromOutput: (output) => output.runDisposition,
+  },
 });
 
 // `readonly` keeps the P4 canonical record shape byte-stable (plan §4.3): an unannotated tool
@@ -788,6 +810,92 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   );
 
   it.effect(
+    "RUN-029 persists and replays an ordinary application run disposition across terminalization crashes",
+    () =>
+      Effect.gen(function* () {
+        const runtime = yield* DurableAgentRuntime;
+        const scenarios = [
+          {
+            location: undefined,
+            conversation: "conversation-run-disposition",
+            key: "run-disposition-1",
+          },
+          {
+            location: "terminalize:after-reserve" as const,
+            conversation: "conversation-run-disposition-reserve",
+            key: "run-disposition-reserve-1",
+          },
+          {
+            location: "terminalize:after-canonical-append" as const,
+            conversation: "conversation-run-disposition-append",
+            key: "run-disposition-append-1",
+          },
+        ];
+
+        for (const scenario of scenarios) {
+          const scripted = yield* makeScriptedModel(() =>
+            finalParts('{"answer":"done","runDisposition":"answered-without-cloud-task"}'),
+          );
+          const agent = Agent.withModel(dispositionDefinition, scripted.model);
+          const conversationId = decodeConversationId(scenario.conversation);
+          const receipt = yield* runtime.submit(
+            agent,
+            { question: "done?" },
+            submitOptions(scenario.conversation, scenario.key),
+          );
+
+          if (scenario.location === undefined) {
+            yield* runtime.processConversation(agent, conversationId);
+          } else {
+            yield* armFailpoint(scenario.location);
+            const killed = yield* Effect.exit(runtime.processConversation(agent, conversationId));
+            expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+            yield* clearFailpoint;
+            yield* runtime.runRecovery;
+          }
+
+          expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
+          const records = yield* readLog(scenario.conversation);
+          const projection = replayConversation(conversationId, records);
+          expect(projection.settlements).toHaveLength(1);
+          const disposition = projection.settlements[0]?.runDisposition;
+          const decodedDisposition = yield* Schema.decodeUnknownEffect(RunDisposition)(disposition);
+          expect(decodedDisposition).toBe("answered-without-cloud-task");
+        }
+      }),
+  );
+
+  it.effect("RUN-029 invalid disposition selection settles failed without disposition", () =>
+    Effect.gen(function* () {
+      const runtime = yield* DurableAgentRuntime;
+      const scripted = yield* makeScriptedModel(() =>
+        finalParts('{"answer":"done","runDisposition":"invented"}'),
+      );
+      const agent = Agent.withModel(dispositionDefinition, scripted.model);
+      const conversation = "conversation-run-disposition-invalid";
+
+      yield* runtime.submit(
+        agent,
+        { question: "done?" },
+        submitOptions(conversation, "run-disposition-invalid-1"),
+      );
+      const settlements = yield* runtime.processConversation(
+        agent,
+        decodeConversationId(conversation),
+      );
+
+      expect(settlements[0]?.outcome).toBe("failed");
+      const settled = (yield* readLog(conversation)).at(-1)?.record.payload;
+      expect(settled?._tag).toBe("SubmissionSettled");
+      if (settled?._tag === "SubmissionSettled") {
+        expect(settled.outcome).toBe("failed");
+        expect(settled.result).toMatchObject({ errorTag: "AgentRunDispositionError" });
+        expect(settled.runDisposition).toBeUndefined();
+      }
+    }),
+  );
+
+  it.effect(
     "RUN-018 a budget-exhausted Run settles the Submission completed with canonical synthetic Tool settlements",
     () =>
       Effect.gen(function* () {
@@ -802,7 +910,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         const probeTools = Toolkit.make(Probe);
         const definition = Agent.define("durable-soft-landing", {
           input: Schema.Struct({ question: Schema.String }),
-          output: Schema.Struct({ answer: Schema.String }),
+          output: Schema.Struct({
+            answer: Schema.String,
+            runDisposition: Schema.optionalKey(Schema.String),
+          }),
           instructions: "Probe before answering.",
           toolkit: probeTools,
           policy: AgentPolicy.make({
@@ -811,6 +922,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             maxDuration: "30 seconds",
             toolConcurrency: 1,
           }),
+          runDisposition: {
+            schema: RunDisposition,
+            fromOutput: (output) => output.runDisposition,
+          },
         });
         const handlerStarts = yield* Ref.make(0);
         const probeToolLayer = probeTools.toLayer({
@@ -836,7 +951,9 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
                 },
                 { type: "finish", reason: "tool-calls", usage },
               ]
-            : finalParts('{"answer":"partial, budget exhausted"}'),
+            : finalParts(
+                '{"answer":"partial, budget exhausted","runDisposition":"answered-without-cloud-task"}',
+              ),
         );
         const agent = Agent.withModel(definition, scripted.model);
         const conversation = "conversation-soft-landing";
@@ -904,7 +1021,11 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           expect(settled.finishReason).toBe("budget-exhausted");
           expect(settled.exhausted).toBe("tool-calls");
           expect(settled.policyLimit).toBeUndefined();
-          expect(settled.result).toEqual({ answer: "partial, budget exhausted" });
+          expect(settled.runDisposition).toBeUndefined();
+          expect(settled.result).toEqual({
+            answer: "partial, budget exhausted",
+            runDisposition: "answered-without-cloud-task",
+          });
         }
 
         // The canonical journal alone rebuilds the exact model-visible prompt,
@@ -954,7 +1075,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           const probeTools = Toolkit.make(Probe);
           const definition = Agent.define("durable-soft-landing-recovery", {
             input: Schema.Struct({ question: Schema.String }),
-            output: Schema.Struct({ answer: Schema.String }),
+            output: Schema.Struct({
+              answer: Schema.String,
+              runDisposition: Schema.optionalKey(Schema.String),
+            }),
             instructions: "Probe before answering.",
             toolkit: probeTools,
             policy: AgentPolicy.make({
@@ -963,6 +1087,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
               maxDuration: "30 seconds",
               toolConcurrency: 1,
             }),
+            runDisposition: {
+              schema: RunDisposition,
+              fromOutput: (output) => output.runDisposition,
+            },
           });
           const probeToolLayer = probeTools.toLayer({
             probe: () => Effect.succeed({ available: true }),
@@ -986,7 +1114,9 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
                   },
                   { type: "finish", reason: "tool-calls", usage },
                 ]
-              : finalParts('{"answer":"recovered partial"}'),
+              : finalParts(
+                  '{"answer":"recovered partial","runDisposition":"answered-without-cloud-task"}',
+                ),
           );
           const agent = Agent.withModel(definition, scripted.model);
 
@@ -1017,6 +1147,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             finishReason: "budget-exhausted",
             exhausted: "tool-calls",
           });
+          expect(settledRecords[0]?.runDisposition).toBeUndefined();
         }
       }),
   );
@@ -1099,7 +1230,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
       const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"never"}'));
-      const agent = Agent.withModel(plannerDefinition, scripted.model);
+      const agent = Agent.withModel(dispositionDefinition, scripted.model);
       const conversation = "conversation-abort-ready";
 
       const receipt = yield* runtime.submit(
@@ -1128,6 +1259,13 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const tags = logTags(records);
       expect(tags).toContain("AbortRequested");
       expect(tags.indexOf("AbortRequested")).toBeLessThan(tags.indexOf("SubmissionSettled"));
+      const settled = records.find(
+        (envelope) => envelope.record.payload._tag === "SubmissionSettled",
+      )?.record.payload;
+      expect(settled?._tag).toBe("SubmissionSettled");
+      if (settled?._tag === "SubmissionSettled") {
+        expect(settled.runDisposition).toBeUndefined();
+      }
       // No model ran and no input became canonical for the aborted, never-claimed head.
       expect(tags).not.toContain("ModelResponseRecorded");
       // DUR-013: the executed decision left a deterministic audit record.

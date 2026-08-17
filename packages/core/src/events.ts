@@ -160,6 +160,8 @@ export type ExhaustedLimit = typeof ExhaustedLimit.Type;
 export class RunCompleted extends Schema.TaggedClass<RunCompleted>()("RunCompleted", {
   ...RunEventBase,
   output: Schema.Json,
+  /** Schema-encoded application disposition, present only for an ordinary completed Run. */
+  runDisposition: Schema.optionalKey(Schema.Json),
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
   finishReason: Schema.Literals(["completed", "model-stop", "budget-exhausted"]),
   exhausted: Schema.optionalKey(ExhaustedLimit),

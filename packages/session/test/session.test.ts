@@ -423,6 +423,52 @@ describe("phase 4 durable canonical payloads", () => {
     }
   });
 
+  it("RUN-029: round-trips an application run disposition on ordinary completion", () => {
+    const payload = {
+      ...encodedSubmissionSettled,
+      runDisposition: "answered-without-cloud-task",
+    } as const;
+    const record = decodeRecord("record-run029", payload);
+
+    expect(Schema.encodeSync(RecordEnvelope)(record).payload).toEqual(payload);
+    expect(
+      Schema.decodeUnknownSync(RecordEnvelope)(Schema.encodeSync(RecordEnvelope)(record)),
+    ).toEqual(record);
+  });
+
+  it("RUN-029: rejects run disposition outside an ordinary completed Run", () => {
+    const envelope = (payload: unknown): unknown => ({
+      recordId: "record-run029-invalid",
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: "2026-07-29T12:00:00.000Z",
+      deploymentId: "test-deployment",
+      payload,
+    });
+    const failures: ReadonlyArray<unknown> = [
+      { ...encodedSubmissionSettled, outcome: "failed", runDisposition: "not-final" },
+      { ...encodedSubmissionSettled, outcome: "aborted", runDisposition: "not-final" },
+      {
+        ...encodedSubmissionSettled,
+        finishReason: "budget-exhausted",
+        exhausted: "turns",
+        runDisposition: "not-final",
+      },
+      (() => {
+        const { runId: _runId, ...withoutRun } = encodedSubmissionSettled;
+        return { ...withoutRun, runDisposition: "not-final" };
+      })(),
+      (() => {
+        const { result: _result, ...withoutResult } = encodedSubmissionSettled;
+        return { ...withoutResult, runDisposition: "not-final" };
+      })(),
+    ];
+
+    for (const payload of failures) {
+      expect(Schema.decodeUnknownExit(RecordEnvelope)(envelope(payload))._tag).toBe("Failure");
+    }
+  });
+
   it("reduces settlements and abort requests while model responses only advance the sequence", () => {
     const created = decodeEnvelope(
       1,

@@ -2,7 +2,7 @@ import type { Effect, Schema } from "effect";
 import { Schema as S } from "effect";
 import type { AiError, Model, Prompt, Tool, Toolkit } from "effect/unstable/ai";
 
-import type { AgentInputError, AgentOutputError } from "./errors.ts";
+import type { AgentInputError, AgentOutputError, AgentRunDispositionError } from "./errors.ts";
 import { AgentId } from "./identifiers.ts";
 import type { AgentPolicy } from "./policy.ts";
 
@@ -22,12 +22,21 @@ export type NativeModel<ModelValue> =
     ? ModelValue
     : never;
 
+/** Definition-owned boundary for selecting and validating an application run disposition. */
+export interface RunDispositionDeclaration<Output, DispositionSchema extends Schema.Top> {
+  /** Canonical Schema used to validate and encode the selected disposition. */
+  readonly schema: DispositionSchema;
+  /** Pure selection from decoded output; `undefined` means this ordinary Run declares none. */
+  readonly fromOutput: (output: Output) => unknown;
+}
+
 /** Immutable, model-agnostic schemas, behavior, tools, and bounds for an agent. */
 export interface Definition<
   InputSchema extends Schema.Top,
   OutputSchema extends Schema.Top,
   Instructions,
   ToolkitValue extends Toolkit.Any,
+  RunDispositionValue = undefined,
 > {
   /** Stable agent identity; changing it creates a distinct definition identity. */
   readonly id: AgentId;
@@ -41,6 +50,7 @@ export interface Definition<
   readonly toolkit: ToolkitValue;
   /** Finite execution bounds enforced by the runtime. */
   readonly policy: AgentPolicy;
+  readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
   readonly metadata?: Readonly<Record<string, string>> | undefined;
 }
@@ -51,17 +61,27 @@ export interface DefinitionOptions<
   OutputSchema extends Schema.Top,
   Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
   ToolkitValue extends Toolkit.Any,
+  RunDispositionValue extends
+    | RunDispositionDeclaration<OutputSchema["Type"], Schema.Top>
+    | undefined = undefined,
 > {
   readonly input: InputSchema;
   readonly output: OutputSchema;
   readonly instructions: Instructions;
   readonly toolkit: ToolkitValue;
   readonly policy: AgentPolicy;
+  readonly runDisposition?: RunDispositionValue | undefined;
   readonly description?: string | undefined;
   readonly metadata?: Readonly<Record<string, string>> | undefined;
 }
 
-type AnyDefinitionShape = Definition<Schema.Top, Schema.Top, unknown, Toolkit.Any>;
+type AnyDefinitionShape = Definition<
+  Schema.Top,
+  Schema.Top,
+  unknown,
+  Toolkit.Any,
+  RunDispositionDeclaration<never, Schema.Top> | undefined
+>;
 
 /** Immutable pairing of an agent definition with the explicit Effect AI Model used to run it. */
 export interface Binding<DefinitionValue extends AnyDefinitionShape, ModelValue> {
@@ -99,6 +119,17 @@ export namespace Agent {
     ? DefinitionValue
     : AgentValue;
 
+  type RunDispositionSchemaOf<DefinitionValue extends AnyDefinition> = [
+    Exclude<DefinitionValue["runDisposition"], undefined>,
+  ] extends [never]
+    ? never
+    : Exclude<DefinitionValue["runDisposition"], undefined> extends RunDispositionDeclaration<
+          never,
+          infer DispositionSchema
+        >
+      ? DispositionSchema
+      : never;
+
   /** Decoded input type of a definition or binding. */
   export type Input<AgentValue extends AnyDefinition | Any> =
     DefinitionOf<AgentValue>["input"]["Type"];
@@ -115,6 +146,18 @@ export namespace Agent {
   export type OutputSchema<AgentValue extends AnyDefinition | Any> =
     DefinitionOf<AgentValue>["output"];
 
+  /** Application run-disposition Schema carried by a definition or binding, or `never`. */
+  export type RunDispositionSchema<AgentValue extends AnyDefinition | Any> = RunDispositionSchemaOf<
+    DefinitionOf<AgentValue>
+  >;
+
+  /** Decoded application run disposition declared by a definition or binding. */
+  export type RunDisposition<AgentValue extends AnyDefinition | Any> = [
+    RunDispositionSchema<AgentValue>,
+  ] extends [never]
+    ? never
+    : RunDispositionSchema<AgentValue>["Type"];
+
   /** Effect AI tool map carried by a definition or binding. */
   export type Tools<AgentValue extends AnyDefinition | Any> = Toolkit.Tools<
     DefinitionOf<AgentValue>["toolkit"]
@@ -130,7 +173,9 @@ export namespace Agent {
     | Tool.HandlerServices<Tools<DefinitionValue>[keyof Tools<DefinitionValue>]>
     | DefinitionValue["input"]["DecodingServices"]
     | DefinitionValue["input"]["EncodingServices"]
-    | DefinitionValue["output"]["DecodingServices"];
+    | DefinitionValue["output"]["DecodingServices"]
+    | RunDispositionSchemaOf<DefinitionValue>["DecodingServices"]
+    | RunDispositionSchemaOf<DefinitionValue>["EncodingServices"];
 
   /** All services required by a runnable binding, including its Model Layer requirements. */
   export type Requirements<AgentValue extends Any> =
@@ -143,10 +188,35 @@ export namespace Agent {
     | Tool.HandlerError<Tools<AgentValue>[keyof Tools<AgentValue>]>
     | AiError.AiError
     | AgentInputError
-    | AgentOutputError;
+    | AgentOutputError
+    | AgentRunDispositionError;
 
   /** Validate an agent ID and return a shallowly frozen, model-agnostic definition. */
-  export const define = <
+  export function define<
+    InputSchema extends Schema.Top,
+    OutputSchema extends Schema.Top,
+    Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
+    ToolkitValue extends Toolkit.Any,
+    DispositionSchema extends Schema.Top,
+  >(
+    id: string,
+    options: DefinitionOptions<
+      InputSchema,
+      OutputSchema,
+      Instructions,
+      ToolkitValue,
+      RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
+    > & {
+      readonly runDisposition: RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>;
+    },
+  ): Definition<
+    InputSchema,
+    OutputSchema,
+    Instructions,
+    ToolkitValue,
+    RunDispositionDeclaration<OutputSchema["Type"], DispositionSchema>
+  >;
+  export function define<
     InputSchema extends Schema.Top,
     OutputSchema extends Schema.Top,
     Instructions extends InstructionSource<InputSchema["Type"], unknown, unknown>,
@@ -154,12 +224,30 @@ export namespace Agent {
   >(
     id: string,
     options: DefinitionOptions<InputSchema, OutputSchema, Instructions, ToolkitValue>,
-  ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue> =>
-    Object.freeze({
+  ): Definition<InputSchema, OutputSchema, Instructions, ToolkitValue>;
+  export function define(
+    id: string,
+    options: {
+      readonly input: Schema.Top;
+      readonly output: Schema.Top;
+      readonly instructions: unknown;
+      readonly toolkit: Toolkit.Any;
+      readonly policy: AgentPolicy;
+      readonly runDisposition?: RunDispositionDeclaration<never, Schema.Top> | undefined;
+      readonly description?: string | undefined;
+      readonly metadata?: Readonly<Record<string, string>> | undefined;
+    },
+  ): AnyDefinition {
+    return Object.freeze({
       ...options,
       id: S.decodeSync(AgentId)(id),
       metadata: options.metadata === undefined ? undefined : Object.freeze({ ...options.metadata }),
+      runDisposition:
+        options.runDisposition === undefined
+          ? undefined
+          : Object.freeze({ ...options.runDisposition }),
     });
+  }
 
   /** Bind a definition to a Model without acquiring or hiding the Model Layer's requirements. */
   export const withModel = <DefinitionValue extends AnyDefinition, ModelValue>(

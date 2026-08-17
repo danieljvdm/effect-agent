@@ -357,6 +357,14 @@ Terminal events are exactly one of:
 - `RunInterrupted`;
 - `RunSuspended`.
 
+An Agent Definition may declare an application run-disposition Schema plus a pure selector from
+decoded output. At an ordinary completion seam the engine selects, Schema-encodes, and JSON-checks
+that value before adding it to `RunCompleted.runDisposition`; `undefined` means absent. Invalid
+selection fails typed with `AgentRunDispositionError`. A final-answer budget completion never
+evaluates or carries the selector result. Reducers fail closed if a budget-completed event carries
+a disposition or if an event carries one without a Definition-owned Schema. No runtime path parses
+output prose or infers disposition from Tool events.
+
 Raw provider chunks are never mixed into the stable event union.
 
 `RunFailed` covers expected failures. The engine keeps defects as defects: a defect fails the
@@ -557,3 +565,8 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   derivation, applied after context preparation and never entered into official history; a
   Definition whose output Schema cannot be derived runs with the documented fallback and a
   diagnostic, never a silent difference.
+- **RUN-029:** An Agent Definition may declare an application-owned run-disposition Schema and
+  decoded-output selector. Only an ordinary completed Run may Schema-validate, emit, and durably
+  persist the selected value. Failed, interrupted, aborted, incomplete, run-less, and
+  budget-exhausted Runs carry none; invalid values fail typed, and consumers never infer a
+  disposition from prose or Tool output.
