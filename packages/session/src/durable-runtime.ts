@@ -290,9 +290,11 @@ type InstructionRequirementsOf<Instructions, Input> =
     : never;
 
 const decodeBatchId = Schema.decodeSync(BatchId);
+const decodeCanonicalSequence = Schema.decodeSync(CanonicalSequence);
 const decodeRecordId = Schema.decodeSync(RecordId);
 const decodeToolCallIdUnknown = Schema.decodeUnknownEffect(ToolCallId);
 const ZERO_EPOCH = Schema.decodeSync(ProducerEpoch)(0);
+const ZERO_SEQUENCE = decodeCanonicalSequence(0);
 const READ_PAGE = 1_024;
 /** Stale-tail append retries per batch before the conflict propagates (see `appendBatch`). */
 const MAX_APPEND_FENCE_REFRESHES = 8;
@@ -895,6 +897,111 @@ const make = Effect.gen(function* () {
         ),
       ),
   );
+
+  interface RecoveryHistorySnapshot {
+    readonly records: ReadonlyArray<CanonicalRecordEnvelope>;
+    readonly materialized: boolean;
+  }
+
+  /**
+   * Read one exact canonical prefix. The authoritative tail captured by the caller bounds both
+   * work and visibility: appends racing the read receive higher sequences and are deliberately
+   * left for a later snapshot, while a short page or sequence gap fails typed before recovery
+   * mutates anything. At most `ceil((through - after) / READ_PAGE)` store pages are requested.
+   */
+  const readCanonicalRange = Effect.fn("DurableAgentRuntime.readCanonicalRange")(function* (
+    conversationId: ConversationId,
+    afterSequence: CanonicalSequence,
+    throughSequence: CanonicalSequence,
+  ): Effect.fn.Return<
+    Array<CanonicalRecordEnvelope>,
+    ConversationStoreError | ConversationNotMaterialized
+  > {
+    const collected: Array<CanonicalRecordEnvelope> = [];
+    let after = afterSequence;
+    let expected = afterSequence + 1;
+    while (expected <= throughSequence) {
+      const limit = Math.min(READ_PAGE, throughSequence - expected + 1);
+      const request = ConversationRead.make({
+        conversationId,
+        limit,
+        ...(after === 0 ? {} : { afterSequence: after }),
+      });
+      const page: Array<CanonicalRecordEnvelope> = yield* Stream.runCollect(store.read(request));
+      if (page.length !== limit) {
+        return yield* ConversationStoreError.make({
+          operation: "read recovery history",
+          message: `Canonical history for ${conversationId} ended at ${after}; expected ${limit} records through sequence ${throughSequence}, received ${page.length}`,
+        });
+      }
+      for (const envelope of page) {
+        if (envelope.sequence !== expected) {
+          return yield* ConversationStoreError.make({
+            operation: "read recovery history",
+            message: `Canonical history for ${conversationId} is not contiguous: expected sequence ${expected}, received ${envelope.sequence}`,
+          });
+        }
+        expected += 1;
+        after = envelope.sequence;
+        collected.push(envelope);
+      }
+    }
+    return collected;
+  });
+
+  /**
+   * Capture one strongly-consistent pass-start tail and read exactly that prefix. This snapshot
+   * is disposable: `runRecovery` retains it only while processing the scan's contiguous group
+   * for this Conversation, so resident canonical history is bounded to one Conversation prefix
+   * and never survives the pass or an interruption/restart.
+   */
+  const readRecoveryHistory = Effect.fn("DurableAgentRuntime.readRecoveryHistory")(function* (
+    conversationId: ConversationId,
+  ): Effect.fn.Return<RecoveryHistorySnapshot, ConversationStoreError> {
+    const tail = yield* store.inspectTail(ConversationTailRequest.make({ conversationId })).pipe(
+      Effect.map(Option.some),
+      Effect.catchTag("ConversationNotMaterialized", () => Effect.succeed(Option.none())),
+    );
+    if (Option.isNone(tail)) return { records: [], materialized: false };
+    const records = yield* readCanonicalRange(
+      conversationId,
+      ZERO_SEQUENCE,
+      tail.value.tailSequence,
+    ).pipe(
+      Effect.catchTag("ConversationNotMaterialized", (error) =>
+        ConversationStoreError.make({
+          operation: "read recovery history",
+          message: `Conversation ${conversationId} disappeared after its recovery tail was captured`,
+          cause: error,
+        }),
+      ),
+    );
+    return { records, materialized: true };
+  });
+
+  /**
+   * A recovery mutation that must distinguish a racing canonical append reads only the suffix
+   * beyond its pass snapshot. The append-only prefix remains valid; no full-history retry is
+   * needed, and malformed suffix pagination fails through the same typed boundary.
+   */
+  const refreshRecoveryHistory = Effect.fn("DurableAgentRuntime.refreshRecoveryHistory")(function* (
+    conversationId: ConversationId,
+    records: ReadonlyArray<CanonicalRecordEnvelope>,
+  ): Effect.fn.Return<ReadonlyArray<CanonicalRecordEnvelope>, DurableWorkerFailure> {
+    const after = records.at(-1)?.sequence ?? ZERO_SEQUENCE;
+    const tail = yield* store.inspectTail(ConversationTailRequest.make({ conversationId }));
+    if (tail.tailSequence <= after) return records;
+    const suffix = yield* readCanonicalRange(conversationId, after, tail.tailSequence).pipe(
+      Effect.catchTag("ConversationNotMaterialized", (error) =>
+        ConversationStoreError.make({
+          operation: "read recovery history",
+          message: `Conversation ${conversationId} disappeared after its recovery suffix tail was captured`,
+          cause: error,
+        }),
+      ),
+    );
+    return [...records, ...suffix];
+  });
 
   const knownRecordIdsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Set<string> =>
     new Set(records.map((envelope) => envelope.record.recordId));
@@ -5489,7 +5596,7 @@ const make = Effect.gen(function* () {
           );
           const ctx = yield* attemptContextFor(submission.conversationId, claim.producerEpoch);
           const tokenRef = yield* Ref.make(claim.ownershipToken);
-          const currentRecords = yield* readAll(submission.conversationId);
+          const currentRecords = yield* refreshRecoveryHistory(submission.conversationId, records);
           yield* applyCanonicalInput(
             ctx,
             submission,
@@ -5812,19 +5919,24 @@ const make = Effect.gen(function* () {
 
   const recoverSubmission = Effect.fn("DurableAgentRuntime.recoverSubmission")(function* (
     submission: SubmissionSnapshot,
+    history: RecoveryHistorySnapshot,
   ): Effect.fn.Return<RecoveryReport, DurableWorkerFailure> {
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
     );
-    const read = yield* readAllTolerant(submission.conversationId);
     const evidence = yield* evidenceFor(
-      read.records,
+      history.records,
       submission.submissionId,
-      read.materialized,
+      history.materialized,
       snapshot.hostSubmissionId,
     );
     const decision = classifyRecovery(snapshot, evidence);
-    const disposition = yield* executeRecoveryDecision(snapshot, evidence, decision, read.records);
+    const disposition = yield* executeRecoveryDecision(
+      snapshot,
+      evidence,
+      decision,
+      history.records,
+    );
     if (disposition === "repaired") {
       yield* annotateRepair(submission.conversationId, submission.submissionId, decision);
     }
@@ -5840,8 +5952,24 @@ const make = Effect.gen(function* () {
     function* (): Effect.fn.Return<ReadonlyArray<RecoveryReport>, DurableWorkerFailure> {
       const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
       const reports: Array<RecoveryReport> = [];
-      for (const submission of nonterminal) {
-        reports.push(yield* recoverSubmission(submission));
+      // SubmissionLedger guarantees `(conversationId, queueSequence)` order. Capture and retain
+      // one verified canonical prefix only for the current contiguous Conversation group: read
+      // work is one tail inspection plus `ceil(passStartTail / READ_PAGE)` pages per Conversation
+      // rather than multiplied by its nonterminal Submission count, and the prefix becomes
+      // unreachable before the next Conversation is read.
+      let index = 0;
+      while (index < nonterminal.length) {
+        const first = nonterminal[index];
+        if (first === undefined) break;
+        const history = yield* readRecoveryHistory(first.conversationId);
+        while (index < nonterminal.length) {
+          const submission = nonterminal[index];
+          if (submission === undefined || submission.conversationId !== first.conversationId) {
+            break;
+          }
+          reports.push(yield* recoverSubmission(submission, history));
+          index += 1;
+        }
       }
       return reports;
     },

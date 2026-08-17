@@ -149,6 +149,13 @@ its alarm; a forced caught-up alarm performs no SQLite, ledger, recovery, or can
 work; mutations racing acknowledgement and mutations held after pre-arm remain dirty; and a child
 evicted after settlement finalization has already committed its parent marker/generation.
 
+The exported durable runtime/store seam carries the active-pass regression from
+[issue #96](https://github.com/danieljvdm/effect-agent/issues/96): multiple nonterminal
+Submissions sharing one multi-page Conversation history receive mixed deterministic recovery
+decisions while the pass issues exactly the captured prefix's page count once, rather than once
+per Submission. The fixture uses the real reference `ConversationStore` and `SubmissionLedger`
+Layers, not the pure classifier or a fabricated recovery snapshot.
+
 The crash-point table in [durability.md](./durability.md) is a minimum coverage
 matrix and should be machine-linked to test names.
 

@@ -201,6 +201,14 @@ Reads that drive recovery must be strongly consistent with prior successful writ
 Eventually consistent replicas may serve UI/history views if their staleness is
 visible.
 
+Recovery-pass history reads first capture the strongly consistent tail and then request the exact
+bounded prefix through that sequence: one tail inspection plus `ceil(T / 1024)` page requests.
+Pagination is fail-closed: a short page or non-contiguous sequence is corruption, not
+end-of-history. The runtime shares that verified prefix across the Conversation's nonterminal
+recovery classifications, retains an `O(T)` working set for only one Conversation prefix at a
+time, and discards it after the group; concurrent append-only suffixes remain canonical and are
+read at an exact mutation seam or by the next pass.
+
 ## 8. Checkpoints
 
 A checkpoint contains a versioned encoded interpreter snapshot plus:
@@ -366,3 +374,6 @@ authoritative read.
   service contracts and conformance suite.
 - **STORE-014**: Public progress waits close subscribe/check and check/park races without making
   in-memory notifications authoritative or adding a periodic polling/alarm loop.
+- **STORE-015**: One recovery pass reads each Conversation's captured canonical prefix in bounded
+  pages once, rejects incomplete pagination, and retains no canonical-history cache across
+  Conversation groups or passes.
