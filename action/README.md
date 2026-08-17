@@ -61,12 +61,22 @@ paths changed or reverted since the baseline are reconsidered. A compatible
 ancestor advance of the base includes overlapping PR paths as affected
 context.
 
+Before ancestry-based range selection, the action compares the current
+accepted-scope fingerprint with the authenticated prior state. The fingerprint
+hashes the ignore-filtered file paths, statuses, addition/deletion counts,
+unified-diff content and context (excluding hunk line coordinates), bounded
+patchless base/head evidence, pull-request framing, and reviewer profile. It
+does not hash commit IDs or base ancestry. An equivalent rebase therefore
+creates the new head-bound workflow check but skips model execution and posts
+no duplicate review or findings; the stored blocking/success conclusion is
+preserved. A changed diff, PR framing, model, guidance, bounds, or ignore
+configuration reviews again.
+
 The action visibly falls back to the full current PR diff when state is
 missing or unreadable, PR/base/head/profile identity is incompatible, a prior
 head is no longer an ancestor, a comparison is unavailable or truncated, or
-the base lineage changed materially. `skip-unchanged: "true"` (the default)
-avoids model execution when the same head was already covered, but preserves
-the stored blocking or successful conclusion.
+the base lineage changed materially and the accepted-scope fingerprint does
+not match. `skip-unchanged: "true"` is the default.
 Only terminal markers authored by the configured `review-author` identity,
 authenticated with the same stable `state-secret`, and pinned to the review's
 commit may narrow scope. The author defaults to `github-actions[bot]`; when
@@ -77,6 +87,16 @@ do not expose it to the model or derive it from pull-request content.
 The authenticated marker itself is capped at 24,000 characters. Signing or
 size failures omit state, render a bounded warning, and force the next run to
 review fully instead of posting continuity data that cannot be recovered.
+
+The workflow needs `contents: read` for bounded base/head file fallback (and a
+checked-out guidance file), plus `pull-requests: write` to read/post reviews
+and maintain progress comments.
+GitHub attaches the workflow job's check to each new head SHA; the action does
+not need `checks: write` for that lightweight check. Fingerprint equivalence is
+textual, not semantic: if a base change alters runtime meaning without changing
+the effective diff/context, the cache cannot detect that. Use
+`review-mode: final` (or disable `skip-unchanged`) when such a base change needs
+a deliberate fresh audit.
 
 After a new state-bearing review posts, `retire-stale-reviews: "true"` (the
 default) turns earlier marker-bearing bot reviews into collapsed, superseded

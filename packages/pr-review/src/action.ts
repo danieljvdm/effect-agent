@@ -28,6 +28,7 @@ import {
   selectReviewRange,
   selectedPullRequestSourceLayer,
   unavailableReviewStateAuthenticatorLayer,
+  validateReviewState,
   webCryptoReviewStateAuthenticatorLayer,
 } from "./internal/review-state.ts";
 import { fanOutReviewBudgetLimits, reviewBudgetLimits } from "./internal/run.ts";
@@ -391,6 +392,39 @@ const concludeReviewState = (state: ReviewState) => {
     : ({ conclusion: "success", reasons: [] } as const);
 };
 
+const skipCoveredReview = Effect.fn("skipCoveredReview")(function* (input: {
+  readonly repository: string;
+  readonly pullRequestNumber: number;
+  readonly reason: string;
+  readonly state: ReviewState;
+  readonly fingerprint?: string | undefined;
+}) {
+  const result = concludeReviewState(input.state);
+  yield* Console.log(
+    `Skipping review of ${input.repository}#${input.pullRequestNumber}: ${input.reason}.`,
+  );
+  yield* writeActionOutputs([
+    ["skipped", "true"],
+    ["skip-reason", input.reason],
+    ...(input.fingerprint === undefined ? [] : ([["fingerprint", input.fingerprint]] as const)),
+    ["conclusion", result.conclusion],
+    ["coverage", "complete"],
+    ["review-mode", "incremental"],
+  ]);
+  yield* writeStepSummary([
+    "### Pull-request review skipped",
+    `- Reason: ${input.reason}`,
+    `- Preserved check conclusion: **${result.conclusion}**`,
+  ]);
+  if (result.conclusion === "blocking") {
+    return yield* ReviewGateFailed.make({
+      conclusion: "blocking",
+      reasons: result.reasons,
+    });
+  }
+  return { _tag: "Skipped", reason: input.reason } satisfies ReviewActionResult;
+});
+
 /**
  * Harness one already-built reviewer inside the Actions environment: resolve
  * the target from the event, provide the GitHub source/publisher/prior
@@ -441,9 +475,15 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
       let selection: ReturnType<typeof selectReviewRange> | undefined;
       if (reviewer.profileFingerprint !== undefined) {
         const source = yield* PullRequestSource;
-        const [snapshot, profileFingerprint] = yield* Effect.all([
+        const [snapshot, profileFingerprint, currentFingerprint] = yield* Effect.all([
           reviewer.snapshot ?? Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
           reviewer.profileFingerprint,
+          reviewer.fingerprint === undefined
+            ? Effect.succeed(undefined)
+            : reviewer.fingerprint.pipe(
+                Effect.map((fingerprint): string | undefined => fingerprint),
+                Effect.orElseSucceed(() => undefined),
+              ),
         ]);
         const { metadata, files: fullFiles } = snapshot;
         const history = options.priorReviews ?? (yield* PriorReviews);
@@ -465,6 +505,27 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
                   }),
                 }),
               );
+        const equivalentPatchState =
+          (options.reviewMode ?? "incremental") === "incremental" &&
+          options.skipUnchanged !== false &&
+          recovered.state !== undefined &&
+          currentFingerprint !== undefined &&
+          validateReviewState(recovered.state, metadata, profileFingerprint) === undefined &&
+          recovered.state.acceptedScopeFingerprint === currentFingerprint
+            ? recovered.state
+            : undefined;
+        if (equivalentPatchState !== undefined) {
+          return yield* skipCoveredReview({
+            repository: target.repository,
+            pullRequestNumber: target.number,
+            reason:
+              equivalentPatchState.reviewedHeadSha === metadata.headSha
+                ? "the current head already has complete stored review coverage"
+                : "the effective pull-request patch is unchanged since the last complete review",
+            state: equivalentPatchState,
+            fingerprint: currentFingerprint,
+          });
+        }
         let comparison: ReviewHeadComparison | undefined;
         let baseComparison: ReviewHeadComparison | undefined;
         if (
@@ -522,30 +583,13 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
           selection.files.length === 0 &&
           selection.priorState !== undefined
         ) {
-          const result = concludeReviewState(selection.priorState);
           const reason = "no changed review scope since the last successfully reviewed head";
-          yield* Console.log(
-            `Skipping review of ${target.repository}#${target.number}: ${reason}.`,
-          );
-          yield* writeActionOutputs([
-            ["skipped", "true"],
-            ["skip-reason", reason],
-            ["conclusion", result.conclusion],
-            ["coverage", "complete"],
-            ["review-mode", "incremental"],
-          ]);
-          yield* writeStepSummary([
-            "### Pull-request review skipped",
-            `- Reason: ${reason}`,
-            `- Preserved check conclusion: **${result.conclusion}**`,
-          ]);
-          if (result.conclusion === "blocking") {
-            return yield* ReviewGateFailed.make({
-              conclusion: "blocking",
-              reasons: result.reasons,
-            });
-          }
-          return { _tag: "Skipped", reason } satisfies ReviewActionResult;
+          return yield* skipCoveredReview({
+            repository: target.repository,
+            pullRequestNumber: target.number,
+            reason,
+            state: selection.priorState,
+          });
         }
       } else if (options.skipUnchanged !== false && reviewer.fingerprint !== undefined) {
         // Preserve the pre-state custom harness contract explicitly. The
