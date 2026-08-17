@@ -1,19 +1,19 @@
 import {
   AdmissionIndeterminate,
-  AppendConflict,
   ChildAttachmentSnapshot,
   ConversationMaterialization,
-  ConversationNotMaterialized,
   ConversationStore,
   ConversationStoreError,
-  FenceRejected,
-  JoinedToHost,
   LedgerError,
   RecoverySnapshot,
-  SettlementConflict,
   SubmissionLedger,
   SubmissionLookupById,
   type AdmissionConflict,
+  type AppendConflict,
+  type ConversationNotMaterialized,
+  type FenceRejected,
+  type JoinedToHost,
+  type SettlementConflict,
   type SubmissionLookupByKey,
   type SubmissionSnapshot,
 } from "@effect-agent/session";
@@ -35,6 +35,9 @@ import {
   LedgerRecordChildSettledResult,
   LedgerResumeSuspensionCall,
   LedgerResumeSuspensionResult,
+  LedgerScanConversationNonterminalPageCall,
+  LedgerScanConversationNonterminalPageResult,
+  LEDGER_SCAN_PAGE_SIZE,
   LedgerRequestAbortCall,
   LedgerRequestAbortResult,
   LedgerResolveAdmissionCall,
@@ -214,7 +217,8 @@ const crossConversationLedgerError = (operation: string, target: string): Ledger
     message:
       `${operation} addressed to foreign Conversation ${target} is not route-capable; the ` +
       "closed cross-Object subset is admit, markReady, lookup, resolveAdmission, " +
-      "requestAbort, recordChildSettled, and resumeSuspension. Every other ledger operation is lane-local by " +
+      "requestAbort, recordChildSettled, resumeSuspension, and scanConversationNonterminal. " +
+      "Every other ledger operation is lane-local by " +
       "construction and must execute inside the owning Conversation's Durable Object.",
   });
 
@@ -726,6 +730,33 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
     // The local scan IS the whole worklist: one Conversation per Object (durability §5).
     scanNonterminal: local.scanNonterminal,
 
+    scanConversationNonterminal: (request) =>
+      request.conversationId === options.localConversationId
+        ? local.scanConversationNonterminal(request)
+        : Stream.paginate(
+            undefined as SubmissionSnapshot["queueSequence"] | undefined,
+            (afterQueueSequence) =>
+              foreignLedgerCall(
+                "ledger scan conversation nonterminal",
+                request.conversationId,
+                LedgerScanConversationNonterminalPageCall.make({
+                  request,
+                  ...(afterQueueSequence === undefined ? {} : { afterQueueSequence }),
+                }),
+                "LedgerScanConversationNonterminalPageResult",
+                noExtraFailure,
+              ).pipe(
+                Effect.map((reply) => {
+                  const last = reply.submissions[reply.submissions.length - 1];
+                  const next: Option.Option<SubmissionSnapshot["queueSequence"] | undefined> =
+                    last === undefined || reply.submissions.length < LEDGER_SCAN_PAGE_SIZE
+                      ? Option.none()
+                      : Option.some(last.queueSequence);
+                  return [reply.submissions, next] as const;
+                }),
+              ),
+          ),
+
     loadRecoverySnapshot: (request) =>
       submissionTarget("ledger load recovery snapshot", request.submissionId).pipe(
         Effect.flatMap((target) =>
@@ -1012,6 +1043,26 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
         ledger
           .resumeSuspension(request.request)
           .pipe(Effect.map((outcome) => LedgerResumeSuspensionResult.make({ outcome }))),
+      );
+    }
+    case "LedgerScanConversationNonterminalPage": {
+      const ledger = yield* SubmissionLedger;
+      const stream = ledger.scanConversationNonterminal(request.request);
+      const afterQueueSequence = request.afterQueueSequence;
+      const page =
+        afterQueueSequence === undefined
+          ? stream
+          : stream.pipe(
+              Stream.dropWhile((submission) => submission.queueSequence <= afterQueueSequence),
+            );
+      return yield* capture(
+        page.pipe(
+          Stream.take(LEDGER_SCAN_PAGE_SIZE),
+          Stream.runCollect,
+          Effect.map((submissions) =>
+            LedgerScanConversationNonterminalPageResult.make({ submissions: [...submissions] }),
+          ),
+        ),
       );
     }
     case "StoreMaterialize": {

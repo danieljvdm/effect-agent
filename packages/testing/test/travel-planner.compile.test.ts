@@ -7,6 +7,7 @@ import {
   AgentPolicyError,
   ContextOverflowError,
   IdGenerator,
+  IdGenerationError,
   ModelProtocolError,
 } from "@effect-agent/core";
 import {
@@ -64,6 +65,7 @@ type ExpectedFailure =
   | AgentOutputError
   | AgentPolicyError
   | ContextOverflowError
+  | IdGenerationError
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentApprovalPending

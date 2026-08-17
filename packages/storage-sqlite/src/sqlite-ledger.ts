@@ -46,6 +46,7 @@ import {
   RecordEnvelope,
   RecoverySnapshot,
   RecoverySnapshotRequest,
+  ScanConversationNonterminalRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
   ResumeSuspensionRequest,
@@ -591,52 +592,166 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     return decoded.length === 0 ? Option.none() : Option.some(decoded[0]);
   });
 
+  const validateStoredReservationSelfIntegrity = Effect.fn(
+    "SqliteSubmissionLedger.validateStoredReservationSelfIntegrity",
+  )(function* (operation: string, submission: SubmissionRow, row: ReservationRow) {
+    const rowFailure = (message: string) =>
+      corruptionFailure(
+        operation,
+        "effect_agent_settlement_reservations",
+        submission.submission_id,
+        message,
+      );
+    const record = yield* decodeRecordEnvelopeText(row.record_json).pipe(
+      Effect.mapError((error) => rowFailure(error.message)),
+    );
+    yield* decodeUtcInstant(row.reserved_at).pipe(
+      Effect.mapError((error) => rowFailure(error.message)),
+    );
+    if (row.finalized_at !== null) {
+      yield* decodeUtcInstant(row.finalized_at).pipe(
+        Effect.mapError((error) => rowFailure(error.message)),
+      );
+    }
+    const submissionId = yield* decodeSubmissionId(submission.submission_id).pipe(
+      Effect.mapError((error) => rowFailure(error.message)),
+    );
+    const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
+      Effect.mapError((error) => rowFailure(error.message)),
+    );
+    const canonical = yield* validateCanonicalSettlementRepair(
+      CanonicalSettlementRepair.make({
+        submissionId,
+        record,
+        recordDigest: row.record_digest,
+      }),
+      receiptId,
+    ).pipe(
+      Effect.provideService(Crypto.Crypto, crypto),
+      Effect.mapError((error) => rowFailure(error.message)),
+    );
+    if (
+      row.submission_id !== canonical.submissionId ||
+      row.settlement_id !== canonical.settlementId ||
+      row.outcome !== canonical.outcome ||
+      row.record_id !== canonical.record.recordId
+    ) {
+      return yield* rowFailure(
+        "Settlement reservation columns disagree with the exact canonical record.",
+      );
+    }
+    return canonical;
+  });
+
   const validateStoredReservation = Effect.fn("SqliteSubmissionLedger.validateStoredReservation")(
     function* (operation: string, submission: SubmissionRow, row: ReservationRow) {
-      const rowFailure = (message: string) =>
-        corruptionFailure(
-          operation,
-          "effect_agent_settlement_reservations",
-          submission.submission_id,
-          message,
-        );
-      const record = yield* decodeRecordEnvelopeText(row.record_json).pipe(
-        Effect.mapError((error) => rowFailure(error.message)),
-      );
-      const submissionId = yield* decodeSubmissionId(submission.submission_id).pipe(
-        Effect.mapError((error) => rowFailure(error.message)),
-      );
-      const receiptId = yield* decodeReceiptId(submission.receipt_id).pipe(
-        Effect.mapError((error) => rowFailure(error.message)),
-      );
-      const canonical = yield* validateCanonicalSettlementRepair(
-        CanonicalSettlementRepair.make({
-          submissionId,
-          record,
-          recordDigest: row.record_digest,
-        }),
-        receiptId,
-      ).pipe(
-        Effect.provideService(Crypto.Crypto, crypto),
-        Effect.mapError((error) => rowFailure(error.message)),
-      );
+      const canonical = yield* validateStoredReservationSelfIntegrity(operation, submission, row);
       if (
-        row.submission_id !== canonical.submissionId ||
-        row.settlement_id !== canonical.settlementId ||
-        row.outcome !== canonical.outcome ||
-        row.record_id !== canonical.record.recordId ||
         (submission.state === "settled") !== (row.finalized_at !== null) ||
         (submission.state === "settled"
           ? submission.settled_outcome !== canonical.outcome
           : submission.settled_outcome !== null)
       ) {
-        return yield* rowFailure(
-          "Settlement reservation columns disagree with the exact canonical record.",
+        return yield* corruptionFailure(
+          operation,
+          "effect_agent_settlement_reservations",
+          submission.submission_id,
+          "Settlement reservation columns disagree with the Submission lifecycle projection.",
         );
       }
       return canonical;
     },
   );
+
+  /** Recovery preserves repairability while classifying reservation self-integrity explicitly. */
+  const readRecoveryReservation = Effect.fn("SqliteSubmissionLedger.readRecoveryReservation")(
+    function* (operation: string, submission: SubmissionRow) {
+      const rows = yield* sql<Record<string, unknown>>`
+      SELECT
+        submission_id,
+        settlement_id,
+        outcome,
+        record_id,
+        record_json,
+        record_digest,
+        reserved_at,
+        finalized_at
+      FROM effect_agent_settlement_reservations
+      WHERE submission_id = ${submission.submission_id}
+    `.pipe(Effect.mapError(sqlFailure(operation)));
+      if (rows.length === 0) {
+        return { reservationIntegrity: "absent" as const };
+      }
+      const decoded = yield* decodeRows(
+        Schema.Array(ReservationRow),
+        "effect_agent_settlement_reservations",
+        submission.submission_id,
+        rows,
+      ).pipe(Effect.option);
+      if (Option.isNone(decoded) || decoded.value.length !== 1) {
+        return { reservationIntegrity: "invalid" as const };
+      }
+      const row = decoded.value[0];
+      const canonical = yield* validateStoredReservationSelfIntegrity(
+        operation,
+        submission,
+        row,
+      ).pipe(Effect.option);
+      if (Option.isNone(canonical)) {
+        return { reservationIntegrity: "invalid" as const };
+      }
+      return {
+        reservationIntegrity: "verified" as const,
+        reservation: SettlementReservationSnapshot.make({
+          settlementId: canonical.value.settlementId,
+          outcome: canonical.value.outcome,
+          record: canonical.value.record,
+          recordDigest: canonical.value.recordDigest,
+          finalized: row.finalized_at !== null,
+        }),
+      };
+    },
+  );
+
+  /** Exact local child settlement proof used by suspension coverage checks. */
+  const localChildSettlementCovered = Effect.fn(
+    "SqliteSubmissionLedger.localChildSettlementCovered",
+  )(function* (
+    operation: string,
+    childSubmissionId: string,
+  ): Effect.fn.Return<boolean, LedgerError> {
+    const child = yield* readSubmission(operation, childSubmissionId);
+    if (Option.isNone(child)) return false;
+    if (child.value.state !== "settled" && child.value.state !== "terminalizing") return false;
+    const reservation = yield* readReservation(operation, childSubmissionId);
+    if (Option.isNone(reservation)) {
+      if (child.value.state === "settled") {
+        return yield* corruptionFailure(
+          operation,
+          "effect_agent_settlement_reservations",
+          childSubmissionId,
+          "A settled child Submission has no exact settlement reservation.",
+        );
+      }
+      return false;
+    }
+    yield* validateStoredReservation(operation, child.value, reservation.value);
+    return true;
+  });
+
+  /** Repair preflight: invalid local projection evidence is a mutation-free deferral. */
+  const localChildSettlementNotificationCovered = Effect.fn(
+    "SqliteSubmissionLedger.localChildSettlementNotificationCovered",
+  )(function* (operation: string, child: SubmissionRow): Effect.fn.Return<boolean, LedgerError> {
+    if (child.state !== "settled" && child.state !== "terminalizing") return false;
+    const evidence = yield* readRecoveryReservation(operation, child);
+    if (evidence.reservationIntegrity !== "verified" || evidence.reservation === undefined) {
+      return false;
+    }
+    return child.state === "settled"
+      ? evidence.reservation.finalized && child.settled_outcome === evidence.reservation.outcome
+      : !evidence.reservation.finalized && child.settled_outcome === null;
+  });
 
   const validateRequestedSettlement = Effect.fn(
     "SqliteSubmissionLedger.validateRequestedSettlement",
@@ -1679,18 +1794,19 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           const recordJson = yield* encodeRecordEnvelopeText(canonical.record).pipe(
             Effect.mapError(internalFailure(operation)),
           );
-          const existing = yield* readReservation(operation, canonical.submissionId);
+          const existingRows = yield* sql<Record<string, unknown>>`
+            SELECT finalized_at
+            FROM effect_agent_settlement_reservations
+            WHERE submission_id = ${canonical.submissionId}
+          `.pipe(Effect.mapError(sqlFailure(operation)));
           const now = yield* currentInstant;
           let settledAt = now.iso;
-          if (
-            submission.state === "settled" &&
-            Option.isSome(existing) &&
-            existing.value.finalized_at !== null
-          ) {
-            const persistedSettledAt = yield* decodeUtcInstant(existing.value.finalized_at).pipe(
+          const existingFinalizedAt = existingRows[0]?.finalized_at;
+          if (submission.state === "settled" && typeof existingFinalizedAt === "string") {
+            const persistedSettledAt = yield* decodeUtcInstant(existingFinalizedAt).pipe(
               Effect.option,
             );
-            if (Option.isSome(persistedSettledAt)) settledAt = existing.value.finalized_at;
+            if (Option.isSome(persistedSettledAt)) settledAt = existingFinalizedAt;
           }
           yield* sql`
             INSERT INTO effect_agent_settlement_reservations (
@@ -1718,6 +1834,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
               record_id = excluded.record_id,
               record_json = excluded.record_json,
               record_digest = excluded.record_digest,
+              reserved_at = excluded.reserved_at,
               finalized_at = excluded.finalized_at
           `.pipe(Effect.mapError(sqlFailure(operation)));
           yield* sql`
@@ -2045,8 +2162,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         } else {
           let allSettled = true;
           for (const child of validated.reason.children) {
-            const childRow = yield* readSubmission(operation, child.childSubmissionId);
-            if (Option.isNone(childRow) || childRow.value.state !== "settled") {
+            if (!(yield* localChildSettlementCovered(operation, child.childSubmissionId))) {
               allSettled = false;
               break;
             }
@@ -2119,13 +2235,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
           }
         } else {
           for (const child of validated.expectedReason.children) {
-            const childRow = yield* readSubmission(operation, child.childSubmissionId);
-            const childReservation = yield* readReservation(operation, child.childSubmissionId);
-            const covered =
-              Option.isSome(childRow) &&
-              (childRow.value.state === "settled" ||
-                (childRow.value.state === "terminalizing" && Option.isSome(childReservation)));
-            if (!covered) {
+            if (!(yield* localChildSettlementCovered(operation, child.childSubmissionId))) {
               return "not-covered" as SuspensionResumeOutcome;
             }
           }
@@ -2402,11 +2512,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             message: `Unknown child submission ${validated.childSubmissionId}.`,
           });
         }
-        const childReservation = yield* readReservation(operation, validated.childSubmissionId);
-        const announced =
-          child.value.state === "settled" ||
-          (child.value.state === "terminalizing" && Option.isSome(childReservation));
-        if (!announced) {
+        if (!(yield* localChildSettlementNotificationCovered(operation, child.value))) {
           return "child-not-terminal" as ChildSettledOutcome;
         }
         if (parent.state !== "suspended" || parent.suspended_reason_json === null) {
@@ -2765,6 +2871,56 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
     scanPage,
   );
 
+  const scanConversationNonterminal: SubmissionLedger["Service"]["scanConversationNonterminal"] = (
+    request,
+  ) =>
+    Stream.unwrap(
+      Schema.decodeUnknownEffect(Schema.toType(ScanConversationNonterminalRequest))(request).pipe(
+        Effect.mapError(internalFailure("ledger scan conversation nonterminal")),
+        Effect.map((validated) =>
+          Stream.paginate(undefined as number | undefined, (cursor) =>
+            Effect.gen(function* () {
+              const operation = "ledger scan conversation nonterminal";
+              const rows = yield* (
+                cursor === undefined
+                  ? sql<Record<string, unknown>>`
+                      SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+                      FROM effect_agent_submissions
+                      WHERE conversation_id = ${validated.conversationId}
+                        AND state <> 'settled'
+                      ORDER BY queue_sequence ASC
+                      LIMIT ${SCAN_PAGE_SIZE}
+                    `
+                  : sql<Record<string, unknown>>`
+                      SELECT ${sql.literal(SUBMISSION_COLUMNS)}
+                      FROM effect_agent_submissions
+                      WHERE conversation_id = ${validated.conversationId}
+                        AND state <> 'settled'
+                        AND queue_sequence > ${cursor}
+                      ORDER BY queue_sequence ASC
+                      LIMIT ${SCAN_PAGE_SIZE}
+                    `
+              ).pipe(Effect.mapError(sqlFailure(operation)));
+              const decoded = yield* decodeSubmissionRows(
+                operation,
+                validated.conversationId,
+                rows,
+              );
+              const snapshots = yield* Effect.forEach(decoded, (row) =>
+                decodeSubmissionSnapshot(operation, row),
+              );
+              const last = decoded[decoded.length - 1];
+              const next: Option.Option<number | undefined> =
+                last === undefined || decoded.length < SCAN_PAGE_SIZE
+                  ? Option.none()
+                  : Option.some(last.queue_sequence);
+              return [snapshots, next] as const;
+            }),
+          ),
+        ),
+      ),
+    );
+
   const loadRecoverySnapshot: SubmissionLedger["Service"]["loadRecoverySnapshot"] = Effect.fn(
     "SqliteSubmissionLedger.loadRecoverySnapshot",
   )(function* (request: RecoverySnapshotRequest) {
@@ -2800,22 +2956,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             }).pipe(Effect.mapError(internalFailure(operation)));
           }
 
-          let reservation: SettlementReservationSnapshot | undefined;
-          const reservationRow = yield* readReservation(operation, validated.submissionId);
-          if (Option.isSome(reservationRow)) {
-            const canonical = yield* validateStoredReservation(
-              operation,
-              submissionRow,
-              reservationRow.value,
-            );
-            reservation = SettlementReservationSnapshot.make({
-              settlementId: canonical.settlementId,
-              outcome: canonical.outcome,
-              record: canonical.record,
-              recordDigest: canonical.recordDigest,
-              finalized: reservationRow.value.finalized_at !== null,
-            });
-          }
+          const recoveryReservation = yield* readRecoveryReservation(operation, submissionRow);
 
           let abortIntent: AbortIntent | undefined;
           const abortRow = yield* readAbortIntent(operation, validated.submissionId);
@@ -2940,6 +3081,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
 
           return RecoverySnapshot.make({
             submission,
+            ...recoveryReservation,
             joins,
             approvalDecisions,
             unknownResolutions,
@@ -2950,7 +3092,6 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
             ...(suspension === undefined ? {} : { suspension }),
             ...(ownership === undefined ? {} : { ownership }),
             ...(inputApplied === undefined ? {} : { inputApplied }),
-            ...(reservation === undefined ? {} : { reservation }),
             ...(abortIntent === undefined ? {} : { abortIntent }),
           });
         }),
@@ -2988,6 +3129,7 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       beginChildBudgetRelease,
       releaseChildBudget,
       scanNonterminal,
+      scanConversationNonterminal,
       loadRecoverySnapshot,
     }),
   );

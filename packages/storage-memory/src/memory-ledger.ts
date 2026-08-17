@@ -2,7 +2,7 @@ import {
   AttemptId,
   ReceiptId,
   SubmissionId,
-  ToolCallId,
+  type ToolCallId,
   type AgentId,
   type ConversationId,
   type SettlementId,
@@ -44,11 +44,12 @@ import {
   OwnershipRenewal,
   OwnershipSnapshot,
   OwnershipToken,
-  ParentLinkage,
+  type ParentLinkage,
   ProducerEpoch,
   QueueSequence,
   RecoverySnapshot,
   RecoverySnapshotRequest,
+  ScanConversationNonterminalRequest,
   ResumeSuspensionRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
@@ -239,6 +240,24 @@ type Decision<A, E> =
 
 const failure = <E>(error: E): Decision<never, E> => ({ _tag: "failure", error });
 const success = <A>(value: A): Decision<A, never> => ({ _tag: "success", value });
+
+type ChildSettlementCoverage = "covered" | "not-covered" | "invalid";
+
+/** Exact in-memory child proof; reservations are already canonical-validated on insertion. */
+const childSettlementCoverage = (stored: StoredSubmission | undefined): ChildSettlementCoverage => {
+  if (stored === undefined) return "not-covered";
+  if (stored.row.state === "settled") {
+    return stored.reservation !== undefined &&
+      stored.reservation.finalizedAtMillis !== undefined &&
+      stored.row.settledOutcome === stored.reservation.outcome
+      ? "covered"
+      : "invalid";
+  }
+  if (stored.row.state === "terminalizing") {
+    return stored.reservation === undefined ? "not-covered" : "covered";
+  }
+  return "not-covered";
+};
 
 const ledgerError = (operation: string, message: string, cause?: unknown): LedgerError =>
   cause === undefined
@@ -1435,15 +1454,28 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             // A covering event that raced ahead of the suspend transaction (an approval decision,
             // or a child settlement observed directly from the child's row in this single store)
             // resumes the caller immediately WITHOUT releasing the lane (plan §2.6, spec §12).
-            const alreadyCovered =
-              request.reason._tag === "ApprovalPending"
-                ? request.reason.toolCallIds.every((toolCallId) =>
-                    stored.approvalDecisions.has(toolCallId),
-                  )
-                : request.reason.children.every(
-                    (child) =>
-                      current.submissions.get(child.childSubmissionId)?.row.state === "settled",
-                  );
+            let alreadyCovered: boolean;
+            if (request.reason._tag === "ApprovalPending") {
+              alreadyCovered = request.reason.toolCallIds.every((toolCallId) =>
+                stored.approvalDecisions.has(toolCallId),
+              );
+            } else {
+              const coverage = request.reason.children.map((child) =>
+                childSettlementCoverage(current.submissions.get(child.childSubmissionId)),
+              );
+              if (coverage.includes("invalid")) {
+                return [
+                  failure(
+                    ledgerError(
+                      "suspend",
+                      "A settled child Submission has no exact settlement reservation",
+                    ),
+                  ),
+                  current,
+                ];
+              }
+              alreadyCovered = coverage.every((entry) => entry === "covered");
+            }
             if (alreadyCovered) {
               return [success("resume-immediately" as const), current];
             }
@@ -1505,18 +1537,28 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            const covered =
-              request.expectedReason._tag === "ApprovalPending"
-                ? request.expectedReason.toolCallIds.every((toolCallId) =>
-                    stored.approvalDecisions.has(toolCallId),
-                  )
-                : request.expectedReason.children.every((child) => {
-                    const listed = current.submissions.get(child.childSubmissionId);
-                    return (
-                      listed?.row.state === "settled" ||
-                      (listed?.row.state === "terminalizing" && listed.reservation !== undefined)
-                    );
-                  });
+            let covered: boolean;
+            if (request.expectedReason._tag === "ApprovalPending") {
+              covered = request.expectedReason.toolCallIds.every((toolCallId) =>
+                stored.approvalDecisions.has(toolCallId),
+              );
+            } else {
+              const coverage = request.expectedReason.children.map((child) =>
+                childSettlementCoverage(current.submissions.get(child.childSubmissionId)),
+              );
+              if (coverage.includes("invalid")) {
+                return [
+                  failure(
+                    ledgerError(
+                      "resumeSuspension",
+                      "A settled child Submission has no exact settlement reservation",
+                    ),
+                  ),
+                  current,
+                ];
+              }
+              covered = coverage.every((entry) => entry === "covered");
+            }
             if (!covered) return [success("not-covered" as const), current];
             return [
               success("resumed" as const),
@@ -1856,10 +1898,8 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            const announced =
-              child.row.state === "settled" ||
-              (child.row.state === "terminalizing" && child.reservation !== undefined);
-            if (!announced) {
+            const coverage = childSettlementCoverage(child);
+            if (coverage !== "covered") {
               return [success("child-not-terminal" as const), current];
             }
             if (
@@ -2247,6 +2287,33 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       ),
     );
 
+    const scanConversationNonterminal: SubmissionLedger["Service"]["scanConversationNonterminal"] =
+      (unvalidated) =>
+        Stream.unwrap(
+          validate(
+            ScanConversationNonterminalRequest,
+            "scanConversationNonterminal",
+            unvalidated,
+          ).pipe(
+            Effect.flatMap((request) =>
+              Ref.get(state).pipe(
+                Effect.map((current) =>
+                  Stream.fromIterable(
+                    [...current.submissions.values()]
+                      .filter(
+                        (stored) =>
+                          stored.row.conversationId === request.conversationId &&
+                          stored.row.state !== "settled",
+                      )
+                      .sort((left, right) => left.row.queueSequence - right.row.queueSequence)
+                      .map((stored) => toSnapshot(stored.row)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+
     const loadRecoverySnapshot: SubmissionLedger["Service"]["loadRecoverySnapshot"] = Effect.fn(
       "MemorySubmissionLedger.loadRecoverySnapshot",
     )((unvalidated) =>
@@ -2309,6 +2376,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
         }
         return RecoverySnapshot.make({
           submission: toSnapshot(stored.row),
+          reservationIntegrity: stored.reservation === undefined ? "absent" : "verified",
           joins,
           approvalDecisions: [...stored.approvalDecisions.values()].sort(byToolCallId),
           unknownResolutions: [...stored.unknownResolutions.values()]
@@ -2385,6 +2453,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
       beginChildBudgetRelease,
       releaseChildBudget,
       scanNonterminal,
+      scanConversationNonterminal,
       loadRecoverySnapshot,
     });
   });

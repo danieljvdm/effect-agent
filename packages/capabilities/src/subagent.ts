@@ -5,7 +5,6 @@ import {
   DelegationId,
   delegationToolPrefix,
   IdGenerator,
-  isDelegationToolName,
   RunId,
   SubmissionId,
   ToolCallId,
@@ -30,6 +29,7 @@ import {
   type SubagentEventPayload,
   ToolCallWaiting,
   ToolExecutionKind,
+  getToolExecutionKind,
 } from "@effect-agent/engine";
 import { Clock, Duration, Effect, Layer, Option, Ref, Schema } from "effect";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -161,6 +161,7 @@ export const SubagentExecutionFailureClassification = Schema.Literals([
   "child-compatibility",
   "establishment-denied",
   "declaration-unavailable",
+  "identity-unavailable",
 ]);
 export type SubagentExecutionFailureClassification =
   typeof SubagentExecutionFailureClassification.Type;
@@ -630,8 +631,8 @@ const define: SubagentDefine = <
   Mode
 > => {
   decodeDelegationToolName(name);
-  for (const childToolName of Object.keys(options.target.toolkit.tools)) {
-    if (isDelegationToolName(childToolName)) {
+  for (const [childToolName, childTool] of Object.entries(options.target.toolkit.tools)) {
+    if (getToolExecutionKind(childTool) === "delegation") {
       throw new Error(
         `Subagent.define(${JSON.stringify(name)}): target Agent ${options.target.id} exposes delegation Tool ${childToolName}; S1 rejects every nested delegation (SUB-029)`,
       );
@@ -1314,7 +1315,8 @@ const layer = <
         );
       }
       for (const childToolName of childToolNames) {
-        if (isDelegationToolName(childToolName)) {
+        const childTool = delegation.target.toolkit.tools[childToolName];
+        if (childTool !== undefined && getToolExecutionKind(childTool) === "delegation") {
           return yield* prestartDenied(
             "nested-delegation",
             `Child Toolkit exposes delegation Tool ${childToolName}; S1 rejects every nested delegation`,
@@ -1431,24 +1433,30 @@ const layer = <
       };
 
       yield* Ref.set(startedAt, yield* Clock.currentTimeMillis);
-      const child = yield* spawner.spawn<
-        TargetInput,
-        TargetOutput,
-        TargetInstructions,
-        TargetTools,
-        Provider,
-        ModelProvides,
-        ModelRequires,
-        never,
-        HookRequirements,
-        InstructionError,
-        InstructionRequirements
-      >(
-        childBinding,
-        encodedInput,
-        { delegationId: delegation.delegationId, parentToolCallId: toolCallId },
-        childOptions,
-      );
+      const child = yield* spawner
+        .spawn<
+          TargetInput,
+          TargetOutput,
+          TargetInstructions,
+          TargetTools,
+          Provider,
+          ModelProvides,
+          ModelRequires,
+          never,
+          HookRequirements,
+          InstructionError,
+          InstructionRequirements
+        >(
+          childBinding,
+          encodedInput,
+          { delegationId: delegation.delegationId, parentToolCallId: toolCallId },
+          childOptions,
+        )
+        .pipe(
+          Effect.catchTag("IdGenerationError", (error) =>
+            Effect.fail(executionFailure("identity-unavailable", error._tag, error.message)),
+          ),
+        );
 
       const payload: SubagentEventBasePayload = {
         toolCallId,
@@ -1609,7 +1617,8 @@ const layer = <
         );
       }
       for (const childToolName of childToolNames) {
-        if (isDelegationToolName(childToolName)) {
+        const childTool = delegation.target.toolkit.tools[childToolName];
+        if (childTool !== undefined && getToolExecutionKind(childTool) === "delegation") {
           return yield* prestartDenied(
             "nested-delegation",
             `Child Toolkit exposes delegation Tool ${childToolName}; S2 rejects every nested delegation`,

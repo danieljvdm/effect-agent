@@ -32,6 +32,7 @@ import {
   ParentLinkage,
   Principal,
   RecoverySnapshotRequest,
+  ScanConversationNonterminalRequest,
   ResumeSuspensionRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
@@ -1083,6 +1084,20 @@ const canonicalSettlementRepair = conformanceCase(
       const tamper = yield* admitReady(tamperConversation, "canonical-repair-tamper-key", {
         work: "canonical-repair-tamper",
       });
+      const tamperClaim = yield* expectSome(
+        "the claim before suspending the canonical-repair tamper target",
+        yield* claimLane(tamperConversation, PRODUCER_A),
+      );
+      const tamperReason = ApprovalPendingSuspension.make({
+        toolCallIds: [decodeToolCallId("call-canonical-repair-tamper")],
+      });
+      yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: tamper.submissionId,
+          ownershipToken: tamperClaim.ownershipToken,
+          reason: tamperReason,
+        }),
+      );
       const tamperCanonical = yield* settlementReservation({
         submissionId: tamper.submissionId,
         ownershipToken: BOGUS_TOKEN,
@@ -1122,12 +1137,14 @@ const canonicalSettlementRepair = conformanceCase(
         wrongFamily instanceof LedgerError,
         "A valid digest cannot make a foreign record family canonical settlement authority",
       );
-      const untouched = yield* expectSome(
-        "the tampered repair target remains admitted",
-        yield* lookupById(tamper.submissionId),
-      );
+      const untouched = yield* recoverySnapshot(tamper.submissionId);
       yield* ensure(
-        untouched.state === "ready" && untouched.settledOutcome === undefined,
+        untouched.submission.state === "suspended" &&
+          untouched.submission.settledOutcome === undefined &&
+          untouched.reservation === undefined &&
+          untouched.suspension?.reason._tag === "ApprovalPending" &&
+          untouched.suspension.reason.toolCallIds.length === 1 &&
+          untouched.suspension.reason.toolCallIds[0] === tamperReason.toolCallIds[0],
         "Canonical validation must fail before any ledger mutation",
       );
     }),
@@ -1207,6 +1224,8 @@ const scanNonterminalWorklist = conformanceCase(
       const second = yield* admitReady(laneA, "scan-key-2", { step: 2 });
       const third = yield* admitReady(laneA, "scan-key-3", { step: 3 });
       const settledElsewhere = yield* admitReady(laneB, "scan-key-4", { step: 4 });
+      const unrelatedLane = decodeConversationId("ledger-conformance-scan-unrelated");
+      yield* admitReady(unrelatedLane, "scan-key-unrelated", { step: "unrelated" });
 
       const firstClaim = yield* expectSome(
         "the claim on the first head",
@@ -1242,6 +1261,18 @@ const scanNonterminalWorklist = conformanceCase(
       yield* ensure(
         start >= 0 && scanned.at(start + 1)?.submissionId === third.submissionId,
         "One lane's unsettled Submissions must be contiguous in (conversation, sequence) order",
+      );
+      const scoped = yield* ledger
+        .scanConversationNonterminal(
+          ScanConversationNonterminalRequest.make({ conversationId: laneA }),
+        )
+        .pipe(Stream.runCollect);
+      yield* ensure(
+        scoped.length === 2 &&
+          scoped.at(0)?.submissionId === second.submissionId &&
+          scoped.at(1)?.submissionId === third.submissionId &&
+          scoped.every((snapshot) => snapshot.conversationId === laneA),
+        "scanConversationNonterminal must push down one lane and preserve queue order",
       );
     }),
 );

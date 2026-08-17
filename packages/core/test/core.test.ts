@@ -1,4 +1,4 @@
-import { Crypto, Duration, Effect, Encoding, Layer, Schema } from "effect";
+import { Crypto, Duration, Effect, Encoding, Layer, PlatformError, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -28,6 +28,7 @@ import {
   ConversationId,
   DelegationId,
   IdGenerator,
+  IdGenerationError,
   ModelProtocolError,
   ReceiptId,
   RunCompleted,
@@ -398,6 +399,41 @@ describe("core schemas", () => {
     expect(firstConversation.startsWith("conversation-")).toBe(true);
     expect(run.startsWith("run-")).toBe(true);
     expect(turn.startsWith("turn-")).toBe(true);
+  });
+
+  it("preserves host Crypto UUID failures as typed identity errors", async () => {
+    const crypto = Crypto.make({
+      randomBytes: (size) => new Uint8Array(size),
+      digest: (_algorithm, data) => Effect.succeed(data),
+    });
+    const platformError = PlatformError.systemError({
+      _tag: "Unknown",
+      module: "Crypto",
+      method: "randomUUIDv4",
+      description: "entropy unavailable",
+    });
+    const failingCrypto = {
+      ...crypto,
+      randomUUIDv4: Effect.fail(platformError),
+    };
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const ids = yield* IdGenerator;
+        const error = yield* ids.nextRunId.pipe(Effect.flip);
+
+        expect(error).toBeInstanceOf(IdGenerationError);
+        expect(error).toMatchObject({
+          operation: "randomUUIDv4",
+          reasonTag: "Unknown",
+          message: "Unknown: Crypto.randomUUIDv4: entropy unavailable",
+        });
+        expect(error.cause).toBe(platformError);
+      }).pipe(
+        Effect.provide(
+          IdGenerator.layer.pipe(Layer.provide(Layer.succeed(Crypto.Crypto, failingCrypto))),
+        ),
+      ),
+    );
   });
 });
 

@@ -296,14 +296,14 @@ describe("coordinator instructions", () => {
 });
 
 describe("file-reviewer policy", () => {
-  it("budgets one diff and two context reads for every path in a maximum-size unit", () => {
-    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 3);
+  it("budgets one diff and three context reads for every path in a maximum-size unit", () => {
+    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 4);
     // A provider may issue those valid reads serially, followed by one terminal response.
     expect(MAX_FILE_REVIEW_TURNS).toBe(MAX_FILE_REVIEW_TOOL_CALLS + 1);
     expect(defaultFileReviewerPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
     expect(fileReviewPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
-    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 3);
-    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 3);
+    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 4);
+    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 4);
   });
 
   it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
@@ -982,12 +982,13 @@ describe("offline fan-out review run", () => {
         const finalPrompt = result.coordinatorPrompts[2] ?? "";
         expect(finalPrompt).toContain("FileReviewUnitFailed");
         expect(finalPrompt).toContain("AgentPolicyError");
+        expect(finalPrompt).toContain("tool-calls");
         expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
         expect(result.published).toHaveLength(1);
         expect(result.outcome.coverage.status).toBe("incomplete");
         expect(result.outcome.coverage.failedUnits).toContainEqual({
           unitId: "unit-002",
-          errorTag: "FileReviewUnitFailed:AgentPolicyError",
+          errorTag: "FileReviewUnitFailed:AgentPolicyError:tool-calls",
         });
       }),
   );

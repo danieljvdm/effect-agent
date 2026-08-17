@@ -52,6 +52,7 @@ import {
   type ChildReservationStatus,
   type DelegationAdmissionEvidence,
   type SettlementOutcome,
+  type SettlementReservationIntegrity,
   type SubmissionState,
 } from "../src/index.ts";
 
@@ -257,6 +258,7 @@ interface SnapshotOverrides {
   readonly ownership?: OwnershipSnapshot;
   readonly inputApplied?: InputAppliedMarker;
   readonly reservation?: SettlementReservationSnapshot;
+  readonly reservationIntegrity?: SettlementReservationIntegrity;
   readonly abortIntent?: AbortIntent;
   readonly hostSubmissionId?: SubmissionId;
   readonly suspension?: SuspensionSnapshot;
@@ -276,6 +278,9 @@ const snapshot = (state: SubmissionState, overrides: SnapshotOverrides = {}): Re
     unknownResolutions: overrides.unknownResolutions ?? [],
     childReservations: overrides.childReservations ?? [],
     childAttachments: overrides.childAttachments ?? [],
+    reservationIntegrity:
+      overrides.reservationIntegrity ??
+      (overrides.reservation === undefined ? "absent" : "verified"),
     ...(overrides.ownership === undefined ? {} : { ownership: overrides.ownership }),
     ...(overrides.inputApplied === undefined ? {} : { inputApplied: overrides.inputApplied }),
     ...(overrides.reservation === undefined ? {} : { reservation: overrides.reservation }),
@@ -546,6 +551,45 @@ describe("recovery classifier crash matrix", () => {
       evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
     );
     expect(divergentStoredRecord._tag).toBe("FinalizeLedgerFromHistory");
+  });
+
+  it("canonical settlement repairs a reservation projection marked self-invalid", () => {
+    const decision = classifyRecovery(
+      snapshot("running", {
+        ownership,
+        reservationIntegrity: "invalid",
+      }),
+      evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
+    );
+    expect(decision._tag).toBe("FinalizeLedgerFromHistory");
+  });
+
+  it("quarantines a self-invalid reservation when canonical settlement authority is absent", () => {
+    const decision = classifyRecovery(
+      snapshot("terminalizing", {
+        reservation: reservation("completed", false),
+        reservationIntegrity: "invalid",
+      }),
+      evidence({ inputRecorded: true }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSettlement");
+  });
+
+  it("quarantines inconsistent reservation presence and integrity classification", () => {
+    const missingVerified = classifyRecovery(
+      snapshot("terminalizing", { reservationIntegrity: "verified" }),
+      evidence({ inputRecorded: true }),
+    );
+    expect(missingVerified._tag).toBe("QuarantineInvalidSettlement");
+
+    const presentAbsent = classifyRecovery(
+      snapshot("terminalizing", {
+        reservation: reservation("completed", false),
+        reservationIntegrity: "absent",
+      }),
+      evidence({ inputRecorded: true }),
+    );
+    expect(presentAbsent._tag).toBe("QuarantineInvalidSettlement");
   });
 });
 

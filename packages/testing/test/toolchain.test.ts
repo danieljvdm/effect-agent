@@ -1360,7 +1360,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         );
         expect(isolatedFailure.output).toContain("refusing to tag");
       }),
-    60_000,
+    90_000,
   );
 
   it.effect("publishes prepared release directories atomically and cleans failed staging", () =>

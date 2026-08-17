@@ -1,12 +1,17 @@
 import {
   CanonicalSettlementRepair,
+  ChildSettledNotification,
   ClaimRequest,
   LedgerError,
   MarkReadyRequest,
   RecoverySnapshotRequest,
+  ResumeSuspensionRequest,
   SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupByKey,
+  SuspendRequest,
+  WaitingChild,
+  WaitingForChildSuspension,
   submissionLedgerConformanceCases,
   IdempotencyKey,
 } from "@effect-agent/session";
@@ -36,6 +41,7 @@ import {
   settlementReservation,
   TEST_PRINCIPAL,
   TEST_PRODUCER,
+  toolCall,
   withConversationStorage,
 } from "./harness.ts";
 
@@ -137,12 +143,15 @@ describe("DoSubmissionLedger", () => {
 
   for (const corruption of [
     "settlement-id",
+    "settlement-id-schema",
     "outcome",
     "record-id",
+    "record-json",
     "record-digest",
+    "reserved-at",
     "submission-outcome",
   ] as const) {
-    it(`rejects a settlement reservation with a tampered ${corruption}`, () =>
+    it(`classifies a settlement reservation with a tampered ${corruption} for repair`, () =>
       withConversationStorage(`wp1-ledger-reservation-corrupt-${corruption}`, (storage) =>
         Effect.gen(function* () {
           const ledger = yield* SubmissionLedger;
@@ -180,6 +189,13 @@ describe("DoSubmissionLedger", () => {
                 WHERE submission_id = ${admitted.submissionId}
               `;
               break;
+            case "settlement-id-schema":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET settlement_id = ''
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
             case "outcome":
               yield* sql`
                 UPDATE effect_agent_settlement_reservations
@@ -194,10 +210,24 @@ describe("DoSubmissionLedger", () => {
                 WHERE submission_id = ${admitted.submissionId}
               `;
               break;
+            case "record-json":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET record_json = '{'
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
             case "record-digest":
               yield* sql`
                 UPDATE effect_agent_settlement_reservations
                 SET record_digest = ${"b".repeat(64)}
+                WHERE submission_id = ${admitted.submissionId}
+              `;
+              break;
+            case "reserved-at":
+              yield* sql`
+                UPDATE effect_agent_settlement_reservations
+                SET reserved_at = 'not-a-timestamp'
                 WHERE submission_id = ${admitted.submissionId}
               `;
               break;
@@ -210,19 +240,13 @@ describe("DoSubmissionLedger", () => {
               break;
           }
 
-          const loaded = yield* ledger
-            .loadRecoverySnapshot(
-              RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
-            )
-            .pipe(Effect.exit);
-          expect(Exit.isFailure(loaded)).toBe(true);
-          if (Exit.isFailure(loaded)) {
-            const error = Cause.squash(loaded.cause);
-            expect(error).toBeInstanceOf(LedgerError);
-            if (error instanceof LedgerError) {
-              expect(error.cause).toBeInstanceOf(DoStorageCorruptionError);
-            }
-          }
+          const loaded = yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
+          );
+          expect(loaded.reservationIntegrity).toBe(
+            corruption === "submission-outcome" ? "verified" : "invalid",
+          );
+          expect(loaded.reservation === undefined).toBe(corruption !== "submission-outcome");
           const settlement = yield* ledger.repairSettlementFromCanonical(
             CanonicalSettlementRepair.make({
               submissionId: admitted.submissionId,
@@ -236,7 +260,124 @@ describe("DoSubmissionLedger", () => {
           expect(settlement.outcome).toBe("completed");
           expect(settlement.settledAt).toEqual(originalSettlement.settledAt);
           expect(repaired.submission.state).toBe("settled");
+          expect(repaired.reservationIntegrity).toBe("verified");
           expect(repaired.reservation?.recordDigest).toBe(reservation.recordDigest);
+        }).pipe(
+          Effect.provide(
+            submissionLedgerLayer.pipe(
+              Layer.provideMerge(
+                Layer.mergeAll(
+                  storageConfigLayer({ storage }),
+                  DoStorageFailpoint.layer,
+                  SqliteClient.layer({ storage }),
+                  BrowserCrypto.layer,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ));
+  }
+
+  for (const corruption of ["missing", "malformed", "invalid-digest"] as const) {
+    it(`defers a settled child notification with a ${corruption} reservation without waking`, () =>
+      withConversationStorage(`wp1-child-notify-${corruption}`, (storage) =>
+        Effect.gen(function* () {
+          const ledger = yield* SubmissionLedger;
+          const sql = yield* SqlClientService.SqlClient;
+          const parentLane = `parent-child-notify-${corruption}`;
+          const childLane = `child-child-notify-${corruption}`;
+          const parent = yield* ledger.admit(
+            yield* admission(parentLane, `parent-child-notify-${corruption}`, { parent: true }),
+          );
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: parent.submissionId }));
+          const parentClaim = yield* ledger.claim(
+            ClaimRequest.make({
+              conversationId: conversation(parentLane),
+              producerId: TEST_PRODUCER,
+            }),
+          );
+          if (Option.isNone(parentClaim)) return yield* Effect.die("missing parent claim");
+
+          const child = yield* ledger.admit(
+            yield* admission(childLane, `child-child-notify-${corruption}`, { child: true }),
+          );
+          yield* ledger.markReady(MarkReadyRequest.make({ submissionId: child.submissionId }));
+          const reason = WaitingForChildSuspension.make({
+            children: [
+              WaitingChild.make({
+                toolCallId: toolCall(`call-child-notify-${corruption}`),
+                childSubmissionId: child.submissionId,
+              }),
+            ],
+          });
+          yield* ledger.suspend(
+            SuspendRequest.make({
+              submissionId: parent.submissionId,
+              ownershipToken: parentClaim.value.ownershipToken,
+              reason,
+            }),
+          );
+          const childClaim = yield* ledger.claim(
+            ClaimRequest.make({
+              conversationId: conversation(childLane),
+              producerId: TEST_PRODUCER,
+            }),
+          );
+          if (Option.isNone(childClaim)) return yield* Effect.die("missing child claim");
+          const reservation = yield* settlementReservation(
+            child,
+            childClaim.value.ownershipToken,
+            "completed",
+          );
+          yield* ledger.reserveSettlement(reservation);
+          yield* ledger.finalizeSettlement(
+            SettlementFinalization.make({
+              submissionId: child.submissionId,
+              settlementId: reservation.settlementId,
+            }),
+          );
+          if (corruption === "missing") {
+            yield* sql`
+              DELETE FROM effect_agent_settlement_reservations
+              WHERE submission_id = ${child.submissionId}
+            `;
+          } else if (corruption === "malformed") {
+            yield* sql`
+              UPDATE effect_agent_settlement_reservations
+              SET settlement_id = ''
+              WHERE submission_id = ${child.submissionId}
+            `;
+          } else {
+            yield* sql`
+              UPDATE effect_agent_settlement_reservations
+              SET record_digest = ${"b".repeat(64)}
+              WHERE submission_id = ${child.submissionId}
+            `;
+          }
+
+          expect(
+            yield* ledger.recordChildSettled(
+              ChildSettledNotification.make({
+                parentSubmissionId: parent.submissionId,
+                childSubmissionId: child.submissionId,
+              }),
+            ),
+          ).toBe("child-not-terminal");
+          const resume = yield* ledger
+            .resumeSuspension(
+              ResumeSuspensionRequest.make({
+                submissionId: parent.submissionId,
+                expectedReason: reason,
+              }),
+            )
+            .pipe(Effect.exit);
+          expect(Exit.isFailure(resume)).toBe(true);
+          const parentSnapshot = yield* ledger.loadRecoverySnapshot(
+            RecoverySnapshotRequest.make({ submissionId: parent.submissionId }),
+          );
+          expect(parentSnapshot.submission.state).toBe("suspended");
+          expect(parentSnapshot.suspension?.reason).toEqual(reason);
         }).pipe(
           Effect.provide(
             submissionLedgerLayer.pipe(

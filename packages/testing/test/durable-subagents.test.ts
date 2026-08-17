@@ -262,6 +262,34 @@ let admissionFault: string | undefined;
 /** Test-only routed parent-read failure injected after a child claim. */
 let parentReadFault: ConversationId | undefined;
 
+/** Runtime-order probe for a local child projection that canonical recovery must repair. */
+let deferPreRepairChildNotification = false;
+let childSettlementRepairEvents: ReadonlyArray<string> = [];
+
+const childSettlementRepairProbeLedgerLive = Layer.effect(
+  SubmissionLedger,
+  Effect.gen(function* () {
+    const ledger = yield* SubmissionLedger;
+    return SubmissionLedger.of({
+      ...ledger,
+      recordChildSettled: (request) =>
+        Effect.suspend(() => {
+          if (deferPreRepairChildNotification) {
+            deferPreRepairChildNotification = false;
+            childSettlementRepairEvents = [...childSettlementRepairEvents, "pre-notify"];
+            return Effect.succeed("child-not-terminal" as const);
+          }
+          childSettlementRepairEvents = [...childSettlementRepairEvents, "post-notify"];
+          return ledger.recordChildSettled(request);
+        }),
+      repairSettlementFromCanonical: (request) =>
+        Effect.sync(() => {
+          childSettlementRepairEvents = [...childSettlementRepairEvents, "repair"];
+        }).pipe(Effect.andThen(ledger.repairSettlementFromCanonical(request))),
+    });
+  }),
+).pipe(Layer.provide(MemorySubmissionLedgerLive.pipe(Layer.provide(NodeCrypto.layer))));
+
 const parentReadFaultStoreLive = Layer.effect(
   ConversationStore,
   Effect.gen(function* () {
@@ -308,6 +336,7 @@ const parentReadFaultTestLayer = baseLayer(
   MemorySubmissionLedgerLive.pipe(Layer.provide(NodeCrypto.layer)),
   parentReadFaultStoreLive,
 );
+const childSettlementRepairTestLayer = baseLayer(childSettlementRepairProbeLedgerLive);
 
 const makeChildFixture = Effect.gen(function* () {
   const childScripted = yield* makeScriptedModel(() => finalParts('{"answer":"child-answer"}'));
@@ -1109,6 +1138,47 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           "released",
         ]);
       }),
+  );
+});
+
+layer(childSettlementRepairTestLayer)("S2 child settlement projection repair", (it) => {
+  it.effect("continues canonical repair after an inert local-child pre-notification", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      const harness = yield* makeHarness();
+      const run = drive(harness);
+      const parent = yield* harness.submitParent(
+        "conversation-s2-child-settlement-repair",
+        "child-settlement-repair-1",
+      );
+      const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+      const runtime = yield* DurableAgentRuntime;
+
+      yield* run(parent.conversationId);
+      expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
+
+      // The canonical Settlement commits while the child projection is still nonterminal. The
+      // adapter-specific corruption tests map a locally settled row whose reservation is missing
+      // or invalid to the same mutation-free child-not-terminal result exercised by this probe.
+      yield* armFailpoint("terminalize:after-canonical-append");
+      const killed = yield* Effect.exit(run(childConversationId));
+      expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
+      yield* clearFailpoint;
+
+      childSettlementRepairEvents = [];
+      deferPreRepairChildNotification = true;
+      const reports = yield* runtime.runRecovery;
+      const repaired = reports.find((report) => report.conversationId === childConversationId);
+      expect(repaired?.decision._tag).toBe("FinalizeLedgerFromHistory");
+      expect(repaired?.disposition).toBe("repaired");
+      if (repaired === undefined) throw new Error("Expected child settlement recovery report");
+      expect(childSettlementRepairEvents).toEqual(["pre-notify", "repair", "post-notify"]);
+      expect((yield* parentState(repaired.submissionId)).state).toBe("settled");
+
+      const parentSettlements = yield* run(parent.conversationId);
+      expect(parentSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+      expect(yield* harness.childInvocations).toBe(1);
+    }),
   );
 });
 

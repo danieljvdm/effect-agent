@@ -5006,8 +5006,15 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       if (failure instanceof RunEventBufferOverflow) {
         expect(failure.maxEvents).toBe(MAX_DETACHED_RUN_EVENTS);
       }
-      expect(yield* detached.events).toHaveLength(MAX_DETACHED_RUN_EVENTS);
-      expect(yield* detached.observe.pipe(Stream.runCollect)).toHaveLength(MAX_DETACHED_RUN_EVENTS);
+      const retained = yield* detached.events;
+      const observed = yield* detached.observe.pipe(Stream.runCollect);
+      expect(retained).toHaveLength(MAX_DETACHED_RUN_EVENTS);
+      expect(retained.map((event) => event.sequence)).toEqual(
+        Array.from({ length: MAX_DETACHED_RUN_EVENTS }, (_, index) => index),
+      );
+      // `observe` terminates deterministically on overflow and replays the
+      // exact retained prefix rather than a lossy subset of it.
+      expect(observed).toEqual(retained);
     }),
   );
 
@@ -5035,6 +5042,9 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       const events = yield* detached.events;
 
       expect(result.output).toEqual({ answer });
+      expect(
+        events.filter((event) => event._tag === "TextDelta").map((event) => event.text),
+      ).toEqual([...encoded]);
       expect(events.length).toBeGreaterThan(MAX_DETACHED_RUN_EVENTS);
       expect(events.length).toBeLessThanOrEqual(maxReplayEvents);
       expect(events.at(-1)?._tag).toBe("RunCompleted");

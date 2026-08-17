@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Equal, Schema } from "effect";
 import {
   makeUsageBudget,
   toRunBudgetHook,
@@ -154,8 +154,8 @@ export class ReviewSelectionViolation extends Schema.TaggedError<ReviewSelection
   { reason: Schema.NonEmptyString.check(Schema.isMaxLength(1_000)) },
 ) {}
 
-const samePaths = (left: ReadonlyArray<ChangedFile>, right: ReadonlyArray<ChangedFile>): boolean =>
-  left.length === right.length && left.every((file, index) => file.path === right[index]?.path);
+const sameFiles = (left: ReadonlyArray<ChangedFile>, right: ReadonlyArray<ChangedFile>): boolean =>
+  left.length === right.length && left.every((file, index) => Equal.equals(file, right[index]));
 
 const validateSelection = (input: {
   readonly selection: ReviewSelection;
@@ -172,10 +172,10 @@ const validateSelection = (input: {
       }),
     );
   }
-  if (!samePaths(sealed.files, files)) {
+  if (!sameFiles(sealed.files, files)) {
     return Effect.fail(
       ReviewSelectionViolation.make({
-        reason: "review selection paths do not match the model-visible source range",
+        reason: "review selection evidence does not match the model-visible source range",
       }),
     );
   }
@@ -196,7 +196,7 @@ const validateSelection = (input: {
   }
   if (
     sealed.mode === "full" &&
-    (sealed.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))
+    (sealed.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))
   ) {
     return Effect.fail(
       ReviewSelectionViolation.make({

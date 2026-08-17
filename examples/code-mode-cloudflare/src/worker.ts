@@ -55,7 +55,7 @@ const decodeCodeModeSuccess = Schema.decodeUnknownOption(
 
 /** A terminal Run event could not be converted into the demo's declared HTTP result. */
 export class DemoRunFailure extends Schema.TaggedError<DemoRunFailure>()("DemoRunFailure", {
-  reason: Schema.Literals(["incomplete", "invalid-output"]),
+  reason: Schema.Literals(["incomplete", "invalid-output", "runtime-failed"]),
   message: Schema.String,
   cause: Schema.optionalKey(Schema.Defect()),
 }) {}
@@ -145,8 +145,6 @@ const runBound = (
       { readonly result?: Schema.Json; readonly logs?: ReadonlyArray<Schema.Json> }
     >();
     let completedOutput: Option.Option<unknown> = Option.none();
-    // Expected Run failures become defects at this HTTP boundary: `runPromise`
-    // rejects and the fetch handler answers 500 instead of fabricating a 200.
     yield* AgentRuntime.stream(agent, { question }).pipe(
       Stream.runForEach((event) =>
         Effect.sync(() => {
@@ -163,7 +161,13 @@ const runBound = (
       ),
       Effect.provide(layers),
       Effect.scoped,
-      Effect.orDie,
+      Effect.mapError((cause) =>
+        DemoRunFailure.make({
+          reason: "runtime-failed",
+          message: "the agent runtime failed",
+          cause,
+        }),
+      ),
     );
     // A Run that ended without emitting RunCompleted (e.g. it hit a policy
     // limit) is NOT a success — fail in the typed channel so `runPromise`
@@ -207,7 +211,11 @@ const runAsk = (
   question: string,
   tenant: string,
   projectCompletedOutput: ProjectCompletedOutput,
+  agentOverride?: DemoBinding,
 ): Effect.Effect<AskResult, DemoRunFailure> => {
+  if (agentOverride !== undefined) {
+    return runBound(env, agentOverride, question, tenant, "scripted", projectCompletedOutput);
+  }
   if (env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0) {
     return runBound(
       env,
@@ -221,9 +229,10 @@ const runAsk = (
   return runBound(env, scriptedAgent, question, tenant, "scripted", projectCompletedOutput);
 };
 
-/** Construct the Worker; tests may project output only after a real RunCompleted event. */
+/** Construct the Worker; tests may alter a real terminal projection or provide a test binding. */
 export const makeDemoWorker = (
   projectCompletedOutput: ProjectCompletedOutput = (output) => output,
+  agentOverride?: DemoBinding,
 ) => ({
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
@@ -275,7 +284,7 @@ export const makeDemoWorker = (
     }
     try {
       const result = await Effect.runPromise(
-        runAsk(env, decodedAsk.question, tenant, projectCompletedOutput),
+        runAsk(env, decodedAsk.question, tenant, projectCompletedOutput, agentOverride),
       );
       return Response.json(await Effect.runPromise(encodeAskResult(result)));
     } catch (cause) {

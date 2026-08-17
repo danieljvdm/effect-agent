@@ -763,10 +763,25 @@ export class SettlementReservationSnapshot extends Schema.Class<SettlementReserv
   finalized: Schema.Boolean,
 }) {}
 
+/**
+ * Recovery-only trust classification for the disposable settlement reservation projection.
+ * `verified` proves the row's own identities, record, and digest against the immutable Submission
+ * and Receipt, but deliberately says nothing about agreement with disposable lifecycle columns.
+ */
+export const SettlementReservationIntegrity = Schema.Literals(["absent", "verified", "invalid"]);
+export type SettlementReservationIntegrity = typeof SettlementReservationIntegrity.Type;
+
 export class RecoverySnapshotRequest extends Schema.Class<RecoverySnapshotRequest>(
   "@effect-agent/session/RecoverySnapshotRequest",
 )({
   submissionId: SubmissionId,
+}) {}
+
+/** Adapter-owned, indexed recovery worklist for one Conversation lane. */
+export class ScanConversationNonterminalRequest extends Schema.Class<ScanConversationNonterminalRequest>(
+  "@effect-agent/session/ScanConversationNonterminalRequest",
+)({
+  conversationId: ConversationId,
 }) {}
 
 /** One joined/joining Submission of a host Run, as the host's recovery sees it. */
@@ -819,6 +834,7 @@ export class RecoverySnapshot extends Schema.Class<RecoverySnapshot>(
   ownership: Schema.optionalKey(OwnershipSnapshot),
   inputApplied: Schema.optionalKey(InputAppliedMarker),
   reservation: Schema.optionalKey(SettlementReservationSnapshot),
+  reservationIntegrity: SettlementReservationIntegrity,
   abortIntent: Schema.optionalKey(AbortIntent),
   joins: Schema.Array(JoinSnapshot),
   hostSubmissionId: Schema.optionalKey(SubmissionId),
@@ -1057,6 +1073,9 @@ export type SubmissionLedgerFailure =
  *   `SettlementConflict` once settled.
  * - `scanNonterminal` — streams every Submission whose state is not `settled`, ordered by
  *   (conversationId, queueSequence); recovery's admission-independent worklist (DUR-014).
+ * - `scanConversationNonterminal` — streams only one Conversation's nonterminal Submissions in
+ *   queue order through an adapter-owned indexed query; wake handling never filters a global
+ *   worklist in the coordinator.
  * - `loadRecoverySnapshot` — strongly consistent full snapshot for the pure recovery classifier.
  *
  * No operation claims exactly-once external side effects; the ledger records decisions
@@ -1142,6 +1161,9 @@ export class SubmissionLedger extends Context.Service<
       request: ReleaseChildBudgetRequest,
     ) => Effect.Effect<ChildBudgetReservationSnapshot, ChildReservationConflict | LedgerError>;
     readonly scanNonterminal: Stream.Stream<SubmissionSnapshot, LedgerError>;
+    readonly scanConversationNonterminal: (
+      request: ScanConversationNonterminalRequest,
+    ) => Stream.Stream<SubmissionSnapshot, LedgerError>;
     readonly loadRecoverySnapshot: (
       request: RecoverySnapshotRequest,
     ) => Effect.Effect<RecoverySnapshot, LedgerError>;

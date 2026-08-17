@@ -4,6 +4,7 @@ import {
   AgentPolicy,
   ConversationId,
   IdGenerator,
+  IdGenerationError,
   ReceiptId,
   type RunEvent,
   RunId,
@@ -415,6 +416,54 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
     }),
   );
 
+  it.effect("contains a child identity-generation failure as a bounded delegation failure", () =>
+    Effect.gen(function* () {
+      const childBinding = Agent.withModel(
+        childDefinition,
+        answeringModel("child-never-started", '{"answer":"unreached"}'),
+      );
+      const parent = Agent.withModel(
+        coordinatorDefinition,
+        delegatingModel(
+          "parent-identity-failure",
+          "delegate_research",
+          [{ id: "call-identity", params: { topic: "berlin" } }],
+          '{"report":"unreached"}',
+        ),
+      );
+      const identityError = IdGenerationError.make({
+        operation: "randomUUIDv4",
+        reasonTag: "Unknown",
+        message: "entropy unavailable",
+      });
+      const failingChildIds = IdGenerator.of({
+        nextConversationId: Effect.fail(identityError),
+        nextRunId: Effect.succeed(decodeRunId("run-never-created")),
+        nextTurnId: Effect.succeed(decodeTurnId("turn-parent")),
+      });
+      const detached = yield* AgentRuntime.start(
+        parent,
+        { mission: "m" },
+        {
+          conversationId: decodeConversationId("conversation-parent"),
+          runId: decodeRunId("parent-run-identity-failure"),
+        },
+      ).pipe(
+        Effect.provide(researchLayer(childBinding)),
+        Effect.provideService(IdGenerator, failingChildIds),
+      );
+      const failure = failureFrom(yield* Effect.exit(detached.await));
+
+      expect(failure).toMatchObject({
+        _tag: "SubagentExecutionFailure",
+        classification: "identity-unavailable",
+        errorTag: "IdGenerationError",
+        message: "entropy unavailable",
+      });
+      expect(findEvent(yield* detached.events, "SubagentStarted")).toBeUndefined();
+    }),
+  );
+
   it.effect("rejects nested delegation at preflight before any reservation (SUB-029)", () =>
     Effect.gen(function* () {
       // A handmade (non-delegation) spawning Tool runs a mid-level Agent whose
@@ -452,6 +501,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
       const SpawnMid = Tool.make("spawn_mid", {
         parameters: Schema.Struct({}),
         success: Schema.Struct({ acknowledged: Schema.Boolean }),
+        failure: IdGenerationError,
       })
         .addDependency(AgentSpawner)
         .addDependency(IdGenerator);
@@ -1883,6 +1933,33 @@ describe("Subagent.define", () => {
     expect(() =>
       Subagent.define("delegate_nested", {
         description: "Nested delegation.",
+        target: nestedDefinition,
+        parameters: ResearchParams,
+        success: ResearchFindings,
+        failure: ResearchDelegationFailed,
+        prepareInput: ({ topic }) => Effect.succeed({ question: topic }),
+        projectResult: (output) => Effect.succeed({ summary: output.answer }),
+        policy: researchPolicy,
+      }),
+    ).toThrow(/nested delegation/);
+  });
+
+  it("rejects a nonconventional Tool name when its execution kind is delegation", () => {
+    const disguisedDelegation = Tool.make("review_child", {
+      parameters: Schema.Struct({}),
+      success: Schema.Struct({}),
+    }).annotate(ToolExecutionKind, "delegation");
+    const nestedDefinition = Agent.define("annotated-nested-target", {
+      input: ChildInput,
+      output: ChildOutput,
+      instructions: "Nested.",
+      toolkit: Toolkit.make(disguisedDelegation),
+      policy: childPolicy,
+    });
+
+    expect(() =>
+      Subagent.define("delegate_annotated_nested", {
+        description: "Nested delegation with a nonconventional Tool name.",
         target: nestedDefinition,
         parameters: ResearchParams,
         success: ResearchFindings,

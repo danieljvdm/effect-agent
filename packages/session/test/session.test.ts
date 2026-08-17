@@ -47,6 +47,7 @@ import {
   ReconciliationDecision,
   RecordEnvelope,
   RecoverySnapshot,
+  ScanConversationNonterminalRequest,
   replayConversation,
   replayConversationFromCheckpoint,
   ReservedSettlement,
@@ -549,6 +550,12 @@ describe("SubmissionLedger port schemas", () => {
     });
     expect(byId._tag).toBe("SubmissionLookupById");
     expect(byKey._tag).toBe("SubmissionLookupByKey");
+    const scopedScan = Schema.decodeUnknownSync(ScanConversationNonterminalRequest)({
+      conversationId: "travel-conversation",
+    });
+    expect(Schema.encodeSync(ScanConversationNonterminalRequest)(scopedScan)).toEqual({
+      conversationId: "travel-conversation",
+    });
     expect(Schema.decodeUnknownExit(SubmissionLookup)({ _tag: "LookupByGuess" })._tag).toBe(
       "Failure",
     );
@@ -577,6 +584,7 @@ describe("SubmissionLedger port schemas", () => {
         leaseExpiresAt: "2026-08-12T00:00:30.000Z",
       },
       inputApplied: { recordId: "input:submission-1", sequence: 2 },
+      reservationIntegrity: "absent",
       joins: [{ submissionId: "submission-2", state: "joined", hostSubmissionId: "submission-1" }],
       approvalDecisions: [
         {
@@ -633,6 +641,7 @@ describe("SubmissionLedger port schemas", () => {
     expect(Schema.encodeSync(RecoverySnapshot)(recovery)).toEqual(encodedRecovery);
     const minimalRecovery = Schema.decodeUnknownSync(RecoverySnapshot)({
       submission: encodedSubmissionSnapshot,
+      reservationIntegrity: "absent",
       joins: [],
       approvalDecisions: [],
       unknownResolutions: [],

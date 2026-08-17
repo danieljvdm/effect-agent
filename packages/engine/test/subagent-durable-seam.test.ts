@@ -5,6 +5,7 @@ import {
   ConversationId,
   DelegationId,
   IdGenerator,
+  IdGenerationError,
   ReceiptId,
   RunId,
   SubmissionId,
@@ -697,6 +698,7 @@ layer(identifiers)("S2 WP1 durable Subagent engine seam", (it) => {
       const SpawningDelegate = Tool.make("delegate_child", {
         parameters: Schema.Struct({ question: Schema.String }),
         success: Schema.Struct({ answer: Schema.String }),
+        failure: IdGenerationError,
       })
         .addDependency(AgentSpawner)
         .addDependency(IdGenerator)

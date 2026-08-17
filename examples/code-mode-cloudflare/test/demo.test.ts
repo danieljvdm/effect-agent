@@ -20,6 +20,7 @@ const workerEntry = join(import.meta.dirname, "..", "src", "worker.ts");
 
 let workerScript = "";
 let invalidAnswerWorkerScript = "";
+let runtimeFailureWorkerScript = "";
 
 const executableWorkerScript = (outputFiles: ReadonlyArray<OutputFile> | undefined): string => {
   const output = outputFiles?.[0];
@@ -93,6 +94,53 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       logLevel: "silent",
     });
     invalidAnswerWorkerScript = executableWorkerScript(invalidAnswerBundle.outputFiles);
+
+    const runtimeFailureBundle = await build({
+      stdin: {
+        contents: `
+          import { Agent } from "@effect-agent/core";
+          import { Effect, Layer, Stream } from "effect";
+          import { AiError, LanguageModel, Model } from "effect/unstable/ai";
+          import { codeModeAgent } from "../src/agent.ts";
+          import { makeDemoWorker } from "../src/worker.ts";
+          export { CodeModeHostEntrypoint, WarehouseObject } from "../src/worker.ts";
+
+          const failure = AiError.AiError.make({
+            module: "code-mode-demo-test",
+            method: "streamText",
+            reason: AiError.UnknownError.make({ description: "expected model failure" }),
+          });
+          const failingModel = Model.make(
+            "scripted",
+            "failing-warehouse-analyst",
+            Layer.effect(
+              LanguageModel.LanguageModel,
+              LanguageModel.make({
+                generateText: () => Effect.fail(failure),
+                streamText: () => Stream.fail(failure),
+              }),
+            ),
+          );
+
+          export default makeDemoWorker(
+            undefined,
+            Agent.withModel(codeModeAgent, failingModel),
+          );
+        `,
+        resolveDir: import.meta.dirname,
+        sourcefile: "runtime-failure-worker.ts",
+        loader: "ts",
+      },
+      bundle: true,
+      write: false,
+      format: "esm",
+      target: "es2022",
+      platform: "browser",
+      conditions: ["workerd", "worker", "browser"],
+      external: ["cloudflare:*", "node:*"],
+      logLevel: "silent",
+    });
+    runtimeFailureWorkerScript = executableWorkerScript(runtimeFailureBundle.outputFiles);
     runtime = openRuntime();
     cleanups.push(() => runtime.dispose());
   }, 120_000);
@@ -165,6 +213,18 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     });
   });
 
+  it("maps expected Agent runtime failures into the typed demo failure before HTTP translation", async () => {
+    const failingRuntime = openRuntime(runtimeFailureWorkerScript);
+    cleanups.push(() => failingRuntime.dispose());
+    const response = await failingRuntime.dispatchFetch("http://demo/ask", {
+      method: "POST",
+      body: JSON.stringify({ question: "Trigger the expected model failure" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: "the agent runtime failed" });
+  });
+
   it("exposes only a curated Schema-decoded invoice operation over DO RPC", async () => {
     const warehouse = await runtime.getDurableObjectNamespace("WAREHOUSE");
     const rawStub = warehouse.get(warehouse.idFromName("acme"));
@@ -183,6 +243,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
         { customer: "Stellar Freight" },
         { customer: "Vertex Robotics" },
         { customer: "Nimbus Analytics" },
+        { customer: "Boundary Foods" },
       ],
     });
 

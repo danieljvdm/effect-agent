@@ -334,6 +334,7 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
             .repairSettlementFromCanonical(request)
             .pipe(Effect.tap(() => untrack(request.submissionId))),
         scanNonterminal: ledger.scanNonterminal,
+        scanConversationNonterminal: ledger.scanConversationNonterminal,
         loadRecoverySnapshot: ledger.loadRecoverySnapshot,
       });
     }),

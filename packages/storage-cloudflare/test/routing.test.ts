@@ -30,6 +30,7 @@ import {
   MarkReadyRequest,
   RecoverySnapshotRequest,
   ResumeSuspensionRequest,
+  ScanConversationNonterminalRequest,
   RenewOwnershipRequest,
   SettlementConflict,
   SettlementFinalization,
@@ -247,6 +248,13 @@ describe("cross-DO port routing", () => {
         // This Object's OWN ledger holds nothing: the child row lives in the owning Object.
         const localScan = yield* ledger.scanNonterminal.pipe(Stream.runCollect);
         expect(localScan).toEqual([]);
+
+        const routedScan = yield* ledger
+          .scanConversationNonterminal(
+            ScanConversationNonterminalRequest.make({ conversationId: conversation(childConv) }),
+          )
+          .pipe(Stream.runCollect);
+        expect(routedScan.map((row) => row.submissionId)).toEqual([admitted.submissionId]);
 
         return admitted;
       }),

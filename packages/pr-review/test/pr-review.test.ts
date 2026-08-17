@@ -1313,6 +1313,79 @@ describe("offline review run", () => {
       expect((yield* scripted.prompts).join("\n")).not.toContain("src/unchanged.ts");
     }),
   );
+
+  it.effect(
+    "rejects a sealed selection when a current rename has the same path but different ancestry",
+    () =>
+      Effect.gen(function* () {
+        const baseSha = "1".repeat(40);
+        const headSha = "2".repeat(40);
+        const stale = ChangedFile.make({
+          path: "src/new.ts",
+          previousPath: "src/old-a.ts",
+          status: "renamed",
+          additions: 1,
+          deletions: 1,
+          patch: "@@ -1 +1 @@\n-old\n+new",
+        });
+        const current = ChangedFile.make({ ...stale, previousPath: "src/old-b.ts" });
+        const metadata = PullRequestMetadata.make({
+          repository: "acme/widgets",
+          number: 31,
+          title: "Rename source",
+          body: "",
+          baseRef: "main",
+          baseSha,
+          headRef: "fix/rename",
+          headSha,
+          totalChangedFiles: 1,
+        });
+        const selection = selectReviewRange({
+          requestedMode: "final",
+          current: metadata,
+          fullFiles: [stale],
+          profileFingerprint: "a".repeat(64),
+          priorState: undefined,
+          comparison: undefined,
+        });
+        const scripted = yield* makeOfflineReviewerModel({
+          diffPath: current.path,
+          readPath: current.path,
+          review: CodeReview.make({ summary: "unused", verdict: "approve", findings: [] }),
+        });
+        const error = yield* executeReview(Agent.withModel(PullRequestReviewer, scripted.model), {
+          post: false,
+          applyVerdict: false,
+          selection,
+        }).pipe(
+          Effect.flip,
+          Effect.provide(
+            Layer.mergeAll(
+              ReviewToolkitLayer.pipe(
+                Layer.provideMerge(
+                  fixturePullRequestSourceLayer(
+                    FixturePullRequest.make({
+                      metadata,
+                      files: [FixtureFile.make({ file: current, headContent: "new" })],
+                    }),
+                  ),
+                ),
+              ),
+              collectingReviewPublisherLayer(
+                yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]),
+              ),
+              testIdGeneratorLayer,
+              unavailableReviewStateAuthenticatorLayer("rename test"),
+            ),
+          ),
+        );
+        expect(error).toMatchObject({
+          _tag: "ReviewSelectionViolation",
+          reason: "review selection evidence does not match the model-visible source range",
+        });
+        expect(yield* scripted.prompts).toEqual([]);
+      }),
+  );
 });
 
 // ---------------------------------------------------------------------------

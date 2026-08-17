@@ -594,7 +594,9 @@ idempotency key and never creates a second child. A crash after `SubagentStarted
 parent reservation attachment/checkpoint is repaired from the exact canonical
 `SubagentRequested`/`SubagentStarted` pair: recovery reattaches that same child under the parent
 fence before it stores `waitingForChild`. It never infers a replacement attachment from mutable
-ledger state.
+ledger state. An expected attachment failure releases the recovery claim immediately so a retry
+does not wait for lease expiry; a crash after a successful attachment intentionally retains the
+crash-state ownership record for fenced recovery.
 
 Absence from an eventually consistent projection is never proof that admission did not occur.
 Recovery queries the deterministically addressed child owner or ledger directly with the
@@ -615,7 +617,8 @@ its exact Tool Call/child pair; a join naming a different child is contradictory
 quarantines the suspension. Only the exact-reason resume operation may clear the suspension after
 all notifications cover it.
 The child uses its separate Conversation lane. S2 MUST prove this suspension/wakeup path at the
-smallest worker-pool size.
+smallest worker-pool size. A wake reconciles only the named Conversation through the ledger's
+adapter-owned conversation-scoped nonterminal scan; it never filters the global recovery worklist.
 
 Every public durable worker binding is registered with exact definition digests. There is no
 identity-only or digest-transparent worker path. Before an admitted child can execute, both the
@@ -700,10 +703,10 @@ capability because they weaken structured ownership and complicate accepted-work
 | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Before parent budget reservation                              | No request or child obligation exists                                                                                                                                  |
 | After reservation, before request append                      | Fenced recovery appends the fixed request or releases the reservation exactly once                                                                                     |
-| After request append, before child admission                  | Direct idempotency resolution classifies admission before one child is admitted                                                                                        |
+| After request append, before child admission                  | Parent-owned establishment reauthorizes current policy, then direct idempotency resolution classifies admission before one child is admitted                           |
 | While admission resolution is indeterminate                   | No second admission occurs; recovery waits/retries the authoritative owner                                                                                             |
-| After child admission, before readiness                       | Child admission recovery completes materialization/readiness                                                                                                           |
-| After child readiness, before parent start append             | Parent resolves the same Receipt and records the link                                                                                                                  |
+| After child admission, before readiness                       | Child-lane recovery defers; parent-owned establishment reauthorizes current policy before completing materialization/readiness                                         |
+| After child readiness, before parent start append             | Parent-owned establishment reauthorizes current policy, resolves the same Receipt, and records the link                                                                |
 | After parent start, before `waitingForChild` checkpoint       | Recovery checkpoints waiting state and releases execution permits                                                                                                      |
 | During child model response                                   | Normal durable model recovery applies inside the child                                                                                                                 |
 | During child ordinary Tool                                    | Normal prepared/settled/operator-resolution classification applies inside the child                                                                                    |

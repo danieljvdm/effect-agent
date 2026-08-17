@@ -19,6 +19,7 @@ import {
   DelegationDepth,
   type DelegationId,
   IdGenerator,
+  IdGenerationError,
   type InstructionSource,
   ModelStarted,
   ModelProtocolError,
@@ -247,6 +248,7 @@ export type AgentRuntimeFailure<
   | AgentApprovalDenied
   | AgentApprovalPending
   | AgentChildPending
+  | IdGenerationError
   | HookError
   | InstructionError;
 
@@ -5273,7 +5275,7 @@ const spawnWithParent = (parent: AgentSpawnerParent, depth: number) =>
       Agent.Output<typeof binding>,
       AgentRuntimeFailure<typeof binding, HookError, InstructionError> | RunEventBufferOverflow
     >,
-    never,
+    IdGenerationError,
     | Scope.Scope
     | AgentRuntimeRequirements<typeof binding, HookRequirements, InstructionRequirements>
   > {

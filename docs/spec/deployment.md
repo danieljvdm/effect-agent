@@ -348,8 +348,9 @@ parking, so disposable memory can neither strand the caller nor impersonate dura
 Each logical client wait obtains one UUID from the explicit `Crypto.Crypto` capability and reuses it
 across reset attempts. That identity groups duplicate transport attempts for cancellation but
 remains disposable coordination state; canonical records alone establish durable progress.
-Host-supplied `CloudflareDurableRuntimeOptions.operationAuthorizer` decisions cross observation,
-progress, approval, and unknown-resolution RPCs as the typed `OperationDenied`.
+The application-provided `OperationAuthorizer` service/Layer governs observation, progress,
+approval, and unknown-resolution RPCs; its refusals cross those boundaries as the typed
+`OperationDenied`.
 
 The target is no longer experimental: the generic durability conformance suite —
 the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the

@@ -5,6 +5,7 @@ import {
   ConversationId,
   DelegationId,
   IdGenerator,
+  IdGenerationError,
   RunId,
   type RunEvent,
   type SubagentParentLink,
@@ -145,6 +146,7 @@ const emittingDefinition = Agent.define("seam-emitting-parent", {
 const SpawningDelegate = Tool.make("delegate", {
   parameters: Schema.Struct({ question: Schema.String }),
   success: Schema.Struct({ answer: Schema.String }),
+  failure: IdGenerationError,
 })
   .addDependency(AgentSpawner)
   .addDependency(IdGenerator);

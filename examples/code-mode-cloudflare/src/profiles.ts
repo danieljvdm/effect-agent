@@ -16,7 +16,7 @@ const usage = { inputTokens: {}, outputTokens: {} };
  */
 const scriptedProgram = `async () => {
   const result = await warehouse.listInvoices({ minimumRevenue: 10000 });
-  const top = result.invoices;
+  const top = result.invoices.filter((row) => row.revenue > 10000);
   console.log("matched", top.length, "high-revenue customers");
   return {
     topCustomers: top.map((row) => row.customer),

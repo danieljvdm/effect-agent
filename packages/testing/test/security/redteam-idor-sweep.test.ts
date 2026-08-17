@@ -235,7 +235,17 @@ const protectedBoundaryControlLayer = Layer.effect(
       record: (operation) =>
         Ref.get(enabled).pipe(
           Effect.flatMap((isEnabled) =>
-            isEnabled ? Ref.update(accesses, (all) => [...all, operation]) : Effect.void,
+            isEnabled
+              ? Ref.update(accesses, (all) => [...all, operation]).pipe(
+                  Effect.andThen(
+                    Effect.die(
+                      new Error(
+                        `Authorization reached protected boundary ${operation} before denying the foreign target`,
+                      ),
+                    ),
+                  ),
+                )
+              : Effect.void,
           ),
         ),
       takeAccesses: Ref.getAndSet(accesses, []),
@@ -251,16 +261,50 @@ const guardedSubmissionLedgerLayer = Layer.effect(
     const guard = <A, E, R>(operation: string, effect: Effect.Effect<A, E, R>) =>
       control.record(`ledger.${operation}`).pipe(Effect.andThen(effect));
     return SubmissionLedger.of({
-      ...inner,
+      capabilities: guard("capabilities", inner.capabilities),
+      admit: (request) => guard("admit", inner.admit(request)),
+      markReady: (request) => guard("markReady", inner.markReady(request)),
       lookup: (request) => guard("lookup", inner.lookup(request)),
+      resolveAdmission: (request) => guard("resolveAdmission", inner.resolveAdmission(request)),
+      claim: (request) => guard("claim", inner.claim(request)),
+      renewOwnership: (request) => guard("renewOwnership", inner.renewOwnership(request)),
+      releaseOwnership: (request) => guard("releaseOwnership", inner.releaseOwnership(request)),
+      markInputApplied: (request) => guard("markInputApplied", inner.markInputApplied(request)),
+      reserveSettlement: (request) => guard("reserveSettlement", inner.reserveSettlement(request)),
+      finalizeSettlement: (request) =>
+        guard("finalizeSettlement", inner.finalizeSettlement(request)),
+      repairSettlementFromCanonical: (request) =>
+        guard("repairSettlementFromCanonical", inner.repairSettlementFromCanonical(request)),
       requestAbort: (request) => guard("requestAbort", inner.requestAbort(request)),
+      claimJoining: (request) => guard("claimJoining", inner.claimJoining(request)),
+      markJoined: (request) => guard("markJoined", inner.markJoined(request)),
+      revertJoining: (request) => guard("revertJoining", inner.revertJoining(request)),
+      suspend: (request) => guard("suspend", inner.suspend(request)),
+      resumeSuspension: (request) => guard("resumeSuspension", inner.resumeSuspension(request)),
       recordApprovalDecision: (request) =>
         guard("recordApprovalDecision", inner.recordApprovalDecision(request)),
+      markUnknown: (request) => guard("markUnknown", inner.markUnknown(request)),
       recordUnknownResolution: (request) =>
         guard("recordUnknownResolution", inner.recordUnknownResolution(request)),
+      recordChildSettled: (request) =>
+        guard("recordChildSettled", inner.recordChildSettled(request)),
+      reserveChildBudget: (request) =>
+        guard("reserveChildBudget", inner.reserveChildBudget(request)),
+      attachChildToReservation: (request) =>
+        guard("attachChildToReservation", inner.attachChildToReservation(request)),
+      beginChildBudgetRelease: (request) =>
+        guard("beginChildBudgetRelease", inner.beginChildBudgetRelease(request)),
+      releaseChildBudget: (request) =>
+        guard("releaseChildBudget", inner.releaseChildBudget(request)),
       scanNonterminal: Stream.unwrap(
         control.record("ledger.scanNonterminal").pipe(Effect.as(inner.scanNonterminal)),
       ),
+      scanConversationNonterminal: (request) =>
+        Stream.unwrap(
+          control
+            .record("ledger.scanConversationNonterminal")
+            .pipe(Effect.as(inner.scanConversationNonterminal(request))),
+        ),
       loadRecoverySnapshot: (request) =>
         guard("loadRecoverySnapshot", inner.loadRecoverySnapshot(request)),
     });
@@ -277,10 +321,14 @@ const guardedConversationStoreLayer = Layer.effect(
     const guardStream = <A, E, R>(operation: string, stream: Stream.Stream<A, E, R>) =>
       Stream.unwrap(control.record(`store.${operation}`).pipe(Effect.as(stream)));
     return ConversationStore.of({
-      ...inner,
+      materialize: (request) => guard("materialize", inner.materialize(request)),
+      append: (request) => guard("append", inner.append(request)),
       read: (request) => guardStream("read", inner.read(request)),
       observe: (request) => guardStream("observe", inner.observe(request)),
       export: (request) => guard("export", inner.export(request)),
+      inspectTail: (request) => guard("inspectTail", inner.inspectTail(request)),
+      saveCheckpoint: (request) => guard("saveCheckpoint", inner.saveCheckpoint(request)),
+      loadCheckpoint: (request) => guard("loadCheckpoint", inner.loadCheckpoint(request)),
     });
   }),
 ).pipe(Layer.provide(MemoryConversationStoreLive));
@@ -290,12 +338,14 @@ const guardedWakeSchedulerLayer = Layer.effect(
   Effect.gen(function* () {
     const inner = yield* WakeScheduler;
     const control = yield* ProtectedBoundaryControl;
+    const guardStream = <A, E, R>(operation: string, stream: Stream.Stream<A, E, R>) =>
+      Stream.unwrap(control.record(`wake.${operation}`).pipe(Effect.as(stream)));
     return WakeScheduler.of({
-      ...inner,
       notify: (conversationId) =>
         control.record("wake.notify").pipe(Effect.andThen(inner.notify(conversationId))),
       subscribe: (conversationId) =>
         control.record("wake.subscribe").pipe(Effect.andThen(inner.subscribe(conversationId))),
+      wakes: guardStream("wakes", inner.wakes),
     });
   }),
 ).pipe(Layer.provide(WakeScheduler.layerNoop));

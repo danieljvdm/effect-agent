@@ -1000,6 +1000,7 @@ export const classifyRecovery = (
     const projectionIsExact =
       state === "settled" &&
       snapshot.submission.settledOutcome === recordedSettlementPayload.outcome &&
+      snapshot.reservationIntegrity === "verified" &&
       reservation !== undefined &&
       reservation.finalized &&
       reservation.settlementId === recordedSettlementPayload.settlementId &&
@@ -1013,6 +1014,21 @@ export const classifyRecovery = (
       settlementId: recordedSettlementPayload.settlementId,
       outcome: recordedSettlementPayload.outcome,
       record: recordedSettlement,
+    });
+  }
+  if (snapshot.reservationIntegrity === "invalid") {
+    return QuarantineInvalidSettlement.make({
+      submissionId,
+      reason: "Settlement reservation projection failed self-integrity validation",
+    });
+  }
+  if (
+    (snapshot.reservationIntegrity === "absent" && snapshot.reservation !== undefined) ||
+    (snapshot.reservationIntegrity === "verified" && snapshot.reservation === undefined)
+  ) {
+    return QuarantineInvalidSettlement.make({
+      submissionId,
+      reason: "Settlement reservation projection disagrees with its integrity classification",
     });
   }
   if (snapshot.reservation !== undefined) {

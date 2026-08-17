@@ -23,7 +23,9 @@ import {
   JoinedToHost,
   LedgerError,
   MarkReadyRequest,
+  QueueSequence,
   ResumeSuspensionRequest,
+  ScanConversationNonterminalRequest,
   SettlementConflict,
   SubmissionLookup,
   SubmissionLookupByKey,
@@ -46,7 +48,7 @@ import { Effect, Schema } from "effect";
  * establishment, `verifySettledChild`, and result projection):
  *
  * - ledger: `admit`, `markReady`, `lookup`, `resolveAdmission`, `requestAbort`,
- *   `recordChildSettled`, `resumeSuspension`;
+ *   `recordChildSettled`, `resumeSuspension`, `scanConversationNonterminal`;
  * - store: `materialize`, `append`, `read` (one page), `inspectTail`, `export`.
  *
  * Every other port operation is lane-local by construction and is NOT given an envelope:
@@ -61,6 +63,8 @@ import { Effect, Schema } from "effect";
 
 /** Ceiling for protocol diagnostic strings; matches `AdmissionIndeterminate.reason`. */
 export const MAX_PORT_DIAGNOSTIC_LENGTH = 4_096;
+/** Fixed routed ledger page bound; local adapters stream beyond it through queue cursors. */
+export const LEDGER_SCAN_PAGE_SIZE = 256;
 
 const BoundedDiagnostic = Schema.String.check(Schema.isMaxLength(MAX_PORT_DIAGNOSTIC_LENGTH));
 
@@ -137,6 +141,14 @@ export class LedgerResumeSuspensionCall extends Schema.TaggedClass<LedgerResumeS
   request: ResumeSuspensionRequest,
 }) {}
 
+/** Routed bounded page of one Conversation's nonterminal recovery worklist. */
+export class LedgerScanConversationNonterminalPageCall extends Schema.TaggedClass<LedgerScanConversationNonterminalPageCall>(
+  "@effect-agent/storage-cloudflare/LedgerScanConversationNonterminalPageCall",
+)("LedgerScanConversationNonterminalPage", {
+  request: ScanConversationNonterminalRequest,
+  afterQueueSequence: Schema.optionalKey(QueueSequence),
+}) {}
+
 /** Routed `ConversationStore.materialize` against the owning Object. */
 export class StoreMaterializeCall extends Schema.TaggedClass<StoreMaterializeCall>(
   "@effect-agent/storage-cloudflare/StoreMaterializeCall",
@@ -181,6 +193,7 @@ export const PortRequest = Schema.Union([
   LedgerRequestAbortCall,
   LedgerRecordChildSettledCall,
   LedgerResumeSuspensionCall,
+  LedgerScanConversationNonterminalPageCall,
   StoreMaterializeCall,
   StoreAppendCall,
   StoreReadPageCall,
@@ -209,6 +222,7 @@ export const portRequestMutates = (request: PortRequest): boolean => {
       return true;
     case "LedgerLookup":
     case "LedgerResolveAdmission":
+    case "LedgerScanConversationNonterminalPage":
     case "StoreReadPage":
     case "StoreInspectTail":
     case "StoreExport":
@@ -261,6 +275,13 @@ export class LedgerResumeSuspensionResult extends Schema.TaggedClass<LedgerResum
   outcome: SuspensionResumeOutcome,
 }) {}
 
+/** One bounded page of a Conversation's nonterminal recovery worklist. */
+export class LedgerScanConversationNonterminalPageResult extends Schema.TaggedClass<LedgerScanConversationNonterminalPageResult>(
+  "@effect-agent/storage-cloudflare/LedgerScanConversationNonterminalPageResult",
+)("LedgerScanConversationNonterminalPageResult", {
+  submissions: Schema.Array(SubmissionSnapshot).check(Schema.isMaxLength(LEDGER_SCAN_PAGE_SIZE)),
+}) {}
+
 export class StoreMaterializeResult extends Schema.TaggedClass<StoreMaterializeResult>(
   "@effect-agent/storage-cloudflare/StoreMaterializeResult",
 )("StoreMaterializeResult", {}) {}
@@ -299,6 +320,7 @@ export const PortResult = Schema.Union([
   LedgerRequestAbortResult,
   LedgerRecordChildSettledResult,
   LedgerResumeSuspensionResult,
+  LedgerScanConversationNonterminalPageResult,
   StoreMaterializeResult,
   StoreAppendResult,
   StoreReadPageResult,

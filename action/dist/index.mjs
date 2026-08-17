@@ -52,6 +52,19 @@ __export(exports_Context, {
   Reference: () => Reference
 });
 
+// node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Equal.js
+var exports_Equal = {};
+__export(exports_Equal, {
+  symbol: () => symbol2,
+  makeCompareSet: () => makeCompareSet,
+  makeCompareMap: () => makeCompareMap,
+  isEqual: () => isEqual,
+  equals: () => equals,
+  byReferenceUnsafe: () => byReferenceUnsafe,
+  byReference: () => byReference,
+  asEquivalence: () => asEquivalence
+});
+
 // node_modules/.bun/effect@4.0.0-beta.107/node_modules/effect/dist/Pipeable.js
 var pipeArguments = (self, args) => {
   switch (args.length) {
@@ -750,6 +763,7 @@ function makeCompareSet(equivalence) {
 var compareSets = /* @__PURE__ */ makeCompareSet(compareBoth);
 var isEqual = (u) => hasProperty(u, symbol2);
 var asEquivalence = () => equals;
+var byReference = (obj) => byReferenceUnsafe(new Proxy(obj, {}));
 var byReferenceUnsafe = (obj) => {
   byReferenceInstances.add(obj);
   return obj;
@@ -29470,8 +29484,6 @@ var AgentError = exports_Schema.Union([
 // packages/core/src/subagent.ts
 var DelegationDepth = exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1));
 var delegationToolPrefix = "delegate_";
-var isDelegationToolName = (toolName) => toolName.startsWith(delegationToolPrefix);
-
 class SubagentParentLink extends exports_Schema.Class("SubagentParentLink")({
   delegationId: DelegationId,
   parentAgentId: AgentId,
@@ -29879,10 +29891,24 @@ class AgentPolicy extends exports_Schema.Class("AgentPolicy")(AgentPolicyFields)
   }
 }
 // packages/core/src/services.ts
+class IdGenerationError extends exports_Schema.TaggedError()("IdGenerationError", {
+  operation: exports_Schema.Literal("randomUUIDv4"),
+  reasonTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(128)),
+  message: exports_Schema.String.check(exports_Schema.isMaxLength(1000)),
+  cause: exports_Schema.optionalKey(exports_Schema.Defect())
+}) {
+}
+var idGenerationError = (error2) => IdGenerationError.make({
+  operation: "randomUUIDv4",
+  reasonTag: error2.reason._tag,
+  message: error2.message.slice(0, 1000),
+  cause: error2
+});
+
 class IdGenerator extends exports_Context.Service()("@effect-agent/core/IdGenerator") {
   static layer = exports_Layer.effect(IdGenerator, exports_Effect.gen(function* () {
     const crypto2 = yield* exports_Crypto.Crypto;
-    const randomUuid = crypto2.randomUUIDv4.pipe(exports_Effect.orDie);
+    const randomUuid = crypto2.randomUUIDv4.pipe(exports_Effect.mapError(idGenerationError));
     return {
       nextConversationId: randomUuid.pipe(exports_Effect.map((uuid) => exports_Schema.decodeSync(ConversationId)(`conversation-${uuid}`))),
       nextRunId: randomUuid.pipe(exports_Effect.map((uuid) => exports_Schema.decodeSync(RunId)(`run-${uuid}`))),
@@ -38791,7 +38817,8 @@ var SubagentExecutionFailureClassification = exports_Schema.Literals([
   "child-aborted",
   "child-compatibility",
   "establishment-denied",
-  "declaration-unavailable"
+  "declaration-unavailable",
+  "identity-unavailable"
 ]);
 var maxErrorTagLength = 256;
 var BoundedErrorTag2 = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(maxErrorTagLength));
@@ -38812,8 +38839,8 @@ var decodeDelegationToolName = exports_Schema.decodeSync(DelegationToolName);
 var decodeDelegationId = exports_Schema.decodeSync(DelegationId);
 var define = (name, options) => {
   decodeDelegationToolName(name);
-  for (const childToolName of Object.keys(options.target.toolkit.tools)) {
-    if (isDelegationToolName(childToolName)) {
+  for (const [childToolName, childTool] of Object.entries(options.target.toolkit.tools)) {
+    if (getToolExecutionKind(childTool) === "delegation") {
       throw new Error(`Subagent.define(${JSON.stringify(name)}): target Agent ${options.target.id} exposes delegation Tool ${childToolName}; S1 rejects every nested delegation (SUB-029)`);
     }
   }
@@ -39033,7 +39060,8 @@ var layer15 = (delegation, childBinding, options) => {
         return yield* prestartDenied("nested-delegation", `Delegation ${delegation.name} was requested at depth ${spawner.depth}; S1 rejects every nested delegation`);
       }
       for (const childToolName of childToolNames) {
-        if (isDelegationToolName(childToolName)) {
+        const childTool = delegation.target.toolkit.tools[childToolName];
+        if (childTool !== undefined && getToolExecutionKind(childTool) === "delegation") {
           return yield* prestartDenied("nested-delegation", `Child Toolkit exposes delegation Tool ${childToolName}; S1 rejects every nested delegation`);
         }
         if (!delegation.grant.allowedToolNames.includes(childToolName)) {
@@ -39079,7 +39107,7 @@ var layer15 = (delegation, childBinding, options) => {
         ...toolCallAllowance === undefined ? {} : { toolCallAllowance }
       };
       yield* exports_Ref.set(startedAt, yield* exports_Clock.currentTimeMillis);
-      const child = yield* spawner.spawn(childBinding, encodedInput, { delegationId: delegation.delegationId, parentToolCallId: toolCallId }, childOptions);
+      const child = yield* spawner.spawn(childBinding, encodedInput, { delegationId: delegation.delegationId, parentToolCallId: toolCallId }, childOptions).pipe(exports_Effect.catchTag("IdGenerationError", (error2) => exports_Effect.fail(executionFailure("identity-unavailable", error2._tag, error2.message))));
       const payload = {
         toolCallId,
         delegationId: delegation.delegationId,
@@ -39164,7 +39192,8 @@ var layer15 = (delegation, childBinding, options) => {
         return yield* prestartDenied("nested-delegation", `Delegation ${delegation.name} was requested at depth ${spawner.depth}; S2 rejects every nested delegation`);
       }
       for (const childToolName of childToolNames) {
-        if (isDelegationToolName(childToolName)) {
+        const childTool = delegation.target.toolkit.tools[childToolName];
+        if (childTool !== undefined && getToolExecutionKind(childTool) === "delegation") {
           return yield* prestartDenied("nested-delegation", `Child Toolkit exposes delegation Tool ${childToolName}; S2 rejects every nested delegation`);
         }
         if (!delegation.grant.allowedToolNames.includes(childToolName)) {
@@ -41705,7 +41734,7 @@ var rankAndDedupeFindings = (findings) => {
 // packages/pr-review/src/internal/fan-out.ts
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
-var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 3;
+var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 4;
 var MAX_FILE_REVIEW_TURNS = MAX_FILE_REVIEW_TOOL_CALLS + 1;
 var FILE_REVIEW_MAX_CONCURRENCY = 5;
 var MAX_FILE_REVIEW_RETRIES = FILE_REVIEW_MAX_CONCURRENCY;
@@ -41748,7 +41777,7 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => [
   ...staticGuidanceLines(options3.guidance),
   "Work in this order:",
   "1. Call read_file_diff for every file in your unit. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
-  "2. Call read_file when you need surrounding context the diff does not show, at most twice per file. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
+  "2. Call read_file when you need surrounding context the diff does not show, at most three times per file. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
   "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
   "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
   "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
@@ -41786,6 +41815,7 @@ class FileReviewUnitResult extends exports_Schema.Class("@effect-agent/pr-review
 
 class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitFailed", {
   childErrorTag: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(256)),
+  childPolicyLimit: exports_Schema.optionalKey(PolicyLimit),
   message: exports_Schema.String.check(exports_Schema.isMaxLength(400))
 }) {
 }
@@ -41799,6 +41829,7 @@ var fileReviewPolicy = SubagentPolicy.make({
 var delegationDescription = `Delegate one planned unit to a bounded read-only file reviewer. Call every unit once; after those settle, at most ${MAX_FILE_REVIEW_RETRIES} failed units may each be retried once with the exact same paths.`;
 var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
   childErrorTag: failure._tag,
+  ...failure._tag === "AgentPolicyError" && failure.limit !== undefined ? { childPolicyLimit: failure.limit } : {},
   message: (failure.message ?? "").slice(0, 400)
 });
 
@@ -42504,7 +42535,7 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
     const returnedFailure = [...declarations].reverse().map((declaration) => trace3.succeeded.get(declaration.id)).filter((event) => event !== undefined).map((event) => exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result)).find(exports_Option.isSome);
     failedUnits.push(FailedReviewUnit.make({
       unitId: unit.unitId,
-      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 2 ? "UnitAssignedMultipleTimes" : exact.length !== declarations.length ? "UnitAssignmentMismatch" : declarations.length === 2 ? "UnitRetryDidNotSettleSuccessfully" : "UnitDidNotSettleSuccessfully")
+      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}${returnedFailure.value.childPolicyLimit === undefined ? "" : `:${returnedFailure.value.childPolicyLimit}`}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 2 ? "UnitAssignedMultipleTimes" : exact.length !== declarations.length ? "UnitAssignmentMismatch" : declarations.length === 2 ? "UnitRetryDidNotSettleSuccessfully" : "UnitDidNotSettleSuccessfully")
     }));
   }
   if (plan.truncated) {
@@ -43567,7 +43598,7 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
 
 class ReviewSelectionViolation extends exports_Schema.TaggedError()("ReviewSelectionViolation", { reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000)) }) {
 }
-var samePaths = (left, right) => left.length === right.length && left.every((file2, index2) => file2.path === right[index2]?.path);
+var sameFiles = (left, right) => left.length === right.length && left.every((file2, index2) => exports_Equal.equals(file2, right[index2]));
 var validateSelection = (input) => {
   const { selection, files, anchorFiles, metadata } = input;
   const sealed = selectedReviewRangeFor(selection, metadata);
@@ -43576,9 +43607,9 @@ var validateSelection = (input) => {
       reason: "review selection was not created by the host range selector"
     }));
   }
-  if (!samePaths(sealed.files, files)) {
+  if (!sameFiles(sealed.files, files)) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
-      reason: "review selection paths do not match the model-visible source range"
+      reason: "review selection evidence does not match the model-visible source range"
     }));
   }
   if (sealed.totalFiles !== files.length) {
@@ -43592,7 +43623,7 @@ var validateSelection = (input) => {
       reason: "review selection contains a path outside the current pull-request source"
     }));
   }
-  if (sealed.mode === "full" && (sealed.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))) {
+  if (sealed.mode === "full" && (sealed.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))) {
     return exports_Effect.fail(ReviewSelectionViolation.make({
       reason: "full review selection does not cover the current pull-request source"
     }));

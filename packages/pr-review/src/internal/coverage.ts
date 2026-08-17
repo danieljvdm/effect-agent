@@ -238,7 +238,11 @@ const fanOutCoverage = (
           failure?.errorTag ??
           (returnedFailure !== undefined
             ? returnedFailure.value._tag === "FileReviewUnitFailed"
-              ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}`
+              ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}${
+                  returnedFailure.value.childPolicyLimit === undefined
+                    ? ""
+                    : `:${returnedFailure.value.childPolicyLimit}`
+                }`
               : returnedFailure.value._tag
             : undefined) ??
           (declarations.length === 0

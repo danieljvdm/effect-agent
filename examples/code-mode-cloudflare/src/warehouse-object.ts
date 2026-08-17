@@ -122,6 +122,12 @@ const seedRows: ReadonlyArray<WarehouseInvoice> = [
     createdAt: "2026-07-21",
   }),
   WarehouseInvoice.make({
+    customer: "Boundary Foods",
+    region: "amer",
+    revenue: 10_000,
+    createdAt: "2026-07-22",
+  }),
+  WarehouseInvoice.make({
     customer: "Vertex Robotics",
     region: "emea",
     revenue: 21_050,

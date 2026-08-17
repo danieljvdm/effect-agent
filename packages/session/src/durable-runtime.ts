@@ -116,6 +116,7 @@ import {
   QueueSequence,
   RecoverySnapshot,
   RecoverySnapshotRequest,
+  ScanConversationNonterminalRequest,
   ResumeSuspensionRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
@@ -5715,6 +5716,14 @@ const make = Effect.gen(function* () {
           const claimed = yield* claimFor(submission);
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
+          const releaseClaim = ledger
+            .releaseOwnership(
+              ReleaseOwnershipRequest.make({
+                submissionId: submission.submissionId,
+                ownershipToken: claim.ownershipToken,
+              }),
+            )
+            .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
           for (const attachment of attachments) {
             yield* ledger
               .attachChildToReservation(
@@ -5729,6 +5738,10 @@ const make = Effect.gen(function* () {
                   "ChildReservationConflict",
                   conflictToLedgerError("attachChildToReservation"),
                 ),
+                // Expected adapter failures happen before the crash failpoint below. Release
+                // immediately so recovery can retry deterministically instead of waiting for
+                // lease expiry; an intentional failpoint still preserves crash ownership.
+                Effect.tapError(() => releaseClaim),
               );
             yield* hit("subagent:after-child-attach");
           }
@@ -5929,16 +5942,15 @@ const make = Effect.gen(function* () {
    * Reconcile the lane named by a wake before attempting to claim it. A suspended lane is
    * deliberately not claimable, so a wake-only worker that skipped this step could never execute
    * `ResumeWaitingParent` after the child recorded its settlement. The scan is evaluated by the
-   * owning adapter: Node filters its shared ledger, while a Durable Object sees only its local
-   * lane and therefore never performs a foreign recovery read.
+   * owning adapter through its indexed conversation-scoped worklist; no wake traverses the
+   * shared global recovery backlog.
    */
   const recoverConversation = Effect.fn("DurableAgentRuntime.recoverConversation")(function* (
     conversationId: ConversationId,
   ): Effect.fn.Return<ReadonlyArray<RecoveryReport>, DurableWorkerFailure> {
-    const nonterminal = yield* ledger.scanNonterminal.pipe(
-      Stream.filter((submission) => submission.conversationId === conversationId),
-      Stream.runCollect,
-    );
+    const nonterminal = yield* ledger
+      .scanConversationNonterminal(ScanConversationNonterminalRequest.make({ conversationId }))
+      .pipe(Stream.runCollect);
     const reports: Array<RecoveryReport> = [];
     for (const submission of nonterminal) {
       reports.push(yield* recoverSubmission(submission));

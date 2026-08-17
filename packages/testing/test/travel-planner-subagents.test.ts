@@ -10,6 +10,7 @@ import {
   Agent,
   AgentPolicy,
   IdGenerator,
+  IdGenerationError,
   type RunEvent,
   RunId,
   ToolCallId,
@@ -204,6 +205,7 @@ const encodedDeskBrief = Schema.encodeSync(DestinationBrief)(
 const SpawnTravelDesk = Tool.make("spawn_travel_desk", {
   parameters: Schema.Struct({}),
   success: Schema.Struct({ denied: Schema.Boolean }),
+  failure: IdGenerationError,
 })
   .addDependency(AgentSpawner)
   .addDependency(IdGenerator);

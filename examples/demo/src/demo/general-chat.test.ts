@@ -6,6 +6,7 @@ import {
   AgentPolicyError,
   ContextOverflowError,
   IdGenerator,
+  IdGenerationError,
   ModelProtocolError,
 } from "@effect-agent/core";
 import {
@@ -56,7 +57,8 @@ type ExpectedFailure =
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentApprovalPending
-  | AgentChildPending;
+  | AgentChildPending
+  | IdGenerationError;
 type RequirementsProof = Assert<
   Equal<Effect.Services<typeof fixtureProgram>, ExpectedRequirements>
 >;
