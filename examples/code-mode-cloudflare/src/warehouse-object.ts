@@ -66,7 +66,7 @@ const selectInvoiceRows = (
     try: () => {
       const minimum = request.minimumRevenue;
       const region = request.region;
-      const limit = MAX_ROWS + 1;
+      const limit = (request.maximum ?? MAX_ROWS) + 1;
       const cursor =
         minimum === undefined
           ? region === undefined
@@ -136,18 +136,19 @@ const queryInvoices = (
   selectInvoiceRows(storage, request).pipe(
     Effect.flatMap((rows) =>
       Effect.gen(function* () {
+        const maximum = request.maximum ?? MAX_ROWS;
+        if (rows.length > maximum) {
+          return yield* queryFailure("result-limit");
+        }
         const invoices: Array<WarehouseInvoice> = [];
         for (const raw of rows) {
-          if (invoices.length === MAX_ROWS) {
-            return WarehouseInvoices.make({ invoices, truncated: true });
-          }
           const invoice = decodeInvoice(raw);
           if (Option.isNone(invoice)) {
             return yield* queryFailure("invalid-invoice");
           }
           invoices.push(invoice.value);
         }
-        return WarehouseInvoices.make({ invoices, truncated: false });
+        return WarehouseInvoices.make({ invoices });
       }),
     ),
   );

@@ -1,8 +1,12 @@
-import { ApprovalDecisionCommand } from "@effect-agent/session";
-import { Effect } from "effect";
+import { ApprovalDecisionCommand, CanonicalRecordEnvelope } from "@effect-agent/session";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
-import { AdmissionLimitExceeded, CloudflareConversationClient } from "../src/index.ts";
+import {
+  AdmissionLimitExceeded,
+  CloudflareConversationClient,
+  ConversationReadByteLimitExceeded,
+} from "../src/index.ts";
 import {
   BOOK_TOOL_CALL_ID,
   TEST_CALLER,
@@ -87,6 +91,42 @@ describe("DC admission limits (before any ledger row exists)", () => {
       _tag: "ConversationReadLimitExceeded",
       maximum: 1,
       observed: 2,
+    });
+
+    const bytePage = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.readPage(decodeConversationId(conversation), TEST_CALLER, {
+          limit: 2,
+        });
+      }),
+    );
+    const encodedBytePage = await Effect.runPromise(
+      Schema.encodeEffect(Schema.Array(CanonicalRecordEnvelope))(bytePage),
+    );
+    const firstEncoded = encodedBytePage.at(0);
+    const secondEncoded = encodedBytePage.at(1);
+    if (firstEncoded === undefined || secondEncoded === undefined) {
+      throw new Error("settled fixture must expose at least two canonical records");
+    }
+    const firstRecordBytes = new TextEncoder().encode(JSON.stringify(firstEncoded)).byteLength;
+    const secondRecordBytes = new TextEncoder().encode(JSON.stringify(secondEncoded)).byteLength;
+
+    const byteFailure = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client
+          .readAll(decodeConversationId(conversation), TEST_CALLER, {
+            maxBytes: firstRecordBytes,
+          })
+          .pipe(Effect.flip);
+      }),
+    );
+    expect(byteFailure).toBeInstanceOf(ConversationReadByteLimitExceeded);
+    expect(byteFailure).toMatchObject({
+      _tag: "ConversationReadByteLimitExceeded",
+      maximumBytes: firstRecordBytes,
+      observedBytes: firstRecordBytes + secondRecordBytes,
     });
 
     const page = await runClient(

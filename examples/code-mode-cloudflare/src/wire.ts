@@ -18,13 +18,15 @@ export class WarehouseListRequest extends Schema.Class<WarehouseListRequest>(
 )({
   minimumRevenue: Schema.optionalKey(Schema.Natural),
   region: Schema.optionalKey(WarehouseRegion),
+  maximum: Schema.optionalKey(
+    Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(200)),
+  ),
 }) {}
 
 export class WarehouseInvoices extends Schema.TaggedClass<WarehouseInvoices>(
   "@effect-agent/example-code-mode-cloudflare/WarehouseInvoices",
 )("WarehouseInvoices", {
   invoices: Schema.Array(WarehouseInvoice).check(Schema.isMaxLength(200)),
-  truncated: Schema.Boolean,
 }) {}
 
 /** Stable public failure categories; diagnostic causes remain inside the Worker/DO only. */
@@ -33,6 +35,7 @@ export const WarehouseDeniedReason = Schema.Literals([
   "initialization-failed",
   "query-failed",
   "invalid-invoice",
+  "result-limit",
   "unavailable",
   "response-encoding-failed",
 ]);
@@ -52,6 +55,9 @@ export class AskRequest extends Schema.Class<AskRequest>(
   question: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
 }) {}
 
+/** The canonical structured output contract for the warehouse Agent. */
+export const AgentAnswer = Schema.Struct({ answer: Schema.String });
+
 export const CodeModeEvidence = Schema.Struct({
   used: Schema.Boolean,
   tool: Schema.String,
@@ -65,7 +71,7 @@ export const CodeModeEvidence = Schema.Struct({
 export class AskResult extends Schema.Class<AskResult>(
   "@effect-agent/example-code-mode-cloudflare/AskResult",
 )({
-  answer: Schema.String,
+  answer: AgentAnswer.fields.answer,
   codeMode: CodeModeEvidence,
   profile: Schema.Literals(["scripted", "openai"]),
 }) {}

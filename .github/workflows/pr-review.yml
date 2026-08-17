@@ -60,7 +60,7 @@ jobs:
           # Medium is the routine-review default. The deliberate full-diff
           # audit gets high effort together with fan-out.
           effort: ${{ github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit' && 'high' || 'medium' }}
-          # A 16-unit final audit plus one four-unit retry wave needs five
+          # A 20-unit final audit plus one five-unit retry wave needs five
           # 8-minute child waves, then a 10-minute coordinator merge window.
           # Leave runner-cleanup headroom under the 55-minute job timeout.
           max-duration-minutes: ${{ ((github.event.action == 'labeled' && github.event.label.name == 'pr-review:final-audit') || github.event.pull_request.changed_files > 11) && '50' || '10' }}

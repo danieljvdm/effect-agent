@@ -25,9 +25,11 @@ engine-owned Tool broker  ──►  curated invoice Tool  ──►  WarehouseO
 The model never touches the database. It writes a program; the program runs in
 an **isolated Dynamic Worker** with no ambient authority and reaches the
 warehouse only through the brokered `warehouse.listInvoices` method. The
-caller supplies typed filters (`minimumRevenue` and `region`), while the
-adapter selects a fixed parameterized read statement. No SQL text crosses the
-Tool or RPC boundary. Deployment class
+caller supplies typed filters (`minimumRevenue`, `region`, and an optional
+`maximum` up to 200), while the adapter selects a fixed parameterized read
+statement. If more rows match than the requested maximum, the operation fails
+with `result-limit`; it never labels a partial list as complete. No SQL text
+crosses the Tool or RPC boundary. Deployment class
 **E**: the Agent runs ephemerally; the Durable Object is the warehouse data
 store, not a Conversation store.
 
@@ -59,9 +61,10 @@ Durable Object SQLite does not expose a connection-level `query_only` lock to
 this Worker. The example therefore does not accept arbitrary SQL and does not
 claim a text scanner is database authority. `WarehouseObject.listInvoices`
 Schema-decodes one closed request, selects one of four adapter-owned
-parameterized `SELECT` statements, caps the cursor at 200 rows, and
-Schema-encodes the response. A write statement is not representable through
-the public Tool or DO RPC surface.
+parameterized `SELECT` statements, reads at most the requested maximum plus one
+row to detect overflow, and Schema-encodes either the complete response or a
+typed refusal. A write statement is not representable through the public Tool
+or DO RPC surface.
 
 ## Run the tests (no credentials)
 
@@ -71,7 +74,8 @@ repository root.
 The test bundles the Worker and boots it in a real workerd runtime
 (programmatic Miniflare) with a Worker Loader binding and the SQLite Durable
 Object, then asserts that a generated program queried the real DO and computed
-the answer, malformed HTTP/DO values fail Schema decoding, and SQL authority is
+the answer, malformed HTTP/DO and terminal Agent values fail Schema decoding,
+an over-limit query is refused instead of truncated, and SQL authority is
 absent from the curated operation. The
 default profile is a deterministic scripted model, so no API key is needed.
 

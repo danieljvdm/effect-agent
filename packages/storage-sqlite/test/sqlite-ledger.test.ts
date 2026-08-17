@@ -546,7 +546,10 @@ describe("SqliteSubmissionLedger", () => {
             `;
           }),
         );
-        expect(rows[0]?.finalized_at).toBe(DateTime.formatIso(repaired.settledAt));
+        const repairedFinalizedAt = DateTime.formatIso(repaired.settledAt);
+        expect(repairedFinalizedAt).not.toBe(staleFinalizedAt);
+        expect(rows[0]?.finalized_at).not.toBe(staleFinalizedAt);
+        expect(rows[0]?.finalized_at).toBe(repairedFinalizedAt);
       }),
     ),
   );
@@ -1098,8 +1101,27 @@ describe("SqliteSubmissionLedger", () => {
         const settlement = yield* finalizeOnce;
         expect(settlement.outcome).toBe("completed");
 
-        // repairSettlementFromCanonical: before → the exact settled row is unchanged; after →
-        // the atomic repair committed and the retry preserves the exact settlement timestamp.
+        // Corrupt one redundant reservation column while retaining the finalized timestamp
+        // and canonical envelope needed for repair.
+        const initialFinalizedAt = (yield* reservationRows)[0]?.finalized_at;
+        yield* withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql`
+              UPDATE effect_agent_settlement_reservations
+              SET outcome = 'failed'
+              WHERE submission_id = ${admitted.submissionId}
+            `;
+          }),
+        );
+        expect((yield* reservationRows)[0]).toMatchObject({
+          outcome: "failed",
+          finalized_at: initialFinalizedAt,
+        });
+
+        // repairSettlementFromCanonical: before → corruption remains; after → canonical
+        // restoration committed despite the injected failure; retry stays stable.
         const repairOnce = failingLedger(
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
@@ -1117,17 +1139,27 @@ describe("SqliteSubmissionLedger", () => {
           yield* repairOnce.pipe(Effect.exit),
           "ledger:repair-settlement:before",
         );
-        expect((yield* reservationRows)[0]?.finalized_at).toBe(
-          DateTime.formatIso(settlement.settledAt),
-        );
+        expect((yield* reservationRows)[0]).toMatchObject({
+          outcome: "failed",
+          finalized_at: initialFinalizedAt,
+        });
         yield* select("ledger:repair-settlement:after");
         expectInjectedFailure(
           yield* repairOnce.pipe(Effect.exit),
           "ledger:repair-settlement:after",
         );
+        expect((yield* reservationRows)[0]).toMatchObject({
+          outcome: "completed",
+          finalized_at: initialFinalizedAt,
+        });
         yield* select(undefined);
         const repaired = yield* repairOnce;
+        expect(repaired.outcome).toBe("completed");
         expect(repaired.settledAt).toEqual(settlement.settledAt);
+        expect((yield* reservationRows)[0]).toMatchObject({
+          outcome: "completed",
+          finalized_at: initialFinalizedAt,
+        });
 
         // requestAbort: before → no intent; after → intent durable, retry returns it unchanged.
         const abortLane = "conversation-failpoints-abort";

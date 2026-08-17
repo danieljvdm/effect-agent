@@ -170,6 +170,22 @@ const runAllChecks = (env: WorkerEnv): Effect.Effect<ReadonlyArray<string>> =>
       );
     }
 
+    // The guest expression is evaluated inside the generated async loader,
+    // so a bare await is valid source and must survive the host-side parser.
+    const awaitedExpressionOutcome = yield* runOutcome(
+      request(`await Promise.resolve(async () => "awaited expression")`),
+      layer,
+    );
+    if (
+      awaitedExpressionOutcome.tag !== "success" ||
+      !Predicate.isObject(awaitedExpressionOutcome.detail) ||
+      awaitedExpressionOutcome.detail.value !== "awaited expression"
+    ) {
+      failures.push(
+        `await-capable guest expression: unexpected outcome ${JSON.stringify(awaitedExpressionOutcome)}`,
+      );
+    }
+
     const loaderEscapeOutcome = yield* runOutcome(
       request("async () => {});\n}\nglobalThis.pwned = true;\nif (false) {\n(async () => {}"),
       layer,

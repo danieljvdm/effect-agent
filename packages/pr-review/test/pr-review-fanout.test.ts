@@ -295,10 +295,10 @@ describe("coordinator instructions", () => {
 });
 
 describe("file-reviewer policy", () => {
-  it("budgets one diff and one context read for every path in a maximum-size unit", () => {
-    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 2);
-    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
-    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
+  it("budgets one diff and two context reads for every path in a maximum-size unit", () => {
+    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 3);
+    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 3);
+    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 3);
   });
 
   it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
@@ -311,12 +311,12 @@ describe("file-reviewer policy", () => {
   });
 
   it("aligns a maximum-size full audit's child waves, coordinator, run budget, and job timeout", () => {
-    expect(MAX_REVIEW_UNITS).toBe(16);
-    expect(FILE_REVIEW_MAX_CONCURRENCY).toBe(4);
+    expect(MAX_REVIEW_UNITS).toBe(20);
+    expect(FILE_REVIEW_MAX_CONCURRENCY).toBe(5);
     expect(fileReviewPolicy.maxConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
     expect(defaultFanOutPolicy.toolConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
-    expect(MAX_FILE_REVIEW_RETRIES).toBe(4);
-    expect(MAX_FILE_REVIEW_ATTEMPTS).toBe(20);
+    expect(MAX_FILE_REVIEW_RETRIES).toBe(5);
+    expect(MAX_FILE_REVIEW_ATTEMPTS).toBe(25);
     expect(fileReviewPolicy.maxChildren).toBe(MAX_FILE_REVIEW_ATTEMPTS);
     expect(defaultFanOutPolicy.maxToolCalls).toBe(1 + MAX_FILE_REVIEW_ATTEMPTS);
     expect(MAX_FILE_REVIEW_WAVES).toBe(5);
@@ -475,7 +475,9 @@ describe("planReviewUnits", () => {
     );
 
     const plan = planReviewUnits(files, { totalChangedFiles: files.length });
-    expect(plan.units.flatMap((unit) => unit.paths)).toHaveLength(files.length);
+    expect([...new Set(plan.units.flatMap((unit) => unit.paths))].sort()).toEqual(
+      files.map((file) => file.path).sort(),
+    );
     expect(plan.unassignedPaths).toEqual([]);
   });
 });

@@ -288,9 +288,11 @@ reads and refusal classification first, then prepares only when it will execute 
 mutation.
 
 `CloudflareConversationClient.readPage` remains the bounded pagination primitive. Its `readAll`
-convenience is also bounded: callers may set `maxRecords`, the default is 4,096, and reaching a
-larger committed history fails with `ConversationReadLimitExceeded` before an unbounded array can
-materialize.
+convenience is also bounded by both record count and cumulative size. Callers may set `maxRecords`
+and `maxBytes`; the defaults are 4,096 records and 8 MiB. The byte total is the sum of each decoded
+record's canonical wire encoding as UTF-8 JSON, independent of page size. Reaching either bound
+fails with `ConversationReadLimitExceeded` or `ConversationReadByteLimitExceeded` before an
+unbounded aggregate can materialize; callers use `readPage` for larger histories.
 
 `CloudflareDurableRuntimeOptions.databasePlan` declares the deployed Durable Objects account
 tier. It defaults conservatively to `free`, whose current SQLite-backed per-Object cap is 1 GB,

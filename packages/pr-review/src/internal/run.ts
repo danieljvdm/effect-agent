@@ -16,7 +16,7 @@ import {
   type ReviewShape,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
-import { FAN_OUT_MAX_DURATION_MINUTES } from "./fan-out.ts";
+import { FAN_OUT_MAX_DURATION_MINUTES, MAX_FILE_REVIEW_ATTEMPTS } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
@@ -32,6 +32,7 @@ import {
   fromStoredConcern,
   fromStoredFinding,
   ReviewState,
+  isSelectedReviewRange,
   type ReviewSelection,
   ReviewStateAuthenticator,
   toStoredConcern,
@@ -71,7 +72,7 @@ export const reviewBudgetLimits = UsageBudgetLimits.make({
 export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 400_000,
   maxOutputTokens: 16_000,
-  maxToolCalls: 24,
+  maxToolCalls: 1 + MAX_FILE_REVIEW_ATTEMPTS,
   maxCostMicrousd: 2_000_000,
   maxDurationMillis: FAN_OUT_MAX_DURATION_MINUTES * 60_000,
 });
@@ -146,6 +147,69 @@ export interface ExecuteReviewOptions {
    */
   readonly selection?: ReviewSelection | undefined;
 }
+
+/** A caller attempted to supply review-accounting scope not selected by the host. */
+export class ReviewSelectionViolation extends Schema.TaggedError<ReviewSelectionViolation>()(
+  "ReviewSelectionViolation",
+  { reason: Schema.NonEmptyString.check(Schema.isMaxLength(1_000)) },
+) {}
+
+const samePaths = (left: ReadonlyArray<ChangedFile>, right: ReadonlyArray<ChangedFile>): boolean =>
+  left.length === right.length && left.every((file, index) => file.path === right[index]?.path);
+
+const validateSelection = (input: {
+  readonly selection: ReviewSelection;
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly anchorFiles: ReadonlyArray<ChangedFile>;
+  readonly metadata: PullRequestMetadata;
+}): Effect.Effect<void, ReviewSelectionViolation> => {
+  const { selection, files, anchorFiles, metadata } = input;
+  if (!isSelectedReviewRange(selection, metadata)) {
+    return Effect.fail(
+      ReviewSelectionViolation.make({
+        reason: "review selection was not created by the host range selector",
+      }),
+    );
+  }
+  if (selection.totalFiles !== files.length) {
+    return Effect.fail(
+      ReviewSelectionViolation.make({
+        reason: "review selection total does not match the model-visible source range",
+      }),
+    );
+  }
+  const anchorPaths = new Set(anchorFiles.map((file) => file.path));
+  if (files.some((file) => !anchorPaths.has(file.path))) {
+    return Effect.fail(
+      ReviewSelectionViolation.make({
+        reason: "review selection contains a path outside the current pull-request source",
+      }),
+    );
+  }
+  if (
+    selection.mode === "full" &&
+    (selection.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))
+  ) {
+    return Effect.fail(
+      ReviewSelectionViolation.make({
+        reason: "full review selection does not cover the current pull-request source",
+      }),
+    );
+  }
+  if (
+    selection.mode === "incremental" &&
+    (selection.priorState === undefined ||
+      selection.baselineSha !== selection.priorState.reviewedHeadSha ||
+      selection.profileFingerprint !== selection.priorState.profileFingerprint)
+  ) {
+    return Effect.fail(
+      ReviewSelectionViolation.make({
+        reason: "incremental review selection is not bound to its authenticated prior state",
+      }),
+    );
+  }
+  return Effect.void;
+};
 
 /** Build the mission one review run frames from the source's snapshot. */
 export const buildReviewMission = (
@@ -235,6 +299,9 @@ export const executeReview = <
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
     const selection = options.selection;
+    if (selection !== undefined) {
+      yield* validateSelection({ selection, files, anchorFiles, metadata });
+    }
     const mission = buildReviewMission(metadata, files);
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =

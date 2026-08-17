@@ -10,6 +10,7 @@ import {
   WarehouseListRequest,
   WarehouseQueryDenied,
 } from "./warehouse-object.ts";
+import { AgentAnswer } from "./wire.ts";
 
 /**
  * The curated read-only warehouse Tool: callers provide only typed filters,
@@ -18,12 +19,9 @@ import {
  */
 export const warehouseListTool = Tool.make("list_warehouse_invoices", {
   description:
-    "List invoices from the curated warehouse, optionally filtering by minimum revenue and region. Results are ordered by revenue descending and bounded to 200 rows.",
+    "List invoices from the curated warehouse, optionally filtering by minimum revenue and region. Results are ordered by revenue descending. The operation refuses rather than returning an incomplete result when its maximum (default 200) is exceeded.",
   parameters: WarehouseListRequest,
-  success: Schema.Struct({
-    invoices: WarehouseInvoices.fields.invoices,
-    truncated: Schema.Boolean,
-  }),
+  success: WarehouseInvoices,
   failure: WarehouseQueryDenied,
 }).annotate(ToolExecutionClass, "readonly");
 
@@ -38,13 +36,7 @@ export const warehouseHandlersLayer: Layer.Layer<
   Effect.gen(function* () {
     const warehouse = yield* Warehouse;
     return {
-      list_warehouse_invoices: (request) =>
-        warehouse.listInvoices(request).pipe(
-          Effect.map((outcome) => ({
-            invoices: outcome.invoices,
-            truncated: outcome.truncated,
-          })),
-        ),
+      list_warehouse_invoices: (request) => warehouse.listInvoices(request),
     };
   }),
 );
@@ -63,10 +55,10 @@ export const codeMode = CodeMode.make("run_javascript", {
 
 export const codeModeAgent = Agent.define("warehouse-analyst", {
   input: Schema.Struct({ question: Schema.String }),
-  output: Schema.Struct({ answer: Schema.String }),
+  output: AgentAnswer,
   instructions: [
     "You answer questions about invoice data.",
-    "First call run_javascript exactly once with a program that reads invoices via warehouse.listInvoices({ minimumRevenue?, region? }) and computes the answer in code.",
+    "First call run_javascript exactly once with a program that reads invoices via warehouse.listInvoices({ minimumRevenue?, region?, maximum? }) and computes the answer in code.",
     "Each invoice has customer, region, revenue, and createdAt fields. No SQL interface is exposed.",
     "After the program returns, respond with only a JSON object of exactly this shape, no prose:",
     '{"answer": "<one concise sentence answering the question>"}',

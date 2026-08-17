@@ -282,23 +282,78 @@ export interface ReviewSelection {
   readonly profileFingerprint: string;
 }
 
+/**
+ * A selection is an internal capability, not caller-supplied accounting data.
+ * The range selector records the object it produced so a structural lookalike
+ * cannot shrink a current full review and mint continuity state for it.
+ */
+interface SelectionSource {
+  readonly repository: string;
+  readonly number: number;
+  readonly baseRef: string;
+  readonly baseSha?: string | undefined;
+  readonly headRef: string;
+  readonly headSha: string;
+  readonly totalChangedFiles: number;
+}
+
+const selectedRanges = new WeakMap<object, SelectionSource>();
+
+const sealReviewSelection = (
+  selection: ReviewSelection,
+  source: PullRequestMetadata,
+): ReviewSelection => {
+  selectedRanges.set(selection, {
+    repository: source.repository,
+    number: source.number,
+    baseRef: source.baseRef,
+    ...(source.baseSha === undefined ? {} : { baseSha: source.baseSha }),
+    headRef: source.headRef,
+    headSha: source.headSha,
+    totalChangedFiles: source.totalChangedFiles,
+  });
+  return selection;
+};
+
+/** Whether this exact selection originated from this current source snapshot. */
+export const isSelectedReviewRange = (
+  selection: ReviewSelection,
+  current: PullRequestMetadata,
+): boolean => {
+  const source = selectedRanges.get(selection);
+  return (
+    source !== undefined &&
+    source.repository === current.repository &&
+    source.number === current.number &&
+    source.baseRef === current.baseRef &&
+    source.baseSha === current.baseSha &&
+    source.headRef === current.headRef &&
+    source.headSha === current.headSha &&
+    source.totalChangedFiles === current.totalChangedFiles
+  );
+};
+
 const fullSelection = (input: {
   readonly reason: string;
   readonly files: ReadonlyArray<ChangedFile>;
-  readonly totalFiles: number;
+  readonly current: PullRequestMetadata;
   readonly profileFingerprint: string;
-}): ReviewSelection => ({
-  mode: "full",
-  reason: input.reason,
-  files: input.files,
-  affectedPaths: input.files.flatMap((file) =>
-    file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
-  ),
-  totalFiles: input.totalFiles,
-  baselineSha: undefined,
-  priorState: undefined,
-  profileFingerprint: input.profileFingerprint,
-});
+}): ReviewSelection =>
+  sealReviewSelection(
+    {
+      mode: "full",
+      reason: input.reason,
+      files: input.files,
+      affectedPaths: input.files.flatMap((file) =>
+        file.previousPath === undefined ? [file.path] : [file.path, file.previousPath],
+      ),
+      totalFiles: input.current.totalChangedFiles,
+      baselineSha: undefined,
+      priorState: undefined,
+      profileFingerprint: input.profileFingerprint,
+    },
+    input.current,
+  );
 
 /**
  * Validate that persisted state belongs to this exact PR/base lineage and the
@@ -337,7 +392,7 @@ export const selectReviewRange = (input: {
     fullSelection({
       reason,
       files: input.fullFiles,
-      totalFiles: input.current.totalChangedFiles,
+      current: input.current,
       profileFingerprint: input.profileFingerprint,
     });
   if (input.requestedMode === "final") return full("explicit final full-diff audit requested");
@@ -411,16 +466,19 @@ export const selectReviewRange = (input: {
   const selectedFiles = [...selectedByPath.values()].sort((left, right) =>
     left.path < right.path ? -1 : left.path > right.path ? 1 : 0,
   );
-  return {
-    mode: "incremental",
-    reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
-    files: selectedFiles,
-    affectedPaths: [...affectedPaths].sort(),
-    totalFiles: selectedFiles.length,
-    baselineSha: input.priorState.reviewedHeadSha,
-    priorState: input.priorState,
-    profileFingerprint: input.profileFingerprint,
-  };
+  return sealReviewSelection(
+    {
+      mode: "incremental",
+      reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
+      files: selectedFiles,
+      affectedPaths: [...affectedPaths].sort(),
+      totalFiles: selectedFiles.length,
+      baselineSha: input.priorState.reviewedHeadSha,
+      priorState: input.priorState,
+      profileFingerprint: input.profileFingerprint,
+    },
+    input.current,
+  );
 };
 
 /**

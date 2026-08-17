@@ -67,7 +67,10 @@ const CALL_TWO = Schema.decodeSync(ToolCallId)("call-2");
 
 const digests = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 
-const submission = (state: SubmissionState): SubmissionSnapshot =>
+const submission = (
+  state: SubmissionState,
+  settledOutcome: SettlementOutcome = "completed",
+): SubmissionSnapshot =>
   SubmissionSnapshot.make({
     submissionId: SUBMISSION_ID,
     conversationId: CONVERSATION_ID,
@@ -81,6 +84,7 @@ const submission = (state: SubmissionState): SubmissionSnapshot =>
     inputDigest: SHA_B,
     receiptId: Schema.decodeSync(ReceiptId)("receipt-classifier-1"),
     state,
+    ...(state === "settled" ? { settledOutcome } : {}),
     createdAt: CREATED_AT,
     ...(state === "admitted" ? {} : { readyAt: CREATED_AT }),
   });
@@ -110,6 +114,21 @@ const settlementRecord = (outcome: SettlementOutcome) =>
       settlementId: submissionSettlementId(SUBMISSION_ID),
       receiptId: "receipt-classifier-1",
       outcome,
+    },
+  });
+
+const wrongTagSettlementRecord = () =>
+  Schema.decodeSync(RecordEnvelope)({
+    recordId: submissionSettlementRecordId(SUBMISSION_ID),
+    family: "conversation",
+    schemaVersion: 1,
+    createdAt: "2026-08-12T12:00:00.000Z",
+    deploymentId: "deployment-classifier",
+    payload: {
+      _tag: "UserInputRecorded",
+      submissionId: SUBMISSION_ID,
+      kind: "user",
+      input: { unexpected: "payload family at deterministic settlement identity" },
     },
   });
 
@@ -245,11 +264,12 @@ interface SnapshotOverrides {
   readonly childReservations?: ReadonlyArray<ChildBudgetReservationSnapshot>;
   readonly childAttachments?: ReadonlyArray<ChildAttachmentSnapshot>;
   readonly parentLinkage?: ParentLinkage;
+  readonly settledOutcome?: SettlementOutcome;
 }
 
 const snapshot = (state: SubmissionState, overrides: SnapshotOverrides = {}): RecoverySnapshot =>
   RecoverySnapshot.make({
-    submission: submission(state),
+    submission: submission(state, overrides.settledOutcome),
     joins: [],
     approvalDecisions: overrides.approvalDecisions ?? [],
     unknownResolutions: overrides.unknownResolutions ?? [],
@@ -280,6 +300,7 @@ interface EvidenceOverrides {
   readonly conversationMaterialized?: boolean;
   readonly inputRecorded?: boolean;
   readonly recordedSettlementOutcome?: SettlementOutcome;
+  readonly recordedSettlement?: RecordEnvelope;
   readonly abortRecorded?: boolean;
   readonly openToolCalls?: ReadonlyArray<OpenToolCallEvidence>;
   readonly openDelegationCalls?: ReadonlyArray<OpenDelegationCallEvidence>;
@@ -295,6 +316,10 @@ interface EvidenceOverrides {
 
 const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence => {
   const openDelegationCalls = overrides.openDelegationCalls ?? [];
+  const recordedSettlement =
+    overrides.recordedSettlementOutcome === undefined
+      ? overrides.recordedSettlement
+      : (overrides.recordedSettlement ?? settlementRecord(overrides.recordedSettlementOutcome));
   return RecoveryEvidence.make({
     conversationMaterialized: overrides.conversationMaterialized ?? true,
     inputRecorded: overrides.inputRecorded ?? false,
@@ -318,9 +343,7 @@ const evidence = (overrides: EvidenceOverrides = {}): RecoveryEvidence => {
     subagentJoinedToolCallIds: overrides.subagentJoinedToolCallIds ?? [],
     joinedInputCovered: overrides.joinedInputCovered ?? true,
     subagentLineageRecorded: overrides.subagentLineageRecorded ?? false,
-    ...(overrides.recordedSettlementOutcome === undefined
-      ? {}
-      : { recordedSettlement: settlementRecord(overrides.recordedSettlementOutcome) }),
+    ...(recordedSettlement === undefined ? {} : { recordedSettlement }),
     ...(overrides.declaredPendingBatch === undefined
       ? {}
       : { declaredPendingBatch: overrides.declaredPendingBatch }),
@@ -456,9 +479,30 @@ describe("recovery classifier crash matrix", () => {
   it("settled work needs no action, even with a stale abort intent", () => {
     const decision = classifyRecovery(
       snapshot("settled", { abortIntent }),
-      evidence({ inputRecorded: true }),
+      evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
     );
     expect(decision._tag).toBe("NoAction");
+  });
+
+  it("quarantines a settled projection without canonical settlement authority", () => {
+    const decision = classifyRecovery(snapshot("settled"), evidence({ inputRecorded: true }));
+    expect(decision._tag).toBe("QuarantineInvalidSettlement");
+  });
+
+  it("quarantines a wrong-tag record at the deterministic settlement identity", () => {
+    const decision = classifyRecovery(
+      snapshot("running", { ownership }),
+      evidence({ inputRecorded: true, recordedSettlement: wrongTagSettlementRecord() }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSettlement");
+  });
+
+  it("quarantines a settled projection whose outcome diverges from canonical history", () => {
+    const decision = classifyRecovery(
+      snapshot("settled", { settledOutcome: "failed" }),
+      evidence({ inputRecorded: true, recordedSettlementOutcome: "completed" }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSettlement");
   });
 });
 
@@ -535,7 +579,11 @@ describe("recovery classifier P5 durable-tool rows (plan §4.3)", () => {
   it("settled state beats open tool calls", () => {
     const decision = classifyRecovery(
       snapshot("settled"),
-      evidence({ inputRecorded: true, openToolCalls: [openCall(CALL_ONE)] }),
+      evidence({
+        inputRecorded: true,
+        recordedSettlementOutcome: "completed",
+        openToolCalls: [openCall(CALL_ONE)],
+      }),
     );
     expect(decision._tag).toBe("NoAction");
   });

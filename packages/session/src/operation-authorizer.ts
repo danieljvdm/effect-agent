@@ -36,15 +36,68 @@ export const AuthorizedOperation = Schema.Literals([
 ]);
 export type AuthorizedOperation = typeof AuthorizedOperation.Type;
 
-/** One explicit caller-bearing authorization question. */
-export class OperationAuthorizationRequest extends Schema.Class<OperationAuthorizationRequest>(
-  "@effect-agent/session/OperationAuthorizationRequest",
-)({
-  operation: AuthorizedOperation,
-  principal: Principal,
-  conversationId: Schema.optionalKey(ConversationId),
-  submissionId: Schema.optionalKey(SubmissionId),
-}) {}
+const AuthorizationPrincipal = { principal: Principal } as const;
+const NoConversationTarget = { conversationId: Schema.optionalKey(Schema.Never) } as const;
+const NoSubmissionTarget = { submissionId: Schema.optionalKey(Schema.Never) } as const;
+const NoGlobalScope = { scope: Schema.optionalKey(Schema.Never) } as const;
+
+/**
+ * One explicit caller-bearing authorization question. Each operation carries its required
+ * resource binding; a protected request can never be represented without a concrete target (or
+ * the explicit all-obligations scope for the one genuinely global operation).
+ */
+export const OperationAuthorizationRequest = Schema.Union([
+  Schema.Struct({
+    operation: Schema.Literal("awaitSettlement"),
+    ...AuthorizationPrincipal,
+    conversationId: ConversationId,
+    submissionId: SubmissionId,
+    ...NoGlobalScope,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("observe"),
+    ...AuthorizationPrincipal,
+    conversationId: ConversationId,
+    submissionId: Schema.optionalKey(SubmissionId),
+    ...NoGlobalScope,
+  }),
+  Schema.Struct({
+    operation: Schema.Literals(["abort", "resolveUnknown", "resolveApproval", "retry"]),
+    ...AuthorizationPrincipal,
+    ...NoConversationTarget,
+    submissionId: SubmissionId,
+    ...NoGlobalScope,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("explain"),
+    ...AuthorizationPrincipal,
+    conversationId: ConversationId,
+    ...NoSubmissionTarget,
+    ...NoGlobalScope,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("explain"),
+    ...AuthorizationPrincipal,
+    ...NoConversationTarget,
+    submissionId: SubmissionId,
+    ...NoGlobalScope,
+  }),
+  Schema.Struct({
+    operation: Schema.Literals(["verify", "wake"]),
+    ...AuthorizationPrincipal,
+    conversationId: ConversationId,
+    ...NoSubmissionTarget,
+    ...NoGlobalScope,
+  }),
+  Schema.Struct({
+    operation: Schema.Literal("scanObligations"),
+    ...AuthorizationPrincipal,
+    ...NoConversationTarget,
+    ...NoSubmissionTarget,
+    scope: Schema.Literal("all"),
+  }),
+]);
+export type OperationAuthorizationRequest = typeof OperationAuthorizationRequest.Type;
 
 /** A typed, fail-closed authorization denial (never a defect, never silent). */
 export class OperationDenied extends Schema.TaggedError<OperationDenied>()("OperationDenied", {

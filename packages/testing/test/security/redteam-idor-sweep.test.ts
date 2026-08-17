@@ -1,5 +1,6 @@
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
 import {
+  AbortCommand,
   ApprovalDecisionCommand,
   DefinitionDigests,
   DeploymentId,
@@ -42,7 +43,7 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
 //
 // The threat: a caller holding a legitimate identity for conversation A tries
 // to read or mutate conversation B (or a foreign Submission) through the
-// administrative surface — observe, explain, explainConversation, verify,
+// administrative surface — observe, abort, explain, explainConversation, verify,
 // retry, wake, scanObligations, resolveUnknown, resolveApproval. Identifier
 // knowledge is never a capability (D10): a non-default `OperationAuthorizer`
 // that binds each request to the CALLER's own conversation must deny every
@@ -61,6 +62,7 @@ const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-idor-sweep");
 const FOREIGN_PRINCIPAL = Schema.decodeSync(Principal)("principal-idor-foreign");
 const CALLER = OperationCaller.make({ principal: PRINCIPAL });
+const DENIAL_REASON = "cross-tenant access denied by the tenant-scoped authorization policy";
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-idor-sweep");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 
@@ -142,9 +144,9 @@ const configLayer = DurableRuntimeConfig.layer({
  *    verify/wake/observe carry `conversationId`); and
  *  - any request naming a Submission the host has resolved to a foreign tenant.
  *
- * The second clause matters because `retry`, `resolveUnknown`, and `resolveApproval` authorize
- * by `submissionId` WITHOUT a `conversationId` (durable-runtime.ts): the framework gives the
- * authorizer no conversation context for those, so a tenant-scoped host must resolve the
+ * The second clause matters because `abort`, `retry`, `resolveUnknown`, and `resolveApproval`
+ * authorize by `submissionId` WITHOUT a `conversationId` (durable-runtime.ts): the framework
+ * gives the authorizer no conversation context for those, so a tenant-scoped host must resolve the
  * Submission→tenant mapping itself. The test models that host-side resolution with an explicit
  * Submission-owner map (see FINDINGS SEC-P7-002).
  */
@@ -184,7 +186,7 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
             return yield* OperationDenied.make({
               operation: request.operation,
               principal: request.principal,
-              reason: "cross-tenant access denied by the tenant-scoped authorization policy",
+              reason: DENIAL_REASON,
               ...(request.conversationId === undefined
                 ? {}
                 : { conversationId: request.conversationId }),
@@ -308,6 +310,25 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         );
         expect(failureTag(observeForeign)).toBe("OperationDenied");
 
+        const abortForeign = yield* Effect.flip(
+          runtime.abort(
+            AbortCommand.make({
+              submissionId: foreignReceipt.submissionId,
+              author: "attacker",
+              reason: "cross-tenant abort",
+            }),
+            CALLER,
+          ),
+        );
+        expect(abortForeign).toEqual(
+          OperationDenied.make({
+            operation: "abort",
+            principal: PRINCIPAL,
+            reason: DENIAL_REASON,
+            submissionId: foreignReceipt.submissionId,
+          }),
+        );
+
         const resolveUnknownForeign = yield* Effect.exit(
           runtime.resolveUnknown(
             UnknownResolutionCommand.make({
@@ -372,6 +393,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
           "retry",
           "wake",
           "observe",
+          "abort",
           "resolveUnknown",
           "resolveApproval",
           "scanObligations",

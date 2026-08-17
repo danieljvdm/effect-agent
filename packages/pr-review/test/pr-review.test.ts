@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Ref, Schema } from "effect";
-import { Agent, IdGenerator } from "effect-agent";
+import { Agent, IdGenerator, RunEvent } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
@@ -89,6 +89,70 @@ describe("host coverage diagnostics", () => {
     expect(coverage.status).toBe("incomplete");
     expect(coverage.reasons.every((reason) => reason.length <= 1_000)).toBe(true);
     expect(coverage.reasons.join("\n")).toContain("(+2 more)");
+  });
+
+  it("rejects a speculative fan-out duplicate that was declared before the initial wave settled", () => {
+    const file = ChangedFile.make({
+      path: "src/hello.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -0,0 +1 @@\n+export {};",
+    });
+    const event = (encoded: unknown) => Schema.decodeUnknownSync(RunEvent)(encoded);
+    const common = {
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "reviewer",
+      timestamp: "2026-08-17T00:00:00.000Z",
+      turnId: "turn-1",
+      toolName: "delegate_file_review",
+      providerExecuted: false,
+    };
+    const events = [
+      event({
+        ...common,
+        _tag: "ToolCallDeclared",
+        sequence: 1,
+        toolCallId: "initial",
+        parameters: { unitId: "unit-001", paths: [file.path] },
+      }),
+      event({
+        ...common,
+        _tag: "ToolCallDeclared",
+        sequence: 2,
+        toolCallId: "speculative-retry",
+        parameters: { unitId: "unit-001", paths: [file.path] },
+      }),
+      event({
+        ...common,
+        _tag: "ToolCallSucceeded",
+        sequence: 3,
+        toolCallId: "speculative-retry",
+        result: { unitId: "unit-001", findings: [] },
+      }),
+      event({
+        ...common,
+        _tag: "ToolCallFailed",
+        sequence: 4,
+        toolCallId: "initial",
+        errorTag: "AgentOutputError",
+        message: "invalid child output",
+      }),
+    ];
+
+    const coverage = assessReviewCoverage({
+      shape: "fan-out",
+      files: [file],
+      totalFiles: 1,
+      anchorFiles: [file],
+      totalAnchorFiles: 1,
+      events,
+    });
+
+    expect(coverage.status).toBe("incomplete");
+    expect(coverage.unreviewedPaths).toContain(file.path);
   });
 });
 

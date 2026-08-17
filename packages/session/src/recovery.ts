@@ -3,11 +3,13 @@ import { Effect, Schema } from "effect";
 
 import {
   ChildReservationId,
-  SuspensionReason,
   WaitingChild,
+  submissionSettlementId,
+  submissionSettlementRecordId,
   type ChildAttachmentSnapshot,
   type ChildBudgetReservationSnapshot,
   type RecoverySnapshot,
+  type SuspensionReason,
 } from "./ledger.ts";
 import { RecordEnvelope, SettlementOutcome, ToolCallPrepared } from "./records.ts";
 
@@ -436,6 +438,18 @@ export class QuarantineInvalidSuspension extends Schema.TaggedClass<QuarantineIn
   reason: Schema.String,
 }) {}
 
+/**
+ * The operational settlement projection and deterministic canonical settlement evidence
+ * disagree. Recovery quarantines the obligation instead of treating malformed or absent
+ * canonical authority as terminal state.
+ */
+export class QuarantineInvalidSettlement extends Schema.TaggedClass<QuarantineInvalidSettlement>(
+  "@effect-agent/session/QuarantineInvalidSettlement",
+)("QuarantineInvalidSettlement", {
+  submissionId: SubmissionId,
+  reason: Schema.String,
+}) {}
+
 /** The executable recovery decision table's output alphabet (plan §Recovery classifier). */
 export const RecoveryDecision = Schema.Union([
   CompleteMaterialization,
@@ -466,6 +480,7 @@ export const RecoveryDecision = Schema.Union([
   PropagateChildAbort,
   ReleaseOrphanChildReservation,
   AwaitParentEstablishment,
+  QuarantineInvalidSettlement,
   QuarantineInvalidSuspension,
   NoAction,
 ]);
@@ -939,10 +954,36 @@ export const classifyRecovery = (
 ): RecoveryDecision => {
   const submissionId = snapshot.submission.submissionId;
   const state = snapshot.submission.state;
+  const recordedSettlement = evidence.recordedSettlement;
+  if (recordedSettlement !== undefined) {
+    const expectedRecordId = submissionSettlementRecordId(submissionId);
+    const payload = recordedSettlement.payload;
+    const mismatch =
+      recordedSettlement.recordId !== expectedRecordId
+        ? `Canonical settlement evidence has record ${recordedSettlement.recordId}; expected ${expectedRecordId}`
+        : payload._tag !== "SubmissionSettled"
+          ? `Deterministic settlement record ${expectedRecordId} carries ${payload._tag}, not SubmissionSettled`
+          : payload.submissionId !== submissionId
+            ? `Canonical settlement payload names Submission ${payload.submissionId}; expected ${submissionId}`
+            : payload.settlementId !== submissionSettlementId(submissionId)
+              ? `Canonical settlement payload carries non-deterministic SettlementId ${payload.settlementId}`
+              : payload.receiptId !== snapshot.submission.receiptId
+                ? `Canonical settlement payload names Receipt ${payload.receiptId}; expected ${snapshot.submission.receiptId}`
+                : state === "settled" && snapshot.submission.settledOutcome !== payload.outcome
+                  ? `Settled ledger outcome ${snapshot.submission.settledOutcome ?? "missing"} disagrees with canonical outcome ${payload.outcome}`
+                  : undefined;
+    if (mismatch !== undefined) {
+      return QuarantineInvalidSettlement.make({ submissionId, reason: mismatch });
+    }
+  } else if (state === "settled") {
+    return QuarantineInvalidSettlement.make({
+      submissionId,
+      reason: "Settled ledger state has no deterministic canonical SubmissionSettled record",
+    });
+  }
   if (state === "settled") {
     return NoAction.make({ submissionId });
   }
-  const recordedSettlement = evidence.recordedSettlement;
   if (recordedSettlement !== undefined && recordedSettlement.payload._tag === "SubmissionSettled") {
     const recordedSettlementPayload = recordedSettlement.payload;
     return FinalizeLedgerFromHistory.make({

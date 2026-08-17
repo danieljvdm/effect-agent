@@ -124,6 +124,12 @@ const scriptedExecutorImplementation = SandboxImplementation.make({
   identity: "scripted-executor",
 });
 
+const boundaryFailure = {
+  message: "m".repeat(80),
+  thrown: "t".repeat(80),
+  logs: ["l".repeat(40)],
+} as const;
+
 /**
  * A scripted CodeExecutor: `CALL <namespace>.<method> <json>` performs one
  * host call and returns its outcome as the pass result; `RESULT <json>`
@@ -184,6 +190,13 @@ const scriptedExecutorLayer = Layer.succeed(CodeExecutor)(
             Array.from({ length: count }, (_, i) => `line-${i} ${"x".repeat(64)}`),
           );
         }
+        if (source === "THROW_BOUNDARY") {
+          return yield* CodeProgramFailedError.make({
+            implementation: scriptedExecutorImplementation,
+            reason: "threw",
+            ...boundaryFailure,
+          });
+        }
         return yield* CodeProgramFailedError.make({
           implementation: scriptedExecutorImplementation,
           reason: "threw",
@@ -220,6 +233,14 @@ const encodedEnvelopeBytes = (value: unknown): number => {
       : Schema.encodeSync(CodeModeSuccess)(Schema.decodeUnknownSync(CodeModeSuccess)(value));
   return Encoding.encodeHex(JSON.stringify(encoded)).length / 2;
 };
+
+const encodedBytes = (value: string): number => Encoding.encodeHex(value).length / 2;
+
+/** The former accounting charged components but omitted the failure-envelope JSON structure. */
+const componentOnlyFailureBytes = (failure: typeof boundaryFailure): number =>
+  encodedBytes(failure.message) +
+  encodedBytes(JSON.stringify(failure.thrown)) +
+  failure.logs.reduce((total, line) => total + encodedBytes(JSON.stringify(line)) + 1, 0);
 
 const runWithCode = (code: string, options?: { readonly maxEgressBytes?: number }) =>
   Effect.gen(function* () {
@@ -393,9 +414,22 @@ layer(identifiers)("CAP-016 Code Mode handler through a scripted executor", (it)
 
   it.effect("CAP-016 bounds the complete Schema-encoded failure envelope", () =>
     Effect.gen(function* () {
-      const outcome = yield* runWithCode("THROW", { maxEgressBytes: 256 });
+      const maxEgressBytes = 256;
+      const unbudgeted = CodeModeFailure.make({
+        errorTag: "CodeProgramFailedError",
+        ...boundaryFailure,
+      });
+
+      // This fixture passes the former component-only accounting but exceeds the public wire
+      // envelope once its tag, field names, punctuation, and array structure are included.
+      expect(componentOnlyFailureBytes(boundaryFailure)).toBeLessThanOrEqual(maxEgressBytes);
+      expect(encodedEnvelopeBytes(unbudgeted)).toBeGreaterThan(maxEgressBytes);
+
+      const outcome = yield* runWithCode("THROW_BOUNDARY", { maxEgressBytes });
       expect(outcome.toolResults[0].isFailure).toBe(true);
-      expect(encodedEnvelopeBytes(outcome.toolResults[0].result)).toBeLessThanOrEqual(256);
+      expect(encodedEnvelopeBytes(outcome.toolResults[0].result)).toBeLessThanOrEqual(
+        maxEgressBytes,
+      );
     }),
   );
 });

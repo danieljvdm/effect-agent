@@ -74,15 +74,10 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     const invalidAnswerBundle = await build({
       stdin: {
         contents: `
-          import { Effect } from "effect";
-          import { decodeAgentAnswer, makeDemoWorker } from "../src/worker.ts";
+          import { makeDemoWorker } from "../src/worker.ts";
           export { CodeModeHostEntrypoint, WarehouseObject } from "../src/worker.ts";
 
-          export default makeDemoWorker(() =>
-            decodeAgentAnswer({ answer: 42 }).pipe(
-              Effect.flatMap(() => Effect.die("invalid answer unexpectedly decoded")),
-            ),
-          );
+          export default makeDemoWorker(() => ({ answer: 42 }));
         `,
         resolveDir: import.meta.dirname,
         sourcefile: "invalid-answer-worker.ts",
@@ -222,6 +217,16 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     expect(denied).toMatchObject({
       _tag: "WarehouseQueryDenied",
       reason: "invalid-request",
+    });
+
+    const incomplete = await Effect.runPromise(
+      Schema.decodeUnknownEffect(WarehouseListOutcome)(
+        await stub.listInvoices({ minimumRevenue: 10_000, maximum: 2 }),
+      ),
+    );
+    expect(incomplete).toMatchObject({
+      _tag: "WarehouseQueryDenied",
+      reason: "result-limit",
     });
 
     const legacy = rawStub as unknown as {

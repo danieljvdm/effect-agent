@@ -9,11 +9,11 @@ A storage adapter cannot be called compatible because it type-checks. Certificat
 point that runs three tiers against a candidate
 `SubmissionLedger`/`ConversationStore` Layer pair and produces one Schema-encoded certificate:
 
-| Tier                            | Claim                                                                                 | How it is discharged                                                                                                                                                                                                                                                                                                |
-| ------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **1 — port contract**           | Both ports honor every documented contract case                                       | The two shared conformance case arrays (`submissionLedgerConformanceCases` and `conversationStoreConformanceCases`), run verbatim                                                                                                                                                                                   |
-| **2 — coordinator convergence** | The durable coordinator over YOUR adapters survives a fault at every durable boundary | Every literal in `DurableRuntimeFailpointLocation` is armed one-shot across the scenario shapes declared by `CERTIFICATION_SCENARIOS`; after the fault the state must classify and the re-drive must converge to `verifyConversationInvariants` with every Submission settled and the digest chain fully recomputed |
-| **3 — real loss**               | The adapter survives ACTUAL loss (process kill, eviction), not only in-process faults | An adapter-supplied crash lever executed in this run, or citations of committed real-loss suites — recorded honestly, never silently claimed                                                                                                                                                                        |
+| Tier                            | Claim                                                                                    | How it is discharged                                                                                                                                                                                                                                                                                                          |
+| ------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1 — port contract**           | Both ports honor every documented contract case                                          | The two shared conformance case arrays (`submissionLedgerConformanceCases` and `conversationStoreConformanceCases`), run verbatim                                                                                                                                                                                             |
+| **2 — coordinator convergence** | Reached coordinator boundaries converge over this candidate adapter pair in this harness | Every literal in `DurableRuntimeFailpointLocation` is armed one-shot across the scenario shapes declared by `CERTIFICATION_SCENARIOS`; a row is fault evidence only when the failpoint fires and the re-drive converges to `verifyConversationInvariants` with every Submission settled and the digest chain fully recomputed |
+| **3 — real loss**               | The adapter survives ACTUAL loss (process kill, eviction), not only in-process faults    | An adapter-supplied crash lever executed in this run, or citations of committed real-loss suites — recorded honestly, never silently claimed                                                                                                                                                                                  |
 
 ## Run the certification
 
@@ -65,18 +65,35 @@ fresh work on its own Conversation lane, drives the lane(s) with
   run still settled and verified); this is recorded scope, not fault coverage;
 - `failed` — anything else, with a bounded detail.
 
+The three committed certificates currently record the same reached matrix. The “not triggered”
+count is part of the result, not a pass over that boundary:
+
+| Scenario         | Reached (`converged` with `failpointFired: true`)                                                                                                                                                                                                                                                                                                                                                                          | Not triggered |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------: |
+| `plain`          | `submit:after-admit`, `submit:after-materialize`, `claim:after-claim`, `input:after-canonical-append`, `turn:after-canonical-append`, `terminalize:after-reserve`, `terminalize:after-canonical-append`                                                                                                                                                                                                                    |            23 |
+| `uncertain-tool` | the `plain` locations, plus `turn:after-response-append`, `turn:after-results-append`, `tools:after-prepared-append`                                                                                                                                                                                                                                                                                                       |            20 |
+| `durable-steps`  | the `uncertain-tool` locations, plus `step:after-step-append`                                                                                                                                                                                                                                                                                                                                                              |            19 |
+| `approval`       | the `uncertain-tool` locations, plus `approval:after-request-append`, `approval:after-suspend`                                                                                                                                                                                                                                                                                                                             |            18 |
+| `join`           | the `plain` locations, plus `join:after-claim`, `join:after-canonical-append`                                                                                                                                                                                                                                                                                                                                              |            21 |
+| `delegation`     | the `plain` locations; `turn:after-response-append`; `tools:after-prepared-append`; and `subagent:after-reserve`, `subagent:after-request-append`, `subagent:after-admit`, `subagent:after-child-ready`, `subagent:after-start-append`, `subagent:after-child-attach`, `subagent:after-sibling-settle`, `subagent:after-suspend`, `subagent:after-join-append`, `subagent:after-release-pending`, `subagent:after-release` |            10 |
+
+That is 69 reached cells and 111 `not-triggered` cells out of 180 armed cells. A location may be
+reached in one scenario and not triggered in another. A candidate certificate therefore proves
+only its rows with `status: "converged"` and `failpointFired: true`; it does not turn an armed but
+unreached row into generic durable-boundary coverage.
+
 The invariant verification is the same shared checker the admin `verify` operation uses —
 with one upgrade: the runner captures each batch's producer identity at append time, so the
 `digest-chain` check is FULLY recomputed from `EMPTY_TAIL_DIGEST` instead of reported
 `skipped` (the ConversationStore port deliberately does not export producer identity).
 
-The locations that never fire in the current scenario matrix are declared by
+The locations that never fire in any row of the current scenario matrix are declared by
 `TIER2_UNREACHED_LOCATIONS`: `abort:after-intent`, `compaction:after-canonical-append`,
 `resolve:after-intent`, and `subagent:after-child-abort-intent` sit on operator, compaction, or
 abort paths the shapes do not take.
 The runners assert the observed never-fired set equals exactly this documented list, so scoped
-coverage cannot silently grow; those locations are pinned by dedicated in-process suites and the
-crash matrices.
+coverage cannot silently change. Dedicated in-process suites and crash matrices exercise those
+paths separately; Tier 2 itself makes no fault-convergence claim for these four locations.
 
 ## Tier 3 honestly
 
@@ -95,9 +112,16 @@ crash matrices.
 
 ## The shipped certificates
 
-The repository certifies its own three adapters — `storage-memory` (reference),
-`storage-sqlite` (`DN`), and `storage-cloudflare` (`DC`, run inside workerd against a real
-SQLite-backed Durable Object) — and commits the resulting JSON certificates under
-`docs/certification/`. Reports are deterministic (scripted model, virtual clock, fixed lane
-names), so a diff in a regenerated certificate is a real behavior change. Use those runners as
-worked examples when certifying your own adapter.
+The repository certifies its own three adapter pairs and commits the resulting JSON certificates
+under `docs/certification/`. `storage-memory` reports `non-durable`. `storage-sqlite` reports the
+adapter capability `durable-node`; its certificate plus the cited process-kill host suites are
+evidence for the repository's tested `DN` Node/SQLite assembly. `storage-cloudflare` reports
+`durable-cloudflare`; its workerd certificate plus the cited eviction/restart suites are evidence
+for the repository's tested `DC` SQLite-backed Durable Object assembly. An adapter capability or
+Tier-2 certificate alone does not confer a generic `DN` or `DC` deployment-class claim on another
+host assembly.
+
+Reports are deterministic (scripted model, virtual clock, fixed lane names), so a diff in a
+regenerated certificate is a real behavior change. Use those runners as worked examples when
+certifying your own adapter, then satisfy the named deployment-class requirements and real-loss
+evidence for the exact assembly you ship.

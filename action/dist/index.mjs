@@ -41611,7 +41611,7 @@ var PullRequestReviewer = Agent.define("pr-reviewer", {
 });
 
 // packages/pr-review/src/internal/review-units.ts
-var MAX_REVIEW_UNITS = 16;
+var MAX_REVIEW_UNITS = 20;
 var MAX_UNIT_FILES = 12;
 var UNIT_CHANGED_LINE_BUDGET = 1200;
 var FILE_OVERHEAD_LINES = 20;
@@ -41705,8 +41705,8 @@ var rankAndDedupeFindings = (findings) => {
 // packages/pr-review/src/internal/fan-out.ts
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
-var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
-var FILE_REVIEW_MAX_CONCURRENCY = 4;
+var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 3;
+var FILE_REVIEW_MAX_CONCURRENCY = 5;
 var MAX_FILE_REVIEW_RETRIES = FILE_REVIEW_MAX_CONCURRENCY;
 var MAX_FILE_REVIEW_ATTEMPTS = MAX_REVIEW_UNITS + MAX_FILE_REVIEW_RETRIES;
 var FILE_REVIEW_MAX_DURATION_MINUTES = 8;
@@ -41747,7 +41747,7 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => [
   ...staticGuidanceLines(options3.guidance),
   "Work in this order:",
   "1. Call read_file_diff for every file in your unit. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
-  "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
+  "2. Call read_file when you need surrounding context the diff does not show, at most twice per file. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
   "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
   "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
   "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
@@ -42144,16 +42144,33 @@ class ReviewHeadComparison extends exports_Schema.Class("@effect-agent/pr-review
   truncated: exports_Schema.Boolean
 }) {
 }
-var fullSelection = (input) => ({
+var selectedRanges = new WeakMap;
+var sealReviewSelection = (selection, source) => {
+  selectedRanges.set(selection, {
+    repository: source.repository,
+    number: source.number,
+    baseRef: source.baseRef,
+    ...source.baseSha === undefined ? {} : { baseSha: source.baseSha },
+    headRef: source.headRef,
+    headSha: source.headSha,
+    totalChangedFiles: source.totalChangedFiles
+  });
+  return selection;
+};
+var isSelectedReviewRange = (selection, current) => {
+  const source = selectedRanges.get(selection);
+  return source !== undefined && source.repository === current.repository && source.number === current.number && source.baseRef === current.baseRef && source.baseSha === current.baseSha && source.headRef === current.headRef && source.headSha === current.headSha && source.totalChangedFiles === current.totalChangedFiles;
+};
+var fullSelection = (input) => sealReviewSelection({
   mode: "full",
   reason: input.reason,
   files: input.files,
   affectedPaths: input.files.flatMap((file2) => file2.previousPath === undefined ? [file2.path] : [file2.path, file2.previousPath]),
-  totalFiles: input.totalFiles,
+  totalFiles: input.current.totalChangedFiles,
   baselineSha: undefined,
   priorState: undefined,
   profileFingerprint: input.profileFingerprint
-});
+}, input.current);
 var validateReviewState = (state, current, profileFingerprint) => {
   if (state.repository !== current.repository || state.pullRequestNumber !== current.number) {
     return "stored state belongs to a different pull request";
@@ -42173,7 +42190,7 @@ var selectReviewRange = (input) => {
   const full = (reason) => fullSelection({
     reason,
     files: input.fullFiles,
-    totalFiles: input.current.totalChangedFiles,
+    current: input.current,
     profileFingerprint: input.profileFingerprint
   });
   if (input.requestedMode === "final")
@@ -42226,7 +42243,7 @@ var selectReviewRange = (input) => {
     }
   }
   const selectedFiles = [...selectedByPath.values()].sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
-  return {
+  return sealReviewSelection({
     mode: "incremental",
     reason: `changes since successfully reviewed head ${input.priorState.reviewedHeadSha.slice(0, 7)}${baseReason}`,
     files: selectedFiles,
@@ -42235,7 +42252,7 @@ var selectReviewRange = (input) => {
     baselineSha: input.priorState.reviewedHeadSha,
     priorState: input.priorState,
     profileFingerprint: input.profileFingerprint
-  };
+  }, input.current);
 };
 var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullRequestSource)(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
@@ -42376,12 +42393,32 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
     if (exports_Option.isNone(request3))
       continue;
     const declarations = declarationsByUnit.get(request3.value.unitId) ?? [];
-    declarations.push({ id: toolCallId, paths: request3.value.paths });
+    declarations.push({
+      id: toolCallId,
+      paths: request3.value.paths,
+      sequence: declaration.sequence
+    });
     declarationsByUnit.set(request3.value.unitId, declarations);
   }
   const plannedUnitIds = new Set(plan.units.map((unit) => unit.unitId));
   const unknownUnitIds = [...declarationsByUnit.keys()].filter((unitId) => !plannedUnitIds.has(unitId));
   const retryAttempts = plan.units.reduce((total, unit) => total + Math.max(0, (declarationsByUnit.get(unit.unitId)?.length ?? 0) - 1), 0);
+  const terminalSequence = (id2) => {
+    const success = trace3.succeeded.get(id2);
+    const failure = trace3.failed.get(id2);
+    if (success === undefined)
+      return failure?.sequence;
+    if (failure === undefined)
+      return success.sequence;
+    return Math.max(success.sequence, failure.sequence);
+  };
+  const initialUnitsSettledBefore = (retryDeclarationSequence) => plan.units.every((planned) => {
+    const initial = declarationsByUnit.get(planned.unitId)?.[0];
+    if (initial === undefined)
+      return false;
+    const terminal = terminalSequence(initial.id);
+    return terminal !== undefined && terminal < retryDeclarationSequence;
+  });
   const reviewed = new Set;
   const unreviewed = new Set([...plan.undiffablePaths, ...plan.unassignedPaths]);
   const failedUnits = [];
@@ -42404,7 +42441,9 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
       return event !== undefined && exports_Option.isSome(exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result));
     };
     const initialSucceeded = declarations.length === 1 && exact.length === 1 && successful.length === 1;
-    const retryRecovered = declarations.length === 2 && exact.length === 2 && exact[0] !== undefined && attemptFailed(exact[0]) && successful.length === 1 && successful[0]?.id === exact[1]?.id;
+    const retry6 = exact[1];
+    const initialTerminal = exact[0] === undefined ? undefined : terminalSequence(exact[0].id);
+    const retryRecovered = declarations.length === 2 && exact.length === 2 && exact[0] !== undefined && retry6 !== undefined && attemptFailed(exact[0]) && successful.length === 1 && successful[0]?.id === retry6.id && initialTerminal !== undefined && initialTerminal < retry6.sequence && initialUnitsSettledBefore(retry6.sequence);
     if (initialSucceeded || retryRecovered) {
       for (const path of unit.paths)
         reviewed.add(path);
@@ -43456,7 +43495,7 @@ var reviewBudgetLimits = UsageBudgetLimits.make({
 var fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 400000,
   maxOutputTokens: 16000,
-  maxToolCalls: 24,
+  maxToolCalls: 1 + MAX_FILE_REVIEW_ATTEMPTS,
   maxCostMicrousd: 2000000,
   maxDurationMillis: FAN_OUT_MAX_DURATION_MINUTES * 60000
 });
@@ -43476,6 +43515,40 @@ class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/Rev
   state: exports_Schema.optionalKey(ReviewState)
 }) {
 }
+
+class ReviewSelectionViolation extends exports_Schema.TaggedError()("ReviewSelectionViolation", { reason: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000)) }) {
+}
+var samePaths = (left, right) => left.length === right.length && left.every((file2, index2) => file2.path === right[index2]?.path);
+var validateSelection = (input) => {
+  const { selection, files, anchorFiles, metadata } = input;
+  if (!isSelectedReviewRange(selection, metadata)) {
+    return exports_Effect.fail(ReviewSelectionViolation.make({
+      reason: "review selection was not created by the host range selector"
+    }));
+  }
+  if (selection.totalFiles !== files.length) {
+    return exports_Effect.fail(ReviewSelectionViolation.make({
+      reason: "review selection total does not match the model-visible source range"
+    }));
+  }
+  const anchorPaths = new Set(anchorFiles.map((file2) => file2.path));
+  if (files.some((file2) => !anchorPaths.has(file2.path))) {
+    return exports_Effect.fail(ReviewSelectionViolation.make({
+      reason: "review selection contains a path outside the current pull-request source"
+    }));
+  }
+  if (selection.mode === "full" && (selection.totalFiles !== metadata.totalChangedFiles || !samePaths(files, anchorFiles))) {
+    return exports_Effect.fail(ReviewSelectionViolation.make({
+      reason: "full review selection does not cover the current pull-request source"
+    }));
+  }
+  if (selection.mode === "incremental" && (selection.priorState === undefined || selection.baselineSha !== selection.priorState.reviewedHeadSha || selection.profileFingerprint !== selection.priorState.profileFingerprint)) {
+    return exports_Effect.fail(ReviewSelectionViolation.make({
+      reason: "incremental review selection is not bound to its authenticated prior state"
+    }));
+  }
+  return exports_Effect.void;
+};
 var buildReviewMission = (metadata, files) => ReviewMission.make({
   repository: metadata.repository,
   number: metadata.number,
@@ -43516,6 +43589,9 @@ var executeReview = (binding, options3) => exports_Effect.gen(function* () {
   const files = yield* source.changedFiles;
   const anchorFiles = yield* source.anchorFiles;
   const selection = options3.selection;
+  if (selection !== undefined) {
+    yield* validateSelection({ selection, files, anchorFiles, metadata });
+  }
   const mission = buildReviewMission(metadata, files);
   const fullMission = buildReviewMission(metadata, anchorFiles);
   const fingerprint = options3.signature === undefined ? undefined : yield* computeChangesetFingerprint(anchorFiles, options3.signature(fullMission));

@@ -12,7 +12,7 @@ import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { codeModeHandlersLayer } from "./agent.ts";
 import { liveAgent, scriptedAgent } from "./profiles.ts";
 import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
-import { AskRequest, AskResult } from "./wire.ts";
+import { AgentAnswer, AskRequest, AskResult } from "./wire.ts";
 
 export { AskRequest, AskResult } from "./wire.ts";
 
@@ -52,7 +52,6 @@ const decodeProgramInput = Schema.decodeUnknownOption(Schema.Struct({ code: Sche
 const decodeCodeModeSuccess = Schema.decodeUnknownOption(
   Schema.Struct({ result: Schema.Json, logs: Schema.Array(Schema.Json) }),
 );
-const AgentAnswer = Schema.Struct({ answer: Schema.String });
 
 /** A terminal Run event could not be converted into the demo's declared HTTP result. */
 export class DemoRunFailure extends Schema.TaggedError<DemoRunFailure>()("DemoRunFailure", {
@@ -80,6 +79,9 @@ export const decodeAgentAnswer = (output: unknown) =>
  * avoid threading two Model types through one function (a known type trap).
  */
 type DemoBinding = typeof scriptedAgent;
+
+/** Narrow seam used to corrupt only a real RunCompleted payload in boundary tests. */
+export type ProjectCompletedOutput = (output: unknown) => unknown;
 
 /**
  * A `run_javascript` tool call's parameters are UNTRUSTED model output
@@ -116,6 +118,7 @@ const runBound = (
   question: string,
   tenant: string,
   profile: AskResult["profile"],
+  projectCompletedOutput: ProjectCompletedOutput,
 ): Effect.Effect<AskResult, DemoRunFailure> => {
   // The Code Mode handler needs the warehouse service and the executor
   // provided INTO it (its handler runs with the captured construction
@@ -154,7 +157,7 @@ const runBound = (
             successes.set(event.toolCallId, successOutcomeOf(event.result));
           }
           if (event._tag === "RunCompleted") {
-            completedOutput = Option.some(event.output);
+            completedOutput = Option.some(projectCompletedOutput(event.output));
           }
         }),
       ),
@@ -203,6 +206,7 @@ const runAsk = (
   env: WorkerEnv,
   question: string,
   tenant: string,
+  projectCompletedOutput: ProjectCompletedOutput,
 ): Effect.Effect<AskResult, DemoRunFailure> => {
   if (env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0) {
     return runBound(
@@ -211,13 +215,16 @@ const runAsk = (
       question,
       tenant,
       "openai",
+      projectCompletedOutput,
     );
   }
-  return runBound(env, scriptedAgent, question, tenant, "scripted");
+  return runBound(env, scriptedAgent, question, tenant, "scripted", projectCompletedOutput);
 };
 
-/** Construct the HTTP Worker with an explicit runner seam for deterministic boundary tests. */
-export const makeDemoWorker = (ask: typeof runAsk = runAsk) => ({
+/** Construct the Worker; tests may project output only after a real RunCompleted event. */
+export const makeDemoWorker = (
+  projectCompletedOutput: ProjectCompletedOutput = (output) => output,
+) => ({
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname !== "/ask") {
@@ -267,7 +274,9 @@ export const makeDemoWorker = (ask: typeof runAsk = runAsk) => ({
       return Response.json({ error: "tenant must match /^[a-z0-9-]{1,32}$/" }, { status: 400 });
     }
     try {
-      const result = await Effect.runPromise(ask(env, decodedAsk.question, tenant));
+      const result = await Effect.runPromise(
+        runAsk(env, decodedAsk.question, tenant, projectCompletedOutput),
+      );
       return Response.json(await Effect.runPromise(encodeAskResult(result)));
     } catch (cause) {
       return Response.json(

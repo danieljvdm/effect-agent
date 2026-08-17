@@ -805,11 +805,13 @@ describe("durable operation authorization contracts", () => {
     const request = OperationAuthorizationRequest.make({
       operation: "awaitSettlement",
       principal: caller.principal,
+      conversationId: Schema.decodeSync(ConversationId)("conversation-auth-1"),
       submissionId: Schema.decodeSync(SubmissionId)("submission-auth-1"),
     });
     expect(Schema.encodeSync(OperationAuthorizationRequest)(request)).toEqual({
       operation: "awaitSettlement",
       principal: "tenant-a",
+      conversationId: "conversation-auth-1",
       submissionId: "submission-auth-1",
     });
     expect(
@@ -818,6 +820,41 @@ describe("durable operation authorization contracts", () => {
         submissionId: "submission-auth-1",
       })._tag,
     ).toBe("Failure");
+  });
+
+  it("requires the operation-discriminated resource target for every authorization", () => {
+    const targetlessOperations = [
+      "awaitSettlement",
+      "observe",
+      "abort",
+      "explain",
+      "verify",
+      "retry",
+      "wake",
+      "resolveUnknown",
+      "resolveApproval",
+    ] as const;
+    for (const operation of targetlessOperations) {
+      expect(
+        Schema.decodeUnknownExit(OperationAuthorizationRequest)({
+          operation,
+          principal: "tenant-a",
+        })._tag,
+      ).toBe("Failure");
+    }
+    expect(
+      Schema.decodeUnknownExit(OperationAuthorizationRequest)({
+        operation: "scanObligations",
+        principal: "tenant-a",
+      })._tag,
+    ).toBe("Failure");
+    expect(
+      Schema.decodeUnknownSync(OperationAuthorizationRequest)({
+        operation: "scanObligations",
+        principal: "tenant-a",
+        scope: "all",
+      }),
+    ).toEqual({ operation: "scanObligations", principal: "tenant-a", scope: "all" });
   });
 
   it("carries only the bounded operation, caller, target, and public preparation failure", () => {

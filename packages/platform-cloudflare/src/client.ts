@@ -98,14 +98,60 @@ export class ConversationReadLimitExceeded extends Schema.TaggedError<Conversati
   }
 }
 
-/** Conservative default preventing accidental unbounded history materialization. */
+/** `readAll` reached its cumulative canonical JSON byte bound. */
+export class ConversationReadByteLimitExceeded extends Schema.TaggedError<ConversationReadByteLimitExceeded>()(
+  "ConversationReadByteLimitExceeded",
+  {
+    conversationId: Schema.String,
+    maximumBytes: Schema.Int.check(Schema.isGreaterThan(0)),
+    observedBytes: Schema.Int.check(Schema.isGreaterThan(0)),
+  },
+) {
+  override get message() {
+    return (
+      `Conversation ${this.conversationId} exceeds the readAll limit of ` +
+      `${this.maximumBytes} canonical JSON bytes; at least ${this.observedBytes} bytes were ` +
+      "observed. Use readPage for larger histories."
+    );
+  }
+}
+
+/** Conservative defaults preventing accidental unbounded history materialization. */
 export const DEFAULT_READ_ALL_MAX_RECORDS = 4_096;
+export const DEFAULT_READ_ALL_MAX_BYTES = 8 * 1_024 * 1_024;
 
 const ReadAllMaximum = Schema.Int.check(
   Schema.isGreaterThan(0),
   Schema.isLessThanOrEqualTo(1_000_000),
 );
 const decodeReadAllMaximum = Schema.decodeUnknownEffect(ReadAllMaximum);
+const ReadAllMaximumBytes = Schema.Int.check(
+  Schema.isGreaterThan(0),
+  Schema.isLessThanOrEqualTo(1_000_000_000),
+);
+const decodeReadAllMaximumBytes = Schema.decodeUnknownEffect(ReadAllMaximumBytes);
+const encodeCanonicalRecordEnvelope = Schema.encodeEffect(CanonicalRecordEnvelope);
+
+const canonicalRecordJsonBytes = (
+  record: CanonicalRecordEnvelope,
+): Effect.Effect<number, HostProtocolError> =>
+  encodeCanonicalRecordEnvelope(record).pipe(
+    Effect.mapError((error) =>
+      HostProtocolError.make({
+        message: boundHostDiagnostic(`readAll record encode failed: ${error.message}`),
+      }),
+    ),
+    Effect.flatMap((encoded) => {
+      const json = JSON.stringify(encoded);
+      return json === undefined
+        ? Effect.fail(
+            HostProtocolError.make({
+              message: "readAll record encoded to a non-JSON value",
+            }),
+          )
+        : Effect.succeed(new TextEncoder().encode(json).byteLength);
+    }),
+  );
 
 // ---------------------------------------------------------------------------
 // Requests
@@ -307,8 +353,11 @@ export type ClientObserveFailure =
   | HostProtocolError
   | ConversationClientError;
 
-/** `readAll` adds only its local materialization bound to the paged observation failures. */
-export type ClientReadAllFailure = ClientObserveFailure | ConversationReadLimitExceeded;
+/** `readAll` adds only its local materialization bounds to paged observation failures. */
+export type ClientReadAllFailure =
+  | ClientObserveFailure
+  | ConversationReadLimitExceeded
+  | ConversationReadByteLimitExceeded;
 
 export type ClientAbortFailure =
   | LedgerError
@@ -447,13 +496,17 @@ export class CloudflareConversationClient extends Context.Service<
     ) => Effect.Effect<ReadonlyArray<CanonicalRecordEnvelope>, ClientObserveFailure>;
     /**
      * Canonical records up to the CURRENT committed tail, via repeated pages and bounded by
-     * `maxRecords`. A snapshot read, not a live observation — callers wanting liveness
-     * re-read after `awaitSettlement`. Use `readPage` for histories above the bound.
+     * `maxRecords` and cumulative canonical JSON `maxBytes`. A snapshot read, not a live
+     * observation — callers wanting liveness re-read after `awaitSettlement`. Use `readPage`
+     * for histories above either bound.
      */
     readonly readAll: (
       conversationId: ConversationId,
       caller: OperationCaller,
-      options?: { readonly maxRecords?: number | undefined },
+      options?: {
+        readonly maxRecords?: number | undefined;
+        readonly maxBytes?: number | undefined;
+      },
     ) => Effect.Effect<ReadonlyArray<CanonicalRecordEnvelope>, ClientReadAllFailure>;
     /**
      * Submission-addressed operations take the owning Conversation explicitly (from the
@@ -668,7 +721,19 @@ export class CloudflareConversationClient extends Context.Service<
                 }),
               ),
             );
+            const maximumBytes = yield* decodeReadAllMaximumBytes(
+              options?.maxBytes ?? DEFAULT_READ_ALL_MAX_BYTES,
+            ).pipe(
+              Effect.mapError((error) =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(
+                    `readAll maxBytes must be an integer from 1 through 1000000000: ${error.message}`,
+                  ),
+                }),
+              ),
+            );
             const all: Array<CanonicalRecordEnvelope> = [];
+            let observedBytes = 0;
             let after: CanonicalSequence | undefined;
             for (;;) {
               const remaining = maximum - all.length;
@@ -684,7 +749,17 @@ export class CloudflareConversationClient extends Context.Service<
                   observed: all.length + page.length,
                 });
               }
-              all.push(...page);
+              for (const record of page) {
+                observedBytes += yield* canonicalRecordJsonBytes(record);
+                if (observedBytes > maximumBytes) {
+                  return yield* ConversationReadByteLimitExceeded.make({
+                    conversationId,
+                    maximumBytes,
+                    observedBytes,
+                  });
+                }
+                all.push(record);
+              }
               const last = page.at(-1);
               if (page.length < pageLimit || last === undefined) return all;
               after = last.sequence;

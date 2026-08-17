@@ -54,7 +54,6 @@ import {
   submissionInputRecordId,
   submissionSettlementId,
   submissionSettlementRecordId,
-  validateCanonicalSettlementRepair,
   type SubmissionLedgerFailure,
 } from "./ledger.ts";
 import {
@@ -1104,24 +1103,19 @@ const canonicalSettlementRepair = conformanceCase(
         invalid instanceof LedgerError,
         "A tampered canonical repair must fail as a typed LedgerError",
       );
-      const encodedCanonical = Schema.encodeSync(CanonicalSettlementRepair)(
-        CanonicalSettlementRepair.make({
-          submissionId: tamper.submissionId,
-          record: tamperCanonical.record,
-          recordDigest: tamperCanonical.recordDigest,
-        }),
-      );
-      const wrongFamilyRecord = { ...encodedCanonical.record, family: "artifact" };
+      const encodedCanonicalRecord = yield* Schema.encodeEffect(RecordEnvelope)(
+        tamperCanonical.record,
+      ).pipe(Effect.orDie);
+      const wrongFamilyRecord = { ...encodedCanonicalRecord, family: "artifact" };
       const wrongFamilyDigest = yield* digestJson(wrongFamilyRecord);
       const wrongFamily = yield* expectFailure(
         "repairing from a wrong-family record whose supplied digest matches its exact envelope",
-        validateCanonicalSettlementRepair(
-          {
-            ...encodedCanonical,
+        ledger.repairSettlementFromCanonical(
+          CanonicalSettlementRepair.make({
+            submissionId: tamper.submissionId,
             record: wrongFamilyRecord,
             recordDigest: wrongFamilyDigest,
-          },
-          tamper.receiptId,
+          }),
         ),
       );
       yield* ensure(

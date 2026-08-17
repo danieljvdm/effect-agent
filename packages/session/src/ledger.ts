@@ -350,7 +350,8 @@ export class CanonicalSettlementRepair extends Schema.Class<CanonicalSettlementR
   "@effect-agent/session/CanonicalSettlementRepair",
 )({
   submissionId: SubmissionId,
-  record: RecordEnvelope,
+  /** Untrusted adapter-boundary evidence; the shared validator establishes RecordEnvelope. */
+  record: Schema.Unknown,
   recordDigest: Digest,
 }) {}
 
@@ -1195,8 +1196,15 @@ export const validateCanonicalSettlementRepair = Effect.fn(
       invalid(`Canonical settlement repair is malformed: ${cause.message}`),
     ),
   );
-  const payload = request.record.payload;
-  if (request.record.recordId !== submissionSettlementRecordId(request.submissionId)) {
+  const record = yield* Schema.decodeUnknownEffect(Schema.toType(RecordEnvelope))(
+    request.record,
+  ).pipe(
+    Effect.mapError((cause) =>
+      invalid(`Canonical settlement repair record is malformed: ${cause.message}`),
+    ),
+  );
+  const payload = record.payload;
+  if (record.recordId !== submissionSettlementRecordId(request.submissionId)) {
     return yield* invalid(
       `Canonical settlement record id does not match Submission ${request.submissionId}`,
     );
@@ -1213,7 +1221,7 @@ export const validateCanonicalSettlementRepair = Effect.fn(
   if (payload.receiptId !== expectedReceiptId) {
     return yield* invalid("Canonical settlement payload carries a different Receipt identity");
   }
-  const encoded = yield* Schema.encodeEffect(RecordEnvelope)(request.record).pipe(
+  const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(
     Effect.mapError((cause) =>
       invalid(`Canonical settlement record failed Schema encoding: ${cause.message}`),
     ),
@@ -1229,7 +1237,7 @@ export const validateCanonicalSettlementRepair = Effect.fn(
     settlementId: payload.settlementId,
     receiptId: payload.receiptId,
     outcome: payload.outcome,
-    record: request.record,
+    record,
     recordDigest: request.recordDigest,
   });
 });

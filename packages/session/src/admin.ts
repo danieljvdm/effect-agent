@@ -203,6 +203,8 @@ export const RECOVERY_DECISION_MEANINGS: Readonly<Record<RecoveryDecision["_tag"
     "The Submission is a parent-linked child whose Conversation lacks the canonical lineage record: the child lane defers its own readiness repair — the parent's idempotent establishment completes it, so a child never runs a Turn before its lineage is canonical (P7 §7(a), SUB-016).",
   QuarantineInvalidSuspension:
     "The ledger suspension state and its reason disagree: recovery quarantines the accepted-work obligation and does not guess which workflow may resume it.",
+  QuarantineInvalidSettlement:
+    "The ledger settlement projection and deterministic canonical settlement record disagree: recovery quarantines the accepted-work obligation and does not treat either side as sufficient terminal authority.",
   NoAction: "The Submission is settled; nothing is owed.",
 };
 
@@ -228,6 +230,7 @@ export const predictRecoveryDisposition = (
     case "MarkUnknown":
       return "unknown";
     case "QuarantineInvalidSuspension":
+    case "QuarantineInvalidSettlement":
       return "quarantined";
     case "ResumeFromTurnBoundary":
     case "ResumePendingToolBatch":

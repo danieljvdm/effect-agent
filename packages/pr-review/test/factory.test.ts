@@ -246,7 +246,7 @@ describe("PrReview.make", () => {
     }),
   );
 
-  it.effect("applies a supplied selection to the model source without an action-side layer", () =>
+  it.effect("rejects a caller-forged selection before it can narrow continuity accounting", () =>
     Effect.gen(function* () {
       const scripted = yield* makeOfflineReviewerModel({
         diffPath: "src/hello.ts",
@@ -268,12 +268,25 @@ describe("PrReview.make", () => {
         priorState: undefined,
         profileFingerprint: "a".repeat(64),
       };
+      const ignoredPublished = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
 
-      yield* runFactoryReviewer((options) => reviewer.run({ ...options, post: false, selection }));
+      const error = yield* reviewer
+        .run({ post: false, selection })
+        .pipe(
+          Effect.flip,
+          Effect.provide(
+            Layer.mergeAll(
+              fixturePullRequestSourceLayer(fixture),
+              collectingReviewPublisherLayer(ignoredPublished),
+              unavailableReviewStateAuthenticatorLayer("offline factory test"),
+              NodeCrypto.layer,
+            ),
+          ),
+        );
 
       const prompts = yield* scripted.prompts;
-      expect(prompts.join("\n")).toContain("src/hello.ts");
-      expect(prompts.join("\n")).not.toContain("deps/bun.lock");
+      expect(error._tag).toBe("ReviewSelectionViolation");
+      expect(prompts).toEqual([]);
     }),
   );
 

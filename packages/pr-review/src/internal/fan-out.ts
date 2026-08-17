@@ -56,13 +56,16 @@ export const MAX_CHILD_FINDINGS = 8;
 export const MAX_CHILD_CONCERNS = 3;
 
 /**
- * One mandatory diff read plus one bounded context read for every path in a
- * maximum-size unit. Keep the child and delegation reservation aligned.
+ * One mandatory diff read plus at most two bounded context reads for every
+ * path in a maximum-size unit. The reviewer can need distinct focused reads
+ * for the producer and consumer sides of a changed contract; keep the child
+ * and delegation reservation aligned rather than making that ordinary work
+ * look like a policy failure.
  */
-export const MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
+export const MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 3;
 
 /** Parent-side concurrent child permits. */
-export const FILE_REVIEW_MAX_CONCURRENCY = 4;
+export const FILE_REVIEW_MAX_CONCURRENCY = 5;
 
 /** One bounded retry wave for failed read-only review units. */
 export const MAX_FILE_REVIEW_RETRIES = FILE_REVIEW_MAX_CONCURRENCY;
@@ -159,7 +162,7 @@ export const makeFileReviewerInstructions =
       ...staticGuidanceLines(options.guidance),
       "Work in this order:",
       "1. Call read_file_diff for every file in your unit. A normal diff marks new-version anchors as R<number>; only those numbers are valid startLine/endLine values. When GitHub omitted a diff, the tool may return bounded base/head content marked B/H instead. Review that content, but report its defects as non-anchored concerns because B/H lines cannot anchor GitHub comments. Never anchor a finding to a removed (-), B, or H line.",
-      "2. Call read_file when you need surrounding context the diff does not show. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
+      "2. Call read_file when you need surrounding context the diff does not show, at most twice per file. ONLY files in the changeset are readable: a request for any other path (an import, a neighbor, a config) returns a failed result — do not retry it; reason from the diff instead and note the gap in your report when it matters.",
       "3. Review for real defects first: correctness, security, concurrency, resource leaks, error handling, API misuse. Style nits are least important. Do not praise; do not restate the diff.",
       "When the diff adds or changes a test, check that it can actually fail: a test that would still pass with the bug present is theatre, not coverage. The usual tell is a loose assertion standing where an exact one belongs — >= or a truthiness check over an expected value, or a snapshot that absorbs whatever it is handed.",
       "Drop bloat-shaped findings before reporting: defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies, just-in-case guards. A finding must be sound, correct, and worth acting on; prefer an explicit keep over an invented finding.",
@@ -344,7 +347,7 @@ export const fanOutReviewInstructions = makeFanOutReviewInstructions();
 export const defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: 1 + MAX_FILE_REVIEW_ATTEMPTS,
-  // 16 initial units plus one four-unit retry wave, followed by the
+  // 20 initial units plus one five-unit retry wave, followed by the
   // coordinator's bounded merge and final response window.
   maxDuration: `${FAN_OUT_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: FILE_REVIEW_MAX_CONCURRENCY,

@@ -138,14 +138,18 @@ const fanOutCoverage = (
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
   const declarationsByUnit = new Map<
     string,
-    Array<{ readonly id: string; readonly paths: ReadonlyArray<string> }>
+    Array<{ readonly id: string; readonly paths: ReadonlyArray<string>; readonly sequence: number }>
   >();
   for (const [toolCallId, declaration] of trace.declared) {
     if (declaration.toolName !== "delegate_file_review") continue;
     const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
     if (Option.isNone(request)) continue;
     const declarations = declarationsByUnit.get(request.value.unitId) ?? [];
-    declarations.push({ id: toolCallId, paths: request.value.paths });
+    declarations.push({
+      id: toolCallId,
+      paths: request.value.paths,
+      sequence: declaration.sequence,
+    });
     declarationsByUnit.set(request.value.unitId, declarations);
   }
   const plannedUnitIds = new Set(plan.units.map((unit) => unit.unitId));
@@ -156,6 +160,20 @@ const fanOutCoverage = (
     (total, unit) => total + Math.max(0, (declarationsByUnit.get(unit.unitId)?.length ?? 0) - 1),
     0,
   );
+  const terminalSequence = (id: string): number | undefined => {
+    const success = trace.succeeded.get(id);
+    const failure = trace.failed.get(id);
+    if (success === undefined) return failure?.sequence;
+    if (failure === undefined) return success.sequence;
+    return Math.max(success.sequence, failure.sequence);
+  };
+  const initialUnitsSettledBefore = (retryDeclarationSequence: number): boolean =>
+    plan.units.every((planned) => {
+      const initial = declarationsByUnit.get(planned.unitId)?.[0];
+      if (initial === undefined) return false;
+      const terminal = terminalSequence(initial.id);
+      return terminal !== undefined && terminal < retryDeclarationSequence;
+    });
 
   const reviewed = new Set<string>();
   const unreviewed = new Set<string>([...plan.undiffablePaths, ...plan.unassignedPaths]);
@@ -185,13 +203,19 @@ const fanOutCoverage = (
     };
     const initialSucceeded =
       declarations.length === 1 && exact.length === 1 && successful.length === 1;
+    const retry = exact[1];
+    const initialTerminal = exact[0] === undefined ? undefined : terminalSequence(exact[0].id);
     const retryRecovered =
       declarations.length === 2 &&
       exact.length === 2 &&
       exact[0] !== undefined &&
+      retry !== undefined &&
       attemptFailed(exact[0]) &&
       successful.length === 1 &&
-      successful[0]?.id === exact[1]?.id;
+      successful[0]?.id === retry.id &&
+      initialTerminal !== undefined &&
+      initialTerminal < retry.sequence &&
+      initialUnitsSettledBefore(retry.sequence);
     if (initialSucceeded || retryRecovered) {
       for (const path of unit.paths) reviewed.add(path);
       continue;

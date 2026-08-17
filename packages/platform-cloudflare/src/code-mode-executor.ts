@@ -361,16 +361,20 @@ interface ActiveHostCall {
 /** Reserved global names the harness owns inside the dynamic worker. */
 const reservedHarnessGlobals = new Set(["console"]);
 
+/** Keep syntax admission byte-for-byte aligned with the module sent to Worker Loader. */
+const guestProgramModule = (source: string): string =>
+  `export default async function loadProgram() {\n  return (\n${source}\n  );\n}`;
+
 /**
- * Parse the model-supplied source as a complete JavaScript program and admit
- * only one expression statement. The expression may compute the async
- * function (the harness checks the resulting value), but it cannot close the
- * generated loader and append a top-level statement. Delimiter wrapping is
- * not an isolation boundary; this host-side parse is.
+ * Parse the model-supplied source in the exact async loader context where it
+ * executes and admit only the loader's single return expression. This accepts
+ * valid bare `await` expressions while preventing source from closing the
+ * generated loader and appending another statement. Delimiter wrapping is not
+ * an isolation boundary; this host-side parse and shape check is.
  */
 const validateGuestExpression = (source: string): Effect.Effect<void, CodeSourceError> =>
   Effect.try({
-    try: () => parse(source, { ecmaVersion: "latest", sourceType: "script" }),
+    try: () => parse(guestProgramModule(source), { ecmaVersion: "latest", sourceType: "module" }),
     catch: (cause) =>
       CodeSourceError.make({
         implementation: dynamicWorkerImplementation,
@@ -378,15 +382,27 @@ const validateGuestExpression = (source: string): Effect.Effect<void, CodeSource
         message: `The source is not valid JavaScript: ${String(cause).slice(0, 7_900)}`,
       }),
   }).pipe(
-    Effect.flatMap((program) =>
-      program.body.length === 1 && program.body[0]?.type === "ExpressionStatement"
+    Effect.flatMap((program) => {
+      const exported = program.body[0];
+      const declaration =
+        exported?.type === "ExportDefaultDeclaration" ? exported.declaration : undefined;
+      const statement =
+        declaration?.type === "FunctionDeclaration" ? declaration.body.body[0] : undefined;
+      const isSingleExpression =
+        program.body.length === 1 &&
+        declaration?.type === "FunctionDeclaration" &&
+        declaration.async &&
+        declaration.body.body.length === 1 &&
+        statement?.type === "ReturnStatement" &&
+        statement.argument !== null;
+      return isSingleExpression
         ? Effect.void
         : CodeSourceError.make({
             implementation: dynamicWorkerImplementation,
             reason: "invalid",
             message: "The source must be exactly one JavaScript expression",
-          }),
-    ),
+          });
+    }),
   );
 
 export interface DynamicWorkerCodeExecutorOptions {
@@ -636,7 +652,7 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
       mainModule: "harness.js",
       modules: {
         "harness.js": HARNESS_MODULE,
-        "program.js": `export default async function loadProgram() {\n  return (\n${request.source}\n  );\n}`,
+        "program.js": guestProgramModule(request.source),
       },
       env: {
         CODE_MODE_HOST: options.hostStub,

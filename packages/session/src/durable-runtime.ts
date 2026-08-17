@@ -1018,7 +1018,7 @@ const make = Effect.gen(function* () {
         abortRecorded = true;
         continue;
       }
-      if (recordId === settlementId && payload._tag === "SubmissionSettled") {
+      if (recordId === settlementId) {
         recordedSettlement = envelope.record;
         continue;
       }
@@ -5330,6 +5330,11 @@ const make = Effect.gen(function* () {
           // remains visible to scans and requires an authorized store repair.
           return "quarantined";
         }
+        case "QuarantineInvalidSettlement": {
+          // Fail closed without blessing an operational terminal projection that lacks exact
+          // canonical settlement authority.
+          return "quarantined";
+        }
         case "ResumeFromTurnBoundary":
         case "ResumePendingToolBatch": {
           // Resumption needs the Agent Binding: a claiming worker resumes from the committed
@@ -6449,13 +6454,18 @@ const make = Effect.gen(function* () {
           "The lane is durably waiting for approval decisions; decide them through resolveApproval instead of retrying.",
       });
     }
-    if (decision._tag === "QuarantineInvalidSuspension") {
+    if (
+      decision._tag === "QuarantineInvalidSuspension" ||
+      decision._tag === "QuarantineInvalidSettlement"
+    ) {
       return yield* RetryRefused.make({
         submissionId: command.submissionId,
         refusal: "quarantined",
         decisionTag: decision._tag,
         message:
-          "The lane's suspension state and reason disagree; recovery stays fail-closed until an authorized store repair restores a matching reason.",
+          decision._tag === "QuarantineInvalidSuspension"
+            ? "The lane's suspension state and reason disagree; recovery stays fail-closed until an authorized store repair restores a matching reason."
+            : "The ledger settlement projection lacks matching canonical authority; recovery stays fail-closed until an authorized store repair restores consistency.",
       });
     }
     yield* Effect.logInfo("DurableAgentRuntime.retry executed an operator re-drive").pipe(
@@ -6516,6 +6526,7 @@ const make = Effect.gen(function* () {
       OperationAuthorizationRequest.make({
         operation: "scanObligations",
         principal: caller.principal,
+        scope: "all",
       }),
     );
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);

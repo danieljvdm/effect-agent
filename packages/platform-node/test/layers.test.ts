@@ -516,22 +516,22 @@ describe("NodeDurableRuntime", () => {
             });
           }),
         ).pipe(Layer.provide(ledgerLayer({ filename })));
-        const scope = yield* Scope.make();
-        const context = yield* Layer.build(
-          ownershipDrainLayer.pipe(Layer.provide(countedLedger)),
-        ).pipe(Scope.provide(scope));
-        const ledger = Context.get(context, SubmissionLedger);
-
-        const claimed = yield* ledger.claim(
-          ClaimRequest.make({
-            conversationId: decodeConversationId("conversation-canonical-repair-drain"),
-            producerId: decodeProducerId("producer-canonical-repair-drain"),
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const context = yield* Layer.build(
+              ownershipDrainLayer.pipe(Layer.provide(countedLedger)),
+            );
+            const ledger = Context.get(context, SubmissionLedger);
+            const claimed = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: decodeConversationId("conversation-canonical-repair-drain"),
+                producerId: decodeProducerId("producer-canonical-repair-drain"),
+              }),
+            );
+            expect(claimed).toEqual(Option.some(claim));
+            expect(yield* ledger.repairSettlementFromCanonical(repair)).toEqual(settlement);
           }),
         );
-        expect(claimed).toEqual(Option.some(claim));
-        expect(yield* ledger.repairSettlementFromCanonical(repair)).toEqual(settlement);
-
-        yield* Scope.close(scope, Exit.void);
         expect(yield* Ref.get(releases)).toBe(0);
       }),
     ),
