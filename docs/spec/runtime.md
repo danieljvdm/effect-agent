@@ -363,7 +363,9 @@ that value before adding it to `RunCompleted.runDisposition`; `undefined` means 
 selection fails typed with `AgentRunDispositionError`. A final-answer budget completion never
 evaluates or carries the selector result. Reducers fail closed if a budget-completed event carries
 a disposition or if an event carries one without a Definition-owned Schema. No runtime path parses
-output prose or infers disposition from Tool events.
+output prose or infers disposition from Tool events. When the application selector throws, the
+typed error retains the original value in its Schema-safe diagnostic `cause`; the terminal event
+uses a fixed non-sensitive message and never serializes that foreign cause.
 
 Raw provider chunks are never mixed into the stable event union.
 

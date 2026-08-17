@@ -29410,6 +29410,7 @@ class AgentOutputError extends exports_Schema.TaggedError()("AgentOutputError", 
 }
 
 class AgentRunDispositionError extends exports_Schema.TaggedError()("AgentRunDispositionError", {
+  cause: exports_Schema.Defect(),
   message: exports_Schema.String
 }) {
 }
@@ -35315,15 +35316,18 @@ var encodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.encodeRunDis
   const selected = yield* exports_Effect.try({
     try: () => declaration.fromOutput(output),
     catch: (cause) => AgentRunDispositionError.make({
-      message: `Run disposition selector failed: ${errorMessage(cause)}`
+      cause,
+      message: "Run disposition selector failed"
     })
   });
   if (selected === undefined)
     return;
   const encoded = yield* exports_Schema.encodeUnknownEffect(declaration.schema)(selected).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
+    cause,
     message: cause.message
   })));
   return yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(encoded).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
+    cause,
     message: `Run disposition did not encode as durable JSON: ${cause.message}`
   })));
 });
@@ -35333,6 +35337,7 @@ function encodeRunDisposition(agent2, output) {
 }
 var decodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.decodeRunDisposition")(function* (declaration, encoded) {
   return yield* exports_Schema.decodeUnknownEffect(declaration.schema)(encoded).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
+    cause,
     message: cause.message
   })));
 });

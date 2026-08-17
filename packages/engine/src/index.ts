@@ -2825,13 +2825,15 @@ const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDispositi
     try: () => declaration.fromOutput(output),
     catch: (cause) =>
       AgentRunDispositionError.make({
-        message: `Run disposition selector failed: ${errorMessage(cause)}`,
+        cause,
+        message: "Run disposition selector failed",
       }),
   });
   if (selected === undefined) return undefined;
   const encoded = yield* Schema.encodeUnknownEffect(declaration.schema)(selected).pipe(
     Effect.mapError((cause) =>
       AgentRunDispositionError.make({
+        cause,
         message: cause.message,
       }),
     ),
@@ -2839,6 +2841,7 @@ const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDispositi
   return yield* Schema.decodeUnknownEffect(Schema.Json)(encoded).pipe(
     Effect.mapError((cause) =>
       AgentRunDispositionError.make({
+        cause,
         message: `Run disposition did not encode as durable JSON: ${cause.message}`,
       }),
     ),
@@ -2885,6 +2888,7 @@ const decodeRunDispositionCandidate = Effect.fn("AgentRuntime.decodeRunDispositi
   return yield* Schema.decodeUnknownEffect(declaration.schema)(encoded).pipe(
     Effect.mapError((cause) =>
       AgentRunDispositionError.make({
+        cause,
         message: cause.message,
       }),
     ),

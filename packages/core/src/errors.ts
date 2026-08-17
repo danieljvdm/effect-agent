@@ -14,6 +14,7 @@ export class AgentOutputError extends Schema.TaggedError<AgentOutputError>()("Ag
 export class AgentRunDispositionError extends Schema.TaggedError<AgentRunDispositionError>()(
   "AgentRunDispositionError",
   {
+    cause: Schema.Defect(),
     message: Schema.String,
   },
 ) {}

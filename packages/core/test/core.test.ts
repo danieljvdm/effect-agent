@@ -119,7 +119,10 @@ describe("core schemas", () => {
     const failures = [
       AgentInputError.make({ message: "invalid trip input" }),
       AgentOutputError.make({ message: "invalid itinerary output" }),
-      AgentRunDispositionError.make({ message: "invalid application run disposition" }),
+      AgentRunDispositionError.make({
+        cause: new Error("invalid application run disposition"),
+        message: "invalid application run disposition",
+      }),
       AgentPolicyError.make({ limit: "turns", message: "turn limit reached" }),
       AgentPolicyError.make({
         limit: "repeated-failures",

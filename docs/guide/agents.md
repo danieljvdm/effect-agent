@@ -87,7 +87,9 @@ Schema validates and encodes it; invalid selection fails with `AgentRunDispositi
 joins `Agent.Failure` only for Definitions that declare this boundary. An ordinary completed
 durable Run persists the encoded value on `SubmissionSettled.runDisposition`, where readers decode
 it with the same application Schema. Budget exhaustion, failure, abort, and incomplete recovery
-never receive one. Do not parse summary prose or infer finality from successful Tool Calls.
+never receive one. A selector exception remains available as the typed error's diagnostic `cause`;
+only a fixed, non-sensitive message enters the Run event stream. Do not parse summary prose or
+infer finality from successful Tool Calls.
 
 ## Stable identity
 

@@ -2576,6 +2576,72 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
     });
   });
 
+  it.effect("keeps a thrown run-disposition selector cause out of canonical events", () => {
+    const RunDisposition = Schema.Literal("application-complete");
+    const secret = "selector-secret-must-not-enter-events";
+    const structuredCause = {
+      _tag: "SelectorDependencyFailure",
+      code: "E_SELECTOR",
+      detail: secret,
+    } as const;
+    const selectorFailure = new Error(`selector failed with ${secret}`, {
+      cause: structuredCause,
+    });
+    selectorFailure.name = "SelectorFailure";
+    const definition = Agent.define("throwing-run-disposition", {
+      input: Schema.Struct({ question: Schema.String }),
+      output: Schema.Struct({ answer: Schema.String }),
+      instructions: "Answer as JSON.",
+      toolkit: Toolkit.empty,
+      policy: AgentPolicy.make({
+        maxTurns: 2,
+        maxToolCalls: 1,
+        maxDuration: "30 seconds",
+        toolConcurrency: 1,
+      }),
+      runDisposition: {
+        schema: RunDisposition,
+        fromOutput: () => {
+          throw selectorFailure;
+        },
+      },
+    });
+    const agent = Agent.withModel(definition, modelFromParts(finalParts('{"answer":"done"}')));
+
+    return Effect.gen(function* () {
+      const observed: Array<RunEvent> = [];
+      const exit = yield* AgentRuntime.stream(agent, { question: "done?" }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            observed.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(exit);
+
+      const isRunDispositionError = Schema.is(AgentRunDispositionError)(failure);
+      expect(isRunDispositionError).toBe(true);
+      if (!isRunDispositionError) {
+        throw new Error("Expected AgentRunDispositionError");
+      }
+      expect(failure.message).toBe("Run disposition selector failed");
+      expect(failure.message).not.toContain(secret);
+      expect(failure.cause).toBe(selectorFailure);
+      expect(selectorFailure.name).toBe("SelectorFailure");
+      expect(selectorFailure.stack).toContain("SelectorFailure");
+      expect(selectorFailure.cause).toBe(structuredCause);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "AgentRunDispositionError",
+        message: "Run disposition selector failed",
+      });
+      expect(observed.some((event) => event._tag === "RunCompleted")).toBe(false);
+      expect(JSON.stringify(observed)).not.toContain(secret);
+    });
+  });
+
   it.effect("keeps input and output decode failures typed", () => {
     const agent = makeAgent(finalParts('{"answer":42}'));
 

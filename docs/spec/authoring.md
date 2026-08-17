@@ -100,7 +100,9 @@ type TaskDisposition = Agent.RunDisposition<typeof TaskAgent>;
 runtime Schema-encodes the candidate before it emits `RunCompleted`; validation failure is the
 typed `AgentRunDispositionError`. The disposition Schema's decoding and encoding services remain
 visible in the Definition and runtime requirement projections. `Agent.Failure` admits
-`AgentRunDispositionError` only for a Definition that declares this boundary.
+`AgentRunDispositionError` only for a Definition that declares this boundary. A thrown selector
+value is retained on that typed error as a Schema-safe diagnostic `cause`, while the canonical
+`RunFailed` message is fixed and does not expose application exception text.
 
 The selector runs only at ordinary completion. Final-answer budget exhaustion, failure,
 interruption, abort, unresolved recovery, and run-less joined settlement never acquire a run
