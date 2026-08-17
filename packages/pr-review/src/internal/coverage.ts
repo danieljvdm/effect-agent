@@ -3,14 +3,9 @@ import type { RunEvent } from "effect-agent";
 
 import type { ChangedFile } from "./diff.ts";
 import { isReviewableFile } from "./diff.ts";
-import {
-  FileReviewDelegationFailure,
-  FileReviewRequest,
-  FileReviewUnitResult,
-  MAX_FILE_REVIEW_RETRIES,
-} from "./fan-out.ts";
+import { FileReviewDelegationFailure, FileReviewRequest, FileReviewUnitResult } from "./fan-out.ts";
 import { FileDiffQuery, type WalkthroughEntry } from "./review-agent.ts";
-import { MAX_REVIEW_UNITS, planReviewUnits } from "./review-units.ts";
+import { planReviewUnits } from "./review-units.ts";
 
 // ---------------------------------------------------------------------------
 // Host-owned coverage. Model summaries are untrusted prose; the check result
@@ -41,7 +36,7 @@ export class ReviewCoverage extends Schema.Class<ReviewCoverage>(
   unreviewedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
     Schema.isMaxLength(300),
   ),
-  failedUnits: Schema.Array(FailedReviewUnit).check(Schema.isMaxLength(MAX_REVIEW_UNITS)),
+  failedUnits: Schema.Array(FailedReviewUnit).check(Schema.isMaxLength(8)),
   reasons: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(1_000))).check(
     Schema.isMaxLength(20),
   ),
@@ -138,42 +133,16 @@ const fanOutCoverage = (
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
   const declarationsByUnit = new Map<
     string,
-    Array<{ readonly id: string; readonly paths: ReadonlyArray<string>; readonly sequence: number }>
+    Array<{ readonly id: string; readonly paths: ReadonlyArray<string> }>
   >();
   for (const [toolCallId, declaration] of trace.declared) {
     if (declaration.toolName !== "delegate_file_review") continue;
     const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
     if (Option.isNone(request)) continue;
     const declarations = declarationsByUnit.get(request.value.unitId) ?? [];
-    declarations.push({
-      id: toolCallId,
-      paths: request.value.paths,
-      sequence: declaration.sequence,
-    });
+    declarations.push({ id: toolCallId, paths: request.value.paths });
     declarationsByUnit.set(request.value.unitId, declarations);
   }
-  const plannedUnitIds = new Set(plan.units.map((unit) => unit.unitId));
-  const unknownUnitIds = [...declarationsByUnit.keys()].filter(
-    (unitId) => !plannedUnitIds.has(unitId),
-  );
-  const retryAttempts = plan.units.reduce(
-    (total, unit) => total + Math.max(0, (declarationsByUnit.get(unit.unitId)?.length ?? 0) - 1),
-    0,
-  );
-  const terminalSequence = (id: string): number | undefined => {
-    const success = trace.succeeded.get(id);
-    const failure = trace.failed.get(id);
-    if (success === undefined) return failure?.sequence;
-    if (failure === undefined) return success.sequence;
-    return Math.max(success.sequence, failure.sequence);
-  };
-  const initialUnitsSettledBefore = (retryDeclarationSequence: number): boolean =>
-    plan.units.every((planned) => {
-      const initial = declarationsByUnit.get(planned.unitId)?.[0];
-      if (initial === undefined) return false;
-      const terminal = terminalSequence(initial.id);
-      return terminal !== undefined && terminal < retryDeclarationSequence;
-    });
 
   const reviewed = new Set<string>();
   const unreviewed = new Set<string>([...plan.undiffablePaths, ...plan.unassignedPaths]);
@@ -193,40 +162,15 @@ const fanOutCoverage = (
       const result = Schema.decodeUnknownOption(FileReviewUnitResult)(event.result);
       return Option.isSome(result) && result.value.unitId === unit.unitId;
     });
-    const attemptFailed = (declaration: { readonly id: string }): boolean => {
-      if (trace.failed.has(declaration.id)) return true;
-      const event = trace.succeeded.get(declaration.id);
-      return (
-        event !== undefined &&
-        Option.isSome(Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result))
-      );
-    };
-    const initialSucceeded =
-      declarations.length === 1 && exact.length === 1 && successful.length === 1;
-    const retry = exact[1];
-    const initialTerminal = exact[0] === undefined ? undefined : terminalSequence(exact[0].id);
-    const retryRecovered =
-      declarations.length === 2 &&
-      exact.length === 2 &&
-      exact[0] !== undefined &&
-      retry !== undefined &&
-      attemptFailed(exact[0]) &&
-      successful.length === 1 &&
-      successful[0]?.id === retry.id &&
-      initialTerminal !== undefined &&
-      initialTerminal < retry.sequence &&
-      initialUnitsSettledBefore(retry.sequence);
-    if (initialSucceeded || retryRecovered) {
+    if (declarations.length === 1 && exact.length === 1 && successful.length === 1) {
       for (const path of unit.paths) reviewed.add(path);
       continue;
     }
     for (const path of unit.paths) unreviewed.add(path);
-    const failure = [...declarations]
-      .reverse()
+    const failure = declarations
       .map((declaration) => trace.failed.get(declaration.id))
       .find((event) => event !== undefined);
-    const returnedFailure = [...declarations]
-      .reverse()
+    const returnedFailure = declarations
       .map((declaration) => trace.succeeded.get(declaration.id))
       .filter((event) => event !== undefined)
       .map((event) => Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result))
@@ -238,22 +182,16 @@ const fanOutCoverage = (
           failure?.errorTag ??
           (returnedFailure !== undefined
             ? returnedFailure.value._tag === "FileReviewUnitFailed"
-              ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}${
-                  returnedFailure.value.childPolicyLimit === undefined
-                    ? ""
-                    : `:${returnedFailure.value.childPolicyLimit}`
-                }`
+              ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}`
               : returnedFailure.value._tag
             : undefined) ??
           (declarations.length === 0
             ? "UnitNotAssigned"
-            : declarations.length > 2
+            : declarations.length > 1
               ? "UnitAssignedMultipleTimes"
-              : exact.length !== declarations.length
+              : exact.length === 0
                 ? "UnitAssignmentMismatch"
-                : declarations.length === 2
-                  ? "UnitRetryDidNotSettleSuccessfully"
-                  : "UnitDidNotSettleSuccessfully"),
+                : "UnitDidNotSettleSuccessfully"),
       }),
     );
   }
@@ -270,14 +208,6 @@ const fanOutCoverage = (
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
-  }
-  if (unknownUnitIds.length > 0) {
-    reasons.push(boundedListReason("delegations targeted unknown review units", unknownUnitIds));
-  }
-  if (retryAttempts > MAX_FILE_REVIEW_RETRIES) {
-    reasons.push(
-      `fan-out retry budget exceeded (${retryAttempts} of ${MAX_FILE_REVIEW_RETRIES} allowed)`,
-    );
   }
   if (failedUnits.length > 0) {
     reasons.push(

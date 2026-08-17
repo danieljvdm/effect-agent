@@ -1,4 +1,4 @@
-import { Effect, Equal, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import {
   makeUsageBudget,
   toRunBudgetHook,
@@ -16,7 +16,6 @@ import {
   type ReviewShape,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
-import { FAN_OUT_MAX_DURATION_MINUTES, MAX_FILE_REVIEW_ATTEMPTS } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
@@ -32,7 +31,6 @@ import {
   fromStoredConcern,
   fromStoredFinding,
   ReviewState,
-  selectedReviewRangeFor,
   type ReviewSelection,
   ReviewStateAuthenticator,
   toStoredConcern,
@@ -72,9 +70,9 @@ export const reviewBudgetLimits = UsageBudgetLimits.make({
 export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 400_000,
   maxOutputTokens: 16_000,
-  maxToolCalls: 1 + MAX_FILE_REVIEW_ATTEMPTS,
+  maxToolCalls: 24,
   maxCostMicrousd: 2_000_000,
-  maxDurationMillis: FAN_OUT_MAX_DURATION_MINUTES * 60_000,
+  maxDurationMillis: 900_000,
 });
 
 /** Everything one review run produced, publication receipt included. */
@@ -141,107 +139,12 @@ export interface ExecuteReviewOptions {
   /** Host-owned coverage shape; defaults to the flat reviewer. */
   readonly reviewShape?: ReviewShape | undefined;
   /**
-   * Explicit host-selected review range. `PrReview.run` applies the matching
-   * source decorator itself, so its model-visible range cannot diverge from
-   * the selection used for continuity and publication.
+   * Explicit host-selected review range. Callers that provide a selection
+   * also decorate `PullRequestSource` with `selectedPullRequestSourceLayer` so
+   * the model sees exactly this range while publication retains full anchors.
    */
   readonly selection?: ReviewSelection | undefined;
 }
-
-/** A caller attempted to supply review-accounting scope not selected by the host. */
-export class ReviewSelectionViolation extends Schema.TaggedError<ReviewSelectionViolation>()(
-  "ReviewSelectionViolation",
-  { reason: Schema.NonEmptyString.check(Schema.isMaxLength(1_000)) },
-) {}
-
-const sameFiles = (left: ReadonlyArray<ChangedFile>, right: ReadonlyArray<ChangedFile>): boolean =>
-  left.length === right.length && left.every((file, index) => Equal.equals(file, right[index]));
-
-/**
- * The selected-source decorator may add bounded base/head evidence to a
- * patchless selected file. That is host-side enrichment of the exact same
- * changed-file identity, not a second selection. Keep every selection field
- * stable while deliberately excluding only those two evidence fields.
- */
-const sameSelectedFileIdentity = (left: ChangedFile, right: ChangedFile): boolean =>
-  left.path === right.path &&
-  left.status === right.status &&
-  left.additions === right.additions &&
-  left.deletions === right.deletions &&
-  left.previousPath === right.previousPath &&
-  left.patch === right.patch;
-
-const sameSelectedFiles = (
-  left: ReadonlyArray<ChangedFile>,
-  right: ReadonlyArray<ChangedFile>,
-): boolean =>
-  left.length === right.length &&
-  left.every((file, index) => {
-    const candidate = right[index];
-    return candidate !== undefined && sameSelectedFileIdentity(file, candidate);
-  });
-
-const validateSelection = (input: {
-  readonly selection: ReviewSelection;
-  readonly files: ReadonlyArray<ChangedFile>;
-  readonly anchorFiles: ReadonlyArray<ChangedFile>;
-  readonly metadata: PullRequestMetadata;
-}): Effect.Effect<ReviewSelection, ReviewSelectionViolation> => {
-  const { selection, files, anchorFiles, metadata } = input;
-  const sealed = selectedReviewRangeFor(selection, metadata);
-  if (sealed === undefined) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection was not created by the host range selector",
-      }),
-    );
-  }
-  if (!sameSelectedFiles(sealed.files, files)) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection evidence does not match the model-visible source range",
-      }),
-    );
-  }
-  if (sealed.mode === "incremental" && sealed.totalFiles !== files.length) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection total does not match the model-visible source range",
-      }),
-    );
-  }
-  const anchorPaths = new Set(anchorFiles.map((file) => file.path));
-  if (files.some((file) => !anchorPaths.has(file.path))) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "review selection contains a path outside the current pull-request source",
-      }),
-    );
-  }
-  if (
-    sealed.mode === "full" &&
-    (sealed.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))
-  ) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "full review selection does not cover the current pull-request source",
-      }),
-    );
-  }
-  if (
-    sealed.mode === "incremental" &&
-    (sealed.priorState === undefined ||
-      sealed.baselineSha !== sealed.priorState.reviewedHeadSha ||
-      sealed.profileFingerprint !== sealed.priorState.profileFingerprint)
-  ) {
-    return Effect.fail(
-      ReviewSelectionViolation.make({
-        reason: "incremental review selection is not bound to its authenticated prior state",
-      }),
-    );
-  }
-  return Effect.succeed(sealed);
-};
 
 /** Build the mission one review run frames from the source's snapshot. */
 export const buildReviewMission = (
@@ -330,10 +233,7 @@ export const executeReview = <
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
-    const selection =
-      options.selection === undefined
-        ? undefined
-        : yield* validateSelection({ selection: options.selection, files, anchorFiles, metadata });
+    const selection = options.selection;
     const mission = buildReviewMission(metadata, files);
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =

@@ -16,9 +16,7 @@ import {
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewPublisher,
-  type RunReviewOptions,
   type ReviewSelection,
-  ReviewState,
   ReviewStateAuthenticator,
   unavailableReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
@@ -161,7 +159,7 @@ describe("enforceFindingsBound", () => {
 // ---------------------------------------------------------------------------
 
 const runFactoryReviewer = <E, R>(
-  run: (options?: RunReviewOptions) => Effect.Effect<unknown, E, R>,
+  run: (options?: { readonly post?: boolean }) => Effect.Effect<unknown, E, R>,
 ) =>
   Effect.gen(function* () {
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
@@ -244,67 +242,6 @@ describe("PrReview.make", () => {
       expect(plan?.comments.map((comment) => comment.path)).toEqual(["src/hello.ts"]);
       expect(plan?.demoted.map((finding) => finding.path)).toEqual(["deps/bun.lock"]);
       expect(outcome).toBeDefined();
-    }),
-  );
-
-  it.effect("rejects a caller-forged selection before it can narrow continuity accounting", () =>
-    Effect.gen(function* () {
-      const scripted = yield* makeOfflineReviewerModel({
-        diffPath: "src/hello.ts",
-        readPath: "src/hello.ts",
-        review: singleFindingReview,
-      });
-      const reviewer = PrReview.make({ model: scripted.model });
-      const [selectedFile] = fixture.files;
-      if (selectedFile === undefined) {
-        throw new Error("Expected the factory fixture to include src/hello.ts");
-      }
-      const selection: ReviewSelection = {
-        mode: "incremental",
-        reason: "test selected delta",
-        files: [selectedFile.file],
-        affectedPaths: [selectedFile.file.path],
-        totalFiles: 1,
-        baselineSha: "0".repeat(40),
-        priorState: ReviewState.make({
-          version: 1,
-          repository: fixture.metadata.repository,
-          pullRequestNumber: fixture.metadata.number,
-          baseRef: fixture.metadata.baseRef,
-          baseSha: "1".repeat(40),
-          headRef: fixture.metadata.headRef,
-          reviewedHeadSha: "0".repeat(40),
-          profileFingerprint: "a".repeat(64),
-          acceptedScopeFingerprint: "b".repeat(64),
-          reviewedPathCount: 1,
-          unresolvedFindings: [],
-          unresolvedConcerns: [],
-          lastReviewMode: "full",
-        }),
-        profileFingerprint: "a".repeat(64),
-      };
-      const ignoredPublished = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
-
-      const error = yield* reviewer
-        .run({ post: false, selection })
-        .pipe(
-          Effect.flip,
-          Effect.provide(
-            Layer.mergeAll(
-              fixturePullRequestSourceLayer(fixture),
-              collectingReviewPublisherLayer(ignoredPublished),
-              unavailableReviewStateAuthenticatorLayer("offline factory test"),
-              NodeCrypto.layer,
-            ),
-          ),
-        );
-
-      const prompts = yield* scripted.prompts;
-      expect(error._tag).toBe("ReviewSelectionViolation");
-      if (error._tag === "ReviewSelectionViolation") {
-        expect(error.reason).toBe("review selection was not created by the host range selector");
-      }
-      expect(prompts).toEqual([]);
     }),
   );
 

@@ -14,7 +14,7 @@ import { ReviewFinding } from "./review-agent.ts";
 // ---------------------------------------------------------------------------
 
 /** The delegation fan-out bound: one parent Run spawns at most this many children. */
-export const MAX_REVIEW_UNITS = 20;
+export const MAX_REVIEW_UNITS = 16;
 
 /** A unit never carries more files than this, regardless of their size. */
 export const MAX_UNIT_FILES = 12;

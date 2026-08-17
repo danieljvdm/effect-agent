@@ -172,18 +172,11 @@ and with a bounded warning, so the next run safely performs a full review.
 `review-mode: final` is the explicit bounded merge-readiness audit. It reviews
 the full current PR diff and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
-The packaged fan-out planner can assign up to 20 units of 12 files, with a
-1,200 changed-line soft budget per unit. After all initial calls settle, the
-coordinator may retry up to five failed units once because their entire Tool
-surface is read-only. A unit that still fails, files beyond finite capacity,
-or any other coverage gap remains explicitly unreviewed and makes the review
-check incomplete; the workflow never converts partial coverage into an
-approval claim.
-
-The included repository workflow also selects fan-out for routine pull
-requests with more than 11 changed files. The flat reviewer's 24-Tool budget
-then remains an honest one-list plus two reads per file envelope instead of
-failing mid-review on a scope it cannot fully cover.
+The packaged fan-out planner can assign up to 16 units of 12 files, with a
+1,200 changed-line soft budget per unit. Files beyond that finite capacity or
+children that fail their bounded policy remain explicitly unreviewed and make
+the review check incomplete; the workflow never converts partial coverage
+into an approval claim.
 
 ## Hosts
 

@@ -25,6 +25,7 @@ import {
   type ReviewMode,
   type ReviewState,
   selectReviewRange,
+  selectedPullRequestSourceLayer,
   unavailableReviewStateAuthenticatorLayer,
   webCryptoReviewStateAuthenticatorLayer,
 } from "./internal/review-state.ts";
@@ -437,11 +438,8 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
       let selection: ReturnType<typeof selectReviewRange> | undefined;
+      const stateAuthenticator = yield* ReviewStateAuthenticator;
       if (reviewer.profileFingerprint !== undefined) {
-        // Legacy/custom reviewers expose only the pre-state fingerprint seam.
-        // Do not acquire the packaged continuity authority unless this reviewer
-        // actually supports authenticated profile selection.
-        const stateAuthenticator = yield* ReviewStateAuthenticator;
         const source = yield* PullRequestSource;
         const [snapshot, profileFingerprint] = yield* Effect.all([
           reviewer.snapshot ?? Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
@@ -608,7 +606,9 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const outcome = yield* reviewEffect;
+      const outcome = yield* selection === undefined
+        ? reviewEffect
+        : reviewEffect.pipe(Effect.provide(selectedPullRequestSourceLayer(selection)));
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,

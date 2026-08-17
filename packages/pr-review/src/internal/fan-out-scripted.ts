@@ -18,9 +18,6 @@ export const OFFLINE_UNITS_CALL_ID = "units-1";
 /** The delegation Tool Call id the scripted coordinator uses for one unit. */
 export const offlineUnitCallId = (unitId: string): string => `delegate-${unitId}`;
 
-/** The retry Tool Call id the scripted coordinator uses for one failed unit. */
-export const offlineUnitRetryCallId = (unitId: string): string => `delegate-retry-${unitId}`;
-
 /** The diff Tool Call id the scripted child uses for one unit. */
 export const offlineChildDiffCallId = (unitId: string): string => `fanout-diff-${unitId}`;
 
@@ -38,31 +35,11 @@ export interface OfflineUnitCall {
  */
 export const makeOfflineFanOutCoordinatorModel = (script: {
   readonly unitCalls: ReadonlyArray<OfflineUnitCall>;
-  readonly retryUnitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
   readonly review: CodeReview;
 }) => {
   const firstUnitCallId = offlineUnitCallId(script.unitCalls[0]?.unitId ?? "unit-none");
-  const firstRetryCallId = offlineUnitRetryCallId(
-    script.retryUnitCalls?.[0]?.unitId ?? "unit-none",
-  );
   return makePromptKeyedModel("pr-fanout-coordinator-offline", (promptJson) => {
-    if ((script.retryUnitCalls?.length ?? 0) > 0 && promptJson.includes(firstRetryCallId)) {
-      return scriptedFinalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
-    }
     if (promptJson.includes(firstUnitCallId)) {
-      if ((script.retryUnitCalls?.length ?? 0) > 0) {
-        return scriptedToolTurn(
-          ...(script.retryUnitCalls ?? []).map(
-            (unit): Response.StreamPartEncoded => ({
-              type: "tool-call",
-              id: offlineUnitRetryCallId(unit.unitId),
-              name: "delegate_file_review",
-              params: { unitId: unit.unitId, paths: unit.paths },
-              providerExecuted: false,
-            }),
-          ),
-        );
-      }
       return scriptedFinalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
     }
     if (promptJson.includes(OFFLINE_UNITS_CALL_ID)) {
@@ -94,8 +71,6 @@ export type OfflineUnitOutcome =
   | { readonly _tag: "findings"; readonly report: FileReviewReport }
   /** Read one diff, then return non-JSON — the child fails typed (AgentOutputError). */
   | { readonly _tag: "malformed-output" }
-  /** First child fails output decoding; one explicit retry returns the report. */
-  | { readonly _tag: "malformed-once-then-findings"; readonly report: FileReviewReport }
   /**
    * Declare more Tool Calls than the child's AgentPolicy allows in one turn —
    * none executes and the child fails typed (AgentPolicyError "tool-calls",
@@ -123,11 +98,7 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
   Effect.gen(function* () {
     const calls = yield* Ref.make(0);
     const prompts = yield* Ref.make<ReadonlyArray<string>>([]);
-    const completedAttempts = yield* Ref.make<ReadonlyMap<string, number>>(new Map());
-    const decide = (
-      promptJson: string,
-      completedAttempt: number | undefined,
-    ): ReadonlyArray<Response.StreamPartEncoded> | undefined => {
+    const decide = (promptJson: string): ReadonlyArray<Response.StreamPartEncoded> | undefined => {
       const script = scripts.find((candidate) => promptJson.includes(candidate.unitId));
       if (script === undefined) return undefined;
       switch (script.outcome._tag) {
@@ -162,22 +133,6 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
             providerExecuted: false,
           });
         }
-        case "malformed-once-then-findings": {
-          if (promptJson.includes(offlineChildDiffCallId(script.unitId))) {
-            return scriptedFinalParts(
-              completedAttempt === 0
-                ? "this is not the JSON you are looking for"
-                : JSON.stringify(Schema.encodeSync(FileReviewReport)(script.outcome.report)),
-            );
-          }
-          return scriptedToolTurn({
-            type: "tool-call",
-            id: offlineChildDiffCallId(script.unitId),
-            name: "read_file_diff",
-            params: { path: script.diffPath },
-            providerExecuted: false,
-          });
-        }
       }
     };
     const model = Model.make(
@@ -193,18 +148,7 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
                 yield* Ref.update(calls, (value) => value + 1);
                 const promptJson = JSON.stringify(request.prompt);
                 yield* Ref.update(prompts, (previous) => [...previous, promptJson]);
-                const script = scripts.find((candidate) => promptJson.includes(candidate.unitId));
-                const completedAttempt =
-                  script?.outcome._tag === "malformed-once-then-findings" &&
-                  promptJson.includes(offlineChildDiffCallId(script.unitId))
-                    ? yield* Ref.modify(completedAttempts, (attempts) => {
-                        const current = attempts.get(script.unitId) ?? 0;
-                        const next = new Map(attempts);
-                        next.set(script.unitId, current + 1);
-                        return [current, next] as const;
-                      })
-                    : undefined;
-                const parts = decide(promptJson, completedAttempt);
+                const parts = decide(promptJson);
                 if (parts === undefined) {
                   return yield* Effect.die(
                     new Error("The child prompt names no scripted review unit"),
