@@ -1,4 +1,4 @@
-import { StalePullRequestHead } from "@effect-agent/example-pr-work-orders";
+import { GitCommitSha, StalePullRequestHead } from "@effect-agent/example-pr-work-orders";
 import { Context, Effect, type FileSystem, Layer, type Path, Schema, type Scope } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -15,7 +15,7 @@ import { spawnIsolatedWorker } from "./isolation.ts";
 
 const PublisherWorkerOutcome = Schema.Union([
   Schema.TaggedStruct("published", {
-    headSha: Schema.String,
+    headSha: GitCommitSha,
   }),
   PublisherVerificationFailure,
   StalePullRequestHead,
@@ -29,7 +29,7 @@ export class IsolatedPublisher extends Context.Service<
     readonly publish: (
       request: PublisherRequest,
     ) => Effect.Effect<
-      string,
+      GitCommitSha,
       | PublisherVerificationFailure
       | StalePullRequestHead
       | IsolationViolation

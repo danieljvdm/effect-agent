@@ -1,12 +1,19 @@
 import {
   GitCommitSha,
-  PatchDigest,
-  WorkOrderDigest,
   type WorkOrderHostError,
   type WorkspaceOperationFailure,
   WorkspacePath,
 } from "@effect-agent/example-pr-work-orders";
 import { Context, Layer, Schema } from "effect";
+
+import {
+  IsolatedCheckRequest,
+  IsolatedCheckSpec,
+  IsolatedPublishWorkerRequest,
+  PublisherTrust,
+} from "./worker-contracts.ts";
+
+export { IsolatedCheckRequest, IsolatedCheckSpec, IsolatedPublishWorkerRequest, PublisherTrust };
 
 export const GITHUB_WRITE_TOKEN_ENV = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
 export const MODEL_SECRET_ENV = "EFFECT_AGENT_MODEL_SECRET";
@@ -166,54 +173,11 @@ export type IngressError =
   | WorkspaceOperationFailure
   | WorkOrderHostError;
 
-export class PublisherTrust extends Schema.Class<PublisherTrust>(
-  "@effect-agent/example-pr-work-order-ingress/PublisherTrust",
-)({
-  workOrderId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-  workOrderDigest: WorkOrderDigest,
-  repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-  pullRequestNumber: Schema.Int.check(Schema.isGreaterThan(0)),
-  expectedHeadSha: GitCommitSha,
-  allowedPaths: Schema.Array(WorkspacePath).check(Schema.isMaxLength(100)),
-  patchDigest: PatchDigest,
-  requiredChecks: Schema.Array(
-    Schema.Struct({
-      name: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
-      status: Schema.Literals(["passed", "failed"]),
-      summary: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
-    }),
-  ).check(Schema.isMaxLength(20)),
-}) {}
-
 export class PublisherRequest extends Schema.Class<PublisherRequest>(
   "@effect-agent/example-pr-work-order-ingress/PublisherRequest",
 )({
   patch: Schema.String.check(Schema.isMaxLength(1_000_000)),
   trust: PublisherTrust,
-}) {}
-
-export class IsolatedCheckSpec extends Schema.Class<IsolatedCheckSpec>(
-  "@effect-agent/example-pr-work-order-ingress/IsolatedCheckSpec",
-)({
-  name: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
-  command: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
-  args: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).check(Schema.isMaxLength(20)),
-}) {}
-
-export class IsolatedCheckRequest extends Schema.Class<IsolatedCheckRequest>(
-  "@effect-agent/example-pr-work-order-ingress/IsolatedCheckRequest",
-)({
-  worktreeRoot: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
-  checks: Schema.Array(IsolatedCheckSpec).check(Schema.isMaxLength(20)),
-}) {}
-
-export class IsolatedPublishWorkerRequest extends Schema.Class<IsolatedPublishWorkerRequest>(
-  "@effect-agent/example-pr-work-order-ingress/IsolatedPublishWorkerRequest",
-)({
-  patch: Schema.String.check(Schema.isMaxLength(1_000_000)),
-  trust: PublisherTrust,
-  expected: PublisherTrust,
-  stateDir: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
 }) {}
 
 export class ThreadReply extends Schema.Class<ThreadReply>(

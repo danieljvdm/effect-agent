@@ -5,7 +5,7 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 import { Schema } from "effect";
 
-import { IsolatedCheckWorkerRequest, IsolatedPublishWorkerRequest } from "./worker-contracts.ts";
+import { IsolatedCheckRequest, IsolatedPublishWorkerRequest } from "./worker-contracts.ts";
 
 const WRITE_TOKEN = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
 const MODEL_SECRET = "EFFECT_AGENT_MODEL_SECRET";
@@ -135,7 +135,7 @@ const sameIdentity = (
 
 if (role === "check") {
   const request =
-    decodeRequest(Schema.fromJsonString(IsolatedCheckWorkerRequest)) ??
+    decodeRequest(Schema.fromJsonString(IsolatedCheckRequest)) ??
     fail({
       _tag: "IsolationViolation",
       process: "check",

@@ -49,7 +49,7 @@ import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts
 import { IsolatedChecks } from "../src/isolation.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
-import { FileBackedAttemptStore } from "../src/store.ts";
+import { FileBackedAttemptStore, IngressStoreFailpoint } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
 const STALE = Schema.decodeUnknownSync(GitCommitSha)("b".repeat(40));
@@ -330,7 +330,9 @@ const withIngress = <A, E, R>(
             IngressPolicy.layer(policyConfig),
             ObservedActionsIdentity.layerAbsent,
             IsolatedChecks.layer,
-            FileBackedAttemptStore.layer(directory),
+            FileBackedAttemptStore.layer(directory).pipe(
+              Layer.provide(IngressStoreFailpoint.layer),
+            ),
             stubHostLayer,
             WorkOrderAttemptPolicy.layerMemory,
             implementer.layer,

@@ -4,7 +4,7 @@ import {
   PublishedWorkOrder,
   SettledWorkOrder,
 } from "@effect-agent/example-pr-work-orders";
-import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect";
+import { Context, Effect, FileSystem, Layer, Path, Schema } from "effect";
 
 import { AttemptIncomplete, IngressStoreFailure, StoredDeliveryFailure } from "./contracts.ts";
 
@@ -75,12 +75,8 @@ export class FileBackedAttemptStore extends Context.Service<
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const failpoint = yield* Effect.serviceOption(IngressStoreFailpoint);
-        const hit = (location: IngressStoreFailpointLocation) =>
-          Option.match(failpoint, {
-            onNone: () => Effect.void,
-            onSome: (service) => service.hit(location),
-          });
+        const failpoint = yield* IngressStoreFailpoint;
+        const hit = failpoint.hit;
         const eventsDir = path.join(directory, "events");
         const attemptsDir = path.join(directory, "attempts");
         const ensureDirectories = Effect.gen(function* () {

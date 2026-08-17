@@ -1,29 +1,37 @@
 import { Schema } from "effect";
 
-export const IsolatedCheckWorkerRequest = Schema.Struct({
-  worktreeRoot: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
-  checks: Schema.Array(
-    Schema.Struct({
-      name: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
-      command: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
-      args: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).check(
-        Schema.isMaxLength(20),
-      ),
-    }),
-  ).check(Schema.isMaxLength(20)),
-});
-export type IsolatedCheckWorkerRequest = typeof IsolatedCheckWorkerRequest.Type;
+import {
+  GitCommitSha,
+  PatchDigest,
+  WorkOrderDigest,
+  WorkspacePath,
+} from "../../pr-work-orders/src/contracts.ts";
 
-const PublisherTrustRecord = Schema.Struct({
+export class IsolatedCheckSpec extends Schema.Class<IsolatedCheckSpec>(
+  "@effect-agent/example-pr-work-order-ingress/IsolatedCheckSpec",
+)({
+  name: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
+  command: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
+  args: Schema.Array(Schema.String.check(Schema.isMaxLength(512))).check(Schema.isMaxLength(20)),
+}) {}
+
+export class IsolatedCheckRequest extends Schema.Class<IsolatedCheckRequest>(
+  "@effect-agent/example-pr-work-order-ingress/IsolatedCheckRequest",
+)({
+  worktreeRoot: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
+  checks: Schema.Array(IsolatedCheckSpec).check(Schema.isMaxLength(20)),
+}) {}
+
+export class PublisherTrust extends Schema.Class<PublisherTrust>(
+  "@effect-agent/example-pr-work-order-ingress/PublisherTrust",
+)({
   workOrderId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
-  workOrderDigest: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+  workOrderDigest: WorkOrderDigest,
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   pullRequestNumber: Schema.Int.check(Schema.isGreaterThan(0)),
-  expectedHeadSha: Schema.NonEmptyString.check(Schema.isMaxLength(40)),
-  allowedPaths: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
-    Schema.isMaxLength(100),
-  ),
-  patchDigest: Schema.NonEmptyString.check(Schema.isMaxLength(64)),
+  expectedHeadSha: GitCommitSha,
+  allowedPaths: Schema.Array(WorkspacePath).check(Schema.isMaxLength(100)),
+  patchDigest: PatchDigest,
   requiredChecks: Schema.Array(
     Schema.Struct({
       name: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
@@ -31,12 +39,13 @@ const PublisherTrustRecord = Schema.Struct({
       summary: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
     }),
   ).check(Schema.isMaxLength(20)),
-});
+}) {}
 
-export const IsolatedPublishWorkerRequest = Schema.Struct({
+export class IsolatedPublishWorkerRequest extends Schema.Class<IsolatedPublishWorkerRequest>(
+  "@effect-agent/example-pr-work-order-ingress/IsolatedPublishWorkerRequest",
+)({
   patch: Schema.String.check(Schema.isMaxLength(1_000_000)),
-  trust: PublisherTrustRecord,
-  expected: PublisherTrustRecord,
+  trust: PublisherTrust,
+  expected: PublisherTrust,
   stateDir: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
-});
-export type IsolatedPublishWorkerRequest = typeof IsolatedPublishWorkerRequest.Type;
+}) {}
