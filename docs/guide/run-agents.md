@@ -30,7 +30,8 @@ interface AgentResult<Output> {
 `runDisposition` is present only when the Definition declares a disposition Schema, its selector
 returns a value, and the Run completes ordinarily. It is the Schema-encoded JSON value; durable
 callers read the same value from the canonical `SubmissionSettled` record and decode it with the
-application Schema.
+application Schema. The exported `AgentResultSchema` enforces the same boundary and rejects a
+`runDisposition` paired with `finishReason: "budget-exhausted"`.
 
 Under the default `onExhaustion: "final-answer"` policy, a Run that exhausts its Turn or Tool
 Call budget settles with one constrained final-answer Turn and reports it honestly as

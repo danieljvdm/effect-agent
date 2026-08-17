@@ -232,7 +232,18 @@ export const AgentResultSchema = <Output extends Schema.Top>(output: Output) =>
     exhausted: Schema.optionalKey(Schema.Literals(["tokens", "tool-calls", "turns"])),
     /** Schema-encoded application disposition declared for an ordinary completed Run. */
     runDisposition: Schema.optionalKey(Schema.Json),
-  });
+  }).check(
+    Schema.makeFilter(
+      (result) =>
+        !("runDisposition" in result) ||
+        result.runDisposition === undefined ||
+        !("finishReason" in result) ||
+        result.finishReason !== "budget-exhausted",
+      {
+        expected: "runDisposition only when finishReason is not budget-exhausted",
+      },
+    ),
+  );
 
 /** Decoded terminal value produced by reducing a completed agent event stream. */
 export type AgentResult<Output> = ReturnType<

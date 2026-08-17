@@ -365,7 +365,9 @@ evaluates or carries the selector result. Reducers fail closed if a budget-compl
 a disposition or if an event carries one without a Definition-owned Schema. No runtime path parses
 output prose or infers disposition from Tool events. When the application selector throws, the
 typed error retains the original value in its Schema-safe diagnostic `cause`; the terminal event
-uses a fixed non-sensitive message and never serializes that foreign cause.
+uses a fixed non-sensitive message and never serializes that foreign cause. The public
+`AgentResultSchema` independently rejects a disposition on `finishReason: "budget-exhausted"`, so
+untrusted serialized results cannot bypass the event-reducer invariant.
 
 Raw provider chunks are never mixed into the stable event union.
 

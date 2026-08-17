@@ -46,6 +46,7 @@ import {
 } from "effect/unstable/ai";
 
 import {
+  AgentResultSchema,
   AgentRuntime,
   ToolExecutionClass,
   withTerminalDefectEvent,
@@ -2527,6 +2528,39 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       expect(reduced?.runId).toBe(runResult.runId);
       expect(reduced?.turns).toBe(runResult.turns);
     });
+  });
+
+  it("AgentResultSchema rejects a disposition on budget exhaustion", () => {
+    const Result = AgentResultSchema(Schema.Struct({ answer: Schema.String }));
+    const ordinary = {
+      output: { answer: "done" },
+      conversationId: "conversation-1",
+      runId: "run-1",
+      turns: 1,
+      finishReason: "completed",
+      runDisposition: "application-complete",
+    } as const;
+    const budgetExhausted = {
+      ...ordinary,
+      finishReason: "budget-exhausted",
+      exhausted: "turns",
+    } as const;
+    const budgetWithoutDisposition = {
+      output: ordinary.output,
+      conversationId: ordinary.conversationId,
+      runId: ordinary.runId,
+      turns: ordinary.turns,
+      finishReason: budgetExhausted.finishReason,
+      exhausted: budgetExhausted.exhausted,
+    } as const;
+
+    expect(Schema.decodeUnknownSync(Result)(ordinary).runDisposition).toBe("application-complete");
+    expect(Schema.decodeUnknownSync(Result)(budgetWithoutDisposition).finishReason).toBe(
+      "budget-exhausted",
+    );
+    expect(() => Schema.decodeUnknownSync(Result)(budgetExhausted)).toThrow(
+      /runDisposition only when finishReason is not budget-exhausted/,
+    );
   });
 
   it.effect("RUN-029 validates and exposes an application run disposition", () => {
