@@ -750,6 +750,40 @@ describe("PR work-order ingress", () => {
   );
 
   it.effect(
+    "WOI-009 a successful update followed by lock cleanup failure reports publication uncertainty",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-lock-" });
+          yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
+          const request = publisherRequest();
+          const result = yield* Effect.gen(function* () {
+            const publisher = yield* IsolatedPublisher;
+            return yield* publisher.publish(request);
+          }).pipe(
+            Effect.provide(
+              IsolatedPublisher.layer({
+                stateDir,
+                expected: request.trust,
+                failpoint: "lock-release",
+              }),
+            ),
+            Effect.flip,
+          );
+          const after = yield* fs.readFileString(path.join(stateDir, "head"));
+          const lockRemains = yield* fs.exists(path.join(stateDir, "head.lock"));
+          expect(result._tag).toBe("PublicationUncertainty");
+          if (result._tag !== "PublicationUncertainty") return;
+          expect(result.observedHeadSha).toBeDefined();
+          expect(after.trim()).toBe(result.observedHeadSha);
+          expect(lockRemains).toBe(true);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect(
     "WOI-010 a published or settled run posts one thread reply and does not resolve the thread",
     () =>
       withIngress({}, ({ github }) =>

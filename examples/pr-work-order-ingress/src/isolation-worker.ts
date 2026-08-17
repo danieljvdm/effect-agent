@@ -5,7 +5,11 @@ import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 import { Schema } from "effect";
 
-import { IsolatedCheckRequest, IsolatedPublishWorkerRequest } from "./worker-contracts.ts";
+import {
+  IsolatedCheckRequest,
+  IsolatedPublishWorkerRequest,
+  PUBLISH_FAILPOINT_ENV,
+} from "./worker-contracts.ts";
 
 const WRITE_TOKEN = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
 const MODEL_SECRET = "EFFECT_AGENT_MODEL_SECRET";
@@ -228,6 +232,21 @@ if (role === "publish") {
     });
   }
   const lockPath = `${stateDir}/head.lock`;
+  const failAt = process.env[PUBLISH_FAILPOINT_ENV];
+  const hit = (location: string, observedHeadSha?: string) => {
+    if (failAt === location) {
+      fail({
+        _tag: "PublicationUncertainty",
+        reason: `failpoint ${location}`,
+        ...(observedHeadSha === undefined ? {} : { observedHeadSha }),
+      });
+    }
+  };
+  const isAbsentLock = (cause: unknown) =>
+    typeof cause === "object" &&
+    cause !== null &&
+    "code" in cause &&
+    (cause as { readonly code?: string }).code === "ENOENT";
   try {
     writeFileSync(lockPath, `${String(process.pid)}\n`, { flag: "wx" });
   } catch {
@@ -236,12 +255,25 @@ if (role === "publish") {
       reason: "lost exclusive publication lock",
     });
   }
-  const releaseLock = () => {
+  const releaseLock = (observedHeadSha?: string) => {
+    hit("before-lock-release", observedHeadSha);
     try {
+      if (failAt === "lock-release") {
+        throw Object.assign(new Error("injected publication lock cleanup failure"), {
+          code: "EPERM",
+        });
+      }
       unlinkSync(lockPath);
-    } catch {
-      // lock already released
+    } catch (cause) {
+      if (!isAbsentLock(cause)) {
+        fail({
+          _tag: "PublicationUncertainty",
+          reason: `publication lock cleanup failed: ${String(cause).slice(0, 1_000)}`,
+          ...(observedHeadSha === undefined ? {} : { observedHeadSha }),
+        });
+      }
     }
+    hit("after-lock-release", observedHeadSha);
   };
   let actual: string;
   try {
@@ -262,6 +294,7 @@ if (role === "publish") {
     });
   }
   const published = createHash("sha256").update(`${actual}\n${patch}`).digest("hex").slice(0, 40);
+  hit("before-head-cas", actual);
   try {
     writeFileSync(`${stateDir}/applied.patch`, patch);
     writeFileSync(`${stateDir}/head.next`, `${published}\n`);
@@ -274,7 +307,8 @@ if (role === "publish") {
       observedHeadSha: actual,
     });
   }
-  releaseLock();
+  hit("after-head-cas", published);
+  releaseLock(published);
   process.stdout.write(
     JSON.stringify({
       _tag: "published",

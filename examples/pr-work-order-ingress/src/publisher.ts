@@ -12,6 +12,7 @@ import {
   PublicationUncertainty,
 } from "./contracts.ts";
 import { spawnIsolatedWorker } from "./isolation.ts";
+import { PUBLISH_FAILPOINT_ENV, type PublishFailpointLocation } from "./worker-contracts.ts";
 
 const PublisherWorkerOutcome = Schema.Union([
   Schema.TaggedStruct("published", {
@@ -42,6 +43,7 @@ export class IsolatedPublisher extends Context.Service<
     readonly stateDir: string;
     readonly writeToken?: string | undefined;
     readonly expected: PublisherTrust;
+    readonly failpoint?: PublishFailpointLocation | undefined;
   }) =>
     Layer.succeed(
       IsolatedPublisher,
@@ -56,10 +58,14 @@ export class IsolatedPublisher extends Context.Service<
                 expected: options.expected,
                 stateDir: options.stateDir,
               }),
-              env:
-                options.writeToken === undefined
+              env: {
+                ...(options.writeToken === undefined
                   ? {}
-                  : { [GITHUB_WRITE_TOKEN_ENV]: options.writeToken },
+                  : { [GITHUB_WRITE_TOKEN_ENV]: options.writeToken }),
+                ...(options.failpoint === undefined
+                  ? {}
+                  : { [PUBLISH_FAILPOINT_ENV]: options.failpoint }),
+              },
             }).pipe(
               Effect.mapError((error) =>
                 error._tag === "IsolationViolation"

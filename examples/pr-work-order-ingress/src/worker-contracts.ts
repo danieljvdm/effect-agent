@@ -49,3 +49,14 @@ export class IsolatedPublishWorkerRequest extends Schema.Class<IsolatedPublishWo
   expected: PublisherTrust,
   stateDir: Schema.NonEmptyString.check(Schema.isMaxLength(1_024)),
 }) {}
+
+export const PublishFailpointLocation = Schema.Literals([
+  "before-head-cas",
+  "after-head-cas",
+  "before-lock-release",
+  "after-lock-release",
+  "lock-release",
+]);
+export type PublishFailpointLocation = typeof PublishFailpointLocation.Type;
+
+export const PUBLISH_FAILPOINT_ENV = "EFFECT_AGENT_PUBLISH_FAILPOINT";
