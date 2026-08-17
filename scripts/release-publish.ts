@@ -410,6 +410,7 @@ const publishOne = Effect.fn("publishOne")(function* (options: {
 });
 
 const dryRunFlag = Flag.boolean("dry-run").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Pack and validate everything without uploading to the registry."),
 );
 const otpFlag = Flag.string("otp").pipe(
