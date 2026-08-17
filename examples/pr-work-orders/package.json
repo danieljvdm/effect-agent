@@ -1,15 +1,14 @@
 {
-  "name": "@effect-agent/example-pr-remediation",
+  "name": "@effect-agent/example-pr-work-orders",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test --passWithNoTests"
+    "test": "vp test"
   },
   "dependencies": {
-    "@effect-agent/pr-review": "workspace:*",
     "@effect/platform-node": "catalog:",
     "effect": "catalog:",
     "effect-agent": "workspace:*"

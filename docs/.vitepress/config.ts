@@ -104,6 +104,7 @@ export default defineConfig({
           { text: "Persistence", link: "/spec/persistence" },
           { text: "Deployment", link: "/spec/deployment" },
           { text: "Security & operations", link: "/spec/security-operations" },
+          { text: "PR work orders", link: "/spec/pr-work-orders" },
           { text: "Testing", link: "/spec/testing" },
           { text: "Compatibility", link: "/spec/compatibility" },
         ],

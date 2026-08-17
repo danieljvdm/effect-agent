@@ -117,6 +117,11 @@ delegation, and depth that established it.
 A Subagent Invocation whose terminal outcome must be joined into its parent Tool Call before that
 Tool Call settles. Detachment is a separate future capability.
 
+**Work Order**
+A head-bound, path-scoped instruction on a pull request, admitted only by explicit human
+dispatch. An implementer proposes a patch; the host validates and publishes. See
+`docs/spec/pr-work-orders.md`.
+
 **Sandbox**  
 A scoped capability set for filesystem, process, and optional network operations. It is not a
 generic bag of provider SDK methods.

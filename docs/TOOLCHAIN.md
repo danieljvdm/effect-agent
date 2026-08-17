@@ -6,7 +6,7 @@ This repository is a Vite+ monorepo derived from
 [`danieljvdm/vp-effect-cf-template`](https://github.com/danieljvdm/vp-effect-cf-template).
 Its hosted and Cloudflare applications are intentionally absent. A local browser test bench lives
 under `examples/demo`; `examples/providers` is a compile-only native provider-binding leaf.
-`examples/pr-remediation` is a private trusted-local proof of the head-bound remediation loop.
+`examples/pr-work-orders` is a private trusted-local proof of the head-bound work-order host.
 Cloudflare support exists as library packages (`storage-cloudflare`, `platform-cloudflare` since
 Phase 6), not as an application scaffold: there is no `wrangler` dependency or configuration,
 and the Worker entries in the repository are test fixtures.
@@ -77,7 +77,7 @@ packages/
 examples/
   demo/             Leaf TanStack Start browser bench
   pr-review/        Leaf consumer of @effect-agent/pr-review (guidance, extra tool, ignore globs)
-  pr-remediation/   Trusted-local review/remediation/re-review proof (private, class E)
+  pr-work-orders/   Trusted-local work-order implementer proof (private, class E)
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
 action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle)

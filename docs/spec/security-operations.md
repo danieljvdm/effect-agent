@@ -179,32 +179,12 @@ and maximum row, column, cell, and encoded-byte bounds. A raw `SELECT` prefix ch
 read-only enforcement. The adapter fails typed when it cannot prove or enforce the configured
 policy.
 
-### 9.1 Pull-request remediation authority
+### 9.1 Pull-request work-order authority
 
-Automated remediation must keep review, implementation, and publication authority separate. The
-packaged reviewer remains read-only and may produce only a bounded, Schema-validated handoff. That
-handoff is authenticated and binds repository, PR number, exact reviewed head, review/profile
-fingerprints, and stable identities for the selected blocking/important findings. Finding text and
-suggestions are untrusted evidence, never executable patches. The handoff builder must require the
-review source snapshot and host publication plan to identify the same exact head; all metadata,
-changed-file, anchor, and file-content evidence in that review must derive from the one immutable
-source snapshot.
-
-A separate implementation Agent may receive only explicit capabilities for a scoped worktree:
-bounded reads/searches, path-jailed edits, patch inspection, and requests for named host-configured
-checks. It receives no GitHub token, provider secret, unrestricted process/shell, or publishing
-Tool. Deterministic host Effect code independently enforces one attempt per reviewed head, validates
-finding accounting, changed paths, patch digest, and model-reported check results against the
-check-capability results the host observed. Required checks are then rerun independently, and
-publication occurs only by an atomic compare-and-swap against the still-current reviewed head. The
-implementer cannot grade or publish its own settlement, and publication must be followed by a fresh
-reviewer whose source snapshot and publication plan both identify the published head.
-
-The current `examples/pr-remediation` adapter is explicitly trusted-local and unisolated. It is not
-an enabled workflow and must not execute untrusted PR code in a process holding credentials or
-provider secrets. A production adapter needs genuine runtime isolation for repository checks,
-authenticated trigger/provenance checks, secret-free check environments, and equivalent head-bound
-publication fencing.
+Review, implementation, and publication stay separate. The contract is
+[pull-request work orders](pr-work-orders.md). The current local proof must not
+execute untrusted pull-request code in a process holding credentials or
+provider secrets.
 
 ## 10. Supply chain
 

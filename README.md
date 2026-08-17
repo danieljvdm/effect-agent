@@ -26,8 +26,8 @@ durable approval suspension, joined queued input, and durable attached Subagent 
 Cloudflare assembly running the same coordinator inside one SQLite-backed Durable Object per
 Conversation with alarm-driven recovery and cross-Object delegation, deterministic scripted
 model Layers, the progressive Travel Planner reference slice, provider-binding compile examples,
-and a browser test bench under `examples/demo`. The private `examples/pr-remediation` leaf proves a
-trusted-local, head-bound review → remediation → fresh re-review loop without widening the packaged
+and a browser test bench under `examples/demo`. The private `examples/pr-work-orders` leaf proves a
+trusted-local, head-bound work-order implementer without widening the packaged
 reviewer's read-only authority.
 
 ## Status
@@ -46,10 +46,10 @@ reviewer's read-only authority.
   the durable Node/SQLite runtime (`DN`), durable Tools and joined input, the Cloudflare Durable
   Object runtime (`DC`), internal hardening (certification, formal models, chaos), and both Subagent slices,
   each proven by named test suites in the tree
-- PR remediation evidence: `examples/pr-remediation` authenticates an exact-head review handoff,
-  grants a separate implementation Agent only jailed file/patch/named-check tools, and leaves
-  attempt admission, check execution, atomic publication, and fresh re-review to deterministic host
-  Effect code. It is local trusted evidence, not an enabled production workflow or isolation claim.
+- PR work-order evidence: `examples/pr-work-orders` admits one explicit head-bound
+  work order, grants a separate implementation Agent only jailed file/patch/named-check
+  tools, and leaves admission, checks, and atomic publication to host Effect code. It is
+  local trusted evidence, not an enabled production workflow or isolation claim.
 - Stated plainly: completion is an engineering claim, not a stability one — no hosted-Cloudflare
   evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in live-model suites are
   implemented and gate-skipped, with live execution a release-lane action; open-source
@@ -109,6 +109,7 @@ The documentation site lives in [`docs/`](docs/index.md); run it locally with
 | Security, approvals, tenancy, redaction                 | [Security and operations](docs/spec/security-operations.md) |
 | Tests, fault injection, model checking                  | [Verification](docs/spec/testing.md)                        |
 | Versioning and compatibility                            | [Compatibility](docs/spec/compatibility.md)                 |
+| Pull-request work orders                                | [Work orders](docs/spec/pr-work-orders.md)                  |
 
 ## Architecture decisions
 
