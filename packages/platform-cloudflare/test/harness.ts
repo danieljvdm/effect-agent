@@ -6,7 +6,7 @@ import {
 } from "@effect-agent/session";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Effect, Layer, Schema } from "effect";
+import { Crypto, Effect, Layer, Schema } from "effect";
 import * as SqlClientService from "effect/unstable/sql/SqlClient";
 import { expect } from "vite-plus/test";
 
@@ -68,24 +68,46 @@ export const stubFor = (conversation: string, namespace: TestNamespace = "CONVER
   return binding.get(binding.idFromName(conversation));
 };
 
+let nextProgressWaitIdentity = 0;
+const deterministicClientCrypto = Layer.succeed(
+  Crypto.Crypto,
+  Crypto.make({
+    randomBytes: (size) => {
+      let identity = ++nextProgressWaitIdentity;
+      const bytes = new Uint8Array(size);
+      for (let index = size - 1; index >= 0 && identity > 0; index--) {
+        bytes[index] = identity & 0xff;
+        identity = Math.floor(identity / 0x100);
+      }
+      return bytes;
+    },
+    digest: (_algorithm, data) => Effect.succeed(data),
+  }),
+);
+
+const clientLayer = (namespace: TestNamespace) =>
+  CloudflareConversationClient.layer.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        ConversationObjectNamespace.layer(
+          env[namespace] as unknown as DurableObjectNamespace<ConversationObjectRpc>,
+        ),
+        deterministicClientCrypto,
+      ),
+    ),
+  );
+
 /** Run one client Effect against a namespace binding through the real Worker-side client. */
 export const runClient = <A, E>(
   effect: Effect.Effect<A, E, CloudflareConversationClient>,
   namespace: TestNamespace = "CONVERSATIONS",
-): Promise<A> =>
-  Effect.runPromise(
-    effect.pipe(
-      Effect.provide(
-        CloudflareConversationClient.layer.pipe(
-          Layer.provide(
-            ConversationObjectNamespace.layer(
-              env[namespace] as unknown as DurableObjectNamespace<ConversationObjectRpc>,
-            ),
-          ),
-        ),
-      ),
-    ),
-  );
+): Promise<A> => Effect.runPromise(effect.pipe(Effect.provide(clientLayer(namespace))));
+
+/** Fork one client Effect so tests can interrupt the real Worker-side caller deterministically. */
+export const runClientFiber = <A, E>(
+  effect: Effect.Effect<A, E, CloudflareConversationClient>,
+  namespace: TestNamespace = "CONVERSATIONS",
+) => Effect.runFork(effect.pipe(Effect.provide(clientLayer(namespace))));
 
 /** Exit-capturing variant for rows whose client call is EXPECTED to die mid-eviction. */
 export const runClientExit = <A, E>(

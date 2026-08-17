@@ -30,7 +30,7 @@ import {
   type DurableSubmitAgent,
   type DurableSubmitOptions,
 } from "@effect-agent/session";
-import { Context, Duration, Effect, Layer, Schema } from "effect";
+import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
 
 import { DurableAlarmError } from "./alarm.ts";
 import { ConversationObjectNamespace, type ConversationObjectRpc } from "./bindings.ts";
@@ -447,12 +447,11 @@ export class CloudflareConversationClient extends Context.Service<
   static readonly layer: Layer.Layer<
     CloudflareConversationClient,
     never,
-    ConversationObjectNamespace
+    ConversationObjectNamespace | Crypto.Crypto
   > = Layer.effect(CloudflareConversationClient)(
     Effect.gen(function* () {
       const { namespace } = yield* ConversationObjectNamespace;
-      const waiterPrefix = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-      let nextWaiter = 0;
+      const crypto = yield* Crypto.Crypto;
 
       const platformSignals = (cause: unknown) => {
         let retryable: boolean | undefined;
@@ -660,7 +659,15 @@ export class CloudflareConversationClient extends Context.Service<
 
         awaitProgress: (conversationId, afterSequence) =>
           Effect.gen(function* () {
-            const waiterId = `${waiterPrefix}:${nextWaiter++}`;
+            const waiterId = yield* crypto.randomUUIDv4.pipe(
+              Effect.mapError((error) =>
+                HostProtocolError.make({
+                  message: boundHostDiagnostic(
+                    `awaitProgress cancellation identity generation failed: ${error.message}`,
+                  ),
+                }),
+              ),
+            );
             const request = AwaitProgressRequest.make({ afterSequence, waiterId });
             const encoded = yield* encodeAwaitProgressRequest(request).pipe(
               Effect.mapError((error) =>

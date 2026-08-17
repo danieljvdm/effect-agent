@@ -1,6 +1,6 @@
 import { ApprovalDecisionCommand, CanonicalSequence, type Receipt } from "@effect-agent/session";
 import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
-import { Cause, Effect, Option, Schema } from "effect";
+import { Cause, Effect, Fiber, Option, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareConversationClient, ProgressWaitRegistry } from "../src/index.ts";
@@ -17,6 +17,7 @@ import {
   drainAlarmsUntil,
   readCanonical,
   runClient,
+  runClientFiber,
   stubFor,
 } from "./harness.ts";
 import type { TestConversationObject } from "./worker.ts";
@@ -25,32 +26,8 @@ const ZERO_SEQUENCE = Schema.decodeSync(CanonicalSequence)(0);
 let laneCounter = 0;
 const lane = (label: string): string => `cf-progress-${label}-${laneCounter++}`;
 
-const sleep = (millis: number) => new Promise((resolve) => setTimeout(resolve, millis));
-
 const progressStub = (conversation: string) =>
   stubFor(conversation) as DurableObjectStub<TestConversationObject>;
-
-const withDeadline = async <A>(promise: Promise<A>, millis = 5_000): Promise<A> =>
-  Promise.race([
-    promise,
-    sleep(millis).then(() => {
-      throw new Error(`#94 progress wait exceeded ${millis}ms`);
-    }),
-  ]);
-
-const waitUntil = async (predicate: () => Promise<boolean>, millis = 5_000): Promise<void> => {
-  const deadline = Date.now() + millis;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      if (await predicate()) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await sleep(5);
-  }
-  throw lastError ?? new Error(`#94 condition was not reached within ${millis}ms`);
-};
 
 const submitPlanner = (conversation: string) =>
   runClient(
@@ -135,24 +112,22 @@ const awaitCanonicalTag = (conversation: string, afterSequence: CanonicalSequenc
 
 describe("#94 Cloudflare durable progress wait", () => {
   it("broadcasts cancellation across duplicate and late transport attempts", async () => {
-    const completed = await withDeadline(
-      Effect.runPromise(
-        Effect.scoped(
-          Effect.gen(function* () {
-            const registry = yield* ProgressWaitRegistry;
-            const first = yield* registry.subscribe("duplicate-attempt");
-            const second = yield* registry.subscribe("duplicate-attempt");
-            yield* registry.cancel("duplicate-attempt");
-            yield* Effect.all([first, second], { concurrency: "unbounded" });
+    const completed = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* ProgressWaitRegistry;
+          const first = yield* registry.subscribe("duplicate-attempt");
+          const second = yield* registry.subscribe("duplicate-attempt");
+          yield* registry.cancel("duplicate-attempt");
+          yield* Effect.all([first, second], { concurrency: "unbounded" });
 
-            yield* registry.cancel("late-attempt");
-            const lateFirst = yield* registry.subscribe("late-attempt");
-            const lateSecond = yield* registry.subscribe("late-attempt");
-            yield* Effect.all([lateFirst, lateSecond], { concurrency: "unbounded" });
-            return true;
-          }),
-        ).pipe(Effect.provide(ProgressWaitRegistry.layer)),
-      ),
+          yield* registry.cancel("late-attempt");
+          const lateFirst = yield* registry.subscribe("late-attempt");
+          const lateSecond = yield* registry.subscribe("late-attempt");
+          yield* Effect.all([lateFirst, lateSecond], { concurrency: "unbounded" });
+          return true;
+        }),
+      ).pipe(Effect.provide(ProgressWaitRegistry.layer)),
     );
     expect(completed).toBe(true);
   });
@@ -161,23 +136,23 @@ describe("#94 Cloudflare durable progress wait", () => {
     const conversation = lane("append");
     await submitPlanner(conversation);
 
-    await withDeadline(awaitProgress(conversation, ZERO_SEQUENCE));
+    await awaitProgress(conversation, ZERO_SEQUENCE);
     const before = await readCanonical(conversation);
     const cursor = before.at(-1)?.sequence;
     expect(cursor).toBeDefined();
     if (cursor === undefined) return;
 
     const waiting = awaitProgress(conversation, cursor);
-    await waitUntil(async () => (await progressStub(conversation).progressWaiterCount()) === 1);
+    await progressStub(conversation).awaitProgressWaiterCount(1);
     const alarm = runDurableObjectAlarm(stubFor(conversation));
-    await withDeadline(waiting);
-    await withDeadline(alarm);
+    await waiting;
+    await alarm;
 
     const after = await readCanonical(conversation);
     expect(after.some((record) => record.sequence > cursor)).toBe(true);
   });
 
-  it("broadcasts to every waiter, isolates lanes, and cleans up a timed-out caller", async () => {
+  it("broadcasts to every waiter, isolates lanes, and cleans up an interrupted caller", async () => {
     const conversation = lane("many");
     const unrelated = lane("unrelated");
     const main = await prepareApproval(conversation);
@@ -187,23 +162,31 @@ describe("#94 Cloudflare durable progress wait", () => {
 
     const first = awaitCanonicalTag(conversation, cursor, "ToolApprovalDecided");
     const second = awaitCanonicalTag(conversation, cursor, "ToolApprovalDecided");
-    const timedUnrelated = runClient(
+    const interruptedFiber = runClientFiber(
       Effect.gen(function* () {
         const client = yield* CloudflareConversationClient;
-        return yield* client
-          .awaitProgress(decodeConversationId(unrelated), unrelatedCursor)
-          .pipe(Effect.timeoutOption("1 second"));
+        yield* client.awaitProgress(decodeConversationId(conversation), cursor);
       }),
     );
-    await waitUntil(async () => (await progressStub(conversation).progressWaiterCount()) === 2);
-    await waitUntil(async () => (await progressStub(unrelated).progressWaiterCount()) === 1);
+    const unrelatedFiber = runClientFiber(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        yield* client.awaitProgress(decodeConversationId(unrelated), unrelatedCursor);
+      }),
+    );
+    await progressStub(conversation).awaitProgressWaiterCount(3);
+    await progressStub(unrelated).awaitProgressWaiterCount(1);
 
-    await approve(conversation, main.receipt);
-    await withDeadline(Promise.all([first, second]));
+    await Effect.runPromise(Fiber.interrupt(interruptedFiber));
+    await progressStub(conversation).awaitProgressWaiterCount(2);
     expect(await progressStub(unrelated).progressWaiterCount()).toBe(1);
 
-    expect(Option.isNone(await withDeadline(timedUnrelated))).toBe(true);
-    await waitUntil(async () => (await progressStub(unrelated).progressWaiterCount()) === 0);
+    await approve(conversation, main.receipt);
+    await Promise.all([first, second]);
+    expect(await progressStub(unrelated).progressWaiterCount()).toBe(1);
+
+    await Effect.runPromise(Fiber.interrupt(unrelatedFiber));
+    await progressStub(unrelated).awaitProgressWaiterCount(0);
     await approve(unrelated, other.receipt);
     await drainAlarmsUntil(conversation, allSettled(conversation));
     await drainAlarmsUntil(unrelated, allSettled(unrelated));
@@ -215,23 +198,16 @@ describe("#94 Cloudflare durable progress wait", () => {
     const cursor = approval.cursor;
 
     const waiting = awaitProgress(conversation, cursor);
-    await waitUntil(async () => (await progressStub(conversation).progressWaiterCount()) === 1);
+    await progressStub(conversation).awaitProgressWaiterCount(1);
     const priorIncarnation = await progressStub(conversation).progressIncarnation();
     await runInDurableObject(stubFor(conversation), (_instance, state) => {
       state.abort("#94 forced wait eviction");
     }).catch(() => undefined);
 
-    await waitUntil(async () => {
-      const stub = progressStub(conversation);
-      return (
-        (await stub.progressIncarnation()) !== priorIncarnation &&
-        (await stub.progressWaiterCount()) === 1
-      );
-    });
-
     await approve(conversation, approval.receipt);
-    await withDeadline(waiting);
+    await waiting;
     await drainAlarmsUntil(conversation, allSettled(conversation));
+    expect(await progressStub(conversation).progressIncarnation()).not.toBe(priorIncarnation);
     const after = await readCanonical(conversation);
     expect(after.some((record) => record.sequence > cursor)).toBe(true);
   }, 20_000);
@@ -240,10 +216,11 @@ describe("#94 Cloudflare durable progress wait", () => {
     const conversation = lane("remote");
     const approval = await prepareApproval(conversation);
     const waiting = awaitProgress(conversation, approval.cursor);
-    await waitUntil(async () => (await progressStub(conversation).progressWaiterCount()) === 1);
+    await progressStub(conversation).awaitProgressWaiterCount(1);
 
     await stubFor(conversation).wake();
-    await withDeadline(waiting);
+    await waiting;
+    await progressStub(conversation).awaitProgressWaiterCount(0);
     expect(await progressStub(conversation).progressWaiterCount()).toBe(0);
     await approve(conversation, approval.receipt);
     await drainAlarmsUntil(conversation, allSettled(conversation));

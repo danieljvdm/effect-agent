@@ -75,8 +75,44 @@ const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
 
 /** The eviction/alarm/chaos suites' Conversation Object. */
 const progressWaiterCounts = new WeakMap<DurableObjectState, number>();
+interface ProgressWaiterCountLatch {
+  readonly expected: number;
+  readonly resolve: () => void;
+}
+const progressWaiterCountLatches = new WeakMap<
+  DurableObjectState,
+  Array<ProgressWaiterCountLatch>
+>();
 const progressIncarnations = new WeakMap<DurableObjectState, number>();
 let nextProgressIncarnation = 0;
+
+const setProgressWaiterCount = (ctx: DurableObjectState, count: number): void => {
+  progressWaiterCounts.set(ctx, count);
+  const latches = progressWaiterCountLatches.get(ctx);
+  if (latches === undefined) return;
+  const pending: Array<ProgressWaiterCountLatch> = [];
+  for (const latch of latches) {
+    if (latch.expected === count) {
+      latch.resolve();
+    } else {
+      pending.push(latch);
+    }
+  }
+  if (pending.length === 0) {
+    progressWaiterCountLatches.delete(ctx);
+  } else {
+    progressWaiterCountLatches.set(ctx, pending);
+  }
+};
+
+const awaitProgressWaiterCount = (ctx: DurableObjectState, expected: number): Promise<void> => {
+  if ((progressWaiterCounts.get(ctx) ?? 0) === expected) return Promise.resolve();
+  return new Promise((resolve) => {
+    const latches = progressWaiterCountLatches.get(ctx) ?? [];
+    latches.push({ expected, resolve });
+    progressWaiterCountLatches.set(ctx, latches);
+  });
+};
 
 const progressIncarnation = (ctx: DurableObjectState): number => {
   const existing = progressIncarnations.get(ctx);
@@ -89,19 +125,20 @@ const progressIncarnation = (ctx: DurableObjectState): number => {
 export class TestConversationObject extends makeConversationObjectClass(baseOptions) {
   override async awaitProgressEncoded(encoded: unknown): Promise<unknown> {
     progressIncarnation(this.ctx);
-    progressWaiterCounts.set(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);
+    setProgressWaiterCount(this.ctx, (progressWaiterCounts.get(this.ctx) ?? 0) + 1);
     try {
       return await super.awaitProgressEncoded(encoded);
     } finally {
-      progressWaiterCounts.set(
-        this.ctx,
-        Math.max(0, (progressWaiterCounts.get(this.ctx) ?? 1) - 1),
-      );
+      setProgressWaiterCount(this.ctx, Math.max(0, (progressWaiterCounts.get(this.ctx) ?? 1) - 1));
     }
   }
 
   progressWaiterCount(): number {
     return progressWaiterCounts.get(this.ctx) ?? 0;
+  }
+
+  awaitProgressWaiterCount(expected: number): Promise<void> {
+    return awaitProgressWaiterCount(this.ctx, expected);
   }
 
   progressIncarnation(): number {

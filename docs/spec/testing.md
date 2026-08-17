@@ -41,7 +41,8 @@ Durable progress waits additionally force both lost-wakeup interleavings (notify
 but before the canonical check, and notify after the check but before park), count canonical reads
 over an advanced TestClock, broadcast to concurrent same-conversation waiters, isolate unrelated
 lanes, and verify cancellation cleanup. The Cloudflare suite repeats the public client/Object
-boundary with typed authorization/store failures and a real `ctx.abort()` reconstruction (#94).
+boundary with typed authorization/store failures, deterministic client cryptography, explicit
+waiter-registration latches, fiber interruption, and a real `ctx.abort()` reconstruction (#94).
 
 ### 1.4 Adapter conformance
 

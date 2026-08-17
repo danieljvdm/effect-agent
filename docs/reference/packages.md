@@ -107,9 +107,11 @@ committed alarm), the alarm/RPC wake scheduler, the Durable Object RPC port tran
 `CloudflareDurableRuntime.layer`, `makeConversationObjectClass` (local-only constructor gates
 and the typed admission-limits gate before `submit`), and the Worker-side
 `CloudflareConversationClient`, whose `awaitProgress` RPC retries Object resets with a fresh stub
-and sends explicit scoped cancellation on interruption. `CloudflareBindingSource` may capture registered worker Bindings
-from `CloudflareBindingSourceContext` once per Object incarnation, after identity derivation. It
-is a Layer-assembly library, not an application entrypoint.
+and sends explicit scoped cancellation on interruption. The client Layer requires `Crypto.Crypto`
+so its composition root owns collision-resistant cancellation identity generation instead of the
+client reading ambient time or randomness. `CloudflareBindingSource` may capture registered worker
+Bindings from `CloudflareBindingSourceContext` once per Object incarnation, after identity
+derivation. It is a Layer-assembly library, not an application entrypoint.
 
 ### `@effect-agent/pr-review`
 

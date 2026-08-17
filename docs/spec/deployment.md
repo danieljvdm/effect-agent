@@ -300,6 +300,9 @@ best-effort hint after their authoritative commit. RPC interruption sends a scop
 an Object eviction rejects the old call, after which the client retries only a platform-classified
 reset with a fresh stub. The reconstructed Object subscribes and rereads canonical storage before
 parking, so disposable memory can neither strand the caller nor impersonate durable progress.
+Each logical client wait obtains one UUID from the explicit `Crypto.Crypto` capability and reuses it
+across reset attempts. That identity groups duplicate transport attempts for cancellation but
+remains disposable coordination state; canonical records alone establish durable progress.
 Host-supplied `CloudflareDurableRuntimeOptions.operationAuthorizer` decisions cross observation,
 progress, approval, and unknown-resolution RPCs as the typed `OperationDenied`.
 
