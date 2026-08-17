@@ -39,7 +39,7 @@ restart-recovery, hosted publication, or untrusted-code isolation claim. See
 - one SQLite-backed Durable Object per Conversation;
 - Cloudflare Workers provide stateless ingress;
 - Durable Object storage owns Conversation state and queue order;
-- alarms wake unsettled work;
+- alarms wake dirty or autonomously actionable work while stable external waits may quiesce;
 - no PostgreSQL dependency.
 
 No package or example may use “durable” without naming DN or DC and the tested adapter.
@@ -264,6 +264,32 @@ Durable Object storage is the only correctness-critical store for that Conversat
 object state is a cache because objects may stop unexpectedly. Alarm work is idempotent because
 alarms execute at least once.
 
+Conversation maintenance is incremental rather than a perpetual nonterminal poll. Each Object
+stores a versioned `dirty`/`processed` generation beside its single alarm slot:
+
+- every public or routed mutation advances `dirty` and establishes the alarm in one storage
+  transaction before its first durable effect;
+- a short incarnation-local gate serializes that pre-arm boundary with pass generation snapshots
+  and acknowledgements, but never spans the mutation body or cross-Object I/O;
+- a pass acknowledges only the generation it observed. It cannot acknowledge while an RPC/port
+  mutation remains in flight, and a later racing generation therefore retains its alarm;
+- after eviction the in-memory gate/count resets, while the durable unprocessed generation and
+  pre-armed alarm cause recovery to resume any committed autonomous work;
+- once classified as a stable externally-driven wait (`ApprovalPending`, unresolved ordinary
+  outcome, joined child, or child awaiting parent establishment), the observed generation is
+  acknowledged and the alarm clears. Its resolving mutation re-establishes both generation and
+  alarm before changing the wait;
+- autonomous retry, indeterminate admission/establishment, lease recovery, and other locally
+  actionable states leave the generation unprocessed and rearm with bounded backoff;
+- a forced alarm with `processed >= dirty` reads only the maintenance record, clears the alarm,
+  and returns. It performs no runtime recovery, ledger scan, or canonical-history read.
+
+Child-to-parent settlement follows the same quiescent contract. After the exact child Settlement
+record is canonical but before child ledger finalization, the child routes the idempotent durable
+settlement marker to the parent. That routed mutation pre-arms and dirties the parent, so child
+eviction after finalization cannot strand a quiescent parent. Same-store ledgers accept this
+notification only for the exact `terminalizing` reservation; earlier states fail closed.
+
 The target is no longer experimental: the generic durability conformance suite —
 the same adapter-neutral case arrays the Node adapters run — passes inside workerd, and the
 eviction (per-failpoint `ctx.abort()` with alarm-only convergence), alarm-retry (double-fire
@@ -336,3 +362,6 @@ Current platform references:
 - **DEPLOY-011**: The Dynamic Worker Code Mode executor denies ambient egress, enforces platform
   CPU and executor wall-clock limits, disposes Worker and RPC handles in Scope finalizers, and
   claims deployment class `E` only.
+- **DEPLOY-012**: Cloudflare Conversation maintenance is generation-incremental and quiescent for
+  stable external waits; pre-armed mutations, pass acknowledgement, restart recovery, and
+  autonomous rearming obey the protocol above.

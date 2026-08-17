@@ -960,9 +960,11 @@ export type SubmissionLedgerFailure =
  *   `suspended(WaitingForChild) → input-applied` exactly when EVERY listed child is settled,
  *   answering `woken`; `still-waiting` while any listed child is unsettled; `not-waiting` when
  *   the parent is not suspended waiting on this child (including replays after the wake). The
- *   child's canonical Settlement is the authority — a notification for an unsettled child is an
- *   adapter-checked caller error (`LedgerError` on single-store adapters). It never settles the
- *   parent and requires no ownership token: the recorded child settlement authorizes the wake.
+ *   child's canonical Settlement is the authority. The runtime reports it after the exact
+ *   reserved record is appended and before ledger finalization, so same-store adapters accept
+ *   `terminalizing` only when its exact reservation exists; an earlier child is an
+ *   adapter-checked caller error. It never settles the parent and requires no ownership token:
+ *   the canonically recorded child settlement authorizes the wake.
  * - `reserveChildBudget` — idempotent get-or-create of the parent-owned child budget
  *   reservation (spec §12 step 2), fenced by the parent lane's live `OwnershipToken`. An
  *   identical replay returns the stored row with `replayed` set (unfenced, mirroring

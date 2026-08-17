@@ -259,7 +259,9 @@ Purpose: first-class edge deployment alongside Node/SQLite.
 - Durable Object identity provides per-Conversation routing and serialized coordination;
 - Durable Object storage transactions implement local atomic methods;
 - important state is always written to storage rather than relying on in-memory object state;
-- alarms wake unsettled work without requiring a new client request;
+- a durable dirty/processed maintenance generation and pre-armed alarm wake committed autonomous
+  work without a new client request, while stable externally-driven waits quiesce until their
+  next mutation;
 - alarm handlers are idempotent because alarm delivery is at least once;
 - R2 may hold large immutable attachments/artifacts;
 - cross-Conversation indexes are optional projections, not recovery truth.

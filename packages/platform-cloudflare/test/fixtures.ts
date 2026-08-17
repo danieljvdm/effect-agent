@@ -23,6 +23,11 @@ import {
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import type {
+  ConversationMaintenanceFailpointHandler,
+  ConversationMaintenanceFailpointLocation,
+} from "../src/index.ts";
+
 /**
  * Workerd-safe eviction-harness fixtures (plan §3, §4 WP3). The vitest pool runs test files
  * and the worker entry in ONE isolate, so this module's state is shared between the tests
@@ -115,6 +120,71 @@ export const runtimeEvictionFailpoint =
         });
       }
       return Effect.void;
+    });
+
+// ---------------------------------------------------------------------------
+// Conversation-maintenance race gate (issue #93)
+// ---------------------------------------------------------------------------
+
+const maintenancePauses = new Map<string, Array<ConversationMaintenanceFailpointLocation>>();
+const reachedMaintenancePauses = new Set<string>();
+const releasedMaintenancePauses = new Set<string>();
+
+const maintenancePauseKey = (
+  conversation: string,
+  location: ConversationMaintenanceFailpointLocation,
+): string => `${conversation}:${location}`;
+
+export const armMaintenancePause = (
+  conversation: string,
+  ...locations: ReadonlyArray<ConversationMaintenanceFailpointLocation>
+): void => {
+  maintenancePauses.set(conversation, [...locations]);
+  for (const location of locations) {
+    const key = maintenancePauseKey(conversation, location);
+    reachedMaintenancePauses.delete(key);
+    releasedMaintenancePauses.delete(key);
+  }
+};
+
+export const maintenancePauseReached = (
+  conversation: string,
+  location?: ConversationMaintenanceFailpointLocation,
+): boolean =>
+  location === undefined
+    ? [...reachedMaintenancePauses].some((key) => key.startsWith(`${conversation}:`))
+    : reachedMaintenancePauses.has(maintenancePauseKey(conversation, location));
+
+export const releaseMaintenancePause = (
+  conversation: string,
+  location?: ConversationMaintenanceFailpointLocation,
+): void => {
+  if (location === undefined) {
+    for (const key of reachedMaintenancePauses) {
+      if (key.startsWith(`${conversation}:`)) releasedMaintenancePauses.add(key);
+    }
+    return;
+  }
+  releasedMaintenancePauses.add(maintenancePauseKey(conversation, location));
+};
+
+export const maintenanceRaceFailpoint =
+  (ctx: DurableObjectState): ConversationMaintenanceFailpointHandler =>
+  (location) =>
+    Effect.gen(function* () {
+      const conversation = ctx.id.name;
+      if (conversation === undefined) return;
+      const queue = maintenancePauses.get(conversation);
+      if (queue?.[0] !== location) return;
+      queue.shift();
+      if (queue.length === 0) maintenancePauses.delete(conversation);
+      const key = maintenancePauseKey(conversation, location);
+      reachedMaintenancePauses.add(key);
+      while (!releasedMaintenancePauses.has(key)) {
+        yield* Effect.sleep(Duration.millis(1));
+      }
+      releasedMaintenancePauses.delete(key);
+      reachedMaintenancePauses.delete(key);
     });
 
 // ---------------------------------------------------------------------------

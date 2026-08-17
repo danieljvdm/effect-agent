@@ -5,8 +5,20 @@ import {
   type DurableBindingFailure,
   type DurableWorkerFailure,
   type RecoveryReport,
+  type SubmissionSnapshot,
 } from "@effect-agent/session";
-import { Clock, Context, Effect, Layer, Option, Random, Ref, Schema, Stream } from "effect";
+import {
+  Clock,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Random,
+  Ref,
+  Schema,
+  Semaphore,
+  Stream,
+} from "effect";
 
 import { ConversationObjectIdentity, DurableObjectContext } from "./bindings.ts";
 import { CloudflareDurableRuntimeConfig } from "./config.ts";
@@ -17,11 +29,10 @@ import { CloudflareDurableRuntimeConfig } from "./config.ts";
  * and abort re-checks, retry backoff) multiplexes into one idempotent maintenance pass, and
  * the slot always holds the EARLIEST deadline any caller asked for.
  *
- * The alarm invariant (plan §1.4): committed nonterminal work implies a committed alarm.
- * It is established by pre-arming — every mutating entry point and every pass arms the alarm
- * BEFORE its durable mutations — so an eviction at any failpoint leaves a persisted alarm
- * that workerd re-delivers to a fresh incarnation WITHOUT any incoming request. Spurious
- * alarms are harmless by design: a pass over an all-settled lane simply deletes the slot.
+ * The alarm invariant (plan §1.4): every committed actionable mutation carries a newer durable
+ * maintenance generation and a committed alarm. Stable externally-driven waits may be
+ * nonterminal without retaining an alarm; their resolving mutation advances the generation and
+ * restores the alarm atomically.
  */
 
 /** The Durable Object alarm API failed; surfaces on host entry points as a typed refusal. */
@@ -63,17 +74,16 @@ export class DurableAlarmService extends Context.Service<
      * caused, and routing open uncertain-class Tool Calls into spurious Unknown Outcomes.
      * Deferral is contract-safe: wakes are droppable hints, every mutating entry point
      * pre-arms BEFORE its first durable mutation (the alarm invariant never rests on this
-     * call), and the deferred wake is flushed when the pass completes.
+     * call). The pass's durable generation check observes any racing mutation, so the
+     * in-memory hint does not need to be flushed after a stable wait is acknowledged.
      */
     readonly scheduleNow: Effect.Effect<void, DurableAlarmError>;
     /**
-     * Run one maintenance pass with wake deferral (see `scheduleNow`): `scheduleNow` calls
-     * while `body` executes coalesce into one flag, flushed as an immediate re-arm after the
-     * pass — failures of the flush are logged and swallowed (hints are droppable; the pass's
-     * own re-arm policy already bounded the next delivery).
+     * Run one maintenance pass with wake deferral (see `scheduleNow`). Calls made while `body`
+     * executes are droppable promptness hints; correctness rests on the durable generation.
      */
     readonly withWakesDeferred: <A, E, R>(body: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
-    /** Clear the slot; only the maintenance pass does this, and only when all work settled. */
+    /** Clear the slot; correctness-sensitive clears live in maintenance generation transactions. */
     readonly cancel: Effect.Effect<void, DurableAlarmError>;
   }
 >()("@effect-agent/platform-cloudflare/DurableAlarmService") {
@@ -87,7 +97,6 @@ export class DurableAlarmService extends Context.Service<
          * on top of the already-committed pre-armed alarm.
          */
         const runningPasses = yield* Ref.make(0);
-        const wakeDeferred = yield* Ref.make(false);
         const scheduled = Effect.tryPromise({
           try: () => ctx.storage.getAlarm(),
           catch: alarmFailure("get alarm"),
@@ -113,33 +122,12 @@ export class DurableAlarmService extends Context.Service<
           Effect.flatMap((now) => ensureScheduledBy(now)),
         );
         const scheduleNow = Ref.get(runningPasses).pipe(
-          Effect.flatMap((passes) => (passes > 0 ? Ref.set(wakeDeferred, true) : armNow)),
-        );
-        /**
-         * Flush after the LAST concurrent pass: the re-arm lands at the very end of the alarm
-         * handler, where a superseding cancellation only re-delivers to the already-idempotent
-         * pass. Runs inside `Effect.ensuring`, so flush failures are logged, never raised.
-         */
-        const flushDeferredWake = Ref.get(runningPasses).pipe(
-          Effect.flatMap((passes) =>
-            passes > 0
-              ? Effect.void
-              : Ref.getAndSet(wakeDeferred, false).pipe(
-                  Effect.flatMap((wanted) => (wanted ? armNow : Effect.void)),
-                ),
-          ),
-          Effect.catch((error) =>
-            Effect.logWarning("DurableAlarmService: deferred wake flush failed", error),
-          ),
+          Effect.flatMap((passes) => (passes > 0 ? Effect.void : armNow)),
         );
         const withWakesDeferred = <A, E, R>(body: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
           Ref.update(runningPasses, (passes) => passes + 1).pipe(
             Effect.andThen(body),
-            Effect.ensuring(
-              Ref.update(runningPasses, (passes) => passes - 1).pipe(
-                Effect.andThen(flushDeferredWake),
-              ),
-            ),
+            Effect.ensuring(Ref.update(runningPasses, (passes) => passes - 1)),
           );
         const cancel = Effect.tryPromise({
           try: () => ctx.storage.deleteAlarm(),
@@ -161,15 +149,112 @@ export class DurableAlarmService extends Context.Service<
 export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
   "@effect-agent/platform-cloudflare/MaintenancePassReport",
 )({
+  /** `caught-up` is generation-only; `actionable` ran recovery and one bounded drain. */
+  phase: Schema.Literals(["caught-up", "actionable"]),
   /** Recovery decisions executed (or deferred) BEFORE any new claim in this pass. */
   recovered: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Settlements the drain pass finalized. */
   settled: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   /** Submissions still nonterminal after the pass (suspended/unknown lanes stay honest). */
   nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  /** `rearmed` while nonterminal work remains, `cleared` once everything settled. */
+  /** `rearmed` for dirty/autonomous work, `cleared` for stable waits or settlement. */
   alarm: Schema.Literals(["rearmed", "cleared"]),
 }) {}
+
+/** Fault boundaries around every maintenance-owned durable mutation. */
+export type ConversationMaintenanceFailpointLocation =
+  | "maintenance:dirty:before"
+  | "maintenance:dirty:after"
+  | "maintenance:mutation:armed"
+  | "maintenance:mutation:finished"
+  | "maintenance:ensure:before"
+  | "maintenance:ensure:after"
+  | "maintenance:begin:before"
+  | "maintenance:begin:after"
+  | "maintenance:finish:before"
+  | "maintenance:finish:after";
+
+export type ConversationMaintenanceFailpointHandler = (
+  location: ConversationMaintenanceFailpointLocation,
+) => Effect.Effect<void>;
+
+/** Test-only fault authority; production uses the inert layer. */
+export class ConversationMaintenanceFailpoint extends Context.Service<
+  ConversationMaintenanceFailpoint,
+  {
+    readonly hit: ConversationMaintenanceFailpointHandler;
+  }
+>()("@effect-agent/platform-cloudflare/ConversationMaintenanceFailpoint") {
+  static readonly layer = Layer.succeed(this)({ hit: () => Effect.void });
+}
+
+const MaintenanceGeneration = Schema.BigIntFromString.check(
+  Schema.isGreaterThanOrEqualToBigInt(0n),
+);
+
+/** Versioned, platform-private maintenance state stored through Durable Object KV. */
+class ConversationMaintenanceState extends Schema.Class<ConversationMaintenanceState>(
+  "@effect-agent/platform-cloudflare/ConversationMaintenanceState",
+)({
+  schemaVersion: Schema.Literal(1),
+  dirty: MaintenanceGeneration,
+  processed: MaintenanceGeneration,
+  nonterminal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+}) {}
+
+const MAINTENANCE_STATE_KEY = "effect-agent:conversation-maintenance:v1";
+const decodeMaintenanceState = Schema.decodeUnknownSync(ConversationMaintenanceState);
+const encodeMaintenanceState = Schema.encodeSync(ConversationMaintenanceState);
+
+const initialMaintenanceState = (): ConversationMaintenanceState =>
+  ConversationMaintenanceState.make({
+    schemaVersion: 1,
+    // Bootstrap Objects created by the pre-generation release without scanning the ledger in
+    // the constructor. One useful pass classifies and acknowledges any existing obligation.
+    dirty: 1n,
+    processed: 0n,
+    nonterminal: 0,
+  });
+
+const readMaintenanceState = async (
+  transaction: DurableObjectTransaction,
+): Promise<{ readonly state: ConversationMaintenanceState; readonly initialized: boolean }> => {
+  const encoded = await transaction.get(MAINTENANCE_STATE_KEY);
+  return encoded === undefined
+    ? { state: initialMaintenanceState(), initialized: false }
+    : { state: decodeMaintenanceState(encoded), initialized: true };
+};
+
+const ensureTransactionAlarmBy = async (
+  transaction: DurableObjectTransaction,
+  deadline: number,
+): Promise<void> => {
+  const scheduled = await transaction.getAlarm();
+  if (scheduled === null || scheduled > deadline) {
+    await transaction.setAlarm(deadline);
+  }
+};
+
+const stableExternalWait = (
+  snapshot: SubmissionSnapshot,
+  reports: ReadonlyMap<string, RecoveryReport>,
+): boolean => {
+  switch (snapshot.state) {
+    case "suspended":
+    case "unknown":
+    case "joined":
+      return true;
+    case "admitted":
+      return reports.get(snapshot.submissionId)?.decision._tag === "AwaitParentEstablishment";
+    case "input-applied":
+    case "joining":
+    case "ready":
+    case "running":
+    case "settled":
+    case "terminalizing":
+      return false;
+  }
+};
 
 export type MaintenancePassFailure =
   | DurableWorkerFailure
@@ -177,25 +262,17 @@ export type MaintenancePassFailure =
   | DurableAlarmError;
 
 /**
- * The idempotent maintenance pass and the alarm-invariant helpers (plan §1.4, D-P6-1/2).
+ * Incremental, quiescent maintenance over a durable dirty/processed generation (issue #93).
  *
- * `pass` = pre-arm → `runRecovery` → `processConversationResolved` → re-arm-or-clear:
+ * `pass` = generation snapshot/pre-arm → recovery → bounded drain → generation acknowledgement:
  *
- * 1. **Pre-arm**: the alarm is re-armed at `now + wakeScanInterval` BEFORE any work, so an
- *    eviction (or thrown failure → workerd alarm retry) at any point of the pass leaves a
- *    committed alarm and the fresh incarnation converges without an incoming request.
- * 2. **Reconcile before new work** (exit gate): every pass classifies and repairs every
- *    nonterminal Submission before the drain claims anything; the pure classifier and the
- *    repair executors are idempotent, so at-least-once alarm delivery re-runs them safely.
- * 3. **Drain**: one bounded `processConversationResolved` pass over this Object's lane — the
- *    D-P6-1 shape; no infinite `runResolvedWorker` loop ever pins the Object.
- * 4. **Re-arm policy**: nonterminal work re-arms at `now + min(backoff-with-jitter,
- *    wakeScanInterval)` — the scan interval bounds every wait (lease expiry of a dead
- *    incarnation included, since claims retry each pass) and the backoff (reset on progress,
- *    grown otherwise) keeps stuck lanes from busy-spinning; all settled clears the slot.
- *
- * Every step is a durability-protocol step that already tolerates re-execution, which is
- * what makes double-fired alarms harmless (the alarm.test.ts gate).
+ * 1. One storage transaction reads dirty/processed and re-arms before work. A caught-up forced
+ *    alarm takes an O(1) path without recovery, ledger scans, or canonical-history reads.
+ * 2. Recovery still strictly precedes a new claim, and one bounded drain advances the lane.
+ * 3. The final transaction acknowledges only the generation observed at pass start. A racing
+ *    mutation therefore remains `dirty > processed` and retains its atomically-established alarm.
+ * 4. Stable external waits acknowledge and clear. Autonomous retry, indeterminate, and lease
+ *    recovery states leave their generation dirty and retain bounded backoff rearming.
  */
 export class ConversationMaintenance extends Context.Service<
   ConversationMaintenance,
@@ -203,17 +280,18 @@ export class ConversationMaintenance extends Context.Service<
     /** One idempotent maintenance pass; failures propagate so workerd retries the alarm. */
     readonly pass: Effect.Effect<MaintenancePassReport, MaintenancePassFailure>;
     /**
-     * Defensive half of the alarm invariant, run by the constructor gate: if any local
-     * Submission is nonterminal and no alarm is scheduled, arm one within the scan interval.
-     * Local-only (one ledger scan + the alarm slot) — never a recovery pass, never transport.
+     * Constructor gate: initialize/inspect only the O(1) maintenance record and ensure a dirty
+     * generation has an alarm. It never scans the ledger or canonical history.
      */
     readonly ensureAlarm: Effect.Effect<void, MaintenancePassFailure>;
     /**
-     * The pre-arm every mutating entry point runs BEFORE its first durable mutation: with
-     * the alarm committed first, a committed admission (or any other committed nonterminal
-     * transition) can never be observed without the alarm that will finish it.
+     * Serialize the pre-arm boundary with pass acknowledgement, advance the durable dirty
+     * generation and arm the alarm in one transaction BEFORE running the caller's mutation.
+     * A pass cannot acknowledge while that mutation remains in flight.
      */
-    readonly preArm: Effect.Effect<void, DurableAlarmError>;
+    readonly withMutation: <A, E, R>(
+      body: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | DurableAlarmError, R>;
   }
 >()("@effect-agent/platform-cloudflare/ConversationMaintenance") {
   static readonly layer: Layer.Layer<
@@ -223,8 +301,10 @@ export class ConversationMaintenance extends Context.Service<
     | AgentBindingResolver
     | SubmissionLedger
     | DurableAlarmService
+    | ConversationMaintenanceFailpoint
     | CloudflareDurableRuntimeConfig
     | ConversationObjectIdentity
+    | DurableObjectContext
   > = Layer.effect(ConversationMaintenance)(
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
@@ -233,20 +313,113 @@ export class ConversationMaintenance extends Context.Service<
       const alarm = yield* DurableAlarmService;
       const config = yield* CloudflareDurableRuntimeConfig;
       const identity = yield* ConversationObjectIdentity;
+      const { ctx } = yield* DurableObjectContext;
+      const failpoint = yield* ConversationMaintenanceFailpoint;
 
       /**
        * Consecutive no-progress passes — an in-memory CACHE, not state: a fresh incarnation
        * restarts at zero and merely re-arms sooner than a long-lived one would have.
        */
       const stalls = yield* Ref.make(0);
+      /**
+       * Incarnation-local mutation count guarded with the generation transactions below. It is
+       * deliberately not durable: after eviction every begun mutation has stopped, while its
+       * pre-armed dirty generation remains durable for recovery. The short gate never spans the
+       * caller's mutation or cross-Object I/O.
+       */
+      const activeMutations = yield* Ref.make(0);
+      const generationGate = yield* Semaphore.make(1);
+      // At-least-once deliveries are idempotent, but overlapping pass bodies could otherwise
+      // acknowledge state while a sibling pass is still mutating it. Port/RPC mutations do not
+      // take this permit, so cross-Object I/O cannot deadlock the maintenance serialization.
+      const maintenancePassGate = yield* Semaphore.make(1);
+      const minimumAlarmDelay = Math.max(1, Math.ceil(config.alarmBackoffBase / 2));
 
-      const preArm = Clock.currentTimeMillis.pipe(
-        Effect.flatMap((now) => alarm.ensureScheduledBy(now + config.wakeScanInterval)),
+      const runTransaction = <A>(
+        operation: string,
+        transaction: () => Promise<A>,
+      ): Effect.Effect<A, DurableAlarmError> =>
+        Effect.tryPromise({
+          try: transaction,
+          catch: alarmFailure(operation),
+        });
+
+      const beginMutation = Effect.fn("ConversationMaintenance.beginMutation")(function* () {
+        yield* failpoint.hit("maintenance:dirty:before");
+        const now = yield* Clock.currentTimeMillis;
+        yield* runTransaction("advance maintenance generation", () =>
+          ctx.storage.transaction(async (transaction) => {
+            const { state } = await readMaintenanceState(transaction);
+            const next = ConversationMaintenanceState.make({
+              ...state,
+              dirty: state.dirty + 1n,
+            });
+            await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
+            // The earliest configured retry bounds a newly actionable mutation without relying
+            // on its best-effort immediate wake hint.
+            await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
+          }),
+        );
+        yield* failpoint.hit("maintenance:dirty:after");
+        yield* Ref.update(activeMutations, (active) => active + 1);
+      });
+
+      const endMutation = generationGate.withPermit(
+        Ref.update(activeMutations, (active) => Math.max(0, active - 1)),
       );
 
-      const countNonterminal = Stream.runCollect(ledger.scanNonterminal).pipe(
-        Effect.map((snapshots) => snapshots.length),
-      );
+      const withMutation = <A, E, R>(
+        body: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E | DurableAlarmError, R> =>
+        Effect.acquireUseRelease(
+          generationGate.withPermit(beginMutation()),
+          () =>
+            failpoint.hit("maintenance:mutation:armed").pipe(
+              Effect.andThen(body),
+              Effect.tap(() => failpoint.hit("maintenance:mutation:finished")),
+            ),
+          () => endMutation,
+        );
+
+      const ensureAlarm = Effect.fn("ConversationMaintenance.ensureAlarm")(function* () {
+        yield* failpoint.hit("maintenance:ensure:before");
+        const now = yield* Clock.currentTimeMillis;
+        yield* runTransaction("ensure maintenance alarm", () =>
+          ctx.storage.transaction(async (transaction) => {
+            const { state, initialized } = await readMaintenanceState(transaction);
+            if (!initialized) {
+              await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
+            }
+            if (state.dirty > state.processed) {
+              await ensureTransactionAlarmBy(transaction, now + config.wakeScanInterval);
+            }
+          }),
+        );
+        yield* failpoint.hit("maintenance:ensure:after");
+      });
+
+      const beginPass = Effect.fn("ConversationMaintenance.beginPass")(function* () {
+        yield* failpoint.hit("maintenance:begin:before");
+        const now = yield* Clock.currentTimeMillis;
+        const result = yield* runTransaction("begin maintenance pass", () =>
+          ctx.storage.transaction(async (transaction) => {
+            const { state, initialized } = await readMaintenanceState(transaction);
+            if (!initialized) {
+              await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(state));
+            }
+            if (state.processed >= state.dirty) {
+              await transaction.deleteAlarm();
+              return { _tag: "CaughtUp" as const, nonterminal: state.nonterminal };
+            }
+            // Pre-arm the earliest retry before recovery. A successful finish may move this slot
+            // LATER to its bounded backoff, which does not cancel the running handler.
+            await ensureTransactionAlarmBy(transaction, now + minimumAlarmDelay);
+            return { _tag: "Actionable" as const, generation: state.dirty };
+          }),
+        );
+        yield* failpoint.hit("maintenance:begin:after");
+        return result;
+      });
 
       const rearmDelay = Effect.fn("ConversationMaintenance.rearmDelay")(function* (
         progressed: boolean,
@@ -268,66 +441,110 @@ export class ConversationMaintenance extends Context.Service<
         MaintenancePassReport,
         MaintenancePassFailure
       > {
-        // Step 1 — pre-arm: an abort or throw anywhere below leaves a committed alarm.
-        yield* preArm;
+        const annotate = (report: MaintenancePassReport) =>
+          Effect.annotateCurrentSpan({
+            phase: report.phase,
+            recovered: report.recovered,
+            settled: report.settled,
+            nonterminal: report.nonterminal,
+            alarm: report.alarm,
+          }).pipe(Effect.as(report));
+
+        const started = yield* generationGate.withPermit(
+          Effect.gen(function* () {
+            const activeAtStart = yield* Ref.get(activeMutations);
+            const generation = yield* beginPass();
+            return { ...generation, activeAtStart };
+          }),
+        );
+        if (started._tag === "CaughtUp") {
+          return yield* annotate(
+            MaintenancePassReport.make({
+              phase: "caught-up",
+              recovered: 0,
+              settled: 0,
+              nonterminal: started.nonterminal,
+              alarm: "cleared",
+            }),
+          );
+        }
         // Step 2 — reconciliation strictly precedes new work in this pass (exit gate).
         const recovered: ReadonlyArray<RecoveryReport> = yield* runtime.runRecovery;
         // Step 3 — one bounded drain pass over this Object's own lane.
         const settlements = yield* runtime
           .processConversationResolved(identity.conversationId)
           .pipe(Effect.provideService(AgentBindingResolver, resolver));
-        // Step 4 — re-arm or clear.
-        const nonterminal = yield* countNonterminal;
-        if (nonterminal === 0) {
-          yield* alarm.cancel;
-          yield* Ref.set(stalls, 0);
-          // Close the cancel/admission interleaving window: a submission committing between
-          // the count and the cancel (Durable Object events interleave at storage-operation
-          // boundaries) must not be left without its alarm. The recount re-arms if anything
-          // appeared; the submit entry's own `scheduleNow` covers commits after the recount.
-          const appeared = yield* countNonterminal;
-          if (appeared > 0) {
-            yield* preArm;
-            return MaintenancePassReport.make({
-              recovered: recovered.length,
-              settled: settlements.length,
-              nonterminal: appeared,
-              alarm: "rearmed",
-            });
-          }
-          return MaintenancePassReport.make({
-            recovered: recovered.length,
-            settled: settlements.length,
-            nonterminal,
-            alarm: "cleared",
-          });
-        }
+        // Observe residual state before acknowledging this exact pass-start generation.
+        const remaining = yield* Stream.runCollect(ledger.scanNonterminal);
+        const reports = new Map(recovered.map((report) => [report.submissionId, report]));
+        const autonomous = remaining.some((snapshot) => !stableExternalWait(snapshot, reports));
         const progressed =
           settlements.length > 0 || recovered.some((report) => report.disposition === "repaired");
-        const delay = yield* rearmDelay(progressed);
+        const delay = autonomous ? yield* rearmDelay(progressed) : 0;
         const now = yield* Clock.currentTimeMillis;
-        yield* alarm.ensureScheduledBy(now + delay);
-        return MaintenancePassReport.make({
-          recovered: recovered.length,
-          settled: settlements.length,
-          nonterminal,
-          alarm: "rearmed",
-        });
-      });
-
-      const ensureAlarm = Effect.fn("ConversationMaintenance.ensureAlarm")(function* () {
-        const nonterminal = yield* countNonterminal;
-        if (nonterminal === 0) return;
-        yield* preArm;
+        yield* failpoint.hit("maintenance:finish:before");
+        const alarmDisposition = yield* generationGate.withPermit(
+          Effect.gen(function* () {
+            const active = yield* Ref.get(activeMutations);
+            return yield* runTransaction("finish maintenance pass", () =>
+              ctx.storage.transaction(async (transaction) => {
+                const { state } = await readMaintenanceState(transaction);
+                // Autonomous work and in-flight mutations intentionally leave the observed
+                // generation dirty. Otherwise acknowledge only the pass-start generation.
+                const processed =
+                  autonomous || started.activeAtStart > 0 || active > 0
+                    ? state.processed
+                    : state.processed > started.generation
+                      ? state.processed
+                      : started.generation;
+                const next = ConversationMaintenanceState.make({
+                  ...state,
+                  processed,
+                  nonterminal: remaining.length,
+                });
+                await transaction.put(MAINTENANCE_STATE_KEY, encodeMaintenanceState(next));
+                if (autonomous) {
+                  // Replace the crash-fallback slot with this pass's bounded backoff. The target
+                  // is never earlier than the begin-pass fallback, so workerd does not cancel
+                  // this running alarm handler before its report/span can complete.
+                  await transaction.setAlarm(now + delay);
+                  return "rearmed" as const;
+                }
+                if (started.activeAtStart > 0 || active > 0 || next.dirty > next.processed) {
+                  // A mutation overlapped this pass's observation window or raced
+                  // acknowledgement. It stays dirty and its pre-armed bounded alarm survives;
+                  // unseen effects are never acknowledged. Do not accelerate that future alarm
+                  // from inside the current handler: workerd cancels a running handler when it
+                  // writes an earlier slot.
+                  await ensureTransactionAlarmBy(transaction, now + config.wakeScanInterval);
+                  return "rearmed" as const;
+                }
+                await transaction.deleteAlarm();
+                return "cleared" as const;
+              }),
+            );
+          }),
+        );
+        yield* failpoint.hit("maintenance:finish:after");
+        if (alarmDisposition === "cleared") {
+          yield* Ref.set(stalls, 0);
+        }
+        return yield* annotate(
+          MaintenancePassReport.make({
+            phase: "actionable",
+            recovered: recovered.length,
+            settled: settlements.length,
+            nonterminal: remaining.length,
+            alarm: alarmDisposition,
+          }),
+        );
       });
 
       return ConversationMaintenance.of({
-        // Wake deferral (see `DurableAlarmService.scheduleNow`): an immediate wake written
-        // while THIS handler runs would make workerd cancel it mid-Attempt; deferring keeps
-        // the running pass alive and flushes the hint as the pass's final re-arm.
-        pass: alarm.withWakesDeferred(pass()),
+        // A mid-pass immediate hint is droppable; durable dirty state decides the final alarm.
+        pass: alarm.withWakesDeferred(maintenancePassGate.withPermit(pass())),
         ensureAlarm: ensureAlarm(),
-        preArm,
+        withMutation,
       });
     }),
   );

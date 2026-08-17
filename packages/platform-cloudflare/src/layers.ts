@@ -1,16 +1,16 @@
 import { ConversationId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
-  ConversationStore,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   ProducerId,
-  SubmissionLedger,
   ToolReconciler,
-  WakeScheduler,
+  type ConversationStore,
   type DurableRuntimeFailpointHandler,
   type ResolvedBinding,
+  type SubmissionLedger,
+  type WakeScheduler,
 } from "@effect-agent/session";
 import {
   conversationStoreLayer,
@@ -28,11 +28,16 @@ import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
-import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
+import {
+  ConversationMaintenance,
+  ConversationMaintenanceFailpoint,
+  DurableAlarmService,
+  type ConversationMaintenanceFailpointHandler,
+} from "./alarm.ts";
 import {
   ConversationObjectIdentity,
-  ConversationObjectNamespace,
   DurableObjectContext,
+  type ConversationObjectNamespace,
 } from "./bindings.ts";
 import {
   CLOUDFLARE_RUNTIME_DEFAULTS,
@@ -88,6 +93,10 @@ export interface CloudflareDurableRuntimeOptions {
   /** Coordinator fault injection (`submit:*` / `terminalize:*` locations); default none. */
   readonly runtimeFailpoint?:
     | ((ctx: DurableObjectState) => DurableRuntimeFailpointHandler)
+    | undefined;
+  /** Conversation-maintenance generation/alarm fault injection; default none. */
+  readonly maintenanceFailpoint?:
+    | ((ctx: DurableObjectState) => ConversationMaintenanceFailpointHandler)
     | undefined;
   /**
    * Reconciliation policy consulted for open ordinary Tool Calls before an Unknown Outcome
@@ -340,6 +349,12 @@ export class CloudflareDurableRuntime {
           options.runtimeFailpoint === undefined
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
+        const maintenanceFailpointLayer =
+          options.maintenanceFailpoint === undefined
+            ? ConversationMaintenanceFailpoint.layer
+            : Layer.succeed(ConversationMaintenanceFailpoint)({
+                hit: options.maintenanceFailpoint(ctx),
+              });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
@@ -352,6 +367,7 @@ export class CloudflareDurableRuntime {
           identityLayer,
           cloudflareConfigLayer,
           DurableAlarmService.layer,
+          maintenanceFailpointLayer,
         );
 
         const runtimeStack = DurableAgentRuntime.layer.pipe(
