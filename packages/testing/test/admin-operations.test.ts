@@ -19,6 +19,7 @@ import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
+  OperationCaller,
   Principal,
   ProducerId,
   RECOVERY_DECISION_MEANINGS,
@@ -34,6 +35,7 @@ import {
   UnknownResolutionCommand,
   UserInputRecorded,
   WakeScheduler,
+  possessionChildAdmissionAuthorizerLayer,
   renderRecoveryExplanation,
   verifyConversationInvariants,
   type AuthorizedOperation,
@@ -63,6 +65,7 @@ import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unsta
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-admin-operations");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-admin-operations");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const decodeConversationId = Schema.decodeSync(ConversationId);
@@ -204,6 +207,7 @@ const authorizerLayer = Layer.effectContext(
           if (deniedOperations.has(request.operation)) {
             return yield* OperationDenied.make({
               operation: request.operation,
+              principal: request.principal,
               reason: "denied by the test authorization policy",
               ...(request.conversationId === undefined
                 ? {}
@@ -236,6 +240,7 @@ const baseLayer = Layer.mergeAll(
   ToolReconciler.uncertain,
   configLayer,
   authorizerLayer,
+  possessionChildAdmissionAuthorizerLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
@@ -333,7 +338,7 @@ const makeUnknownLane = (conversation: string, key: string) =>
     yield* armFailpoint("tools:after-prepared-append");
     const killed = yield* Effect.exit(
       runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(bookToolLayer)),
     );
     expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -360,7 +365,7 @@ const makeApprovalSuspendedLane = (conversation: string, key: string) =>
       submitOptions(conversation, key),
     );
     const settlements = yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), DIGESTS)
       .pipe(Effect.provide(approvalToolLayer));
     expect(settlements).toEqual([]);
     return receipt;
@@ -380,6 +385,7 @@ const makeSettledLane = (conversation: string, key: string) =>
     const settlements = yield* runtime.processConversation(
       agent,
       decodeConversationId(conversation),
+      DIGESTS,
     );
     expect(settlements[0]?.outcome).toBe("completed");
     return receipt;
@@ -406,9 +412,10 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         const receipt = yield* makeUnknownLane(conversation, "explain-1");
 
         const before = yield* durableStateFingerprint(conversation);
-        const explanation = yield* runtime.explain(receipt.submissionId);
+        const explanation = yield* runtime.explain(receipt.submissionId, CALLER);
         const laneExplanations = yield* runtime.explainConversation(
           decodeConversationId(conversation),
+          CALLER,
         );
         const after = yield* durableStateFingerprint(conversation);
         expect(after).toBe(before);
@@ -441,7 +448,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const conversation = "conversation-admin-verify";
       yield* makeSettledLane(conversation, "verify-1");
 
-      const report = yield* runtime.verify(decodeConversationId(conversation));
+      const report = yield* runtime.verify(decodeConversationId(conversation), CALLER);
       expect(report.ok).toBe(true);
       expect(report.submissionCount).toBe(1);
       expect(checkByName(report, "schema-round-trip").status).toBe("passed");
@@ -610,6 +617,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
           author: "operator",
           reason: "finish the interrupted admission",
         }),
+        CALLER,
       );
       expect(report.decision._tag).toBe("CompleteMaterialization");
       expect(report.disposition).toBe("repaired");
@@ -629,6 +637,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("completed");
     }),
@@ -647,6 +656,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             author: "operator",
             reason: "re-drive settled work",
           }),
+          CALLER,
         ),
       );
       const settledRefusal = failureValue(settledExit);
@@ -660,6 +670,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             author: "operator",
             reason: "re-drive an unknown-blocked lane",
           }),
+          CALLER,
         ),
       );
       expect(failureValue(unknownExit)).toMatchObject({
@@ -679,6 +690,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             author: "operator",
             reason: "re-drive an approval-suspended lane",
           }),
+          CALLER,
         ),
       );
       expect(failureValue(approvalExit)).toMatchObject({
@@ -708,7 +720,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       yield* TestClock.adjust(Duration.seconds(120));
       const thresholds = ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 });
-      const report = yield* runtime.scanObligations(thresholds);
+      const report = yield* runtime.scanObligations(thresholds, CALLER);
       const byId = new Map(report.entries.map((entry) => [entry.submissionId, entry]));
 
       const unknownEntry = byId.get(unknown.submissionId);
@@ -727,7 +739,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       expect(readyEntry?.severity).toBe("aging");
 
       yield* TestClock.adjust(Duration.seconds(600));
-      const later = yield* runtime.scanObligations(thresholds);
+      const later = yield* runtime.scanObligations(thresholds, CALLER);
       const laterById = new Map(later.entries.map((entry) => [entry.submissionId, entry]));
       expect(laterById.get(unknown.submissionId)?.ageSeconds).toBe(720);
       expect(laterById.get(unknown.submissionId)?.severity).toBe("overdue");
@@ -755,9 +767,11 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         "resolveApproval",
       ]);
 
-      const explainExit = yield* Effect.exit(runtime.explain(receipt.submissionId));
+      const explainExit = yield* Effect.exit(runtime.explain(receipt.submissionId, CALLER));
       expect(failureTag(explainExit)).toBe("OperationDenied");
-      const verifyExit = yield* Effect.exit(runtime.verify(decodeConversationId(conversation)));
+      const verifyExit = yield* Effect.exit(
+        runtime.verify(decodeConversationId(conversation), CALLER),
+      );
       expect(failureTag(verifyExit)).toBe("OperationDenied");
       const retryExit = yield* Effect.exit(
         runtime.retry(
@@ -766,18 +780,20 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             author: "operator",
             reason: "denied",
           }),
+          CALLER,
         ),
       );
       expect(failureTag(retryExit)).toBe("OperationDenied");
-      const wakeExit = yield* Effect.exit(runtime.wake(decodeConversationId(conversation)));
+      const wakeExit = yield* Effect.exit(runtime.wake(decodeConversationId(conversation), CALLER));
       expect(failureTag(wakeExit)).toBe("OperationDenied");
       const scanExit = yield* Effect.exit(
         runtime.scanObligations(
           ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 }),
+          CALLER,
         ),
       );
       expect(failureTag(scanExit)).toBe("OperationDenied");
-      const observeExit = yield* Effect.exit(Stream.runCollect(runtime.observe(receipt)));
+      const observeExit = yield* Effect.exit(Stream.runCollect(runtime.observe(receipt, CALLER)));
       expect(failureTag(observeExit)).toBe("OperationDenied");
       const resolveExit = yield* Effect.exit(
         runtime.resolveUnknown(
@@ -788,6 +804,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             reason: "denied",
             resolution: ResolutionNeverHappened.make(),
           }),
+          CALLER,
         ),
       );
       expect(failureTag(resolveExit)).toBe("OperationDenied");
@@ -800,6 +817,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
             resolver: "operator",
             reason: "denied",
           }),
+          CALLER,
         ),
       );
       expect(failureTag(approvalExit)).toBe("OperationDenied");
@@ -821,7 +839,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
 
       // The denial policy lifts and the default possession behavior is restored.
       yield* control.reset;
-      const explanation = yield* runtime.explain(receipt.submissionId);
+      const explanation = yield* runtime.explain(receipt.submissionId, CALLER);
       expect(explanation.decision._tag).toBe("NoAction");
       expect(explanation.disposition).toBe("none");
     }),
@@ -834,19 +852,25 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
       const receipt = yield* makeSettledLane("conversation-admin-types", "types-1");
 
       const explainEffect: Effect.Effect<RecoveryExplanation, DurableExplainFailure> =
-        runtime.explain(receipt.submissionId);
+        runtime.explain(receipt.submissionId, CALLER);
       const explainLane: Effect.Effect<
         ReadonlyArray<RecoveryExplanation>,
         DurableExplainFailure
-      > = runtime.explainConversation(conversationId);
-      const verifyEffect: Effect.Effect<IntegrityReport, DurableVerifyFailure> =
-        runtime.verify(conversationId);
+      > = runtime.explainConversation(conversationId, CALLER);
+      const verifyEffect: Effect.Effect<IntegrityReport, DurableVerifyFailure> = runtime.verify(
+        conversationId,
+        CALLER,
+      );
       const retryEffect: Effect.Effect<RecoveryReport, DurableRetryFailure> = runtime.retry(
         RetryCommand.make({ submissionId: receipt.submissionId, author: "a", reason: "b" }),
+        CALLER,
       );
-      const wakeEffect: Effect.Effect<void, OperationDenied> = runtime.wake(conversationId);
+      const wakeEffect: Effect.Effect<void, OperationDenied> = runtime.wake(conversationId, CALLER);
       const scanEffect: Effect.Effect<ObligationReport, DurableObligationFailure> =
-        runtime.scanObligations(ObligationThresholds.make({ agingSeconds: 1, overdueSeconds: 2 }));
+        runtime.scanObligations(
+          ObligationThresholds.make({ agingSeconds: 1, overdueSeconds: 2 }),
+          CALLER,
+        );
 
       // Execute the read-only members to keep the proof honest at runtime too.
       yield* explainEffect;

@@ -31,6 +31,7 @@ import {
   DurableRuntimeFailpointTestControl,
   DurableWorkerBinding,
   IdempotencyKey,
+  OperationCaller,
   Principal,
   ProducerId,
   RecoverySnapshotRequest,
@@ -57,6 +58,8 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
+
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PARENT_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const CHILD_DIGEST_STRINGS = {
@@ -75,6 +78,7 @@ const WRONG_CHILD_DIGESTS = DefinitionDigests.make({
   tools: Schema.decodeSync(Digest)("e".repeat(64)),
 });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-subagents");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
@@ -263,17 +267,18 @@ const baseLayer = (ledger: Layer.Layer<SubmissionLedger>) =>
         DurableRuntimeFailpoint.layerTest,
         ToolReconciler.uncertain,
         configLayer,
+        TrustedLocalDurableAuthorizationLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
   );
 
-const testLayer = baseLayer(MemorySubmissionLedgerLive);
+const testLayer = baseLayer(MemorySubmissionLedgerLive.pipe(Layer.provide(NodeCrypto.layer)));
 const faultTestLayer = baseLayer(
   memorySubmissionLedgerLayer({
     resolveAdmissionFault: Effect.sync(() =>
       admissionFault === undefined ? Option.none() : Option.some(admissionFault),
     ),
-  }),
+  }).pipe(Layer.provide(NodeCrypto.layer)),
 );
 
 const makeChildFixture = Effect.gen(function* () {
@@ -778,6 +783,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           author: "operator",
           reason: "test abort",
         }),
+        CALLER,
       );
       // PropagateChildAbort: the one idempotent durable child abort command; the parent stays
       // suspended waiting for the join (spec §13.1). The same recovery pass then settles the
@@ -941,6 +947,7 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           author: "operator",
           reason: "abandon before request",
         }),
+        CALLER,
       );
       const first = yield* runtime.runRecovery;
       const orphanReport = first.find((report) => report.submissionId === parent.submissionId);

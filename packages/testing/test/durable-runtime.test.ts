@@ -28,6 +28,7 @@ import {
   FenceRejected,
   IdempotencyKey,
   ObservationOffset,
+  OperationCaller,
   Principal,
   ProducerId,
   QueueSequence,
@@ -76,8 +77,11 @@ import {
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
+
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -190,6 +194,7 @@ const baseLayer = Layer.mergeAll(
   DurableRuntimeFailpoint.layerTest,
   ToolReconciler.uncertain,
   configLayer,
+  TrustedLocalDurableAuthorizationLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
@@ -301,7 +306,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         submitOptions(conversation, "run-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(searchToolLayer));
 
       expect(settlements).toHaveLength(1);
@@ -346,7 +351,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         "assistant",
       ]);
 
-      const settlement = yield* runtime.awaitSettlement(receipt);
+      const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
       expect(settlement).toEqual(settlements[0]);
     }),
   );
@@ -411,7 +416,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           submitOptions(conversation, "soft-landing-1"),
         );
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(probeToolLayer));
 
         expect(settlements).toHaveLength(1);
@@ -562,14 +567,14 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           yield* armFailpoint(scenario.location);
           const killed = yield* Effect.exit(
             runtime
-              .processConversation(agent, decodeConversationId(scenario.conversation))
+              .processConversation(agent, decodeConversationId(scenario.conversation), DIGESTS)
               .pipe(Effect.provide(probeToolLayer)),
           );
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
           yield* runtime.runRecovery;
-          const settlement = yield* runtime.awaitSettlement(receipt);
+          const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
           expect(settlement.outcome).toBe("completed");
           const records = yield* readLog(scenario.conversation);
           const settledRecords = records
@@ -597,8 +602,8 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         { question: "when?" },
         submitOptions(conversation, "await-1"),
       );
-      const waiter = yield* Effect.forkChild(runtime.awaitSettlement(receipt));
-      yield* runtime.processConversation(agent, decodeConversationId(conversation));
+      const waiter = yield* Effect.forkChild(runtime.awaitSettlement(receipt, CALLER));
+      yield* runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS);
       yield* TestClock.adjust(Duration.millis(150));
       const settlement = yield* Fiber.join(waiter);
       expect(settlement.outcome).toBe("completed");
@@ -629,6 +634,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       // P5 (plan §2.5): the active host Run claims the contiguous ready prefix, so the second
       // Submission JOINS the first Run instead of waiting for its own claim — one head
@@ -636,7 +642,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
         first.submissionId,
       ]);
-      const joinedSettlement = yield* runtime.awaitSettlement(second);
+      const joinedSettlement = yield* runtime.awaitSettlement(second, CALLER);
       expect(joinedSettlement.outcome).toBe("completed");
 
       const records = yield* readLog(conversation);
@@ -677,6 +683,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           author: "operator",
           reason: "user cancelled",
         }),
+        CALLER,
       );
       expect(intent.submissionId).toBe(receipt.submissionId);
 
@@ -685,7 +692,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(report?.decision._tag).toBe("SettleAborted");
       expect(report?.disposition).toBe("repaired");
 
-      const settlement = yield* runtime.awaitSettlement(receipt);
+      const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
       expect(settlement.outcome).toBe("aborted");
 
       const records = yield* readLog(conversation);
@@ -707,6 +714,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             author: "operator",
             reason: "user cancelled",
           }),
+          CALLER,
         ),
       );
       expect(failureTag(conflict)).toBe("SettlementConflict");
@@ -745,6 +753,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           author: "operator",
           reason: "cancelled while queued",
         }),
+        CALLER,
       );
 
       const reports = yield* runtime.runRecovery;
@@ -753,7 +762,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(report?.disposition).toBe("repaired");
 
       // The aborted non-head settled immediately — the HEAD is still unsettled.
-      const settled = yield* runtime.awaitSettlement(second);
+      const settled = yield* runtime.awaitSettlement(second, CALLER);
       expect(settled.outcome).toBe("aborted");
       const ledger = yield* SubmissionLedger;
       const headRow = yield* ledger.lookup(
@@ -778,11 +787,12 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements.map((settlement) => settlement.submissionId)).toEqual([head.submissionId]);
-      const headSettled = yield* runtime.awaitSettlement(head);
+      const headSettled = yield* runtime.awaitSettlement(head, CALLER);
       expect(headSettled.outcome).toBe("completed");
-      const thirdSettled = yield* runtime.awaitSettlement(third);
+      const thirdSettled = yield* runtime.awaitSettlement(third, CALLER);
       expect(thirdSettled.outcome).toBe("completed");
 
       // Canonical order: the aborted settlement precedes the head's settlement — that is the
@@ -792,7 +802,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(recordIds.indexOf(submissionSettlementRecordId(second.submissionId))).toBeLessThan(
         recordIds.indexOf(submissionSettlementRecordId(head.submissionId)),
       );
-      const integrity = yield* runtime.verify(decodeConversationId(conversation));
+      const integrity = yield* runtime.verify(decodeConversationId(conversation), CALLER);
       expect(integrity.ok).toBe(true);
       expect(integrity.checks.find((check) => check.name === "fifo-settlement-order")?.status).toBe(
         "passed",
@@ -828,7 +838,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
         submitOptions(conversation, "abort-running-1"),
       );
       const worker = yield* Effect.forkChild(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       yield* Deferred.await(started);
 
@@ -838,6 +848,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           author: "operator",
           reason: "stop the run",
         }),
+        CALLER,
       );
       yield* TestClock.adjust(Duration.millis(150));
 
@@ -901,7 +912,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
 
       const staleWorker = yield* Effect.forkChild(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       yield* Deferred.await(started);
 
@@ -909,6 +920,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
@@ -1055,7 +1067,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
       yield* armFailpoint("claim:after-claim");
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1073,6 +1085,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("completed");
       const inputRecords = (yield* readLog(conversation)).filter(
@@ -1096,7 +1109,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
       yield* armFailpoint("input:after-canonical-append");
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1109,6 +1122,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("completed");
       const inputRecords = (yield* readLog(conversation)).filter(
@@ -1132,7 +1146,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
       yield* armFailpoint("terminalize:after-reserve");
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1142,7 +1156,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       expect(report?.decision._tag).toBe("AppendReservedSettlement");
       expect(report?.disposition).toBe("repaired");
 
-      const settlement = yield* runtime.awaitSettlement(receipt);
+      const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
       expect(settlement.outcome).toBe("completed");
       const records = yield* readLog(conversation);
       const settledRecords = records.filter(
@@ -1169,7 +1183,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
       yield* armFailpoint("terminalize:after-canonical-append");
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -1216,7 +1230,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       yield* armFailpoint("turn:after-results-append");
       const killed = yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(searchToolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -1233,7 +1247,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       ]);
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(searchToolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
 
@@ -1289,7 +1303,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const submitHasFailpoint: DurableRuntimeFailpointError extends SubmitError ? true : false =
         true;
 
-      const awaitProgram = runtime.awaitSettlement(typeProofReceipt);
+      const awaitProgram = runtime.awaitSettlement(typeProofReceipt, CALLER);
       type AwaitError = Effect.Error<typeof awaitProgram>;
       type AwaitSuccess = Effect.Success<typeof awaitProgram>;
       const awaitHasConflict: SettlementConflict extends AwaitError ? true : false = true;
@@ -1298,6 +1312,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       const workerProgram = runtime.processConversation(
         Agent.withModel(searchDefinition, scripted.model),
         decodeConversationId("conversation-types"),
+        DIGESTS,
       );
       type WorkerError = Effect.Error<typeof workerProgram>;
       type WorkerServices = Effect.Services<typeof workerProgram>;
@@ -1527,6 +1542,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           .processConversation(
             Agent.withModel(searchDefinition, first.model),
             decodeConversationId(conversation),
+            DIGESTS,
           )
           .pipe(Effect.provide(searchToolLayer));
         expect(firstSettled[0]?.outcome).toBe("completed");
@@ -1565,7 +1581,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         // prompt and must NOT append a duplicate record.
         yield* armFailpoint("compaction:after-canonical-append");
         const crashed = yield* Effect.exit(
-          runtime.processConversation(compactor, decodeConversationId(conversation)),
+          runtime.processConversation(compactor, decodeConversationId(conversation), DIGESTS),
         );
         expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
         // The hook failure is typed AND ordering holds: the summarizer call
@@ -1577,6 +1593,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         const settled = yield* runtime.processConversation(
           compactor,
           decodeConversationId(conversation),
+          DIGESTS,
         );
         expect(settled).toHaveLength(1);
         expect(settled[0]?.outcome).toBe("completed");
@@ -1655,6 +1672,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
           .processConversation(
             Agent.withModel(probeDefinition, prior.model),
             decodeConversationId(conversation),
+            DIGESTS,
           )
           .pipe(Effect.provide(probeLayer));
         expect(priorSettled[0]?.outcome).toBe("completed");
@@ -1685,6 +1703,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         const settled = yield* runtime.processConversation(
           compactor,
           decodeConversationId(conversation),
+          DIGESTS,
         );
         expect(settled[0]?.outcome).toBe("completed");
 
@@ -1731,6 +1750,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
         .processConversation(
           Agent.withModel(searchDefinition, first.model),
           decodeConversationId(conversation),
+          DIGESTS,
         )
         .pipe(Effect.provide(searchToolLayer));
       expect(firstSettled[0]?.outcome).toBe("completed");
@@ -1766,6 +1786,7 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       const settled = yield* runtime.processConversation(
         compactor,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settled).toHaveLength(1);
       expect(settled[0]?.outcome).toBe("completed");
@@ -1819,14 +1840,14 @@ layer(testLayer)("RUN-026 durable compaction and usage re-seed", (it) => {
       yield* armFailpoint("turn:after-response-append");
       const crashed = yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(searchToolLayer)),
       );
       expect(failureTag(crashed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
 
       const settled = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(searchToolLayer));
       // 90+5 committed tokens re-seed the resumed Attempt; the 25-token Turn 2
       // breaches the 100-token budget. Without re-seeding this Run would
@@ -1903,7 +1924,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
 
       yield* runtime.submit(agent, { question: "turns?" }, submitOptions(conversation, "turns-1"));
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(searchToolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
 
@@ -1942,6 +1963,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("completed");
 
@@ -1978,6 +2000,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("failed");
 
@@ -2013,6 +2036,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("failed");
 
@@ -2055,7 +2079,7 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
         submitOptions(conversation, "duration-1"),
       );
       const worker = yield* Effect.forkChild(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       yield* TestClock.adjust(Duration.seconds(6));
       const settlements = yield* Fiber.join(worker);
@@ -2105,13 +2129,17 @@ layer(testLayer)("RUN-011 durable typed budget settlement", (it) => {
           );
           yield* armFailpoint(scenario.location);
           const killed = yield* Effect.exit(
-            runtime.processConversation(agent, decodeConversationId(scenario.conversation)),
+            runtime.processConversation(
+              agent,
+              decodeConversationId(scenario.conversation),
+              DIGESTS,
+            ),
           );
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
           yield* clearFailpoint;
 
           yield* runtime.runRecovery;
-          const settlement = yield* runtime.awaitSettlement(receipt);
+          const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
           expect(settlement.outcome).toBe("failed");
           const records = yield* readLog(scenario.conversation);
           const settledRecords = records

@@ -219,6 +219,12 @@ behavior; typed handler failures stay typed; approval or policy denial prevents 
 budget exhaustion prevents the next call; sequential identities are deterministic; and
 non-allowlisted or sanitized-name collision cases fail closed.
 
+The Node SQLite warehouse fixture is partial security evidence only: it proves database-authority
+write denial, host-owned tenant topology, dangerous-keyword denial, and result bounds. Its
+synchronous driver cannot cancel a running statement, so the fixture and its Code Mode scenario
+do not claim the complete SEC-015 timeout/cancellation posture. A complete reference adapter must
+run the security specification's full SQL contract, including a runaway-query cancellation case.
+
 ## 9. Compatibility tests
 
 The suite tests:

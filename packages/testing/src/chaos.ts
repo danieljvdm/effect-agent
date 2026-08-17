@@ -31,6 +31,7 @@ import {
   DurableWorkerBinding,
   IdempotencyKey,
   ObligationThresholds,
+  OperationCaller,
   Principal,
   ResolutionAbortSubmission,
   ResolutionCompletedWithResult,
@@ -475,6 +476,7 @@ const childLaneDigests = (lane: number): DefinitionDigests => {
 };
 
 const CHAOS_PRINCIPAL = Schema.decodeSync(Principal)("principal-chaos");
+const CHAOS_CALLER = OperationCaller.make({ principal: CHAOS_PRINCIPAL });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
@@ -656,7 +658,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
       const agent = Agent.withModel(plainDefinition, model);
       return plainLaneFixture(
         false,
-        runtime.processConversation(agent, conversationId),
+        runtime.processConversation(agent, conversationId, digests),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
       );
@@ -666,7 +668,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
       return plainLaneFixture(
         true,
         runtime
-          .processConversation(agent, conversationId)
+          .processConversation(agent, conversationId, digests)
           .pipe(Effect.provide(bookToolLayerFor(bookTools))),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
@@ -677,7 +679,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
       return plainLaneFixture(
         true,
         runtime
-          .processConversation(agent, conversationId)
+          .processConversation(agent, conversationId, digests)
           .pipe(Effect.provide(bookToolLayerFor(approvalTools))),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
@@ -704,7 +706,7 @@ const makeLaneFixture = Effect.fn("Chaos.makeLaneFixture")(function* (
       });
       return plainLaneFixture(
         true,
-        runtime.processConversation(agent, conversationId).pipe(Effect.provide(toolLayer)),
+        runtime.processConversation(agent, conversationId, digests).pipe(Effect.provide(toolLayer)),
         (flatIndex) =>
           runtime.submit(agent, { question: `chaos ${flatIndex}` }, submitOptionsFor(flatIndex)),
       );
@@ -828,7 +830,7 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
   for (const row of nonterminal.value) {
     if (row.state !== "unknown" && row.state !== "suspended") continue;
     const state = byId.get(row.submissionId);
-    const explanation = yield* tolerateTyped(runtime.explain(row.submissionId));
+    const explanation = yield* tolerateTyped(runtime.explain(row.submissionId, CHAOS_CALLER));
     if (Option.isNone(explanation)) continue;
     const flatIndex = state?.flatIndex ?? 0;
     const ref = state?.lane.ref ?? "ref-child";
@@ -850,6 +852,7 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
               reason: `chaos plan ${plan.seed} resolution (${kind})`,
               resolution: resolutionFor(kind, call.toolName, ref, produced),
             }),
+            CHAOS_CALLER,
           ),
         );
       }
@@ -870,6 +873,7 @@ const resolutionPass = Effect.fn("Chaos.resolutionPass")(function* (
               resolver: "chaos-runner",
               reason: `chaos plan ${plan.seed} approval (${decision})`,
             }),
+            CHAOS_CALLER,
           ),
         );
       }
@@ -1046,6 +1050,7 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
               author: "chaos-runner",
               reason: `chaos plan ${plan.seed} abort injection`,
             }),
+            CHAOS_CALLER,
           ),
         );
       }
@@ -1160,7 +1165,10 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
   }
 
   const obligations = yield* runtime
-    .scanObligations(ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }))
+    .scanObligations(
+      ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
+      CHAOS_CALLER,
+    )
     .pipe(
       Effect.mapError((error) =>
         ChaosConvergenceFailure.make({

@@ -6,10 +6,10 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { SqlError } from "effect/unstable/sql/SqlError";
 
 /**
- * The C3 read-only SQL reference integration (plan §8, SEC-015): application
- * code built from native Effect AI primitives proving that generated Code
- * Mode programs can query an internal service without the executor ever
- * seeing a connection, credential, or network authority.
+ * A partial read-only SQL fixture built from native Effect AI primitives. It
+ * proves database-authority write denial, tenant-scoped data topology, and
+ * bounded results without exposing a connection, credential, or network
+ * authority to generated Code Mode programs.
  *
  * The guarantee is database authority and data topology, not SQL text
  * inspection: the fixture materializes a curated, tenant-scoped copy of the
@@ -20,11 +20,10 @@ import { SqlError } from "effect/unstable/sql/SqlError";
  * could re-enable writes; ATTACH reaches the filesystem) — it is never the
  * primary boundary.
  *
- * Statement timeout: the synchronous SQLite driver cannot cancel a running
- * statement, so a `statementTimeout` request is rejected typed at Layer
- * construction rather than silently unenforced (CAP-015 posture). Wall-clock
- * bounding of a whole pass belongs to the Run duration budget and, in Code
- * Mode, the executor's own deadline.
+ * This is deliberately NOT the complete SEC-015 reference adapter: the
+ * synchronous SQLite driver cannot cancel a running statement. A requested
+ * `statementTimeout` is rejected typed at Layer construction, and suites must
+ * not present the remaining checks as timeout/cancellation conformance.
  */
 
 const BoundedSqlText = Schema.NonEmptyString.check(Schema.isMaxLength(16 * 1024));
@@ -89,7 +88,7 @@ export class WarehouseQuerySuccess extends Schema.Class<WarehouseQuerySuccess>(
 
 /**
  * The read-only warehouse query service. Tenant identity is fixed at Layer
- * construction by the host — never by model-controlled arguments (SEC-015).
+ * construction by the host — never by model-controlled arguments.
  */
 export class WarehouseDb extends Context.Service<
   WarehouseDb,
@@ -320,7 +319,7 @@ export const warehouseDbLayer = (
           truncated,
         });
         // Structural audit metadata: digest and shape only — never SQL text,
-        // parameter values, or row contents (SEC-015, spec §11).
+        // parameter values, or row contents.
         yield* Effect.logDebug("warehouse query settled").pipe(
           Effect.annotateLogs({
             queryDigest: queryDigest(text),

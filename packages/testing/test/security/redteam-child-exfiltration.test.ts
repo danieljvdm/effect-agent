@@ -10,6 +10,8 @@ import {
   ConversationStore,
   DurableAgentRuntime,
   IdempotencyKey,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
@@ -66,6 +68,8 @@ const runtimeOptions = (
   deploymentId: docsResearcherDeploymentId,
   producerId: docsResearcherProducerId,
   observationPollInterval: 1,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 

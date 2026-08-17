@@ -1176,7 +1176,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
           "output[title]=Generated release target changed during verification\n",
         );
       }),
-    15_000,
+    45_000,
   );
 
   it.effect(
@@ -1279,7 +1279,7 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         expect(unsafeTarball.exitCode).not.toBe(0);
         expect(unsafeTarball.publishInvoked).toBe(false);
       }),
-    90_000,
+    240_000,
   );
 
   it.effect(

@@ -2,10 +2,9 @@ export * from "./certification.ts";
 export * from "./chaos.ts";
 export * from "./code-executor-conformance.ts";
 export * from "./code-executor-substitute.ts";
+export * from "./durable-test-authorization.ts";
 export * from "./fixtures/docs-researcher/index.ts";
 export * from "./fixtures/travel-planner/index.ts";
-// The warehouse fixture is NOT re-exported here: it depends on
-// `@effect/sql-sqlite-node` (`node:sqlite`), which workerd consumers of this
-// barrel (the Cloudflare certification suites) cannot load. Import it
-// directly from `@effect-agent/testing/src/fixtures/warehouse/index.ts`.
+// The Node-only warehouse fixture is exported from `@effect-agent/testing/warehouse`
+// so workerd consumers of this platform-neutral barrel never load `node:sqlite`.
 export * from "./scripted-model.ts";

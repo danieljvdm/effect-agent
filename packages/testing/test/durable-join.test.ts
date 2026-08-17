@@ -14,6 +14,7 @@ import {
   DurableRuntimeFailpointTestControl,
   IdempotencyKey,
   JoinedToHost,
+  OperationCaller,
   Principal,
   ProducerId,
   SubmissionLedger,
@@ -33,8 +34,11 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/unstable/ai";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
+
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-join");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -116,6 +120,7 @@ const baseLayer = Layer.mergeAll(
   DurableRuntimeFailpoint.layerTest,
   ToolReconciler.uncertain,
   configLayer,
+  TrustedLocalDurableAuthorizationLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
@@ -218,6 +223,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       // The lane produced ONE head settlement; the joined Submission settled with it
       // (DUR-002: each accepted Submission still gets its own settlement record).
@@ -226,7 +232,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       expect(yield* lookupState(host.submissionId)).toBe("settled");
       expect(yield* lookupState(joined.submissionId)).toBe("settled");
 
-      const settled = yield* runtime.awaitSettlement(joined);
+      const settled = yield* runtime.awaitSettlement(joined, CALLER);
       expect(settled.outcome).toBe("completed");
 
       const hostRunId = runIdForSubmission(host.submissionId);
@@ -279,7 +285,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         { question: "queued question" },
         submitOptions(conversation, "canonical-2"),
       );
-      yield* runtime.processConversation(agent, decodeConversationId(conversation));
+      yield* runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS);
 
       const hostRunId = runIdForSubmission(host.submissionId);
       const byId = recordsById(yield* readLog(conversation));
@@ -327,6 +333,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements).toHaveLength(1);
       expect(yield* lookupState(second.submissionId)).toBe("settled");
@@ -388,7 +395,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         );
         yield* armFailpoint("join:after-claim");
         const killed = yield* Effect.exit(
-          runtime.processConversation(agent, decodeConversationId(conversation)),
+          runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -408,9 +415,10 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         const settlements = yield* runtime.processConversation(
           agent,
           decodeConversationId(conversation),
+          DIGESTS,
         );
         expect(settlements[0]?.outcome).toBe("completed");
-        const settled = yield* runtime.awaitSettlement(joined);
+        const settled = yield* runtime.awaitSettlement(joined, CALLER);
         expect(settled.outcome).toBe("completed");
 
         // Exactly one canonical `input:{sid}` record ever, delivered exactly once.
@@ -444,7 +452,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         );
         yield* armFailpoint("join:after-canonical-append");
         const killed = yield* Effect.exit(
-          runtime.processConversation(agent, decodeConversationId(conversation)),
+          runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -463,9 +471,10 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         const settlements = yield* runtime.processConversation(
           agent,
           decodeConversationId(conversation),
+          DIGESTS,
         );
         expect(settlements[0]?.outcome).toBe("completed");
-        const settled = yield* runtime.awaitSettlement(joined);
+        const settled = yield* runtime.awaitSettlement(joined, CALLER);
         expect(settled.outcome).toBe("completed");
 
         // Reattached, never duplicated: one canonical record, one prompt delivery.
@@ -497,7 +506,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       );
       yield* armFailpoint("join:after-canonical-append");
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -508,6 +517,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* lookupState(joined.submissionId)).toBe("settled");
@@ -542,9 +552,10 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements[0]?.outcome).toBe("failed");
-      const settled = yield* runtime.awaitSettlement(joined);
+      const settled = yield* runtime.awaitSettlement(joined, CALLER);
       expect(settled.outcome).toBe("failed");
 
       const byId = recordsById(yield* readLog(conversation));
@@ -579,7 +590,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       // `joined` while the host is not yet settled.
       yield* armFailpointAt("terminalize:after-reserve", 1);
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -592,6 +603,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
             author: "operator",
             reason: "stop the joined request",
           }),
+          CALLER,
         ),
       );
       // A joined Submission settles with its host: the abort target is the host, carried in
@@ -608,7 +620,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const hostReport = reports.find((entry) => entry.submissionId === host.submissionId);
       expect(hostReport?.decision._tag).toBe("AppendReservedSettlement");
       expect(hostReport?.disposition).toBe("repaired");
-      const settled = yield* runtime.awaitSettlement(joined);
+      const settled = yield* runtime.awaitSettlement(joined, CALLER);
       expect(settled.outcome).toBe("completed");
     }),
   );
@@ -632,7 +644,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       );
       yield* armFailpoint("join:after-claim");
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -645,6 +657,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
           author: "operator",
           reason: "withdraw the queued request",
         }),
+        CALLER,
       );
       expect(intent.submissionId).toBe(joining.submissionId);
 
@@ -658,9 +671,10 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(conversation),
+        DIGESTS,
       );
       expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed", "aborted"]);
-      const settled = yield* runtime.awaitSettlement(joining);
+      const settled = yield* runtime.awaitSettlement(joining, CALLER);
       expect(settled.outcome).toBe("aborted");
 
       // The input was never consumed: no canonical `input:{sid}` record, no prompt delivery.
@@ -696,7 +710,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         // ledger is not finalized, and the joined settlement never started.
         yield* armFailpointAt("terminalize:after-canonical-append", 1);
         const killed = yield* Effect.exit(
-          runtime.processConversation(agent, decodeConversationId(conversation)),
+          runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
@@ -711,8 +725,8 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         expect(joinedReport?.decision._tag).toBe("SettleJoinedWithHost");
         expect(joinedReport?.disposition).toBe("repaired");
 
-        const settledHost = yield* runtime.awaitSettlement(host);
-        const settledJoined = yield* runtime.awaitSettlement(joined);
+        const settledHost = yield* runtime.awaitSettlement(host, CALLER);
+        const settledJoined = yield* runtime.awaitSettlement(joined, CALLER);
         expect(settledHost.outcome).toBe("completed");
         expect(settledJoined.outcome).toBe("completed");
         const byId = recordsById(yield* readLog(conversation));
@@ -746,7 +760,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       // the joined reservation commits, before its canonical append.
       yield* armFailpointAt("terminalize:after-reserve", 2);
       const killed = yield* Effect.exit(
-        runtime.processConversation(agent, decodeConversationId(conversation)),
+        runtime.processConversation(agent, decodeConversationId(conversation), DIGESTS),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
       yield* clearFailpoint;
@@ -757,7 +771,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
       const report = reports.find((entry) => entry.submissionId === joined.submissionId);
       expect(report?.decision._tag).toBe("AppendReservedSettlement");
       expect(report?.disposition).toBe("repaired");
-      const settled = yield* runtime.awaitSettlement(joined);
+      const settled = yield* runtime.awaitSettlement(joined, CALLER);
       expect(settled.outcome).toBe("completed");
       const records = yield* readLog(conversation);
       expect(
@@ -811,6 +825,7 @@ layer(testLayer)("DUR P5 joining/joined queued input (plan §2.5)", (it) => {
         const settlements = yield* runtime.processConversation(
           agent,
           decodeConversationId(conversation),
+          DIGESTS,
         );
         // Two head settlements: the host (with the joined Submission settling alongside) and the
         // gap Submission as its OWN later Run — never skipped, never joined past the gap.

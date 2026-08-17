@@ -11,6 +11,7 @@ import {
   DurableRuntimeFailpoint,
   IdempotencyKey,
   ObligationThresholds,
+  OperationCaller,
   Principal,
   ProducerId,
   SubmissionLedger,
@@ -26,7 +27,6 @@ import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Schema, Stream } from "effect";
 import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai";
-
 /**
  * P7 WP4 pure-memory soak (plan §5): 5,000 Submissions across 500 lanes under TestClock,
  * heavy on queued input so the joining/joined machinery (`joinedInputEnvelopes` and friends)
@@ -40,6 +40,8 @@ import { LanguageModel, Model, Toolkit, type Response } from "effect/unstable/ai
 
 // The memory ConversationStore bounds itself to 256 Conversations (SEC-013), so each wave
 // stays under that bound and the 5,000-Submission total spans two scoped waves.
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
+
 const LANES = 250;
 const SUBMISSIONS_PER_LANE = 10;
 const WAVES = 2;
@@ -47,6 +49,7 @@ const WAVES = 2;
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-soak-memory");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 
@@ -102,6 +105,7 @@ const freshLayer = () =>
         DurableRuntimeFailpoint.layer,
         ToolReconciler.uncertain,
         configLayer,
+        TrustedLocalDurableAuthorizationLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
   );
@@ -142,6 +146,7 @@ const runWave = (wave: number) =>
       const settlements = yield* runtime.processConversation(
         agent,
         decodeConversationId(`soak-memory-w${wave}-lane-${lane}`),
+        DIGESTS,
       );
       expect(settlements.length).toBeGreaterThan(0);
     }
@@ -150,6 +155,7 @@ const runWave = (wave: number) =>
     expect(Array.from(nonterminal)).toHaveLength(0);
     const obligations = yield* runtime.scanObligations(
       ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
+      CALLER,
     );
     expect(obligations.entries).toHaveLength(0);
   }).pipe(Effect.provide(freshLayer()));

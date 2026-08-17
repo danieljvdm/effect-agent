@@ -14,6 +14,7 @@ import {
   DurableAgentRuntime,
   DurableRuntimeFailpointError,
   IdempotencyKey,
+  OperationCaller,
   ParentLinkage,
   PersistedJson,
   Principal,
@@ -24,6 +25,8 @@ import {
   SubmissionLookupById,
   SubmissionLookupByKey,
   UnknownResolutionCommand,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   childConversationIdFor,
   runIdForSubmission,
   type CanonicalRecordEnvelope,
@@ -78,6 +81,7 @@ const decodeAccounting = Schema.decodeUnknownEffect(SubagentDurableAccounting);
 const decodeShortlist = Schema.decodeUnknownEffect(DestinationShortlist);
 
 const DELEGATE_CALL = decodeToolCallId(durableResearchCallId);
+const CALLER = OperationCaller.make({ principal: s2TravelPlannerPrincipal });
 
 const dimensionKeys = [
   "turns",
@@ -109,6 +113,8 @@ const runtimeOptions = (
   deploymentId: s2TravelPlannerDeploymentId,
   producerId: s2TravelPlannerProducerId,
   observationPollInterval: 1,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -653,6 +659,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
                   isFailure: false,
                 }),
               }),
+              CALLER,
             );
             const childSettlements = yield* drive(crashed.childConversationId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
@@ -708,6 +715,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
                 author: "traveler",
                 reason: "The mission was cancelled while research was outstanding.",
               }),
+              CALLER,
             );
 
             // PropagateChildAbort issues the ONE idempotent durable child abort command while
@@ -910,7 +918,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             const unrelatedLog = yield* readLog(unrelated.conversationId);
             expect(unrelatedLog.length).toBeGreaterThan(0);
             const observed = yield* runtime
-              .observe(unrelated)
+              .observe(unrelated, CALLER)
               .pipe(Stream.take(unrelatedLog.length), Stream.runCollect);
             expect(recordIds(observed)).toEqual(recordIds(unrelatedLog));
 

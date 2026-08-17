@@ -18,14 +18,7 @@ import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, FileSystem, Layer, Option, Schema } from "effect";
 import { TestClock } from "effect/testing";
 
-import {
-  chaosSeedFromEnv,
-  generateChaosPlans,
-  runChaosPlan,
-  type ChaosAdapterFailpoints,
-  type ChaosPlan,
-} from "../src/index.ts";
-
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 /**
  * P7 WP4 SQLite chaos lane (plan §5): a reduced seeded-plan sweep over the REAL SQLite adapter
  * pair, adding the adapter-owned failpoint arms (`ledger:*` / `append:*`) to the coordinator
@@ -37,6 +30,13 @@ import {
  * `@effect-agent/storage-sqlite` — the same constraint that moved the adapter-backed durable
  * runtime suites here (see the c106b53 precedent).
  */
+import {
+  chaosSeedFromEnv,
+  generateChaosPlans,
+  runChaosPlan,
+  type ChaosAdapterFailpoints,
+  type ChaosPlan,
+} from "../src/index.ts";
 
 const ROOT_SEED = chaosSeedFromEnv(process.env);
 const PLAN_COUNT = 24;
@@ -112,6 +112,7 @@ const freshLayer = (
         DurableRuntimeFailpoint.layerTest,
         ToolReconciler.uncertain,
         configLayer,
+        TrustedLocalDurableAuthorizationLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
   );

@@ -15,6 +15,7 @@ import {
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   IdempotencyKey,
+  OperationCaller,
   runIdForSubmission,
   SubmissionLedger,
   SubmissionLookupById,
@@ -29,6 +30,7 @@ import { expect, layer } from "@effect/vitest";
 import { Context, Duration, Effect, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../../src/durable-test-authorization.ts";
 import {
   ActivityCatalogLayer,
   bookFlightIdempotencyKey,
@@ -37,7 +39,9 @@ import {
   FlightOption,
   LodgingCatalogLayer,
   phase1Trip,
+  phase5TravelPlannerDefinitionDigests,
   phase5TravelPlannerDeploymentId,
+  phase5TravelPlannerPrincipal,
   phase5TravelPlannerProducerId,
   phase5TravelPlannerSubmitOptions,
   QuoteId,
@@ -46,6 +50,8 @@ import {
   TravelPlannerPhase5ToolkitLayer,
   TravelSupplierReconcilerLayer,
 } from "../../src/index.ts";
+
+const CALLER = OperationCaller.make({ principal: phase5TravelPlannerPrincipal });
 
 // ---------------------------------------------------------------------------
 // Red-team suite: PROMPT-INJECTED SUPPLIER CONTENT (P7 WP5, plan §4;
@@ -211,6 +217,7 @@ const infraLayer = Layer.mergeAll(
   WakeScheduler.layerNoop,
   DurableRuntimeFailpoint.layerTest,
   configLayer,
+  TrustedLocalDurableAuthorizationLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(
@@ -286,7 +293,11 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
         // the handler for book_flight has not started (SEC-005/§6: high-risk actions require a
         // decision independent of model intent), so the supplier desk shows no call.
         const suspended = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(injectedWorkerLayer));
         expect(suspended).toEqual([]);
         const state = yield* lookupState(receipt.submissionId);
@@ -313,9 +324,14 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
             resolver: "security-operator",
             reason: "refusing an action demanded by prompt-injected supplier content",
           }),
+          CALLER,
         );
         const settled = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(injectedWorkerLayer));
         expect(settled[0]?.outcome).toBe("failed");
         expect(yield* desk.callCount(bookFlightIdempotencyKey("book-injected-1"))).toBe(0);
@@ -354,7 +370,11 @@ layer(testLayer)("SEC-007 prompt-injected supplier content cannot escalate capab
 
         yield* runtime.submit(agent, phase1Trip, submitOptions(conversation, "inj-2"));
         const settled = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(injectedWorkerLayer));
         expect(settled[0]?.outcome).toBe("completed");
         // No supplier mutation occurred from untrusted content.

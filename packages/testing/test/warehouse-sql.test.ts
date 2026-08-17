@@ -1,12 +1,11 @@
-import { expect, it } from "@effect/vitest";
-import { Duration, Effect, Layer } from "effect";
-
 import {
   WarehouseDb,
   WarehouseLimits,
   warehouseDbLayer,
   warehouseDemoSeed,
-} from "../src/fixtures/warehouse/index.ts";
+} from "@effect-agent/testing/warehouse";
+import { expect, it } from "@effect/vitest";
+import { Duration, Effect, Layer } from "effect";
 
 const acmeLayer = (limits?: WarehouseLimits) =>
   warehouseDbLayer({ tenant: "acme", seed: warehouseDemoSeed, limits });
@@ -14,7 +13,7 @@ const acmeLayer = (limits?: WarehouseLimits) =>
 const withWarehouse = <A, E>(build: Effect.Effect<A, E, WarehouseDb>, limits?: WarehouseLimits) =>
   build.pipe(Effect.provide(acmeLayer(limits)));
 
-it.effect("SEC-015 answers a read query over the curated tenant view", () =>
+it.effect("answers a read query over the curated tenant view", () =>
   withWarehouse(
     Effect.gen(function* () {
       const db = yield* WarehouseDb;
@@ -33,7 +32,7 @@ it.effect("SEC-015 answers a read query over the curated tenant view", () =>
   ),
 );
 
-it.effect("SEC-015 writes and DDL are denied by the database authority, not the scanner", () =>
+it.effect("writes and DDL are denied by the database authority, not the scanner", () =>
   withWarehouse(
     Effect.gen(function* () {
       const db = yield* WarehouseDb;
@@ -50,7 +49,7 @@ it.effect("SEC-015 writes and DDL are denied by the database authority, not the 
   ),
 );
 
-it.effect("SEC-015 multi-statement attempts are denied while literal semicolons pass", () =>
+it.effect("multi-statement attempts are denied while literal semicolons pass", () =>
   withWarehouse(
     Effect.gen(function* () {
       const db = yield* WarehouseDb;
@@ -62,7 +61,7 @@ it.effect("SEC-015 multi-statement attempts are denied while literal semicolons 
   ),
 );
 
-it.effect("SEC-015 escape-hatch keywords the authority cannot police are denied closed", () =>
+it.effect("escape-hatch keywords the authority cannot police are denied closed", () =>
   withWarehouse(
     Effect.gen(function* () {
       const db = yield* WarehouseDb;
@@ -81,7 +80,7 @@ it.effect("SEC-015 escape-hatch keywords the authority cannot police are denied 
   ),
 );
 
-it.effect("SEC-015 cross-tenant rows are physically absent from the curated database", () =>
+it.effect("cross-tenant rows are physically absent from the curated database", () =>
   withWarehouse(
     Effect.gen(function* () {
       const db = yield* WarehouseDb;
@@ -96,7 +95,7 @@ it.effect("SEC-015 cross-tenant rows are physically absent from the curated data
   ),
 );
 
-it.effect("SEC-015 oversized results truncate honestly with truncated: true", () =>
+it.effect("oversized results truncate honestly with truncated: true", () =>
   withWarehouse(
     Effect.gen(function* () {
       const db = yield* WarehouseDb;
@@ -109,7 +108,7 @@ it.effect("SEC-015 oversized results truncate honestly with truncated: true", ()
   ),
 );
 
-it.effect("SEC-015 a statement timeout the driver cannot enforce is refused typed", () =>
+it.effect("a statement timeout the driver cannot enforce is refused typed", () =>
   Effect.gen(function* () {
     const error = yield* Layer.build(
       warehouseDbLayer({

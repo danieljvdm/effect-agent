@@ -1,16 +1,16 @@
 import { CodeMode } from "@effect-agent/capabilities";
 import { Agent, AgentPolicy, ConversationId, IdGenerator, RunId, TurnId } from "@effect-agent/core";
 import { AgentRuntime, ToolExecutionClass } from "@effect-agent/engine";
-import { expect, layer } from "@effect/vitest";
-import { Effect, Layer, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
-
 import {
   warehouseDbLayer,
   warehouseDemoSeed,
   warehouseHandlersLayer,
   warehouseQueryTool,
-} from "../src/fixtures/warehouse/index.ts";
+} from "@effect-agent/testing/warehouse";
+import { expect, layer } from "@effect/vitest";
+import { Effect, Layer, Ref, Schema, Stream } from "effect";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+
 import { inProcessCodeExecutorLayer } from "../src/index.ts";
 
 const usage = { inputTokens: {}, outputTokens: {} };
@@ -199,14 +199,13 @@ layer(identifiers, { excludeTestServices: true })("Code Mode end to end", (it) =
   );
 
   it.effect(
-    "SEC-015 a generated program filters the real read-only warehouse into a bounded answer",
+    "a generated program filters the partial read-only warehouse fixture into a bounded answer",
     () =>
       Effect.gen(function* () {
-        // The C3 reference scenario (plan §8.2): real SQLite behind the
-        // tenant-scoped read-only fixture; the executor sees only namespace
-        // methods — no connection, credential, or network authority. The
-        // program pulls a broad result, filters locally, and also proves the
-        // database authority end to end by catching a denied UPDATE.
+        // Real SQLite behind the tenant-scoped partial fixture: the executor
+        // sees only namespace methods — no connection, credential, or network
+        // authority. This proves database-authority write denial and bounded
+        // data flow, not statement timeout/cancellation conformance.
         const codeMode = CodeMode.make("run_javascript", {
           description: "Execute JavaScript over the read-only warehouse",
           tools: { warehouse: { query: warehouseQueryTool } },

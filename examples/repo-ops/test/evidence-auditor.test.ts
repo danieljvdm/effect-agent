@@ -9,8 +9,11 @@ import {
   ConversationStore,
   DurableAgentRuntime,
   IdempotencyKey,
+  OperationCaller,
   SubmissionLedger,
   SubmissionLookupById,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   runIdForSubmission,
   toolStepSettledRecordId,
   type CanonicalRecordEnvelope,
@@ -52,9 +55,13 @@ import {
   OpenAiEvidenceAuditor,
   RepoOpsWorkspace,
   repoOpsDeploymentId,
+  repoOpsAuditorDigests,
+  repoOpsPrincipal,
   repoOpsProducerId,
   repoOpsSubmitOptions,
 } from "../src/index.ts";
+
+const CALLER = OperationCaller.make({ principal: repoOpsPrincipal });
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -69,6 +76,8 @@ const runtimeOptions = (
   deploymentId: repoOpsDeploymentId,
   producerId: repoOpsProducerId,
   observationPollInterval: 1,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -247,7 +256,7 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
             // sandbox, one named durable step per document) and the report
             // write suspends durably on its canonical approval request.
             const first = yield* runtime
-              .processConversation(agent, conversation)
+              .processConversation(agent, conversation, repoOpsAuditorDigests)
               .pipe(Effect.provide(workerLayer));
             expect(first).toHaveLength(0);
             expect((yield* submissionState(receipt.submissionId)).state).toBe("suspended");
@@ -302,9 +311,10 @@ describe("CAP-010 evidence auditor offline profile (DN)", () => {
                 resolver: "repo-ops-operator",
                 reason: "The audit rows were reviewed.",
               }),
+              CALLER,
             );
             const settlements = yield* runtime
-              .processConversation(agent, conversation)
+              .processConversation(agent, conversation, repoOpsAuditorDigests)
               .pipe(Effect.provide(workerLayer));
             expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
 
@@ -378,7 +388,7 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
             let outcome: string | undefined;
             for (let drive = 0; drive < 4 && outcome === undefined; drive += 1) {
               const settlements = yield* runtime
-                .processConversation(OpenAiEvidenceAuditor, conversation)
+                .processConversation(OpenAiEvidenceAuditor, conversation, repoOpsAuditorDigests)
                 .pipe(Effect.provide(workerLayer));
               outcome = settlements[0]?.outcome;
               if (outcome !== undefined) break;
@@ -395,6 +405,7 @@ describe.skipIf(!liveEnabled)("CAP-010 evidence auditor live profile (opt-in)", 
                       resolver: "repo-ops-operator",
                       reason: "Live smoke: report write approved.",
                     }),
+                    CALLER,
                   );
                 }
               }

@@ -10,11 +10,14 @@ import {
   DurableRuntimeFailpoint,
   DurableRuntimeFailpointError,
   IdempotencyKey,
+  OperationCaller,
   ProducerId,
   RecoverySnapshotRequest,
   ReleaseOwnershipRequest,
   SubmissionLedger,
   SubmissionLookupById,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   ToolReconciler,
   WakeScheduler,
   type CanonicalRecordEnvelope,
@@ -37,12 +40,15 @@ import {
   Stream,
 } from "effect";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import {
   expectedTravelPlan,
   makePhase4TravelPlannerAgent,
   normalizeDurableTravelPlannerEvidence,
   phase1Trip,
+  phase4TravelPlannerDefinitionDigests,
   phase4TravelPlannerDeploymentId,
+  phase4TravelPlannerPrincipal,
   phase4TravelPlannerProducerId,
   phase4TravelPlannerProfile,
   phase4TravelPlannerSubmitOptions,
@@ -54,6 +60,7 @@ import {
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeProducerId = Schema.decodeSync(ProducerId);
+const CALLER = OperationCaller.make({ principal: phase4TravelPlannerPrincipal });
 
 const submitOptions = (conversationId: ConversationId, idempotencyKey: string) =>
   phase4TravelPlannerSubmitOptions(conversationId, decodeIdempotencyKey(idempotencyKey));
@@ -66,6 +73,8 @@ const runtimeOptions = (
   deploymentId: phase4TravelPlannerDeploymentId,
   producerId: phase4TravelPlannerProducerId,
   observationPollInterval: 1,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ...overrides,
 });
 
@@ -95,6 +104,7 @@ const memoryRuntimeLayer = DurableAgentRuntime.layer.pipe(
         deploymentId: phase4TravelPlannerDeploymentId,
         producerId: phase4TravelPlannerProducerId,
       }),
+      TrustedLocalDurableAuthorizationLayer,
     ).pipe(Layer.provideMerge(NodeCrypto.layer)),
   ),
 );
@@ -201,11 +211,15 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             phase1Trip,
             submitOptions(conversationId, "p4-settlement-1"),
           );
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processConversation(
+            agent,
+            conversationId,
+            phase4TravelPlannerDefinitionDigests,
+          );
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.submissionId).toBe(receipt.submissionId);
 
-          const settlement = yield* runtime.awaitSettlement(receipt);
+          const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
           expect(settlement.outcome).toBe("completed");
           expect(settlement.receiptId).toBe(receipt.receiptId);
           expect(yield* lookupState(receipt.submissionId)).toBe("settled");
@@ -271,7 +285,11 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             }),
           );
 
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processConversation(
+            agent,
+            conversationId,
+            phase4TravelPlannerDefinitionDigests,
+          );
           // P5 (plan §2.5): the active host Run claims the contiguous ready prefix, so the
           // second Submission JOINS the first Run — one head settlement, and the joined
           // Submission settles with the host (DUR-002) in admitted FIFO order (DUR-004).
@@ -279,7 +297,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             first.submissionId,
           ]);
           expect(settlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
-          const joinedSettlement = yield* runtime.awaitSettlement(second);
+          const joinedSettlement = yield* runtime.awaitSettlement(second, CALLER);
           expect(joinedSettlement.outcome).toBe("completed");
 
           // Canonical order keeps the admitted FIFO order: both inputs are canonical before
@@ -318,7 +336,13 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
               phase1Trip,
               submitOptions(conversationId, "p4-restart-1"),
             );
-            const exit = yield* Effect.exit(runtime.processConversation(agent, conversationId));
+            const exit = yield* Effect.exit(
+              runtime.processConversation(
+                agent,
+                conversationId,
+                phase4TravelPlannerDefinitionDigests,
+              ),
+            );
             const failure = failureOf(exit);
             expect(failure).toHaveProperty("_tag", "DurableRuntimeFailpointError");
             expect(failure).toHaveProperty("location", "terminalize:after-reserve");
@@ -354,7 +378,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
             expect(report?.decision._tag).toBe("AppendReservedSettlement");
             expect(report?.disposition).toBe("repaired");
 
-            const settlement = yield* runtime.awaitSettlement(crashed.receipt);
+            const settlement = yield* runtime.awaitSettlement(crashed.receipt, CALLER);
             expect(settlement.outcome).toBe("completed");
             expect(yield* lookupState(crashed.receipt.submissionId)).toBe("settled");
             return yield* readLog(conversationId);
@@ -380,7 +404,11 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
               phase1Trip,
               submitOptions(conversationId, "p4-restart-1"),
             );
-            const settlements = yield* runtime.processConversation(agent, conversationId);
+            const settlements = yield* runtime.processConversation(
+              agent,
+              conversationId,
+              phase4TravelPlannerDefinitionDigests,
+            );
             expect(settlements).toHaveLength(1);
             return { receipt, records: yield* readLog(conversationId) };
           }).pipe(Effect.provide(dnLayer(runtimeOptions(`${directory}/control.sqlite`))));
@@ -424,6 +452,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
               author: "traveler",
               reason: "The trip was cancelled before planning started.",
             }),
+            CALLER,
           );
           expect(intent.submissionId).toBe(receipt.submissionId);
 
@@ -434,7 +463,7 @@ describe("TEST-014 P4 durable Travel Planner profile (DN) — supplier booking i
           expect(report?.decision._tag).toBe("SettleAborted");
           expect(report?.disposition).toBe("repaired");
 
-          const settlement = yield* runtime.awaitSettlement(receipt);
+          const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
           expect(settlement.outcome).toBe("aborted");
 
           // No Attempt ran: the abort command and settlement are canonical, but no input was

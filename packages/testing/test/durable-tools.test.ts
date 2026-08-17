@@ -14,6 +14,7 @@ import {
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointTestControl,
   IdempotencyKey,
+  OperationCaller,
   Principal,
   ProducerId,
   ReconciliationCompleted,
@@ -49,8 +50,11 @@ import { expect, layer } from "@effect/vitest";
 import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
 import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
+
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-tools");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
@@ -299,6 +303,7 @@ const baseLayer = Layer.mergeAll(
   DurableRuntimeFailpoint.layerTest,
   reconcilerTestLayer,
   configLayer,
+  TrustedLocalDurableAuthorizationLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
@@ -380,7 +385,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         submitOptions(conversation, "split-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements).toHaveLength(1);
       expect(settlements[0]?.outcome).toBe("completed");
@@ -446,7 +451,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         submitOptions(conversation, "readonly-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(searchToolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
 
@@ -491,7 +496,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         submitOptions(conversation, "mixed-1"),
       );
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(Layer.mergeAll(searchToolLayer, desk.toolLayer)));
       expect(settlements[0]?.outcome).toBe("completed");
 
@@ -531,7 +536,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* armFailpoint("turn:after-response-append");
         const killed = yield* Effect.exit(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(agent, decodeConversationId(conversation), DIGESTS)
             .pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -554,7 +559,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(report?.disposition).toBe("deferred");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
 
@@ -603,14 +608,14 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(agent, decodeConversationId(conversation), DIGESTS)
             .pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(scripted.prompts).toHaveLength(2);
@@ -655,7 +660,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(agent, decodeConversationId(conversation), DIGESTS)
             .pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -674,7 +679,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         );
         // The lane is durably blocked: a worker claim grants nothing and no settlement occurs.
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements).toEqual([]);
         expect(yield* desk.count("r-unknown")).toBe(0);
@@ -689,12 +694,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             reason: "the supplier confirmed the call never started",
             resolution: ResolutionNeverHappened.make(),
           }),
+          CALLER,
         );
         expect(intent.toolCallId).toBe("book-1");
         expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
 
         const resumed = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(resumed[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-unknown")).toBe(1);
@@ -743,7 +749,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(agent, decodeConversationId(conversation), DIGESTS)
             .pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -763,6 +769,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
               isFailure: false,
             }),
           }),
+          CALLER,
         );
         yield* runtime.resolveUnknown(
           UnknownResolutionCommand.make({
@@ -772,11 +779,12 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
             reason: "the supplier store shows no attempt",
             resolution: ResolutionNeverHappened.make(),
           }),
+          CALLER,
         );
         expect(yield* lookupState(receipt.submissionId)).toBe("input-applied");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         // Only the open call executed; the resolved result was injected without execution.
@@ -835,7 +843,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("tools:after-prepared-append");
       const killed = yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -871,7 +879,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(yield* desk.count("r-rec")).toBe(0);
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.count("r-rec")).toBe(0);
@@ -907,7 +915,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* armFailpoint("tools:after-prepared-append");
         const killed = yield* Effect.exit(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(agent, decodeConversationId(conversation), DIGESTS)
             .pipe(Effect.provide(desk.toolLayer)),
         );
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -915,7 +923,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         // The worker resumes directly: the declared idempotency contract needs no reconciler.
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-idem")).toBe(1);
@@ -947,7 +955,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("tools:after-prepared-append");
       const killed = yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -959,6 +967,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           author: "operator",
           reason: "give up on the booking",
         }),
+        CALLER,
       );
       // Kill the aborting recovery between the canonical settlement append and the ledger
       // finalization: history now carries BOTH the terminal outcome and the open tool call.
@@ -974,7 +983,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(report?.decision._tag).toBe("FinalizeLedgerFromHistory");
       expect(report?.disposition).toBe("repaired");
 
-      const settlement = yield* runtime.awaitSettlement(receipt);
+      const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
       expect(settlement.outcome).toBe("aborted");
       expect(yield* desk.count("r-abort")).toBe(0);
 
@@ -1016,7 +1025,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("tools:after-prepared-append");
       yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer)),
       );
       yield* clearFailpoint;
@@ -1031,10 +1040,11 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
           reason: "unresolvable; abort the submission",
           resolution: ResolutionAbortSubmission.make(),
         }),
+        CALLER,
       );
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("aborted");
       expect(yield* desk.count("r-resabort")).toBe(0);
@@ -1073,7 +1083,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         yield* armFailpoint("tools:after-prepared-append");
         yield* Effect.exit(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(agent, decodeConversationId(conversation), DIGESTS)
             .pipe(Effect.provide(desk.toolLayer)),
         );
         yield* clearFailpoint;
@@ -1089,11 +1099,11 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
 
         // Kill immediately after the durable intent write: the intent survives, the caller replays.
         yield* armFailpoint("resolve:after-intent");
-        const killed = yield* Effect.exit(runtime.resolveUnknown(command));
+        const killed = yield* Effect.exit(runtime.resolveUnknown(command, CALLER));
         expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
         yield* clearFailpoint;
 
-        const replayed = yield* runtime.resolveUnknown(command);
+        const replayed = yield* runtime.resolveUnknown(command, CALLER);
         expect(replayed.resolution._tag).toBe("NeverHappened");
 
         // A divergent re-resolution conflicts typed (DUR-017).
@@ -1109,12 +1119,13 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
                 isFailure: false,
               }),
             }),
+            CALLER,
           ),
         );
         expect(failureTag(divergent)).toBe("UnknownResolutionConflict");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.count("r-idemres")).toBe(1);
@@ -1142,7 +1153,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("turn:after-results-append");
       const killed = yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -1150,7 +1161,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       expect(yield* desk.count("r-results")).toBe(1);
 
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
       // The recorded outcome did not rerun (exit gate).
@@ -1203,7 +1214,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       yield* armFailpoint("step:after-step-append");
       const killed = yield* Effect.exit(
         runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(agent, decodeConversationId(conversation), DIGESTS)
           .pipe(Effect.provide(desk.toolLayer)),
       );
       expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -1224,7 +1235,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
       // replays Step 1 from its record, and executes only Step 2.
       yield* control.set(() => ReconciliationSafeToRetry.make());
       const settlements = yield* runtime
-        .processConversation(agent, decodeConversationId(conversation))
+        .processConversation(agent, decodeConversationId(conversation), DIGESTS)
         .pipe(Effect.provide(desk.toolLayer));
       expect(settlements[0]?.outcome).toBe("completed");
       expect(yield* desk.entries).toBe(2);
@@ -1260,7 +1271,7 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         reason: "type proof",
         resolution: ResolutionNeverHappened.make(),
       });
-      const resolveProgram = runtime.resolveUnknown(command);
+      const resolveProgram = runtime.resolveUnknown(command, CALLER);
       type ResolveError = Effect.Error<typeof resolveProgram>;
       const resolveHasConflict: UnknownResolutionConflict extends ResolveError ? true : false =
         true;

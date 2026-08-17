@@ -15,6 +15,7 @@ import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Cause, Duration, Effect, Exit, Layer, Schema } from "effect";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import { ChaosPlan, chaosSeedFromEnv, generateChaosPlans, runChaosPlan } from "../src/index.ts";
 
 /**
@@ -47,6 +48,7 @@ const freshLayer = () =>
         DurableRuntimeFailpoint.layerTest,
         ToolReconciler.uncertain,
         configLayer,
+        TrustedLocalDurableAuthorizationLayer,
       ).pipe(Layer.provideMerge(NodeCrypto.layer)),
     ),
   );

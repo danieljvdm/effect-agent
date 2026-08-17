@@ -3,8 +3,12 @@ import { NodeDurableRuntime } from "@effect-agent/platform-node";
 import {
   DurableAgentRuntime,
   ObligationThresholds,
+  OperationCaller,
+  Principal,
   RecoveryExplanation,
   RetryCommand,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   renderRecoveryExplanation,
   type IntegrityReport,
   type ObligationReport,
@@ -58,6 +62,11 @@ const decodeSubmissionId = (value: string) =>
 
 const encodeExplanation = Schema.encodeEffect(RecoveryExplanation);
 
+/** This local database operator runs under an explicit service-possession policy. */
+const ADMIN_CALLER = OperationCaller.make({
+  principal: Schema.decodeSync(Principal)("principal-durable-admin"),
+});
+
 const database = Flag.file("database").pipe(
   Flag.withDescription("SQLite database file of the DN deployment (Conversation Log + ledger)."),
 );
@@ -72,6 +81,8 @@ const runtimeLayerFor = (filename: string) =>
     filename,
     deploymentId: "durable-admin",
     producerId: "durable-admin",
+    operationAuthorizer: possessionOperationAuthorizer,
+    childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   });
 
 const admin = CliCommand.make("durable-admin").pipe(
@@ -115,12 +126,12 @@ const explainCommand = CliCommand.make(
         const runtime = yield* DurableAgentRuntime;
         if (submission._tag === "Some") {
           const submissionId = yield* decodeSubmissionId(submission.value);
-          const explanation = yield* runtime.explain(submissionId);
+          const explanation = yield* runtime.explain(submissionId, ADMIN_CALLER);
           return yield* printExplanation(explanation, asJson);
         }
         if (conversation._tag === "Some") {
           const conversationId = yield* decodeConversationId(conversation.value);
-          const explanations = yield* runtime.explainConversation(conversationId);
+          const explanations = yield* runtime.explainConversation(conversationId, ADMIN_CALLER);
           if (explanations.length === 0) {
             return yield* Console.log(
               `No nonterminal Submissions on conversation ${conversationId}.`,
@@ -165,7 +176,7 @@ const verifyCommand = CliCommand.make(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const conversationId = yield* decodeConversationId(conversation);
-        const report = yield* runtime.verify(conversationId);
+        const report = yield* runtime.verify(conversationId, ADMIN_CALLER);
         yield* Effect.forEach(renderReport(report), (line) => Console.log(line), {
           discard: true,
         });
@@ -216,7 +227,7 @@ const retryCommand = CliCommand.make(
             InvalidIdentifier.make({ kind: "RetryCommand", value: `${author}/${reason}` }),
           ),
         );
-        const report = yield* runtime.retry(command);
+        const report = yield* runtime.retry(command, ADMIN_CALLER);
         yield* Console.log(renderRetry(report));
       }),
     ),
@@ -239,7 +250,7 @@ const wakeCommand = CliCommand.make(
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
         const conversationId = yield* decodeConversationId(conversation);
-        yield* runtime.wake(conversationId);
+        yield* runtime.wake(conversationId, ADMIN_CALLER);
         yield* Console.log(
           `Wake hint sent for ${conversationId} (droppable by contract; workers' ledger scans stay authoritative).`,
         );
@@ -282,7 +293,7 @@ const obligationsCommand = CliCommand.make(
             }),
           ),
         );
-        const report = yield* runtime.scanObligations(thresholds);
+        const report = yield* runtime.scanObligations(thresholds, ADMIN_CALLER);
         yield* Effect.forEach(renderObligations(report), (line) => Console.log(line), {
           discard: true,
         });

@@ -12,6 +12,7 @@ import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationDenied,
+  OperationCaller,
   Principal,
   ProducerId,
   ResolutionNeverHappened,
@@ -19,6 +20,7 @@ import {
   ToolReconciler,
   UnknownResolutionCommand,
   WakeScheduler,
+  possessionChildAdmissionAuthorizerLayer,
   type AuthorizedOperation,
   type DurableSubmitOptions,
   type OperationAuthorizerService,
@@ -56,6 +58,7 @@ const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-idor-sweep");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-idor-sweep");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 
@@ -163,6 +166,7 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
           if (foreignConversation || foreignSubmission) {
             return yield* OperationDenied.make({
               operation: request.operation,
+              principal: request.principal,
               reason: "cross-tenant access denied by the tenant-scoped authorization policy",
               ...(request.conversationId === undefined
                 ? {}
@@ -193,6 +197,7 @@ const baseLayer = Layer.mergeAll(
   ToolReconciler.uncertain,
   configLayer,
   tenantScopedAuthorizerLayer,
+  possessionChildAdmissionAuthorizerLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
@@ -222,6 +227,7 @@ const runSettledLane = (conversation: string, key: string) =>
     const settlements = yield* runtime.processConversation(
       agent,
       decodeConversationId(conversation),
+      DIGESTS,
     );
     expect(settlements[0]?.outcome).toBe("completed");
     return receipt;
@@ -246,15 +252,17 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         yield* control.markForeignSubmission(foreignReceipt.submissionId);
 
         // --- Foreign target: every targeted operation is denied BEFORE any read/write. ---
-        const explainForeign = yield* Effect.exit(runtime.explain(foreignReceipt.submissionId));
+        const explainForeign = yield* Effect.exit(
+          runtime.explain(foreignReceipt.submissionId, CALLER),
+        );
         expect(failureTag(explainForeign)).toBe("OperationDenied");
 
         const explainConvForeign = yield* Effect.exit(
-          runtime.explainConversation(foreignConversationId),
+          runtime.explainConversation(foreignConversationId, CALLER),
         );
         expect(failureTag(explainConvForeign)).toBe("OperationDenied");
 
-        const verifyForeign = yield* Effect.exit(runtime.verify(foreignConversationId));
+        const verifyForeign = yield* Effect.exit(runtime.verify(foreignConversationId, CALLER));
         expect(failureTag(verifyForeign)).toBe("OperationDenied");
 
         const retryForeign = yield* Effect.exit(
@@ -264,15 +272,16 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
               author: "attacker",
               reason: "cross-tenant re-drive",
             }),
+            CALLER,
           ),
         );
         expect(failureTag(retryForeign)).toBe("OperationDenied");
 
-        const wakeForeign = yield* Effect.exit(runtime.wake(foreignConversationId));
+        const wakeForeign = yield* Effect.exit(runtime.wake(foreignConversationId, CALLER));
         expect(failureTag(wakeForeign)).toBe("OperationDenied");
 
         const observeForeign = yield* Effect.exit(
-          Stream.runCollect(runtime.observe(foreignReceipt)),
+          Stream.runCollect(runtime.observe(foreignReceipt, CALLER)),
         );
         expect(failureTag(observeForeign)).toBe("OperationDenied");
 
@@ -285,6 +294,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
               reason: "cross-tenant resolution",
               resolution: ResolutionNeverHappened.make(),
             }),
+            CALLER,
           ),
         );
         expect(failureTag(resolveUnknownForeign)).toBe("OperationDenied");
@@ -298,24 +308,25 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
               resolver: "attacker",
               reason: "cross-tenant approval",
             }),
+            CALLER,
           ),
         );
         expect(failureTag(resolveApprovalForeign)).toBe("OperationDenied");
 
         // --- Own target: the caller's own Conversation is permitted (default-behavior allow). ---
-        const explainOwn = yield* runtime.explain(ownReceipt.submissionId);
+        const explainOwn = yield* runtime.explain(ownReceipt.submissionId, CALLER);
         expect(explainOwn.submission.submissionId).toBe(ownReceipt.submissionId);
 
-        const explainConvOwn = yield* runtime.explainConversation(ownConversationId);
+        const explainConvOwn = yield* runtime.explainConversation(ownConversationId, CALLER);
         expect(explainConvOwn).toEqual([]); // settled lane: no nonterminal explanations
 
-        const verifyOwn = yield* runtime.verify(ownConversationId);
+        const verifyOwn = yield* runtime.verify(ownConversationId, CALLER);
         expect(verifyOwn.ok).toBe(true);
 
-        yield* runtime.wake(ownConversationId);
+        yield* runtime.wake(ownConversationId, CALLER);
 
         const observeOwn = yield* Stream.runCollect(
-          runtime.observe(ownReceipt).pipe(Stream.take(1)),
+          runtime.observe(ownReceipt, CALLER).pipe(Stream.take(1)),
         );
         expect(observeOwn.length).toBeGreaterThan(0);
 
@@ -324,6 +335,7 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         // none). This documents that untargeted scans are the host's responsibility to scope.
         const obligations = yield* runtime.scanObligations(
           ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 }),
+          CALLER,
         );
         expect(obligations.entries).toEqual([]);
 

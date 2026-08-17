@@ -38,6 +38,7 @@ import {
   DurableWorkerBinding,
   IdempotencyKey,
   LoadCheckpointRequest,
+  OperationCaller,
   Principal,
   ProducerId,
   ResolutionSafeToRetry,
@@ -74,6 +75,8 @@ import {
 } from "effect";
 import { TestClock } from "effect/testing";
 import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
+
+import { TrustedLocalDurableAuthorizationLayer } from "./durable-test-authorization.ts";
 
 /**
  * P7 WP2 — `certifyDurableAdapters` (plan §1): the one certification entry point a durable
@@ -203,6 +206,7 @@ const CHILD_DIGESTS = DefinitionDigests.make({
   tools: Schema.decodeSync(Digest)(CHILD_DIGEST_STRINGS.tools),
 });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-certification");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
@@ -753,7 +757,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
       yield* Effect.exit(driveLane(lane));
     }
     for (const lane of lanes) {
-      const explains = yield* Effect.exit(runtime.explainConversation(lane));
+      const explains = yield* Effect.exit(runtime.explainConversation(lane, CALLER));
       if (Exit.isFailure(explains)) continue;
       for (const explanation of explains.value) {
         for (const unknown of explanation.evidence.unknownCalls) {
@@ -767,6 +771,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
                 reason: `re-drive after injected fault at ${location}`,
                 resolution: ResolutionSafeToRetry.make(),
               }),
+              CALLER,
             ),
           );
         }
@@ -784,6 +789,7 @@ const runSweepCell = Effect.fn("Certification.runSweepCell")(function* (
                 resolver: "certification-runner",
                 reason: `re-drive after injected fault at ${location}`,
               }),
+              CALLER,
             ),
           );
         }
@@ -927,6 +933,7 @@ export const certifyDurableAdapters = <LedgerE = never, StoreE = never>(
     options.wakeScheduler ?? WakeScheduler.layerNoop,
     DurableRuntimeFailpoint.layerTest,
     ToolReconciler.uncertain,
+    TrustedLocalDurableAuthorizationLayer,
     DurableRuntimeConfig.layer({
       deploymentId: Schema.decodeSync(DeploymentId)("deployment-certification"),
       producerId: Schema.decodeSync(ProducerId)("producer-certification"),

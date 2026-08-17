@@ -17,10 +17,13 @@ import {
   DurableRuntimeFailpointError,
   DurableRuntimeFailpointTestControl,
   IdempotencyKey,
+  OperationCaller,
   PersistedJson,
   ResolutionCompletedWithResult,
   SubmissionLedger,
   SubmissionLookupById,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   ToolReconciler,
   UnknownResolutionCommand,
   WakeScheduler,
@@ -53,13 +56,16 @@ import {
 } from "effect";
 import { LanguageModel, Model, Prompt, type Response } from "effect/unstable/ai";
 
+import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import {
   assertSettledBookingsExistAtSupplier,
   bookFlightIdempotencyKey,
   cancelBookingIdempotencyKey,
   itineraryStepIdempotencyKey,
   phase1Trip,
+  phase5TravelPlannerDefinitionDigests,
   phase5TravelPlannerDeploymentId,
+  phase5TravelPlannerPrincipal,
   phase5TravelPlannerProducerId,
   phase5TravelPlannerProfile,
   phase5TravelPlannerSubmitOptions,
@@ -78,6 +84,7 @@ const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const toPersistedJson = Schema.decodeUnknownSync(PersistedJson);
 const encodeConfirmation = Schema.encodeSync(SupplierBookingConfirmation);
+const CALLER = OperationCaller.make({ principal: phase5TravelPlannerPrincipal });
 
 const submitOptions = (conversationId: string, idempotencyKey: string) =>
   phase5TravelPlannerSubmitOptions(
@@ -180,6 +187,7 @@ const infraLayer = Layer.mergeAll(
   WakeScheduler.layerNoop,
   DurableRuntimeFailpoint.layerTest,
   configLayer,
+  TrustedLocalDurableAuthorizationLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
 /** Test control replacing the policy-auto approval delegate per test (default: auto-approve). */
@@ -351,7 +359,11 @@ layer(reconciledTestLayer)(
           yield* armFailpoint("turn:after-results-append");
           const killed = yield* Effect.exit(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -360,7 +372,11 @@ layer(reconciledTestLayer)(
           expect(yield* desk.callCount(key)).toBe(1);
 
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements[0]?.outcome).toBe("completed");
           // Exit gate: the recorded Tool outcome did not rerun.
@@ -413,7 +429,11 @@ layer(reconciledTestLayer)(
           yield* armFailpoint("step:after-step-append");
           const killed = yield* Effect.exit(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -430,7 +450,11 @@ layer(reconciledTestLayer)(
           // The fixture reconciler proves book_itinerary safe to re-enter BY CONSTRUCTION:
           // every mutation inside is a Step whose supplier key derives from (toolCallId, stepName).
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements[0]?.outcome).toBe("completed");
           // Exit gate: the committed Step replayed WITHOUT executing; later Steps ran once.
@@ -483,7 +507,11 @@ layer(reconciledTestLayer)(
           const hold = yield* desk.holdAfterWrite(lodgingKey);
           yield* interruptAtSupplierWrite(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
             hold.held,
           );
@@ -508,7 +536,11 @@ layer(reconciledTestLayer)(
           expect(recoveryReport?.disposition).toBe("deferred");
 
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements[0]?.outcome).toBe("completed");
           // Exit gate: the external Step side effect stayed honestly at-least-once — TWO
@@ -545,7 +577,11 @@ layer(reconciledTestLayer)(
         const hold = yield* desk.holdAfterWrite(key);
         yield* interruptAtSupplierWrite(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           hold.held,
         );
@@ -587,7 +623,11 @@ layer(reconciledTestLayer)(
         }
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         expect(yield* desk.callCount(key)).toBe(1);
@@ -626,7 +666,11 @@ layer(reconciledTestLayer)(
         // Submission 1 books and settles.
         yield* runtime.submit(agent, phase1Trip, submitOptions(conversation, "p5-cancel-book"));
         const booked = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
         expect(booked[0]?.outcome).toBe("completed");
 
@@ -640,7 +684,11 @@ layer(reconciledTestLayer)(
         const hold = yield* desk.holdAfterWrite(cancelKey);
         yield* interruptAtSupplierWrite(
           runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           hold.held,
         );
@@ -654,7 +702,11 @@ layer(reconciledTestLayer)(
         expect(recoveryReport?.disposition).toBe("deferred");
 
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
         expect(settlements[0]?.outcome).toBe("completed");
         // Honest at-least-once: TWO supplier calls, ONE cancelled booking, one settled record.
@@ -700,7 +752,11 @@ layer(reconciledTestLayer)(
             submitOptions(conversation, "p5-approval-1"),
           );
           const first = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           // No settlement: the accepted-work obligation stays owed while the lane waits durably,
           // with the canonical ToolApprovalRequested as the safe boundary (durability §8).
@@ -721,9 +777,14 @@ layer(reconciledTestLayer)(
               resolver: "operator",
               reason: "the traveler confirmed the charge",
             }),
+            CALLER,
           );
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements[0]?.outcome).toBe("completed");
           expect(yield* desk.callCount(key)).toBe(1);
@@ -764,7 +825,11 @@ layer(reconciledTestLayer)(
           submitOptions(conversation, "p5-deny-1"),
         );
         const first = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
         expect(first).toHaveLength(0);
         expect(yield* lookupState(receipt.submissionId)).toBe("suspended");
@@ -777,9 +842,14 @@ layer(reconciledTestLayer)(
             resolver: "operator",
             reason: "the traveler declined the charge",
           }),
+          CALLER,
         );
         const settlements = yield* runtime
-          .processConversation(agent, decodeConversationId(conversation))
+          .processConversation(
+            agent,
+            decodeConversationId(conversation),
+            phase5TravelPlannerDefinitionDigests,
+          )
           .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
         // Denial-terminal (P2 default): the Run fails with the denial canonical; the supplier
         // was never called.
@@ -825,7 +895,11 @@ layer(reconciledTestLayer)(
           yield* armFailpoint("join:after-claim");
           const killed = yield* Effect.exit(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -843,12 +917,16 @@ layer(reconciledTestLayer)(
           expect(yield* lookupState(followUp.submissionId)).toBe("ready");
 
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
             host.submissionId,
           ]);
-          const joined = yield* runtime.awaitSettlement(followUp);
+          const joined = yield* runtime.awaitSettlement(followUp, CALLER);
           expect(joined.outcome).toBe("completed");
 
           // Exactly one canonical input record ever, delivered into exactly one model request.
@@ -893,7 +971,11 @@ layer(reconciledTestLayer)(
           yield* armFailpoint("join:after-canonical-append");
           const killed = yield* Effect.exit(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
           );
           expect(failureTag(killed)).toBe("DurableRuntimeFailpointError");
@@ -911,12 +993,16 @@ layer(reconciledTestLayer)(
           expect(yield* lookupState(followUp.submissionId)).toBe("joined");
 
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements.map((settlement) => settlement.submissionId)).toEqual([
             host.submissionId,
           ]);
-          const joined = yield* runtime.awaitSettlement(followUp);
+          const joined = yield* runtime.awaitSettlement(followUp, CALLER);
           expect(joined.outcome).toBe("completed");
 
           // Reattachment, never duplication: one canonical record, one prompt delivery.
@@ -963,7 +1049,11 @@ layer(uncertainTestLayer)(
           const hold = yield* desk.holdAfterWrite(key);
           yield* interruptAtSupplierWrite(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
             hold.held,
           );
@@ -990,7 +1080,11 @@ layer(uncertainTestLayer)(
           // Exit gate: the uncertain ordinary effect does NOT replay automatically — the blocked
           // lane grants no worker claim and the supplier call count never moves.
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements).toEqual([]);
           expect(yield* desk.callCount(key)).toBe(1);
@@ -1021,7 +1115,11 @@ layer(uncertainTestLayer)(
           const hold = yield* desk.holdAfterWrite(key);
           yield* interruptAtSupplierWrite(
             runtime
-              .processConversation(agent, decodeConversationId(conversation))
+              .processConversation(
+                agent,
+                decodeConversationId(conversation),
+                phase5TravelPlannerDefinitionDigests,
+              )
               .pipe(Effect.provide(phase5TravelPlannerWorkerLayer)),
             hold.held,
           );
@@ -1053,10 +1151,15 @@ layer(uncertainTestLayer)(
                 isFailure: false,
               }),
             }),
+            CALLER,
           );
 
           const settlements = yield* runtime
-            .processConversation(agent, decodeConversationId(conversation))
+            .processConversation(
+              agent,
+              decodeConversationId(conversation),
+              phase5TravelPlannerDefinitionDigests,
+            )
             .pipe(Effect.provide(phase5TravelPlannerWorkerLayer));
           expect(settlements[0]?.outcome).toBe("completed");
           // The resolved call never re-executed; the recovered result is the settled truth.
@@ -1106,6 +1209,8 @@ const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
   deploymentId: phase5TravelPlannerDeploymentId,
   producerId: phase5TravelPlannerProducerId,
   observationPollInterval: 1,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
 });
 
 describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
@@ -1137,9 +1242,13 @@ describe("TEST-014 P5 Travel Planner on the DN SQLite assembly", () => {
             phase1Trip,
             phase5TravelPlannerSubmitOptions(conversationId, decodeIdempotencyKey("p5-sqlite-1")),
           );
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processConversation(
+            agent,
+            conversationId,
+            phase5TravelPlannerDefinitionDigests,
+          );
           expect(settlements[0]?.outcome).toBe("completed");
-          const settlement = yield* runtime.awaitSettlement(receipt);
+          const settlement = yield* runtime.awaitSettlement(receipt, CALLER);
           expect(settlement.outcome).toBe("completed");
 
           const store = yield* ConversationStore;

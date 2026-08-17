@@ -5,6 +5,8 @@ import {
   ConversationStore,
   DurableAgentRuntime,
   IdempotencyKey,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
 } from "@effect-agent/session";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
@@ -16,6 +18,7 @@ import {
   makePhase4TravelPlannerAgent,
   normalizeCrossPlatformTravelPlannerEvidence,
   phase1Trip,
+  phase4TravelPlannerDefinitionDigests,
   phase4TravelPlannerDeploymentId,
   phase4TravelPlannerProducerId,
   phase4TravelPlannerSubmitOptions,
@@ -27,7 +30,6 @@ import {
 
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
-
 const withTemporaryDirectory = <A, E>(
   use: (directory: string) => Effect.Effect<A, E>,
 ): Effect.Effect<A, E | PlatformError.PlatformError> =>
@@ -46,6 +48,8 @@ const runtimeOptions = (filename: string): NodeDurableRuntimeOptions => ({
   deploymentId: phase4TravelPlannerDeploymentId,
   producerId: phase4TravelPlannerProducerId,
   observationPollInterval: 1,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
 });
 
 /** One DN "host process": the full Node/SQLite runtime stack plus the deterministic services. */
@@ -95,7 +99,11 @@ describe("TEST-014 P6 Travel Planner DN/DC equivalence — the DN half", () => {
               decodeIdempotencyKey("p6-golden-dn-1"),
             ),
           );
-          const settlements = yield* runtime.processConversation(agent, conversationId);
+          const settlements = yield* runtime.processConversation(
+            agent,
+            conversationId,
+            phase4TravelPlannerDefinitionDigests,
+          );
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.outcome).toBe("completed");
 
