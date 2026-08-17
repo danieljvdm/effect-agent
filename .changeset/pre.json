@@ -32,6 +32,7 @@
     "context-review-fixes",
     "delegation-containment",
     "durable-progress-wait",
+    "durable-run-duration",
     "effect-agent-umbrella",
     "efficient-pr-review",
     "friendly-cloudflare-peer",
