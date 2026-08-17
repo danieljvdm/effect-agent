@@ -65,6 +65,7 @@ packages/
 examples/
   demo
   pr-review
+  pr-work-orders
   providers
   repo-ops
 action/
@@ -73,8 +74,13 @@ action/
 There is no `apps/` workspace. Reusable Travel Planner fixtures live in the leaf testing package;
 `examples/demo` consumes public framework packages as a local browser bench. `examples/providers`
 binds the shared Travel Planner Definition directly to upstream OpenAI and Anthropic Effect AI
-Models as a compile-only leaf proof. Examples are outside the framework dependency graph and do not
-define a deployment boundary.
+Models as a compile-only leaf proof. `examples/pr-work-orders` is the private
+trusted-local proof of a head-bound work-order implementer: a distinct Agent
+receives only jailed file/patch/named-check tools, and host Effect code owns
+admission, validation, and atomic publication. It adds no package edge and
+makes only a class E claim. See [pull-request work orders](spec/pr-work-orders.md).
+Examples are outside the framework dependency graph and do not define
+a deployment boundary.
 Platform hosts are library packages that applications can assemble later.
 
 | First phase | Packages introduced                           |

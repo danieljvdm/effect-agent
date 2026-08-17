@@ -204,6 +204,13 @@ and maximum row, column, cell, and encoded-byte bounds. A raw `SELECT` prefix ch
 read-only enforcement. The adapter fails typed when it cannot prove or enforce the configured
 policy.
 
+### 9.1 Pull-request work-order authority
+
+Review, implementation, and publication stay separate. The contract is
+[pull-request work orders](pr-work-orders.md). The current local proof must not
+execute untrusted pull-request code in a process holding credentials or
+provider secrets.
+
 ## 10. Supply chain
 
 - exact dependency versions for prerelease Effect packages;

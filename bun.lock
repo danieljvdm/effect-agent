@@ -111,6 +111,21 @@
         "vite-plus": "catalog:",
       },
     },
+    "examples/pr-work-orders": {
+      "name": "@effect-agent/example-pr-work-orders",
+      "version": "0.0.0",
+      "dependencies": {
+        "@effect/platform-node": "catalog:",
+        "effect": "catalog:",
+        "effect-agent": "workspace:*",
+      },
+      "devDependencies": {
+        "@effect/vitest": "catalog:",
+        "@types/node": "catalog:",
+        "typescript": "catalog:",
+        "vite-plus": "catalog:",
+      },
+    },
     "examples/providers": {
       "name": "@effect-agent/example-providers",
       "version": "0.0.0",
@@ -660,6 +675,8 @@
     "@effect-agent/example-demo": ["@effect-agent/example-demo@workspace:examples/demo"],
 
     "@effect-agent/example-pr-review": ["@effect-agent/example-pr-review@workspace:examples/pr-review"],
+
+    "@effect-agent/example-pr-work-orders": ["@effect-agent/example-pr-work-orders@workspace:examples/pr-work-orders"],
 
     "@effect-agent/example-providers": ["@effect-agent/example-providers@workspace:examples/providers"],
 
