@@ -1,6 +1,6 @@
 {
   "name": "@effect-agent/pr-review",
-  "version": "0.1.0-beta.15",
+  "version": "0.1.0-beta.16",
   "description": "Bounded, fail-closed GitHub pull-request reviewer built on the effect-agent public surface: schema-first review contracts, read-only tools, GitHub adapters, a configuration factory, and CLI + GitHub Actions entrypoints.",
   "license": "MIT",
   "repository": {
