@@ -1,5 +1,13 @@
 # @effect-agent/core
 
+## 0.1.0-beta.17
+
+### Minor Changes
+
+- [#101](https://github.com/danieljvdm/effect-agent/pull/101) [`016df57`](https://github.com/danieljvdm/effect-agent/commit/016df574fa8c0f362468d848ae830d72532cbcaf) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Add a Definition-owned Schema boundary for typed application run dispositions and persist valid
+  ordinary-completion values on canonical `SubmissionSettled` records across crash recovery and
+  replay, including materialization through the public durable Settlement API.
+
 ## 0.1.0-beta.16
 
 ## 0.1.0-beta.15
