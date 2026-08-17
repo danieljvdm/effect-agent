@@ -20,6 +20,7 @@ import { NodeDurableHost } from "../../src/index.ts";
 import { packageRoot, waitUntil, withHost, withRuntime } from "../crash/harness.ts";
 import {
   SOAK_DELEGATE_CALL_ID,
+  SOAK_CALLER,
   SOAK_KILL_EXIT_CODE,
   SoakEnv,
   decodeConversationId,
@@ -260,7 +261,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                   ...Array.from({ length: DELEGATION_LANES }, (_, lane) => delegationLane(lane)),
                 ].map((name) => decodeConversationId(name));
                 for (const conversationId of conversations) {
-                  const report = yield* host.verify(conversationId);
+                  const report = yield* host.verify(conversationId, SOAK_CALLER);
                   expect(
                     report.ok,
                     `integrity report for ${conversationId}: ${JSON.stringify(report.checks)}`,
@@ -275,7 +276,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     receipt.submissionId,
                     decodeToolCallId(SOAK_DELEGATE_CALL_ID),
                   );
-                  const report = yield* host.verify(child).pipe(
+                  const report = yield* host.verify(child, SOAK_CALLER).pipe(
                     Effect.map(Option.some),
                     Effect.catchTag("ConversationNotMaterialized", () =>
                       Effect.succeed(Option.none()),
@@ -293,6 +294,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // DUR-017 surface agrees: nothing is aged, blocked, or invisibly stuck.
                 const obligations = yield* host.scanObligations(
                   ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
+                  SOAK_CALLER,
                 );
                 expect(obligations.entries).toHaveLength(0);
               }),

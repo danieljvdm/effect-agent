@@ -25,6 +25,8 @@ import {
   BOOK_CALL_ID,
   BOOK_REF,
   CHILD_ANSWER,
+  CRASH_CALLER,
+  CRASH_DIGESTS,
   FRESH_ANSWER,
   bookDefinition,
   bookTools,
@@ -96,7 +98,11 @@ const drainPlanner = (conversation: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
     const agent = Agent.withModel(plannerDefinition, model);
-    return yield* runtime.processConversation(agent, decodeConversationId(conversation));
+    return yield* runtime.processConversation(
+      agent,
+      decodeConversationId(conversation),
+      CRASH_DIGESTS,
+    );
   });
 
 const drainBook = (site: CrashSite, conversation: string) =>
@@ -105,7 +111,7 @@ const drainBook = (site: CrashSite, conversation: string) =>
     const model = yield* makeScriptedModel(() => finalParts(FRESH_ANSWER));
     const agent = Agent.withModel(bookDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), CRASH_DIGESTS)
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookTools)));
   });
 
@@ -192,6 +198,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       isFailure: false,
                     }),
                   }),
+                  CRASH_CALLER,
                 );
 
                 // Mint a POST-BACKUP ownership epoch on this timeline, then release it so the
@@ -246,7 +253,10 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const runId = runIdForSubmission(snapshot.submissionId);
 
                 // (1) Pre-backup history survived intact.
-                const settledLane = yield* runtime.verify(decodeConversationId(SETTLED_LANE));
+                const settledLane = yield* runtime.verify(
+                  decodeConversationId(SETTLED_LANE),
+                  CRASH_CALLER,
+                );
                 expect(settledLane.ok).toBe(true);
 
                 // (3) The post-backup outcome is GONE; the external effect is not: startup
@@ -260,6 +270,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
                 const obligations = yield* runtime.scanObligations(
                   ObligationThresholds.make({ agingSeconds: 0, overdueSeconds: 0 }),
+                  CRASH_CALLER,
                 );
                 const entry = obligations.entries.find(
                   (candidate) => candidate.submissionId === snapshot.submissionId,
@@ -305,13 +316,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       isFailure: false,
                     }),
                   }),
+                  CRASH_CALLER,
                 );
                 const settlements = yield* drainBook(site, UNCERTAIN_LANE);
                 expect(settlements[0]?.outcome).toBe("completed");
                 expect(supplierCount(site.supplier, "book", BOOK_REF)).toBe(1);
                 // The restored lane's canonical history carries the full prepared → resolved →
                 // settled trail and passes the shared integrity checks.
-                const verifyReport = yield* runtime.verify(decodeConversationId(UNCERTAIN_LANE));
+                const verifyReport = yield* runtime.verify(
+                  decodeConversationId(UNCERTAIN_LANE),
+                  CRASH_CALLER,
+                );
                 expect(
                   verifyReport.ok,
                   `restored integrity report: ${JSON.stringify(verifyReport.checks)}`,

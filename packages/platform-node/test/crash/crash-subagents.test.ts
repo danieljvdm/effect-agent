@@ -23,6 +23,7 @@ import { Effect, Option } from "effect";
 import { NodeDurableHost } from "../../src/index.ts";
 import {
   CHILD_MODEL_OP,
+  CRASH_CALLER,
   CRASH_PRINCIPAL,
   CRASH_QUESTION,
   DELEGATE_CALL_ID,
@@ -326,6 +327,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     author: "operator",
                     reason: "abandon before request",
                   }),
+                  CRASH_CALLER,
                 );
                 return parent.submissionId;
               }),
@@ -665,6 +667,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                     author: "operator",
                     reason: "abort the waiting parent",
                   }),
+                  CRASH_CALLER,
                 );
                 return parent.submissionId;
               }),
@@ -1048,7 +1051,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 // the child lane. Completion is only possible because waitingForChild released
                 // the single worker permit (SUB-030) — a held permit would deadlock here.
                 const settlement = yield* Effect.raceFirst(
-                  host.awaitSettlement(receipt),
+                  host.awaitSettlement(receipt, CRASH_CALLER),
                   host.runResolvedWorkers.pipe(
                     Effect.andThen(
                       Effect.die(new Error("the resolved worker loop ended unexpectedly")),

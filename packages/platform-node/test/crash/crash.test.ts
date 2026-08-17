@@ -32,6 +32,8 @@ import {
   BOOK_CALL_ID,
   BOOK_REF,
   CHILD_ANSWER,
+  CRASH_CALLER,
+  CRASH_DIGESTS,
   CRASH_QUESTION,
   FENCED_EXIT_CODE,
   FRESH_ANSWER,
@@ -116,7 +118,11 @@ const drainPlanner = (conversation: string, answer: string) =>
     const runtime = yield* DurableAgentRuntime;
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(plannerDefinition, model);
-    return yield* runtime.processConversation(agent, decodeConversationId(conversation));
+    return yield* runtime.processConversation(
+      agent,
+      decodeConversationId(conversation),
+      CRASH_DIGESTS,
+    );
   });
 
 const drainSearch = (conversation: string, answer: string) =>
@@ -125,7 +131,7 @@ const drainSearch = (conversation: string, answer: string) =>
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(searchDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), CRASH_DIGESTS)
       .pipe(Effect.provide(searchToolLayer));
   });
 
@@ -135,7 +141,7 @@ const drainUncertainBook = (site: CrashSite, conversation: string, answer: strin
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(bookDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), CRASH_DIGESTS)
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookTools)));
   });
 
@@ -145,7 +151,7 @@ const drainIdempotentBook = (site: CrashSite, conversation: string, answer: stri
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(bookIdempotentDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), CRASH_DIGESTS)
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, bookIdempotentTools)));
   });
 
@@ -155,7 +161,7 @@ const drainApprovalBook = (site: CrashSite, conversation: string, answer: string
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(approvalDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), CRASH_DIGESTS)
       .pipe(Effect.provide(makeBookToolLayer(site.supplier, approvalTools)));
   });
 
@@ -165,7 +171,7 @@ const drainItinerary = (site: CrashSite, conversation: string, answer: string) =
     const model = yield* makeScriptedModel(() => finalParts(answer));
     const agent = Agent.withModel(itineraryDefinition, model);
     return yield* runtime
-      .processConversation(agent, decodeConversationId(conversation))
+      .processConversation(agent, decodeConversationId(conversation), CRASH_DIGESTS)
       .pipe(Effect.provide(makeItineraryToolLayer(site.supplier)));
   });
 
@@ -243,7 +249,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const settlements = yield* drainPlanner(conversation, CHILD_ANSWER);
                 expect(settlements).toHaveLength(1);
                 expect(settlements[0]?.outcome).toBe("completed");
-                const settlement = yield* host.awaitSettlement(receipt);
+                const settlement = yield* host.awaitSettlement(receipt, CRASH_CALLER);
                 expect(settlement.outcome).toBe("completed");
                 yield* assertConvergence(conversation, [snapshot.submissionId]);
               }),
@@ -489,13 +495,13 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // Observation resumes from a stored offset instead of replaying from scratch.
                 const observedHead = yield* Stream.runCollect(
-                  Stream.take(runtime.observe(receipt), 2),
+                  Stream.take(runtime.observe(receipt, CRASH_CALLER), 2),
                 );
                 expect(observedHead).toHaveLength(2);
                 const storedOffset = observedHead[0]?.offset;
                 if (storedOffset === undefined) throw new Error("Expected a stored offset");
                 const observedResume = yield* Stream.runCollect(
-                  Stream.take(runtime.observe(receipt, { after: storedOffset }), 1),
+                  Stream.take(runtime.observe(receipt, CRASH_CALLER, { after: storedOffset }), 1),
                 );
                 expect(Number(observedResume[0]?.sequence)).toBe(Number(observedHead[1]?.sequence));
 
@@ -512,7 +518,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(records.map((envelope) => envelope.record.recordId)).toContain(
                   modelResponseRecordId(runId, 2),
                 );
-                const settlement = yield* host.awaitSettlement(receipt);
+                const settlement = yield* host.awaitSettlement(receipt, CRASH_CALLER);
                 expect(settlement.outcome).toBe("completed");
                 yield* assertConvergence(conversation, [snapshot.submissionId]);
               }),
@@ -695,7 +701,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
 
                 // awaitSettlement after restart returns the recorded Settlement.
                 const receipt = yield* resubmit(conversation, key);
-                const settlement = yield* host.awaitSettlement(receipt);
+                const settlement = yield* host.awaitSettlement(receipt, CRASH_CALLER);
                 expect(settlement.outcome).toBe("completed");
                 expect(settlement.receiptId).toBe(snapshot.receiptId);
                 yield* assertConvergence(conversation, [snapshot.submissionId]);
@@ -759,7 +765,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(settled[0]).toEqual(before.envelope);
 
                 const receipt = yield* resubmit(conversation, key);
-                const settlement = yield* host.awaitSettlement(receipt);
+                const settlement = yield* host.awaitSettlement(receipt, CRASH_CALLER);
                 expect(settlement.outcome).toBe("completed");
                 yield* assertConvergence(conversation, [before.submissionId]);
               }),
@@ -798,7 +804,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(report?.disposition).toBe("repaired");
 
                 const receipt = yield* resubmit(conversation, key);
-                const settlement = yield* host.awaitSettlement(receipt);
+                const settlement = yield* host.awaitSettlement(receipt, CRASH_CALLER);
                 expect(settlement.outcome).toBe("aborted");
 
                 const records = yield* readLog(conversation);
@@ -822,6 +828,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       author: "operator",
                       reason: "second abort",
                     }),
+                    CRASH_CALLER,
                   ),
                 );
                 expect(failureTag(conflict)).toBe("SettlementConflict");
@@ -900,6 +907,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       author: "operator",
                       reason: "second abort",
                     }),
+                    CRASH_CALLER,
                   ),
                 );
                 expect(failureTag(conflict)).toBe("SettlementConflict");
@@ -942,6 +950,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                         author: "operator",
                         reason: "stop the run",
                       }),
+                      CRASH_CALLER,
                     );
                   }),
                 );
@@ -978,7 +987,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 expect(tags).toContain("UserInputRecorded");
 
                 const receipt = yield* resubmit(conversation, key);
-                const settlement = yield* host.awaitSettlement(receipt);
+                const settlement = yield* host.awaitSettlement(receipt, CRASH_CALLER);
                 expect(settlement.outcome).toBe("aborted");
                 const conflict = yield* Effect.exit(
                   runtime.abort(
@@ -987,6 +996,7 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                       author: "operator",
                       reason: "stop the run",
                     }),
+                    CRASH_CALLER,
                   ),
                 );
                 expect(failureTag(conflict)).toBe("SettlementConflict");

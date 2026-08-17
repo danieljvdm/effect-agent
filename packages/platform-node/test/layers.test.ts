@@ -3,6 +3,8 @@ import type { SubmissionId } from "@effect-agent/core";
 import {
   AdmissionRequest,
   AgentBindingResolver,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -14,6 +16,7 @@ import {
   DurableRuntimeFailpointError,
   IdempotencyKey,
   MarkReadyRequest,
+  OperationCaller,
   Principal,
   ProducerId,
   SubmissionLedger,
@@ -72,6 +75,8 @@ const runtimeLayerProbe = NodeDurableRuntime.layer({
   filename: "unused.sqlite",
   deploymentId: "deployment-proof",
   producerId: "producer-proof",
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
 });
 type RuntimeLayerServicesProof = Assert<
   Equal<Layer.Success<typeof runtimeLayerProbe>, NodeDurableRuntimeServices>
@@ -97,6 +102,7 @@ type HostLayerRequirementsProof = Assert<
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-platform-node");
+const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const decodeConversationId = Schema.decodeSync(ConversationId);
 const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeProducerId = Schema.decodeSync(ProducerId);
@@ -110,6 +116,8 @@ const runtimeOptions = (
   filename,
   deploymentId: "deployment-platform-node",
   producerId: "producer-platform-node",
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   wakeScanInterval: 1_000,
   ...overrides,
 });
@@ -315,7 +323,9 @@ describe("NodeDurableRuntime", () => {
               { question: "reconcile?" },
               submitOptions("conversation-reconcile", "reconcile-1"),
             );
-            const crashed = yield* Effect.exit(runtime.processConversation(agent, conversation));
+            const crashed = yield* Effect.exit(
+              runtime.processConversation(agent, conversation, DIGESTS),
+            );
             const error = failureOf(crashed);
             expect(error).toHaveProperty("_tag", "DurableRuntimeFailpointError");
             expect(yield* lookupState(receipt.submissionId)).toBe("terminalizing");
@@ -347,7 +357,7 @@ describe("NodeDurableRuntime", () => {
             );
             expect(replayed).toEqual(receipt);
 
-            const settlement = yield* host.awaitSettlement(receipt);
+            const settlement = yield* host.awaitSettlement(receipt, CALLER);
             expect(settlement.outcome).toBe("completed");
             expect(settlement.receiptId).toBe(receipt.receiptId);
 
@@ -472,7 +482,7 @@ describe("NodeDurableRuntime", () => {
 
           const model = yield* makeScriptedModel(() => finalParts('{"answer":"woken"}'));
           const agent = Agent.withModel(plannerDefinition, model);
-          const settlements = yield* runtime.processConversation(agent, conversation);
+          const settlements = yield* runtime.processConversation(agent, conversation, DIGESTS);
           expect(settlements).toHaveLength(1);
           expect(settlements[0]?.outcome).toBe("completed");
           expect(yield* lookupState(admitted.submissionId)).toBe("settled");

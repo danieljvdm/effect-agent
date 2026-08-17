@@ -6,6 +6,8 @@ import type { SubmissionId } from "@effect-agent/core";
 import {
   ConversationRead,
   ConversationStore,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
@@ -249,6 +251,8 @@ export const runtimeOptions = (
   filename,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: HOST_PRODUCER_ID,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   settlementPollInterval: 50,
   abortPollInterval: 50,
   wakeScanInterval: 1_000,

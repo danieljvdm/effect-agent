@@ -7,6 +7,8 @@ import {
   ApprovalDecisionCommand,
   DurableAgentRuntime,
   DurableRuntimeFailpointLocation,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
   ResolutionNeverHappened,
   SubmissionLedger,
   SubmissionLookupByKey,
@@ -31,6 +33,8 @@ import {
 } from "../../src/index.ts";
 import {
   CHILD_ANSWER,
+  CRASH_CALLER,
+  CRASH_DIGESTS,
   CHILD_PRODUCER_ID,
   CRASH_DEPLOYMENT_ID,
   CRASH_QUESTION,
@@ -168,6 +172,8 @@ const options: NodeDurableRuntimeOptions = {
   filename: env.EFFECT_AGENT_DB,
   deploymentId: CRASH_DEPLOYMENT_ID,
   producerId: CHILD_PRODUCER_ID,
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ownershipLeaseDuration: env.EFFECT_AGENT_LEASE_MS ?? 30_000,
   // Long enough that a deliberately expired short lease is never renewed mid-scenario.
   leaseRenewalInterval: 60_000,
@@ -335,6 +341,7 @@ const scenario = Effect.gen(function* () {
           author: "operator",
           reason: "crash harness abort",
         }),
+        CRASH_CALLER,
       );
       return;
     }
@@ -350,6 +357,7 @@ const scenario = Effect.gen(function* () {
           author: "operator",
           reason: "crash harness queued abort",
         }),
+        CRASH_CALLER,
       );
       return;
     }
@@ -357,7 +365,9 @@ const scenario = Effect.gen(function* () {
       yield* submitPlanner(idempotencyKey);
       const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
       const agent = Agent.withModel(plannerDefinition, model);
-      yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      yield* emitSettlements(
+        yield* runtime.processConversation(agent, conversationId, CRASH_DIGESTS),
+      );
       return;
     }
     case "run-two": {
@@ -365,7 +375,9 @@ const scenario = Effect.gen(function* () {
       yield* submitPlanner(`${idempotencyKey}-2`);
       const model = yield* makeScriptedModel(() => finalParts(CHILD_ANSWER));
       const agent = Agent.withModel(plannerDefinition, model);
-      yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      yield* emitSettlements(
+        yield* runtime.processConversation(agent, conversationId, CRASH_DIGESTS),
+      );
       return;
     }
     case "run-blocked": {
@@ -379,7 +391,9 @@ const scenario = Effect.gen(function* () {
         crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey),
       );
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
-      yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      yield* emitSettlements(
+        yield* runtime.processConversation(agent, conversationId, CRASH_DIGESTS),
+      );
       return;
     }
     case "abort-active": {
@@ -392,7 +406,9 @@ const scenario = Effect.gen(function* () {
         crashSubmitOptions(env.EFFECT_AGENT_CONVERSATION, idempotencyKey),
       );
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
-      yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      yield* emitSettlements(
+        yield* runtime.processConversation(agent, conversationId, CRASH_DIGESTS),
+      );
       return;
     }
     case "run-uncertain": {
@@ -412,7 +428,9 @@ const scenario = Effect.gen(function* () {
           ? makeBookToolLayer(dir, bookTools)
           : makeBlockedBookToolLayer(dir, bookTools, env.EFFECT_AGENT_MARKER_FILE);
       yield* emitSettlements(
-        yield* runtime.processConversation(agent, conversationId).pipe(Effect.provide(toolLayer)),
+        yield* runtime
+          .processConversation(agent, conversationId, CRASH_DIGESTS)
+          .pipe(Effect.provide(toolLayer)),
       );
       return;
     }
@@ -430,7 +448,7 @@ const scenario = Effect.gen(function* () {
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(
         yield* runtime
-          .processConversation(agent, conversationId)
+          .processConversation(agent, conversationId, CRASH_DIGESTS)
           .pipe(Effect.provide(makeBookToolLayer(dir, bookIdempotentTools))),
       );
       return;
@@ -449,7 +467,7 @@ const scenario = Effect.gen(function* () {
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(
         yield* runtime
-          .processConversation(agent, conversationId)
+          .processConversation(agent, conversationId, CRASH_DIGESTS)
           .pipe(Effect.provide(makeBookToolLayer(dir, approvalTools))),
       );
       return;
@@ -468,7 +486,7 @@ const scenario = Effect.gen(function* () {
       yield* emit({ kind: "receipt", key: idempotencyKey, receipt });
       yield* emitSettlements(
         yield* runtime
-          .processConversation(agent, conversationId)
+          .processConversation(agent, conversationId, CRASH_DIGESTS)
           .pipe(Effect.provide(makeItineraryToolLayer(dir))),
       );
       return;
@@ -485,7 +503,9 @@ const scenario = Effect.gen(function* () {
             // queued input joined — SIGKILL then leaves `joined` + a nonterminal host.
             yield* makeScriptedStreamModel(blockedForeverScript(env.EFFECT_AGENT_MARKER_FILE));
       const agent = Agent.withModel(plannerDefinition, model);
-      yield* emitSettlements(yield* runtime.processConversation(agent, conversationId));
+      yield* emitSettlements(
+        yield* runtime.processConversation(agent, conversationId, CRASH_DIGESTS),
+      );
       return;
     }
     case "resolve-approval": {
@@ -499,6 +519,7 @@ const scenario = Effect.gen(function* () {
           resolver: "operator",
           reason: "crash-harness decision from a second process",
         }),
+        CRASH_CALLER,
       );
       yield* emit({ kind: "resolved", value: intent.decision });
       return;
@@ -513,6 +534,7 @@ const scenario = Effect.gen(function* () {
           reason: "the supplier store shows the call never started",
           resolution: ResolutionNeverHappened.make(),
         }),
+        CRASH_CALLER,
       );
       yield* emit({ kind: "resolved", value: intent.resolution._tag });
       return;
@@ -554,6 +576,7 @@ const scenario = Effect.gen(function* () {
           author: "operator",
           reason: "crash harness abort",
         }),
+        CRASH_CALLER,
       );
       yield* emit({ kind: "resolved", value: "aborted" });
       return;

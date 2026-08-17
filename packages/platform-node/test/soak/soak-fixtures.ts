@@ -11,6 +11,7 @@ import {
   Digest,
   DurableWorkerBinding,
   IdempotencyKey,
+  OperationCaller,
   Principal,
   type DurableSubmitOptions,
   type ResolvedBinding,
@@ -27,6 +28,7 @@ import { LanguageModel, Model, Prompt, Toolkit, type Response } from "effect/uns
 
 export const SOAK_DEPLOYMENT_ID = "deployment-soak";
 export const SOAK_PRINCIPAL = Schema.decodeSync(Principal)("principal-soak");
+export const SOAK_CALLER = OperationCaller.make({ principal: SOAK_PRINCIPAL });
 export const SOAK_DELEGATE_CALL_ID = "soak-delegate-1";
 export const SOAK_KILL_EXIT_CODE = 137;
 

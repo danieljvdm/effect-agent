@@ -1,5 +1,11 @@
 import type { ConversationId } from "@effect-agent/core";
-import { AgentBindingResolver, DurableAgentRuntime, SubmissionLedger } from "@effect-agent/session";
+import {
+  AgentBindingResolver,
+  DurableAgentRuntime,
+  SubmissionLedger,
+  possessionChildAdmissionAuthorizer,
+  possessionOperationAuthorizer,
+} from "@effect-agent/session";
 import { Cause, Duration, Effect, Exit, Option, Schema, Stream } from "effect";
 
 import { NodeDurableRuntime, type NodeDurableRuntimeOptions } from "../../src/index.ts";
@@ -32,6 +38,8 @@ const options: NodeDurableRuntimeOptions = {
   filename: env[SoakEnv.database],
   deploymentId: SOAK_DEPLOYMENT_ID,
   producerId: env[SoakEnv.producer],
+  operationAuthorizer: possessionOperationAuthorizer,
+  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ownershipLeaseDuration: env[SoakEnv.leaseMillis] ?? 750,
   leaseRenewalInterval: 200,
   abortPollInterval: 50,

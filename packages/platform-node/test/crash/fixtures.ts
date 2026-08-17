@@ -21,6 +21,7 @@ import {
   Digest,
   DurableWorkerBinding,
   IdempotencyKey,
+  OperationCaller,
   Principal,
   Receipt,
   ReconciliationCompleted,
@@ -146,6 +147,7 @@ export const FRESH_ANSWER = '{"answer":"fresh"}';
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 export const CRASH_DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
 export const CRASH_PRINCIPAL = Schema.decodeSync(Principal)("principal-crash");
+export const CRASH_CALLER = OperationCaller.make({ principal: CRASH_PRINCIPAL });
 
 export const decodeConversationId = Schema.decodeSync(ConversationId);
 export const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);

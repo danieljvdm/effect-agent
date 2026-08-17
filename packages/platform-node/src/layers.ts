@@ -1,18 +1,22 @@
 import type { SubmissionId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
-  ConversationStore,
+  childAdmissionAuthorizerLayer,
+  type ConversationStore,
   DEFAULT_OWNERSHIP_LEASE_DURATION,
   DeploymentId,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   ProducerId,
+  operationAuthorizerLayer,
   ReleaseOwnershipRequest,
   SubmissionLedger,
   ToolReconciler,
-  WakeScheduler,
+  type WakeScheduler,
   type DurableRuntimeFailpointHandler,
+  type ChildAdmissionAuthorizerService,
+  type OperationAuthorizerService,
   type OwnershipToken,
   type ResolvedBinding,
 } from "@effect-agent/session";
@@ -94,6 +98,10 @@ export interface NodeDurableRuntimeOptions {
   readonly filename: string;
   readonly deploymentId: string;
   readonly producerId: string;
+  /** Required current-policy authority for every protected runtime operation. */
+  readonly operationAuthorizer: OperationAuthorizerService;
+  /** Required current-policy authority for durable child establishment. */
+  readonly childAdmissionAuthorizer: ChildAdmissionAuthorizerService;
   /** Milliseconds; default `DEFAULT_OWNERSHIP_LEASE_DURATION` (30s, D5). */
   readonly ownershipLeaseDuration?: number | undefined;
   /** Default 1; bounded to 1..64. */
@@ -319,9 +327,11 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
         // Suspension ends the ownership period by contract, so the drain stops tracking it.
         suspend: (request) =>
           ledger.suspend(request).pipe(Effect.tap(() => untrack(request.submissionId))),
+        resumeSuspension: ledger.resumeSuspension,
         recordApprovalDecision: ledger.recordApprovalDecision,
         markUnknown: ledger.markUnknown,
         recordUnknownResolution: ledger.recordUnknownResolution,
+        repairSettlementFromCanonical: ledger.repairSettlementFromCanonical,
         scanNonterminal: ledger.scanNonterminal,
         loadRecoverySnapshot: ledger.loadRecoverySnapshot,
       });
@@ -372,7 +382,13 @@ export class NodeDurableRuntime {
     return DurableAgentRuntime.layer.pipe(
       Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer)),
       Layer.provide(
-        Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
+        Layer.mergeAll(
+          wakeSchedulerConfigLayer,
+          runtimeFailpointLayer,
+          reconcilerLayer,
+          operationAuthorizerLayer(options.operationAuthorizer),
+          childAdmissionAuthorizerLayer(options.childAdmissionAuthorizer),
+        ),
       ),
       Layer.provideMerge(infrastructure),
       Layer.provideMerge(NodeDurableRuntime.configLayer(options)),
