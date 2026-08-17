@@ -17,7 +17,36 @@ export * from "./internal/providers.ts";
 export * from "./internal/render.ts";
 export * from "./internal/retirement.ts";
 export * from "./internal/review-agent.ts";
-export * from "./internal/review-state.ts";
+// Continuity wire schemas and host capabilities are public. The packaged
+// Action installs one fresh selection authority around authenticated state
+// recovery, range selection, and the matching reviewer run.
+export {
+  GitCommitSha,
+  ReviewMode,
+  ReviewScopeMode,
+  StoredReviewFinding,
+  StoredReviewConcern,
+  ReviewState,
+  ReviewStateMarker,
+  ReviewStateAuthenticationFailure,
+  ReviewStateMarkerTooLarge,
+  ReviewStateAuthenticator,
+  ReviewSelectionAuthority,
+  reviewSelectionAuthorityLayer,
+  webCryptoReviewStateAuthenticatorLayer,
+  unavailableReviewStateAuthenticatorLayer,
+  ReviewHeadComparison,
+  computeProfileFingerprint,
+  validateReviewState,
+  buildProfileMission,
+} from "./internal/review-state.ts";
+export type {
+  ReviewMode as ReviewModeType,
+  ReviewScopeMode as ReviewScopeModeType,
+  ReviewSelection,
+  SelectReviewRangeInput,
+  ReviewStateMarker as ReviewStateMarkerType,
+} from "./internal/review-state.ts";
 export * from "./internal/review-units.ts";
 export * from "./internal/run.ts";
 export * from "./internal/source.ts";

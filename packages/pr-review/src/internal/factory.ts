@@ -34,6 +34,8 @@ import {
 import {
   buildProfileMission,
   computeProfileFingerprint,
+  sealedReviewSelection,
+  selectedPullRequestSourceLayer,
   type ReviewSelection,
 } from "./review-state.ts";
 import {
@@ -130,6 +132,20 @@ const provideIgnore = <A, E, R>(
   ignore !== undefined && ignore.length > 0
     ? effect.pipe(Effect.provide(ignoringPullRequestSourceLayer(ignore)))
     : effect;
+
+/** Keep the model's source surface identical to the continuity selection. */
+const provideSelection = <A, E, R>(
+  effect: Effect.Effect<A, E, R>,
+  selection: ReviewSelection | undefined,
+) =>
+  selection === undefined
+    ? effect
+    : Effect.gen(function* () {
+        const sealed = yield* sealedReviewSelection(selection);
+        return yield* effect.pipe(
+          Effect.provide(selectedPullRequestSourceLayer(sealed ?? selection)),
+        );
+      });
 
 /**
  * The changeset fingerprint of what this reviewer WOULD review right now:
@@ -240,20 +256,26 @@ const make = <
     ].join("\u0000");
 
   const run = (runOptions: RunReviewOptions = {}) =>
-    provideIgnore(
-      executeReview(binding, {
-        post: runOptions.post ?? false,
-        applyVerdict: options.applyVerdict ?? false,
-        limits: options.budget ?? reviewBudgetLimits,
-        maxFindings: clampMaxFindings(options.maxFindings),
-        signature,
-        modelLabel: options.modelLabel,
-        runUrl: runOptions.runUrl,
-        usageScope: "run",
-        reviewShape: "flat",
-        selection: runOptions.selection,
-      }).pipe(Effect.provide(Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), Effect.scoped),
-      options.ignore,
+    provideSelection(
+      provideIgnore(
+        executeReview(binding, {
+          post: runOptions.post ?? false,
+          applyVerdict: options.applyVerdict ?? false,
+          limits: options.budget ?? reviewBudgetLimits,
+          maxFindings: clampMaxFindings(options.maxFindings),
+          signature,
+          modelLabel: options.modelLabel,
+          runUrl: runOptions.runUrl,
+          usageScope: "run",
+          reviewShape: "flat",
+          selection: runOptions.selection,
+        }).pipe(
+          Effect.provide(Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)),
+          Effect.scoped,
+        ),
+        options.ignore,
+      ),
+      runOptions.selection,
     );
 
   return {
@@ -337,25 +359,28 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
   );
 
   const run = (runOptions: RunReviewOptions = {}) =>
-    provideIgnore(
-      executeReview(binding, {
-        post: runOptions.post ?? false,
-        applyVerdict: options.applyVerdict ?? false,
-        limits: options.budget ?? fanOutReviewBudgetLimits,
-        maxFindings: clampMaxFindings(options.maxFindings),
-        signature,
-        modelLabel: options.modelLabel,
-        runUrl: runOptions.runUrl,
-        usageScope: "coordinator",
-        reviewShape: "fan-out",
-        selection: runOptions.selection,
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer),
+    provideSelection(
+      provideIgnore(
+        executeReview(binding, {
+          post: runOptions.post ?? false,
+          applyVerdict: options.applyVerdict ?? false,
+          limits: options.budget ?? fanOutReviewBudgetLimits,
+          maxFindings: clampMaxFindings(options.maxFindings),
+          signature,
+          modelLabel: options.modelLabel,
+          runUrl: runOptions.runUrl,
+          usageScope: "coordinator",
+          reviewShape: "fan-out",
+          selection: runOptions.selection,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer),
+          ),
+          Effect.scoped,
         ),
-        Effect.scoped,
+        options.ignore,
       ),
-      options.ignore,
+      runOptions.selection,
     );
 
   return {

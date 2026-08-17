@@ -21,11 +21,12 @@ import {
 import { retireStaleReviews } from "./internal/retirement.ts";
 import {
   ReviewHeadComparison,
+  reviewSelectionAuthorityLayer,
+  type ReviewSelection,
   ReviewStateAuthenticator,
   type ReviewMode,
   type ReviewState,
   selectReviewRange,
-  selectedPullRequestSourceLayer,
   unavailableReviewStateAuthenticatorLayer,
   webCryptoReviewStateAuthenticatorLayer,
 } from "./internal/review-state.ts";
@@ -437,9 +438,12 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     // One layer build for state selection AND the run, so both observe
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
-      let selection: ReturnType<typeof selectReviewRange> | undefined;
-      const stateAuthenticator = yield* ReviewStateAuthenticator;
+      let selection: ReviewSelection | undefined;
       if (reviewer.profileFingerprint !== undefined) {
+        // Legacy/custom reviewers expose only the pre-state fingerprint seam.
+        // Do not acquire the packaged continuity authority unless this reviewer
+        // actually supports authenticated profile selection.
+        const stateAuthenticator = yield* ReviewStateAuthenticator;
         const source = yield* PullRequestSource;
         const [snapshot, profileFingerprint] = yield* Effect.all([
           reviewer.snapshot ?? Effect.all({ metadata: source.metadata, files: source.anchorFiles }),
@@ -502,7 +506,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             }
           }
         }
-        selection = selectReviewRange({
+        selection = yield* selectReviewRange({
           requestedMode: options.reviewMode ?? "incremental",
           current: metadata,
           fullFiles,
@@ -606,9 +610,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const outcome = yield* selection === undefined
-        ? reviewEffect
-        : reviewEffect.pipe(Effect.provide(selectedPullRequestSourceLayer(selection)));
+      const outcome = yield* reviewEffect;
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,
@@ -658,7 +660,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
         });
       }
       return { _tag: "Completed", outcome } satisfies ReviewActionResult;
-    }).pipe(Effect.provide(gitHubReviewLayers(target)));
+    }).pipe(Effect.provide(Layer.merge(gitHubReviewLayers(target), reviewSelectionAuthorityLayer)));
   });
 
 /**

@@ -1,7 +1,7 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import { Effect, Exit, Layer, Ref, Schema } from "effect";
-import { Agent, IdGenerator } from "effect-agent";
+import { Agent, IdGenerator, RunEvent } from "effect-agent";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
@@ -34,14 +34,14 @@ import {
   ReviewFinding,
   ReviewHeadComparison,
   ReviewPublicationPlan,
+  reviewSelectionAuthorityLayer,
   ReviewState,
   ReviewToolkitLayer,
-  selectReviewRange,
-  selectedPullRequestSourceLayer,
   StoredReviewFinding,
   WalkthroughEntry,
   unavailableReviewStateAuthenticatorLayer,
 } from "../src/index.ts";
+import { selectReviewRange, selectedPullRequestSourceLayer } from "../src/internal/review-state.ts";
 import {
   collectingReviewPublisherLayer,
   FixtureFile,
@@ -89,6 +89,70 @@ describe("host coverage diagnostics", () => {
     expect(coverage.status).toBe("incomplete");
     expect(coverage.reasons.every((reason) => reason.length <= 1_000)).toBe(true);
     expect(coverage.reasons.join("\n")).toContain("(+2 more)");
+  });
+
+  it("rejects a speculative fan-out duplicate that was declared before the initial wave settled", () => {
+    const file = ChangedFile.make({
+      path: "src/hello.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: "@@ -0,0 +1 @@\n+export {};",
+    });
+    const event = (encoded: unknown) => Schema.decodeUnknownSync(RunEvent)(encoded);
+    const common = {
+      eventVersion: 1,
+      runId: "run-1",
+      conversationId: "conversation-1",
+      agentId: "reviewer",
+      timestamp: "2026-08-17T00:00:00.000Z",
+      turnId: "turn-1",
+      toolName: "delegate_file_review",
+      providerExecuted: false,
+    };
+    const events = [
+      event({
+        ...common,
+        _tag: "ToolCallDeclared",
+        sequence: 1,
+        toolCallId: "initial",
+        parameters: { unitId: "unit-001", paths: [file.path] },
+      }),
+      event({
+        ...common,
+        _tag: "ToolCallDeclared",
+        sequence: 2,
+        toolCallId: "speculative-retry",
+        parameters: { unitId: "unit-001", paths: [file.path] },
+      }),
+      event({
+        ...common,
+        _tag: "ToolCallSucceeded",
+        sequence: 3,
+        toolCallId: "speculative-retry",
+        result: { unitId: "unit-001", findings: [] },
+      }),
+      event({
+        ...common,
+        _tag: "ToolCallFailed",
+        sequence: 4,
+        toolCallId: "initial",
+        errorTag: "AgentOutputError",
+        message: "invalid child output",
+      }),
+    ];
+
+    const coverage = assessReviewCoverage({
+      shape: "fan-out",
+      files: [file],
+      totalFiles: 1,
+      anchorFiles: [file],
+      totalAnchorFiles: 1,
+      events,
+    });
+
+    expect(coverage.status).toBe("incomplete");
+    expect(coverage.unreviewedPaths).toContain(file.path);
   });
 });
 
@@ -988,7 +1052,7 @@ describe("concerns, metadata, and footer", () => {
 // live model.
 // ---------------------------------------------------------------------------
 
-describe("offline review run", () => {
+layer(reviewSelectionAuthorityLayer)("offline review run", (it) => {
   it.effect("reviews the fixture pull request end-to-end and publishes the validated plan", () =>
     Effect.gen(function* () {
       const scripted = yield* makeOfflineReviewerModel({
@@ -1004,6 +1068,7 @@ describe("offline review run", () => {
           Layer.mergeAll(
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
+            reviewSelectionAuthorityLayer,
             testIdGeneratorLayer,
             unavailableReviewStateAuthenticatorLayer("offline review test"),
           ),
@@ -1149,7 +1214,14 @@ describe("offline review run", () => {
         status: "modified",
         additions: 1,
         deletions: 1,
-        patch: "@@ -1 +1 @@\n-before\n+after",
+      });
+      // The compare payload has no patch. The selected-source decorator must
+      // enrich it from the current full source without invalidating the
+      // authenticated incremental selection's stable identity.
+      const enrichedCorrectiveFile = ChangedFile.make({
+        ...correctiveFile,
+        reviewBaseContent: "before",
+        reviewHeadContent: "after",
       });
       const metadata = PullRequestMetadata.make({
         repository: "acme/widgets",
@@ -1185,7 +1257,7 @@ describe("offline review run", () => {
         unresolvedConcerns: [],
         lastReviewMode: "full",
       });
-      const selection = selectReviewRange({
+      const selection = yield* selectReviewRange({
         requestedMode: "incremental",
         current: metadata,
         fullFiles: [unchangedFile, correctiveFile],
@@ -1217,7 +1289,7 @@ describe("offline review run", () => {
           metadata,
           files: [
             FixtureFile.make({ file: unchangedFile, headContent: "unchanged" }),
-            FixtureFile.make({ file: correctiveFile, headContent: "after" }),
+            FixtureFile.make({ file: enrichedCorrectiveFile, headContent: "after" }),
           ],
         }),
       );
@@ -1249,6 +1321,151 @@ describe("offline review run", () => {
       expect((yield* scripted.prompts).join("\n")).not.toContain("src/unchanged.ts");
     }),
   );
+
+  it.effect(
+    "reports a full source truncated by the host bound as incomplete instead of rejecting it",
+    () =>
+      Effect.gen(function* () {
+        const file = ChangedFile.make({
+          path: "src/visible.ts",
+          status: "modified",
+          additions: 1,
+          deletions: 1,
+          patch: "@@ -1 +1 @@\n-old\n+new",
+        });
+        const metadata = PullRequestMetadata.make({
+          repository: "acme/widgets",
+          number: 32,
+          title: "Bounded source",
+          body: "",
+          baseRef: "main",
+          baseSha: "1".repeat(40),
+          headRef: "fix/bounded-source",
+          headSha: "2".repeat(40),
+          // The adapter's visible list is bounded below GitHub's total.
+          totalChangedFiles: 2,
+        });
+        const selection = yield* selectReviewRange({
+          requestedMode: "final",
+          current: metadata,
+          fullFiles: [file],
+          profileFingerprint: "a".repeat(64),
+          priorState: undefined,
+          comparison: undefined,
+        });
+        const scripted = yield* makeOfflineReviewerModel({
+          diffPath: file.path,
+          readPath: file.path,
+          review: CodeReview.make({
+            summary: "one visible file",
+            verdict: "approve",
+            findings: [],
+          }),
+        });
+        const outcome = yield* executeReview(Agent.withModel(PullRequestReviewer, scripted.model), {
+          post: false,
+          applyVerdict: false,
+          selection,
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              ReviewToolkitLayer.pipe(
+                Layer.provideMerge(
+                  fixturePullRequestSourceLayer(
+                    FixturePullRequest.make({
+                      metadata,
+                      files: [FixtureFile.make({ file, headContent: "new" })],
+                    }),
+                  ),
+                ),
+              ),
+              collectingReviewPublisherLayer(
+                yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]),
+              ),
+              testIdGeneratorLayer,
+              unavailableReviewStateAuthenticatorLayer("bounded source test"),
+            ),
+          ),
+          Effect.scoped,
+        );
+
+        expect(outcome.coverage.status).toBe("incomplete");
+        expect(outcome.plan.body).toContain("Reviewed 1 of 2 changed files");
+      }),
+  );
+
+  it.effect(
+    "rejects a sealed selection when a current rename has the same path but different ancestry",
+    () =>
+      Effect.gen(function* () {
+        const baseSha = "1".repeat(40);
+        const headSha = "2".repeat(40);
+        const stale = ChangedFile.make({
+          path: "src/new.ts",
+          previousPath: "src/old-a.ts",
+          status: "renamed",
+          additions: 1,
+          deletions: 1,
+          patch: "@@ -1 +1 @@\n-old\n+new",
+        });
+        const current = ChangedFile.make({ ...stale, previousPath: "src/old-b.ts" });
+        const metadata = PullRequestMetadata.make({
+          repository: "acme/widgets",
+          number: 31,
+          title: "Rename source",
+          body: "",
+          baseRef: "main",
+          baseSha,
+          headRef: "fix/rename",
+          headSha,
+          totalChangedFiles: 1,
+        });
+        const selection = yield* selectReviewRange({
+          requestedMode: "final",
+          current: metadata,
+          fullFiles: [stale],
+          profileFingerprint: "a".repeat(64),
+          priorState: undefined,
+          comparison: undefined,
+        });
+        const scripted = yield* makeOfflineReviewerModel({
+          diffPath: current.path,
+          readPath: current.path,
+          review: CodeReview.make({ summary: "unused", verdict: "approve", findings: [] }),
+        });
+        const error = yield* executeReview(Agent.withModel(PullRequestReviewer, scripted.model), {
+          post: false,
+          applyVerdict: false,
+          selection,
+        }).pipe(
+          Effect.flip,
+          Effect.provide(
+            Layer.mergeAll(
+              ReviewToolkitLayer.pipe(
+                Layer.provideMerge(
+                  fixturePullRequestSourceLayer(
+                    FixturePullRequest.make({
+                      metadata,
+                      files: [FixtureFile.make({ file: current, headContent: "new" })],
+                    }),
+                  ),
+                ),
+              ),
+              collectingReviewPublisherLayer(
+                yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]),
+              ),
+              testIdGeneratorLayer,
+              unavailableReviewStateAuthenticatorLayer("rename test"),
+            ),
+          ),
+        );
+        expect(error).toMatchObject({
+          _tag: "ReviewSelectionViolation",
+          reason: "review selection evidence does not match the model-visible source range",
+        });
+        expect(yield* scripted.prompts).toEqual([]);
+      }),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -1275,6 +1492,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
               ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
               collectingReviewPublisherLayer(published),
               openAiClientLayer,
+              reviewSelectionAuthorityLayer,
               testIdGeneratorLayer,
               unavailableReviewStateAuthenticatorLayer("live review test"),
             ),

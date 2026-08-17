@@ -2,6 +2,7 @@ import {
   gitHubReviewLayers,
   makeOpenAiReviewModel,
   openAiClientLayer,
+  reviewSelectionAuthorityLayer,
   resolveReviewTarget,
   ReviewPublicationPlan,
   unavailableReviewStateAuthenticatorLayer,
@@ -58,6 +59,7 @@ const command = CliCommand.make(
               gitHubReviewLayers(target),
               openAiClientLayer,
               ReadReviewConventionsLayer,
+              reviewSelectionAuthorityLayer,
               unavailableReviewStateAuthenticatorLayer(
                 "the example CLI has no configured review-state signing key",
               ),

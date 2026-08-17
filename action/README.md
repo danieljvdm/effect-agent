@@ -144,7 +144,7 @@ truncated source surface, or coordinator failure — is also non-success. The
 legacy `fail-on` input is accepted for compatibility but no longer weakens or
 changes this conservative gate.
 
-If you set `max-duration-minutes` (or rely on the defaults: 8 flat / 15
+If you set `max-duration-minutes` (or rely on the defaults: 8 flat / 50
 fan-out), keep the job's `timeout-minutes` above it — a runner-killed job
 posts nothing, while a budget-ended run fails typed with its forensics.
 

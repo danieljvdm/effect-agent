@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Equal, Schema } from "effect";
 import {
   makeUsageBudget,
   toRunBudgetHook,
@@ -16,6 +16,7 @@ import {
   type ReviewShape,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
+import { FAN_OUT_MAX_DURATION_MINUTES, MAX_FILE_REVIEW_ATTEMPTS } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
@@ -31,6 +32,7 @@ import {
   fromStoredConcern,
   fromStoredFinding,
   ReviewState,
+  selectedReviewRangeFor,
   type ReviewSelection,
   ReviewStateAuthenticator,
   toStoredConcern,
@@ -70,9 +72,9 @@ export const reviewBudgetLimits = UsageBudgetLimits.make({
 export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxInputTokens: 400_000,
   maxOutputTokens: 16_000,
-  maxToolCalls: 24,
+  maxToolCalls: 1 + MAX_FILE_REVIEW_ATTEMPTS,
   maxCostMicrousd: 2_000_000,
-  maxDurationMillis: 900_000,
+  maxDurationMillis: FAN_OUT_MAX_DURATION_MINUTES * 60_000,
 });
 
 /** Everything one review run produced, publication receipt included. */
@@ -139,12 +141,95 @@ export interface ExecuteReviewOptions {
   /** Host-owned coverage shape; defaults to the flat reviewer. */
   readonly reviewShape?: ReviewShape | undefined;
   /**
-   * Explicit host-selected review range. Callers that provide a selection
-   * also decorate `PullRequestSource` with `selectedPullRequestSourceLayer` so
-   * the model sees exactly this range while publication retains full anchors.
+   * Explicit host-selected review range. `PrReview.run` applies the matching
+   * source decorator itself, so its model-visible range cannot diverge from
+   * the selection used for continuity and publication.
    */
   readonly selection?: ReviewSelection | undefined;
 }
+
+/** A caller attempted to supply review-accounting scope not selected by the host. */
+export class ReviewSelectionViolation extends Schema.TaggedError<ReviewSelectionViolation>()(
+  "ReviewSelectionViolation",
+  { reason: Schema.NonEmptyString.check(Schema.isMaxLength(1_000)) },
+) {}
+
+const sameFiles = (left: ReadonlyArray<ChangedFile>, right: ReadonlyArray<ChangedFile>): boolean =>
+  left.length === right.length && left.every((file, index) => Equal.equals(file, right[index]));
+
+/**
+ * The selected-source decorator may add bounded base/head evidence to a
+ * patchless selected file. That is host-side enrichment of the exact same
+ * changed-file identity, not a second selection. Keep every selection field
+ * stable while deliberately excluding only those two evidence fields.
+ */
+const sameSelectedFileIdentity = (left: ChangedFile, right: ChangedFile): boolean =>
+  left.path === right.path &&
+  left.status === right.status &&
+  left.additions === right.additions &&
+  left.deletions === right.deletions &&
+  left.previousPath === right.previousPath &&
+  left.patch === right.patch;
+
+const sameSelectedFiles = (
+  left: ReadonlyArray<ChangedFile>,
+  right: ReadonlyArray<ChangedFile>,
+): boolean =>
+  left.length === right.length &&
+  left.every((file, index) => {
+    const candidate = right[index];
+    return candidate !== undefined && sameSelectedFileIdentity(file, candidate);
+  });
+
+const validateSelection = Effect.fn("validateSelection")(function* (input: {
+  readonly selection: ReviewSelection;
+  readonly files: ReadonlyArray<ChangedFile>;
+  readonly anchorFiles: ReadonlyArray<ChangedFile>;
+  readonly metadata: PullRequestMetadata;
+}) {
+  const { selection, files, anchorFiles, metadata } = input;
+  const verified = yield* selectedReviewRangeFor(selection, metadata);
+  if (verified === undefined) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection was not created by the host range selector",
+    });
+  }
+  if (!sameSelectedFiles(verified.files, files)) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection evidence does not match the model-visible source range",
+    });
+  }
+  if (verified.mode === "incremental" && verified.totalFiles !== files.length) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection total does not match the model-visible source range",
+    });
+  }
+  const anchorPaths = new Set(anchorFiles.map((file) => file.path));
+  if (files.some((file) => !anchorPaths.has(file.path))) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "review selection contains a path outside the current pull-request source",
+    });
+  }
+  if (
+    verified.mode === "full" &&
+    (verified.totalFiles !== metadata.totalChangedFiles || !sameFiles(files, anchorFiles))
+  ) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "full review selection does not cover the current pull-request source",
+    });
+  }
+  if (
+    verified.mode === "incremental" &&
+    (verified.priorState === undefined ||
+      verified.baselineSha !== verified.priorState.reviewedHeadSha ||
+      verified.profileFingerprint !== verified.priorState.profileFingerprint)
+  ) {
+    return yield* ReviewSelectionViolation.make({
+      reason: "incremental review selection is not bound to its authenticated prior state",
+    });
+  }
+  return verified;
+});
 
 /** Build the mission one review run frames from the source's snapshot. */
 export const buildReviewMission = (
@@ -233,7 +318,10 @@ export const executeReview = <
     const metadata = yield* source.metadata;
     const files = yield* source.changedFiles;
     const anchorFiles = yield* source.anchorFiles;
-    const selection = options.selection;
+    const selection =
+      options.selection === undefined
+        ? undefined
+        : yield* validateSelection({ selection: options.selection, files, anchorFiles, metadata });
     const mission = buildReviewMission(metadata, files);
     const fullMission = buildReviewMission(metadata, anchorFiles);
     const fingerprint =

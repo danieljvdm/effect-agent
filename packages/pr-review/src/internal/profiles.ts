@@ -48,8 +48,8 @@ export class FanOutReviewerProfile extends Schema.Class<FanOutReviewerProfile>(
   anchorsValidatedBeforePublication: Schema.Literal(true),
   /** S1 attached ephemeral delegation at depth 1; nested delegation is rejected. */
   attachedEphemeralDelegation: Schema.Literal(true),
-  /** A failed unit surfaces to the coordinator as a typed failed result, never retried. */
-  failedUnitsReportedNotRetried: Schema.Literal(true),
+  /** Failed read-only units may be retried once within one bounded retry wave. */
+  boundedReadOnlyUnitRetry: Schema.Literal(true),
   /** The live profile is env-gated out of every ordinary test gate. */
   liveProfileOptIn: Schema.Literal(true),
   /** Never claimed at any phase (DUR-003). */
@@ -62,7 +62,7 @@ export const fanOutReviewerProfile = FanOutReviewerProfile.make({
   publicationOutsideAgentLoop: true,
   anchorsValidatedBeforePublication: true,
   attachedEphemeralDelegation: true,
-  failedUnitsReportedNotRetried: true,
+  boundedReadOnlyUnitRetry: true,
   liveProfileOptIn: true,
   exactlyOnceExternalEffects: false,
 });

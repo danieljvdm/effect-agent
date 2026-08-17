@@ -1,5 +1,5 @@
 import { NodeCrypto } from "@effect/platform-node";
-import { describe, expect, it } from "@effect/vitest";
+import { describe, expect, it, layer } from "@effect/vitest";
 import { Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
 import {
   Agent,
@@ -23,6 +23,13 @@ import {
   DelegateFileReview,
   executeReview,
   FanOutCoordinatorToolkitLayer,
+  FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES,
+  FAN_OUT_MAX_DURATION_MINUTES,
+  FAN_OUT_WORKFLOW_TIMEOUT_MINUTES,
+  FILE_REVIEW_MAX_CONCURRENCY,
+  FILE_REVIEW_MAX_DURATION_MINUTES,
+  FILE_REVIEW_TOKEN_BUDGET,
+  FILE_REVIEW_WAVE_DURATION_MINUTES,
   fanOutHandlersLayer,
   FanOutReviewer,
   fanOutReviewBudgetLimits,
@@ -37,8 +44,12 @@ import {
   ListReviewUnits,
   makeFanOutReviewInstructions,
   makeFanOutReviewSuite,
+  MAX_FILE_REVIEW_ATTEMPTS,
+  MAX_FILE_REVIEW_RETRIES,
   MAX_FILE_REVIEW_TOOL_CALLS,
+  MAX_FILE_REVIEW_TURNS,
   MAX_REVIEW_UNITS,
+  MAX_FILE_REVIEW_WAVES,
   MAX_UNIT_FILES,
   planReviewUnits,
   PullRequestMetadata,
@@ -48,8 +59,10 @@ import {
   ReviewFinding,
   ReviewMission,
   ReviewPublicationPlan,
+  reviewSelectionAuthorityLayer,
   ReviewStateAuthenticator,
   WalkthroughEntry,
+  defaultFanOutPolicy,
   defaultFileReviewerPolicy,
   fileReviewPolicy,
   unavailableReviewStateAuthenticatorLayer,
@@ -198,11 +211,13 @@ const runOfflineFanOut = (script: {
   readonly children: ReadonlyArray<OfflineUnitScript>;
   readonly review: CodeReview;
   readonly unitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
+  readonly retryUnitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
   readonly sourceFixture?: FixturePullRequest | undefined;
 }) =>
   Effect.gen(function* () {
     const coordinator = yield* makeOfflineFanOutCoordinatorModel({
       unitCalls: script.unitCalls ?? [UNIT_ONE, UNIT_TWO],
+      retryUnitCalls: script.retryUnitCalls,
       review: script.review,
     });
     const children = yield* makeOfflineFileReviewerModel(script.children);
@@ -226,6 +241,7 @@ const runOfflineFanOut = (script: {
           FanOutCoordinatorToolkitLayer.pipe(Layer.provideMerge(sourceLayer)),
           fanOutHandlersLayer(childBinding).pipe(Layer.provide(childSupportLayer)),
           collectingReviewPublisherLayer(published),
+          reviewSelectionAuthorityLayer,
           testIdGeneratorLayer,
           unavailableReviewStateAuthenticatorLayer("offline fan-out test"),
         ),
@@ -283,15 +299,48 @@ describe("coordinator instructions", () => {
 });
 
 describe("file-reviewer policy", () => {
-  it("budgets one diff and one context read for every path in a maximum-size unit", () => {
-    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 2);
-    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
-    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
+  it("budgets one diff and three context reads for every path in a maximum-size unit", () => {
+    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 4);
+    // A provider may issue those valid reads serially, followed by one terminal response.
+    expect(MAX_FILE_REVIEW_TURNS).toBe(MAX_FILE_REVIEW_TOOL_CALLS + 1);
+    expect(defaultFileReviewerPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
+    expect(fileReviewPolicy.maxTurns).toBe(MAX_FILE_REVIEW_TURNS);
+    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 4);
+    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 4);
+    // The complete permitted read envelope for a 12-file unit is deliberately
+    // larger than the former 200k cumulative budget; it must not fail as an
+    // ordinary `AgentPolicyError:tokens` after all valid reads were allowed.
+    expect(defaultFileReviewerPolicy.tokenBudget).toBe(FILE_REVIEW_TOKEN_BUDGET);
+    expect(FILE_REVIEW_TOKEN_BUDGET).toBe(600_000);
   });
 
   it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
-    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(10 * 60_000);
-    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(10 * 60_000);
+    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(
+      FILE_REVIEW_MAX_DURATION_MINUTES * 60_000,
+    );
+    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(
+      FILE_REVIEW_MAX_DURATION_MINUTES * 60_000,
+    );
+  });
+
+  it("aligns a maximum-size full audit's child waves, coordinator, run budget, and job timeout", () => {
+    expect(MAX_REVIEW_UNITS).toBe(20);
+    expect(FILE_REVIEW_MAX_CONCURRENCY).toBe(5);
+    expect(fileReviewPolicy.maxConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
+    expect(defaultFanOutPolicy.toolConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
+    expect(MAX_FILE_REVIEW_RETRIES).toBe(5);
+    expect(MAX_FILE_REVIEW_ATTEMPTS).toBe(25);
+    expect(fileReviewPolicy.maxChildren).toBe(MAX_FILE_REVIEW_ATTEMPTS);
+    expect(defaultFanOutPolicy.maxToolCalls).toBe(1 + MAX_FILE_REVIEW_ATTEMPTS);
+    expect(MAX_FILE_REVIEW_WAVES).toBe(5);
+    expect(FILE_REVIEW_WAVE_DURATION_MINUTES).toBe(40);
+    expect(FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES).toBe(10);
+    expect(FAN_OUT_MAX_DURATION_MINUTES).toBe(50);
+    expect(Duration.toMillis(defaultFanOutPolicy.maxDuration)).toBe(
+      FAN_OUT_MAX_DURATION_MINUTES * 60_000,
+    );
+    expect(fanOutReviewBudgetLimits.maxDurationMillis).toBe(FAN_OUT_MAX_DURATION_MINUTES * 60_000);
+    expect(FAN_OUT_WORKFLOW_TIMEOUT_MINUTES).toBe(FAN_OUT_MAX_DURATION_MINUTES + 5);
   });
 });
 
@@ -311,7 +360,7 @@ describe("fan-out profile", () => {
       publicationOutsideAgentLoop: true,
       anchorsValidatedBeforePublication: true,
       attachedEphemeralDelegation: true,
-      failedUnitsReportedNotRetried: true,
+      boundedReadOnlyUnitRetry: true,
       liveProfileOptIn: true,
       exactlyOnceExternalEffects: false,
     });
@@ -439,7 +488,9 @@ describe("planReviewUnits", () => {
     );
 
     const plan = planReviewUnits(files, { totalChangedFiles: files.length });
-    expect(plan.units.flatMap((unit) => unit.paths)).toHaveLength(files.length);
+    expect([...new Set(plan.units.flatMap((unit) => unit.paths))].sort()).toEqual(
+      files.map((file) => file.path).sort(),
+    );
     expect(plan.unassignedPaths).toEqual([]);
   });
 });
@@ -485,7 +536,7 @@ describe("rankAndDedupeFindings", () => {
 // the real S1 delegation, toolkits, source port, and publication path.
 // ---------------------------------------------------------------------------
 
-describe("offline fan-out review run", () => {
+layer(reviewSelectionAuthorityLayer)("offline fan-out review run", (it) => {
   const happyChildren: ReadonlyArray<OfflineUnitScript> = [
     {
       unitId: "unit-001",
@@ -782,6 +833,76 @@ describe("offline fan-out review run", () => {
     }),
   );
 
+  it.effect("recovers one failed read-only unit through the bounded retry wave", () =>
+    Effect.gen(function* () {
+      const retryingChildren: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: { _tag: "malformed-once-then-findings", report: unitOneReport },
+        },
+        happyChildren[1] as OfflineUnitScript,
+      ];
+
+      const result = yield* runOfflineFanOut({
+        children: retryingChildren,
+        retryUnitCalls: [UNIT_ONE],
+        review: happyReview,
+      });
+
+      // list -> initial delegation batch -> one retry -> final merge.
+      expect(result.coordinatorCalls).toBe(4);
+      // The failed child and its retry each read then answer; unit-002 runs once.
+      expect(result.childCalls).toBe(6);
+      expect(result.outcome.coverage.failedUnits).toEqual([]);
+      expect(result.outcome.coverage.reviewedPaths).toEqual([
+        "src/api/alpha.ts",
+        "src/api/beta.ts",
+        "src/core/delta.ts",
+        "src/core/gamma.ts",
+      ]);
+      expect(result.outcome.coverage.unreviewedPaths).toEqual(["assets/logo.png"]);
+      expect(result.coordinatorPrompts[3]).toContain(alphaFinding.title);
+    }),
+  );
+
+  it.effect("keeps a unit incomplete when its one bounded retry also fails", () =>
+    Effect.gen(function* () {
+      const persistentlyFailingChildren: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: { _tag: "malformed-output" },
+        },
+        happyChildren[1] as OfflineUnitScript,
+      ];
+      const honestReview = CodeReview.make({
+        summary: "unit-001 remained unreviewed after its AgentOutputError retry failed.",
+        verdict: "comment",
+        findings: [...unitTwoReport.findings],
+      });
+
+      const result = yield* runOfflineFanOut({
+        children: persistentlyFailingChildren,
+        retryUnitCalls: [UNIT_ONE],
+        review: honestReview,
+      });
+
+      expect(result.coordinatorCalls).toBe(4);
+      expect(result.childCalls).toBe(6);
+      expect(result.outcome.coverage.status).toBe("incomplete");
+      expect(result.outcome.coverage.failedUnits).toContainEqual({
+        unitId: "unit-001",
+        errorTag: "FileReviewUnitFailed:AgentOutputError",
+      });
+      expect(result.outcome.coverage.unreviewedPaths).toEqual([
+        "assets/logo.png",
+        "src/api/alpha.ts",
+        "src/api/beta.ts",
+      ]);
+    }),
+  );
+
   it.effect("reports a whole batch of failed units before the repeated-failure stop", () =>
     Effect.gen(function* () {
       const failedUnits: ReadonlyArray<OfflineUnitScript> = [
@@ -828,7 +949,7 @@ describe("offline fan-out review run", () => {
   );
 
   it.effect(
-    "SUB-033 a runaway child fails typed and its unit is reported honestly, never retried",
+    "SUB-033 a runaway child fails typed and stays incomplete without a bounded retry",
     () =>
       Effect.gen(function* () {
         const runawayChildren: ReadonlyArray<OfflineUnitScript> = [
@@ -869,12 +990,13 @@ describe("offline fan-out review run", () => {
         const finalPrompt = result.coordinatorPrompts[2] ?? "";
         expect(finalPrompt).toContain("FileReviewUnitFailed");
         expect(finalPrompt).toContain("AgentPolicyError");
+        expect(finalPrompt).toContain("tool-calls");
         expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
         expect(result.published).toHaveLength(1);
         expect(result.outcome.coverage.status).toBe("incomplete");
         expect(result.outcome.coverage.failedUnits).toContainEqual({
           unitId: "unit-002",
-          errorTag: "FileReviewUnitFailed:AgentPolicyError",
+          errorTag: "FileReviewUnitFailed:AgentPolicyError:tool-calls",
         });
       }),
   );

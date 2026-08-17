@@ -4,6 +4,7 @@ import {
   PullRequestMetadata,
   ReviewFinding,
   ReviewPublicationPlan,
+  reviewSelectionAuthorityLayer,
   unavailableReviewStateAuthenticatorLayer,
 } from "@effect-agent/pr-review";
 import {
@@ -113,6 +114,7 @@ describe("example reviewer", () => {
               collectingReviewPublisherLayer(published),
               ReadReviewConventionsLayer,
               NodeCrypto.layer,
+              reviewSelectionAuthorityLayer,
               unavailableReviewStateAuthenticatorLayer("offline example test"),
             ),
           ),

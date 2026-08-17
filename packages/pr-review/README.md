@@ -19,6 +19,8 @@ import {
   resolveReviewTarget,
   makeOpenAiReviewModel,
   openAiClientLayer,
+  reviewSelectionAuthorityLayer,
+  unavailableReviewStateAuthenticatorLayer,
 } from "@effect-agent/pr-review";
 
 const reviewer = PrReview.make({ model: makeOpenAiReviewModel() });
@@ -27,7 +29,16 @@ const program = Effect.gen(function* () {
   const target = yield* resolveReviewTarget({ repository: "acme/api", number: 123 });
   return yield* reviewer
     .run({ post: true })
-    .pipe(Effect.provide(Layer.merge(gitHubReviewLayers(target), openAiClientLayer)));
+    .pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          gitHubReviewLayers(target),
+          openAiClientLayer,
+          reviewSelectionAuthorityLayer,
+          unavailableReviewStateAuthenticatorLayer("incremental continuity is not configured"),
+        ),
+      ),
+    );
 });
 ```
 
@@ -169,14 +180,27 @@ schema-branded and capped at 24,000 characters. If signing fails or state
 exceeds that bound, the completed review is posted without continuity state
 and with a bounded warning, so the next run safely performs a full review.
 
+Range selection is also explicit host authority. `reviewSelectionAuthorityLayer` is non-memoized,
+so each host composition receives a fresh issuer/verifier; the packaged Action installs one
+instance around authenticated state recovery, source decoration, and review execution. Selection
+validity is therefore scoped to that composition rather than process-wide mutable state, and a
+selection from another composition fails closed.
+
 `review-mode: final` is the explicit bounded merge-readiness audit. It reviews
 the full current PR diff and resets the incremental baseline; normal
 `synchronize` events use `incremental` and do not perform this audit.
-The packaged fan-out planner can assign up to 16 units of 12 files, with a
-1,200 changed-line soft budget per unit. Files beyond that finite capacity or
-children that fail their bounded policy remain explicitly unreviewed and make
-the review check incomplete; the workflow never converts partial coverage
-into an approval claim.
+The packaged fan-out planner can assign up to 20 units of 12 files, with a
+1,200 changed-line soft budget per unit. After all initial calls settle, the
+coordinator may retry up to five failed units once because their entire Tool
+surface is read-only. A unit that still fails, files beyond finite capacity,
+or any other coverage gap remains explicitly unreviewed and makes the review
+check incomplete; the workflow never converts partial coverage into an
+approval claim.
+
+The included repository workflow also selects fan-out for routine pull
+requests with more than 11 changed files. The flat reviewer's 24-Tool budget
+then remains an honest one-list plus two reads per file envelope instead of
+failing mid-review on a scope it cannot fully cover.
 
 ## Hosts
 
