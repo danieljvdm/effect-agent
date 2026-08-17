@@ -8,8 +8,7 @@ import { type IsolatedCheckRequest, IsolatedEnvironment, IsolationViolation } fr
 const workerPath = fileURLToPath(new URL("./isolation-worker.mjs", import.meta.url));
 
 const IsolatedCheckOutcome = Schema.Union([
-  Schema.Struct({
-    _tag: Schema.Literal("checked"),
+  Schema.TaggedStruct("checked", {
     environment: IsolatedEnvironment,
     results: Schema.Array(
       Schema.Struct({
@@ -31,7 +30,24 @@ export const spawnIsolatedWorker = Effect.fn("spawnIsolatedWorker")(function* (i
   const path = yield* Path.Path;
   const directory = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-isolate-" });
   const requestPath = path.join(directory, "request.json");
-  yield* fs.writeFileString(requestPath, JSON.stringify(input.request));
+  const encoded = yield* Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown))(
+    input.request,
+  ).pipe(
+    Effect.mapError(() =>
+      IsolationViolation.make({
+        process: input.role,
+        reason: "isolation request could not be encoded",
+      }),
+    ),
+  );
+  yield* fs.writeFileString(requestPath, encoded).pipe(
+    Effect.mapError((cause) =>
+      IsolationViolation.make({
+        process: input.role,
+        reason: String(cause).slice(0, 2_048),
+      }),
+    ),
+  );
   const child = yield* ChildProcess.make(process.execPath, [workerPath, input.role, requestPath], {
     env: { PATH: "/usr/bin:/bin", ...input.env },
     extendEnv: false,

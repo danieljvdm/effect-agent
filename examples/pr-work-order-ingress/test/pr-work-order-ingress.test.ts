@@ -17,7 +17,11 @@ import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { type Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
 
-import { ObservedActionsIdentity, signGitHubDelivery } from "../src/authenticate.ts";
+import {
+  authenticateDelivery,
+  ObservedActionsIdentity,
+  signGitHubDelivery,
+} from "../src/authenticate.ts";
 import { constructWorkOrder } from "../src/construct.ts";
 import {
   DEFAULT_MENTION_COMMAND,
@@ -95,7 +99,24 @@ type HandleRequiresCrypto = Assert<
   Equal<Extract<TypedHandleServices, Crypto.Crypto>, Crypto.Crypto>
 >;
 
-const typedPublish = IsolatedPublisher.layer({ stateDir: "/tmp" }).pipe(
+const defaultTrustFields = {
+  workOrderId: "wo-1",
+  workOrderDigest: DIGEST,
+  repository: REPOSITORY,
+  pullRequestNumber: PULL,
+  expectedHeadSha: HEAD,
+  allowedPaths: [FILE_PATH],
+  patchDigest: EMPTY_DIGEST,
+  requiredChecks: [{ name: "fixture-check", status: "passed", summary: "ok" }] as const,
+};
+
+const typedPublish = IsolatedPublisher.layer({
+  stateDir: "/tmp",
+  expected: PublisherTrust.make({
+    ...defaultTrustFields,
+    requiredChecks: [...defaultTrustFields.requiredChecks],
+  }),
+}).pipe(
   Layer.build,
   Effect.flatMap(() =>
     Effect.flatMap(IsolatedPublisher, (publisher) =>
@@ -260,6 +281,17 @@ const NOTES_PATCH = "diff --git a/notes.md b/notes.md\n--- a/notes.md\n+++ b/not
 const NOTES_DIGEST = Schema.decodeUnknownSync(PatchDigest)(
   createHash("sha256").update(NOTES_PATCH).digest("hex"),
 );
+const TRADITIONAL_PATCH = "--- a/secret\n+++ b/secret\n";
+const TRADITIONAL_DIGEST = Schema.decodeUnknownSync(PatchDigest)(
+  createHash("sha256").update(TRADITIONAL_PATCH).digest("hex"),
+);
+
+const defaultTrust = (overrides?: Partial<PublisherTrust>) =>
+  PublisherTrust.make({
+    ...defaultTrustFields,
+    requiredChecks: [...defaultTrustFields.requiredChecks],
+    ...overrides,
+  });
 
 const publisherRequest = (overrides?: {
   readonly patch?: string;
@@ -267,17 +299,7 @@ const publisherRequest = (overrides?: {
 }) =>
   PublisherRequest.make({
     patch: overrides?.patch ?? "",
-    trust: PublisherTrust.make({
-      workOrderId: "wo-1",
-      workOrderDigest: DIGEST,
-      repository: REPOSITORY,
-      pullRequestNumber: PULL,
-      expectedHeadSha: HEAD,
-      allowedPaths: [FILE_PATH],
-      patchDigest: EMPTY_DIGEST,
-      requiredChecks: [{ name: "fixture-check", status: "passed", summary: "ok" }],
-      ...overrides?.trust,
-    }),
+    trust: defaultTrust(overrides?.trust),
   });
 
 const withIngress = <A, E, R>(
@@ -618,11 +640,52 @@ describe("PR work-order ingress", () => {
             { name: "fixture-check", status: "passed", summary: "ok" },
           ]);
         }),
-      ).pipe(Effect.provide(IsolatedChecks.layer), Effect.provide(NodeServices.layer)),
+      ).pipe(Effect.provide(Layer.mergeAll(IsolatedChecks.layer, NodeServices.layer))),
+  );
+
+  it.effect("WOI-001 Actions authentication binds the trusted event payload and delivery id", () =>
+    Effect.gen(function* () {
+      const rawBody = JSON.stringify(mentionPayload({ inReplyTo: 1001 }));
+      const delivery = PlatformDelivery.make({
+        deliveryId: "actions-run-1:1",
+        eventName: "pull_request_review_comment",
+        rawBody,
+      });
+      const matching = Layer.succeed(
+        ObservedActionsIdentity,
+        ObservedActionsIdentity.of({
+          read: Effect.succeed({
+            repository: REPOSITORY,
+            eventName: "pull_request_review_comment",
+            eventPayload: rawBody,
+            deliveryId: "actions-run-1:1",
+          }),
+        }),
+      );
+      yield* authenticateDelivery(delivery, policyConfig).pipe(Effect.provide(matching));
+      const forged = yield* authenticateDelivery(
+        PlatformDelivery.make({
+          deliveryId: "actions-run-1:1",
+          eventName: "pull_request_review_comment",
+          rawBody: JSON.stringify({ forged: true }),
+        }),
+        policyConfig,
+      ).pipe(Effect.provide(matching), Effect.flip);
+      const swappedId = yield* authenticateDelivery(
+        PlatformDelivery.make({
+          deliveryId: "other-run:1",
+          eventName: "pull_request_review_comment",
+          rawBody,
+        }),
+        policyConfig,
+      ).pipe(Effect.provide(matching), Effect.flip);
+      expect(forged._tag).toBe("DeliveryUnauthentic");
+      expect(swappedId._tag).toBe("DeliveryUnauthentic");
+    }),
   );
 
   it.effect(
-    "WOI-008 WOI-009 the publisher rejects a digest, path, or head mismatch and does not update the ref",
+    "WOI-008 WOI-009 the publisher rejects a digest, path, identity, or head mismatch and does not update the ref",
     () =>
       Effect.scoped(
         Effect.gen(function* () {
@@ -630,11 +693,19 @@ describe("PR work-order ingress", () => {
           const path = yield* Path.Path;
           const stateDir = yield* fs.makeTempDirectoryScoped({ prefix: "ingress-publish-" });
           yield* fs.writeFileString(path.join(stateDir, "head"), HEAD);
-          const publish = (request: PublisherRequest) =>
+          const publish = (request: PublisherRequest, expected?: PublisherTrust) =>
             Effect.gen(function* () {
               const publisher = yield* IsolatedPublisher;
               return yield* publisher.publish(request);
-            }).pipe(Effect.provide(IsolatedPublisher.layer({ stateDir })), Effect.flip);
+            }).pipe(
+              Effect.provide(
+                IsolatedPublisher.layer({
+                  stateDir,
+                  expected: expected ?? request.trust,
+                }),
+              ),
+              Effect.flip,
+            );
           const digest = yield* publish(
             publisherRequest({
               patch: "diff --git a/src/value.ts b/src/value.ts\n",
@@ -646,11 +717,32 @@ describe("PR work-order ingress", () => {
               trust: { patchDigest: NOTES_DIGEST },
             }),
           );
+          const unproven = yield* publish(
+            publisherRequest({
+              patch: TRADITIONAL_PATCH,
+              trust: { patchDigest: TRADITIONAL_DIGEST },
+            }),
+          );
+          const substituted = yield* publish(
+            publisherRequest({ trust: { workOrderId: "wo-forged" } }),
+            defaultTrust(),
+          );
           yield* fs.writeFileString(path.join(stateDir, "head"), STALE);
           const head = yield* publish(publisherRequest());
           const after = yield* fs.readFileString(path.join(stateDir, "head"));
           expect(digest._tag).toBe("PublisherVerificationFailure");
-          expect(forbidden._tag).toBe("PublisherVerificationFailure");
+          expect(forbidden).toMatchObject({
+            _tag: "PublisherVerificationFailure",
+            reason: "path-not-allowed",
+          });
+          expect(unproven).toMatchObject({
+            _tag: "PublisherVerificationFailure",
+            reason: "path-not-allowed",
+          });
+          expect(substituted).toMatchObject({
+            _tag: "PublisherVerificationFailure",
+            reason: "identity-mismatch",
+          });
           expect(head._tag).toBe("StalePullRequestHead");
           expect(after.trim()).toBe(STALE);
         }),

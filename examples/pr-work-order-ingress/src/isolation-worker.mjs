@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 
 const WRITE_TOKEN = "EFFECT_AGENT_GITHUB_WRITE_TOKEN";
 const MODEL_SECRET = "EFFECT_AGENT_MODEL_SECRET";
@@ -18,6 +18,102 @@ const environment = {
 };
 
 const request = JSON.parse(readFileSync(requestPath, "utf8"));
+
+const headerPath = (line, side) => {
+  const body = line.slice(4).split("\t", 1)[0] ?? "";
+  if (body === "/dev/null") return "/dev/null";
+  const prefix = `${side}/`;
+  if (!body.startsWith(prefix)) return;
+  const value = body.slice(prefix.length);
+  return value.length > 0 ? value : undefined;
+};
+
+const provenPathsFromPatch = (patch) => {
+  if (patch.trim() === "") return { ok: true, paths: [] };
+  const paths = new Set();
+  let current;
+  let files = 0;
+  const start = () => {
+    current ??= { source: undefined, dest: undefined };
+    return current;
+  };
+  const assign = (field, value) => {
+    const slot = start();
+    if (slot[field] !== undefined && slot[field] !== value) return false;
+    slot[field] = value;
+    return true;
+  };
+  const flush = () => {
+    if (current === undefined) return true;
+    if (current.source === undefined || current.dest === undefined) return false;
+    if (current.source !== "/dev/null") paths.add(current.source);
+    if (current.dest !== "/dev/null") paths.add(current.dest);
+    files += 1;
+    current = undefined;
+    return true;
+  };
+  for (const line of patch.split("\n")) {
+    if (line.startsWith("diff --git ")) {
+      if (!flush()) return { ok: false };
+      const git = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
+      if (git === null || git[1] === undefined || git[2] === undefined) return { ok: false };
+      if (!assign("source", git[1]) || !assign("dest", git[2])) return { ok: false };
+      continue;
+    }
+    if (line.startsWith("--- ")) {
+      const path = headerPath(line, "a");
+      if (path === undefined || !assign("source", path)) return { ok: false };
+      continue;
+    }
+    if (line.startsWith("+++ ")) {
+      const path = headerPath(line, "b");
+      if (path === undefined || !assign("dest", path)) return { ok: false };
+      continue;
+    }
+    if (line.startsWith("rename from ") || line.startsWith("copy from ")) {
+      const path = line.slice(line.startsWith("rename from ") ? 12 : 10);
+      if (path.length === 0 || !assign("source", path)) return { ok: false };
+      continue;
+    }
+    if (line.startsWith("rename to ") || line.startsWith("copy to ")) {
+      const path = line.slice(line.startsWith("rename to ") ? 10 : 8);
+      if (path.length === 0 || !assign("dest", path)) return { ok: false };
+    }
+  }
+  if (!flush() || files === 0) return { ok: false };
+  return { ok: true, paths: [...paths] };
+};
+
+const sameStringArray = (left, right) =>
+  Array.isArray(left) &&
+  Array.isArray(right) &&
+  left.length === right.length &&
+  left.every((value, index) => value === right[index]);
+
+const sameChecks = (left, right) =>
+  Array.isArray(left) &&
+  Array.isArray(right) &&
+  left.length === right.length &&
+  left.every(
+    (check, index) =>
+      check?.name === right[index]?.name &&
+      check?.status === right[index]?.status &&
+      check?.summary === right[index]?.summary,
+  );
+
+const sameIdentity = (trust, expected) =>
+  expected !== null &&
+  expected !== undefined &&
+  trust !== null &&
+  trust !== undefined &&
+  trust.workOrderId === expected.workOrderId &&
+  trust.workOrderDigest === expected.workOrderDigest &&
+  trust.repository === expected.repository &&
+  trust.pullRequestNumber === expected.pullRequestNumber &&
+  trust.expectedHeadSha === expected.expectedHeadSha &&
+  trust.patchDigest === expected.patchDigest &&
+  sameStringArray(trust.allowedPaths, expected.allowedPaths) &&
+  sameChecks(trust.requiredChecks, expected.requiredChecks);
 
 if (role === "check") {
   if (environment.hasWriteToken || environment.hasModelSecret) {
@@ -60,7 +156,15 @@ if (role === "publish") {
       reason: "publisher process inherited a model-provider secret",
     });
   }
-  const { patch, trust, stateDir } = request;
+  const { patch, trust, expected, stateDir } = request;
+  if (!sameIdentity(trust, expected)) {
+    fail({
+      _tag: "PublisherVerificationFailure",
+      reason: "identity-mismatch",
+      detail:
+        "publication request identity does not match independently owned publisher configuration",
+    });
+  }
   const digest = createHash("sha256").update(patch).digest("hex");
   if (digest !== trust.patchDigest) {
     fail({
@@ -69,12 +173,15 @@ if (role === "publish") {
       detail: "publisher-computed patch digest differs from the host-validated digest",
     });
   }
-  const paths = new Set();
-  for (const line of patch.split("\n")) {
-    const git = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (git?.[2] !== undefined && git[2] !== "/dev/null") paths.add(git[2]);
+  const proven = provenPathsFromPatch(patch);
+  if (!proven.ok) {
+    fail({
+      _tag: "PublisherVerificationFailure",
+      reason: "path-not-allowed",
+      detail: "publisher could not prove the complete source and destination path set",
+    });
   }
-  if ([...paths].some((entry) => !trust.allowedPaths.includes(entry))) {
+  if (proven.paths.some((entry) => !trust.allowedPaths.includes(entry))) {
     fail({
       _tag: "PublisherVerificationFailure",
       reason: "path-not-allowed",
@@ -88,20 +195,34 @@ if (role === "publish") {
       detail: "trusted required-check evidence is not all passing",
     });
   }
-  if (
-    trust.workOrderId.length === 0 ||
-    trust.workOrderDigest.length === 0 ||
-    trust.repository.length === 0 ||
-    trust.pullRequestNumber <= 0
-  ) {
+  const lockPath = `${stateDir}/head.lock`;
+  try {
+    writeFileSync(lockPath, `${String(process.pid)}\n`, { flag: "wx" });
+  } catch {
     fail({
-      _tag: "PublisherVerificationFailure",
-      reason: "identity-mismatch",
-      detail: "trusted publication record does not name a complete work-order identity",
+      _tag: "PublicationUncertainty",
+      reason: "lost exclusive publication lock",
     });
   }
-  const actual = readFileSync(`${stateDir}/head`, "utf8").trim();
+  const releaseLock = () => {
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // lock already released
+    }
+  };
+  let actual;
+  try {
+    actual = readFileSync(`${stateDir}/head`, "utf8").trim();
+  } catch (cause) {
+    releaseLock();
+    fail({
+      _tag: "PublicationUncertainty",
+      reason: `could not read current head: ${String(cause).slice(0, 1_000)}`,
+    });
+  }
   if (actual !== trust.expectedHeadSha) {
+    releaseLock();
     fail({
       _tag: "StalePullRequestHead",
       expected: trust.expectedHeadSha,
@@ -109,8 +230,19 @@ if (role === "publish") {
     });
   }
   const published = createHash("sha256").update(`${actual}\n${patch}`).digest("hex").slice(0, 40);
-  writeFileSync(`${stateDir}/head`, published);
-  writeFileSync(`${stateDir}/applied.patch`, patch);
+  try {
+    writeFileSync(`${stateDir}/applied.patch`, patch);
+    writeFileSync(`${stateDir}/head.next`, `${published}\n`);
+    renameSync(`${stateDir}/head.next`, `${stateDir}/head`);
+  } catch (cause) {
+    releaseLock();
+    fail({
+      _tag: "PublicationUncertainty",
+      reason: `compare-and-swap write failed: ${String(cause).slice(0, 1_000)}`,
+      observedHeadSha: actual,
+    });
+  }
+  releaseLock();
   process.stdout.write(
     JSON.stringify({
       _tag: "published",

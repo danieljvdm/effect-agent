@@ -47,7 +47,10 @@ the canonical work order defined in [pr-work-orders.md](pr-work-orders.md) §2.
 
 It must establish, before the host is invoked:
 
-1. the delivery signature or Actions identity is authentic;
+1. the delivery signature is authentic, or the Actions-owned identity matches
+   the configured repository and event, the supplied body equals the trusted
+   `GITHUB_EVENT_PATH` payload, and the delivery id equals the trusted run
+   identity;
 2. `dispatch.actorId` is a configured human principal, using the stable
    platform user id, not the login;
 3. the event targets one inline review comment on the configured repository
@@ -90,10 +93,14 @@ need.
 | Checks          | the detached worktree, host-configured checks | GitHub write token, model-provider secret           |
 | Publisher       | GitHub write token, host-validated artifacts  | model-provider secret, unrestricted worktree access |
 
-The publisher receives only the host-validated patch, digest, allowed paths,
-required-check evidence, work-order identity, and expected `headSha`. It
-independently re-verifies those facts, re-reads the pull-request head, and
-updates the ref only if it still names that SHA. A lost race is
+The publisher receives only the host-validated patch plus independently owned
+publisher configuration for the digest, allowed paths, required-check
+evidence, work-order identity, and expected `headSha`. It compares every
+identity field to that configuration, derives every affected source and
+destination path from a fail-closed parse of the patch, and rejects any
+non-empty patch whose complete path set cannot be proven and checked against
+the allowlist. It re-reads the pull-request head and updates the ref only
+through an atomic compare-and-swap that still names that SHA. A lost race is
 `StalePullRequestHead`. A successful update followed by a cleanup failure
 reports publication uncertainty and the observed head. No exactly-once
 publication claim is made.
@@ -147,8 +154,12 @@ The suite must demonstrate:
 - a second explicit dispatch has a distinct work-order id;
 - the check process environment contains neither a GitHub write token nor a
   provider secret;
-- the publisher rejects a digest, path, or head mismatch and does not update
-  the ref;
+- Actions authentication rejects a payload or delivery id that does not match
+  the trusted Actions event;
+- the publisher rejects a digest, path, identity, or head mismatch and does
+  not update the ref;
+- the publisher rejects a non-empty patch whose complete source and
+  destination path set cannot be proven;
 - a published or settled run posts one thread reply and does not resolve the
   thread.
 
@@ -175,14 +186,21 @@ The suite must demonstrate:
   Isolation is the enablement gate.
 - **Publisher trusts the implementer-reported digest.** The publisher repeats
   the host's verification.
+- **Treating ambient Actions repository and event-name variables as
+  authentication.** The trusted event payload and run identity must match.
+- **Accepting a patch whose complete path set cannot be proven.** Publication
+  is fail-closed.
+- **Read-then-write publication of the pull-request head.** The head update
+  must be an atomic compare-and-swap.
 - **Resolving the GitHub thread on `fixed`.** Presentation is a reply, not
   closure.
 
 ## 10. Requirements
 
-- **WOI-001**: Ingress authenticates the platform delivery and accepts a
-  dispatch only when it uniquely names one inline, path-bearing review
-  comment.
+- **WOI-001**: Ingress authenticates the platform delivery — a valid webhook
+  signature, or an Actions identity bound to the trusted event payload and
+  run id — and accepts a dispatch only when it uniquely names one inline,
+  path-bearing review comment.
 - **WOI-002**: Only a configured stable actor id authorizes dispatch; source
   authorship, logins, and comment prose do not.
 - **WOI-003**: Ingress admits only a trusted same-repository, non-fork pull
@@ -197,12 +215,13 @@ The suite must demonstrate:
   of `dispatch.eventId` is idempotent and never retries automatically.
 - **WOI-007**: Checks, model/provider, and publication run in isolated
   processes with fail-closed credential separation.
-- **WOI-008**: The publisher independently verifies patch digest, allowed
-  paths, required-check evidence, work-order identity, and expected head
-  before compare-and-swap.
-- **WOI-009**: Network publication is compare-and-swap against the still-
-  current `headSha`; post-publication uncertainty stays typed and makes no
-  exactly-once claim.
+- **WOI-008**: The publisher independently verifies patch digest, a proven
+  complete path set, required-check evidence, work-order identity, and
+  expected head against independently owned publisher configuration before
+  compare-and-swap.
+- **WOI-009**: Network publication is an atomic compare-and-swap against the
+  still-current `headSha`; post-publication uncertainty stays typed and makes
+  no exactly-once claim.
 - **WOI-010**: Presentation is one host-authored thread reply; the source
   thread is never resolved.
 - **WOI-011**: No enabled workflow may run an implementer until isolation and

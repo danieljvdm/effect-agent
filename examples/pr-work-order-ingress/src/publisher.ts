@@ -6,29 +6,21 @@ import {
   GITHUB_WRITE_TOKEN_ENV,
   IsolationViolation,
   type PublisherRequest,
+  type PublisherTrust,
   PublisherVerificationFailure,
-  type PublicationUncertainty,
+  PublicationUncertainty,
 } from "./contracts.ts";
 import { spawnIsolatedWorker } from "./isolation.ts";
 
 const PublisherWorkerOutcome = Schema.Union([
-  Schema.Struct({
-    _tag: Schema.Literal("published"),
+  Schema.TaggedStruct("published", {
     headSha: Schema.String,
   }),
   PublisherVerificationFailure,
   StalePullRequestHead,
   IsolationViolation,
+  PublicationUncertainty,
 ]);
-
-export const changedPathsFromPatch = (patch: string): ReadonlyArray<string> => {
-  const paths = new Set<string>();
-  for (const line of patch.split("\n")) {
-    const git = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
-    if (git?.[2] !== undefined && git[2] !== "/dev/null") paths.add(git[2]);
-  }
-  return [...paths];
-};
 
 export class IsolatedPublisher extends Context.Service<
   IsolatedPublisher,
@@ -48,6 +40,7 @@ export class IsolatedPublisher extends Context.Service<
   static readonly layer = (options: {
     readonly stateDir: string;
     readonly writeToken?: string | undefined;
+    readonly expected: PublisherTrust;
   }) =>
     Layer.succeed(
       IsolatedPublisher,
@@ -56,7 +49,12 @@ export class IsolatedPublisher extends Context.Service<
           Effect.gen(function* () {
             const payload = yield* spawnIsolatedWorker({
               role: "publish",
-              request: { ...request, stateDir: options.stateDir },
+              request: {
+                patch: request.patch,
+                trust: request.trust,
+                expected: options.expected,
+                stateDir: options.stateDir,
+              },
               env:
                 options.writeToken === undefined
                   ? {}

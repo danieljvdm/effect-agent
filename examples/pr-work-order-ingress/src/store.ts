@@ -54,23 +54,16 @@ export class DurableAttemptStore extends Context.Service<
         const eventsDir = path.join(directory, "events");
         const attemptsDir = path.join(directory, "attempts");
         const ensureDirectories = Effect.gen(function* () {
-          yield* fs.makeDirectory(eventsDir, { recursive: true }).pipe(
-            Effect.mapError((cause) =>
-              IngressStoreFailure.make({
-                operation: "create attempt store",
-                reason: String(cause).slice(0, 4_096),
-              }),
-            ),
-          );
-          yield* fs.makeDirectory(attemptsDir, { recursive: true }).pipe(
-            Effect.mapError((cause) =>
-              IngressStoreFailure.make({
-                operation: "create attempt store",
-                reason: String(cause).slice(0, 4_096),
-              }),
-            ),
-          );
-        });
+          yield* fs.makeDirectory(eventsDir, { recursive: true });
+          yield* fs.makeDirectory(attemptsDir, { recursive: true });
+        }).pipe(
+          Effect.mapError((cause) =>
+            IngressStoreFailure.make({
+              operation: "create attempt store",
+              reason: String(cause).slice(0, 4_096),
+            }),
+          ),
+        );
         const eventPath = (eventId: string) =>
           path.join(eventsDir, `${encodeURIComponent(eventId)}.json`);
         const attemptPath = (order: PullRequestWorkOrder) =>

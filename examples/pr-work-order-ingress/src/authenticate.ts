@@ -1,32 +1,59 @@
-import { Context, Effect, Encoding, Layer, Result } from "effect";
+import { Context, Effect, Encoding, FileSystem, Layer, Result } from "effect";
 
 import { DeliveryUnauthentic, type IngressPolicy, type PlatformDelivery } from "./contracts.ts";
+
+export interface TrustedActionsIdentity {
+  readonly repository: string;
+  readonly eventName: string;
+  readonly eventPayload: string;
+  readonly deliveryId: string;
+}
 
 export class ObservedActionsIdentity extends Context.Service<
   ObservedActionsIdentity,
   {
-    readonly read: Effect.Effect<
-      { readonly repository: string; readonly eventName: string } | undefined
-    >;
+    readonly read: Effect.Effect<TrustedActionsIdentity | void>;
   }
 >()("@effect-agent/example-pr-work-order-ingress/ObservedActionsIdentity") {
-  static readonly layerFromEnvironment = Layer.succeed(
+  static readonly layerFromEnvironment = Layer.effect(
     ObservedActionsIdentity,
-    ObservedActionsIdentity.of({
-      read: Effect.sync(() => {
-        if (process.env.GITHUB_ACTIONS !== "true") return undefined;
-        const repository = process.env.GITHUB_REPOSITORY;
-        const eventName = process.env.GITHUB_EVENT_NAME;
-        if (repository === undefined || eventName === undefined) return undefined;
-        return { repository, eventName };
-      }),
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      return ObservedActionsIdentity.of({
+        read: Effect.gen(function* () {
+          if (process.env.GITHUB_ACTIONS !== "true") return undefined;
+          const repository = process.env.GITHUB_REPOSITORY;
+          const eventName = process.env.GITHUB_EVENT_NAME;
+          const eventPath = process.env.GITHUB_EVENT_PATH;
+          const runId = process.env.GITHUB_RUN_ID;
+          const runAttempt = process.env.GITHUB_RUN_ATTEMPT ?? "1";
+          if (
+            repository === undefined ||
+            eventName === undefined ||
+            eventPath === undefined ||
+            runId === undefined
+          ) {
+            return undefined;
+          }
+          const eventPayload = yield* fs
+            .readFileString(eventPath)
+            .pipe(Effect.orElseSucceed((): string | undefined => undefined));
+          if (eventPayload === undefined) return undefined;
+          return {
+            repository,
+            eventName,
+            eventPayload,
+            deliveryId: `${runId}:${runAttempt}`,
+          };
+        }),
+      });
     }),
   );
 
   static readonly layerAbsent = Layer.succeed(
     ObservedActionsIdentity,
     ObservedActionsIdentity.of({
-      read: Effect.succeed(undefined),
+      read: Effect.void,
     }),
   );
 }
@@ -107,9 +134,11 @@ export const authenticateDelivery = Effect.fn("authenticateDelivery")(function* 
   }
   const actions = yield* (yield* ObservedActionsIdentity).read;
   if (
-    actions !== undefined &&
+    actions &&
     actions.repository === policy.repository &&
-    actions.eventName === delivery.eventName
+    actions.eventName === delivery.eventName &&
+    actions.eventPayload === delivery.rawBody &&
+    actions.deliveryId === delivery.deliveryId
   ) {
     return;
   }

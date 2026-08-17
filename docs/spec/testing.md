@@ -254,12 +254,12 @@ or GitHub ingress. See [pull-request work orders](pr-work-orders.md) and
 
 The private `examples/pr-work-order-ingress` leaf uses recorded GitHub event
 fixtures and a fake GitHub API. It proves authenticated mention and reaction
-dispatch, unique inline targeting, actor-id authorization, same-repository
-non-fork admission, stale-anchor rejection, durable duplicate-delivery
-replay, isolated check-process credentials, independent publisher
-verification, compare-and-swap fencing, and one host-authored thread reply
-that does not resolve the thread. Tests do not call live GitHub and do not
-enable a repository workflow.
+dispatch, Actions payload binding, unique inline targeting, actor-id
+authorization, same-repository non-fork admission, stale-anchor rejection,
+durable duplicate-delivery replay, isolated check-process credentials,
+fail-closed publisher path and identity verification, atomic compare-and-swap
+fencing, and one host-authored thread reply that does not resolve the thread.
+Tests do not call live GitHub and do not enable a repository workflow.
 
 ## 9. Compatibility tests
 
