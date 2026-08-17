@@ -55,8 +55,10 @@ capability.
 
 **Settlement**  
 The single durable terminal outcome owed to an accepted Submission: `completed`, `failed`, or
-`aborted`. An ordinary completed Settlement may materialize the Definition-validated,
-Schema-encoded application run disposition stored in its exact canonical record.
+`aborted`. A failed Settlement always carries the framework's bounded generic diagnostic;
+completed joined work and every aborted Settlement may legitimately have no result. An ordinary
+completed Settlement may materialize the Definition-validated, Schema-encoded application run
+disposition stored in its exact canonical record.
 
 ## Agent capabilities
 

@@ -62,8 +62,9 @@ import {
   ProducerId,
   RecordEnvelope,
   SubmissionSettled,
+  SubmissionSettledRecord,
   type PersistedJson,
-  type SettlementOutcome,
+  type SettlementFailureDiagnostic,
 } from "./records.ts";
 
 /** A SubmissionLedger contract invariant that an adapter under test violated. */
@@ -181,13 +182,27 @@ const recoverySnapshot = Effect.fn("SubmissionLedgerConformance.recoverySnapshot
   return yield* ledger.loadRecoverySnapshot(RecoverySnapshotRequest.make({ submissionId }));
 });
 
-interface ReservationOptions {
+interface ReservationIdentity {
   readonly submissionId: SubmissionId;
   readonly ownershipToken: OwnershipToken;
   readonly receiptId: ReceiptId;
-  readonly outcome: SettlementOutcome;
-  readonly result?: PersistedJson;
 }
+
+type ReservationOptions = ReservationIdentity &
+  (
+    | {
+        readonly outcome: "completed";
+        readonly result?: PersistedJson;
+      }
+    | {
+        readonly outcome: "failed";
+        readonly result: SettlementFailureDiagnostic;
+      }
+    | {
+        readonly outcome: "aborted";
+        readonly result?: never;
+      }
+  );
 
 /**
  * Builds a complete, deterministic settlement reservation: the exact canonical envelope that
@@ -197,19 +212,22 @@ interface ReservationOptions {
 const settlementReservation = Effect.fn("SubmissionLedgerConformance.settlementReservation")(
   function* (options: ReservationOptions) {
     const settlementId = submissionSettlementId(options.submissionId);
-    const record = RecordEnvelope.make({
-      recordId: submissionSettlementRecordId(options.submissionId),
-      family: "conversation",
-      schemaVersion: 1,
-      createdAt: CONFORMANCE_CREATED_AT,
-      deploymentId: CONFORMANCE_DEPLOYMENT,
-      payload: SubmissionSettled.make({
+    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+      SubmissionSettled.make({
         submissionId: options.submissionId,
         settlementId,
         receiptId: options.receiptId,
         outcome: options.outcome,
         ...(options.result === undefined ? {} : { result: options.result }),
       }),
+    ).pipe(Effect.orDie);
+    const record = RecordEnvelope.make({
+      recordId: submissionSettlementRecordId(options.submissionId),
+      family: "conversation",
+      schemaVersion: 1,
+      createdAt: CONFORMANCE_CREATED_AT,
+      deploymentId: CONFORMANCE_DEPLOYMENT,
+      payload,
     });
     const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
     const recordDigest = yield* digestJson(encoded);
@@ -886,6 +904,51 @@ const settlementLifecycle = conformanceCase(
         Option.isNone(yield* claimLane(conversationId, PRODUCER_B)),
         "A settled lane with no further work must produce no claim",
       );
+
+      const failedDiagnostic = {
+        errorTag: "ConformanceFailure",
+        message: "The conformance Submission failed",
+      } as const;
+      const failedAdmission = yield* admitReady(conversationId, "settle-key-2", {
+        work: "fail",
+      });
+      const failedClaim = yield* expectSome(
+        "the claim before failed terminalization",
+        yield* claimLane(conversationId, PRODUCER_A),
+      );
+      const failedReservation = yield* settlementReservation({
+        submissionId: failedAdmission.submissionId,
+        ownershipToken: failedClaim.ownershipToken,
+        receiptId: failedAdmission.receiptId,
+        outcome: "failed",
+        result: failedDiagnostic,
+      });
+      yield* ledger.reserveSettlement(failedReservation);
+      const failedSettlement = yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: failedAdmission.submissionId,
+          settlementId: failedReservation.settlementId,
+        }),
+      );
+      yield* ensure(
+        failedSettlement.outcome === "failed" &&
+          failedSettlement.failure?.errorTag === failedDiagnostic.errorTag &&
+          failedSettlement.failure.message === failedDiagnostic.message,
+        "A failed finalization must return the exact bounded canonical diagnostic",
+      );
+      yield* TestClock.adjust("1 second");
+      const replayedFailedSettlement = yield* ledger.finalizeSettlement(
+        SettlementFinalization.make({
+          submissionId: failedAdmission.submissionId,
+          settlementId: failedReservation.settlementId,
+        }),
+      );
+      yield* ensure(
+        replayedFailedSettlement.failure?.errorTag === failedDiagnostic.errorTag &&
+          replayedFailedSettlement.failure.message === failedDiagnostic.message &&
+          sameInstant(replayedFailedSettlement.settledAt, failedSettlement.settledAt),
+        "A replayed failed finalization must preserve its diagnostic and original settledAt",
+      );
     }),
 );
 
@@ -915,7 +978,10 @@ const settlementConflicts = conformanceCase(
         ownershipToken: claim.ownershipToken,
         receiptId: admitted.receiptId,
         outcome: "failed",
-        result: { attempt: 1 },
+        result: {
+          errorTag: "ConformanceFailure",
+          message: "The conflicting conformance reservation failed",
+        },
       });
       const outcomeConflict = yield* expectFailure(
         "reserving a different outcome for the same Submission",

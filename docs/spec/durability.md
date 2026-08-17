@@ -304,6 +304,22 @@ valid only on a `completed` settlement with a `runId` and without
 incomplete, and recovery-only outcomes cannot acquire one. The durable runtime never reconstructs
 this value from result prose or Tool records.
 
+Every `failed` canonical settlement carries exactly one generic failure diagnostic in `result`:
+`errorTag` is non-empty and at most 256 characters, and `message` is at most 16 KiB. No other
+field is admitted. In particular, raw Effect Causes, defects, stacks, provider payloads, and
+application-specific data are not settlement diagnostics. The runtime builds this projection
+from the already-classified Run failure; joined Submissions copy the host's canonical diagnostic
+byte-for-byte in both the live and recovery paths rather than rebuilding it from a Cause or
+message. The `SubmissionLedger` returns the same diagnostic as `Settlement.failure` on first
+finalization and every idempotent replay.
+
+Result-less cases are explicit by settlement family. A joined `completed` Submission has no
+independent output and may omit `result`; an `aborted` Submission always omits it because abort
+records intent rather than inventing a failure. A `failed` record without its exact diagnostic —
+including a schema-version-1 record written by an earlier private-development build — is malformed
+and fails Schema decode during replay or recovery. The private-development compatibility policy
+does not migrate that record into apparently trustworthy history.
+
 ## 13. Abort
 
 Abort is a durable command with identity, author, reason, and target.
@@ -401,7 +417,9 @@ for that queue.
 - **DUR-010**: Durable step results are exactly-once recorded, not necessarily
   exactly-once executed.
 - **DUR-011**: Terminalization reserves one exact outcome, appends it canonically, then finalizes
-  the ledger idempotently.
+  the ledger idempotently. Every failed canonical and public Settlement preserves the exact bounded
+  generic diagnostic through joined fanout, recovery, and replay; only the documented completed
+  and aborted families are result-less.
 - **DUR-012**: Abort is canonical, idempotent, and cannot rewrite a prior terminal
   outcome.
 - **DUR-013**: Recovery decisions are recorded and testable from persisted state.

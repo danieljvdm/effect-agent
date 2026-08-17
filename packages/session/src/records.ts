@@ -59,6 +59,28 @@ export type ProducerEpoch = typeof ProducerEpoch.Type;
 const BoundedText = Schema.String.check(Schema.isMaxLength(64 * 1024));
 const BoundedName = Schema.NonEmptyString.check(Schema.isMaxLength(256));
 
+/** Stable, non-empty failure classification carried by a failed durable Settlement. */
+const SettlementFailureTag = Schema.NonEmptyString.check(Schema.isMaxLength(256));
+
+/** Diagnostic text is bounded independently from the broader persisted JSON envelope. */
+const SettlementFailureMessage = Schema.String.check(Schema.isMaxLength(16 * 1024));
+
+/**
+ * The complete generic diagnostic allowed on a failed durable Settlement. It deliberately has
+ * no raw Cause, stack, provider payload, or application-specific fields; those values can carry
+ * secrets and do not form a stable cross-process contract.
+ */
+export const SettlementFailureDiagnostic = Schema.Struct({
+  errorTag: SettlementFailureTag,
+  message: SettlementFailureMessage,
+}).pipe(
+  Schema.annotate({
+    identifier: "@effect-agent/session/SettlementFailureDiagnostic",
+    parseOptions: { onExcessProperty: "error" },
+  }),
+);
+export type SettlementFailureDiagnostic = typeof SettlementFailureDiagnostic.Type;
+
 /** Positive canonical (Run-relative, Attempt-independent) Turn number. */
 const TurnNumber = Schema.Int.check(Schema.isGreaterThan(0));
 
@@ -406,9 +428,7 @@ export class AbortRequested extends Schema.TaggedClass<AbortRequested>(
  * Canonical history is the outcome authority: the ledger row is finalized from this record and
  * never the other way around (DUR-015).
  */
-export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
-  "@effect-agent/session/SubmissionSettled",
-)("SubmissionSettled", {
+const RawSubmissionSettled = Schema.Struct({
   submissionId: SubmissionId,
   settlementId: SettlementId,
   receiptId: ReceiptId,
@@ -445,38 +465,77 @@ export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
    * before the limit became durable (additive, schemaVersion 1).
    */
   policyLimit: Schema.optionalKey(PolicyLimit),
-}) {}
+});
 
 const isPolicyFailureProjection = Schema.is(
   Schema.Struct({ errorTag: Schema.Literal("AgentPolicyError") }),
 );
+const isSettlementFailureDiagnostic = Schema.is(SettlementFailureDiagnostic);
+
+const hasValidSettlementFamily = (settled: typeof RawSubmissionSettled.Type): boolean =>
+  (settled.finishReason === undefined || settled.outcome === "completed") &&
+  (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
+  (settled.runDisposition === undefined ||
+    (settled.outcome === "completed" &&
+      settled.finishReason === undefined &&
+      settled.runId !== undefined &&
+      settled.result !== undefined)) &&
+  (settled.outcome !== "failed" || isSettlementFailureDiagnostic(settled.result)) &&
+  (settled.outcome !== "aborted" || settled.result === undefined) &&
+  (settled.policyLimit === undefined ||
+    (settled.outcome === "failed" && isPolicyFailureProjection(settled.result)));
+
+const SubmissionSettledFields = RawSubmissionSettled.check(
+  Schema.makeFilter(hasValidSettlementFamily, {
+    title:
+      "failed settlements require a bounded diagnostic; aborted settlements carry no result; budget metadata must match its settlement family",
+  }),
+);
+
+export class SubmissionSettled extends Schema.TaggedClass<SubmissionSettled>(
+  "@effect-agent/session/SubmissionSettled",
+)("SubmissionSettled", SubmissionSettledFields) {}
+
+/** Canonical completed settlement; joined completion may legitimately carry no independent result. */
+export type CompletedSubmissionSettled = SubmissionSettled & {
+  readonly outcome: "completed";
+};
+
+/** Canonical failed settlement; its bounded diagnostic is required and typed. */
+export type FailedSubmissionSettled = SubmissionSettled & {
+  readonly outcome: "failed";
+  readonly result: SettlementFailureDiagnostic;
+};
+
+/** Canonical aborted settlement; abort records intent rather than fabricating a terminal result. */
+export type AbortedSubmissionSettled = SubmissionSettled & {
+  readonly outcome: "aborted";
+  readonly result?: never;
+};
+
+export type SubmissionSettledRecord =
+  | CompletedSubmissionSettled
+  | FailedSubmissionSettled
+  | AbortedSubmissionSettled;
 
 /**
  * Canonical-boundary view of `SubmissionSettled`: `finishReason` is valid
  * only on a `completed` outcome, `exhausted` only alongside
- * `finishReason: "budget-exhausted"`, and `policyLimit` only on a `failed`
- * outcome whose `result` carries the `AgentPolicyError` failure projection,
- * and `runDisposition` only on an ordinary completed settlement with a Run —
+ * `finishReason: "budget-exhausted"`, every `failed` outcome requires the exact bounded
+ * `SettlementFailureDiagnostic`, aborted outcomes carry no result, and `policyLimit` only occurs
+ * on a `failed` outcome whose diagnostic carries the `AgentPolicyError` tag. `runDisposition`
+ * occurs only on an ordinary completed settlement with a Run —
  * so a malformed persisted combination such as
  * `{ outcome: "failed", finishReason: "budget-exhausted" }` or a
  * `policyLimit` contradicting `result.errorTag` fails closed at decode
  * instead of becoming trusted audit history (STORE-006, RUN-011).
  */
-const SubmissionSettledRecord = SubmissionSettled.pipe(
+export const SubmissionSettledRecord = SubmissionSettled.pipe(
   Schema.refine(
-    (settled): settled is SubmissionSettled =>
-      (settled.finishReason === undefined || settled.outcome === "completed") &&
-      (settled.exhausted === undefined || settled.finishReason === "budget-exhausted") &&
-      (settled.runDisposition === undefined ||
-        (settled.outcome === "completed" &&
-          settled.finishReason === undefined &&
-          settled.runId !== undefined &&
-          settled.result !== undefined)) &&
-      (settled.policyLimit === undefined ||
-        (settled.outcome === "failed" && isPolicyFailureProjection(settled.result))),
+    (settled): settled is SubmissionSettledRecord => hasValidSettlementFamily(settled),
     {
       expected:
-        "finishReason only on a completed settlement, exhausted only with finishReason budget-exhausted, runDisposition only on an ordinary completed settlement with a Run result, policyLimit only on a failed AgentPolicyError settlement",
+        "failed settlements require a bounded diagnostic, aborted settlements carry no result, finishReason only occurs on completed settlements, exhausted only occurs with finishReason budget-exhausted, runDisposition only occurs on an ordinary completed settlement with a Run result, and policyLimit only occurs on a failed AgentPolicyError settlement",
     },
   ),
 );

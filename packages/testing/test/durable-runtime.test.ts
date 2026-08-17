@@ -268,6 +268,7 @@ const untrustedSettlementLedgerLayer = Layer.effect(
               receiptId: settlement.receiptId,
               outcome: settlement.outcome,
               runDisposition: "unverified-ledger-disposition",
+              ...(settlement.failure === undefined ? {} : { failure: settlement.failure }),
               settledAt: settlement.settledAt,
             }),
           ),
@@ -747,6 +748,7 @@ layer(untrustedSettlementTestLayer)("RUN-029 canonical settlement authority", (i
 
       const settlement = yield* runtime.awaitSettlement(receipt);
       expect(settlement.outcome).toBe("failed");
+      expect(settlement.failure).toBeDefined();
       expect(settlement.runDisposition).toBeUndefined();
 
       const settled = (yield* readLog(conversation)).at(-1)?.record.payload;

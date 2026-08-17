@@ -172,11 +172,13 @@ import {
   RecordEnvelope,
   RecordId,
   RepairAnnotated,
+  SettlementFailureDiagnostic,
   SubagentJoined,
   SubagentLineageRecorded,
   SubagentRequested,
   SubagentStarted,
   SubmissionSettled,
+  SubmissionSettledRecord,
   ToolApprovalDecided,
   ToolApprovalRequested,
   ToolCallPrepared,
@@ -640,7 +642,7 @@ type AttemptOutcome =
     }
   | {
       readonly _tag: "failed";
-      readonly result: PersistedJson;
+      readonly result: SettlementFailureDiagnostic;
       /** The typed limit of an `AgentPolicyError` failure; absent otherwise (RUN-011). */
       readonly policyLimit?: PolicyLimit;
     }
@@ -825,6 +827,14 @@ const make = Effect.gen(function* () {
     settlement: Settlement,
     record: RecordEnvelope | undefined,
   ): Settlement => {
+    const common = {
+      submissionId: settlement.submissionId,
+      settlementId: settlement.settlementId,
+      receiptId: settlement.receiptId,
+      outcome: settlement.outcome,
+      ...(settlement.failure === undefined ? {} : { failure: settlement.failure }),
+      settledAt: settlement.settledAt,
+    };
     const payload = record?.payload;
     if (
       payload === undefined ||
@@ -836,21 +846,11 @@ const make = Effect.gen(function* () {
       settlement.outcome !== "completed" ||
       payload.runDisposition === undefined
     ) {
-      return Settlement.make({
-        submissionId: settlement.submissionId,
-        settlementId: settlement.settlementId,
-        receiptId: settlement.receiptId,
-        outcome: settlement.outcome,
-        settledAt: settlement.settledAt,
-      });
+      return Settlement.make(common);
     }
     return Settlement.make({
-      submissionId: settlement.submissionId,
-      settlementId: settlement.settlementId,
-      receiptId: settlement.receiptId,
-      outcome: settlement.outcome,
+      ...common,
       runDisposition: payload.runDisposition,
-      settledAt: settlement.settledAt,
     });
   };
 
@@ -892,6 +892,46 @@ const make = Effect.gen(function* () {
 
   const knownRecordIdsOf = (records: ReadonlyArray<CanonicalRecordEnvelope>): Set<string> =>
     new Set(records.map((envelope) => envelope.record.recordId));
+
+  const settlementPayloadFromRecord = Effect.fn("DurableAgentRuntime.settlementPayloadFromRecord")(
+    function* (
+      record: RecordEnvelope,
+      submissionId: SubmissionId,
+    ): Effect.fn.Return<SubmissionSettledRecord, LedgerError> {
+      const payload = record.payload;
+      if (
+        payload._tag !== "SubmissionSettled" ||
+        payload.submissionId !== submissionId ||
+        payload.settlementId !== submissionSettlementId(submissionId) ||
+        record.recordId !== submissionSettlementRecordId(submissionId)
+      ) {
+        return yield* LedgerError.make({
+          operation: "settlementPayloadFromRecord",
+          message: `The reserved canonical record is not the exact Settlement for Submission ${submissionId}`,
+        });
+      }
+      return payload;
+    },
+  );
+
+  const canonicalSettlementRecord = Effect.fn("DurableAgentRuntime.canonicalSettlementRecord")(
+    function* (
+      records: ReadonlyArray<CanonicalRecordEnvelope>,
+      submissionId: SubmissionId,
+    ): Effect.fn.Return<RecordEnvelope, LedgerError> {
+      const record = records.find(
+        (envelope) => envelope.record.recordId === submissionSettlementRecordId(submissionId),
+      )?.record;
+      if (record === undefined) {
+        return yield* LedgerError.make({
+          operation: "canonicalSettlementRecord",
+          message: `Canonical history has no Settlement for Submission ${submissionId}`,
+        });
+      }
+      yield* settlementPayloadFromRecord(record, submissionId);
+      return record;
+    },
+  );
 
   /**
    * Fold structured recovery evidence from canonical records (plan §2.2). Canonical history is
@@ -1765,10 +1805,11 @@ const make = Effect.gen(function* () {
 
   const settleOneJoined = Effect.fn("DurableAgentRuntime.settleOneJoined")(function* (
     ctx: AttemptAppendContext,
-    hostSubmissionId: SubmissionId,
-    outcome: SettlementOutcome,
+    hostSettlement: SubmissionSettledRecord,
     joined: RecoverySnapshot,
   ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
+    const hostSubmissionId = hostSettlement.submissionId;
+    const outcome = hostSettlement.outcome;
     const submission = joined.submission;
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
@@ -1778,13 +1819,16 @@ const make = Effect.gen(function* () {
       // batch replay is byte-identical (DUR-011).
       record = joined.reservation.record;
     } else {
-      const payload = SubmissionSettled.make({
-        submissionId,
-        settlementId,
-        receiptId: submission.receiptId,
-        outcome,
-        runId: runIdForSubmission(hostSubmissionId),
-      });
+      const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+        SubmissionSettled.make({
+          submissionId,
+          settlementId,
+          receiptId: submission.receiptId,
+          outcome,
+          runId: runIdForSubmission(hostSubmissionId),
+          ...(hostSettlement.outcome === "failed" ? { result: hostSettlement.result } : {}),
+        }),
+      ).pipe(Effect.orDie);
       const envelope = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
       // The envelope was constructed from validated parts, so an encode failure is a defect.
       const encoded = yield* Schema.encodeEffect(RecordEnvelope)(envelope).pipe(Effect.orDie);
@@ -1851,9 +1895,9 @@ const make = Effect.gen(function* () {
   const settleJoinedSubmissions = Effect.fn("DurableAgentRuntime.settleJoinedSubmissions")(
     function* (
       ctx: AttemptAppendContext,
-      hostSubmissionId: SubmissionId,
-      outcome: SettlementOutcome,
+      hostSettlement: SubmissionSettledRecord,
     ): Effect.fn.Return<void, DurableWorkerFailure> {
+      const hostSubmissionId = hostSettlement.submissionId;
       const snapshot = yield* ledger.loadRecoverySnapshot(
         RecoverySnapshotRequest.make({ submissionId: hostSubmissionId }),
       );
@@ -1863,7 +1907,7 @@ const make = Effect.gen(function* () {
           RecoverySnapshotRequest.make({ submissionId: join.submissionId }),
         );
         if (joinedSnapshot.submission.state === "settled") continue;
-        yield* settleOneJoined(ctx, hostSubmissionId, outcome, joinedSnapshot);
+        yield* settleOneJoined(ctx, hostSettlement, joinedSnapshot);
       }
     },
   );
@@ -1883,29 +1927,31 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<Settlement, DurableWorkerFailure> {
     const submissionId = submission.submissionId;
     const settlementId = submissionSettlementId(submissionId);
-    const payload = SubmissionSettled.make({
-      submissionId,
-      settlementId,
-      receiptId: submission.receiptId,
-      outcome: outcome._tag,
-      ...(includeRunId ? { runId: runIdForSubmission(submissionId) } : {}),
-      ...(outcome._tag === "aborted" ? {} : { result: outcome.result }),
-      ...(includeRunId &&
-      outcome._tag === "completed" &&
-      outcome.finishReason === undefined &&
-      outcome.runDisposition !== undefined
-        ? { runDisposition: outcome.runDisposition }
-        : {}),
-      ...(outcome._tag === "completed" && outcome.finishReason !== undefined
-        ? { finishReason: outcome.finishReason }
-        : {}),
-      ...(outcome._tag === "completed" && outcome.exhausted !== undefined
-        ? { exhausted: outcome.exhausted }
-        : {}),
-      ...(outcome._tag === "failed" && outcome.policyLimit !== undefined
-        ? { policyLimit: outcome.policyLimit }
-        : {}),
-    });
+    const payload = yield* Schema.decodeUnknownEffect(SubmissionSettledRecord)(
+      SubmissionSettled.make({
+        submissionId,
+        settlementId,
+        receiptId: submission.receiptId,
+        outcome: outcome._tag,
+        ...(includeRunId ? { runId: runIdForSubmission(submissionId) } : {}),
+        ...(outcome._tag === "aborted" ? {} : { result: outcome.result }),
+        ...(includeRunId &&
+        outcome._tag === "completed" &&
+        outcome.finishReason === undefined &&
+        outcome.runDisposition !== undefined
+          ? { runDisposition: outcome.runDisposition }
+          : {}),
+        ...(outcome._tag === "completed" && outcome.finishReason !== undefined
+          ? { finishReason: outcome.finishReason }
+          : {}),
+        ...(outcome._tag === "completed" && outcome.exhausted !== undefined
+          ? { exhausted: outcome.exhausted }
+          : {}),
+        ...(outcome._tag === "failed" && outcome.policyLimit !== undefined
+          ? { policyLimit: outcome.policyLimit }
+          : {}),
+      }),
+    ).pipe(Effect.orDie);
     const record = yield* makeEnvelope(submissionSettlementRecordId(submissionId), payload);
     // The envelope was constructed from validated parts, so an encode failure is a defect.
     const encoded = yield* Schema.encodeEffect(RecordEnvelope)(record).pipe(Effect.orDie);
@@ -1938,9 +1984,10 @@ const make = Effect.gen(function* () {
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
+    const canonicalSettlement = yield* settlementPayloadFromRecord(reserved.record, submissionId);
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
-    yield* settleJoinedSubmissions(ctx, submissionId, outcome._tag);
+    yield* settleJoinedSubmissions(ctx, canonicalSettlement);
     return materializeSettlement(settlement, reserved.record);
   });
 
@@ -1974,20 +2021,28 @@ const make = Effect.gen(function* () {
         settlementId: reservation.settlementId,
       }),
     );
+    const canonicalSettlement = yield* settlementPayloadFromRecord(
+      reservation.record,
+      submission.submissionId,
+    );
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
-    yield* settleJoinedSubmissions(ctx, submission.submissionId, settlement.outcome);
+    yield* settleJoinedSubmissions(ctx, canonicalSettlement);
     return materializeSettlement(settlement, reservation.record);
   });
 
   /** Canonical settlement exists: rebuild the ledger from history, never the reverse (DUR-015). */
   const finalizeFromHistory = Effect.fn("DurableAgentRuntime.finalizeFromHistory")(function* (
     submission: SubmissionSnapshot,
-    settlementId: Settlement["settlementId"],
+    record: RecordEnvelope,
   ): Effect.fn.Return<Settlement, LedgerError | SettlementConflict> {
+    const canonicalSettlement = yield* settlementPayloadFromRecord(record, submission.submissionId);
     yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
-      SettlementFinalization.make({ submissionId: submission.submissionId, settlementId }),
+      SettlementFinalization.make({
+        submissionId: submission.submissionId,
+        settlementId: canonicalSettlement.settlementId,
+      }),
     );
     const snapshot = yield* ledger.loadRecoverySnapshot(
       RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
@@ -2234,18 +2289,15 @@ const make = Effect.gen(function* () {
 
   /** The coordinator's bounded `{errorTag, message}` projection of a non-completed child. */
   const boundedChildFailureResult = (
-    payload: SubmissionSettled,
+    payload: SubmissionSettledRecord,
     childSubmissionId: SubmissionId,
   ): Effect.Effect<PersistedJson> => {
-    if (payload.outcome === "failed" && payload.result !== undefined) {
+    if (payload.outcome === "failed") {
       return Effect.succeed(payload.result);
     }
     return decodePersisted({
-      errorTag: payload.outcome === "aborted" ? "SubagentAborted" : "ChildRunFailed",
-      message:
-        payload.outcome === "aborted"
-          ? `Attached child ${childSubmissionId} settled aborted`
-          : `Attached child ${childSubmissionId} settled failed without a recorded failure payload`,
+      errorTag: "SubagentAborted",
+      message: `Attached child ${childSubmissionId} settled aborted`,
     }).pipe(Effect.orDie);
   };
 
@@ -2254,7 +2306,7 @@ const make = Effect.gen(function* () {
     readonly outcome: SettlementOutcome;
     /** Child terminal output for `completed`; the bounded `{errorTag, message}` projection otherwise. */
     readonly encodedResult: PersistedJson;
-    readonly settlement: SubmissionSettled;
+    readonly settlement: SubmissionSettledRecord;
     readonly childRecords: ReadonlyArray<CanonicalRecordEnvelope>;
   }
 
@@ -2684,11 +2736,11 @@ const make = Effect.gen(function* () {
   });
 
   const failureOutcome = (error: unknown): Effect.Effect<AttemptOutcome> =>
-    Schema.decodeUnknownEffect(PersistedJson)({
-      errorTag: errorTagOf(error),
+    Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
+      errorTag: errorTagOf(error).slice(0, 256) || "UnknownError",
       message: errorMessageOf(error).slice(0, MAX_FAILURE_MESSAGE_LENGTH),
     }).pipe(
-      // Two bounded strings always satisfy the canonical persistence limits.
+      // The exact diagnostic Schema admits no raw Cause, stack, or provider payload.
       Effect.orDie,
       Effect.map((result) => ({
         _tag: "failed" as const,
@@ -4464,11 +4516,10 @@ const make = Effect.gen(function* () {
       const knownIds = knownRecordIdsOf(records);
 
       if (evidence.recordedSettlementOutcome !== undefined) {
-        const settlement = yield* finalizeFromHistory(
-          submission,
-          snapshot.reservation?.settlementId ?? submissionSettlementId(submissionId),
-        );
-        yield* settleJoinedSubmissions(ctx, submissionId, settlement.outcome);
+        const record = yield* canonicalSettlementRecord(records, submissionId);
+        const settlement = yield* finalizeFromHistory(submission, record);
+        const canonicalSettlement = yield* settlementPayloadFromRecord(record, submissionId);
+        yield* settleJoinedSubmissions(ctx, canonicalSettlement);
         return Option.some(settlement);
       }
       if (snapshot.reservation !== undefined) {
@@ -4700,7 +4751,7 @@ const make = Effect.gen(function* () {
         // An earlier pass already reserved the one exact outcome: complete it, never re-decide.
         return yield* completeReservation(ctx, submission, snapshot.reservation, recorded);
       }
-      const result = yield* decodePersisted({
+      const result = yield* Schema.decodeUnknownEffect(SettlementFailureDiagnostic)({
         errorTag: "ChildCompatibilityFailure",
         message: boundedText(failure.message),
       }).pipe(Effect.orDie);
@@ -5365,16 +5416,13 @@ const make = Effect.gen(function* () {
         case "SettleJoinedWithHost": {
           const hostSubmissionId = snapshot.hostSubmissionId;
           if (hostSubmissionId === undefined) return "deferred";
+          const hostRecord = yield* canonicalSettlementRecord(records, hostSubmissionId);
+          const hostSettlement = yield* settlementPayloadFromRecord(hostRecord, hostSubmissionId);
           // The host settled canonically, so no live owner can exist for this lane (a joined
           // head is never claimable): the joined settlement completes unfenced at the current
           // tail, deferring to any racing fence advance.
           const ctx = yield* attemptContextAtTail(submission.conversationId);
-          const applied = yield* settleOneJoined(
-            ctx,
-            hostSubmissionId,
-            decision.outcome,
-            snapshot,
-          ).pipe(
+          const applied = yield* settleOneJoined(ctx, hostSettlement, snapshot).pipe(
             Effect.as(true),
             Effect.catchTag("FenceRejected", () => Effect.succeed(false)),
           );
@@ -5481,7 +5529,8 @@ const make = Effect.gen(function* () {
           return "repaired";
         }
         case "FinalizeLedgerFromHistory": {
-          yield* finalizeFromHistory(submission, decision.settlementId);
+          const record = yield* canonicalSettlementRecord(records, submission.submissionId);
+          yield* finalizeFromHistory(submission, record);
           return "repaired";
         }
         case "SettleAborted": {
