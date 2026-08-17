@@ -337,10 +337,10 @@ export class AwaitChildSettlement extends Schema.TaggedClass<AwaitChildSettlemen
   "@effect-agent/session/AwaitChildSettlement",
 )("AwaitChildSettlement", { submissionId: SubmissionId }) {}
 
-/** Every relevant child is provably settled but the parent has not joined (a dropped wake or a
- * crash between child finalization and `recordChildSettled`): replay the idempotent wake so a
- * claiming worker resumes the declared batch and joins each child's canonical Settlement — the
- * join itself needs the parent Binding and is deferred to that worker (spec §13). */
+/** Every relevant child is provably settled but the parent has not joined (legacy data, or a
+ * canonical settlement whose idempotent wake still needs replay): record/replay the durable wake
+ * so a claiming worker resumes the declared batch and joins each child's canonical Settlement —
+ * the join itself needs the parent Binding and is deferred to that worker (spec §13). */
 export class ResumeWaitingParent extends Schema.TaggedClass<ResumeWaitingParent>(
   "@effect-agent/session/ResumeWaitingParent",
 )("ResumeWaitingParent", {

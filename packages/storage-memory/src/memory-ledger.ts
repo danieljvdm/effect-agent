@@ -1651,10 +1651,16 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 current,
               ];
             }
-            // The child's canonical Settlement is the authority for this wake; a notification
-            // for an unsettled (or unknown) child is a caller error in a single-store adapter.
+            // The caller may notify after the canonical Settlement append but before ledger
+            // finalization. In a single store, an exact reservation plus `terminalizing` is the
+            // narrow durable prefix that makes that ordering admissible; earlier states remain
+            // a caller error.
             const child = current.submissions.get(request.childSubmissionId);
-            if (child === undefined || child.row.state !== "settled") {
+            const announced =
+              child !== undefined &&
+              (child.row.state === "settled" ||
+                (child.row.state === "terminalizing" && child.reservation !== undefined));
+            if (!announced) {
               return [
                 failure(
                   ledgerError(
@@ -1676,12 +1682,15 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
             if (!children.some((entry) => entry.childSubmissionId === request.childSubmissionId)) {
               return [success("not-waiting" as const), current];
             }
-            // The parent wakes exactly when EVERY listed child is settled (spec §12 step 10);
-            // replays re-run the coverage check so a recovering caller wakes the lane
-            // idempotently.
-            const allSettled = children.every(
-              (entry) => current.submissions.get(entry.childSubmissionId)?.row.state === "settled",
-            );
+            // Every listed child must be either finalized or canonically announced from the
+            // exact terminalizing reservation. Replays re-run this coverage check idempotently.
+            const allSettled = children.every((entry) => {
+              const listed = current.submissions.get(entry.childSubmissionId);
+              return (
+                listed?.row.state === "settled" ||
+                (listed?.row.state === "terminalizing" && listed.reservation !== undefined)
+              );
+            });
             if (!allSettled) return [success("still-waiting" as const), current];
             return [
               success("woken" as const),

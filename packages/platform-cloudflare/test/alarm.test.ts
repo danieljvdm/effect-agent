@@ -3,9 +3,9 @@ import {
   ResolutionNeverHappened,
   UnknownResolutionCommand,
 } from "@effect-agent/session";
-import { runDurableObjectAlarm } from "cloudflare:test";
-import { Effect } from "effect";
-import { describe, expect, it } from "vite-plus/test";
+import { runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
+import { Effect, Schema } from "effect";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import { CloudflareConversationClient } from "../src/index.ts";
 import {
@@ -16,7 +16,10 @@ import {
   armedRuntimeFailures,
   bookDefinition,
   decodeConversationId,
+  armMaintenancePause,
+  awaitMaintenancePause,
   plannerDefinition,
+  releaseMaintenancePause,
   submitOptions,
 } from "./fixtures.ts";
 import {
@@ -35,8 +38,8 @@ import {
  * Alarm semantics (plan §3, D-P6-2; exit gate 2): the single multiplexed alarm's maintenance
  * pass is idempotent under at-least-once delivery (double-fired alarms change nothing), a
  * typed failure inside the pass REJECTS the delivery so workerd redelivers while the pass's
- * own pre-arm keeps the slot committed, and the alarm invariant — committed nonterminal work
- * implies a committed alarm — holds from admission to settlement.
+ * dirty generation keeps the slot committed, stable external waits quiesce, and autonomous work
+ * retains bounded rearming through settlement.
  */
 
 let laneCounter = 0;
@@ -68,7 +71,149 @@ const canonicalFingerprint = async (conversation: string): Promise<string> => {
   );
 };
 
+const MaintenanceGenerationProbe = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  dirty: Schema.BigIntFromString,
+  processed: Schema.BigIntFromString,
+});
+
+const maintenanceGeneration = (conversation: string) =>
+  runInDurableObject(stubFor(conversation), async (_instance, state) =>
+    Schema.decodeUnknownSync(MaintenanceGenerationProbe)(
+      await state.storage.get<unknown>("effect-agent:conversation-maintenance:v1"),
+    ),
+  );
+
 describe("DC alarm semantics", () => {
+  it("issue #93: a stable approval wait quiesces and a forced caught-up alarm performs no SQL work", async () => {
+    const conversation = lane("issue-93-quiescent-approval");
+    const receipt = await submitTo(approvalDefinition, conversation);
+    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
+    await drainAlarmsUntil(conversation, async () => (await scheduledAlarm(conversation)) === null);
+
+    const suspendedFingerprint = await canonicalFingerprint(conversation);
+    await runInDurableObject(stubFor(conversation), async (instance, state) => {
+      const sql = vi.spyOn(state.storage.sql, "exec").mockImplementation(() => {
+        throw new Error("a caught-up maintenance pass must not touch SQLite");
+      });
+      try {
+        await expect(instance.alarm()).resolves.toBeUndefined();
+        expect(sql).not.toHaveBeenCalled();
+      } finally {
+        sql.mockRestore();
+      }
+    });
+    expect(await canonicalFingerprint(conversation)).toBe(suspendedFingerprint);
+    expect(await scheduledAlarm(conversation)).toBeNull();
+
+    await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.resolveApproval(
+          decodeConversationId(conversation),
+          ApprovalDecisionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: BOOK_TOOL_CALL_ID,
+            decision: "approved",
+            resolver: "cf-issue-93-approver",
+            reason: "durable input must wake a quiescent lane exactly once",
+          }),
+        );
+      }),
+    );
+    await drainAlarmsUntil(conversation, allSettled(conversation));
+    await assertConvergence(conversation);
+  }, 30_000);
+
+  it("issue #93: a mutation racing stable-wait cancellation remains dirty and resumes exactly once", async () => {
+    const conversation = lane("issue-93-cancel-race");
+    armMaintenancePause(conversation, "maintenance:finish:before");
+    const receipt = await submitTo(approvalDefinition, conversation);
+
+    await awaitMaintenancePause(conversation, "maintenance:finish:before");
+    expect((await laneRows(conversation))[0]?.state).toBe("suspended");
+
+    // The alarm pass has observed the stable wait but has not acknowledged/cancelled yet.
+    // This public resolving mutation advances a NEW durable generation before its intent.
+    await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.resolveApproval(
+          decodeConversationId(conversation),
+          ApprovalDecisionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: BOOK_TOOL_CALL_ID,
+            decision: "approved",
+            resolver: "cf-issue-93-race-approver",
+            reason: "race the pass's stable-wait acknowledgement",
+          }),
+        );
+      }),
+    );
+    expect(await scheduledAlarm(conversation)).not.toBeNull();
+
+    releaseMaintenancePause(conversation);
+    await drainAlarmsUntil(conversation, allSettled(conversation));
+    await assertConvergence(conversation);
+  }, 30_000);
+
+  it("issue #93: a pass cannot acknowledge a pre-armed generation while its RPC mutation is in flight", async () => {
+    const conversation = lane("issue-93-in-flight-mutation");
+    const receipt = await submitTo(approvalDefinition, conversation);
+    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
+    await drainAlarmsUntil(conversation, async () => (await scheduledAlarm(conversation)) === null);
+
+    armMaintenancePause(
+      conversation,
+      "maintenance:mutation:armed",
+      "maintenance:begin:after",
+      "maintenance:mutation:finished",
+      "maintenance:finish:before",
+      "maintenance:finish:after",
+    );
+    const resolution = runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.resolveApproval(
+          decodeConversationId(conversation),
+          ApprovalDecisionCommand.make({
+            submissionId: receipt.submissionId,
+            toolCallId: BOOK_TOOL_CALL_ID,
+            decision: "approved",
+            resolver: "cf-issue-93-in-flight-approver",
+            reason: "hold the RPC after its pre-arm and before its durable decision",
+          }),
+        );
+      }),
+    );
+    await awaitMaintenancePause(conversation, "maintenance:mutation:armed");
+
+    // Start a forced pass while the RPC is still between pre-arm and body. It snapshots both the
+    // new generation and the active-mutation count, then pauses before recovery.
+    const forcedPass = runDurableObjectAlarm(stubFor(conversation)).catch(() => undefined);
+    await awaitMaintenancePause(conversation, "maintenance:begin:after");
+
+    // Let the mutation body finish BEFORE the pass observes durable state, but hold the RPC at
+    // its body-complete boundary. The pass may see the approval decision, but must conservatively
+    // retain this overlapped generation rather than acknowledge a body that was not visible at
+    // its snapshot boundary.
+    releaseMaintenancePause(conversation, "maintenance:mutation:armed");
+    await awaitMaintenancePause(conversation, "maintenance:mutation:finished");
+    releaseMaintenancePause(conversation, "maintenance:mutation:finished");
+    releaseMaintenancePause(conversation, "maintenance:begin:after");
+    await awaitMaintenancePause(conversation, "maintenance:finish:before");
+    releaseMaintenancePause(conversation, "maintenance:finish:before");
+    await awaitMaintenancePause(conversation, "maintenance:finish:after");
+    const generation = await maintenanceGeneration(conversation);
+    expect(generation.dirty > generation.processed).toBe(true);
+    expect(await scheduledAlarm(conversation)).not.toBeNull();
+    releaseMaintenancePause(conversation, "maintenance:finish:after");
+    await resolution;
+    await forcedPass;
+    await drainAlarmsUntil(conversation, allSettled(conversation));
+    await assertConvergence(conversation);
+  }, 30_000);
+
   it("double-fired alarms are idempotent on a ready lane: one settlement, no duplicate records", async () => {
     const conversation = lane("ready-double");
     await submitTo(plannerDefinition, conversation);
@@ -119,12 +264,17 @@ describe("DC alarm semantics", () => {
     armRuntimeEviction(conversation, "tools:after-prepared-append");
     const receipt = await submitTo(bookDefinition, conversation);
     await drainAlarmsUntil(conversation, anyInState(conversation, "unknown"));
+    await drainAlarmsUntil(conversation, async () => (await scheduledAlarm(conversation)) === null);
     const blockedFingerprint = await canonicalFingerprint(conversation);
     await runDurableObjectAlarm(stubFor(conversation)).catch(() => undefined);
     await runDurableObjectAlarm(stubFor(conversation)).catch(() => undefined);
     // DUR-009: the unresolved ordinary call is never auto-replayed by redelivered alarms.
     expect(await canonicalFingerprint(conversation)).toBe(blockedFingerprint);
     expect((await laneRows(conversation))[0]?.state).toBe("unknown");
+    expect(
+      await scheduledAlarm(conversation),
+      "AwaitUnknownResolution must quiesce (#93)",
+    ).toBeNull();
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareConversationClient;
@@ -159,18 +309,17 @@ describe("DC alarm semantics", () => {
     await assertConvergence(conversation);
   }, 30_000);
 
-  it("the alarm invariant holds while work is nonterminal and clears once everything settles", async () => {
+  it("the alarm invariant quiesces an external wait and its resolving mutation restores liveness", async () => {
     const conversation = lane("invariant");
     const receipt = await submitTo(approvalDefinition, conversation);
-    // A durably suspended lane is STABLE nonterminal state: passes must keep the slot armed
-    // (the slot is only transiently empty while a delivered pass is mid-execution).
+    // A durably suspended lane is a stable externally-driven wait: elapsed time is not work.
     await drainAlarmsUntil(conversation, anyInState(conversation, "suspended"));
-    let observedArmed = false;
-    for (let round = 0; round < 100 && !observedArmed; round++) {
-      observedArmed = (await scheduledAlarm(conversation)) !== null;
+    let observedCleared = false;
+    for (let round = 0; round < 100 && !observedCleared; round++) {
+      observedCleared = (await scheduledAlarm(conversation)) === null;
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
-    expect(observedArmed, "a suspended lane must keep a committed alarm").toBe(true);
+    expect(observedCleared, "a suspended lane must quiesce its autonomous alarm").toBe(true);
     await runClient(
       Effect.gen(function* () {
         const client = yield* CloudflareConversationClient;

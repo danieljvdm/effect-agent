@@ -6,8 +6,9 @@
  * `makeConversationObjectClass` builds the class applications export from their Worker,
  * `CloudflareDurableRuntime.layer` assembles the coordinator over the storage-cloudflare
  * adapters and the WP2 cross-Object routing, `DurableAlarmService`/`ConversationMaintenance`
- * multiplex every cadence into the Object's single alarm slot (nonterminal work implies a
- * committed alarm, so eviction recovers without an incoming request), and
+ * multiplex every cadence into the Object's single alarm slot (dirty or autonomously
+ * actionable work retains a committed alarm; stable external waits quiesce until their next
+ * durably pre-armed mutation), and
  * `CloudflareConversationClient` is the Worker-side ingress. Platform bindings enter ONLY
  * through the `bindings.ts` Layers (DEPLOY-010). This is the only workspace package allowed
  * to import the `cloudflare:workers` runtime module.

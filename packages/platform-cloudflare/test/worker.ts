@@ -6,6 +6,7 @@ import {
   DEPLOYMENT_ID,
   PRODUCER_PREFIX,
   fixtureReconcilerLayer,
+  maintenanceRaceFailpoint,
   makeTestBindings,
   runtimeEvictionFailpoint,
   storageEvictionFailpoint,
@@ -38,6 +39,7 @@ const baseOptions: ConversationObjectOptions = {
   toolReconciler: fixtureReconcilerLayer,
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,
+  maintenanceFailpoint: maintenanceRaceFailpoint,
 };
 
 interface BindingSourceProbe {

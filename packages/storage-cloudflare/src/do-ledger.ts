@@ -2254,12 +2254,18 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
       Effect.gen(function* () {
         const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
         // The child's canonical Settlement is the authority for this wake. When the child's
-        // row lives in THIS store (single-store latitude, and every conformance lane), an
-        // unsettled child makes the notification a caller error exactly as on Node. When it
-        // does not — the normal cross-DO case — the routed notification from the child's
-        // owning Durable Object is the settlement evidence this store records durably.
+        // row lives in THIS store (single-store latitude, and every conformance lane), either a
+        // finalized row or an exact terminalizing reservation admits the notification: the
+        // runtime calls only after the canonical append and before ledger finalization. When the
+        // row does not live here — the normal cross-DO case — the routed notification from the
+        // child's owning Durable Object is the settlement evidence this store records durably.
         const child = yield* readSubmission(operation, validated.childSubmissionId);
-        if (Option.isSome(child) && child.value.state !== "settled") {
+        const childReservation = yield* readReservation(operation, validated.childSubmissionId);
+        if (
+          Option.isSome(child) &&
+          child.value.state !== "settled" &&
+          !(child.value.state === "terminalizing" && Option.isSome(childReservation))
+        ) {
           return yield* LedgerError.make({
             operation,
             message: `Child submission ${validated.childSubmissionId} has no recorded settlement.`,
@@ -2279,7 +2285,13 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           ) VALUES (
             ${validated.parentSubmissionId},
             ${validated.childSubmissionId},
-            ${Option.isSome(child) ? child.value.settled_outcome : null},
+            ${
+              Option.isSome(child) && child.value.state === "settled"
+                ? child.value.settled_outcome
+                : Option.isSome(childReservation)
+                  ? childReservation.value.outcome
+                  : null
+            },
             ${now.iso}
           )
           ON CONFLICT (parent_submission_id, child_submission_id) DO NOTHING

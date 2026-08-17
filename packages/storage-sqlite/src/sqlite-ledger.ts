@@ -2173,10 +2173,16 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
       operation,
       Effect.gen(function* () {
         const parent = yield* requireSubmission(operation, validated.parentSubmissionId);
-        // The child's canonical Settlement is the authority for this wake; a notification for
-        // an unsettled (or unknown) child is a caller error in a single-store adapter.
+        // The caller may notify after the canonical Settlement append but before ledger
+        // finalization. An exact reservation plus `terminalizing` is the narrow durable prefix
+        // that makes that ordering admissible; earlier states remain a caller error.
         const child = yield* readSubmission(operation, validated.childSubmissionId);
-        if (Option.isNone(child) || child.value.state !== "settled") {
+        const childReservation = yield* readReservation(operation, validated.childSubmissionId);
+        const announced =
+          Option.isSome(child) &&
+          (child.value.state === "settled" ||
+            (child.value.state === "terminalizing" && Option.isSome(childReservation)));
+        if (!announced) {
           return yield* LedgerError.make({
             operation,
             message: `Child submission ${validated.childSubmissionId} has no recorded settlement.`,
@@ -2205,11 +2211,16 @@ const makeServices = Effect.fn("SqliteSubmissionLedger.makeServices")(function* 
         ) {
           return "not-waiting" as ChildSettledOutcome;
         }
-        // The parent wakes exactly when EVERY listed child is settled (spec §12 step 10);
-        // replays re-run the coverage check so a recovering caller wakes the lane idempotently.
+        // Every listed child must be either finalized or canonically announced from the exact
+        // terminalizing reservation. Replays re-run this coverage check idempotently.
         for (const entry of reason.children) {
           const listed = yield* readSubmission(operation, entry.childSubmissionId);
-          if (Option.isNone(listed) || listed.value.state !== "settled") {
+          const reservation = yield* readReservation(operation, entry.childSubmissionId);
+          const covered =
+            Option.isSome(listed) &&
+            (listed.value.state === "settled" ||
+              (listed.value.state === "terminalizing" && Option.isSome(reservation)));
+          if (!covered) {
             return "still-waiting" as ChildSettledOutcome;
           }
         }

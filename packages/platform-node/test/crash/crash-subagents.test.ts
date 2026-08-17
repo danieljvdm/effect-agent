@@ -380,15 +380,15 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
     );
 
     it.effect(
-      "kill between the child settlement finalize and the parent wake: recovery replays the wake",
+      "kill after the precommitted parent wake and child finalize: recovery replays the wake idempotently",
       () =>
         withCrashSite((site) =>
           Effect.gen(function* () {
             const conversation = "conversation-s2-wake";
             const key = "s2-wake-1";
-            // The FIRST settlement finalization of the scenario is the child's: the kill lands
-            // after the child is durably settled but before `recordChildSettled` wakes the
-            // suspended parent (spec §14 "after child Settlement, before parent observes it").
+            // The FIRST settlement finalization of the scenario is the child's. The parent wake
+            // is now durably committed before this boundary, so the kill cannot strand a
+            // suspended parent after the child becomes settled (issue #93).
             const result = yield* runWorkerToExit({
               db: site.db,
               scenario: "subagent-run",
@@ -401,12 +401,12 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
             expectKilled(result);
             yield* waitOutChildLease;
 
-            // Before recovery: the child is settled, the parent still durably suspended.
+            // Before recovery: the child is settled and its parent wake is already durable.
             const ids = yield* withRuntime(
               site.db,
               Effect.gen(function* () {
                 const parent = yield* lookupByKey(conversation, key);
-                expect(parent.state).toBe("suspended");
+                expect(parent.state).toBe("input-applied");
                 const started = yield* startedPayloadOf(conversation);
                 const child = yield* submissionSnapshot(started.childSubmissionId);
                 expect(child.state).toBe("settled");
@@ -423,8 +423,8 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const report = host.startupRecovery.find(
                   (entry) => entry.submissionId === ids.parent,
                 );
-                // Scan-seeded recovery replays the idempotent wake: a dropped wake is never a
-                // lost obligation (plan §1.3).
+                // The parent wake was already committed before the kill. Recovery still repairs
+                // the open canonical delegation through the same idempotent wake operation.
                 expect(report?.decision._tag).toBe("ResumeWaitingParent");
                 expect(report?.disposition).toBe("repaired");
                 expect((yield* submissionSnapshot(ids.parent)).state).toBe("input-applied");

@@ -25,7 +25,14 @@ import {
   decodeConversationId,
   submitOptions,
 } from "./fixtures.ts";
-import { anyInState, laneRows, readCanonical, runClient, stubFor } from "./harness.ts";
+import {
+  anyInState,
+  laneRows,
+  readCanonical,
+  runClient,
+  scheduledAlarm,
+  stubFor,
+} from "./harness.ts";
 import {
   armTransportFault,
   childModelInvocations,
@@ -61,8 +68,8 @@ import {
  * SAME `DurableRuntimeFailpointLocation` strings the Node process-kill suite uses.
  *
  * On top of the failpoint rows: `recordChildSettled` at-least-once redelivery (not-waiting,
- * idempotent), lost-notification healing by the parent's own alarm re-poll, cross-Object
- * abort propagation (request-abort-and-join), and the DO-unreachable `Indeterminate`
+ * idempotent), pre-finalization durable parent wake, cross-Object abort propagation
+ * (request-abort-and-join), and the DO-unreachable `Indeterminate`
  * establishment row (SUB-031: an unreachable admission authority NEVER admits a second
  * child; convergence resumes when transport heals).
  */
@@ -249,6 +256,10 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       expect(rows[0]?.state, `child state in probe round ${round}`).toBe("admitted");
     }
     expect(childModelInvocations(ref)).toBe(0);
+    expect(
+      await scheduledAlarm(child, SUBAGENTS),
+      "AwaitParentEstablishment is a stable external wait and must quiesce (#93)",
+    ).toBeNull();
 
     // The WP1 admin surface names the deferral: the child Object explains its own lane.
     const explainedRaw: unknown = await Promise.resolve(
@@ -369,10 +380,10 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
   }, 40_000);
 
   // -------------------------------------------------------------------------
-  // Lost notification — the parent's own alarm re-poll heals it (plan §1.3).
+  // Issue #93: parent wake is durable before child finalization can commit.
   // -------------------------------------------------------------------------
 
-  it("a child evicted between its settlement finalize and the parent wake is healed by the parent's own alarm re-poll", async () => {
+  it("issue #93: child eviction after finalize cannot lose its precommitted parent wake", async () => {
     const ref = lane("lost-notification");
     const key = `${ref}-key`;
     // The researcher hangs mid-stream so the eviction can be armed with the child provably
@@ -385,9 +396,13 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       kickWithoutAwaiting(child);
       return childModelInvocations(ref) === 1;
     }, "the hanging researcher invocation");
+    await waitFor(
+      async () => (await scheduledAlarm(ref, SUBAGENTS)) === null,
+      "the parent AwaitChildSettlement alarm to quiesce (#93)",
+    );
 
-    // The child's Object dies right AFTER its settlement finalize commits and BEFORE
-    // `recordChildSettled` reaches the parent's Object: the notification is lost.
+    // The child's Object dies right AFTER its settlement finalize commits. The protocol must
+    // have durably routed `recordChildSettled` and dirtied the parent BEFORE this can happen.
     armStorageEviction(child, "ledger:finalize-settlement:after");
     releaseChildModel(ref);
     await waitFor(async () => {
@@ -395,13 +410,10 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
       return rows.length === 1 && rows[0]?.state === "settled";
     }, "the child settlement to commit before the eviction");
     expect(armedEvictionsRemaining(child)).toBe(0);
-    // (The marker's absence right after the abort is not asserted: the parent's own alarm
-    // auto-fires in the pool and can heal the lost wake within milliseconds — which is the
-    // very property this row exists to prove.)
+    expect(await settlementMarkers(ref)).toHaveLength(1);
 
-    // Fire ONLY the parent's persisted alarm: its recovery re-polls the settled-but-silent
-    // child by routed lookup against the child's (fresh) Object, records the durable marker
-    // itself, and joins — a dropped notification is never a lost obligation.
+    // Fire ONLY the parent's persisted alarm: the precommitted marker/generation resumes the
+    // join after quiescence; no background polling contract is needed.
     await drainDelegationUntil([ref], allLanesSettled(ref, child));
     await assertDelegationConverged(completedDelegation(receipt, ref));
   }, 40_000);
@@ -529,6 +541,10 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const duringFault = await readCanonical(ref, SUBAGENTS);
     expect(payloadsOf(duringFault, "SubagentStarted")).toHaveLength(0);
     expect(childModelInvocations(ref)).toBe(0);
+    expect(
+      await scheduledAlarm(ref, SUBAGENTS),
+      "indeterminate establishment is autonomous retry state and must retain an alarm (#93)",
+    ).not.toBeNull();
 
     // Heal the transport: the next alarm passes resolve the admission (fresh), establish the
     // ONE child, and the delegation completes — no duplicate was ever possible.

@@ -1692,9 +1692,11 @@ const make = Effect.gen(function* () {
    * Cross-lane drive-forward after one child Submission settles (spec §12 step 10): the child's
    * canonical Settlement is already durable, so the idempotent `recordChildSettled` wake is the
    * durable notification — `suspended(WaitingForChild) → input-applied` once every listed child
-   * settled — and the parent-lane wake hint is liveness only. Invoked from every settlement
-   * finalization path; a crash between the child's finalize and this notification is repaired by
-   * the `ResumeWaitingParent` recovery row (a dropped wake is never a lost obligation).
+   * settled — and the parent-lane wake hint is liveness only. Invoked after the exact canonical
+   * append but BEFORE child ledger finalization: once a child may become terminal, its parent's
+   * durable marker and maintenance generation already exist. Finalization replays the same
+   * notification for single-store parent re-suspension races; `ResumeWaitingParent` remains the
+   * repair for older data and any already-recorded canonical settlement.
    */
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
@@ -1783,6 +1785,7 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
@@ -1879,6 +1882,7 @@ const make = Effect.gen(function* () {
       Effect.asVoid,
     );
     yield* hit("terminalize:after-canonical-append");
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId, settlementId }),
     );
@@ -1911,6 +1915,7 @@ const make = Effect.gen(function* () {
       );
       yield* hit("terminalize:after-canonical-append");
     }
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({
         submissionId: submission.submissionId,
@@ -1928,6 +1933,7 @@ const make = Effect.gen(function* () {
     submission: SubmissionSnapshot,
     settlementId: Settlement["settlementId"],
   ): Effect.fn.Return<Settlement, LedgerError | SettlementConflict> {
+    yield* notifyParentOfChildSettlement(submission);
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId: submission.submissionId, settlementId }),
     );
