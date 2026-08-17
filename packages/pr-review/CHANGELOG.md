@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.19
+
+### Patch Changes
+
+- [#95](https://github.com/danieljvdm/effect-agent/pull/95) [`1e0e2a5`](https://github.com/danieljvdm/effect-agent/commit/1e0e2a5b9024fd1afe1375afec00ceec5302111e) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Skip model execution for authenticated, patch-equivalent pull-request rebases while preserving the prior review conclusion. Changeset fingerprints now ignore unified-diff hunk coordinate shifts but remain sensitive to changed diff content and review configuration.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.19
+
 ## 0.1.0-beta.18
 
 ### Patch Changes

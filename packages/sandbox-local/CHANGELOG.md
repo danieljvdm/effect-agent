@@ -1,5 +1,12 @@
 # @effect-agent/sandbox-local
 
+## 0.1.0-beta.19
+
+### Patch Changes
+
+- Updated dependencies []:
+  - @effect-agent/sandbox@0.1.0-beta.19
+
 ## 0.1.0-beta.18
 
 ### Patch Changes

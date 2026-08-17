@@ -1,5 +1,27 @@
 # @effect-agent/session
 
+## 0.1.0-beta.19
+
+### Minor Changes
+
+- [#105](https://github.com/danieljvdm/effect-agent/pull/105) [`b8beef5`](https://github.com/danieljvdm/effect-agent/commit/b8beef5624f6704b0e52b5023babd1272d6b0603) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Require every failed canonical `SubmissionSettled` record to carry the exact bounded generic
+  `{ errorTag, message }` diagnostic and expose it as `Settlement.failure`. Joined failure fanout,
+  recovery, durable adapter finalization, and idempotent replay preserve the host's canonical
+  diagnostic byte-for-byte. Result-less completed joins and aborted settlements remain explicitly
+  valid; malformed private-development failed records now fail closed at Schema decode.
+
+### Patch Changes
+
+- [#106](https://github.com/danieljvdm/effect-agent/pull/106) [`9e31de4`](https://github.com/danieljvdm/effect-agent/commit/9e31de4c5f63ebc7eefbce33d3e0ed2052538f26) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Expose host-supplied model-context preparation through Cloudflare Conversation Object options
+  ([#49](https://github.com/danieljvdm/effect-agent/issues/49)). A generic scoped `RunContextPreparation` service now composes after canonical durable
+  resume reconstruction, `contextCompactorRunContextLayer` adapts the digest-bound
+  `ContextCompactor` capability with typed failures, and `CloudflareDurableRuntimeOptions.runContext`
+  accepts a closed Layer or per-incarnation Layer factory. Compaction changes only model-visible
+  context; canonical history remains recoverable across Durable Object eviction and retries.
+- Updated dependencies [[`9e31de4`](https://github.com/danieljvdm/effect-agent/commit/9e31de4c5f63ebc7eefbce33d3e0ed2052538f26)]:
+  - @effect-agent/engine@0.1.0-beta.19
+  - @effect-agent/core@0.1.0-beta.19
+
 ## 0.1.0-beta.18
 
 ### Patch Changes
