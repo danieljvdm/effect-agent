@@ -77,10 +77,7 @@ export class CloudflareAdmissionLimitsValue extends Schema.Class<CloudflareAdmis
   /** Maximum encoded input bytes; never above the storage per-value bound. */
   maxInputBytes: Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(2_000_000)),
   /** Maximum `ctx.storage.sql.databaseSize` at admission; validated against the selected plan. */
-  maxDatabaseBytes: Schema.Int.check(
-    Schema.isGreaterThan(0),
-    Schema.isLessThanOrEqualTo(CLOUDFLARE_DATABASE_CAP_BYTES),
-  ),
+  maxDatabaseBytes: Schema.Int.check(Schema.isGreaterThan(0)),
 }) {}
 
 /**
@@ -89,7 +86,7 @@ export class CloudflareAdmissionLimitsValue extends Schema.Class<CloudflareAdmis
  * the same deployment, distinct across deployments — and producer-epoch fencing (not the
  * producer name) remains the correctness authority (DUR-006).
  */
-export class CloudflareDurableRuntimeConfigValue extends Schema.Class<CloudflareDurableRuntimeConfigValue>(
+class CloudflareDurableRuntimeConfigModel extends Schema.Class<CloudflareDurableRuntimeConfigModel>(
   "@effect-agent/platform-cloudflare/CloudflareDurableRuntimeConfigValue",
 )({
   deploymentId: DeploymentId,
@@ -125,6 +122,28 @@ export class CloudflareDurableRuntimeConfigValue extends Schema.Class<Cloudflare
   verifyOnOpen: Schema.Boolean,
   limits: CloudflareAdmissionLimitsValue,
 }) {}
+
+/**
+ * Canonical whole-configuration Schema. The cross-field check binds the positive database
+ * admission limit to the selected deployment plan's actual per-Object ceiling.
+ */
+export const CloudflareDurableRuntimeConfigValue = CloudflareDurableRuntimeConfigModel.check(
+  Schema.makeFilter((config) => {
+    const cap =
+      config.databasePlan === "paid"
+        ? CLOUDFLARE_PAID_DATABASE_CAP_BYTES
+        : CLOUDFLARE_FREE_DATABASE_CAP_BYTES;
+    return config.limits.maxDatabaseBytes <= cap
+      ? undefined
+      : {
+          path: ["limits", "maxDatabaseBytes"],
+          issue:
+            `maxDatabaseBytes ${config.limits.maxDatabaseBytes} exceeds the ` +
+            `${config.databasePlan} plan cap ${cap}`,
+        };
+  }),
+);
+export type CloudflareDurableRuntimeConfigValue = typeof CloudflareDurableRuntimeConfigValue.Type;
 
 /** Explicit configuration authority for the assembled Cloudflare durable runtime. */
 export class CloudflareDurableRuntimeConfig extends Context.Service<

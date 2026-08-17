@@ -8,12 +8,13 @@ import {
 } from "@effect-agent/session";
 import { NodeFileSystem } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { Effect, FileSystem, Layer, PlatformError, Schema, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Schema, Stream, type PlatformError } from "effect";
 
 import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-authorization.ts";
 import {
   TravelPlannerCloudflareProfile,
   expectedTravelPlan,
+  makePhase6TravelPlannerHarness,
   makePhase4TravelPlannerAgent,
   normalizeCrossPlatformTravelPlannerEvidence,
   phase1Trip,
@@ -55,6 +56,53 @@ const dnLayer = (options: NodeDurableRuntimeOptions) =>
     phase4TravelPlannerWorkerLayer,
     NodeDurableRuntime.layer(options).pipe(Layer.provide(TrustedLocalDurableAuthorizationLayer)),
   );
+
+const assertResetAdvancesGateGeneration = Effect.fn(
+  "TravelPlannerPhase6Test.assertResetAdvancesGateGeneration",
+)(function* (
+  awaitGate: Effect.Effect<void>,
+  resetGate: Effect.Effect<void>,
+  releaseGate: Effect.Effect<void>,
+) {
+  const previousWaiter = yield* Effect.forkChild(awaitGate);
+  yield* Effect.yieldNow;
+  expect(previousWaiter.pollUnsafe()).toBeUndefined();
+
+  yield* resetGate;
+  yield* Fiber.join(previousWaiter);
+
+  const nextWaiter = yield* Effect.forkChild(awaitGate);
+  yield* Effect.yieldNow;
+  expect(nextWaiter.pollUnsafe()).toBeUndefined();
+
+  yield* releaseGate;
+  yield* Fiber.join(nextWaiter);
+});
+
+describe("Phase 6 fixture gate generations", () => {
+  it.effect("planner reset releases existing keyed waiters and blocks the next generation", () =>
+    Effect.gen(function* () {
+      const harness = yield* makePhase6TravelPlannerHarness();
+      const marker = "planner-gate-generation";
+      yield* assertResetAdvancesGateGeneration(
+        harness.awaitPlannerGate(marker),
+        harness.resetPlannerGate(marker),
+        harness.releasePlannerGate(marker),
+      );
+    }),
+  );
+
+  it.effect("researcher reset releases existing waiters and blocks the next generation", () =>
+    Effect.gen(function* () {
+      const harness = yield* makePhase6TravelPlannerHarness();
+      yield* assertResetAdvancesGateGeneration(
+        harness.awaitResearcherGate,
+        harness.resetResearcherGate,
+        harness.releaseResearcherGate,
+      );
+    }),
+  );
+});
 
 /**
  * TEST-014, the DN HALF of the P6 DN/DC equivalence gate (plan §6, D-P6-6): the SAME

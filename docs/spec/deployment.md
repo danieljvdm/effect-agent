@@ -275,14 +275,17 @@ the application composition root. Protected Worker-to-Object calls Schema-encode
 RPC failure union so the Worker client retains the typed denial. Trusted local deployments and
 tests may deliberately select the exported possession policy Layers.
 
-For a protected mutation, the durable runtime performs one final authorization and then invokes
-its required `OperationMutationPreparer` exactly once immediately before the mutation path. The
-Cloudflare adapter implements that port by durably pre-arming the Object's maintenance alarm.
-The order is therefore authorization → alarm pre-arm → domain mutation, with no second policy
-check between pre-arm and mutation. A denial cannot persist an alarm, an alarm-write failure is a
-typed `OperationMutationPreparationError`, and an authorized request cannot be denied after the
-alarm mutation. `retry` performs its authorized reads and refusal classification first, then
-prepares only when it will execute a recovery mutation.
+For each attempt of a protected mutation, the durable runtime performs one final authorization and
+then invokes its required `OperationMutationPreparer` once immediately before the mutation path.
+The Cloudflare adapter implements that port by durably pre-arming the Object's maintenance alarm.
+The order within an attempt is therefore authorization → alarm pre-arm → domain mutation, with no
+second policy check between pre-arm and mutation. Preparation is an idempotent, at-least-once
+boundary across attempts, not an exactly-once external side effect: interruption or caller retry
+may repeat both the current-policy decision and the alarm pre-arm in a later attempt. A denial
+cannot persist an alarm, an alarm-write failure is a typed `OperationMutationPreparationError`, and
+an authorized attempt cannot be denied after its alarm mutation. `retry` performs its authorized
+reads and refusal classification first, then prepares only when it will execute a recovery
+mutation.
 
 `CloudflareConversationClient.readPage` remains the bounded pagination primitive. Its `readAll`
 convenience is also bounded: callers may set `maxRecords`, the default is 4,096, and reaching a

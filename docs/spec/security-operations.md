@@ -72,13 +72,15 @@ retry, wake, and obligation scans consult a required host-supplied authorizer an
 denial. There is no ambient allow-default Layer; trusted local programs and tests must opt into the
 explicit service-possession substitute.
 
-Protected mutations (`abort`, `resolveUnknown`, `resolveApproval`, and accepted `retry` recovery)
-make one current-policy authorization decision, then invoke the required host mutation preparer
-exactly once immediately before the first durable mutation. A denial never reaches preparation; a
-typed, bounded preparation failure performs no ledger mutation. `retry` classifies all read-only
-refusal branches first, so a refused retry neither prepares nor mutates the host commit boundary.
-This ordering lets a platform durably pre-arm maintenance without a second authorization decision
-that could race with the first.
+Each attempt of a protected mutation (`abort`, `resolveUnknown`, `resolveApproval`, and accepted
+`retry` recovery) makes one current-policy authorization decision, then invokes the required host
+mutation preparer once immediately before its first durable mutation. A denial never reaches
+preparation; a typed, bounded preparation failure performs no ledger mutation. `retry` classifies
+all read-only refusal branches first, so a refused retry neither prepares nor mutates the host commit
+boundary. The preparer is an idempotent, at-least-once boundary across attempts, not an exactly-once
+external side effect: interruption or caller retry may repeat authorization and preparation in a
+later attempt. This ordering gives each attempt one policy decision while still letting a platform
+durably pre-arm maintenance without a second decision that could race with the first.
 
 Observation authorization is current, not a one-time subscription check. The runtime checks before
 opening a stream and before delivering each canonical record, so revocation affects a live stream;

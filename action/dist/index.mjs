@@ -41706,9 +41706,11 @@ var rankAndDedupeFindings = (findings) => {
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
 var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
-var FILE_REVIEW_MAX_DURATION_MINUTES = 10;
 var FILE_REVIEW_MAX_CONCURRENCY = 4;
-var MAX_FILE_REVIEW_WAVES = Math.ceil(MAX_REVIEW_UNITS / FILE_REVIEW_MAX_CONCURRENCY);
+var MAX_FILE_REVIEW_RETRIES = FILE_REVIEW_MAX_CONCURRENCY;
+var MAX_FILE_REVIEW_ATTEMPTS = MAX_REVIEW_UNITS + MAX_FILE_REVIEW_RETRIES;
+var FILE_REVIEW_MAX_DURATION_MINUTES = 8;
+var MAX_FILE_REVIEW_WAVES = Math.ceil(MAX_FILE_REVIEW_ATTEMPTS / FILE_REVIEW_MAX_CONCURRENCY);
 var FILE_REVIEW_WAVE_DURATION_MINUTES = MAX_FILE_REVIEW_WAVES * FILE_REVIEW_MAX_DURATION_MINUTES;
 var FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES = 10;
 var FAN_OUT_MAX_DURATION_MINUTES = FILE_REVIEW_WAVE_DURATION_MINUTES + FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES;
@@ -41787,13 +41789,13 @@ class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitF
 }) {
 }
 var fileReviewPolicy = SubagentPolicy.make({
-  maxChildren: MAX_REVIEW_UNITS,
+  maxChildren: MAX_FILE_REVIEW_ATTEMPTS,
   maxConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
   maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
   maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`
 });
-var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
+var delegationDescription = `Delegate one planned unit to a bounded read-only file reviewer. Call every unit once; after those settle, at most ${MAX_FILE_REVIEW_RETRIES} failed units may each be retried once with the exact same paths.`;
 var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
   childErrorTag: failure._tag,
   message: (failure.message ?? "").slice(0, 400)
@@ -41829,12 +41831,13 @@ ${mission.body}` : "The author provided no description.",
     ...staticGuidanceLines(options3.guidance),
     "Work in this order:",
     "1. Call list_review_units once to get the planned review units.",
-    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all delegation calls in one batch. Never review files yourself and never invent units.",
-    `3. A delegation result with "_tag" is a FAILED unit. Never retry it; instead your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan's undiffablePaths and unassignedPaths must also be named as not reviewed when present.`,
-    `4. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
-    `5. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
-    "6. Merge the units' fileSummaries into one walkthrough: copy each entry verbatim, one entry per file, dropping duplicate paths.",
-    '7. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "category": <string, OPTIONAL>, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>, "walkthrough": <array, OPTIONAL: [{"path": <string>, "summary": <string>}], the merged fileSummaries>}. Copy findings (including "category" and "suggestion" when present), concerns, and walkthrough entries verbatim from the delegation results; never invent or edit anchors.',
+    "2. Call delegate_file_review EXACTLY once per unit, passing each unit's unitId and paths verbatim. Prefer declaring all initial delegation calls in one batch. Never review files yourself and never invent units.",
+    `3. After every initial call settles, you MUST retry the first ${MAX_FILE_REVIEW_RETRIES} FAILED units once, in unit order, with the exact same unitId and paths (or every failed unit when fewer than ${MAX_FILE_REVIEW_RETRIES} failed). Retrying is allowed only because this child surface is read-only. Never retry a successful unit or retry any unit more than once.`,
+    `4. A unit whose retry also returns an "_tag", or which was not eligible for the bounded retry wave, remains FAILED. Your summary MUST name it honestly, e.g. "unit-002 unreviewed: AgentPolicyError". The plan's undiffablePaths and unassignedPaths must also be named as not reviewed when present.`,
+    `5. Merge the successful units' findings: drop duplicates sharing the same path and line range keeping the most severe, rank blocking > important > nit, and keep at most ${maxFindings} findings. Drop bloat-shaped findings during the merge — defensive checks for cases that cannot happen, abstractions used once, comments restating obvious code, tests asserting tautologies; children bias toward recommending changes, and a finding must be sound, correct, and worth acting on to survive.`,
+    `6. Merge the units' concerns the same way: drop duplicates keeping the most severe, and keep at most ${MAX_CONCERNS}.`,
+    "7. Merge the units' fileSummaries into one walkthrough: copy each entry verbatim, one entry per file, dropping duplicate paths.",
+    '8. Then return ONLY a JSON object — no Markdown fences, no prose before or after — exactly this shape: {"summary": <string, 1-3 paragraphs of overall assessment, including every unreviewed unit or file>, "verdict": <"approve" | "comment" | "request-changes">, "findings": [{"path": <string>, "startLine": <integer>, "endLine": <integer>, "severity": <"blocking" | "important" | "nit">, "category": <string, OPTIONAL>, "title": <string, <= 120 chars>, "body": <string>, "suggestion": <string, OPTIONAL>}], "concerns": <array, OPTIONAL: [{"severity": <"blocking" | "important" | "nit">, "title": <string, <= 120 chars>, "body": <string>}], the merged unit concerns>, "walkthrough": <array, OPTIONAL: [{"path": <string>, "summary": <string>}], the merged fileSummaries>}. Copy findings (including "category" and "suggestion" when present), concerns, and walkthrough entries verbatim from the delegation results; never invent or edit anchors.',
     'Use verdict "request-changes" only when at least one finding or concern is "blocking". An empty findings array with verdict "approve" is a valid review when every unit succeeded and found nothing.'
   ].join(`
 `);
@@ -41842,7 +41845,7 @@ ${mission.body}` : "The author provided no description.",
 var fanOutReviewInstructions = makeFanOutReviewInstructions();
 var defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
-  maxToolCalls: 1 + MAX_REVIEW_UNITS,
+  maxToolCalls: 1 + MAX_FILE_REVIEW_ATTEMPTS,
   maxDuration: `${FAN_OUT_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
   repeatedFailureLimit: 3,
@@ -42288,7 +42291,7 @@ class ReviewCoverage extends exports_Schema.Class("@effect-agent/pr-review/Revie
   requiredPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
   reviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
   unreviewedPaths: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512))).check(exports_Schema.isMaxLength(300)),
-  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(8)),
+  failedUnits: exports_Schema.Array(FailedReviewUnit).check(exports_Schema.isMaxLength(MAX_REVIEW_UNITS)),
   reasons: exports_Schema.Array(exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(1000))).check(exports_Schema.isMaxLength(20))
 }) {
 }
@@ -42376,6 +42379,9 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
     declarations.push({ id: toolCallId, paths: request3.value.paths });
     declarationsByUnit.set(request3.value.unitId, declarations);
   }
+  const plannedUnitIds = new Set(plan.units.map((unit) => unit.unitId));
+  const unknownUnitIds = [...declarationsByUnit.keys()].filter((unitId) => !plannedUnitIds.has(unitId));
+  const retryAttempts = plan.units.reduce((total, unit) => total + Math.max(0, (declarationsByUnit.get(unit.unitId)?.length ?? 0) - 1), 0);
   const reviewed = new Set;
   const unreviewed = new Set([...plan.undiffablePaths, ...plan.unassignedPaths]);
   const failedUnits = [];
@@ -42391,18 +42397,26 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
       const result4 = exports_Schema.decodeUnknownOption(FileReviewUnitResult)(event.result);
       return exports_Option.isSome(result4) && result4.value.unitId === unit.unitId;
     });
-    if (declarations.length === 1 && exact.length === 1 && successful.length === 1) {
+    const attemptFailed = (declaration) => {
+      if (trace3.failed.has(declaration.id))
+        return true;
+      const event = trace3.succeeded.get(declaration.id);
+      return event !== undefined && exports_Option.isSome(exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result));
+    };
+    const initialSucceeded = declarations.length === 1 && exact.length === 1 && successful.length === 1;
+    const retryRecovered = declarations.length === 2 && exact.length === 2 && exact[0] !== undefined && attemptFailed(exact[0]) && successful.length === 1 && successful[0]?.id === exact[1]?.id;
+    if (initialSucceeded || retryRecovered) {
       for (const path of unit.paths)
         reviewed.add(path);
       continue;
     }
     for (const path of unit.paths)
       unreviewed.add(path);
-    const failure = declarations.map((declaration) => trace3.failed.get(declaration.id)).find((event) => event !== undefined);
-    const returnedFailure = declarations.map((declaration) => trace3.succeeded.get(declaration.id)).filter((event) => event !== undefined).map((event) => exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result)).find(exports_Option.isSome);
+    const failure = [...declarations].reverse().map((declaration) => trace3.failed.get(declaration.id)).find((event) => event !== undefined);
+    const returnedFailure = [...declarations].reverse().map((declaration) => trace3.succeeded.get(declaration.id)).filter((event) => event !== undefined).map((event) => exports_Schema.decodeUnknownOption(FileReviewDelegationFailure)(event.result)).find(exports_Option.isSome);
     failedUnits.push(FailedReviewUnit.make({
       unitId: unit.unitId,
-      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 1 ? "UnitAssignedMultipleTimes" : exact.length === 0 ? "UnitAssignmentMismatch" : "UnitDidNotSettleSuccessfully")
+      errorTag: failure?.errorTag ?? (returnedFailure !== undefined ? returnedFailure.value._tag === "FileReviewUnitFailed" ? `${returnedFailure.value._tag}:${returnedFailure.value.childErrorTag}` : returnedFailure.value._tag : undefined) ?? (declarations.length === 0 ? "UnitNotAssigned" : declarations.length > 2 ? "UnitAssignedMultipleTimes" : exact.length !== declarations.length ? "UnitAssignmentMismatch" : declarations.length === 2 ? "UnitRetryDidNotSettleSuccessfully" : "UnitDidNotSettleSuccessfully")
     }));
   }
   if (plan.truncated) {
@@ -42413,6 +42427,12 @@ var fanOutCoverage = (files, totalFiles, trace3) => {
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
+  }
+  if (unknownUnitIds.length > 0) {
+    reasons.push(boundedListReason("delegations targeted unknown review units", unknownUnitIds));
+  }
+  if (retryAttempts > MAX_FILE_REVIEW_RETRIES) {
+    reasons.push(`fan-out retry budget exceeded (${retryAttempts} of ${MAX_FILE_REVIEW_RETRIES} allowed)`);
   }
   if (failedUnits.length > 0) {
     reasons.push(boundedListReason("review units did not complete", failedUnits.map((unit) => `${unit.unitId} (${unit.errorTag})`)));
@@ -54919,8 +54939,8 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
   const target = yield* resolveReviewTarget({});
   return yield* exports_Effect.gen(function* () {
     let selection;
-    const stateAuthenticator = yield* ReviewStateAuthenticator;
     if (reviewer.profileFingerprint !== undefined) {
+      const stateAuthenticator = yield* ReviewStateAuthenticator;
       const source = yield* PullRequestSource;
       const [snapshot2, profileFingerprint] = yield* exports_Effect.all([
         reviewer.snapshot ?? exports_Effect.all({ metadata: source.metadata, files: source.anchorFiles }),

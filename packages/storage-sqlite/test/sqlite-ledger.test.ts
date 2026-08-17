@@ -522,11 +522,11 @@ describe("SqliteSubmissionLedger", () => {
             `;
           }),
         );
-        yield* withLedger(
+        const repaired = yield* withLedger(
           filename,
           Effect.gen(function* () {
             const ledger = yield* SubmissionLedger;
-            yield* ledger.repairSettlementFromCanonical(
+            return yield* ledger.repairSettlementFromCanonical(
               CanonicalSettlementRepair.make({
                 submissionId: admitted.submissionId,
                 record: reservation.record,
@@ -546,7 +546,7 @@ describe("SqliteSubmissionLedger", () => {
             `;
           }),
         );
-        expect(rows[0]?.finalized_at).not.toBe(staleFinalizedAt);
+        expect(rows[0]?.finalized_at).toBe(DateTime.formatIso(repaired.settledAt));
       }),
     ),
   );

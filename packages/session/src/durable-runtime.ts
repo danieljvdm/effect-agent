@@ -339,6 +339,16 @@ const boundedText = (value: string): string =>
 const decodeChildReservationIdSync = Schema.decodeSync(ChildReservationId);
 const decodeDefinitionDigests = Schema.decodeUnknownEffect(DefinitionDigests);
 
+const decodeChildReservationId = (value: unknown): Effect.Effect<ChildReservationId, LedgerError> =>
+  Schema.decodeUnknownEffect(ChildReservationId)(value).pipe(
+    Effect.mapError((cause) =>
+      LedgerError.make({
+        operation: "decodeChildReservationId",
+        message: `Canonical child reservation ID is invalid: ${cause.message}`,
+      }),
+    ),
+  );
+
 const decodeChildPrincipal = (value: unknown): Effect.Effect<Principal, LedgerError> =>
   Schema.decodeUnknownEffect(Principal)(value).pipe(
     Effect.mapError((cause) =>
@@ -2251,6 +2261,7 @@ const make = Effect.gen(function* () {
     ): Effect.fn.Return<ChildAdmissionOutcome, DurableWorkerFailure> {
       const principal = yield* decodeChildPrincipal(request.childPrincipal);
       const idempotencyKey = yield* decodeChildIdempotencyKey(request.childIdempotencyKey);
+      const reservationId = yield* decodeChildReservationId(request.reservationId);
       const authorizeChild = childAdmissionAuthorizer.authorize(
         ChildAdmissionAuthorizationRequest.make({
           principal: parent.principal,
@@ -2265,7 +2276,7 @@ const make = Effect.gen(function* () {
           targetDigests: request.targetDigests,
           childInputDigest: request.childInputDigest,
           grantDigest: request.grantDigest,
-          reservationId: decodeChildReservationIdSync(request.reservationId),
+          reservationId,
           reservationDigest: request.reservationDigest,
         }),
       );
@@ -3879,10 +3890,11 @@ const make = Effect.gen(function* () {
               });
             }
             const attachToken = yield* Ref.get(tokenRef);
+            const reservationId = yield* decodeChildReservationId(requestedPayload.reservationId);
             yield* ledger
               .attachChildToReservation(
                 AttachChildToReservationRequest.make({
-                  reservationId: decodeChildReservationIdSync(requestedPayload.reservationId),
+                  reservationId,
                   ownershipToken: attachToken,
                   childSubmissionId: startedPayload.childSubmissionId,
                 }),
@@ -3956,7 +3968,7 @@ const make = Effect.gen(function* () {
                 message: `Delegation Tool Call ${toolCallId} joined without canonical establishment records`,
               });
             }
-            const reservationId = decodeChildReservationIdSync(requestedPayload.reservationId);
+            const reservationId = yield* decodeChildReservationId(requestedPayload.reservationId);
             const joinedRecordId = subagentJoinedRecordId(runId, toolCallId);
             let finalAccounting: PersistedJson;
             const existingJoined = subagentState.joined.get(toolCallId);
@@ -5589,10 +5601,11 @@ const make = Effect.gen(function* () {
             );
             yield* hit("subagent:after-start-append");
           }
+          const reservationId = yield* decodeChildReservationId(requestedPayload.reservationId);
           yield* ledger
             .attachChildToReservation(
               AttachChildToReservationRequest.make({
-                reservationId: decodeChildReservationIdSync(requestedPayload.reservationId),
+                reservationId,
                 ownershipToken: claim.ownershipToken,
                 childSubmissionId: admission.childSubmissionId,
               }),
@@ -5638,7 +5651,7 @@ const make = Effect.gen(function* () {
               return "deferred";
             }
             attachments.push({
-              reservationId: decodeChildReservationIdSync(requested.reservationId),
+              reservationId: yield* decodeChildReservationId(requested.reservationId),
               childSubmissionId: child.childSubmissionId,
             });
           }
@@ -5865,10 +5878,12 @@ const make = Effect.gen(function* () {
   const recoverConversation = Effect.fn("DurableAgentRuntime.recoverConversation")(function* (
     conversationId: ConversationId,
   ): Effect.fn.Return<ReadonlyArray<RecoveryReport>, DurableWorkerFailure> {
-    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const nonterminal = yield* ledger.scanNonterminal.pipe(
+      Stream.filter((submission) => submission.conversationId === conversationId),
+      Stream.runCollect,
+    );
     const reports: Array<RecoveryReport> = [];
     for (const submission of nonterminal) {
-      if (submission.conversationId !== conversationId) continue;
       reports.push(yield* recoverSubmission(submission));
     }
     return reports;

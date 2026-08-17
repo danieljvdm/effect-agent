@@ -500,10 +500,18 @@ export interface Phase6TravelPlannerHarness {
   readonly supplierDesk: SupplierBookingDesk["Service"];
   readonly supplierDeskLayer: Layer.Layer<SupplierBookingDesk>;
   readonly supplierReconcilerLayer: Layer.Layer<ToolReconciler>;
+  /** Release the keyed planner gate's current generation. */
   readonly releasePlannerGate: (marker: string) => Effect.Effect<void>;
+  /** Release existing waiters, then install a fresh unresolved generation for future waiters. */
   readonly resetPlannerGate: (marker: string) => Effect.Effect<void>;
+  /** Await the keyed planner gate's current generation. */
+  readonly awaitPlannerGate: (marker: string) => Effect.Effect<void>;
+  /** Release the researcher gate's current generation. */
   readonly releaseResearcherGate: Effect.Effect<void>;
+  /** Release existing waiters, then install a fresh unresolved generation for future waiters. */
   readonly resetResearcherGate: Effect.Effect<void>;
+  /** Await the researcher gate's current generation. */
+  readonly awaitResearcherGate: Effect.Effect<void>;
   readonly guideInvocationCount: Effect.Effect<number>;
 }
 
@@ -534,10 +542,13 @@ export const makePhase6TravelPlannerHarness = Effect.fn(
       Effect.asVoid,
     );
   const resetPlannerGate = (marker: string) =>
-    Deferred.make<void>().pipe(
-      Effect.flatMap((next) =>
-        SynchronizedRef.update(plannerGates, (current) => new Map(current).set(marker, next)),
-      ),
+    SynchronizedRef.modifyEffect(plannerGates, (current) =>
+      Effect.gen(function* () {
+        const next = yield* Deferred.make<void>();
+        const previous = current.get(marker);
+        if (previous !== undefined) yield* Deferred.succeed(previous, undefined);
+        return [undefined, new Map(current).set(marker, next)] as const;
+      }),
     );
   const awaitPlannerGate = (marker: string) =>
     plannerGate(marker).pipe(Effect.flatMap(Deferred.await));
@@ -548,8 +559,12 @@ export const makePhase6TravelPlannerHarness = Effect.fn(
     Effect.flatMap((gate) => Deferred.succeed(gate, undefined)),
     Effect.asVoid,
   );
-  const resetResearcherGate = Deferred.make<void>().pipe(
-    Effect.flatMap((next) => SynchronizedRef.set(researcherGate, next)),
+  const resetResearcherGate = SynchronizedRef.modifyEffect(researcherGate, (current) =>
+    Effect.gen(function* () {
+      const next = yield* Deferred.make<void>();
+      yield* Deferred.succeed(current, undefined);
+      return [undefined, next] as const;
+    }),
   );
   const awaitResearcherGate = SynchronizedRef.get(researcherGate).pipe(
     Effect.flatMap(Deferred.await),
@@ -623,8 +638,10 @@ export const makePhase6TravelPlannerHarness = Effect.fn(
     supplierReconcilerLayer,
     releasePlannerGate,
     resetPlannerGate,
+    awaitPlannerGate,
     releaseResearcherGate,
     resetResearcherGate,
+    awaitResearcherGate,
     guideInvocationCount: Ref.get(guideInvocations),
   };
 });

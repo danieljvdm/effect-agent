@@ -43,6 +43,8 @@ import {
   ListReviewUnits,
   makeFanOutReviewInstructions,
   makeFanOutReviewSuite,
+  MAX_FILE_REVIEW_ATTEMPTS,
+  MAX_FILE_REVIEW_RETRIES,
   MAX_FILE_REVIEW_TOOL_CALLS,
   MAX_REVIEW_UNITS,
   MAX_FILE_REVIEW_WAVES,
@@ -206,11 +208,13 @@ const runOfflineFanOut = (script: {
   readonly children: ReadonlyArray<OfflineUnitScript>;
   readonly review: CodeReview;
   readonly unitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
+  readonly retryUnitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
   readonly sourceFixture?: FixturePullRequest | undefined;
 }) =>
   Effect.gen(function* () {
     const coordinator = yield* makeOfflineFanOutCoordinatorModel({
       unitCalls: script.unitCalls ?? [UNIT_ONE, UNIT_TWO],
+      retryUnitCalls: script.retryUnitCalls,
       review: script.review,
     });
     const children = yield* makeOfflineFileReviewerModel(script.children);
@@ -311,7 +315,11 @@ describe("file-reviewer policy", () => {
     expect(FILE_REVIEW_MAX_CONCURRENCY).toBe(4);
     expect(fileReviewPolicy.maxConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
     expect(defaultFanOutPolicy.toolConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
-    expect(MAX_FILE_REVIEW_WAVES).toBe(4);
+    expect(MAX_FILE_REVIEW_RETRIES).toBe(4);
+    expect(MAX_FILE_REVIEW_ATTEMPTS).toBe(20);
+    expect(fileReviewPolicy.maxChildren).toBe(MAX_FILE_REVIEW_ATTEMPTS);
+    expect(defaultFanOutPolicy.maxToolCalls).toBe(1 + MAX_FILE_REVIEW_ATTEMPTS);
+    expect(MAX_FILE_REVIEW_WAVES).toBe(5);
     expect(FILE_REVIEW_WAVE_DURATION_MINUTES).toBe(40);
     expect(FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES).toBe(10);
     expect(FAN_OUT_MAX_DURATION_MINUTES).toBe(50);
@@ -339,7 +347,7 @@ describe("fan-out profile", () => {
       publicationOutsideAgentLoop: true,
       anchorsValidatedBeforePublication: true,
       attachedEphemeralDelegation: true,
-      failedUnitsReportedNotRetried: true,
+      boundedReadOnlyUnitRetry: true,
       liveProfileOptIn: true,
       exactlyOnceExternalEffects: false,
     });
@@ -810,6 +818,76 @@ describe("offline fan-out review run", () => {
     }),
   );
 
+  it.effect("recovers one failed read-only unit through the bounded retry wave", () =>
+    Effect.gen(function* () {
+      const retryingChildren: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: { _tag: "malformed-once-then-findings", report: unitOneReport },
+        },
+        happyChildren[1] as OfflineUnitScript,
+      ];
+
+      const result = yield* runOfflineFanOut({
+        children: retryingChildren,
+        retryUnitCalls: [UNIT_ONE],
+        review: happyReview,
+      });
+
+      // list -> initial delegation batch -> one retry -> final merge.
+      expect(result.coordinatorCalls).toBe(4);
+      // The failed child and its retry each read then answer; unit-002 runs once.
+      expect(result.childCalls).toBe(6);
+      expect(result.outcome.coverage.failedUnits).toEqual([]);
+      expect(result.outcome.coverage.reviewedPaths).toEqual([
+        "src/api/alpha.ts",
+        "src/api/beta.ts",
+        "src/core/delta.ts",
+        "src/core/gamma.ts",
+      ]);
+      expect(result.outcome.coverage.unreviewedPaths).toEqual(["assets/logo.png"]);
+      expect(result.coordinatorPrompts[3]).toContain(alphaFinding.title);
+    }),
+  );
+
+  it.effect("keeps a unit incomplete when its one bounded retry also fails", () =>
+    Effect.gen(function* () {
+      const persistentlyFailingChildren: ReadonlyArray<OfflineUnitScript> = [
+        {
+          unitId: "unit-001",
+          diffPath: "src/api/alpha.ts",
+          outcome: { _tag: "malformed-output" },
+        },
+        happyChildren[1] as OfflineUnitScript,
+      ];
+      const honestReview = CodeReview.make({
+        summary: "unit-001 remained unreviewed after its AgentOutputError retry failed.",
+        verdict: "comment",
+        findings: [...unitTwoReport.findings],
+      });
+
+      const result = yield* runOfflineFanOut({
+        children: persistentlyFailingChildren,
+        retryUnitCalls: [UNIT_ONE],
+        review: honestReview,
+      });
+
+      expect(result.coordinatorCalls).toBe(4);
+      expect(result.childCalls).toBe(6);
+      expect(result.outcome.coverage.status).toBe("incomplete");
+      expect(result.outcome.coverage.failedUnits).toContainEqual({
+        unitId: "unit-001",
+        errorTag: "FileReviewUnitFailed:AgentOutputError",
+      });
+      expect(result.outcome.coverage.unreviewedPaths).toEqual([
+        "assets/logo.png",
+        "src/api/alpha.ts",
+        "src/api/beta.ts",
+      ]);
+    }),
+  );
+
   it.effect("reports a whole batch of failed units before the repeated-failure stop", () =>
     Effect.gen(function* () {
       const failedUnits: ReadonlyArray<OfflineUnitScript> = [
@@ -856,7 +934,7 @@ describe("offline fan-out review run", () => {
   );
 
   it.effect(
-    "SUB-033 a runaway child fails typed and its unit is reported honestly, never retried",
+    "SUB-033 a runaway child fails typed and stays incomplete without a bounded retry",
     () =>
       Effect.gen(function* () {
         const runawayChildren: ReadonlyArray<OfflineUnitScript> = [

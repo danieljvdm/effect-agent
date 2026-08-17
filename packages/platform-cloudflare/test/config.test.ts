@@ -1,8 +1,9 @@
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   CloudflarePlatformConfigError,
+  CloudflareDurableRuntimeConfigValue,
   cloudflareDurableRuntimeConfigFromOptions,
 } from "../src/index.ts";
 
@@ -45,6 +46,41 @@ describe("Cloudflare durable runtime database plan", () => {
         });
         expect(config.databasePlan).toBe("paid");
         expect(config.limits.maxDatabaseBytes).toBe(9_000_000_000);
+      }),
+    );
+  });
+
+  it("enforces the selected plan cap at the whole-config Schema boundary", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const baseline = yield* cloudflareDurableRuntimeConfigFromOptions(baseOptions);
+        const aboveFreeCap = {
+          ...baseline,
+          limits: { ...baseline.limits, maxDatabaseBytes: 1_000_000_001 },
+        };
+        const failure = yield* Schema.decodeUnknownEffect(CloudflareDurableRuntimeConfigValue)(
+          aboveFreeCap,
+        ).pipe(Effect.flip);
+        expect(failure.message).toContain(
+          "maxDatabaseBytes 1000000001 exceeds the free plan cap 1000000000",
+        );
+
+        const paid = yield* Schema.decodeUnknownEffect(CloudflareDurableRuntimeConfigValue)({
+          ...aboveFreeCap,
+          databasePlan: "paid",
+        });
+        expect(paid.limits.maxDatabaseBytes).toBe(1_000_000_001);
+
+        const abovePaidCap = yield* Schema.decodeUnknownEffect(CloudflareDurableRuntimeConfigValue)(
+          {
+            ...aboveFreeCap,
+            databasePlan: "paid",
+            limits: { ...aboveFreeCap.limits, maxDatabaseBytes: 10_000_000_001 },
+          },
+        ).pipe(Effect.flip);
+        expect(abovePaidCap.message).toContain(
+          "maxDatabaseBytes 10000000001 exceeds the paid plan cap 10000000000",
+        );
       }),
     );
   });

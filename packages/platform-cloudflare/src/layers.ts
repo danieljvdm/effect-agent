@@ -40,8 +40,6 @@ import {
   DurableObjectContext,
 } from "./bindings.ts";
 import {
-  CLOUDFLARE_FREE_DATABASE_CAP_BYTES,
-  CLOUDFLARE_PAID_DATABASE_CAP_BYTES,
   CLOUDFLARE_RUNTIME_DEFAULTS,
   DEFAULT_PAID_MAX_DATABASE_BYTES,
   CloudflareDurableRuntimeConfig,
@@ -177,10 +175,6 @@ export const cloudflareDurableRuntimeConfigFromOptions = (
   options: CloudflareDurableRuntimeOptions,
 ): Effect.Effect<CloudflareDurableRuntimeConfigValue, CloudflarePlatformConfigError> => {
   const databasePlan = options.databasePlan ?? CLOUDFLARE_RUNTIME_DEFAULTS.databasePlan;
-  const databaseCap =
-    databasePlan === "paid"
-      ? CLOUDFLARE_PAID_DATABASE_CAP_BYTES
-      : CLOUDFLARE_FREE_DATABASE_CAP_BYTES;
   const defaultMaximum =
     databasePlan === "paid"
       ? DEFAULT_PAID_MAX_DATABASE_BYTES
@@ -219,16 +213,6 @@ export const cloudflareDurableRuntimeConfigFromOptions = (
         message: `Invalid Cloudflare durable runtime configuration: ${error.message}`,
         cause: error,
       }),
-    ),
-    Effect.filterOrFail(
-      (config) => config.limits.maxDatabaseBytes <= databaseCap,
-      (config) =>
-        CloudflarePlatformConfigError.make({
-          message:
-            `Invalid Cloudflare durable runtime configuration: maxDatabaseBytes ` +
-            `${config.limits.maxDatabaseBytes} exceeds the ${config.databasePlan} plan cap ` +
-            `${databaseCap}. Select the deployed plan explicitly or lower the admission limit.`,
-        }),
     ),
   );
 };

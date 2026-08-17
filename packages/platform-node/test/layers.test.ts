@@ -1,9 +1,17 @@
-import { Agent, AgentPolicy, ConversationId } from "@effect-agent/core";
-import type { SubmissionId } from "@effect-agent/core";
+import {
+  Agent,
+  AgentPolicy,
+  AttemptId,
+  ConversationId,
+  ReceiptId,
+  SubmissionId,
+} from "@effect-agent/core";
 import {
   AdmissionRequest,
   AgentBindingResolver,
+  CanonicalSettlementRepair,
   type ChildAdmissionAuthorizer,
+  Claim,
   ClaimRequest,
   ConversationRead,
   ConversationStore,
@@ -17,17 +25,25 @@ import {
   MarkReadyRequest,
   OperationCaller,
   type OperationAuthorizer,
+  OwnershipToken,
   Principal,
+  ProducerEpoch,
   ProducerId,
+  RecordEnvelope,
+  Settlement,
   SubmissionLedger,
   SubmissionLookupById,
+  SubmissionSettled,
   WakeScheduler,
+  submissionSettlementId,
+  submissionSettlementRecordId,
   type DurableSubmitOptions,
   type PersistedJson,
   type SubmissionState,
 } from "@effect-agent/session";
 import {
   CurrentSqliteStorageVersion,
+  ledgerLayer,
   SqliteStorageCompatibilityError,
   type SqliteStorageInitializationError,
 } from "@effect-agent/storage-sqlite";
@@ -37,6 +53,7 @@ import { describe, expect, it } from "@effect/vitest";
 import {
   Cause,
   Context,
+  DateTime,
   Duration,
   Effect,
   Exit,
@@ -58,6 +75,7 @@ import {
   NodeDurableHost,
   NodeDurableRuntime,
   NodeDurableRuntimeConfig,
+  ownershipDrainLayer,
   type NodeDurableRuntimeInitializationError,
   type NodeDurableRuntimeOptions,
   type NodeDurableRuntimeServices,
@@ -441,6 +459,80 @@ describe("NodeDurableRuntime", () => {
             }
           }),
         );
+      }),
+    ),
+  );
+
+  it.effect("does not retain ownership after canonical settlement repair", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const submissionId = Schema.decodeSync(SubmissionId)("submission-canonical-repair-drain");
+        const receiptId = Schema.decodeSync(ReceiptId)("receipt-canonical-repair-drain");
+        const ownershipToken = Schema.decodeSync(OwnershipToken)("ownership-canonical-repair");
+        const releases = yield* Ref.make(0);
+        const settledAt = DateTime.toUtc(DateTime.makeUnsafe(0));
+        const settlementId = submissionSettlementId(submissionId);
+        const record = RecordEnvelope.make({
+          recordId: submissionSettlementRecordId(submissionId),
+          family: "conversation",
+          schemaVersion: 1,
+          createdAt: settledAt,
+          deploymentId: decodeDeploymentId("deployment-platform-node"),
+          payload: SubmissionSettled.make({
+            submissionId,
+            settlementId,
+            receiptId,
+            outcome: "completed",
+          }),
+        });
+        const repair = CanonicalSettlementRepair.make({
+          submissionId,
+          record,
+          recordDigest: SHA_A,
+        });
+        const claim = Claim.make({
+          submissionId,
+          attemptId: Schema.decodeSync(AttemptId)("attempt-canonical-repair-drain"),
+          ownershipToken,
+          producerEpoch: Schema.decodeSync(ProducerEpoch)(1),
+          leaseExpiresAt: settledAt,
+          inputPayload: { question: "canonical repair" },
+        });
+        const settlement = Settlement.make({
+          submissionId,
+          settlementId,
+          receiptId,
+          outcome: "completed",
+          settledAt,
+        });
+        const countedLedger = Layer.effect(SubmissionLedger)(
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            return SubmissionLedger.of({
+              ...ledger,
+              claim: () => Effect.succeed(Option.some(claim)),
+              releaseOwnership: () => Ref.update(releases, (count) => count + 1),
+              repairSettlementFromCanonical: () => Effect.succeed(settlement),
+            });
+          }),
+        ).pipe(Layer.provide(ledgerLayer({ filename })));
+        const scope = yield* Scope.make();
+        const context = yield* Layer.build(
+          ownershipDrainLayer.pipe(Layer.provide(countedLedger)),
+        ).pipe(Scope.provide(scope));
+        const ledger = Context.get(context, SubmissionLedger);
+
+        const claimed = yield* ledger.claim(
+          ClaimRequest.make({
+            conversationId: decodeConversationId("conversation-canonical-repair-drain"),
+            producerId: decodeProducerId("producer-canonical-repair-drain"),
+          }),
+        );
+        expect(claimed).toEqual(Option.some(claim));
+        expect(yield* ledger.repairSettlementFromCanonical(repair)).toEqual(settlement);
+
+        yield* Scope.close(scope, Exit.void);
+        expect(yield* Ref.get(releases)).toBe(0);
       }),
     ),
   );

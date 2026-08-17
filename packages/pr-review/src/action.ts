@@ -437,8 +437,11 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
     // the same cached pull-request snapshot.
     return yield* Effect.gen(function* () {
       let selection: ReturnType<typeof selectReviewRange> | undefined;
-      const stateAuthenticator = yield* ReviewStateAuthenticator;
       if (reviewer.profileFingerprint !== undefined) {
+        // Legacy/custom reviewers expose only the pre-state fingerprint seam.
+        // Do not acquire the packaged continuity authority unless this reviewer
+        // actually supports authenticated profile selection.
+        const stateAuthenticator = yield* ReviewStateAuthenticator;
         const source = yield* PullRequestSource;
         const [snapshot, profileFingerprint] = yield* Effect.all([
           reviewer.snapshot ?? Effect.all({ metadata: source.metadata, files: source.anchorFiles }),

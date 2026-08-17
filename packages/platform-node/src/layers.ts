@@ -327,7 +327,12 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
         recordApprovalDecision: ledger.recordApprovalDecision,
         markUnknown: ledger.markUnknown,
         recordUnknownResolution: ledger.recordUnknownResolution,
-        repairSettlementFromCanonical: ledger.repairSettlementFromCanonical,
+        // Canonical repair terminalizes and releases the lane just like ordinary finalization.
+        // Do not leave its now-invalid token for the shutdown drain to redundantly release.
+        repairSettlementFromCanonical: (request) =>
+          ledger
+            .repairSettlementFromCanonical(request)
+            .pipe(Effect.tap(() => untrack(request.submissionId))),
         scanNonterminal: ledger.scanNonterminal,
         loadRecoverySnapshot: ledger.loadRecoverySnapshot,
       });

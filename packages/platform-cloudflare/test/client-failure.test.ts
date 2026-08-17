@@ -10,7 +10,7 @@ import {
   decodeConversationId,
   submitOptions,
 } from "./fixtures.ts";
-import { runClient } from "./harness.ts";
+import { anyInState, drainAlarmsUntil, runClient } from "./harness.ts";
 
 describe("Cloudflare Conversation Object typed client failures", () => {
   it("re-decodes RunJournalError from resolveApproval without erasing its error class", async () => {
@@ -25,6 +25,11 @@ describe("Cloudflare Conversation Object typed client failures", () => {
         );
       }),
       "RUN_JOURNAL_FAILURE",
+    );
+    await drainAlarmsUntil(
+      conversation,
+      anyInState(conversation, "suspended", "RUN_JOURNAL_FAILURE"),
+      { namespace: "RUN_JOURNAL_FAILURE" },
     );
 
     const failure = await runClient(

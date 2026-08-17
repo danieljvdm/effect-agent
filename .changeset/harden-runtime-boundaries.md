@@ -14,7 +14,8 @@
 ---
 
 Make runtime authority, cryptography, definition digests, and operation callers explicit; validate
-durable recovery against canonical evidence; repair settlement projections atomically; bound event,
-diagnostic, context, and Cloudflare read surfaces; and expose only curated Schema-decoded platform
-operations. These changes remove ambient dependencies and fail closed when persisted, transported,
-or authorization evidence is absent or contradictory.
+durable recovery for the `DN` and `DC` deployment classes against canonical evidence; repair
+settlement projections atomically; bound event, diagnostic, context, and Cloudflare read surfaces;
+and expose only curated Schema-decoded platform operations. These changes remove ambient
+dependencies and fail closed when persisted, transported, or authorization evidence is absent or
+contradictory.

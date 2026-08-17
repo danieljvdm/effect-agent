@@ -52,7 +52,26 @@ const decodeProgramInput = Schema.decodeUnknownOption(Schema.Struct({ code: Sche
 const decodeCodeModeSuccess = Schema.decodeUnknownOption(
   Schema.Struct({ result: Schema.Json, logs: Schema.Array(Schema.Json) }),
 );
-const decodeAgentAnswer = Schema.decodeUnknownOption(Schema.Struct({ answer: Schema.String }));
+const AgentAnswer = Schema.Struct({ answer: Schema.String });
+
+/** A terminal Run event could not be converted into the demo's declared HTTP result. */
+export class DemoRunFailure extends Schema.TaggedError<DemoRunFailure>()("DemoRunFailure", {
+  reason: Schema.Literals(["incomplete", "invalid-output"]),
+  message: Schema.String,
+  cause: Schema.optionalKey(Schema.Defect()),
+}) {}
+
+/** Decode untrusted terminal output through the Agent's answer contract. */
+export const decodeAgentAnswer = (output: unknown) =>
+  Schema.decodeUnknownEffect(AgentAnswer)(output).pipe(
+    Effect.mapError((cause) =>
+      DemoRunFailure.make({
+        reason: "invalid-output",
+        message: "the completed agent output did not match the Answer Schema",
+        cause,
+      }),
+    ),
+  );
 
 /**
  * Both profiles' bindings share one definition and both models resolve to a
@@ -97,7 +116,7 @@ const runBound = (
   question: string,
   tenant: string,
   profile: AskResult["profile"],
-): Effect.Effect<AskResult> => {
+): Effect.Effect<AskResult, DemoRunFailure> => {
   // The Code Mode handler needs the warehouse service and the executor
   // provided INTO it (its handler runs with the captured construction
   // context); the Run additionally needs IdGenerator.
@@ -122,8 +141,7 @@ const runBound = (
       string,
       { readonly result?: Schema.Json; readonly logs?: ReadonlyArray<Schema.Json> }
     >();
-    let answer = "";
-    let completed = false;
+    let completedOutput: Option.Option<unknown> = Option.none();
     // Expected Run failures become defects at this HTTP boundary: `runPromise`
     // rejects and the fetch handler answers 500 instead of fabricating a 200.
     yield* AgentRuntime.stream(agent, { question }).pipe(
@@ -136,11 +154,7 @@ const runBound = (
             successes.set(event.toolCallId, successOutcomeOf(event.result));
           }
           if (event._tag === "RunCompleted") {
-            completed = true;
-            const output = decodeAgentAnswer(event.output);
-            if (Option.isSome(output)) {
-              answer = output.value.answer;
-            }
+            completedOutput = Option.some(event.output);
           }
         }),
       ),
@@ -149,11 +163,15 @@ const runBound = (
       Effect.orDie,
     );
     // A Run that ended without emitting RunCompleted (e.g. it hit a policy
-    // limit) is NOT a success — surface it as a defect so `runPromise` rejects
-    // and the fetch handler returns 500, rather than a 200 with an empty answer.
-    if (!completed) {
-      return yield* Effect.die(new Error("the agent run did not complete"));
+    // limit) is NOT a success — fail in the typed channel so `runPromise`
+    // rejects and the fetch handler returns 500, rather than a 200 with an empty answer.
+    if (Option.isNone(completedOutput)) {
+      return yield* DemoRunFailure.make({
+        reason: "incomplete",
+        message: "the agent run did not complete",
+      });
     }
+    const answer = (yield* decodeAgentAnswer(completedOutput.value)).answer;
     // Claim a single program/result ONLY when exactly one run_javascript call
     // succeeded (with a matching declaration) — never arbitrarily pick among
     // several, and never assert provenance for a run that used zero or multiple
@@ -181,7 +199,11 @@ const runBound = (
   });
 };
 
-const runAsk = (env: WorkerEnv, question: string, tenant: string): Effect.Effect<AskResult> => {
+const runAsk = (
+  env: WorkerEnv,
+  question: string,
+  tenant: string,
+): Effect.Effect<AskResult, DemoRunFailure> => {
   if (env.OPENAI_API_KEY !== undefined && env.OPENAI_API_KEY.length > 0) {
     return runBound(
       env,
@@ -194,7 +216,8 @@ const runAsk = (env: WorkerEnv, question: string, tenant: string): Effect.Effect
   return runBound(env, scriptedAgent, question, tenant, "scripted");
 };
 
-export default {
+/** Construct the HTTP Worker with an explicit runner seam for deterministic boundary tests. */
+export const makeDemoWorker = (ask: typeof runAsk = runAsk) => ({
   async fetch(request: Request, env: WorkerEnv): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname !== "/ask") {
@@ -244,7 +267,7 @@ export default {
       return Response.json({ error: "tenant must match /^[a-z0-9-]{1,32}$/" }, { status: 400 });
     }
     try {
-      const result = await Effect.runPromise(runAsk(env, decodedAsk.question, tenant));
+      const result = await Effect.runPromise(ask(env, decodedAsk.question, tenant));
       return Response.json(await Effect.runPromise(encodeAskResult(result)));
     } catch (cause) {
       return Response.json(
@@ -253,7 +276,9 @@ export default {
       );
     }
   },
-};
+});
+
+export default makeDemoWorker();
 
 // Re-exported so a consumer can compose the warehouse service directly.
 export { Warehouse };

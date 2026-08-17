@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 import { Effect, Schema } from "effect";
-import { build } from "esbuild";
+import { build, type OutputFile } from "esbuild";
 import { Miniflare, kCurrentWorker } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
@@ -19,11 +19,28 @@ import { AskResult, WarehouseListOutcome } from "../src/wire.ts";
 const workerEntry = join(import.meta.dirname, "..", "src", "worker.ts");
 
 let workerScript = "";
+let invalidAnswerWorkerScript = "";
 
-const openRuntime = (): Miniflare =>
+const executableWorkerScript = (outputFiles: ReadonlyArray<OutputFile> | undefined): string => {
+  const output = outputFiles?.[0];
+  if (output === undefined) {
+    throw new Error("esbuild produced no worker bundle");
+  }
+  // A transitive dependency ships a dead-code `import(<computed>)` that
+  // single-script Miniflare's static module locator rejects even though it
+  // never runs on the demo's path. Neutralize the dynamic-import
+  // expressions in the HOST bundle (the fixed dynamic-worker harness uses a
+  // static program import, so it carries none), mirroring the repository's
+  // Miniflare restart lane.
+  const disabled =
+    'const __disabledDynamicImport = () => Promise.reject(new Error("dynamic import is disabled in the demo bundle"));\n';
+  return `${disabled}${output.text.replaceAll(/\bimport\s*\(/g, "__disabledDynamicImport(")}`;
+};
+
+const openRuntime = (script = workerScript): Miniflare =>
   new Miniflare({
     modules: true,
-    script: workerScript,
+    script,
     modulesRoot: "/",
     compatibilityDate: "2025-05-01",
     compatibilityFlags: ["nodejs_compat", "experimental"],
@@ -52,19 +69,35 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       external: ["cloudflare:*", "node:*"],
       logLevel: "silent",
     });
-    const output = bundled.outputFiles[0];
-    if (output === undefined) {
-      throw new Error("esbuild produced no worker bundle");
-    }
-    // A transitive dependency ships a dead-code `import(<computed>)` that
-    // single-script Miniflare's static module locator rejects even though it
-    // never runs on the demo's path. Neutralize the dynamic-import
-    // expressions in the HOST bundle (the fixed dynamic-worker harness uses a
-    // static program import, so it carries none), mirroring the repository's
-    // Miniflare restart lane.
-    const disabled =
-      'const __disabledDynamicImport = () => Promise.reject(new Error("dynamic import is disabled in the demo bundle"));\n';
-    workerScript = `${disabled}${output.text.replaceAll(/\bimport\s*\(/g, "__disabledDynamicImport(")}`;
+    workerScript = executableWorkerScript(bundled.outputFiles);
+
+    const invalidAnswerBundle = await build({
+      stdin: {
+        contents: `
+          import { Effect } from "effect";
+          import { decodeAgentAnswer, makeDemoWorker } from "../src/worker.ts";
+          export { CodeModeHostEntrypoint, WarehouseObject } from "../src/worker.ts";
+
+          export default makeDemoWorker(() =>
+            decodeAgentAnswer({ answer: 42 }).pipe(
+              Effect.flatMap(() => Effect.die("invalid answer unexpectedly decoded")),
+            ),
+          );
+        `,
+        resolveDir: import.meta.dirname,
+        sourcefile: "invalid-answer-worker.ts",
+        loader: "ts",
+      },
+      bundle: true,
+      write: false,
+      format: "esm",
+      target: "es2022",
+      platform: "browser",
+      conditions: ["workerd", "worker", "browser"],
+      external: ["cloudflare:*", "node:*"],
+      logLevel: "silent",
+    });
+    invalidAnswerWorkerScript = executableWorkerScript(invalidAnswerBundle.outputFiles);
     runtime = openRuntime();
     cleanups.push(() => runtime.dispose());
   }, 120_000);
@@ -121,6 +154,20 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       body: JSON.stringify({ question: 42 }),
     });
     expect(wrongShape.status).toBe(400);
+  });
+
+  it("fails closed when completed output does not match the Answer Schema", async () => {
+    const invalidRuntime = openRuntime(invalidAnswerWorkerScript);
+    cleanups.push(() => invalidRuntime.dispose());
+    const response = await invalidRuntime.dispatchFetch("http://demo/ask", {
+      method: "POST",
+      body: JSON.stringify({ question: "Return malformed terminal output" }),
+    });
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: "the completed agent output did not match the Answer Schema",
+    });
   });
 
   it("exposes only a curated Schema-decoded invoice operation over DO RPC", async () => {

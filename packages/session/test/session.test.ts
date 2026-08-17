@@ -1145,45 +1145,53 @@ describe("S2 durable subagent canonical payloads", () => {
     }
   });
 
-  it.effect("validates exact child lineage and rejects a divergent canonical payload", () =>
-    Effect.gen(function* () {
-      const parent = Schema.decodeUnknownSync(SubmissionSnapshot)({
-        submissionId: "submission-parent",
-        conversationId: "conversation-parent",
-        queueSequence: 0,
-        principal: "tenant-a",
-        idempotencyKey: "parent-key",
-        agentId: "travel-coordinator",
-        agentDigests: { agent: SHA_256_A, model: SHA_256_B, tools: SHA_256_C },
-        deploymentId: "test-deployment",
-        inputPayload: { destination: "Kyoto" },
-        inputDigest: SHA_256_C,
-        receiptId: "receipt-parent",
-        state: "running",
-        createdAt: "2026-08-12T12:00:00.000Z",
-        readyAt: "2026-08-12T12:00:00.000Z",
-      });
-      const requestRecord = decodeRecord("subagent-request", encodedSubagentRequested);
-      expect(requestRecord.payload._tag).toBe("SubagentRequested");
-      if (requestRecord.payload._tag !== "SubagentRequested") {
-        return yield* Effect.die(new Error("lineage test prerequisite was not SubagentRequested"));
-      }
-      const lineageRecord = decodeRecord(
-        subagentLineageRecordId(requestRecord.payload.childConversationId),
-        encodedSubagentLineage,
-      );
-      yield* validateSubagentLineageRecord(parent, requestRecord.payload, lineageRecord);
+  it.effect(
+    "validates exact child lineage and rejects wrong-family data at the Schema boundary",
+    () =>
+      Effect.gen(function* () {
+        const parent = Schema.decodeUnknownSync(SubmissionSnapshot)({
+          submissionId: "submission-parent",
+          conversationId: "conversation-parent",
+          queueSequence: 0,
+          principal: "tenant-a",
+          idempotencyKey: "parent-key",
+          agentId: "travel-coordinator",
+          agentDigests: { agent: SHA_256_A, model: SHA_256_B, tools: SHA_256_C },
+          deploymentId: "test-deployment",
+          inputPayload: { destination: "Kyoto" },
+          inputDigest: SHA_256_C,
+          receiptId: "receipt-parent",
+          state: "running",
+          createdAt: "2026-08-12T12:00:00.000Z",
+          readyAt: "2026-08-12T12:00:00.000Z",
+        });
+        const requestRecord = decodeRecord("subagent-request", encodedSubagentRequested);
+        expect(requestRecord.payload._tag).toBe("SubagentRequested");
+        if (requestRecord.payload._tag !== "SubagentRequested") {
+          return yield* Effect.die(
+            new Error("lineage test prerequisite was not SubagentRequested"),
+          );
+        }
+        const lineageRecord = decodeRecord(
+          subagentLineageRecordId(requestRecord.payload.childConversationId),
+          encodedSubagentLineage,
+        );
+        yield* validateSubagentLineageRecord(parent, requestRecord.payload, lineageRecord);
 
-      const divergent = decodeRecord(
-        subagentLineageRecordId(requestRecord.payload.childConversationId),
-        { ...encodedSubagentLineage, grantDigest: SHA_256_C },
-      );
-      const failure = yield* Effect.flip(
-        validateSubagentLineageRecord(parent, requestRecord.payload, divergent),
-      );
-      expect(failure).toBeInstanceOf(LedgerError);
-      expect(failure.operation).toBe("validateSubagentLineageRecord");
-    }),
+        const divergent = decodeRecord(
+          subagentLineageRecordId(requestRecord.payload.childConversationId),
+          { ...encodedSubagentLineage, grantDigest: SHA_256_C },
+        );
+        const failure = yield* Effect.flip(
+          validateSubagentLineageRecord(parent, requestRecord.payload, divergent),
+        );
+        expect(failure).toBeInstanceOf(LedgerError);
+        expect(failure.operation).toBe("validateSubagentLineageRecord");
+
+        expect(() =>
+          Schema.decodeUnknownSync(RecordEnvelope)({ ...lineageRecord, family: "artifact" }),
+        ).toThrow(/Expected "conversation"/);
+      }),
   );
 
   it.effect("binds admitted children to the exact principal and idempotency scope", () =>
