@@ -348,7 +348,7 @@ const SettlementFields = Schema.Struct({
   outcome: SettlementOutcome,
   /** Schema-encoded application disposition materialized from the exact canonical reservation. */
   runDisposition: Schema.optionalKey(PersistedJson),
-  /** Present exactly for `failed`; copied from the exact canonical reservation. */
+  /** Present exactly for `failed`; its Schema rejects excess keys before canonical projection. */
   failure: Schema.optionalKey(SettlementFailureDiagnostic),
   settledAt: Schema.DateTimeUtcFromString,
 }).check(
