@@ -28,8 +28,12 @@ import {
 import { type BudgetExceeded, UsageDelta, type UsageBudgetNode } from "./budget.ts";
 import type { RunCommandQueue } from "./commands.ts";
 import {
+  CompactionDigestError,
   CompactionArtifact,
   ContextCompactor,
+  ContextLimitExceeded,
+  ContextTransformError,
+  InvalidCompactionArtifact,
   type ModelContextMessage,
   applyCompaction,
   prepareModelContext,
@@ -265,14 +269,14 @@ const DETERMINISTIC_CONTEXT_TIMESTAMP = DateTime.toUtc(DateTime.makeUnsafe(0));
 
 const encodedBytes = (value: string): number => Encoding.encodeHex(value).length / 2;
 
-const failureTag = (error: unknown): string =>
-  typeof error === "object" &&
-  error !== null &&
-  "_tag" in error &&
-  typeof error._tag === "string" &&
-  error._tag.length > 0
-    ? error._tag
-    : "UnknownContextPreparationFailure";
+const failureTag = (error: unknown): string => {
+  if (Schema.isSchemaError(error)) return "SchemaError";
+  if (Schema.is(ContextTransformError)(error)) return "ContextTransformError";
+  if (Schema.is(CompactionDigestError)(error)) return "CompactionDigestError";
+  if (Schema.is(InvalidCompactionArtifact)(error)) return "InvalidCompactionArtifact";
+  if (Schema.is(ContextLimitExceeded)(error)) return "ContextLimitExceeded";
+  return "UnknownContextPreparationFailure";
+};
 
 const contextPreparationError = (error: unknown): RunContextPreparationError =>
   Schema.is(RunContextPreparationError)(error)

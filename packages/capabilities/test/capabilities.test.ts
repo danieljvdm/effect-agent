@@ -1319,6 +1319,31 @@ describe("capability contracts", () => {
       expect(typed._tag).toBe("RunContextPreparationError");
       expect(typed.cause).toBe(expected);
 
+      const hostileFailure = ContextTransformError.make({
+        transformId: "hostile-tag",
+        message: "expected compactor refusal",
+      });
+      Object.defineProperty(hostileFailure, "_tag", {
+        value: `sensitive-${"x".repeat(8_192)}`,
+      });
+      expect(hostileFailure._tag).toContain("sensitive");
+      const hostileLayer = contextCompactorRunContextLayer.pipe(
+        Layer.provide(
+          Layer.succeed(ContextCompactor)({
+            compact: () => Effect.fail(hostileFailure),
+          }),
+        ),
+        Layer.provide(NodeCrypto.layer),
+      );
+      const hostile = yield* RunContextPreparation.use((service) =>
+        service.hook === undefined
+          ? Effect.die("expected the hostile compactor context hook")
+          : service.hook.prepare(request).pipe(Effect.flip),
+      ).pipe(Effect.provide(hostileLayer));
+      expect(hostile.message).toBe("Context compaction failed (ContextTransformError)");
+      expect(hostile.message).not.toContain("sensitive");
+      expect(hostile.cause).toBe(hostileFailure);
+
       const defectLayer = contextCompactorRunContextLayer.pipe(
         Layer.provide(
           Layer.succeed(ContextCompactor)({

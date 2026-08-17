@@ -37375,7 +37375,19 @@ var toRunConversationOptions = exports_Effect.fn("toRunConversationOptions")(fun
 var CONTEXT_COMPACTOR_PREPARER_ID = "@effect-agent/capabilities/ContextCompactor";
 var DETERMINISTIC_CONTEXT_TIMESTAMP = exports_DateTime.toUtc(exports_DateTime.makeUnsafe(0));
 var encodedBytes2 = (value4) => exports_Encoding.encodeHex(value4).length / 2;
-var failureTag = (error2) => typeof error2 === "object" && error2 !== null && ("_tag" in error2) && typeof error2._tag === "string" && error2._tag.length > 0 ? error2._tag : "UnknownContextPreparationFailure";
+var failureTag = (error2) => {
+  if (exports_Schema.isSchemaError(error2))
+    return "SchemaError";
+  if (exports_Schema.is(ContextTransformError)(error2))
+    return "ContextTransformError";
+  if (exports_Schema.is(CompactionDigestError)(error2))
+    return "CompactionDigestError";
+  if (exports_Schema.is(InvalidCompactionArtifact)(error2))
+    return "InvalidCompactionArtifact";
+  if (exports_Schema.is(ContextLimitExceeded)(error2))
+    return "ContextLimitExceeded";
+  return "UnknownContextPreparationFailure";
+};
 var contextPreparationError = (error2) => exports_Schema.is(RunContextPreparationError)(error2) ? error2 : RunContextPreparationError.make({
   preparerId: CONTEXT_COMPACTOR_PREPARER_ID,
   message: `Context compaction failed (${failureTag(error2)})`,
