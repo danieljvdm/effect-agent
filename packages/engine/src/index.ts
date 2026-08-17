@@ -2845,7 +2845,7 @@ const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDispositi
     Effect.mapError((cause) =>
       AgentRunDispositionError.make({
         cause,
-        message: cause.message,
+        message: "Run disposition failed Schema encoding",
       }),
     ),
   );
@@ -2853,7 +2853,7 @@ const encodeRunDispositionCandidate = Effect.fn("AgentRuntime.encodeRunDispositi
     Effect.mapError((cause) =>
       AgentRunDispositionError.make({
         cause,
-        message: `Run disposition did not encode as durable JSON: ${cause.message}`,
+        message: "Run disposition did not encode as durable JSON",
       }),
     ),
   );

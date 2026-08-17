@@ -296,10 +296,13 @@ schemaVersion 1).
 An ordinary completed Run may additionally carry the application-defined, Schema-encoded
 `runDisposition` from `RunCompleted` (RUN-029). It is part of the same exact reserved settlement
 record, so reservation replay, canonical append, ledger-finalization recovery, record reads, and
-projection rebuilds preserve it byte-for-byte. Decode is fail-closed: the field is valid only on a
-`completed` settlement with a `runId` and without `finishReason: "budget-exhausted"`. Failed,
-aborted, budget-exhausted, run-less joined, incomplete, and recovery-only outcomes cannot acquire
-one. The durable runtime never reconstructs this value from result prose or Tool records.
+projection rebuilds preserve it byte-for-byte. The public `Settlement` returned by
+`awaitSettlement` materializes the encoded value from that exact reservation, including after
+recovery; it does not derive it from cached outcome metadata. Decode is fail-closed: the field is
+valid only on a `completed` settlement with a `runId` and without
+`finishReason: "budget-exhausted"`. Failed, aborted, budget-exhausted, run-less joined,
+incomplete, and recovery-only outcomes cannot acquire one. The durable runtime never reconstructs
+this value from result prose or Tool records.
 
 ## 13. Abort
 

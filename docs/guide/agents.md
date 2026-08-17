@@ -27,17 +27,25 @@ making Model selection explicit.
 ## Definition contract
 
 ```ts
-interface Definition<InputSchema, OutputSchema, Instructions, Toolkit, RunDisposition> {
+interface RunDispositionDeclaration<Output, DispositionSchema> {
+  readonly schema: DispositionSchema;
+  readonly fromOutput: (output: Output) => unknown;
+}
+
+interface Definition<
+  InputSchema,
+  OutputSchema,
+  Instructions,
+  Toolkit,
+  RunDispositionValue = undefined,
+> {
   readonly id: AgentId;
   readonly input: InputSchema;
   readonly output: OutputSchema;
   readonly instructions: Instructions;
   readonly toolkit: Toolkit;
   readonly policy: AgentPolicy;
-  readonly runDisposition?: {
-    readonly schema: RunDisposition;
-    readonly fromOutput: (output: OutputSchema["Type"]) => unknown;
-  };
+  readonly runDisposition?: RunDispositionValue;
   readonly description?: string;
   readonly metadata?: Readonly<Record<string, string>>;
 }

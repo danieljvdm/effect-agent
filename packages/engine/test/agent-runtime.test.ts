@@ -2564,7 +2564,11 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
   });
 
   it.effect("RUN-029 validates and exposes an application run disposition", () => {
-    const RunDisposition = Schema.Literal("application-complete");
+    const RunDisposition = Schema.String.check(
+      Schema.makeFilter((value) =>
+        value === "application-complete" ? undefined : `Rejected disposition: ${value}`,
+      ),
+    );
     const definition = Agent.define("run-disposition", {
       input: Schema.Struct({ question: Schema.String }),
       output: Schema.Struct({
@@ -2601,12 +2605,52 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       });
       expect(result.runDisposition).toBe("application-complete");
 
+      const secret = "sensitive-run-disposition-must-not-enter-events";
+      const invalidDefinition = Agent.define("invalid-run-disposition", {
+        input: Schema.Struct({ question: Schema.String }),
+        output: Schema.Struct({ answer: Schema.String }),
+        instructions: "Answer as JSON.",
+        toolkit: Toolkit.empty,
+        policy: AgentPolicy.make({
+          maxTurns: 2,
+          maxToolCalls: 1,
+          maxDuration: "30 seconds",
+          toolConcurrency: 1,
+        }),
+        runDisposition: {
+          schema: RunDisposition,
+          fromOutput: () => secret,
+        },
+      });
       const invalid = Agent.withModel(
-        definition,
-        modelFromParts(finalParts('{"answer":"done","runDisposition":"invented"}')),
+        invalidDefinition,
+        modelFromParts(finalParts('{"answer":"done"}')),
       );
-      const invalidExit = yield* AgentRuntime.run(invalid, { question: "done?" }).pipe(Effect.exit);
-      expect(failureFrom(invalidExit)).toBeInstanceOf(AgentRunDispositionError);
+      const observed: Array<RunEvent> = [];
+      const invalidExit = yield* AgentRuntime.stream(invalid, { question: "done?" }).pipe(
+        Stream.tap((event) =>
+          Effect.sync(() => {
+            observed.push(event);
+          }),
+        ),
+        Stream.runDrain,
+        Effect.exit,
+      );
+      const failure = failureFrom(invalidExit);
+      const isRunDispositionError = Schema.is(AgentRunDispositionError)(failure);
+      expect(isRunDispositionError).toBe(true);
+      if (!isRunDispositionError) {
+        throw new Error("Expected AgentRunDispositionError");
+      }
+      expect(failure.message).toBe("Run disposition failed Schema encoding");
+      expect(failure.message).not.toContain(secret);
+      expect(String(failure.cause)).toContain(secret);
+      expect(observed.at(-1)).toMatchObject({
+        _tag: "RunFailed",
+        errorTag: "AgentRunDispositionError",
+        message: "Run disposition failed Schema encoding",
+      });
+      expect(JSON.stringify(observed)).not.toContain(secret);
     });
   });
 

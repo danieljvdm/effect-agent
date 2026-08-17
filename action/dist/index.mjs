@@ -35324,11 +35324,11 @@ var encodeRunDispositionCandidate = exports_Effect.fn("AgentRuntime.encodeRunDis
     return;
   const encoded = yield* exports_Schema.encodeUnknownEffect(declaration.schema)(selected).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
     cause,
-    message: cause.message
+    message: "Run disposition failed Schema encoding"
   })));
   return yield* exports_Schema.decodeUnknownEffect(exports_Schema.Json)(encoded).pipe(exports_Effect.mapError((cause) => AgentRunDispositionError.make({
     cause,
-    message: `Run disposition did not encode as durable JSON: ${cause.message}`
+    message: "Run disposition did not encode as durable JSON"
   })));
 });
 function encodeRunDisposition(agent2, output) {

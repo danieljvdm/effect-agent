@@ -854,7 +854,9 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
             yield* runtime.runRecovery;
           }
 
-          expect((yield* runtime.awaitSettlement(receipt)).outcome).toBe("completed");
+          const settlement = yield* runtime.awaitSettlement(receipt);
+          expect(settlement.outcome).toBe("completed");
+          expect(settlement.runDisposition).toBe("application-complete");
           const records = yield* readLog(scenario.conversation);
           const projection = replayConversation(conversationId, records);
           expect(projection.settlements).toHaveLength(1);
@@ -868,13 +870,16 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
   it.effect("RUN-029 invalid disposition selection settles failed without disposition", () =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+      const secret = "sensitive-run-disposition-must-not-enter-history";
       const scripted = yield* makeScriptedModel(() =>
-        finalParts('{"answer":"done","runDisposition":"invented"}'),
+        finalParts(
+          '{"answer":"done","runDisposition":"sensitive-run-disposition-must-not-enter-history"}',
+        ),
       );
       const agent = Agent.withModel(dispositionDefinition, scripted.model);
       const conversation = "conversation-run-disposition-invalid";
 
-      yield* runtime.submit(
+      const receipt = yield* runtime.submit(
         agent,
         { question: "done?" },
         submitOptions(conversation, "run-disposition-invalid-1"),
@@ -885,12 +890,20 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
       );
 
       expect(settlements[0]?.outcome).toBe("failed");
+      expect(settlements[0]?.runDisposition).toBeUndefined();
+      const settlement = yield* runtime.awaitSettlement(receipt);
+      expect(settlement.outcome).toBe("failed");
+      expect(settlement.runDisposition).toBeUndefined();
       const settled = (yield* readLog(conversation)).at(-1)?.record.payload;
       expect(settled?._tag).toBe("SubmissionSettled");
       if (settled?._tag === "SubmissionSettled") {
         expect(settled.outcome).toBe("failed");
-        expect(settled.result).toMatchObject({ errorTag: "AgentRunDispositionError" });
+        expect(settled.result).toMatchObject({
+          errorTag: "AgentRunDispositionError",
+          message: "Run disposition failed Schema encoding",
+        });
         expect(settled.runDisposition).toBeUndefined();
+        expect(JSON.stringify(settled)).not.toContain(secret);
       }
     }),
   );
@@ -969,6 +982,10 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
         expect(settlements).toHaveLength(1);
         expect(settlements[0]?.outcome).toBe("completed");
+        expect(settlements[0]?.runDisposition).toBeUndefined();
+        const settlement = yield* runtime.awaitSettlement(receipt);
+        expect(settlement.outcome).toBe("completed");
+        expect(settlement.runDisposition).toBeUndefined();
         expect(yield* Ref.get(handlerStarts)).toBe(0);
 
         const submissionId = receipt.submissionId;
@@ -1137,6 +1154,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
           yield* runtime.runRecovery;
           const settlement = yield* runtime.awaitSettlement(receipt);
           expect(settlement.outcome).toBe("completed");
+          expect(settlement.runDisposition).toBeUndefined();
           const records = yield* readLog(scenario.conversation);
           const settledRecords = records
             .map((envelope) => envelope.record.payload)
@@ -1254,6 +1272,7 @@ layer(testLayer)("DUR P4 DurableAgentRuntime", (it) => {
 
       const settlement = yield* runtime.awaitSettlement(receipt);
       expect(settlement.outcome).toBe("aborted");
+      expect(settlement.runDisposition).toBeUndefined();
 
       const records = yield* readLog(conversation);
       const tags = logTags(records);

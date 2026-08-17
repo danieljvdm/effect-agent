@@ -743,9 +743,11 @@ describe("SubmissionLedger port schemas", () => {
       settlementId: "settlement:submission-1",
       receiptId: "receipt-1",
       outcome: "completed",
+      runDisposition: "application-complete",
       settledAt: "2026-08-12T00:01:00.000Z",
     });
     expect(settlement.outcome).toBe("completed");
+    expect(settlement.runDisposition).toBe("application-complete");
     expect(
       Schema.decodeUnknownExit(SettlementReservation)({
         ...encodedReservation,

@@ -821,6 +821,33 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const materializeSettlement = (
+    settlement: Settlement,
+    record: RecordEnvelope | undefined,
+  ): Settlement => {
+    const payload = record?.payload;
+    if (
+      payload === undefined ||
+      payload._tag !== "SubmissionSettled" ||
+      payload.submissionId !== settlement.submissionId ||
+      payload.settlementId !== settlement.settlementId ||
+      payload.receiptId !== settlement.receiptId ||
+      payload.outcome !== settlement.outcome ||
+      settlement.outcome !== "completed" ||
+      payload.runDisposition === undefined
+    ) {
+      return settlement;
+    }
+    return Settlement.make({
+      submissionId: settlement.submissionId,
+      settlementId: settlement.settlementId,
+      receiptId: settlement.receiptId,
+      outcome: settlement.outcome,
+      runDisposition: payload.runDisposition,
+      settledAt: settlement.settledAt,
+    });
+  };
+
   const readAll = Effect.fn("DurableAgentRuntime.readAll")(function* (
     conversationId: ConversationId,
   ): Effect.fn.Return<
@@ -1908,7 +1935,7 @@ const make = Effect.gen(function* () {
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
     yield* settleJoinedSubmissions(ctx, submissionId, outcome._tag);
-    return settlement;
+    return materializeSettlement(settlement, reserved.record);
   });
 
   /** Complete a previously reserved settlement: append the EXACT reserved record, then finalize. */
@@ -1944,7 +1971,7 @@ const make = Effect.gen(function* () {
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
     yield* settleJoinedSubmissions(ctx, submission.submissionId, settlement.outcome);
-    return settlement;
+    return materializeSettlement(settlement, reservation.record);
   });
 
   /** Canonical settlement exists: rebuild the ledger from history, never the reverse (DUR-015). */
@@ -1956,9 +1983,12 @@ const make = Effect.gen(function* () {
     const settlement = yield* ledger.finalizeSettlement(
       SettlementFinalization.make({ submissionId: submission.submissionId, settlementId }),
     );
+    const snapshot = yield* ledger.loadRecoverySnapshot(
+      RecoverySnapshotRequest.make({ submissionId: submission.submissionId }),
+    );
     yield* wake.notify(submission.conversationId);
     yield* notifyParentOfChildSettlement(submission);
-    return settlement;
+    return materializeSettlement(settlement, snapshot.reservation?.record);
   });
 
   /**
@@ -5755,12 +5785,16 @@ const make = Effect.gen(function* () {
       }
       if (snapshot.value.state === "settled") {
         // The idempotent finalization replay returns the recorded Settlement (settledAt intact).
-        return yield* ledger.finalizeSettlement(
+        const settlement = yield* ledger.finalizeSettlement(
           SettlementFinalization.make({
             submissionId: receipt.submissionId,
             settlementId: submissionSettlementId(receipt.submissionId),
           }),
         );
+        const recovery = yield* ledger.loadRecoverySnapshot(
+          RecoverySnapshotRequest.make({ submissionId: receipt.submissionId }),
+        );
+        return materializeSettlement(settlement, recovery.reservation?.record);
       }
       // Wake delivery is a pure liveness hint; the ledger poll below guarantees progress.
       yield* Effect.raceFirst(
