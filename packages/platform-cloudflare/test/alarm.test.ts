@@ -169,6 +169,7 @@ describe("DC alarm semantics", () => {
       "maintenance:begin:after",
       "maintenance:mutation:finished",
       "maintenance:finish:before",
+      "maintenance:finish:after",
     );
     const resolution = runClient(
       Effect.gen(function* () {
@@ -201,9 +202,12 @@ describe("DC alarm semantics", () => {
     releaseMaintenancePause(conversation, "maintenance:mutation:finished");
     releaseMaintenancePause(conversation, "maintenance:begin:after");
     await awaitMaintenancePause(conversation, "maintenance:finish:before");
+    releaseMaintenancePause(conversation, "maintenance:finish:before");
+    await awaitMaintenancePause(conversation, "maintenance:finish:after");
     const generation = await maintenanceGeneration(conversation);
     expect(generation.dirty > generation.processed).toBe(true);
-    releaseMaintenancePause(conversation, "maintenance:finish:before");
+    expect(await scheduledAlarm(conversation)).not.toBeNull();
+    releaseMaintenancePause(conversation, "maintenance:finish:after");
     await resolution;
     await forcedPass;
     await drainAlarmsUntil(conversation, allSettled(conversation));
