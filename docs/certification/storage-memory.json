@@ -4,7 +4,7 @@
     "name": "@effect-agent/storage-memory",
     "durability": "non-durable"
   },
-  "generatedAt": "1970-01-01T02:28:51.004Z",
+  "generatedAt": "1970-01-01T02:34:33.004Z",
   "tier1": [
     {
       "suite": "submission-ledger",
@@ -49,6 +49,11 @@
     {
       "suite": "submission-ledger",
       "name": "rejects conflicting settlement reservations and finalizations",
+      "status": "passed"
+    },
+    {
+      "suite": "submission-ledger",
+      "name": "repairs missing ledger settlement state from the exact canonical record",
       "status": "passed"
     },
     {
@@ -138,7 +143,7 @@
     },
     {
       "suite": "submission-ledger",
-      "name": "recordChildSettled wakes only when every listed child settled",
+      "name": "child notifications stay inert until exact suspension resume",
       "status": "passed"
     },
     {
@@ -371,6 +376,13 @@
     },
     {
       "scenario": "plain",
+      "location": "subagent:after-child-attach",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "plain",
       "location": "subagent:after-sibling-settle",
       "failpointFired": false,
       "status": "not-triggered",
@@ -574,6 +586,13 @@
     },
     {
       "scenario": "uncertain-tool",
+      "location": "subagent:after-child-attach",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "uncertain-tool",
       "location": "subagent:after-sibling-settle",
       "failpointFired": false,
       "status": "not-triggered",
@@ -777,6 +796,13 @@
     },
     {
       "scenario": "durable-steps",
+      "location": "subagent:after-child-attach",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "durable-steps",
       "location": "subagent:after-sibling-settle",
       "failpointFired": false,
       "status": "not-triggered",
@@ -980,6 +1006,13 @@
     },
     {
       "scenario": "approval",
+      "location": "subagent:after-child-attach",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "approval",
       "location": "subagent:after-sibling-settle",
       "failpointFired": false,
       "status": "not-triggered",
@@ -1183,6 +1216,13 @@
     },
     {
       "scenario": "join",
+      "location": "subagent:after-child-attach",
+      "failpointFired": false,
+      "status": "not-triggered",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "join",
       "location": "subagent:after-sibling-settle",
       "failpointFired": false,
       "status": "not-triggered",
@@ -1380,6 +1420,13 @@
     {
       "scenario": "delegation",
       "location": "subagent:after-start-append",
+      "failpointFired": true,
+      "status": "converged",
+      "digestChainVerified": true
+    },
+    {
+      "scenario": "delegation",
+      "location": "subagent:after-child-attach",
       "failpointFired": true,
       "status": "converged",
       "digestChainVerified": true

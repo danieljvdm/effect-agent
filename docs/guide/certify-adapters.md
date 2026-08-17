@@ -9,11 +9,11 @@ A storage adapter cannot be called compatible because it type-checks. Certificat
 point that runs three tiers against a candidate
 `SubmissionLedger`/`ConversationStore` Layer pair and produces one Schema-encoded certificate:
 
-| Tier                            | Claim                                                                                 | How it is discharged                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **1 — port contract**           | Both ports honor every documented contract case                                       | The two shared conformance case arrays (`submissionLedgerConformanceCases`, 32 cases; `conversationStoreConformanceCases`, 8 cases), run verbatim                                                                                                                                                                                          |
-| **2 — coordinator convergence** | The durable coordinator over YOUR adapters survives a fault at every durable boundary | Every `DurableRuntimeFailpointLocation` (28) is armed one-shot across six scenario shapes (plain, uncertain-tool, durable-steps, approval, join, delegation); after the fault the state must classify and the re-drive must converge to `verifyConversationInvariants` with every Submission settled and the digest chain fully recomputed |
-| **3 — real loss**               | The adapter survives ACTUAL loss (process kill, eviction), not only in-process faults | An adapter-supplied crash lever executed in this run, or citations of committed real-loss suites — recorded honestly, never silently claimed                                                                                                                                                                                               |
+| Tier                            | Claim                                                                                 | How it is discharged                                                                                                                                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **1 — port contract**           | Both ports honor every documented contract case                                       | The two shared conformance case arrays (`submissionLedgerConformanceCases` and `conversationStoreConformanceCases`), run verbatim                                                                                                                                                                                   |
+| **2 — coordinator convergence** | The durable coordinator over YOUR adapters survives a fault at every durable boundary | Every literal in `DurableRuntimeFailpointLocation` is armed one-shot across the scenario shapes declared by `CERTIFICATION_SCENARIOS`; after the fault the state must classify and the re-drive must converge to `verifyConversationInvariants` with every Submission settled and the digest chain fully recomputed |
+| **3 — real loss**               | The adapter survives ACTUAL loss (process kill, eviction), not only in-process faults | An adapter-supplied crash lever executed in this run, or citations of committed real-loss suites — recorded honestly, never silently claimed                                                                                                                                                                        |
 
 ## Run the certification
 
@@ -52,8 +52,9 @@ silent passes and never failures.
 
 ## What Tier 2 asserts, exactly
 
-Each of the 168 sweep cells (6 scenarios × 28 locations) arms ONE coordinator failpoint
-one-shot, submits fresh work on its own Conversation lane, drives the lane(s) with
+Each cell in the Cartesian product of `CERTIFICATION_SCENARIOS` and
+`DurableRuntimeFailpointLocation.literals` arms ONE coordinator failpoint one-shot, submits
+fresh work on its own Conversation lane, drives the lane(s) with
 `processConversationResolved`, and then re-drives to convergence using only public levers:
 `runRecovery`, worker re-drives, and the authorized unblocking operations chosen from
 `explainConversation` evidence (`resolveUnknown` with `SafeToRetry`, `resolveApproval` with
@@ -69,8 +70,10 @@ with one upgrade: the runner captures each batch's producer identity at append t
 `digest-chain` check is FULLY recomputed from `EMPTY_TAIL_DIGEST` instead of reported
 `skipped` (the ConversationStore port deliberately does not export producer identity).
 
-Three locations never fire in these six shapes — `abort:after-intent`, `resolve:after-intent`,
-and `subagent:after-child-abort-intent` sit on operator/abort paths the shapes do not take.
+The locations that never fire in the current scenario matrix are declared by
+`TIER2_UNREACHED_LOCATIONS`: `abort:after-intent`, `compaction:after-canonical-append`,
+`resolve:after-intent`, and `subagent:after-child-abort-intent` sit on operator, compaction, or
+abort paths the shapes do not take.
 The runners assert the observed never-fired set equals exactly this documented list, so scoped
 coverage cannot silently grow; those locations are pinned by dedicated in-process suites and the
 crash matrices.

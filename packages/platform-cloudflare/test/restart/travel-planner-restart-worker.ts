@@ -1,18 +1,22 @@
+import { Agent } from "@effect-agent/core";
 import {
+  DurableWorkerBinding,
   DurableRuntimeFailpointLocation,
   OperationCaller,
   Receipt,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
+  possessionChildAdmissionAuthorizerLayer,
+  possessionOperationAuthorizerLayer,
   type CanonicalRecordEnvelope,
 } from "@effect-agent/session";
 import { DoStorageFailpointLocation } from "@effect-agent/storage-cloudflare";
 import {
   TravelPlannerPhase4,
-  makePhase6TravelPlannerHarness,
   phase1Trip,
+  phase4TravelPlannerDefinitionDigests,
+  phase4TravelPlannerWorkerLayer,
   phase4TravelPlannerPrincipal,
   phase4TravelPlannerSubmitOptions,
+  phase6PlannerModel,
   phase6TravelPlannerDeploymentId,
   phase6TravelPlannerProducerPrefix,
 } from "@effect-agent/testing";
@@ -49,28 +53,38 @@ import {
 
 let alarmDeliveries = 0;
 const clientEntries: Array<string> = [];
-const travelPlannerHarness = Effect.runSync(makePhase6TravelPlannerHarness());
 const operationCaller = OperationCaller.make({ principal: phase4TravelPlannerPrincipal });
+const authorizationLayer = Layer.merge(
+  possessionOperationAuthorizerLayer,
+  possessionChildAdmissionAuthorizerLayer,
+);
+const bindings = DurableWorkerBinding.make(
+  Agent.withModel(TravelPlannerPhase4, phase6PlannerModel),
+  phase4TravelPlannerDefinitionDigests,
+).pipe(
+  Effect.provide(phase4TravelPlannerWorkerLayer),
+  Effect.map((binding) => [binding]),
+);
 
-const baseClass = makeConversationObjectClass({
-  namespaceBinding: "CONVERSATIONS",
-  deploymentId: phase6TravelPlannerDeploymentId,
-  producerPrefix: phase6TravelPlannerProducerPrefix,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
-  ownershipLeaseDuration: 1_000,
-  leaseRenewalInterval: 100,
-  wakeScanInterval: 100,
-  settlementPollInterval: 25,
-  abortPollInterval: 25,
-  alarmBackoffBase: 10,
-  alarmBackoffCap: 100,
-  observationPollInterval: 10,
-  bindings: travelPlannerHarness.bindings,
-  toolReconciler: travelPlannerHarness.supplierReconcilerLayer,
-  storageFailpoint: storageEvictionFailpoint,
-  runtimeFailpoint: runtimeEvictionFailpoint,
-});
+const baseClass = makeConversationObjectClass(
+  {
+    namespaceBinding: "CONVERSATIONS",
+    deploymentId: phase6TravelPlannerDeploymentId,
+    producerPrefix: phase6TravelPlannerProducerPrefix,
+    ownershipLeaseDuration: 1_000,
+    leaseRenewalInterval: 100,
+    wakeScanInterval: 100,
+    settlementPollInterval: 25,
+    abortPollInterval: 25,
+    alarmBackoffBase: 10,
+    alarmBackoffCap: 100,
+    observationPollInterval: 10,
+    bindings,
+    storageFailpoint: storageEvictionFailpoint,
+    runtimeFailpoint: runtimeEvictionFailpoint,
+  },
+  authorizationLayer,
+);
 
 /** The restart lane's Conversation Object, with entry-kind instrumentation. */
 export class TravelPlannerRestartObject extends baseClass {

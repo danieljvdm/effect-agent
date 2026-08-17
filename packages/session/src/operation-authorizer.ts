@@ -79,6 +79,57 @@ export const operationAuthorizerLayer = (
 export const possessionOperationAuthorizerLayer: Layer.Layer<OperationAuthorizer> =
   operationAuthorizerLayer(possessionOperationAuthorizer);
 
+/** Mutating protected operations whose host commit boundary may require durable preparation. */
+export const PreparedMutationOperation = Schema.Literals([
+  "abort",
+  "resolveUnknown",
+  "resolveApproval",
+  "retry",
+]);
+export type PreparedMutationOperation = typeof PreparedMutationOperation.Type;
+
+/** Exact caller and target presented after authorization and before the mutation path begins. */
+export class OperationMutationPreparationRequest extends Schema.Class<OperationMutationPreparationRequest>(
+  "@effect-agent/session/OperationMutationPreparationRequest",
+)({
+  operation: PreparedMutationOperation,
+  principal: Principal,
+  submissionId: SubmissionId,
+}) {}
+
+/** Typed, transportable failure to establish the host's durable mutation boundary. */
+export class OperationMutationPreparationError extends Schema.TaggedError<OperationMutationPreparationError>()(
+  "OperationMutationPreparationError",
+  {
+    operation: PreparedMutationOperation,
+    message: Schema.String.check(Schema.isMaxLength(4_096)),
+  },
+) {}
+
+export interface OperationMutationPreparerService {
+  readonly prepare: (
+    request: OperationMutationPreparationRequest,
+  ) => Effect.Effect<void, OperationMutationPreparationError>;
+}
+
+/** Required inward port run once after authorization and before a protected mutation path. */
+export class OperationMutationPreparer extends Context.Service<
+  OperationMutationPreparer,
+  OperationMutationPreparerService
+>()("@effect-agent/session/OperationMutationPreparer") {}
+
+export const operationMutationPreparerLayer = (
+  service: OperationMutationPreparerService,
+): Layer.Layer<OperationMutationPreparer> => Layer.succeed(OperationMutationPreparer)(service);
+
+/** Explicit no-op for hosts whose mutation boundary needs no additional durable preparation. */
+export const noopOperationMutationPreparer: OperationMutationPreparerService = {
+  prepare: () => Effect.void,
+};
+
+export const noopOperationMutationPreparerLayer: Layer.Layer<OperationMutationPreparer> =
+  operationMutationPreparerLayer(noopOperationMutationPreparer);
+
 /**
  * Current-policy question asked immediately before each durable child establishment attempt. The
  * opaque grant digest remains capabilities-owned; session binds it without interpreting it.

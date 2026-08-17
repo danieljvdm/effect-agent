@@ -155,10 +155,11 @@ const submitParent = (conversation: string, key: string) =>
     );
   });
 
-/** Drive one Conversation lane through the S2 multi-binding worker entry point. */
+/** Drive one Conversation lane through the S2 recovery-then-worker entry point. */
 const drive = (conversationId: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+    yield* runtime.runRecovery;
     return yield* runtime.processConversationResolved(conversationId);
   });
 
@@ -314,12 +315,13 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
             expect(yield* decodeAmounts(reservedRow.allocation)).toEqual(durableResearchAllocation);
 
             // Phase 2: the child lane runs to Settlement under its own Attempt ownership and
-            // wakes the parent durably (recordChildSettled → input-applied).
+            // records the durable parent marker. Only parent-owned recovery may clear the
+            // suspension on the next drive.
             const childSettlements = yield* drive(childConversationId);
             expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
             expect(yield* harness.childModelCalls).toBe(2);
             expect(yield* harness.guideInvocations).toBe(1);
-            expect((yield* parentState(receipt.submissionId)).state).toBe("input-applied");
+            expect((yield* parentState(receipt.submissionId)).state).toBe("suspended");
             const childLog = yield* readLog(childConversationId);
             expect(recordIds(childLog)).toContain(`subagent-lineage:${childConversationId}`);
             // Context isolation (SUB-006/SUB-015): the child saw only the projected brief,
@@ -865,7 +867,7 @@ describe("TEST-014 S2 durable Travel Planner Subagent delegation (DN)", () => {
               typeof failure === "object" && failure !== null && "message" in failure
                 ? String(failure.message)
                 : "",
-            ).toContain("fails closed");
+            ).toContain("diverges from the canonical SubagentRequested identity");
             const log = yield* readLog(receipt.conversationId);
             expect(payloadsOf(log, "SubagentStarted")).toHaveLength(0);
             expect(payloadsOf(log, "SubagentJoined")).toHaveLength(0);

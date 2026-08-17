@@ -202,6 +202,7 @@ exact `SubagentStarted` Tool Call/child pairs and applies two-sided validation: 
 the stored reason has canonical provenance, and every canonically pending approval or unjoined
 started child remains named by the reason. This preserves the original reason through partial
 multi-item coverage while allowing earlier fully decided/joined suspension cycles to be absent.
+Tool Call/child identities are compared as structural pairs, never as delimiter-joined strings.
 Only then may `resumeSuspension` atomically recheck the exact stored reason and complete operational
 coverage before transitioning `suspended → input-applied`.
 
@@ -237,6 +238,10 @@ tool-call ID, and the Schema-backed execution kind copied from the actual Effect
 annotation. The only execution kinds are `application` and `delegation`; Tool names, including a
 name beginning with `delegate_`, carry no replay-safety meaning. After the Tool returns and output
 validation succeeds, the engine commits `ToolCallSettled`.
+
+`executionKind` is required in the current private-development schema-v1 payload. Histories written
+before that field existed intentionally fail Schema decode and are reset under STORE-011; recovery
+does not infer a value, and this project provides no migration compatibility for those histories.
 
 If recovery sees `ToolCallPrepared` without `ToolCallSettled`, the outcome is
 unknown unless a registered reconciliation policy can prove one of:
@@ -389,7 +394,8 @@ Poison submissions are not retried forever. The scheduler supports:
 `Unknown` stops ordinary running-time and worker-permit consumption, but not the accepted settlement
 obligation. Unknown work is aged, alerted, and routed to the configured resolution dependency.
 Durable deployment claims require an operational runbook and authorized bounded intervention path
-for that queue.
+for that queue. The same scan reports contradictory or provenance-invalid suspension state as a
+distinct `quarantined` obligation rather than mislabeling it as approval or child waiting.
 
 ## 17. Requirements
 

@@ -9,9 +9,9 @@ import { Context, Effect, Layer, Ref, Schema } from "effect";
  *
  * The `subagent:*` family covers every durable mutation of the S2 establishment/join protocol
  * (spec/subagents.md §12/§14): reservation, request append, child admission, child readiness,
- * start-link append, sibling per-call settles at the suspension seam, the `waitingForChild`
- * suspension, child abort propagation, the atomic join batch, and both reservation-release
- * transitions.
+ * start-link append, durable reservation attachment, sibling per-call settles at the suspension
+ * seam, the `waitingForChild` suspension, child abort propagation, the atomic join batch, and both
+ * reservation-release transitions.
  */
 export const DurableRuntimeFailpointLocation = Schema.Literals([
   "submit:after-admit",
@@ -37,6 +37,7 @@ export const DurableRuntimeFailpointLocation = Schema.Literals([
   "subagent:after-admit",
   "subagent:after-child-ready",
   "subagent:after-start-append",
+  "subagent:after-child-attach",
   "subagent:after-sibling-settle",
   "subagent:after-suspend",
   "subagent:after-child-abort-intent",

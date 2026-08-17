@@ -12,6 +12,9 @@ import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { codeModeHandlersLayer } from "./agent.ts";
 import { liveAgent, scriptedAgent } from "./profiles.ts";
 import { isValidTenant, Warehouse, WarehouseObject, warehouseLayer } from "./warehouse-object.ts";
+import { AskRequest, AskResult } from "./wire.ts";
+
+export { AskRequest, AskResult } from "./wire.ts";
 
 /**
  * The demo Worker: it answers a natural-language question about the invoice
@@ -42,35 +45,6 @@ interface WorkerEnv {
    */
   readonly DEMO_AUTH_TOKEN?: string;
 }
-
-export class AskRequest extends Schema.Class<AskRequest>(
-  "@effect-agent/example-code-mode-cloudflare/AskRequest",
-)({
-  question: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
-}) {}
-
-const CodeModeEvidence = Schema.Struct({
-  used: Schema.Boolean,
-  tool: Schema.String,
-  executor: Schema.String,
-  calls: Schema.Natural,
-  program: Schema.optionalKey(Schema.String),
-  result: Schema.optionalKey(Schema.Json),
-  logs: Schema.optionalKey(Schema.Array(Schema.Json)),
-});
-
-export class AskResult extends Schema.Class<AskResult>(
-  "@effect-agent/example-code-mode-cloudflare/AskResult",
-)({
-  answer: Schema.String,
-  /**
-   * Evidence that the answer came from Code Mode: the tool the model called,
-   * how many times, the JavaScript program it actually wrote, and the isolated
-   * executor that ran it — plus the program's returned value and console logs.
-   */
-  codeMode: CodeModeEvidence,
-  profile: Schema.Literals(["scripted", "openai"]),
-}) {}
 
 const decodeAskRequest = Schema.decodeUnknownEffect(AskRequest);
 const encodeAskResult = Schema.encodeEffect(AskResult);

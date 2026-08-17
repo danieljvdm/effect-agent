@@ -397,13 +397,15 @@ export class IntegrityReport extends Schema.Class<IntegrityReport>(
 
 /**
  * What one nonterminal Submission is visibly blocked on (DUR-017 operator surface; OPS-001).
- * `ready-aged`/`running-aged` are not blocks — they are accepted work whose settlement age is
- * measurable and alertable.
+ * `quarantined` is a fail-closed suspension whose operational reason contradicts canonical
+ * evidence. `ready-aged`/`running-aged` are not blocks — they are accepted work whose settlement
+ * age is measurable and alertable.
  */
 export const ObligationBlockedOn = Schema.Literals([
   "unknown",
   "approval",
   "waitingForChild",
+  "quarantined",
   "ready-aged",
   "running-aged",
 ]);

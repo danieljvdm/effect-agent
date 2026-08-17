@@ -1,6 +1,8 @@
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
+  OperationMutationPreparationError,
+  OperationMutationPreparer,
   SubmissionLedger,
   type DurableBindingFailure,
   type DurableWorkerFailure,
@@ -10,6 +12,14 @@ import { Clock, Context, Effect, Layer, Option, Random, Ref, Schema, Stream } fr
 
 import { ConversationObjectIdentity, DurableObjectContext } from "./bindings.ts";
 import { CloudflareDurableRuntimeConfig } from "./config.ts";
+
+const preArmEffect = (
+  alarm: DurableAlarmService["Service"],
+  config: CloudflareDurableRuntimeConfig["Service"],
+) =>
+  Clock.currentTimeMillis.pipe(
+    Effect.flatMap((now) => alarm.ensureScheduledBy(now + config.wakeScanInterval)),
+  );
 
 /**
  * The single multiplexed Durable Object alarm (decision D-P6-2). A Durable Object has ONE
@@ -157,6 +167,30 @@ export class DurableAlarmService extends Context.Service<
     );
 }
 
+/** Session mutation-boundary port backed by the Object's durable alarm slot. */
+export const cloudflareOperationMutationPreparerLayer: Layer.Layer<
+  OperationMutationPreparer,
+  never,
+  DurableAlarmService | CloudflareDurableRuntimeConfig
+> = Layer.effect(
+  OperationMutationPreparer,
+  Effect.gen(function* () {
+    const alarm = yield* DurableAlarmService;
+    const config = yield* CloudflareDurableRuntimeConfig;
+    return OperationMutationPreparer.of({
+      prepare: (request) =>
+        preArmEffect(alarm, config).pipe(
+          Effect.mapError((error) =>
+            OperationMutationPreparationError.make({
+              operation: request.operation,
+              message: error.message.slice(0, 4_096),
+            }),
+          ),
+        ),
+    });
+  }),
+);
+
 /** What one maintenance pass did — auditable evidence mirroring `NodeDurableHost`'s report. */
 export class MaintenancePassReport extends Schema.Class<MaintenancePassReport>(
   "@effect-agent/platform-cloudflare/MaintenancePassReport",
@@ -240,9 +274,7 @@ export class ConversationMaintenance extends Context.Service<
        */
       const stalls = yield* Ref.make(0);
 
-      const preArm = Clock.currentTimeMillis.pipe(
-        Effect.flatMap((now) => alarm.ensureScheduledBy(now + config.wakeScanInterval)),
-      );
+      const preArm = preArmEffect(alarm, config);
 
       const countNonterminal = Stream.runCollect(ledger.scanNonterminal).pipe(
         Effect.map((snapshots) => snapshots.length),

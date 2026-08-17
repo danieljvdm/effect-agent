@@ -84,10 +84,11 @@ const submitMission = (conversation: string, key: string) =>
     );
   });
 
-/** Drive one Conversation lane through the S2 multi-binding worker entry point. */
+/** Drive one Conversation lane through the S2 recovery-then-worker entry point. */
 const drive = (conversationId: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+    yield* runtime.runRecovery;
     return yield* runtime.processConversationResolved(conversationId);
   });
 

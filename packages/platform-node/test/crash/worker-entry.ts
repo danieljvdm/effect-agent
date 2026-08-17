@@ -302,6 +302,9 @@ const driveResolved = (
 ) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+    // The long-running worker performs parent-owned recovery before handling a wake. This
+    // one-shot child-process driver must preserve the same ordering.
+    yield* runtime.runRecovery;
     return yield* runtime
       .processConversationResolved(conversation)
       .pipe(Effect.provideService(AgentBindingResolver, resolver));

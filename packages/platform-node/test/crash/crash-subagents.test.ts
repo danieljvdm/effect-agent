@@ -79,10 +79,13 @@ const submitCoordinator = (conversation: string, key: string) =>
     );
   });
 
-/** Drive one Conversation lane through the S2 multi-binding worker path (SUB-023). */
+/** Drive one Conversation lane through the S2 recovery-then-worker path (SUB-023). */
 const driveWith = (bindings: ReadonlyArray<ResolvedBinding>) => (conversation: string) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+    // A production worker reconciles durable notifications before it claims the woken lane.
+    // Keep this bounded crash driver faithful to that ordering.
+    yield* runtime.runRecovery;
     return yield* runtime
       .processConversationResolved(decodeConversationId(conversation))
       .pipe(
@@ -780,13 +783,17 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 const host = yield* NodeDurableHost;
                 const parent = yield* lookupByKey(conversation, key);
                 const started = yield* startedPayloadOf(conversation);
-                // Independent fenced recovery: the parent restores its waiting checkpoint
-                // under its own fence, the child resumes from its own Turn boundary.
+                // Independent fenced recovery: either the child worker's pre-drive scan already
+                // restored the parent checkpoint after its short lease expired, or this startup
+                // pass does so now. Both histories leave the parent suspended on the same
+                // canonical child while that child resumes from its own Turn boundary.
                 const parentReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === parent.submissionId,
                 );
-                expect(parentReport?.decision._tag).toBe("EnsureWaitingForChild");
-                expect(parentReport?.disposition).toBe("repaired");
+                expect([
+                  ["EnsureWaitingForChild", "repaired"],
+                  ["AwaitChildSettlement", "deferred"],
+                ]).toContainEqual([parentReport?.decision._tag, parentReport?.disposition]);
                 const childReport = host.startupRecovery.find(
                   (entry) => entry.submissionId === started.childSubmissionId,
                 );
@@ -990,15 +997,21 @@ layer(NodeFileSystem.layer, { excludeTestServices: true })(
                 yield* withRuntime(
                   site.db,
                   Effect.gen(function* () {
+                    const runtime = yield* DurableAgentRuntime;
                     // Independent fencing (spec §7 platform row): the child replacement never
-                    // touched the parent's log or epoch — the parent's only transition is its
-                    // own durable wake (suspended → input-applied).
-                    const parentTailAfter = yield* readTail(conversation);
-                    expect(parentTailAfter.tailDigest).toBe(parentTailBefore.tailDigest);
-                    expect(Number(parentTailAfter.producerEpoch)).toBe(
+                    // touched the parent's log or epoch. Only the durable ledger notification is
+                    // visible before the parent owner runs recovery.
+                    const parentTailAfterChild = yield* readTail(conversation);
+                    expect(parentTailAfterChild.tailDigest).toBe(parentTailBefore.tailDigest);
+                    expect(Number(parentTailAfterChild.producerEpoch)).toBe(
                       Number(parentTailBefore.producerEpoch),
                     );
                     expect(yield* recordIdsOf(conversation)).toEqual(parentIdsBefore);
+
+                    // The replacement child records a durable settlement marker. Its wake is a
+                    // hint; the parent owner consumes that marker through recovery before the
+                    // suspension may clear. Recovery may append its own audit annotation.
+                    yield* runtime.runRecovery;
                     expect((yield* submissionSnapshot(parentId)).state).toBe("input-applied");
                     // Exactly one committed child response — the fresh Attempt's.
                     const childLog = yield* readLog(childConversation);

@@ -358,15 +358,19 @@ describe("cross-DO port routing", () => {
           expect(settledConflict.submissionId).toBe(prepared.host.submissionId);
         }
 
-        const repaired = yield* ledger.repairSettlementFromCanonical(
-          CanonicalSettlementRepair.make({
-            submissionId: prepared.host.submissionId,
-            record: prepared.reservation.record,
-            recordDigest: prepared.reservation.recordDigest,
-          }),
-        );
-        expect(repaired.submissionId).toBe(prepared.host.submissionId);
-        expect(repaired.outcome).toBe("completed");
+        // Canonical repair is lane-local: this caller cannot prove that its supplied envelope
+        // came from the target Object's ConversationStore, so the router refuses to forward it.
+        const foreignRepair = yield* ledger
+          .repairSettlementFromCanonical(
+            CanonicalSettlementRepair.make({
+              submissionId: prepared.host.submissionId,
+              record: prepared.reservation.record,
+              recordDigest: prepared.reservation.recordDigest,
+            }),
+          )
+          .pipe(Effect.flip);
+        expect(foreignRepair).toBeInstanceOf(LedgerError);
+        expect(foreignRepair.message).toContain("not route-capable");
 
         // A joined Submission settles with its host: the redirect crosses Objects typed.
         const joinedRedirect = yield* ledger

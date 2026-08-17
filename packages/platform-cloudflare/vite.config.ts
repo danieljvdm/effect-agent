@@ -36,6 +36,14 @@ export default defineConfig({
               durableObjects: {
                 CONVERSATIONS: { className: "TestConversationObject", useSQLite: true },
                 DENIED: { className: "DeniedConversationObject", useSQLite: true },
+                CHANGING_AUTH: {
+                  className: "ChangingAuthorizationConversationObject",
+                  useSQLite: true,
+                },
+                RUN_JOURNAL_FAILURE: {
+                  className: "RunJournalFailureConversationObject",
+                  useSQLite: true,
+                },
                 LIMITED: { className: "LimitedConversationObject", useSQLite: true },
                 TINYDB: { className: "TinyDatabaseConversationObject", useSQLite: true },
                 SUBAGENTS: { className: "SubagentConversationObject", useSQLite: true },

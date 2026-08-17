@@ -3,6 +3,25 @@ import { DurableObject } from "cloudflare:workers";
 import { Context, Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import {
+  WarehouseDeniedReason,
+  type WarehouseDeniedReason as WarehouseDeniedReasonType,
+  WarehouseInvoice,
+  WarehouseInvoices,
+  WarehouseListOutcome,
+  WarehouseListRequest,
+  WarehouseQueryDenied,
+} from "./wire.ts";
+
+export {
+  WarehouseInvoice,
+  WarehouseInvoices,
+  WarehouseListOutcome,
+  WarehouseListRequest,
+  WarehouseQueryDenied,
+  WarehouseRegion,
+} from "./wire.ts";
+
 /**
  * The warehouse Durable Object exposes one curated invoice-list operation.
  * Callers choose typed filters, never SQL text, so the `readonly` Tool label
@@ -12,43 +31,6 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 const MAX_ROWS = 200;
 
-export const WarehouseRegion = Schema.Literals(["amer", "emea", "apac"]);
-export type WarehouseRegion = typeof WarehouseRegion.Type;
-
-export class WarehouseInvoice extends Schema.Class<WarehouseInvoice>(
-  "@effect-agent/example-code-mode-cloudflare/WarehouseInvoice",
-)({
-  customer: Schema.NonEmptyString,
-  region: WarehouseRegion,
-  revenue: Schema.Natural,
-  createdAt: Schema.NonEmptyString,
-}) {}
-
-export class WarehouseListRequest extends Schema.Class<WarehouseListRequest>(
-  "@effect-agent/example-code-mode-cloudflare/WarehouseListRequest",
-)({
-  minimumRevenue: Schema.optionalKey(Schema.Natural),
-  region: Schema.optionalKey(WarehouseRegion),
-}) {}
-
-export class WarehouseInvoices extends Schema.TaggedClass<WarehouseInvoices>(
-  "@effect-agent/example-code-mode-cloudflare/WarehouseInvoices",
-)("WarehouseInvoices", {
-  invoices: Schema.Array(WarehouseInvoice).check(Schema.isMaxLength(MAX_ROWS)),
-  truncated: Schema.Boolean,
-}) {}
-
-export class WarehouseQueryDenied extends Schema.TaggedError<WarehouseQueryDenied>()(
-  "WarehouseQueryDenied",
-  {
-    reason: Schema.String.check(Schema.isMaxLength(500)),
-    cause: Schema.optionalKey(Schema.Defect()),
-  },
-) {}
-
-export const WarehouseListOutcome = Schema.Union([WarehouseInvoices, WarehouseQueryDenied]);
-export type WarehouseListOutcome = typeof WarehouseListOutcome.Type;
-
 const decodeListRequest = Schema.decodeUnknownEffect(WarehouseListRequest);
 const decodeListOutcome = Schema.decodeUnknownEffect(WarehouseListOutcome);
 const encodeListRequest = Schema.encodeEffect(WarehouseListRequest);
@@ -57,16 +39,24 @@ const decodeInvoice = Schema.decodeUnknownOption(WarehouseInvoice);
 const WarehouseCount = Schema.Struct({
   n: Schema.Union([
     Schema.Natural,
-    Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+    Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
   ]),
 });
 const decodeCount = Schema.decodeUnknownEffect(WarehouseCount);
 
-const queryFailure = (reason: string, cause?: unknown): WarehouseQueryDenied =>
-  WarehouseQueryDenied.make({
-    reason: reason.slice(0, 500),
-    ...(cause === undefined ? {} : { cause }),
-  });
+const queryFailure = (reason: WarehouseDeniedReasonType): WarehouseQueryDenied =>
+  WarehouseQueryDenied.make({ reason });
+
+class WarehouseQueryFault extends Schema.TaggedError<WarehouseQueryFault>()("WarehouseQueryFault", {
+  reason: WarehouseDeniedReason,
+  cause: Schema.Defect(),
+}) {}
+
+const redactFailure = (fault: WarehouseQueryFault): Effect.Effect<never, WarehouseQueryDenied> =>
+  Effect.logWarning("warehouse operation failed").pipe(
+    Effect.annotateLogs({ reason: fault.reason, cause: fault.cause }),
+    Effect.andThen(Effect.fail(queryFailure(fault.reason))),
+  );
 
 const selectInvoiceRows = (
   storage: DurableObjectStorage,
@@ -91,20 +81,20 @@ const selectInvoiceRows = (
               )
           : region === undefined
             ? storage.sql.exec(
-                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? ORDER BY revenue DESC LIMIT ?",
+                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue >= ? ORDER BY revenue DESC LIMIT ?",
                 minimum,
                 limit,
               )
             : storage.sql.exec(
-                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue > ? AND region = ? ORDER BY revenue DESC LIMIT ?",
+                "SELECT customer, region, revenue, created_at AS createdAt FROM invoice_summary WHERE revenue >= ? AND region = ? ORDER BY revenue DESC LIMIT ?",
                 minimum,
                 region,
                 limit,
               );
       return [...cursor];
     },
-    catch: (cause) => queryFailure(`warehouse query failed: ${String(cause)}`, cause),
-  });
+    catch: (cause) => WarehouseQueryFault.make({ reason: "query-failed", cause }),
+  }).pipe(Effect.catch(redactFailure));
 
 const seedRows: ReadonlyArray<WarehouseInvoice> = [
   WarehouseInvoice.make({
@@ -153,7 +143,7 @@ const queryInvoices = (
           }
           const invoice = decodeInvoice(raw);
           if (Option.isNone(invoice)) {
-            return yield* queryFailure("warehouse returned a row outside the invoice wire Schema");
+            return yield* queryFailure("invalid-invoice");
           }
           invoices.push(invoice.value);
         }
@@ -198,15 +188,14 @@ export class WarehouseObject extends DurableObject {
   async listInvoices(encoded: unknown): Promise<unknown> {
     const outcome = await Effect.runPromise(
       decodeListRequest(encoded).pipe(
-        Effect.mapError((error) =>
-          queryFailure(`invalid warehouse request: ${error.message.slice(0, 450)}`, error),
+        Effect.catch((cause) =>
+          redactFailure(WarehouseQueryFault.make({ reason: "invalid-request", cause })),
         ),
         Effect.tap(() =>
           Effect.tryPromise({
             try: () => this.#ensureSeeded(),
-            catch: (cause) =>
-              queryFailure(`warehouse initialization failed: ${String(cause)}`, cause),
-          }),
+            catch: (cause) => WarehouseQueryFault.make({ reason: "initialization-failed", cause }),
+          }).pipe(Effect.catch(redactFailure)),
         ),
         Effect.flatMap((request) => queryInvoices(this.ctx.storage, request)),
         Effect.match({ onFailure: (failure) => failure, onSuccess: (success) => success }),
@@ -214,12 +203,10 @@ export class WarehouseObject extends DurableObject {
     );
     return Effect.runPromise(
       encodeListOutcome(outcome).pipe(
-        Effect.catch((error) =>
-          Effect.succeed({
-            _tag: "WarehouseQueryDenied",
-            reason: `warehouse response encoding failed: ${error.message.slice(0, 430)}`,
-          }),
-        ),
+        Effect.orElseSucceed(() => ({
+          _tag: "WarehouseQueryDenied" as const,
+          reason: "response-encoding-failed" as const,
+        })),
       ),
     );
   }
@@ -247,17 +234,17 @@ export const warehouseLayer = (
     listInvoices: (request) =>
       encodeListRequest(request).pipe(
         Effect.flatMap((encoded) =>
-          Effect.tryPromise(() => {
-            const stub = namespace.get(namespace.idFromName(tenant));
-            return stub.listInvoices(encoded);
+          Effect.tryPromise({
+            try: () => {
+              const stub = namespace.get(namespace.idFromName(tenant));
+              return stub.listInvoices(encoded);
+            },
+            catch: (cause) => WarehouseQueryFault.make({ reason: "unavailable", cause }),
           }),
         ),
         Effect.flatMap(decodeListOutcome),
-        Effect.mapError((error) =>
-          queryFailure(
-            `warehouse unavailable or returned an invalid response: ${error.message.slice(0, 390)}`,
-            error,
-          ),
+        Effect.catch((cause) =>
+          redactFailure(WarehouseQueryFault.make({ reason: "unavailable", cause })),
         ),
         Effect.flatMap((outcome) =>
           outcome._tag === "WarehouseQueryDenied" ? Effect.fail(outcome) : Effect.succeed(outcome),

@@ -2,8 +2,8 @@ import { SubagentReservationsMemoryLive } from "@effect-agent/capabilities";
 import { Agent } from "@effect-agent/core";
 import {
   DurableWorkerBinding,
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
+  possessionChildAdmissionAuthorizerLayer,
+  possessionOperationAuthorizerLayer,
   type ResolvedBinding,
   type ToolReconciler,
 } from "@effect-agent/session";
@@ -28,7 +28,8 @@ import {
   phase4TravelPlannerWorkerLayer,
   phase5TravelPlannerDefinitionDigests,
   phase5TravelPlannerWorkerLayer,
-  phase6BookingModel,
+  phase6BookingRef,
+  phase6BookingToolCallId,
   phase6ChildLookupCallId,
   phase6CoordinatorModel,
   phase6PlannerModel,
@@ -102,6 +103,52 @@ const researcherReportParts: ReadonlyArray<AiResponse.StreamPartEncoded> = [
   { type: "text-end", id: "destination-report" },
   { type: "finish", reason: "stop", usage },
 ];
+
+const latestBookingMarker = (promptJson: string): string => {
+  const matches = [...promptJson.matchAll(/\[case:([^\]]+)\]/g)];
+  return matches.at(-1)?.[1] ?? "unknown-case";
+};
+
+/**
+ * Workerd queue fixture variant of the Phase 6 booking model. A Conversation can carry more
+ * than one booking Submission, so it selects the latest input marker instead of the first marker
+ * retained in canonical history. Each queued Submission therefore declares its own approval.
+ */
+const cloudflareBookingModel = promptAwareModel(
+  "travel-planner-phase-5-cloudflare",
+  (promptJson) => {
+    const marker = latestBookingMarker(promptJson);
+    if (!promptJson.includes(phase6BookingToolCallId(marker))) {
+      return Stream.fromIterable<AiResponse.StreamPartEncoded>([
+        {
+          type: "tool-call",
+          id: phase6BookingToolCallId(marker),
+          name: "book_flight",
+          params: {
+            quoteId: "quote-sfo-lhr-001",
+            travelerRef: `traveler-${marker}`,
+            departOn: "2026-09-14",
+          },
+          providerExecuted: false,
+        },
+        { type: "finish", reason: "tool-calls", usage },
+      ]);
+    }
+    return Stream.fromIterable<AiResponse.StreamPartEncoded>([
+      { type: "text-start", id: "booking-report" },
+      {
+        type: "text-delta",
+        id: "booking-report",
+        delta: JSON.stringify({
+          summary: "trip booked",
+          bookingRefs: [phase6BookingRef(marker)],
+        }),
+      },
+      { type: "text-end", id: "booking-report" },
+      { type: "finish", reason: "stop", usage },
+    ]);
+  },
+);
 
 const makeCloudflarePhase6Harness = (): CloudflarePhase6Harness => {
   let researcherGateReleased = false;
@@ -182,7 +229,7 @@ const makeCloudflarePhase6Harness = (): CloudflarePhase6Harness => {
       phase4TravelPlannerDefinitionDigests,
     ).pipe(Effect.provide(phase4TravelPlannerWorkerLayer));
     const booking = yield* DurableWorkerBinding.make(
-      Agent.withModel(TravelPlannerPhase5, phase6BookingModel),
+      Agent.withModel(TravelPlannerPhase5, cloudflareBookingModel),
       phase5TravelPlannerDefinitionDigests,
     ).pipe(
       Effect.provide(phase5TravelPlannerWorkerLayer.pipe(Layer.provideMerge(supplierDeskLayer))),
@@ -234,12 +281,15 @@ const makeCloudflarePhase6Harness = (): CloudflarePhase6Harness => {
 /** Explicit worker composition-root fixture; each test resets the state it owns. */
 export const travelPlannerHarness = makeCloudflarePhase6Harness();
 
+const authorizationLayer = Layer.merge(
+  possessionOperationAuthorizerLayer,
+  possessionChildAdmissionAuthorizerLayer,
+);
+
 const baseOptions: ConversationObjectOptions = {
   namespaceBinding: "CONVERSATIONS",
   deploymentId: phase6TravelPlannerDeploymentId,
   producerPrefix: phase6TravelPlannerProducerPrefix,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   ownershipLeaseDuration: 1_000,
   leaseRenewalInterval: 100,
   wakeScanInterval: 100,
@@ -254,14 +304,20 @@ const baseOptions: ConversationObjectOptions = {
   runtimeFailpoint: runtimeEvictionFailpoint,
 };
 
-export class TravelPlannerConversationObject extends makeConversationObjectClass(baseOptions) {}
+export class TravelPlannerConversationObject extends makeConversationObjectClass(
+  baseOptions,
+  authorizationLayer,
+) {}
 
-export class TravelPlannerLimitedObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "LIMITED",
-  maxQueueDepthPerLane: 2,
-  maxInputBytes: 512,
-}) {}
+export class TravelPlannerLimitedObject extends makeConversationObjectClass(
+  {
+    ...baseOptions,
+    namespaceBinding: "LIMITED",
+    maxQueueDepthPerLane: 2,
+    maxInputBytes: 512,
+  },
+  authorizationLayer,
+) {}
 
 export default {
   fetch(): Response {

@@ -1173,12 +1173,29 @@ export const submissionSettlementRecordId = (submissionId: SubmissionId): Record
 export const validateCanonicalSettlementRepair = Effect.fn(
   "SubmissionLedger.validateCanonicalSettlementRepair",
 )(function* (
-  request: CanonicalSettlementRepair,
+  unvalidated: unknown,
   expectedReceiptId: ReceiptId,
 ): Effect.fn.Return<ValidatedCanonicalSettlement, LedgerError, Crypto.Crypto> {
-  const payload = request.record.payload;
   const invalid = (message: string) =>
     LedgerError.make({ operation: "repairSettlementFromCanonical", message });
+  const familyProjection = yield* Schema.decodeUnknownEffect(
+    Schema.Struct({ record: Schema.Struct({ family: Schema.String }) }),
+  )(unvalidated).pipe(
+    Effect.mapError((cause) =>
+      invalid(`Canonical settlement repair is malformed: ${cause.message}`),
+    ),
+  );
+  if (familyProjection.record.family !== "conversation") {
+    return yield* invalid("Canonical settlement repair requires a conversation-family record");
+  }
+  const request = yield* Schema.decodeUnknownEffect(Schema.toType(CanonicalSettlementRepair))(
+    unvalidated,
+  ).pipe(
+    Effect.mapError((cause) =>
+      invalid(`Canonical settlement repair is malformed: ${cause.message}`),
+    ),
+  );
+  const payload = request.record.payload;
   if (request.record.recordId !== submissionSettlementRecordId(request.submissionId)) {
     return yield* invalid(
       `Canonical settlement record id does not match Submission ${request.submissionId}`,

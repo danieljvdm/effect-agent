@@ -20,6 +20,7 @@ import {
   ToolReconciler,
   UnknownResolutionCommand,
   WakeScheduler,
+  noopOperationMutationPreparerLayer,
   possessionChildAdmissionAuthorizerLayer,
   type AuthorizedOperation,
   type DurableSubmitOptions,
@@ -58,6 +59,7 @@ const decodeIdempotencyKey = Schema.decodeSync(IdempotencyKey);
 const decodeToolCallId = Schema.decodeSync(ToolCallId);
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-idor-sweep");
+const FOREIGN_PRINCIPAL = Schema.decodeSync(Principal)("principal-idor-foreign");
 const CALLER = OperationCaller.make({ principal: PRINCIPAL });
 const PRODUCER_ID = Schema.decodeSync(ProducerId)("producer-idor-sweep");
 const DIGESTS = DefinitionDigests.make({ agent: SHA_A, model: SHA_A, tools: SHA_A });
@@ -67,9 +69,13 @@ const OWNED_CONVERSATION = "idor-owned-conversation";
 /** A foreign Conversation the caller must never reach through any admin operation. */
 const FOREIGN_CONVERSATION = "idor-foreign-conversation";
 
-const submitOptions = (conversation: string, key: string): DurableSubmitOptions => ({
+const submitOptions = (
+  conversation: string,
+  key: string,
+  principal: Principal = PRINCIPAL,
+): DurableSubmitOptions => ({
   conversationId: decodeConversationId(conversation),
-  principal: PRINCIPAL,
+  principal,
   idempotencyKey: decodeIdempotencyKey(key),
   definitions: DIGESTS,
 });
@@ -129,7 +135,8 @@ const configLayer = DurableRuntimeConfig.layer({
 });
 
 /**
- * A tenant-scoped authorizer modelling the IDOR decision a real host enforces. It denies:
+ * A tenant-scoped authorizer modelling the IDOR decision a real host enforces. Ownership is
+ * explicitly keyed by the caller principal, and it denies:
  *
  *  - any request naming a Conversation other than the caller's own (explain/explainConversation/
  *    verify/wake/observe carry `conversationId`); and
@@ -139,12 +146,15 @@ const configLayer = DurableRuntimeConfig.layer({
  * by `submissionId` WITHOUT a `conversationId` (durable-runtime.ts): the framework gives the
  * authorizer no conversation context for those, so a tenant-scoped host must resolve the
  * Submission→tenant mapping itself. The test models that host-side resolution with an explicit
- * foreign-Submission set (see FINDINGS SEC-P7-002).
+ * Submission-owner map (see FINDINGS SEC-P7-002).
  */
 class AuthorizerControl extends Context.Service<
   AuthorizerControl,
   {
-    readonly markForeignSubmission: (submissionId: string) => Effect.Effect<void>;
+    readonly recordSubmissionOwner: (
+      submissionId: string,
+      principal: Principal,
+    ) => Effect.Effect<void>;
     readonly requests: Effect.Effect<ReadonlyArray<OperationAuthorizationRequest>>;
   }
 >()("@effect-agent/testing/IdorAuthorizerControl") {}
@@ -152,17 +162,24 @@ class AuthorizerControl extends Context.Service<
 const tenantScopedAuthorizerLayer = Layer.effectContext(
   Effect.gen(function* () {
     const owned = decodeConversationId(OWNED_CONVERSATION);
+    const foreign = decodeConversationId(FOREIGN_CONVERSATION);
+    const conversationOwners = new Map<ConversationId, Principal>([
+      [owned, PRINCIPAL],
+      [foreign, FOREIGN_PRINCIPAL],
+    ]);
     const seen = yield* Ref.make<ReadonlyArray<OperationAuthorizationRequest>>([]);
-    const foreignSubmissions = yield* Ref.make<ReadonlySet<string>>(new Set());
+    const submissionOwners = yield* Ref.make<ReadonlyMap<string, Principal>>(new Map());
     const service: OperationAuthorizerService = {
       authorize: (request) =>
         Effect.gen(function* () {
           yield* Ref.update(seen, (all) => [...all, request]);
-          const deniedSubmissions = yield* Ref.get(foreignSubmissions);
+          const owners = yield* Ref.get(submissionOwners);
           const foreignConversation =
-            request.conversationId !== undefined && request.conversationId !== owned;
+            request.conversationId !== undefined &&
+            conversationOwners.get(request.conversationId) !== request.principal;
           const foreignSubmission =
-            request.submissionId !== undefined && deniedSubmissions.has(request.submissionId);
+            request.submissionId !== undefined &&
+            owners.get(request.submissionId) !== request.principal;
           if (foreignConversation || foreignSubmission) {
             return yield* OperationDenied.make({
               operation: request.operation,
@@ -180,8 +197,8 @@ const tenantScopedAuthorizerLayer = Layer.effectContext(
       Context.add(
         AuthorizerControl,
         AuthorizerControl.of({
-          markForeignSubmission: (submissionId) =>
-            Ref.update(foreignSubmissions, (all) => new Set(all).add(submissionId)),
+          recordSubmissionOwner: (submissionId, principal) =>
+            Ref.update(submissionOwners, (all) => new Map(all).set(submissionId, principal)),
           requests: Ref.get(seen),
         }),
       ),
@@ -197,6 +214,7 @@ const baseLayer = Layer.mergeAll(
   ToolReconciler.uncertain,
   configLayer,
   tenantScopedAuthorizerLayer,
+  noopOperationMutationPreparerLayer,
   possessionChildAdmissionAuthorizerLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
@@ -214,7 +232,7 @@ const failureTag = <A, E>(exit: Exit.Exit<A, E>): string => {
 };
 
 /** Run one plain lane on the given Conversation to a completed settlement, return its Receipt. */
-const runSettledLane = (conversation: string, key: string) =>
+const runSettledLane = (conversation: string, key: string, principal: Principal = PRINCIPAL) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
     const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"done"}'));
@@ -222,7 +240,7 @@ const runSettledLane = (conversation: string, key: string) =>
     const receipt = yield* runtime.submit(
       agent,
       { question: "answer" },
-      submitOptions(conversation, key),
+      submitOptions(conversation, key, principal),
     );
     const settlements = yield* runtime.processConversation(
       agent,
@@ -243,13 +261,18 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
 
         // Two lanes exist: the caller's own and a foreign tenant's.
         const ownReceipt = yield* runSettledLane(OWNED_CONVERSATION, "idor-own-1");
-        const foreignReceipt = yield* runSettledLane(FOREIGN_CONVERSATION, "idor-foreign-1");
+        const foreignReceipt = yield* runSettledLane(
+          FOREIGN_CONVERSATION,
+          "idor-foreign-1",
+          FOREIGN_PRINCIPAL,
+        );
         const foreignConversationId = decodeConversationId(FOREIGN_CONVERSATION);
         const ownConversationId = decodeConversationId(OWNED_CONVERSATION);
 
-        // The host resolves the foreign Submission to its (foreign) tenant — the mapping the
-        // framework does not supply to the submission-only resolution operations.
-        yield* control.markForeignSubmission(foreignReceipt.submissionId);
+        // The host resolves each Submission to its owning principal — the mapping the framework
+        // does not supply to the submission-only resolution operations.
+        yield* control.recordSubmissionOwner(ownReceipt.submissionId, PRINCIPAL);
+        yield* control.recordSubmissionOwner(foreignReceipt.submissionId, FOREIGN_PRINCIPAL);
 
         // --- Foreign target: every targeted operation is denied BEFORE any read/write. ---
         const explainForeign = yield* Effect.exit(
@@ -340,7 +363,9 @@ layer(testLayer)("SEC-002/D10 admin surface IDOR sweep under a tenant-scoped aut
         expect(obligations.entries).toEqual([]);
 
         // Every targeted operation reached the authorization seam (proof the sweep is not bypassed).
-        const operations = new Set((yield* control.requests).map((request) => request.operation));
+        const requests = yield* control.requests;
+        expect(requests.every((request) => request.principal === CALLER.principal)).toBe(true);
+        const operations = new Set(requests.map((request) => request.operation));
         const expectedOperations: ReadonlyArray<AuthorizedOperation> = [
           "explain",
           "verify",

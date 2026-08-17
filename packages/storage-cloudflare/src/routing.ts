@@ -33,8 +33,6 @@ import {
   LedgerMarkReadyResult,
   LedgerRecordChildSettledCall,
   LedgerRecordChildSettledResult,
-  LedgerRepairSettlementCall,
-  LedgerRepairSettlementResult,
   LedgerResumeSuspensionCall,
   LedgerResumeSuspensionResult,
   LedgerRequestAbortCall,
@@ -216,8 +214,7 @@ const crossConversationLedgerError = (operation: string, target: string): Ledger
     message:
       `${operation} addressed to foreign Conversation ${target} is not route-capable; the ` +
       "closed cross-Object subset is admit, markReady, lookup, resolveAdmission, " +
-      "requestAbort, recordChildSettled, repairSettlementFromCanonical, and " +
-      "resumeSuspension. Every other ledger operation is lane-local by " +
+      "requestAbort, recordChildSettled, and resumeSuspension. Every other ledger operation is lane-local by " +
       "construction and must execute inside the owning Conversation's Durable Object.",
   });
 
@@ -547,13 +544,12 @@ const makeRoutedLedgerServices = Effect.fn("DoPortRouting.makeRoutedLedgerServic
         Effect.flatMap((target) =>
           target._tag === "local"
             ? local.repairSettlementFromCanonical(request)
-            : foreignLedgerCall(
-                "ledger repair settlement from canonical",
-                target.conversationId,
-                LedgerRepairSettlementCall.make({ request }),
-                "LedgerRepairSettlementResult",
-                noExtraFailure,
-              ).pipe(Effect.map((reply) => reply.settlement)),
+            : Effect.fail(
+                crossConversationLedgerError(
+                  "ledger repair settlement from canonical",
+                  target.conversationId,
+                ),
+              ),
         ),
       ),
 
@@ -1008,14 +1004,6 @@ export const executePortRequest = Effect.fn("DoPortRouting.executePortRequest")(
         ledger
           .recordChildSettled(request.request)
           .pipe(Effect.map((outcome) => LedgerRecordChildSettledResult.make({ outcome }))),
-      );
-    }
-    case "LedgerRepairSettlement": {
-      const ledger = yield* SubmissionLedger;
-      return yield* capture(
-        ledger
-          .repairSettlementFromCanonical(request.request)
-          .pipe(Effect.map((settlement) => LedgerRepairSettlementResult.make({ settlement }))),
       );
     }
     case "LedgerResumeSuspension": {

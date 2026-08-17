@@ -161,6 +161,10 @@ const CALL_DELEGATE = Schema.decodeSync(ToolCallId)("call-delegate-1");
 const CALL_DELEGATE_TWO = Schema.decodeSync(ToolCallId)("call-delegate-2");
 const CHILD_ONE = Schema.decodeSync(SubmissionId)("submission-child-1");
 const CHILD_TWO = Schema.decodeSync(SubmissionId)("submission-child-2");
+const DELIMITER_CANONICAL_CALL = Schema.decodeSync(ToolCallId)("call:a");
+const DELIMITER_CANONICAL_CHILD = Schema.decodeSync(SubmissionId)("child");
+const DELIMITER_FORGED_CALL = Schema.decodeSync(ToolCallId)("call");
+const DELIMITER_FORGED_CHILD = Schema.decodeSync(SubmissionId)("a:child");
 const RESERVATION_ONE = Schema.decodeSync(ChildReservationId)("child-reservation-1");
 
 const waitingChild = (toolCallId: ToolCallId, childSubmissionId: SubmissionId) =>
@@ -1282,6 +1286,28 @@ describe("recovery classifier S2 changed-precedence pins (plan §4.3)", () => {
         suspension: waitingSuspension([waitingChild(CALL_DELEGATE, CHILD_ONE)]),
       }),
       evidence({ inputRecorded: true }),
+    );
+    expect(decision._tag).toBe("QuarantineInvalidSuspension");
+  });
+
+  it("compares WaitingForChild identities structurally across delimiter-colliding tuples", () => {
+    // Both pairs flatten to `call:a:child`; only the first pair is canonical.
+    const decision = classifyRecovery(
+      snapshot("suspended", {
+        inputApplied: inputMarker,
+        suspension: waitingSuspension([
+          waitingChild(DELIMITER_FORGED_CALL, DELIMITER_FORGED_CHILD),
+        ]),
+      }),
+      evidence({
+        inputRecorded: true,
+        subagentStarts: [
+          CanonicalSubagentStartedEvidence.make({
+            toolCallId: DELIMITER_CANONICAL_CALL,
+            childSubmissionId: DELIMITER_CANONICAL_CHILD,
+          }),
+        ],
+      }),
     );
     expect(decision._tag).toBe("QuarantineInvalidSuspension");
   });

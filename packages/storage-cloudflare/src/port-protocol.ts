@@ -7,7 +7,6 @@ import {
   AdmissionResult,
   AppendConflict,
   AppendResult,
-  CanonicalSettlementRepair,
   CanonicalRecordEnvelope,
   ChildSettledNotification,
   ChildSettledOutcome,
@@ -25,7 +24,6 @@ import {
   LedgerError,
   MarkReadyRequest,
   ResumeSuspensionRequest,
-  Settlement,
   SettlementConflict,
   SubmissionLookup,
   SubmissionLookupByKey,
@@ -48,7 +46,7 @@ import { Effect, Schema } from "effect";
  * establishment, `verifySettledChild`, and result projection):
  *
  * - ledger: `admit`, `markReady`, `lookup`, `resolveAdmission`, `requestAbort`,
- *   `recordChildSettled`, `repairSettlementFromCanonical`, `resumeSuspension`;
+ *   `recordChildSettled`, `resumeSuspension`;
  * - store: `materialize`, `append`, `read` (one page), `inspectTail`, `export`.
  *
  * Every other port operation is lane-local by construction and is NOT given an envelope:
@@ -132,13 +130,6 @@ export class LedgerRecordChildSettledCall extends Schema.TaggedClass<LedgerRecor
   request: ChildSettledNotification,
 }) {}
 
-/** Routed canonical repair when recovery targets a Submission owned by another Object. */
-export class LedgerRepairSettlementCall extends Schema.TaggedClass<LedgerRepairSettlementCall>(
-  "@effect-agent/storage-cloudflare/LedgerRepairSettlementCall",
-)("LedgerRepairSettlement", {
-  request: CanonicalSettlementRepair,
-}) {}
-
 /** Routed canonical-evidence-authorized suspension wake. */
 export class LedgerResumeSuspensionCall extends Schema.TaggedClass<LedgerResumeSuspensionCall>(
   "@effect-agent/storage-cloudflare/LedgerResumeSuspensionCall",
@@ -189,7 +180,6 @@ export const PortRequest = Schema.Union([
   LedgerResolveAdmissionCall,
   LedgerRequestAbortCall,
   LedgerRecordChildSettledCall,
-  LedgerRepairSettlementCall,
   LedgerResumeSuspensionCall,
   StoreMaterializeCall,
   StoreAppendCall,
@@ -213,7 +203,6 @@ export const portRequestMutates = (request: PortRequest): boolean => {
     case "LedgerMarkReady":
     case "LedgerRequestAbort":
     case "LedgerRecordChildSettled":
-    case "LedgerRepairSettlement":
     case "LedgerResumeSuspension":
     case "StoreMaterialize":
     case "StoreAppend":
@@ -266,12 +255,6 @@ export class LedgerRecordChildSettledResult extends Schema.TaggedClass<LedgerRec
   outcome: ChildSettledOutcome,
 }) {}
 
-export class LedgerRepairSettlementResult extends Schema.TaggedClass<LedgerRepairSettlementResult>(
-  "@effect-agent/storage-cloudflare/LedgerRepairSettlementResult",
-)("LedgerRepairSettlementResult", {
-  settlement: Settlement,
-}) {}
-
 export class LedgerResumeSuspensionResult extends Schema.TaggedClass<LedgerResumeSuspensionResult>(
   "@effect-agent/storage-cloudflare/LedgerResumeSuspensionResult",
 )("LedgerResumeSuspensionResult", {
@@ -315,7 +298,6 @@ export const PortResult = Schema.Union([
   LedgerResolveAdmissionResult,
   LedgerRequestAbortResult,
   LedgerRecordChildSettledResult,
-  LedgerRepairSettlementResult,
   LedgerResumeSuspensionResult,
   StoreMaterializeResult,
   StoreAppendResult,

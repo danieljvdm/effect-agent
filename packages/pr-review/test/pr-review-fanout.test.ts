@@ -23,6 +23,12 @@ import {
   DelegateFileReview,
   executeReview,
   FanOutCoordinatorToolkitLayer,
+  FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES,
+  FAN_OUT_MAX_DURATION_MINUTES,
+  FAN_OUT_WORKFLOW_TIMEOUT_MINUTES,
+  FILE_REVIEW_MAX_CONCURRENCY,
+  FILE_REVIEW_MAX_DURATION_MINUTES,
+  FILE_REVIEW_WAVE_DURATION_MINUTES,
   fanOutHandlersLayer,
   FanOutReviewer,
   fanOutReviewBudgetLimits,
@@ -39,6 +45,7 @@ import {
   makeFanOutReviewSuite,
   MAX_FILE_REVIEW_TOOL_CALLS,
   MAX_REVIEW_UNITS,
+  MAX_FILE_REVIEW_WAVES,
   MAX_UNIT_FILES,
   planReviewUnits,
   PullRequestMetadata,
@@ -50,6 +57,7 @@ import {
   ReviewPublicationPlan,
   ReviewStateAuthenticator,
   WalkthroughEntry,
+  defaultFanOutPolicy,
   defaultFileReviewerPolicy,
   fileReviewPolicy,
   unavailableReviewStateAuthenticatorLayer,
@@ -290,8 +298,28 @@ describe("file-reviewer policy", () => {
   });
 
   it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
-    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(10 * 60_000);
-    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(10 * 60_000);
+    expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(
+      FILE_REVIEW_MAX_DURATION_MINUTES * 60_000,
+    );
+    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(
+      FILE_REVIEW_MAX_DURATION_MINUTES * 60_000,
+    );
+  });
+
+  it("aligns a maximum-size full audit's child waves, coordinator, run budget, and job timeout", () => {
+    expect(MAX_REVIEW_UNITS).toBe(16);
+    expect(FILE_REVIEW_MAX_CONCURRENCY).toBe(4);
+    expect(fileReviewPolicy.maxConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
+    expect(defaultFanOutPolicy.toolConcurrency).toBe(FILE_REVIEW_MAX_CONCURRENCY);
+    expect(MAX_FILE_REVIEW_WAVES).toBe(4);
+    expect(FILE_REVIEW_WAVE_DURATION_MINUTES).toBe(40);
+    expect(FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES).toBe(10);
+    expect(FAN_OUT_MAX_DURATION_MINUTES).toBe(50);
+    expect(Duration.toMillis(defaultFanOutPolicy.maxDuration)).toBe(
+      FAN_OUT_MAX_DURATION_MINUTES * 60_000,
+    );
+    expect(fanOutReviewBudgetLimits.maxDurationMillis).toBe(FAN_OUT_MAX_DURATION_MINUTES * 60_000);
+    expect(FAN_OUT_WORKFLOW_TIMEOUT_MINUTES).toBe(FAN_OUT_MAX_DURATION_MINUTES + 5);
   });
 });
 

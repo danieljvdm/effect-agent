@@ -228,7 +228,9 @@ export type ToolCallExecutionKind = typeof ToolCallExecutionKind.Type;
  * (durability §10). `parameters` is the Schema-encoded wire form of the declared call and
  * `parametersDigest` pins it; recovery that sees this record without a matching `ToolCallSettled`
  * (or `ToolCallUnknown` → `ToolCallResolved`) must reconcile or mark unknown, never silently
- * replay (DUR-009). `readonly`-class Tools never produce this record (P4 parity).
+ * replay (DUR-009). `readonly`-class Tools never produce this record (P4 parity). The required
+ * `executionKind` was added during private schema-v1 development: older development data without
+ * it intentionally fails decode and must be reset, rather than inferring authority from a name.
  */
 export class ToolCallPrepared extends Schema.TaggedClass<ToolCallPrepared>(
   "@effect-agent/session/ToolCallPrepared",

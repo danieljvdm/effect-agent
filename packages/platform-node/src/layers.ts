@@ -8,6 +8,7 @@ import {
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
+  noopOperationMutationPreparerLayer,
   ProducerId,
   type OperationAuthorizer,
   ReleaseOwnershipRequest,
@@ -338,7 +339,8 @@ export const ownershipDrainLayer: Layer.Layer<SubmissionLedger, never, Submissio
  * `layer(options)` decodes the configuration, opens ONE SQLite database serving both the
  * Conversation Log and the Submission Ledger (so claims fence the same producer epochs), wires
  * the Node wake scheduler with its ledger-scan fallback, wraps the ledger with the shutdown
- * ownership drain, defaults the Tool reconciliation policy to the fail-closed
+ * ownership drain, supplies the explicit no-op mutation preparer because Node has no separate
+ * alarm/transaction boundary, defaults the Tool reconciliation policy to the fail-closed
  * `ToolReconciler.uncertain` (override via `options.toolReconciler`), and provides a ready
  * `DurableAgentRuntime` on top. Storage compatibility is
  * verified during construction: an incompatible database file fails the Layer with
@@ -381,7 +383,12 @@ export class NodeDurableRuntime {
     return DurableAgentRuntime.layer.pipe(
       Layer.provideMerge(Layer.mergeAll(ports, durableRuntimeConfigLayer, bindingResolverLayer)),
       Layer.provide(
-        Layer.mergeAll(wakeSchedulerConfigLayer, runtimeFailpointLayer, reconcilerLayer),
+        Layer.mergeAll(
+          wakeSchedulerConfigLayer,
+          runtimeFailpointLayer,
+          reconcilerLayer,
+          noopOperationMutationPreparerLayer,
+        ),
       ),
       Layer.provideMerge(infrastructure),
       Layer.provideMerge(NodeDurableRuntime.configLayer(options)),

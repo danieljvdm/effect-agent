@@ -536,11 +536,12 @@ export interface ChaosAdapterFailpoints {
 export interface ChaosRunOptions {
   readonly adapterFailpoints?: ChaosAdapterFailpoints | undefined;
   /**
-   * Executed at the end of every round. Adapters whose ownership leases block every new claim
-   * until expiry (the SQLite ledger's D5 semantics — expiry only revokes the liveness
-   * assumption; producer epochs stay the correctness fence) pass a deterministic
-   * `TestClock.adjust` here so a dead Attempt's lane becomes reclaimable next round. The memory
-   * ledger needs nothing: it allows same-producer reclaim under a live lease.
+   * Executed after the round's faults are cleared and before its recovery pass. Adapters whose
+   * ownership leases block every new claim until expiry (the SQLite ledger's D5 semantics —
+   * expiry only revokes the liveness assumption; producer epochs stay the correctness fence)
+   * pass a deterministic `TestClock.adjust` here so recovery, not a fresh worker drive, first
+   * owns repair of a dead Attempt. The memory ledger needs nothing: it allows same-producer
+   * reclaim under a live lease.
    */
   readonly betweenRounds?: Effect.Effect<void> | undefined;
 }
@@ -1062,6 +1063,11 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
     yield* failpoints.clear;
     if (options?.adapterFailpoints !== undefined) yield* options.adapterFailpoints.clear;
 
+    // Recovery owns the first post-fault mutation. In particular, an after-commit admission
+    // fault may leave a live parent claim plus a real child but no canonical SubagentStarted
+    // link. Expire that claim before recovery so a direct worker re-drive cannot observe a
+    // fixture-local pending child and suspend ahead of the canonical provenance repair.
+    if (options?.betweenRounds !== undefined) yield* options.betweenRounds;
     yield* tolerateTyped(runtime.runRecovery);
     // Second, unarmed pass guarantees forward progress for newly marked Unknown lanes.
     yield* resolutionPass(plan, states, desk);
@@ -1070,7 +1076,6 @@ export const runChaosPlan = Effect.fn("Chaos.runChaosPlan")(function* (
       converged = true;
       break;
     }
-    if (options?.betweenRounds !== undefined) yield* options.betweenRounds;
   }
 
   if (!converged) {

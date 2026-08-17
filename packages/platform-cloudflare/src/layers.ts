@@ -1,20 +1,17 @@
 import { ConversationId } from "@effect-agent/core";
 import {
   AgentBindingResolver,
-  type OperationAuthorizer,
-  childAdmissionAuthorizerLayer,
+  type ChildAdmissionAuthorizer,
   type ConversationStore,
   DurableAgentRuntime,
   DurableRuntimeConfig,
   DurableRuntimeFailpoint,
   ProducerId,
-  operationAuthorizerLayer,
+  type OperationAuthorizer,
   type SubmissionLedger,
   ToolReconciler,
   type WakeScheduler,
   type DurableRuntimeFailpointHandler,
-  type ChildAdmissionAuthorizerService,
-  type OperationAuthorizerService,
   type ResolvedBinding,
 } from "@effect-agent/session";
 import {
@@ -32,7 +29,11 @@ import {
 import { SqliteClient } from "@effect/sql-sqlite-do";
 import { Context, Duration, Effect, Layer, Schema } from "effect";
 
-import { ConversationMaintenance, DurableAlarmService } from "./alarm.ts";
+import {
+  ConversationMaintenance,
+  DurableAlarmService,
+  cloudflareOperationMutationPreparerLayer,
+} from "./alarm.ts";
 import {
   ConversationObjectIdentity,
   type ConversationObjectNamespace,
@@ -63,10 +64,6 @@ export interface CloudflareDurableRuntimeOptions {
   readonly databasePlan?: "free" | "paid" | undefined;
   /** Head of the minted producer identity `{producerPrefix}:{conversationId}`. */
   readonly producerPrefix: string;
-  /** Required current-policy authority for every protected runtime operation. */
-  readonly operationAuthorizer: OperationAuthorizerService;
-  /** Required current-policy authority for durable child establishment. */
-  readonly childAdmissionAuthorizer: ChildAdmissionAuthorizerService;
   /** Milliseconds; default 30s (D5). */
   readonly ownershipLeaseDuration?: number | undefined;
   /** Milliseconds; default 100. */
@@ -157,8 +154,7 @@ export type CloudflareDurableRuntimeServices =
   | ConversationObjectIdentity
   | DurableAlarmService
   | ConversationMaintenance
-  | ConversationObjectPorts
-  | OperationAuthorizer;
+  | ConversationObjectPorts;
 
 /**
  * Owner-side endpoint body for the Conversation Object's `portCall` (plan §1.3): decode,
@@ -178,10 +174,7 @@ const decodeConversationId = Schema.decodeUnknownEffect(ConversationId);
 const decodeProducerId = Schema.decodeUnknownEffect(ProducerId);
 
 export const cloudflareDurableRuntimeConfigFromOptions = (
-  options: Omit<
-    CloudflareDurableRuntimeOptions,
-    "operationAuthorizer" | "childAdmissionAuthorizer"
-  >,
+  options: CloudflareDurableRuntimeOptions,
 ): Effect.Effect<CloudflareDurableRuntimeConfigValue, CloudflarePlatformConfigError> => {
   const databasePlan = options.databasePlan ?? CLOUDFLARE_RUNTIME_DEFAULTS.databasePlan;
   const databaseCap =
@@ -293,9 +286,10 @@ const resolveBindings = (
  * Storage compatibility is verified during construction: an incompatible database fails the
  * Layer typed (`DoStorageCompatibilityError`) before anything is mutated (DEPLOY-008).
  *
- * Requires only the two binding services (`DurableObjectContext`,
- * `ConversationObjectNamespace`) — platform values enter exclusively through Layers
- * (DEPLOY-010).
+ * Requires the two binding services (`DurableObjectContext`, `ConversationObjectNamespace`) and
+ * the application-selected `OperationAuthorizer` and `ChildAdmissionAuthorizer`. Policy remains
+ * visible in the Layer input instead of being hidden in construction options; platform values
+ * enter exclusively through Layers (DEPLOY-010).
  */
 export class CloudflareDurableRuntime {
   static layer(
@@ -303,7 +297,10 @@ export class CloudflareDurableRuntime {
   ): Layer.Layer<
     CloudflareDurableRuntimeServices,
     CloudflareDurableRuntimeInitializationError,
-    DurableObjectContext | ConversationObjectNamespace
+    | DurableObjectContext
+    | ConversationObjectNamespace
+    | OperationAuthorizer
+    | ChildAdmissionAuthorizer
   > {
     return Layer.unwrap(
       Effect.gen(function* () {
@@ -380,10 +377,6 @@ export class CloudflareDurableRuntime {
             ? DurableRuntimeFailpoint.layer
             : Layer.succeed(DurableRuntimeFailpoint)({ hit: options.runtimeFailpoint(ctx) });
         const reconcilerLayer = options.toolReconciler ?? ToolReconciler.uncertain;
-        const authorizerLayers = Layer.merge(
-          operationAuthorizerLayer(options.operationAuthorizer),
-          childAdmissionAuthorizerLayer(options.childAdmissionAuthorizer),
-        );
         const bindingResolverLayer = Layer.effect(AgentBindingResolver)(
           Effect.map(
             resolveBindings(options.bindings, { ctx, env, conversationId, producerId }),
@@ -396,6 +389,9 @@ export class CloudflareDurableRuntime {
           cloudflareConfigLayer,
           DurableAlarmService.layer,
         );
+        const mutationPreparerLayer = cloudflareOperationMutationPreparerLayer.pipe(
+          Layer.provide(base),
+        );
 
         const runtimeStack = DurableAgentRuntime.layer.pipe(
           Layer.provideMerge(routedPorts),
@@ -406,7 +402,7 @@ export class CloudflareDurableRuntime {
             Layer.mergeAll(
               runtimeFailpointLayer,
               reconcilerLayer,
-              authorizerLayers,
+              mutationPreparerLayer,
               cloudflareCryptoLayer,
             ),
           ),
@@ -417,7 +413,6 @@ export class CloudflareDurableRuntime {
           runtimeStack,
           ConversationMaintenance.layer.pipe(Layer.provide(runtimeStack)),
           portsEndpointLayer,
-          authorizerLayers,
         );
       }),
     );

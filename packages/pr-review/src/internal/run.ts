@@ -16,6 +16,7 @@ import {
   type ReviewShape,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
+import { FAN_OUT_MAX_DURATION_MINUTES } from "./fan-out.ts";
 import { computeChangesetFingerprint } from "./fingerprint.ts";
 import { PublishedReview, ReviewPublisher } from "./github.ts";
 import { planPublication, ReviewPublicationPlan } from "./render.ts";
@@ -72,7 +73,7 @@ export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxOutputTokens: 16_000,
   maxToolCalls: 24,
   maxCostMicrousd: 2_000_000,
-  maxDurationMillis: 900_000,
+  maxDurationMillis: FAN_OUT_MAX_DURATION_MINUTES * 60_000,
 });
 
 /** Everything one review run produced, publication receipt included. */
@@ -139,9 +140,9 @@ export interface ExecuteReviewOptions {
   /** Host-owned coverage shape; defaults to the flat reviewer. */
   readonly reviewShape?: ReviewShape | undefined;
   /**
-   * Explicit host-selected review range. Callers that provide a selection
-   * also decorate `PullRequestSource` with `selectedPullRequestSourceLayer` so
-   * the model sees exactly this range while publication retains full anchors.
+   * Explicit host-selected review range. `PrReview.run` applies the matching
+   * source decorator itself, so its model-visible range cannot diverge from
+   * the selection used for continuity and publication.
    */
   readonly selection?: ReviewSelection | undefined;
 }

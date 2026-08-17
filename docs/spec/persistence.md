@@ -131,13 +131,14 @@ span the two stores through recoverable states:
 
 Canonical input and settlement records win over cached ledger markers during repair.
 `reserveSettlement` accepts only a self-consistent exact settlement record: its deterministic
-record and settlement identities, payload tag, Submission and receipt identities, outcome, and
-recomputed canonical digest must agree with the request and immutable ledger row before any
-mutation. Recovery invokes `repairSettlementFromCanonical` after observing that canonical record;
+record and settlement identities, `conversation` family, payload tag, Submission and receipt
+identities, outcome, and recomputed canonical digest must agree with the request and immutable
+ledger row before any mutation. A matching digest over a different record family is still rejected.
+Recovery invokes `repairSettlementFromCanonical` after observing that canonical record;
 the method atomically reconstructs or overwrites divergent operational reservation columns,
 settles the row, clears any stale nonterminal suspension state, and releases lane ownership. An
-exact replay preserves its prior settlement time when that timestamp is valid; repaired or
-reconstructed state uses the transaction time.
+already-settled row preserves any parseable prior finalization time while repairing redundant
+columns; a missing/invalid timestamp or nonterminal reconstruction uses the transaction time.
 
 Operational approval decisions and child-settlement notifications are evidence only: recording
 them never clears a suspended lane. The coordinator validates canonical history, then calls
@@ -373,7 +374,9 @@ cannot cause lost work because schedulers also scan the ledger.
 - **STORE-010**: Every durable adapter passes the shared conformance and
   crash-consistency suite.
 - **STORE-011**: Unsupported stored versions fail clearly; private development provides no
-  migration promise.
+  migration promise. In particular, schema-v1 `ToolCallPrepared` histories written before the
+  required `executionKind` field are reset after a clear decode failure, never defaulted or
+  inferred from the Tool name.
 - **STORE-012**: Canonical records are retained indefinitely during private development.
 - **STORE-013**: Node/SQLite and Cloudflare Durable Object adapters implement the same Effect
   service contracts and conformance suite.

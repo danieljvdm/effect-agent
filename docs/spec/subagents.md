@@ -590,7 +590,11 @@ Establishment is a recoverable protocol:
 
 The runtime MUST NOT emit a durable `SubagentStarted` event or rely on a child until the child
 Receipt exists. A crash after child admission but before parent linkage resolves through the same
-idempotency key and never creates a second child.
+idempotency key and never creates a second child. A crash after `SubagentStarted` but before the
+parent reservation attachment/checkpoint is repaired from the exact canonical
+`SubagentRequested`/`SubagentStarted` pair: recovery reattaches that same child under the parent
+fence before it stores `waitingForChild`. It never infers a replacement attachment from mutable
+ledger state.
 
 Absence from an eventually consistent projection is never proof that admission did not occur.
 Recovery queries the deterministically addressed child owner or ledger directly with the
@@ -601,9 +605,13 @@ another child.
 `waitingForChild` retains the parent Conversation lane, ownership of the join obligation, and its
 open budget reservation, but holds no worker, provider, model, Tool, or child-concurrency permit.
 Child Settlement records an idempotent operational notification, but that notification alone never
-wakes the parent. The coordinator first validates every stored Tool Call/child pair against exact
+wakes the parent. A child may route that notification to the parent owner, but it never reads the
+parent's lane-local recovery snapshot; the owning lane's pre-armed maintenance pass performs the
+resume decision. The coordinator first validates every stored Tool Call/child pair against exact
 canonical `SubagentStarted` evidence and ensures every canonically unjoined child is still named;
-only its exact-reason resume operation may clear the suspension after all notifications cover it.
+these identities are compared field-by-field as structural pairs, never as delimiter-concatenated
+strings that distinct identifiers could collide under. Only its exact-reason resume operation may
+clear the suspension after all notifications cover it.
 The child uses its separate Conversation lane. S2 MUST prove this suspension/wakeup path at the
 smallest worker-pool size.
 
@@ -612,9 +620,13 @@ identity-only or digest-transparent worker path. Before an admitted child can ex
 readiness path and the worker claim gate validate the complete immutable lineage record: parent
 Submission/Conversation/Run/Tool Call, delegation and depth, child definition/input/grant digests,
 and the deterministic lineage record identity. They also cross-check the admitted child's target,
-definition and input against the request; the admission authorization question separately binds
-the reservation identity/digest and child identity. Mere presence of a lineage-shaped record is
-insufficient; any mismatch fails closed before application code runs.
+definition, input, exact Principal, scoped admission idempotency key, Conversation, and parent
+linkage against `SubagentRequested`; the admission authorization question separately binds the
+reservation identity/digest and child identity. The same complete binding is checked when replaying
+an already-admitted child and again at the worker claim gate. The child Principal must equal the
+parent Principal, and its admission key must equal the deterministic parent Run/Tool Call key; a
+mutually matching but forged request/row pair is not sufficient. Mere presence of a lineage-shaped
+record is insufficient; any mismatch fails closed before application code runs.
 
 Joining is also recoverable:
 

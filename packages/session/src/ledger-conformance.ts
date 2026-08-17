@@ -54,6 +54,7 @@ import {
   submissionInputRecordId,
   submissionSettlementId,
   submissionSettlementRecordId,
+  validateCanonicalSettlementRepair,
   type SubmissionLedgerFailure,
 } from "./ledger.ts";
 import {
@@ -1037,6 +1038,48 @@ const canonicalSettlementRepair = conformanceCase(
         "Replaying the same canonical repair must preserve the original Settlement timestamp",
       );
 
+      const unknownConversation = decodeConversationId(
+        "ledger-conformance-canonical-repair-unknown",
+      );
+      const unknown = yield* admitReady(unknownConversation, "canonical-repair-unknown-key", {
+        work: "canonical-repair-unknown",
+      });
+      yield* expectSome(
+        "the claim before the unknown mark",
+        yield* claimLane(unknownConversation, PRODUCER_A),
+      );
+      yield* ledger.markUnknown(
+        MarkUnknownRequest.make({
+          submissionId: unknown.submissionId,
+          toolCallIds: [decodeToolCallId("call-canonical-repair-unknown")],
+          reason: "the external effect may have completed",
+        }),
+      );
+      const unknownBeforeRepair = yield* recoverySnapshot(unknown.submissionId);
+      yield* ensure(
+        unknownBeforeRepair.submission.state === "unknown",
+        "The unknown repair fixture must begin in the blocked Unknown Outcome state",
+      );
+      const unknownCanonical = yield* settlementReservation({
+        submissionId: unknown.submissionId,
+        ownershipToken: BOGUS_TOKEN,
+        receiptId: unknown.receiptId,
+        outcome: "completed",
+      });
+      yield* ledger.repairSettlementFromCanonical(
+        CanonicalSettlementRepair.make({
+          submissionId: unknown.submissionId,
+          record: unknownCanonical.record,
+          recordDigest: unknownCanonical.recordDigest,
+        }),
+      );
+      const unknownAfterRepair = yield* recoverySnapshot(unknown.submissionId);
+      yield* ensure(
+        unknownAfterRepair.submission.state === "settled" &&
+          unknownAfterRepair.submission.settledOutcome === "completed",
+        "Canonical repair must replace blocked Unknown operational state with the exact canonical settlement",
+      );
+
       const tamperConversation = decodeConversationId("ledger-conformance-canonical-repair-tamper");
       const tamper = yield* admitReady(tamperConversation, "canonical-repair-tamper-key", {
         work: "canonical-repair-tamper",
@@ -1060,6 +1103,30 @@ const canonicalSettlementRepair = conformanceCase(
       yield* ensure(
         invalid instanceof LedgerError,
         "A tampered canonical repair must fail as a typed LedgerError",
+      );
+      const encodedCanonical = Schema.encodeSync(CanonicalSettlementRepair)(
+        CanonicalSettlementRepair.make({
+          submissionId: tamper.submissionId,
+          record: tamperCanonical.record,
+          recordDigest: tamperCanonical.recordDigest,
+        }),
+      );
+      const wrongFamilyRecord = { ...encodedCanonical.record, family: "artifact" };
+      const wrongFamilyDigest = yield* digestJson(wrongFamilyRecord);
+      const wrongFamily = yield* expectFailure(
+        "repairing from a wrong-family record whose supplied digest matches its exact envelope",
+        validateCanonicalSettlementRepair(
+          {
+            ...encodedCanonical,
+            record: wrongFamilyRecord,
+            recordDigest: wrongFamilyDigest,
+          },
+          tamper.receiptId,
+        ),
+      );
+      yield* ensure(
+        wrongFamily instanceof LedgerError,
+        "A valid digest cannot make a foreign record family canonical settlement authority",
       );
       const untouched = yield* expectSome(
         "the tampered repair target remains admitted",

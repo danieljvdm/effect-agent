@@ -25,7 +25,6 @@ import {
   type ReviewMode,
   type ReviewState,
   selectReviewRange,
-  selectedPullRequestSourceLayer,
   unavailableReviewStateAuthenticatorLayer,
   webCryptoReviewStateAuthenticatorLayer,
 } from "./internal/review-state.ts";
@@ -606,9 +605,7 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
             ),
           )
         : runReview;
-      const outcome = yield* selection === undefined
-        ? reviewEffect
-        : reviewEffect.pipe(Effect.provide(selectedPullRequestSourceLayer(selection)));
+      const outcome = yield* reviewEffect;
       yield* Console.log(
         `Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` +
           `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`,

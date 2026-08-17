@@ -96,6 +96,7 @@ const submitMission = (conversation: string, key: string) =>
 const drive = (conversationId: ConversationId) =>
   Effect.gen(function* () {
     const runtime = yield* DurableAgentRuntime;
+    yield* runtime.runRecovery;
     return yield* runtime.processConversationResolved(conversationId);
   });
 

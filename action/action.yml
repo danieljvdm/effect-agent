@@ -46,7 +46,7 @@ inputs:
     required: false
   max-duration-minutes:
     description: >-
-      Run duration budget in minutes (defaults: 8 flat, 15 fan-out). Keep the
+      Run duration budget in minutes (defaults: 8 flat, 50 fan-out). Keep the
       job's timeout-minutes ABOVE this so the reviewer ends its run gracefully
       instead of being killed by the runner with nothing posted.
     required: false

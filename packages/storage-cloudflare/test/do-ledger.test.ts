@@ -4,6 +4,7 @@ import {
   LedgerError,
   MarkReadyRequest,
   RecoverySnapshotRequest,
+  SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupByKey,
   submissionLedgerConformanceCases,
@@ -164,6 +165,12 @@ describe("DoSubmissionLedger", () => {
             "completed",
           );
           yield* ledger.reserveSettlement(reservation);
+          const originalSettlement = yield* ledger.finalizeSettlement(
+            SettlementFinalization.make({
+              submissionId: admitted.submissionId,
+              settlementId: reservation.settlementId,
+            }),
+          );
 
           switch (corruption) {
             case "settlement-id":
@@ -227,6 +234,7 @@ describe("DoSubmissionLedger", () => {
             RecoverySnapshotRequest.make({ submissionId: admitted.submissionId }),
           );
           expect(settlement.outcome).toBe("completed");
+          expect(settlement.settledAt).toEqual(originalSettlement.settledAt);
           expect(repaired.submission.state).toBe("settled");
           expect(repaired.reservation?.recordDigest).toBe(reservation.recordDigest);
         }).pipe(
@@ -245,6 +253,64 @@ describe("DoSubmissionLedger", () => {
         ),
       ));
   }
+
+  it("does not trust a parseable finalized timestamp on a nonterminal reservation", () =>
+    withConversationStorage("wp1-ledger-nonterminal-finalized-at", (storage) =>
+      Effect.gen(function* () {
+        const ledger = yield* SubmissionLedger;
+        const sql = yield* SqlClientService.SqlClient;
+        const staleFinalizedAt = "2099-01-01T00:00:00.000Z";
+        const lane = "conversation-nonterminal-finalized-at";
+        const admitted = yield* ledger.admit(
+          yield* admission(lane, "nonterminal-finalized-at", { work: "repair" }),
+        );
+        yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+        const claim = yield* ledger.claim(
+          ClaimRequest.make({
+            conversationId: conversation(lane),
+            producerId: TEST_PRODUCER,
+          }),
+        );
+        if (Option.isNone(claim)) return yield* Effect.die("missing settlement claim");
+        const reservation = yield* settlementReservation(
+          admitted,
+          claim.value.ownershipToken,
+          "completed",
+        );
+        yield* ledger.reserveSettlement(reservation);
+        yield* sql`
+          UPDATE effect_agent_settlement_reservations
+          SET finalized_at = ${staleFinalizedAt}
+          WHERE submission_id = ${admitted.submissionId}
+        `;
+        yield* ledger.repairSettlementFromCanonical(
+          CanonicalSettlementRepair.make({
+            submissionId: admitted.submissionId,
+            record: reservation.record,
+            recordDigest: reservation.recordDigest,
+          }),
+        );
+        const rows = yield* sql<{ finalized_at: string }>`
+          SELECT finalized_at
+          FROM effect_agent_settlement_reservations
+          WHERE submission_id = ${admitted.submissionId}
+        `;
+        expect(rows[0]?.finalized_at).not.toBe(staleFinalizedAt);
+      }).pipe(
+        Effect.provide(
+          submissionLedgerLayer.pipe(
+            Layer.provideMerge(
+              Layer.mergeAll(
+                storageConfigLayer({ storage }),
+                DoStorageFailpoint.layer,
+                SqliteClient.layer({ storage }),
+                BrowserCrypto.layer,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ));
 
   // The DC realization of "persists admissions durably across process-style reopen": the
   // Durable Object is evicted mid-flight through the failpoint's `ctx.abort()` mode — the

@@ -1759,14 +1759,8 @@ const makeServices = Effect.fn("DoSubmissionLedger.makeServices")(function* () {
           const now = yield* currentInstant;
           let settledAt = now.iso;
           if (
-            Option.isSome(existing) &&
             submission.state === "settled" &&
-            submission.settled_outcome === canonical.outcome &&
-            existing.value.settlement_id === canonical.settlementId &&
-            existing.value.outcome === canonical.outcome &&
-            existing.value.record_id === canonical.record.recordId &&
-            existing.value.record_json === recordJson &&
-            existing.value.record_digest === canonical.recordDigest &&
+            Option.isSome(existing) &&
             existing.value.finalized_at !== null
           ) {
             const persistedSettledAt = yield* decodeUtcInstant(existing.value.finalized_at).pipe(

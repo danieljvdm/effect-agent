@@ -981,6 +981,7 @@ const makeSubmissionLedger = (options: MemorySubmissionLedgerOptions = {}) =>
                 reservation,
                 ownership: undefined,
                 suspension: undefined,
+                unknownMark: undefined,
               });
               return [
                 success(

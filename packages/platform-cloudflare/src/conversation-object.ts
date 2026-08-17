@@ -2,6 +2,7 @@ import type { AgentId } from "@effect-agent/core";
 import { SubmissionId } from "@effect-agent/core";
 import {
   AppendConflict,
+  type ChildAdmissionAuthorizer,
   ChildAdmissionDenied,
   ConversationNotMaterialized,
   ConversationRead,
@@ -19,6 +20,7 @@ import {
   OperationAuthorizer,
   OperationCaller,
   OperationDenied,
+  OperationMutationPreparationError,
   OwnershipLost,
   PersistedJson,
   RecoveryExplanation,
@@ -42,7 +44,6 @@ import {
 
 import {
   ConversationMaintenance,
-  DurableAlarmError,
   DurableAlarmService,
   type MaintenancePassFailure,
 } from "./alarm.ts";
@@ -83,7 +84,7 @@ import {
 } from "./layers.ts";
 
 /**
- * `makeConversationObjectClass(options, observability?)` — the Conversation Durable Object
+ * `makeConversationObjectClass(options, authorization, observability?)` — the Conversation Durable Object
  * (plan §1.4,
  * D-P6-1): a factory returning a class that applications export from their Worker entry.
  * One SQLite-backed Object per Conversation is the serialized owner (durability §6); the
@@ -110,8 +111,11 @@ export interface ConversationObjectOptions extends CloudflareDurableRuntimeOptio
   readonly namespaceBinding: string;
 }
 
-type EndpointServices = CloudflareDurableRuntimeServices | DurableObjectContext;
-type RuntimeServices = EndpointServices | ConversationObjectNamespace;
+type EndpointServices =
+  | CloudflareDurableRuntimeServices
+  | DurableObjectContext
+  | OperationAuthorizer;
+type RuntimeServices = EndpointServices | ConversationObjectNamespace | ChildAdmissionAuthorizer;
 type ConversationObjectInitializationError =
   | CloudflareDurableRuntimeInitializationError
   | CloudflareBindingError
@@ -304,37 +308,12 @@ const observePageEndpoint = (encoded: unknown): Effect.Effect<unknown, never, En
     Effect.flatMap(encodeResponse),
   );
 
-/**
- * Authorize the caller before the alarm write, then let the runtime authorize
- * again immediately before its domain mutation. A denied request therefore
- * cannot mutate the Durable Object merely by reaching a protected endpoint,
- * while the second check keeps current policy authoritative for the commit.
- */
-const authorizeAndPreArmMutation = (
-  operation: "abort" | "resolveApproval" | "resolveUnknown" | "retry",
-  submissionId: SubmissionId,
-  caller: OperationCaller,
-) =>
-  Effect.gen(function* () {
-    const authorizer = yield* OperationAuthorizer;
-    yield* authorizer.authorize(
-      OperationAuthorizationRequest.make({
-        operation,
-        principal: caller.principal,
-        submissionId,
-      }),
-    );
-    const maintenance = yield* ConversationMaintenance;
-    yield* maintenance.preArm;
-  });
-
 const abortEndpoint = (encoded: unknown): Effect.Effect<unknown, never, EndpointServices> =>
   decodeAbortHostRequest(encoded).pipe(
     Effect.mapError(protocolFailure("The abort command could not be decoded")),
     Effect.flatMap((request) =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        yield* authorizeAndPreArmMutation("abort", request.command.submissionId, request.caller);
         const intent = yield* runtime.abort(request.command, request.caller);
         return AbortRecorded.make({ intent });
       }),
@@ -351,11 +330,6 @@ const resolveApprovalEndpoint = (
     Effect.flatMap((request) =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        yield* authorizeAndPreArmMutation(
-          "resolveApproval",
-          request.command.submissionId,
-          request.caller,
-        );
         const intent = yield* runtime.resolveApproval(request.command, request.caller);
         return ApprovalRecorded.make({ intent });
       }),
@@ -372,11 +346,6 @@ const resolveUnknownEndpoint = (
     Effect.flatMap((request) =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        yield* authorizeAndPreArmMutation(
-          "resolveUnknown",
-          request.command.submissionId,
-          request.caller,
-        );
         const intent = yield* runtime.resolveUnknown(request.command, request.caller);
         return UnknownResolutionRecorded.make({ intent });
       }),
@@ -417,6 +386,7 @@ export class AdminObligationsRequest extends Schema.Class<AdminObligationsReques
 /** Every typed failure of the four admin entry points, plus the protocol's own errors. */
 export const AdminFailure = Schema.Union([
   OperationDenied,
+  OperationMutationPreparationError,
   ChildAdmissionDenied,
   RetryRefused,
   LedgerError,
@@ -429,7 +399,6 @@ export const AdminFailure = Schema.Union([
   AppendConflict,
   FenceRejected,
   DurableRuntimeFailpointError,
-  DurableAlarmError,
   HostProtocolError,
 ]);
 export type AdminFailure = typeof AdminFailure.Type;
@@ -544,9 +513,6 @@ const retryEndpoint = (encoded: unknown): Effect.Effect<unknown, never, Endpoint
     Effect.flatMap((request) =>
       Effect.gen(function* () {
         const runtime = yield* DurableAgentRuntime;
-        // Alarm invariant: retry may repair durable state, so the authorized alarm that will
-        // finish the lane commits BEFORE the mutation (D-P6-2), exactly like abort.
-        yield* authorizeAndPreArmMutation("retry", request.command.submissionId, request.caller);
         const report = yield* runtime.retry(request.command, request.caller);
         return RetryExecuted.make({ report });
       }),
@@ -691,10 +657,16 @@ export interface ConversationObjectClass {
  * effect-cf owns the cached ManagedRuntime, native RPC methods, event scopes, and post-handler
  * OTLP flush scheduling for RPC and alarm events. The optional outer Layer is built per native
  * event, so a host can install Tracer/Logger/Metric services and `OtlpExporter.Flusher` without
- * Effect Agent owning exporter lifecycle machinery.
+ * Effect Agent owning exporter lifecycle machinery. The required authorization Layer makes both
+ * session policy ports an explicit application composition decision.
  */
+export type ConversationObjectAuthorizationLayer = Layer.Layer<
+  OperationAuthorizer | ChildAdmissionAuthorizer
+>;
+
 export const makeConversationObjectClass = <EventLayerError = never, EventServices = never>(
   options: ConversationObjectOptions,
+  authorization: ConversationObjectAuthorizationLayer,
   observability?: Layer.Layer<
     EventServices,
     EventLayerError,
@@ -710,6 +682,7 @@ export const makeConversationObjectClass = <EventLayerError = never, EventServic
     EffectCfDurableObjectState.DurableObjectState | WorkerEnvironment
   > = CloudflareDurableRuntime.layer(options).pipe(
     Layer.provideMerge(effectCfPlatformLayer(options.namespaceBinding)),
+    Layer.provideMerge(authorization),
   );
 
   // The storage/config Layer must acquire inside Cloudflare's constructor gate. effect-cf owns

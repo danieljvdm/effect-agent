@@ -16,6 +16,7 @@ import {
   ReviewFinding,
   ReviewPublicationPlan,
   ReviewPublisher,
+  type RunReviewOptions,
   type ReviewSelection,
   ReviewStateAuthenticator,
   unavailableReviewStateAuthenticatorLayer,
@@ -159,7 +160,7 @@ describe("enforceFindingsBound", () => {
 // ---------------------------------------------------------------------------
 
 const runFactoryReviewer = <E, R>(
-  run: (options?: { readonly post?: boolean }) => Effect.Effect<unknown, E, R>,
+  run: (options?: RunReviewOptions) => Effect.Effect<unknown, E, R>,
 ) =>
   Effect.gen(function* () {
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
@@ -242,6 +243,37 @@ describe("PrReview.make", () => {
       expect(plan?.comments.map((comment) => comment.path)).toEqual(["src/hello.ts"]);
       expect(plan?.demoted.map((finding) => finding.path)).toEqual(["deps/bun.lock"]);
       expect(outcome).toBeDefined();
+    }),
+  );
+
+  it.effect("applies a supplied selection to the model source without an action-side layer", () =>
+    Effect.gen(function* () {
+      const scripted = yield* makeOfflineReviewerModel({
+        diffPath: "src/hello.ts",
+        readPath: "src/hello.ts",
+        review: singleFindingReview,
+      });
+      const reviewer = PrReview.make({ model: scripted.model });
+      const [selectedFile] = fixture.files;
+      if (selectedFile === undefined) {
+        throw new Error("Expected the factory fixture to include src/hello.ts");
+      }
+      const selection: ReviewSelection = {
+        mode: "incremental",
+        reason: "test selected delta",
+        files: [selectedFile.file],
+        affectedPaths: [selectedFile.file.path],
+        totalFiles: 1,
+        baselineSha: "0".repeat(40),
+        priorState: undefined,
+        profileFingerprint: "a".repeat(64),
+      };
+
+      yield* runFactoryReviewer((options) => reviewer.run({ ...options, post: false, selection }));
+
+      const prompts = yield* scripted.prompts;
+      expect(prompts.join("\n")).toContain("src/hello.ts");
+      expect(prompts.join("\n")).not.toContain("deps/bun.lock");
     }),
   );
 

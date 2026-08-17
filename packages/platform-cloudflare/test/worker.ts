@@ -1,9 +1,10 @@
 import {
-  possessionChildAdmissionAuthorizer,
-  possessionOperationAuthorizer,
   OperationDenied,
+  operationAuthorizerLayer,
+  possessionChildAdmissionAuthorizerLayer,
+  possessionOperationAuthorizerLayer,
 } from "@effect-agent/session";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 
 import { makeConversationObjectClass, type ConversationObjectOptions } from "../src/index.ts";
 import {
@@ -30,8 +31,6 @@ const baseOptions: ConversationObjectOptions = {
   namespaceBinding: CONVERSATIONS_BINDING,
   deploymentId: DEPLOYMENT_ID,
   producerPrefix: PRODUCER_PREFIX,
-  operationAuthorizer: possessionOperationAuthorizer,
-  childAdmissionAuthorizer: possessionChildAdmissionAuthorizer,
   // A dead incarnation's lease must lapse quickly so alarm passes reclaim its lane.
   ownershipLeaseDuration: 250,
   leaseRenewalInterval: 50,
@@ -46,6 +45,57 @@ const baseOptions: ConversationObjectOptions = {
   storageFailpoint: storageEvictionFailpoint,
   runtimeFailpoint: runtimeEvictionFailpoint,
 };
+
+const possessionAuthorizationLayer = Layer.merge(
+  possessionOperationAuthorizerLayer,
+  possessionChildAdmissionAuthorizerLayer,
+);
+
+const deniedAuthorizationLayer = Layer.merge(
+  operationAuthorizerLayer({
+    authorize: (request) =>
+      Effect.fail(
+        OperationDenied.make({
+          operation: request.operation,
+          principal: request.principal,
+          reason: "denied by the platform RPC policy fixture",
+          ...(request.conversationId === undefined
+            ? {}
+            : { conversationId: request.conversationId }),
+          ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
+        }),
+      ),
+  }),
+  possessionChildAdmissionAuthorizerLayer,
+);
+
+const changingAuthorizationCalls = new Map<string, number>();
+const changingAuthorizationLayer = Layer.merge(
+  operationAuthorizerLayer({
+    authorize: (request) =>
+      Effect.suspend(() => {
+        const key = `${request.operation}:${request.submissionId ?? request.conversationId ?? "none"}`;
+        const calls = (changingAuthorizationCalls.get(key) ?? 0) + 1;
+        changingAuthorizationCalls.set(key, calls);
+        return calls === 1
+          ? Effect.void
+          : Effect.fail(
+              OperationDenied.make({
+                operation: request.operation,
+                principal: request.principal,
+                reason: "changing policy denies every authorization after the first",
+                ...(request.conversationId === undefined
+                  ? {}
+                  : { conversationId: request.conversationId }),
+                ...(request.submissionId === undefined
+                  ? {}
+                  : { submissionId: request.submissionId }),
+              }),
+            );
+      }),
+  }),
+  possessionChildAdmissionAuthorizerLayer,
+);
 
 interface BindingSourceProbe {
   readonly evaluationCount: number;
@@ -78,49 +128,60 @@ const dynamicBindings: NonNullable<ConversationObjectOptions["bindings"]> = ({
   });
 
 /** The eviction/alarm/chaos suites' Conversation Object. */
-export class TestConversationObject extends makeConversationObjectClass(baseOptions) {}
+export class TestConversationObject extends makeConversationObjectClass(
+  baseOptions,
+  possessionAuthorizationLayer,
+) {}
 
 /** Fail-closed policy proving denials survive the real Worker↔DO RPC boundary. */
-export class DeniedConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "DENIED",
-  operationAuthorizer: {
-    authorize: (request) =>
-      Effect.fail(
-        OperationDenied.make({
-          operation: request.operation,
-          principal: request.principal,
-          reason: "denied by the platform RPC policy fixture",
-          ...(request.conversationId === undefined
-            ? {}
-            : { conversationId: request.conversationId }),
-          ...(request.submissionId === undefined ? {} : { submissionId: request.submissionId }),
-        }),
-      ),
-  },
-}) {}
+export class DeniedConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "DENIED" },
+  deniedAuthorizationLayer,
+) {}
+
+/** Allow-once policy proving one protected mutation performs exactly one authorization. */
+export class ChangingAuthorizationConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "CHANGING_AUTH" },
+  changingAuthorizationLayer,
+) {}
+
+/** RPC fixture proving journal failures retain their concrete Schema error on the client. */
+export class RunJournalFailureConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "RUN_JOURNAL_FAILURE" },
+  possessionAuthorizationLayer,
+) {
+  override async resolveApprovalEncoded(_encoded: unknown): Promise<unknown> {
+    // RPC transports encoded protocol data. Returning a Schema class here would be rejected by
+    // structured clone before the client codec gets a chance to reconstruct the error class.
+    return {
+      _tag: "HostFailed",
+      failure: { _tag: "RunJournalError", message: "fixture Run journal projection failure" },
+    };
+  }
+}
 
 /** Tight queue-depth and input-size quotas for the admission-limits gate rows. */
-export class LimitedConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "LIMITED",
-  maxQueueDepthPerLane: 2,
-  maxInputBytes: 512,
-}) {}
+export class LimitedConversationObject extends makeConversationObjectClass(
+  {
+    ...baseOptions,
+    namespaceBinding: "LIMITED",
+    maxQueueDepthPerLane: 2,
+    maxInputBytes: 512,
+  },
+  possessionAuthorizationLayer,
+) {}
 
 /** A database-size ceiling below any real database: every admission must refuse typed. */
-export class TinyDatabaseConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "TINYDB",
-  maxDatabaseBytes: 1,
-}) {}
+export class TinyDatabaseConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "TINYDB", maxDatabaseBytes: 1 },
+  possessionAuthorizationLayer,
+) {}
 
 /** Callback-form Binding capture probe. */
-export class DynamicBindingsConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "DYNAMIC_BINDINGS",
-  bindings: dynamicBindings,
-}) {
+export class DynamicBindingsConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "DYNAMIC_BINDINGS", bindings: dynamicBindings },
+  possessionAuthorizationLayer,
+) {
   async bindingSourceProbe(): Promise<BindingSourceProbe & { readonly stateMatches: boolean }> {
     const probe = bindingSourceProbes.get(this.ctx);
     if (probe === undefined) throw new Error("Binding source was not evaluated");
@@ -129,22 +190,20 @@ export class DynamicBindingsConversationObject extends makeConversationObjectCla
 }
 
 /** Legacy array-form Binding capture probe. */
-export class ArrayBindingsConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "ARRAY_BINDINGS",
-  bindings: [],
-}) {
+export class ArrayBindingsConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "ARRAY_BINDINGS", bindings: [] },
+  possessionAuthorizationLayer,
+) {
   async bindingSourceKind(): Promise<string> {
     return "array";
   }
 }
 
 /** Legacy Effect-form Binding capture probe. */
-export class EffectBindingsConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "EFFECT_BINDINGS",
-  bindings: Effect.succeed([]),
-}) {
+export class EffectBindingsConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "EFFECT_BINDINGS", bindings: Effect.succeed([]) },
+  possessionAuthorizationLayer,
+) {
   async bindingSourceKind(): Promise<string> {
     return "effect";
   }
@@ -157,6 +216,7 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
     namespaceBinding: "TELEMETRY",
     wakeScanInterval: 60_000,
   },
+  possessionAuthorizationLayer,
   observabilityProbeLayer,
 ) {
   failNextFlush(): void {
@@ -176,11 +236,10 @@ export class TelemetryConversationObject extends makeConversationObjectClass(
  * any owner-side execution, so the routed caller observes a `PortTransportError` (and
  * `AdmissionIndeterminate` on `resolveAdmission`, SUB-031). Unarmed, it is a passthrough.
  */
-export class SubagentConversationObject extends makeConversationObjectClass({
-  ...baseOptions,
-  namespaceBinding: "SUBAGENTS",
-  bindings: makeSubagentTestBindings,
-}) {
+export class SubagentConversationObject extends makeConversationObjectClass(
+  { ...baseOptions, namespaceBinding: "SUBAGENTS", bindings: makeSubagentTestBindings },
+  possessionAuthorizationLayer,
+) {
   override async portCall(encoded: unknown): Promise<unknown> {
     const reason = transportFaultReason(this.ctx.id.name);
     if (reason !== undefined) throw new Error(reason);

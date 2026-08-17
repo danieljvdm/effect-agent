@@ -361,7 +361,7 @@ describe("SqliteSubmissionLedger", () => {
       (corruption) =>
         withTemporaryDatabase((filename) =>
           Effect.gen(function* () {
-            const { admitted, reservation } = yield* withLedger(
+            const { admitted, reservation, settlement } = yield* withLedger(
               filename,
               Effect.gen(function* () {
                 const ledger = yield* SubmissionLedger;
@@ -385,7 +385,13 @@ describe("SqliteSubmissionLedger", () => {
                   "completed",
                 );
                 yield* ledger.reserveSettlement(reservation);
-                return { admitted, reservation };
+                const settlement = yield* ledger.finalizeSettlement(
+                  SettlementFinalization.make({
+                    submissionId: admitted.submissionId,
+                    settlementId: reservation.settlementId,
+                  }),
+                );
+                return { admitted, reservation, settlement };
               }),
             );
             yield* withSql(
@@ -468,10 +474,80 @@ describe("SqliteSubmissionLedger", () => {
               }),
             );
             expect(repaired.settlement.outcome).toBe("completed");
+            expect(repaired.settlement.settledAt).toEqual(settlement.settledAt);
             expect(repaired.snapshot.submission.state).toBe("settled");
             expect(repaired.snapshot.reservation?.recordDigest).toBe(reservation.recordDigest);
           }),
         ),
+    ),
+  );
+
+  it.effect("does not trust a parseable finalized timestamp on a nonterminal reservation", () =>
+    withTemporaryDatabase((filename) =>
+      Effect.gen(function* () {
+        const staleFinalizedAt = "2099-01-01T00:00:00.000Z";
+        const { admitted, reservation } = yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            const lane = "conversation-nonterminal-finalized-at";
+            const admitted = yield* ledger.admit(
+              yield* admission(lane, "nonterminal-finalized-at", { work: "repair" }),
+            );
+            yield* ledger.markReady(MarkReadyRequest.make({ submissionId: admitted.submissionId }));
+            const claim = yield* ledger.claim(
+              ClaimRequest.make({
+                conversationId: conversation(lane),
+                producerId: TEST_PRODUCER,
+              }),
+            );
+            if (Option.isNone(claim)) return yield* Effect.die("missing settlement claim");
+            const reservation = yield* settlementReservation(
+              admitted,
+              claim.value.ownershipToken,
+              "completed",
+            );
+            yield* ledger.reserveSettlement(reservation);
+            return { admitted, reservation };
+          }),
+        );
+        yield* withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            yield* sql`
+              UPDATE effect_agent_settlement_reservations
+              SET finalized_at = ${staleFinalizedAt}
+              WHERE submission_id = ${admitted.submissionId}
+            `;
+          }),
+        );
+        yield* withLedger(
+          filename,
+          Effect.gen(function* () {
+            const ledger = yield* SubmissionLedger;
+            yield* ledger.repairSettlementFromCanonical(
+              CanonicalSettlementRepair.make({
+                submissionId: admitted.submissionId,
+                record: reservation.record,
+                recordDigest: reservation.recordDigest,
+              }),
+            );
+          }),
+        );
+        const rows = yield* withSql(
+          filename,
+          Effect.gen(function* () {
+            const sql = yield* SqlClientService.SqlClient;
+            return yield* sql<{ finalized_at: string }>`
+              SELECT finalized_at
+              FROM effect_agent_settlement_reservations
+              WHERE submission_id = ${admitted.submissionId}
+            `;
+          }),
+        );
+        expect(rows[0]?.finalized_at).not.toBe(staleFinalizedAt);
+      }),
     ),
   );
 

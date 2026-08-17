@@ -1,7 +1,9 @@
 import { Agent, AgentPolicy, ConversationId, ToolCallId } from "@effect-agent/core";
 import {
   ApprovalDecisionCommand,
+  ApprovalPendingSuspension,
   CanonicalRecordEnvelope,
+  ClaimRequest,
   ConversationExport,
   ConversationExportRequest,
   ConversationRead,
@@ -31,10 +33,12 @@ import {
   SubmissionLedger,
   SubmissionLookupByKey,
   SubmissionLookupById,
+  SuspendRequest,
   ToolReconciler,
   UnknownResolutionCommand,
   UserInputRecorded,
   WakeScheduler,
+  noopOperationMutationPreparerLayer,
   possessionChildAdmissionAuthorizerLayer,
   renderRecoveryExplanation,
   verifyConversationInvariants,
@@ -240,6 +244,7 @@ const baseLayer = Layer.mergeAll(
   ToolReconciler.uncertain,
   configLayer,
   authorizerLayer,
+  noopOperationMutationPreparerLayer,
   possessionChildAdmissionAuthorizerLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
@@ -747,6 +752,48 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
     }),
   );
 
+  it.effect("scanObligations quarantines a suspension without canonical provenance", () =>
+    Effect.gen(function* () {
+      yield* resetAuthorizer;
+      const runtime = yield* DurableAgentRuntime;
+      const ledger = yield* SubmissionLedger;
+      const conversation = "conversation-admin-ghost-suspension";
+      const conversationId = decodeConversationId(conversation);
+      const scripted = yield* makeScriptedModel(() => finalParts('{"answer":"never"}'));
+      const agent = Agent.withModel(plainDefinition, scripted.model);
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "wait" },
+        submitOptions(conversation, "ghost-suspension-1"),
+      );
+      const claim = yield* ledger.claim(
+        ClaimRequest.make({ conversationId, producerId: PRODUCER_ID }),
+      );
+      expect(Option.isSome(claim)).toBe(true);
+      if (Option.isNone(claim)) throw new Error("Expected the ghost-suspension lane claim");
+
+      const suspended = yield* ledger.suspend(
+        SuspendRequest.make({
+          submissionId: receipt.submissionId,
+          ownershipToken: claim.value.ownershipToken,
+          reason: ApprovalPendingSuspension.make({
+            toolCallIds: [decodeToolCallId("ghost-approval")],
+          }),
+        }),
+      );
+      expect(suspended).toBe("suspended");
+
+      const report = yield* runtime.scanObligations(
+        ObligationThresholds.make({ agingSeconds: 60, overdueSeconds: 600 }),
+        CALLER,
+      );
+      const entry = report.entries.find(
+        (candidate) => candidate.submissionId === receipt.submissionId,
+      );
+      expect(entry?.blockedOn).toBe("quarantined");
+    }),
+  );
+
   it.effect("a non-default authorizer denies every consulted surface fail-closed", () =>
     Effect.gen(function* () {
       yield* resetAuthorizer;
@@ -836,6 +883,7 @@ layer(testLayer)("DUR-017/SEC-011 P7 administrative operations", (it) => {
         "resolveUnknown",
         "resolveApproval",
       ]);
+      expect(requests.every((request) => request.principal === CALLER.principal)).toBe(true);
 
       // The denial policy lifts and the default possession behavior is restored.
       yield* control.reset;

@@ -21,6 +21,7 @@ import {
   ClaimRequest,
   ConversationRead,
   ConversationStore,
+  ConversationStoreError,
   DefinitionDigests,
   DeploymentId,
   Digest,
@@ -31,10 +32,12 @@ import {
   DurableRuntimeFailpointTestControl,
   DurableWorkerBinding,
   IdempotencyKey,
+  LedgerError,
   OperationCaller,
   Principal,
   ProducerId,
   RecoverySnapshotRequest,
+  ReleaseOwnershipRequest,
   SettlementFinalization,
   SubmissionLedger,
   SubmissionLookupById,
@@ -256,13 +259,34 @@ const configLayer = DurableRuntimeConfig.layer({
 
 /** Test-only fault switch for the memory ledger's authoritative admission lookup (SUB-031). */
 let admissionFault: string | undefined;
+/** Test-only routed parent-read failure injected after a child claim. */
+let parentReadFault: ConversationId | undefined;
 
-const baseLayer = (ledger: Layer.Layer<SubmissionLedger>) =>
+const parentReadFaultStoreLive = Layer.effect(
+  ConversationStore,
+  Effect.gen(function* () {
+    const store = yield* ConversationStore;
+    return ConversationStore.of({
+      ...store,
+      read: (request) =>
+        request.conversationId === parentReadFault
+          ? Stream.fail(
+              ConversationStoreError.make({
+                operation: "read-parent-provenance",
+                message: "injected routed parent read failure",
+              }),
+            )
+          : store.read(request),
+    });
+  }),
+).pipe(Layer.provide(MemoryConversationStoreLive));
+
+const baseLayer = (ledger: Layer.Layer<SubmissionLedger>, store = MemoryConversationStoreLive) =>
   DurableAgentRuntime.layer.pipe(
     Layer.provideMerge(
       Layer.mergeAll(
         ledger,
-        MemoryConversationStoreLive,
+        store,
         WakeScheduler.layerNoop,
         DurableRuntimeFailpoint.layerTest,
         ToolReconciler.uncertain,
@@ -279,6 +303,10 @@ const faultTestLayer = baseLayer(
       admissionFault === undefined ? Option.none() : Option.some(admissionFault),
     ),
   }).pipe(Layer.provide(NodeCrypto.layer)),
+);
+const parentReadFaultTestLayer = baseLayer(
+  MemorySubmissionLedgerLive.pipe(Layer.provide(NodeCrypto.layer)),
+  parentReadFaultStoreLive,
 );
 
 const makeChildFixture = Effect.gen(function* () {
@@ -410,6 +438,7 @@ const drive =
   (conversationId: ConversationId) =>
     Effect.gen(function* () {
       const runtime = yield* DurableAgentRuntime;
+      yield* runtime.runRecovery;
       return yield* runtime
         .processConversationResolved(conversationId)
         .pipe(Effect.provideService(AgentBindingResolver, harness.resolver));
@@ -512,16 +541,19 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
         expect(reservations).toHaveLength(1);
         expect(reservations[0]?.status).toBe("reserved");
 
-        // Phase 2: the child lane runs to Settlement and wakes the parent durably.
+        // Phase 2: the child lane runs to Settlement and records the parent's durable marker.
+        // The notification cannot clear the suspension by itself; the parent owner does that
+        // from canonical evidence on its next recovery-first drive.
         const childSettlements = yield* run(childConversationId);
         expect(childSettlements).toHaveLength(1);
         expect(childSettlements[0]?.outcome).toBe("completed");
         expect(yield* harness.childInvocations).toBe(1);
-        expect((yield* parentState(parent.submissionId)).state).toBe("input-applied");
+        expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
         const childLog = yield* readLog(childConversationId);
         expect(recordIds(childLog)).toContain(`subagent-lineage:${childConversationId}`);
 
-        // Phase 3: the woken parent joins the verified child Settlement atomically.
+        // Phase 3: the parent owner consumes the marker, then joins the verified child
+        // Settlement atomically.
         const settlements = yield* run(parent.conversationId);
         expect(settlements).toHaveLength(1);
         expect(settlements[0]?.outcome).toBe("completed");
@@ -881,6 +913,60 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
     }),
   );
 
+  it.effect(
+    "EnsureWaitingForChild replays a committed attachment after attachment succeeds but suspension is lost",
+    () =>
+      Effect.gen(function* () {
+        yield* clearFailpoint;
+        const harness = yield* makeHarness();
+        const run = drive(harness);
+        const parent = yield* harness.submitParent(
+          "conversation-s2-recovery-attach-before-suspend",
+          "recovery-attach-before-suspend-1",
+        );
+        const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+        const runtime = yield* DurableAgentRuntime;
+
+        // First lose the normal Attempt after the canonical start link, leaving recovery to
+        // restore the operational attachment and waiting suspension from canonical evidence.
+        yield* armFailpoint("subagent:after-start-append");
+        const startExit = yield* Effect.exit(run(parent.conversationId));
+        expect(failureTag(startExit)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        // The recovery attachment commits (the adapter's ledger:child-attach:after boundary),
+        // then this coordinator crash point loses the following suspend transition.
+        yield* armFailpoint("subagent:after-child-attach");
+        const attachExit = yield* Effect.exit(runtime.runRecovery);
+        expect(failureTag(attachExit)).toBe("DurableRuntimeFailpointError");
+        yield* clearFailpoint;
+
+        const attached = yield* parentReservations(parent.submissionId);
+        expect(attached).toHaveLength(1);
+        expect(attached[0]?.childSubmissionId).toBeDefined();
+        expect((yield* parentState(parent.submissionId)).state).toBe("input-applied");
+
+        // Idempotent recovery reattaches the same child and completes only the missing
+        // waitingForChild suspension; it never admits or starts a replacement child.
+        const reports = yield* runtime.runRecovery;
+        const report = reports.find((entry) => entry.submissionId === parent.submissionId);
+        expect(report?.decision._tag).toBe("EnsureWaitingForChild");
+        expect(report?.disposition).toBe("repaired");
+        expect((yield* parentState(parent.submissionId)).state).toBe("suspended");
+        const recovered = yield* parentReservations(parent.submissionId);
+        expect(recovered[0]?.childSubmissionId).toBe(attached[0]?.childSubmissionId);
+        expect(payloadsOf(yield* readLog(parent.conversationId), "SubagentStarted")).toHaveLength(
+          1,
+        );
+
+        const childSettlements = yield* run(childConversationId);
+        expect(childSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+        const parentSettlements = yield* run(parent.conversationId);
+        expect(parentSettlements.map((settlement) => settlement.outcome)).toEqual(["completed"]);
+        expect(yield* harness.childInvocations).toBe(1);
+      }),
+  );
+
   it.effect("a dropped child-settlement wake is replayed by ResumeWaitingParent", () =>
     Effect.gen(function* () {
       yield* clearFailpoint;
@@ -1023,6 +1109,84 @@ layer(testLayer)("S2 durable attached Subagents (WP4 coordinator)", (it) => {
           "released",
         ]);
       }),
+  );
+});
+
+layer(parentReadFaultTestLayer)("S2 child claim provenance failures", (it) => {
+  it.effect("releases a child claim when routed parent provenance reading fails typed", () =>
+    Effect.gen(function* () {
+      yield* clearFailpoint;
+      parentReadFault = undefined;
+      const harness = yield* makeHarness();
+      const run = drive(harness);
+      const parent = yield* harness.submitParent(
+        "conversation-s2-parent-read-failure",
+        "parent-read-failure-1",
+      );
+      const childConversationId = childConversationIdFor(parent.submissionId, DELEGATE_CALL);
+
+      yield* run(parent.conversationId);
+      const started = payloadsOf(yield* readLog(parent.conversationId), "SubagentStarted")[0]
+        ?.record.payload;
+      if (started?._tag !== "SubagentStarted") throw new Error("Expected SubagentStarted");
+
+      parentReadFault = parent.conversationId;
+      const runtime = yield* DurableAgentRuntime;
+      const exit = yield* Effect.exit(
+        runtime
+          .processConversationResolved(childConversationId)
+          .pipe(Effect.provideService(AgentBindingResolver, harness.resolver)),
+      );
+      expect(failureTag(exit)).toBe("ConversationStoreError");
+      expect(yield* harness.childInvocations).toBe(0);
+
+      // A different producer can claim immediately. Without release-on-error, the original
+      // producer's unexpired ownership lease would keep this probe fenced out.
+      const ledger = yield* SubmissionLedger;
+      const reclaimed = yield* ledger.claim(
+        ClaimRequest.make({
+          conversationId: childConversationId,
+          producerId: Schema.decodeSync(ProducerId)("producer-parent-read-release-probe"),
+        }),
+      );
+      expect(Option.isSome(reclaimed)).toBe(true);
+      if (Option.isNone(reclaimed)) throw new Error("Expected the child claim to be released");
+      expect(reclaimed.value.submissionId).toBe(started.childSubmissionId);
+      yield* ledger.releaseOwnership(
+        ReleaseOwnershipRequest.make({
+          submissionId: reclaimed.value.submissionId,
+          ownershipToken: reclaimed.value.ownershipToken,
+        }),
+      );
+
+      // Resolver infrastructure errors are part of the same defensive pre-execution gate and
+      // release the claim; binding absence/digest mismatch retain ownership for child settlement.
+      parentReadFault = undefined;
+      const resolverExit = yield* Effect.exit(
+        runtime.processConversationResolved(childConversationId).pipe(
+          Effect.provideService(
+            AgentBindingResolver,
+            AgentBindingResolver.of({
+              resolve: () =>
+                Effect.fail(
+                  LedgerError.make({
+                    operation: "resolve-child-binding",
+                    message: "injected routed resolver failure",
+                  }),
+                ),
+            }),
+          ),
+        ),
+      );
+      expect(failureTag(resolverExit)).toBe("LedgerError");
+      const resolverReclaimed = yield* ledger.claim(
+        ClaimRequest.make({
+          conversationId: childConversationId,
+          producerId: Schema.decodeSync(ProducerId)("producer-resolver-release-probe"),
+        }),
+      );
+      expect(Option.isSome(resolverReclaimed)).toBe(true);
+    }),
   );
 });
 

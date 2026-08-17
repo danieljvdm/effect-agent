@@ -155,6 +155,9 @@ import {
   OperationAuthorizationRequest,
   OperationAuthorizer,
   OperationCaller,
+  OperationMutationPreparationRequest,
+  type OperationMutationPreparationError,
+  OperationMutationPreparer,
   type OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
@@ -333,10 +336,28 @@ const boundedApprovalReason = (reason: string | undefined, fallback: string): st
 const boundedText = (value: string): string =>
   value.length > MAX_FAILURE_MESSAGE_LENGTH ? value.slice(0, MAX_FAILURE_MESSAGE_LENGTH) : value;
 
-const decodePrincipalSync = Schema.decodeSync(Principal);
-const decodeIdempotencyKeySync = Schema.decodeSync(IdempotencyKey);
 const decodeChildReservationIdSync = Schema.decodeSync(ChildReservationId);
 const decodeDefinitionDigests = Schema.decodeUnknownEffect(DefinitionDigests);
+
+const decodeChildPrincipal = (value: unknown): Effect.Effect<Principal, LedgerError> =>
+  Schema.decodeUnknownEffect(Principal)(value).pipe(
+    Effect.mapError((cause) =>
+      LedgerError.make({
+        operation: "decodeChildPrincipal",
+        message: `Canonical child Principal is invalid: ${cause.message}`,
+      }),
+    ),
+  );
+
+const decodeChildIdempotencyKey = (value: unknown): Effect.Effect<IdempotencyKey, LedgerError> =>
+  Schema.decodeUnknownEffect(IdempotencyKey)(value).pipe(
+    Effect.mapError((cause) =>
+      LedgerError.make({
+        operation: "decodeChildIdempotencyKey",
+        message: `Canonical child idempotency key is invalid: ${cause.message}`,
+      }),
+    ),
+  );
 
 /**
  * Deterministic parent-owned child budget reservation identity (spec
@@ -380,6 +401,37 @@ export const validateSubagentLineageRecord = Effect.fn(
     return yield* LedgerError.make({
       operation: "validateSubagentLineageRecord",
       message: `Child Conversation ${request.childConversationId} carries divergent lineage for Tool Call ${request.toolCallId}`,
+    });
+  }
+});
+
+/** Exact immutable child-admission binding shared by establishment replay and the claim gate. */
+export const validateSubagentAdmissionBinding = Effect.fn(
+  "DurableAgentRuntime.validateSubagentAdmissionBinding",
+)(function* (
+  parent: SubmissionSnapshot,
+  request: SubagentRequested,
+  child: SubmissionSnapshot,
+): Effect.fn.Return<void, LedgerError> {
+  const principal = yield* decodeChildPrincipal(request.childPrincipal);
+  const idempotencyKey = yield* decodeChildIdempotencyKey(request.childIdempotencyKey);
+  const linkage = child.parentLinkage;
+  if (
+    principal !== parent.principal ||
+    idempotencyKey !== childIdempotencyKeyFor(request.runId, request.toolCallId) ||
+    child.conversationId !== request.childConversationId ||
+    child.principal !== principal ||
+    child.idempotencyKey !== idempotencyKey ||
+    child.agentId !== request.targetAgentId ||
+    !definitionDigestsEqual(child.agentDigests, request.targetDigests) ||
+    child.inputDigest !== request.childInputDigest ||
+    linkage === undefined ||
+    linkage.parentSubmissionId !== parent.submissionId ||
+    linkage.parentToolCallId !== request.toolCallId
+  ) {
+    return yield* LedgerError.make({
+      operation: "validateSubagentAdmissionBinding",
+      message: `Admitted child ${child.submissionId} diverges from the canonical SubagentRequested identity for Tool Call ${request.toolCallId}`,
     });
   }
 });
@@ -542,6 +594,7 @@ export type DurableAbortFailure =
   | SettlementConflict
   | JoinedToHost
   | OperationDenied
+  | OperationMutationPreparationError
   | DurableRuntimeFailpointError;
 
 /**
@@ -555,6 +608,7 @@ export type DurableResolveFailure =
   | SettlementConflict
   | UnknownResolutionConflict
   | JoinedToHost
+  | OperationMutationPreparationError
   | DurableRuntimeFailpointError;
 
 /**
@@ -567,7 +621,8 @@ export type DurableApprovalFailure =
   | SettlementConflict
   | ApprovalConflict
   | ConversationStoreError
-  | RunJournalError;
+  | RunJournalError
+  | OperationMutationPreparationError;
 
 /**
  * Failure family of the read-only `explain`/`explainConversation` operations (P7 WP1): pure
@@ -596,10 +651,18 @@ export type DurableVerifyFailure =
  * family, refusals are typed (`RetryRefused` — settled work and lanes owned by the
  * resolveUnknown/resolveApproval paths), and denial is fail-closed.
  */
-export type DurableRetryFailure = DurableWorkerFailure | RetryRefused | OperationDenied;
+export type DurableRetryFailure =
+  | DurableWorkerFailure
+  | RetryRefused
+  | OperationDenied
+  | OperationMutationPreparationError;
 
 /** Failure family of `scanObligations` (P7 WP1): ledger scan + canonical unknown-age reads. */
-export type DurableObligationFailure = LedgerError | ConversationStoreError | OperationDenied;
+export type DurableObligationFailure =
+  | LedgerError
+  | ConversationStoreError
+  | RunJournalError
+  | OperationDenied;
 
 /**
  * Optional policy-auto approval delegate consulted by the durable approval hook (plan §2.6 step
@@ -832,6 +895,7 @@ const make = Effect.gen(function* () {
   // Both authorization ports are required composition inputs. Trusted local/test hosts may opt
   // into the explicit possession Layers; production hosts provide current-policy decisions.
   const operationAuthorizer = yield* OperationAuthorizer;
+  const operationMutationPreparer = yield* OperationMutationPreparer;
   const childAdmissionAuthorizer = yield* ChildAdmissionAuthorizer;
 
   const withCrypto = <A, E>(effect: Effect.Effect<A, E, Crypto.Crypto>): Effect.Effect<A, E> =>
@@ -1053,11 +1117,15 @@ const make = Effect.gen(function* () {
       let admission: DelegationAdmissionEvidence | undefined;
       let childSubmissionId = startedRecord?.childSubmissionId;
       if (requestedRecord !== undefined && startedRecord === undefined) {
+        const childPrincipal = yield* decodeChildPrincipal(requestedRecord.childPrincipal);
+        const childIdempotencyKey = yield* decodeChildIdempotencyKey(
+          requestedRecord.childIdempotencyKey,
+        );
         const resolution = yield* ledger.resolveAdmission(
           SubmissionLookupByKey.make({
             conversationId: requestedRecord.childConversationId,
-            principal: decodePrincipalSync(requestedRecord.childPrincipal),
-            idempotencyKey: decodeIdempotencyKeySync(requestedRecord.childIdempotencyKey),
+            principal: childPrincipal,
+            idempotencyKey: childIdempotencyKey,
           }),
         );
         switch (resolution._tag) {
@@ -1776,9 +1844,11 @@ const make = Effect.gen(function* () {
   /**
    * Cross-lane drive-forward after one child Submission settles (spec §12 step 10): the child's
    * canonical Settlement is already durable, so `recordChildSettled` records operational
-   * coverage. The coordinator then validates the parent's exact canonical `SubagentStarted`
-   * pairs before `resumeSuspension` may make it runnable. Invoked from every settlement
-   * finalization path; a crash between either step is repaired by `ResumeWaitingParent`.
+   * coverage. The parent lane then validates its exact canonical `SubagentStarted` pairs before
+   * `resumeSuspension` may make it runnable. The child never reads the parent's lane-local
+   * recovery snapshot: the routed notification pre-arms the owning Object, and the wake below is
+   * only a liveness hint. Invoked from every settlement finalization path; a crash between either
+   * step is repaired by `ResumeWaitingParent`.
    */
   const notifyParentOfChildSettlement = Effect.fn(
     "DurableAgentRuntime.notifyParentOfChildSettlement",
@@ -1795,19 +1865,6 @@ const make = Effect.gen(function* () {
       SubmissionLookupById.make({ submissionId: linkage.parentSubmissionId }),
     );
     if (Option.isSome(parent)) {
-      const snapshot = yield* ledger.loadRecoverySnapshot(
-        RecoverySnapshotRequest.make({ submissionId: linkage.parentSubmissionId }),
-      );
-      if (snapshot.submission.state === "suspended") {
-        const read = yield* readAllTolerant(parent.value.conversationId);
-        const evidence = yield* evidenceFor(
-          read.records,
-          linkage.parentSubmissionId,
-          read.materialized,
-          snapshot.hostSubmissionId,
-        );
-        yield* resumeSuspensionFromCanonical(snapshot, evidence);
-      }
       yield* wake.notify(parent.value.conversationId);
     }
   });
@@ -2192,8 +2249,8 @@ const make = Effect.gen(function* () {
       parent: SubmissionSnapshot,
       request: SubagentRequested,
     ): Effect.fn.Return<ChildAdmissionOutcome, DurableWorkerFailure> {
-      const principal = decodePrincipalSync(request.childPrincipal);
-      const idempotencyKey = decodeIdempotencyKeySync(request.childIdempotencyKey);
+      const principal = yield* decodeChildPrincipal(request.childPrincipal);
+      const idempotencyKey = yield* decodeChildIdempotencyKey(request.childIdempotencyKey);
       const authorizeChild = childAdmissionAuthorizer.authorize(
         ChildAdmissionAuthorizationRequest.make({
           principal: parent.principal,
@@ -2259,20 +2316,7 @@ const make = Effect.gen(function* () {
           // request before reattaching — a divergent row can never be "the same child"
           // (fail-closed; identifiers are never capabilities, D10).
           const child = resolution.submission;
-          const linkage = child.parentLinkage;
-          if (
-            child.agentId !== request.targetAgentId ||
-            !definitionDigestsEqual(child.agentDigests, request.targetDigests) ||
-            child.inputDigest !== request.childInputDigest ||
-            linkage === undefined ||
-            linkage.parentSubmissionId !== parent.submissionId ||
-            linkage.parentToolCallId !== request.toolCallId
-          ) {
-            return yield* LedgerError.make({
-              operation: "establishChildFromRequest",
-              message: `The admitted child ${child.submissionId} diverges from the canonical SubagentRequested record for Tool Call ${request.toolCallId}; establishment fails closed (SUB-016)`,
-            });
-          }
+          yield* validateSubagentAdmissionBinding(parent, request, child);
           childSubmissionId = child.submissionId;
           receiptId = child.receiptId;
           break;
@@ -3849,6 +3893,7 @@ const make = Effect.gen(function* () {
                   conflictToLedgerError("attachChildToReservation"),
                 ),
               );
+            yield* hit("subagent:after-child-attach");
             const identity = {
               childConversationId: startedPayload.childConversationId,
               childSubmissionId: startedPayload.childSubmissionId,
@@ -4721,10 +4766,19 @@ const make = Effect.gen(function* () {
         if (Option.isNone(claimed)) return settlements as ReadonlyArray<Settlement>;
         yield* hit("claim:after-claim");
         const claim = claimed.value;
-        const found = yield* ledger.lookup(
-          SubmissionLookupById.make({ submissionId: claim.submissionId }),
-        );
+        const releaseClaim = ledger
+          .releaseOwnership(
+            ReleaseOwnershipRequest.make({
+              submissionId: claim.submissionId,
+              ownershipToken: claim.ownershipToken,
+            }),
+          )
+          .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+        const found = yield* ledger
+          .lookup(SubmissionLookupById.make({ submissionId: claim.submissionId }))
+          .pipe(Effect.tapError(() => releaseClaim));
         if (Option.isNone(found)) {
+          yield* releaseClaim;
           return yield* LedgerError.make({
             operation: "drainConversation",
             message: `Claimed unknown Submission ${claim.submissionId}`,
@@ -4733,81 +4787,43 @@ const make = Effect.gen(function* () {
         const submission = found.value;
         // A parent-linked child is runnable only after exact lineage validation against the
         // canonical parent request. Presence of any lineage-shaped record is insufficient.
-        if (submission.parentLinkage !== undefined) {
-          const parent = yield* ledger.lookup(
-            SubmissionLookupById.make({
-              submissionId: submission.parentLinkage.parentSubmissionId,
-            }),
-          );
-          if (Option.isNone(parent)) {
-            yield* ledger
-              .releaseOwnership(
-                ReleaseOwnershipRequest.make({
-                  submissionId: claim.submissionId,
-                  ownershipToken: claim.ownershipToken,
-                }),
-              )
-              .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
-            return yield* LedgerError.make({
-              operation: "drainConversation",
-              message: `Parent-linked child ${submission.submissionId} references an unknown parent Submission`,
-            });
-          }
-          const childRead = yield* readAllTolerant(conversationId);
-          const parentRead = yield* readAllTolerant(parent.value.conversationId);
-          const request = subagentRecordsOf(
-            parentRead.records,
-            runIdForSubmission(parent.value.submissionId),
-          ).requested.get(submission.parentLinkage.parentToolCallId);
-          const lineage = childRead.records.find(
-            (envelope) =>
-              envelope.record.recordId === subagentLineageRecordId(submission.conversationId),
-          );
-          if (request === undefined || lineage === undefined) {
-            yield* ledger
-              .releaseOwnership(
-                ReleaseOwnershipRequest.make({
-                  submissionId: claim.submissionId,
-                  ownershipToken: claim.ownershipToken,
-                }),
-              )
-              .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
-            yield* wake.notify(parent.value.conversationId);
-            return settlements as ReadonlyArray<Settlement>;
-          }
-          if (
-            request.childConversationId !== submission.conversationId ||
-            request.targetAgentId !== submission.agentId ||
-            !definitionDigestsEqual(request.targetDigests, submission.agentDigests) ||
-            request.childInputDigest !== submission.inputDigest
-          ) {
-            yield* ledger
-              .releaseOwnership(
-                ReleaseOwnershipRequest.make({
-                  submissionId: claim.submissionId,
-                  ownershipToken: claim.ownershipToken,
-                }),
-              )
-              .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
-            return yield* LedgerError.make({
-              operation: "drainConversation",
-              message: `Parent-linked child ${submission.submissionId} diverges from its canonical SubagentRequested record`,
-            });
-          }
-          yield* validateSubagentLineageRecord(parent.value, request, lineage.record).pipe(
-            Effect.tapError(() =>
-              ledger
-                .releaseOwnership(
-                  ReleaseOwnershipRequest.make({
-                    submissionId: claim.submissionId,
-                    ownershipToken: claim.ownershipToken,
-                  }),
-                )
-                .pipe(Effect.catchTag("OwnershipLost", () => Effect.void)),
-            ),
-          );
+        const linkage = submission.parentLinkage;
+        if (linkage !== undefined) {
+          const lineageReady = yield* Effect.gen(function* () {
+            const parent = yield* ledger.lookup(
+              SubmissionLookupById.make({
+                submissionId: linkage.parentSubmissionId,
+              }),
+            );
+            if (Option.isNone(parent)) {
+              return yield* LedgerError.make({
+                operation: "drainConversation",
+                message: `Parent-linked child ${submission.submissionId} references an unknown parent Submission`,
+              });
+            }
+            const childRead = yield* readAllTolerant(conversationId);
+            const parentRead = yield* readAllTolerant(parent.value.conversationId);
+            const request = subagentRecordsOf(
+              parentRead.records,
+              runIdForSubmission(parent.value.submissionId),
+            ).requested.get(linkage.parentToolCallId);
+            const lineage = childRead.records.find(
+              (envelope) =>
+                envelope.record.recordId === subagentLineageRecordId(submission.conversationId),
+            );
+            if (request === undefined || lineage === undefined) {
+              yield* releaseClaim;
+              yield* wake.notify(parent.value.conversationId);
+              return false;
+            }
+            yield* validateSubagentAdmissionBinding(parent.value, request, submission);
+            yield* validateSubagentLineageRecord(parent.value, request, lineage.record);
+            return true;
+          }).pipe(Effect.tapError(() => releaseClaim));
+          if (!lineageReady) return settlements as ReadonlyArray<Settlement>;
         }
         const resolution = yield* resolve(submission).pipe(
+          Effect.tapErrorTag("LedgerError", () => releaseClaim),
           Effect.map((binding) => ({ _tag: "resolved" as const, binding })),
           Effect.catchTags({
             BindingUnavailable: (failure) => Effect.succeed({ _tag: "refused" as const, failure }),
@@ -4837,14 +4853,7 @@ const make = Effect.gen(function* () {
           }
           // Root Submission: release the claim and surface the typed refusal — the obligation
           // stays visible and no different code ever runs (spec §11).
-          yield* ledger
-            .releaseOwnership(
-              ReleaseOwnershipRequest.make({
-                submissionId: claim.submissionId,
-                ownershipToken: claim.ownershipToken,
-              }),
-            )
-            .pipe(Effect.catchTag("OwnershipLost", () => Effect.void));
+          yield* releaseClaim;
           return yield* refusal;
         }
         if (resolution._tag !== "resolved") {
@@ -5594,6 +5603,7 @@ const make = Effect.gen(function* () {
                 conflictToLedgerError("attachChildToReservation"),
               ),
             );
+          yield* hit("subagent:after-child-attach");
           yield* ledger
             .releaseOwnership(
               ReleaseOwnershipRequest.make({
@@ -5608,12 +5618,50 @@ const make = Effect.gen(function* () {
         }
         case "EnsureWaitingForChild": {
           // Restore the lost `waitingForChild` checkpoint (spec §14 "after parent start, before
-          // waitingForChild checkpoint"): claim the lane and suspend it — the ledger op ends the
-          // ownership period itself, so the lane holds no worker permit while each child runs
-          // on its own lane. Never spawns a replacement invocation (SUB-018/SUB-030).
+          // reservation attachment / waitingForChild checkpoint"): claim the lane, restore every
+          // attachment from the exact canonical request/start pair, then suspend it. The ledger
+          // op ends the ownership period itself, so the lane holds no worker permit while each
+          // child runs on its own lane. Never spawns a replacement invocation (SUB-018/SUB-030).
+          const subagent = subagentRecordsOf(records, runIdForSubmission(submission.submissionId));
+          const attachments: Array<{
+            readonly reservationId: ChildReservationId;
+            readonly childSubmissionId: SubmissionId;
+          }> = [];
+          for (const child of decision.children) {
+            const requested = subagent.requested.get(child.toolCallId);
+            const started = subagent.started.get(child.toolCallId);
+            if (
+              requested === undefined ||
+              started === undefined ||
+              started.childSubmissionId !== child.childSubmissionId
+            ) {
+              return "deferred";
+            }
+            attachments.push({
+              reservationId: decodeChildReservationIdSync(requested.reservationId),
+              childSubmissionId: child.childSubmissionId,
+            });
+          }
           const claimed = yield* claimFor(submission);
           if (Option.isNone(claimed)) return "deferred";
           const claim = claimed.value;
+          for (const attachment of attachments) {
+            yield* ledger
+              .attachChildToReservation(
+                AttachChildToReservationRequest.make({
+                  reservationId: attachment.reservationId,
+                  ownershipToken: claim.ownershipToken,
+                  childSubmissionId: attachment.childSubmissionId,
+                }),
+              )
+              .pipe(
+                Effect.catchTag(
+                  "ChildReservationConflict",
+                  conflictToLedgerError("attachChildToReservation"),
+                ),
+              );
+            yield* hit("subagent:after-child-attach");
+          }
           const suspension = yield* ledger.suspend(
             SuspendRequest.make({
               submissionId: submission.submissionId,
@@ -5807,6 +5855,25 @@ const make = Effect.gen(function* () {
     },
   );
 
+  /**
+   * Reconcile the lane named by a wake before attempting to claim it. A suspended lane is
+   * deliberately not claimable, so a wake-only worker that skipped this step could never execute
+   * `ResumeWaitingParent` after the child recorded its settlement. The scan is evaluated by the
+   * owning adapter: Node filters its shared ledger, while a Durable Object sees only its local
+   * lane and therefore never performs a foreign recovery read.
+   */
+  const recoverConversation = Effect.fn("DurableAgentRuntime.recoverConversation")(function* (
+    conversationId: ConversationId,
+  ): Effect.fn.Return<ReadonlyArray<RecoveryReport>, DurableWorkerFailure> {
+    const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
+    const reports: Array<RecoveryReport> = [];
+    for (const submission of nonterminal) {
+      if (submission.conversationId !== conversationId) continue;
+      reports.push(yield* recoverSubmission(submission));
+    }
+    return reports;
+  });
+
   const submit = Effect.fn("DurableAgentRuntime.submit")(function* <InputSchema extends Schema.Top>(
     agent: DurableSubmitAgent<InputSchema>,
     input: InputSchema["Type"],
@@ -5973,6 +6040,13 @@ const make = Effect.gen(function* () {
         submissionId: command.submissionId,
       }),
     );
+    yield* operationMutationPreparer.prepare(
+      OperationMutationPreparationRequest.make({
+        operation: "abort",
+        principal: caller.principal,
+        submissionId: command.submissionId,
+      }),
+    );
     const intent = yield* ledger.requestAbort(command);
     yield* hit("abort:after-intent");
     const snapshot = yield* ledger.lookup(
@@ -5999,6 +6073,13 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<UnknownResolutionIntent, DurableResolveFailure | OperationDenied> {
     yield* operationAuthorizer.authorize(
       OperationAuthorizationRequest.make({
+        operation: "resolveUnknown",
+        principal: caller.principal,
+        submissionId: command.submissionId,
+      }),
+    );
+    yield* operationMutationPreparer.prepare(
+      OperationMutationPreparationRequest.make({
         operation: "resolveUnknown",
         principal: caller.principal,
         submissionId: command.submissionId,
@@ -6042,6 +6123,13 @@ const make = Effect.gen(function* () {
   ): Effect.fn.Return<ApprovalDecisionIntent, DurableApprovalFailure | OperationDenied> {
     yield* operationAuthorizer.authorize(
       OperationAuthorizationRequest.make({
+        operation: "resolveApproval",
+        principal: caller.principal,
+        submissionId: command.submissionId,
+      }),
+    );
+    yield* operationMutationPreparer.prepare(
+      OperationMutationPreparationRequest.make({
         operation: "resolveApproval",
         principal: caller.principal,
         submissionId: command.submissionId,
@@ -6364,6 +6452,13 @@ const make = Effect.gen(function* () {
         decision: decision._tag,
       }),
     );
+    yield* operationMutationPreparer.prepare(
+      OperationMutationPreparationRequest.make({
+        operation: "retry",
+        principal: caller.principal,
+        submissionId: command.submissionId,
+      }),
+    );
     const disposition = yield* executeRecoveryDecision(snapshot, evidence, decision, read.records);
     if (disposition === "repaired") {
       yield* annotateRepair(submission.conversationId, command.submissionId, decision);
@@ -6411,7 +6506,10 @@ const make = Effect.gen(function* () {
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const nowMillis = yield* Clock.currentTimeMillis;
     const generatedAt = yield* nowUtc;
-    const recordsCache = new Map<ConversationId, ReadonlyArray<CanonicalRecordEnvelope>>();
+    const readsCache = new Map<
+      ConversationId,
+      { readonly records: ReadonlyArray<CanonicalRecordEnvelope>; readonly materialized: boolean }
+    >();
     const entries: Array<ObligationEntry> = [];
     for (const submission of nonterminal) {
       const snapshot = yield* ledger.loadRecoverySnapshot(
@@ -6419,48 +6517,82 @@ const make = Effect.gen(function* () {
       );
       let blockedOn: ObligationBlockedOn;
       let since: DateTime.Utc = submission.readyAt ?? submission.createdAt;
-      switch (submission.state) {
-        case "unknown": {
-          blockedOn = "unknown";
-          let records = recordsCache.get(submission.conversationId);
-          if (records === undefined) {
-            records = (yield* readAllTolerant(submission.conversationId)).records;
-            recordsCache.set(submission.conversationId, records);
-          }
-          const resolvedIds = new Set(
-            snapshot.unknownResolutions.map((intent) => intent.toolCallId),
-          );
-          const runId = runIdForSubmission(submission.submissionId);
-          let earliest: DateTime.Utc | undefined;
-          for (const envelope of records) {
-            const payload = envelope.record.payload;
-            if (payload._tag !== "ToolCallUnknown" || payload.runId !== runId) continue;
-            if (resolvedIds.has(payload.toolCallId)) continue;
-            const recordedAt = envelope.record.createdAt;
-            if (
-              earliest === undefined ||
-              DateTime.toEpochMillis(recordedAt) < DateTime.toEpochMillis(earliest)
-            ) {
-              earliest = recordedAt;
+      let suspensionQuarantined =
+        (submission.state === "suspended" && snapshot.suspension === undefined) ||
+        (submission.state !== "suspended" && snapshot.suspension !== undefined);
+      if (
+        !suspensionQuarantined &&
+        submission.state === "suspended" &&
+        snapshot.suspension !== undefined
+      ) {
+        let read = readsCache.get(submission.conversationId);
+        if (read === undefined) {
+          read = yield* readAllTolerant(submission.conversationId);
+          readsCache.set(submission.conversationId, read);
+        }
+        const canonicalEvidence = yield* evidenceFor(
+          read.records,
+          submission.submissionId,
+          read.materialized,
+          snapshot.hostSubmissionId,
+        );
+        suspensionQuarantined =
+          canonicalSuspensionMismatch(snapshot.suspension.reason, canonicalEvidence) !== undefined;
+      }
+      if (suspensionQuarantined) {
+        blockedOn = "quarantined";
+        since = snapshot.suspension?.suspendedAt ?? since;
+      } else {
+        switch (submission.state) {
+          case "unknown": {
+            blockedOn = "unknown";
+            let read = readsCache.get(submission.conversationId);
+            if (read === undefined) {
+              read = yield* readAllTolerant(submission.conversationId);
+              readsCache.set(submission.conversationId, read);
             }
+            const resolvedIds = new Set(
+              snapshot.unknownResolutions.map((intent) => intent.toolCallId),
+            );
+            const runId = runIdForSubmission(submission.submissionId);
+            let earliest: DateTime.Utc | undefined;
+            for (const envelope of read.records) {
+              const payload = envelope.record.payload;
+              if (payload._tag !== "ToolCallUnknown" || payload.runId !== runId) continue;
+              if (resolvedIds.has(payload.toolCallId)) continue;
+              const recordedAt = envelope.record.createdAt;
+              if (
+                earliest === undefined ||
+                DateTime.toEpochMillis(recordedAt) < DateTime.toEpochMillis(earliest)
+              ) {
+                earliest = recordedAt;
+              }
+            }
+            since = earliest ?? snapshot.suspension?.suspendedAt ?? since;
+            break;
           }
-          since = earliest ?? snapshot.suspension?.suspendedAt ?? since;
-          break;
-        }
-        case "suspended": {
-          blockedOn =
-            snapshot.suspension?.reason._tag === "WaitingForChild" ? "waitingForChild" : "approval";
-          since = snapshot.suspension?.suspendedAt ?? since;
-          break;
-        }
-        case "admitted":
-        case "ready": {
-          blockedOn = "ready-aged";
-          break;
-        }
-        default: {
-          blockedOn = "running-aged";
-          break;
+          case "suspended": {
+            blockedOn =
+              snapshot.suspension?.reason._tag === "WaitingForChild"
+                ? "waitingForChild"
+                : "approval";
+            since = snapshot.suspension?.suspendedAt ?? since;
+            break;
+          }
+          case "admitted":
+          case "ready": {
+            blockedOn = "ready-aged";
+            break;
+          }
+          case "joining":
+          case "joined":
+          case "running":
+          case "input-applied":
+          case "terminalizing":
+          case "settled": {
+            blockedOn = "running-aged";
+            break;
+          }
         }
       }
       const ageSeconds = ageSecondsSince(since, nowMillis);
@@ -6504,6 +6636,9 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       // Wake subscriptions may drop hints, so a ledger scan seeds the worklist (persistence §14).
+      // Recovery must precede claiming: it is the only path authorized to clear a canonically
+      // covered suspension after a child-settlement or approval notification.
+      yield* runRecoveryImpl();
       const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
       const seen = new Set<ConversationId>();
       for (const submission of nonterminal) {
@@ -6512,7 +6647,9 @@ const make = Effect.gen(function* () {
         yield* processConversationImpl(agent, submission.conversationId, definitions);
       }
       yield* Stream.runForEach(wake.wakes, (conversationId) =>
-        processConversationImpl(agent, conversationId, definitions),
+        recoverConversation(conversationId).pipe(
+          Effect.andThen(processConversationImpl(agent, conversationId, definitions)),
+        ),
       );
     });
 
@@ -6524,6 +6661,7 @@ const make = Effect.gen(function* () {
     // The multi-binding worker (plan §1.7): every claimed head resolves its exact stored
     // Binding through the host-supplied resolver, so one worker pool serves parent and child
     // lanes (spec §12's smallest-pool wakeup proof runs over this loop).
+    yield* runRecoveryImpl();
     const nonterminal = yield* Stream.runCollect(ledger.scanNonterminal);
     const seen = new Set<ConversationId>();
     for (const submission of nonterminal) {
@@ -6532,7 +6670,9 @@ const make = Effect.gen(function* () {
       yield* processConversationResolvedImpl(submission.conversationId);
     }
     yield* Stream.runForEach(wake.wakes, (conversationId) =>
-      processConversationResolvedImpl(conversationId),
+      recoverConversation(conversationId).pipe(
+        Effect.andThen(processConversationResolvedImpl(conversationId)),
+      ),
     );
   });
 
@@ -6616,9 +6756,10 @@ const make = Effect.gen(function* () {
  *   repair with mandatory author/reason audit and typed refusals; `scanObligations` is the
  *   scan-based DUR-017/OPS-001 obligation surface. Every one of them (plus `observe`,
  *   `awaitSettlement`, `abort`, `resolveUnknown`, `resolveApproval`) carries an explicit caller and
- *   consults the required host-supplied `OperationAuthorizer` fail-closed. Durable child admission
- *   separately consults the narrow required `ChildAdmissionAuthorizer` immediately before
- *   admission and again before materialization/readiness.
+ *   consults the required host-supplied `OperationAuthorizer` fail-closed. Protected mutations
+ *   then consult the required `OperationMutationPreparer` exactly once at their commit boundary.
+ *   Durable child admission separately consults the narrow required `ChildAdmissionAuthorizer`
+ *   immediately before admission and again before materialization/readiness.
  */
 export class DurableAgentRuntime extends Context.Service<
   DurableAgentRuntime,
@@ -6813,6 +6954,7 @@ export class DurableAgentRuntime extends Context.Service<
     | DurableRuntimeConfig
     | ToolReconciler
     | OperationAuthorizer
+    | OperationMutationPreparer
     | ChildAdmissionAuthorizer
     | Crypto.Crypto
   > = Layer.effect(DurableAgentRuntime)(make);

@@ -24,10 +24,12 @@ import {
 } from "./fixtures.ts";
 import type {
   ArrayBindingsConversationObject,
+  ChangingAuthorizationConversationObject,
   DeniedConversationObject,
   DynamicBindingsConversationObject,
   EffectBindingsConversationObject,
   LimitedConversationObject,
+  RunJournalFailureConversationObject,
   SubagentConversationObject,
   TelemetryConversationObject,
   TestConversationObject,
@@ -39,6 +41,8 @@ declare global {
     interface Env {
       CONVERSATIONS: DurableObjectNamespace<TestConversationObject>;
       DENIED: DurableObjectNamespace<DeniedConversationObject>;
+      CHANGING_AUTH: DurableObjectNamespace<ChangingAuthorizationConversationObject>;
+      RUN_JOURNAL_FAILURE: DurableObjectNamespace<RunJournalFailureConversationObject>;
       LIMITED: DurableObjectNamespace<LimitedConversationObject>;
       TINYDB: DurableObjectNamespace<TinyDatabaseConversationObject>;
       SUBAGENTS: DurableObjectNamespace<SubagentConversationObject>;
@@ -60,6 +64,8 @@ declare global {
 export type TestNamespace =
   | "CONVERSATIONS"
   | "DENIED"
+  | "CHANGING_AUTH"
+  | "RUN_JOURNAL_FAILURE"
   | "LIMITED"
   | "TINYDB"
   | "SUBAGENTS"

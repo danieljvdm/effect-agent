@@ -587,6 +587,8 @@ describe("DC Travel Planner — admission limits", () => {
 
   it("admission refuses over-limit queue depth before any third ledger row exists", async () => {
     const conversation = lane("limit-queue");
+    const firstMarker = `${conversation}-first`;
+    const secondMarker = `${conversation}-second`;
     const bookingOptions = (key: string) =>
       phase5TravelPlannerSubmitOptions(
         decodeConversationId(conversation),
@@ -596,7 +598,7 @@ describe("DC Travel Planner — admission limits", () => {
     // accepted admissions are nonterminal without a Worker-root Deferred.
     const first = await submitAgent(
       { definition: TravelPlannerPhase5 },
-      phase6BookingTrip(conversation),
+      phase6BookingTrip(firstMarker),
       bookingOptions(`${conversation}-k1`),
       "LIMITED",
     );
@@ -605,7 +607,7 @@ describe("DC Travel Planner — admission limits", () => {
     });
     const second = await submitAgent(
       { definition: TravelPlannerPhase5 },
-      phase6BookingTrip(conversation),
+      phase6BookingTrip(secondMarker),
       bookingOptions(`${conversation}-k2`),
       "LIMITED",
     );
@@ -618,7 +620,7 @@ describe("DC Travel Planner — admission limits", () => {
         return yield* client
           .submit(
             { definition: TravelPlannerPhase5 },
-            phase6BookingTrip(conversation),
+            phase6BookingTrip(`${conversation}-third`),
             bookingOptions(`${conversation}-k3`),
           )
           .pipe(Effect.flip);
@@ -632,7 +634,7 @@ describe("DC Travel Planner — admission limits", () => {
     // The refused Submission left no third row. Resolve each accepted approval in FIFO order,
     // proving the queue fixture drains without a cross-DO gate promise.
     expect(await laneRows(conversation, "LIMITED")).toHaveLength(2);
-    const approve = (submissionId: Receipt["submissionId"]) =>
+    const approve = (submissionId: Receipt["submissionId"], marker: string) =>
       runClient(
         Effect.gen(function* () {
           const client = yield* CloudflareConversationClient;
@@ -640,7 +642,7 @@ describe("DC Travel Planner — admission limits", () => {
             decodeConversationId(conversation),
             ApprovalDecisionCommand.make({
               submissionId,
-              toolCallId: decodeToolCallId(phase6BookingToolCallId(conversation)),
+              toolCallId: decodeToolCallId(phase6BookingToolCallId(marker)),
               decision: "approved",
               resolver: "travel-limit-fixture",
               reason: "drain accepted quota-test work",
@@ -650,23 +652,23 @@ describe("DC Travel Planner — admission limits", () => {
         }),
         "LIMITED",
       );
-    await approve(first.submissionId);
+    await approve(first.submissionId, firstMarker);
     await drainAlarmsUntil(
       conversation,
       async () => {
         const rows = await laneRows(conversation, "LIMITED");
-        return rows.some(
-          (row) =>
-            row.submission_id === second.submissionId &&
-            (row.state === "suspended" || row.state === "settled"),
+        return (
+          rows.some(
+            (row) => row.submission_id === first.submissionId && row.state === "suspended",
+          ) &&
+          rows.some((row) => row.submission_id === second.submissionId && row.state === "joined")
         );
       },
       { namespace: "LIMITED" },
     );
-    const secondRow = (await laneRows(conversation, "LIMITED")).find(
-      (row) => row.submission_id === second.submissionId,
-    );
-    if (secondRow?.state === "suspended") await approve(second.submissionId);
+    // The queued input joined the active host Run. Its Tool Call therefore suspends the host
+    // Submission, and the second decision addresses that host with the joined input's exact ID.
+    await approve(first.submissionId, secondMarker);
     await drainAlarmsUntil(conversation, allSettled(conversation, "LIMITED"), {
       namespace: "LIMITED",
     });

@@ -5,6 +5,8 @@ import { build } from "esbuild";
 import { Miniflare, kCurrentWorker } from "miniflare";
 import { afterAll, beforeAll, describe, expect, it } from "vite-plus/test";
 
+import { AskResult, WarehouseListOutcome } from "../src/wire.ts";
+
 /**
  * The demo end to end in a real workerd runtime (programmatic Miniflare): a
  * Code Mode Agent answers a question by running one JavaScript program in an
@@ -33,39 +35,6 @@ const openRuntime = (): Miniflare =>
       CODE_MODE_HOST: { name: kCurrentWorker, entrypoint: "CodeModeHostEntrypoint" },
     },
   });
-
-const AskResult = Schema.Struct({
-  answer: Schema.String,
-  codeMode: Schema.Struct({
-    used: Schema.Boolean,
-    tool: Schema.String,
-    executor: Schema.String,
-    calls: Schema.Natural,
-    program: Schema.optionalKey(Schema.String),
-    result: Schema.optionalKey(Schema.Json),
-    logs: Schema.optionalKey(Schema.Array(Schema.Json)),
-  }),
-  profile: Schema.Literals(["scripted", "openai"]),
-});
-
-const WarehouseOutcome = Schema.Union([
-  Schema.Struct({
-    _tag: Schema.Literal("WarehouseInvoices"),
-    invoices: Schema.Array(
-      Schema.Struct({
-        customer: Schema.String,
-        region: Schema.Literals(["amer", "emea", "apac"]),
-        revenue: Schema.Natural,
-        createdAt: Schema.String,
-      }),
-    ),
-    truncated: Schema.Boolean,
-  }),
-  Schema.Struct({
-    _tag: Schema.Literal("WarehouseQueryDenied"),
-    reason: Schema.String,
-  }),
-]);
 
 describe("Code Mode over a SQLite Durable Object warehouse", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -162,7 +131,7 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
     };
 
     const listed = await Effect.runPromise(
-      Schema.decodeUnknownEffect(WarehouseOutcome)(
+      Schema.decodeUnknownEffect(WarehouseListOutcome)(
         await stub.listInvoices({ minimumRevenue: 10_000 }),
       ),
     );
@@ -175,14 +144,37 @@ describe("Code Mode over a SQLite Durable Object warehouse", () => {
       ],
     });
 
+    const inclusive = await Effect.runPromise(
+      Schema.decodeUnknownEffect(WarehouseListOutcome)(
+        await stub.listInvoices({ minimumRevenue: 12_800 }),
+      ),
+    );
+    expect(inclusive._tag).toBe("WarehouseInvoices");
+    if (inclusive._tag !== "WarehouseInvoices") throw new Error("expected invoices");
+    expect(
+      inclusive.invoices.some(
+        (invoice) => invoice.customer === "Nimbus Analytics" && invoice.revenue === 12_800,
+      ),
+    ).toBe(true);
+
+    const inclusiveInRegion = await Effect.runPromise(
+      Schema.decodeUnknownEffect(WarehouseListOutcome)(
+        await stub.listInvoices({ minimumRevenue: 12_800, region: "amer" }),
+      ),
+    );
+    expect(inclusiveInRegion._tag).toBe("WarehouseInvoices");
+    if (inclusiveInRegion._tag !== "WarehouseInvoices") throw new Error("expected invoices");
+    expect(inclusiveInRegion.invoices).toHaveLength(1);
+    expect(inclusiveInRegion.invoices[0]?.customer).toBe("Nimbus Analytics");
+
     const denied = await Effect.runPromise(
-      Schema.decodeUnknownEffect(WarehouseOutcome)(
+      Schema.decodeUnknownEffect(WarehouseListOutcome)(
         await stub.listInvoices({ minimumRevenue: "UPDATE invoice_summary" }),
       ),
     );
     expect(denied).toMatchObject({
       _tag: "WarehouseQueryDenied",
-      reason: expect.stringContaining("invalid warehouse request"),
+      reason: "invalid-request",
     });
 
     const legacy = rawStub as unknown as {

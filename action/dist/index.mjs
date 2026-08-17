@@ -41706,6 +41706,13 @@ var rankAndDedupeFindings = (findings) => {
 var MAX_CHILD_FINDINGS = 8;
 var MAX_CHILD_CONCERNS = 3;
 var MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
+var FILE_REVIEW_MAX_DURATION_MINUTES = 10;
+var FILE_REVIEW_MAX_CONCURRENCY = 4;
+var MAX_FILE_REVIEW_WAVES = Math.ceil(MAX_REVIEW_UNITS / FILE_REVIEW_MAX_CONCURRENCY);
+var FILE_REVIEW_WAVE_DURATION_MINUTES = MAX_FILE_REVIEW_WAVES * FILE_REVIEW_MAX_DURATION_MINUTES;
+var FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES = 10;
+var FAN_OUT_MAX_DURATION_MINUTES = FILE_REVIEW_WAVE_DURATION_MINUTES + FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES;
+var FAN_OUT_WORKFLOW_TIMEOUT_MINUTES = FAN_OUT_MAX_DURATION_MINUTES + 5;
 var FileReviewToolkit = exports_Toolkit.make(ReadFileDiff, ReadFile);
 var FileReviewToolkitLayer = FileReviewToolkit.toLayer({
   read_file_diff: readFileDiffHandler,
@@ -41751,7 +41758,7 @@ var fileReviewerInstructions = makeFileReviewerInstructions();
 var defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "10 minutes",
+  maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: 2,
   repeatedFailureLimit: 12,
   tokenBudget: 200000,
@@ -41781,10 +41788,10 @@ class FileReviewUnitFailed extends exports_Schema.TaggedError()("FileReviewUnitF
 }
 var fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
-  maxConcurrency: 4,
+  maxConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
   maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "10 minutes"
+  maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`
 });
 var delegationDescription = "Delegate the review of one planned unit to a bounded file-reviewer child and return its line-anchored findings. Call it exactly once per unit from list_review_units; never retry a failed unit.";
 var mapFileReviewChildFailure = (failure) => FileReviewUnitFailed.make({
@@ -41836,8 +41843,8 @@ var fanOutReviewInstructions = makeFanOutReviewInstructions();
 var defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
-  maxDuration: "20 minutes",
-  toolConcurrency: 4,
+  maxDuration: `${FAN_OUT_MAX_DURATION_MINUTES} minutes`,
+  toolConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
   repeatedFailureLimit: 3,
   tokenBudget: 300000,
   contextTokenLimit: 150000,
@@ -43431,7 +43438,7 @@ var fanOutReviewBudgetLimits = UsageBudgetLimits.make({
   maxOutputTokens: 16000,
   maxToolCalls: 24,
   maxCostMicrousd: 2000000,
-  maxDurationMillis: 900000
+  maxDurationMillis: FAN_OUT_MAX_DURATION_MINUTES * 60000
 });
 
 class ReviewRunOutcome extends exports_Schema.Class("@effect-agent/pr-review/ReviewRunOutcome")({
@@ -43633,6 +43640,7 @@ var requireReadonly = (tools) => {
   }
 };
 var provideIgnore = (effect2, ignore6) => ignore6 !== undefined && ignore6.length > 0 ? effect2.pipe(exports_Effect.provide(ignoringPullRequestSourceLayer(ignore6))) : effect2;
+var provideSelection = (effect2, selection) => selection === undefined ? effect2 : effect2.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)));
 var makeFingerprint = (signature, ignore6) => provideIgnore(exports_Effect.gen(function* () {
   const source = yield* PullRequestSource;
   const metadata = yield* source.metadata;
@@ -43683,7 +43691,7 @@ var make58 = (options3) => {
     `applyVerdict=${String(options3.applyVerdict ?? false)}`,
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join("\x00");
-  const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
+  const run5 = (runOptions = {}) => provideSelection(provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? reviewBudgetLimits,
@@ -43694,7 +43702,7 @@ var make58 = (options3) => {
     usageScope: "run",
     reviewShape: "flat",
     selection: runOptions.selection
-  }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
+  }).pipe(exports_Effect.provide(exports_Layer.mergeAll(ReviewToolkitLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore), runOptions.selection);
   return {
     definition,
     binding,
@@ -43731,7 +43739,7 @@ var makeFanOut = (options3) => {
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join("\x00");
   const delegationLayer = fanOutHandlersLayerFor(suite.delegation)(childBinding).pipe(exports_Layer.provide(exports_Layer.mergeAll(FileReviewToolkitLayer, SubagentReservationsMemoryLive, IdGenerator.layer)));
-  const run5 = (runOptions = {}) => provideIgnore(executeReview(binding, {
+  const run5 = (runOptions = {}) => provideSelection(provideIgnore(executeReview(binding, {
     post: runOptions.post ?? false,
     applyVerdict: options3.applyVerdict ?? false,
     limits: options3.budget ?? fanOutReviewBudgetLimits,
@@ -43742,7 +43750,7 @@ var makeFanOut = (options3) => {
     usageScope: "coordinator",
     reviewShape: "fan-out",
     selection: runOptions.selection
-  }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore);
+  }).pipe(exports_Effect.provide(exports_Layer.mergeAll(FanOutCoordinatorToolkitLayer, delegationLayer, IdGenerator.layer)), exports_Effect.scoped), options3.ignore), runOptions.selection);
   return {
     definition: suite.parent,
     binding,
@@ -55044,7 +55052,7 @@ var runReviewAction = (reviewer, options3 = {}) => exports_Effect.gen(function* 
       runUrl,
       modelLabel: options3.modelLabel
     }))) : runReview;
-    const outcome = yield* selection === undefined ? reviewEffect : reviewEffect.pipe(exports_Effect.provide(selectedPullRequestSourceLayer(selection)));
+    const outcome = yield* reviewEffect;
     yield* exports_Console.log(`Review finished in ${outcome.turns} turn(s): verdict ${outcome.review.verdict}, ` + `${outcome.plan.comments.length} inline comment(s), ${outcome.plan.demoted.length} demoted finding(s).`);
     if (outcome.published !== undefined) {
       yield* exports_Console.log(`Posted ${outcome.published.event} review: ${outcome.published.url}`);

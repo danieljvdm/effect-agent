@@ -260,17 +260,23 @@ identities are derived and receives the live `DurableObjectState`, raw Worker en
 resources such as Worker service bindings; database clients and other request-scoped resources
 remain outside the cached Durable Object runtime.
 
-The Conversation Object composition root requires the session package's existing
-`OperationAuthorizerService` and `ChildAdmissionAuthorizerService`; there is no ambient allow
-default. Protected Worker-to-Object calls Schema-encode an explicit `OperationCaller`, and an
-authorization refusal returns `OperationDenied` through the same closed RPC failure union so the
-Worker client retains the typed denial. Trusted local deployments and tests may deliberately
-select the exported possession policies.
+`CloudflareDurableRuntime.layer(options)` exposes the session package's `OperationAuthorizer` and
+`ChildAdmissionAuthorizer` as required Layer inputs; neither policy is hidden in construction
+options and there is no ambient allow default. `makeConversationObjectClass(options,
+authorization, observability?)` therefore requires an explicit Layer providing both services at
+the application composition root. Protected Worker-to-Object calls Schema-encode an explicit
+`OperationCaller`, and an authorization refusal returns `OperationDenied` through the same closed
+RPC failure union so the Worker client retains the typed denial. Trusted local deployments and
+tests may deliberately select the exported possession policy Layers.
 
-Protected mutating Object endpoints authorize before writing the pre-armed maintenance alarm,
-then the runtime reauthorizes immediately before its domain mutation. A denied request therefore
-cannot persist an alarm or replace `OperationDenied` with an alarm-write failure, while authorized
-mutations still retain the alarm-before-mutation convergence invariant.
+For a protected mutation, the durable runtime performs one final authorization and then invokes
+its required `OperationMutationPreparer` exactly once immediately before the mutation path. The
+Cloudflare adapter implements that port by durably pre-arming the Object's maintenance alarm.
+The order is therefore authorization → alarm pre-arm → domain mutation, with no second policy
+check between pre-arm and mutation. A denial cannot persist an alarm, an alarm-write failure is a
+typed `OperationMutationPreparationError`, and an authorized request cannot be denied after the
+alarm mutation. `retry` performs its authorized reads and refusal classification first, then
+prepares only when it will execute a recovery mutation.
 
 `CloudflareConversationClient.readPage` remains the bounded pagination primitive. Its `readAll`
 convenience is also bounded: callers may set `maxRecords`, the default is 4,096, and reaching a

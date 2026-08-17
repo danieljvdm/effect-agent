@@ -27,6 +27,8 @@ import {
   EMPTY_TAIL_DIGEST,
   JoinedToHost,
   JoiningClaim,
+  IdempotencyKey,
+  LedgerError,
   LedgerCapabilities,
   MarkJoinedRequest,
   MarkUnknownRequest,
@@ -35,7 +37,11 @@ import {
   OwnershipLost,
   OperationAuthorizationRequest,
   OperationCaller,
+  OperationMutationPreparationError,
+  OperationMutationPreparationRequest,
+  ObligationBlockedOn,
   PersistedJson,
+  Principal,
   PreparedToolCallEvidence,
   ProducerEpoch,
   ReconciliationDecision,
@@ -84,9 +90,12 @@ import {
   turnResponseBatchId,
   turnResultsBatchId,
   validateSubagentLineageRecord,
+  validateSubagentAdmissionBinding,
 } from "../src/index.ts";
 
 const SHA_256_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const TENANT_B = Schema.decodeSync(Principal)("tenant-b");
+const DIFFERENT_CHILD_KEY = Schema.decodeSync(IdempotencyKey)("different-child-key");
 const SHA_256_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const SHA_256_C = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 
@@ -810,6 +819,32 @@ describe("durable operation authorization contracts", () => {
       })._tag,
     ).toBe("Failure");
   });
+
+  it("carries only the bounded operation, caller, target, and public preparation failure", () => {
+    const request = Schema.decodeUnknownSync(OperationMutationPreparationRequest)({
+      operation: "retry",
+      principal: "tenant-a",
+      submissionId: "submission-auth-1",
+    });
+    expect(Schema.encodeSync(OperationMutationPreparationRequest)(request)).toEqual({
+      operation: "retry",
+      principal: "tenant-a",
+      submissionId: "submission-auth-1",
+    });
+    const failure = OperationMutationPreparationError.make({
+      operation: request.operation,
+      message: "durable mutation boundary preparation failed",
+    });
+    expect(Schema.encodeSync(OperationMutationPreparationError)(failure)).toEqual({
+      _tag: "OperationMutationPreparationError",
+      operation: "retry",
+      message: "durable mutation boundary preparation failed",
+    });
+  });
+
+  it("exposes corrupt durable suspensions as a distinct operator obligation", () => {
+    expect(Schema.decodeUnknownSync(ObligationBlockedOn)("quarantined")).toBe("quarantined");
+  });
 });
 
 describe("phase 5 durable canonical payloads", () => {
@@ -904,6 +939,8 @@ describe("phase 5 durable canonical payloads", () => {
       payload,
     });
     const failures: ReadonlyArray<unknown> = [
+      // Private schema-v1 data predating executionKind intentionally requires a development reset.
+      (({ executionKind: _executionKind, ...legacy }) => legacy)(encodedToolCallPrepared),
       { ...encodedToolCallPrepared, turn: 0 },
       { ...encodedToolCallPrepared, parametersDigest: "not-a-digest" },
       { ...encodedToolCallPrepared, toolName: "" },
@@ -1127,7 +1164,10 @@ describe("S2 durable subagent canonical payloads", () => {
         readyAt: "2026-08-12T12:00:00.000Z",
       });
       const requestRecord = decodeRecord("subagent-request", encodedSubagentRequested);
-      if (requestRecord.payload._tag !== "SubagentRequested") return;
+      expect(requestRecord.payload._tag).toBe("SubagentRequested");
+      if (requestRecord.payload._tag !== "SubagentRequested") {
+        return yield* Effect.die(new Error("lineage test prerequisite was not SubagentRequested"));
+      }
       const lineageRecord = decodeRecord(
         subagentLineageRecordId(requestRecord.payload.childConversationId),
         encodedSubagentLineage,
@@ -1138,10 +1178,113 @@ describe("S2 durable subagent canonical payloads", () => {
         subagentLineageRecordId(requestRecord.payload.childConversationId),
         { ...encodedSubagentLineage, grantDigest: SHA_256_C },
       );
-      const exit = yield* Effect.exit(
+      const failure = yield* Effect.flip(
         validateSubagentLineageRecord(parent, requestRecord.payload, divergent),
       );
-      expect(exit._tag).toBe("Failure");
+      expect(failure).toBeInstanceOf(LedgerError);
+      expect(failure.operation).toBe("validateSubagentLineageRecord");
+    }),
+  );
+
+  it.effect("binds admitted children to the exact principal and idempotency scope", () =>
+    Effect.gen(function* () {
+      const parent = Schema.decodeUnknownSync(SubmissionSnapshot)({
+        submissionId: "submission-parent",
+        conversationId: "conversation-parent",
+        queueSequence: 0,
+        principal: "tenant-a",
+        idempotencyKey: "parent-key",
+        agentId: "travel-coordinator",
+        agentDigests: { agent: SHA_256_A, model: SHA_256_B, tools: SHA_256_C },
+        deploymentId: "test-deployment",
+        inputPayload: { destination: "Kyoto" },
+        inputDigest: SHA_256_C,
+        receiptId: "receipt-parent",
+        state: "running",
+        createdAt: "2026-08-12T12:00:00.000Z",
+        readyAt: "2026-08-12T12:00:00.000Z",
+      });
+      const requestRecord = decodeRecord("subagent-request-binding", encodedSubagentRequested);
+      expect(requestRecord.payload._tag).toBe("SubagentRequested");
+      if (requestRecord.payload._tag !== "SubagentRequested") {
+        return yield* Effect.die(
+          new Error("admission test prerequisite was not SubagentRequested"),
+        );
+      }
+      const child = Schema.decodeUnknownSync(SubmissionSnapshot)({
+        submissionId: "submission-child-1",
+        conversationId: encodedSubagentRequested.childConversationId,
+        queueSequence: 0,
+        principal: encodedSubagentRequested.childPrincipal,
+        idempotencyKey: encodedSubagentRequested.childIdempotencyKey,
+        agentId: encodedSubagentRequested.targetAgentId,
+        agentDigests: encodedSubagentRequested.targetDigests,
+        deploymentId: "test-deployment",
+        inputPayload: encodedSubagentRequested.childInput,
+        inputDigest: encodedSubagentRequested.childInputDigest,
+        receiptId: "receipt-child-1",
+        state: "admitted",
+        createdAt: "2026-08-12T12:00:00.000Z",
+        parentLinkage: {
+          parentSubmissionId: "submission-parent",
+          parentToolCallId: encodedSubagentRequested.toolCallId,
+        },
+      });
+      yield* validateSubagentAdmissionBinding(parent, requestRecord.payload, child);
+
+      const forgedPrincipalRecord = decodeRecord("subagent-request-forged-principal", {
+        ...encodedSubagentRequested,
+        childPrincipal: "tenant-b",
+      });
+      const forgedIdempotencyRecord = decodeRecord("subagent-request-forged-key", {
+        ...encodedSubagentRequested,
+        childIdempotencyKey: "different-child-key",
+      });
+      expect(forgedPrincipalRecord.payload._tag).toBe("SubagentRequested");
+      expect(forgedIdempotencyRecord.payload._tag).toBe("SubagentRequested");
+      if (
+        forgedPrincipalRecord.payload._tag !== "SubagentRequested" ||
+        forgedIdempotencyRecord.payload._tag !== "SubagentRequested"
+      ) {
+        return yield* Effect.die(new Error("forged admission fixtures were not requests"));
+      }
+      const mismatches = [
+        {
+          request: requestRecord.payload,
+          child: SubmissionSnapshot.make({
+            ...child,
+            principal: TENANT_B,
+          }),
+        },
+        {
+          request: requestRecord.payload,
+          child: SubmissionSnapshot.make({
+            ...child,
+            idempotencyKey: DIFFERENT_CHILD_KEY,
+          }),
+        },
+        {
+          request: forgedPrincipalRecord.payload,
+          child: SubmissionSnapshot.make({
+            ...child,
+            principal: TENANT_B,
+          }),
+        },
+        {
+          request: forgedIdempotencyRecord.payload,
+          child: SubmissionSnapshot.make({
+            ...child,
+            idempotencyKey: DIFFERENT_CHILD_KEY,
+          }),
+        },
+      ];
+      for (const mismatch of mismatches) {
+        const failure = yield* Effect.flip(
+          validateSubagentAdmissionBinding(parent, mismatch.request, mismatch.child),
+        );
+        expect(failure).toBeInstanceOf(LedgerError);
+        expect(failure.operation).toBe("validateSubagentAdmissionBinding");
+      }
     }),
   );
 

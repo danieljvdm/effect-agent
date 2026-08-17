@@ -32,10 +32,11 @@ import { TrustedLocalDurableAuthorizationLayer } from "../src/durable-test-autho
  */
 import {
   chaosSeedFromEnv,
+  ChaosPlan,
+  ChaosSubmissionSpec,
   generateChaosPlans,
   runChaosPlan,
   type ChaosAdapterFailpoints,
-  type ChaosPlan,
 } from "../src/index.ts";
 
 const ROOT_SEED = chaosSeedFromEnv(process.env);
@@ -121,7 +122,41 @@ const replayHint = (planIndex: number, plan: ChaosPlan): string =>
   `replay: CHAOS_SEED=${ROOT_SEED} (plan #${planIndex}, plan seed ${plan.seed}, ` +
   `arms [${[...plan.failpointArms, ...plan.adapterArms].join(", ")}])`;
 
+const LOST_CHILD_ADMISSION_PLAN = ChaosPlan.make({
+  seed: 628085221,
+  lanes: 1,
+  submissions: [ChaosSubmissionSpec.make({ lane: 0, kind: "delegation" })],
+  failpointArms: ["input:after-canonical-append"],
+  adapterArms: ["ledger:admit:after"],
+  abortInjections: [14],
+  resolutionInjections: [],
+  approvalDecisions: [],
+});
+
 describe("DUR-002/DUR-004/DUR-017 P7 chaos (SQLite adapters)", () => {
+  it.effect(
+    "recovers a committed child admission before re-driving the parent",
+    () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "effect-agent-chaos-sqlite-child-admission-",
+          });
+          const arm = makeSqliteArm();
+          const report = yield* runChaosPlan(LOST_CHILD_ADMISSION_PLAN, {
+            adapterFailpoints: arm.failpoints,
+            betweenRounds: TestClock.adjust(Duration.minutes(1)),
+          }).pipe(
+            Effect.provide(freshLayer(`${directory}/lost-child-admission.sqlite`, arm.handler)),
+          );
+          expect(report.openObligations).toBe(0);
+          expect(report.lanes.every((lane) => lane.verified)).toBe(true);
+        }),
+      ).pipe(Effect.provide(NodeFileSystem.layer)),
+    30_000,
+  );
+
   it.effect(
     `CHAOS: ${PLAN_COUNT} seeded interleavings over SQLite converge (reduced count, adapter arms included)`,
     () =>

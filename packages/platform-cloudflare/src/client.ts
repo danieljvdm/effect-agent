@@ -20,6 +20,7 @@ import {
   LedgerError,
   OperationCaller,
   OperationDenied,
+  OperationMutationPreparationError,
   PersistedJson,
   Principal,
   Receipt,
@@ -175,6 +176,7 @@ export class UnknownResolutionHostRequest extends Schema.Class<UnknownResolution
  */
 export const HostFailure = Schema.Union([
   OperationDenied,
+  OperationMutationPreparationError,
   AgentInputError,
   DigestError,
   AdmissionConflict,
@@ -313,8 +315,8 @@ export type ClientAbortFailure =
   | SettlementConflict
   | JoinedToHost
   | OperationDenied
+  | OperationMutationPreparationError
   | DurableRuntimeFailpointError
-  | DurableAlarmError
   | HostProtocolError
   | ConversationClientError;
 
@@ -322,8 +324,10 @@ export type ClientApprovalFailure =
   | LedgerError
   | SettlementConflict
   | ApprovalConflict
+  | ConversationStoreError
+  | RunJournalError
   | OperationDenied
-  | DurableAlarmError
+  | OperationMutationPreparationError
   | HostProtocolError
   | ConversationClientError;
 
@@ -333,8 +337,8 @@ export type ClientUnknownFailure =
   | UnknownResolutionConflict
   | JoinedToHost
   | OperationDenied
+  | OperationMutationPreparationError
   | DurableRuntimeFailpointError
-  | DurableAlarmError
   | HostProtocolError
   | ConversationClientError;
 
@@ -369,16 +373,18 @@ const ABORT_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "SettlementConflict",
   "JoinedToHost",
   "OperationDenied",
+  "OperationMutationPreparationError",
   "DurableRuntimeFailpointError",
-  "DurableAlarmError",
   "HostProtocolError",
 ]);
 const APPROVAL_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "LedgerError",
   "SettlementConflict",
   "ApprovalConflict",
+  "ConversationStoreError",
+  "RunJournalError",
   "OperationDenied",
-  "DurableAlarmError",
+  "OperationMutationPreparationError",
   "HostProtocolError",
 ]);
 const UNKNOWN_FAILURE_TAGS: ReadonlySet<string> = new Set([
@@ -387,8 +393,8 @@ const UNKNOWN_FAILURE_TAGS: ReadonlySet<string> = new Set([
   "UnknownResolutionConflict",
   "JoinedToHost",
   "OperationDenied",
+  "OperationMutationPreparationError",
   "DurableRuntimeFailpointError",
-  "DurableAlarmError",
   "HostProtocolError",
 ]);
 

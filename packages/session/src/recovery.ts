@@ -495,22 +495,36 @@ export const canonicalSuspensionMismatch = (
       ? undefined
       : "ApprovalPending suspension is not two-sided covered by canonical approval evidence";
   }
-  const canonicalChildren = new Set(
-    evidence.subagentStarts.map((started) => `${started.toolCallId}:${started.childSubmissionId}`),
-  );
+  const sameChild = (
+    left: { readonly toolCallId: ToolCallId; readonly childSubmissionId: SubmissionId },
+    right: { readonly toolCallId: ToolCallId; readonly childSubmissionId: SubmissionId },
+  ): boolean =>
+    left.toolCallId === right.toolCallId && left.childSubmissionId === right.childSubmissionId;
+  const includesChild = (
+    values: ReadonlyArray<{
+      readonly toolCallId: ToolCallId;
+      readonly childSubmissionId: SubmissionId;
+    }>,
+    expected: { readonly toolCallId: ToolCallId; readonly childSubmissionId: SubmissionId },
+  ): boolean => values.some((value) => sameChild(value, expected));
+  const hasDuplicateChild = (
+    values: ReadonlyArray<{
+      readonly toolCallId: ToolCallId;
+      readonly childSubmissionId: SubmissionId;
+    }>,
+  ): boolean =>
+    values.some((value, index) =>
+      values.slice(index + 1).some((candidate) => sameChild(value, candidate)),
+    );
+  const canonicalChildren = evidence.subagentStarts;
   const joined = new Set(evidence.subagentJoinedToolCallIds);
-  const canonicallyUnjoined = new Set(
-    evidence.subagentStarts
-      .filter((started) => !joined.has(started.toolCallId))
-      .map((started) => `${started.toolCallId}:${started.childSubmissionId}`),
+  const canonicallyUnjoined = evidence.subagentStarts.filter(
+    (started) => !joined.has(started.toolCallId),
   );
-  const suspendedChildren = reason.children.map(
-    (child) => `${child.toolCallId}:${child.childSubmissionId}`,
-  );
-  const suspendedSet = new Set(suspendedChildren);
-  return suspendedSet.size === suspendedChildren.length &&
-    suspendedChildren.every((identity) => canonicalChildren.has(identity)) &&
-    [...canonicallyUnjoined].every((identity) => suspendedSet.has(identity))
+  const suspendedChildren = reason.children;
+  return !hasDuplicateChild(suspendedChildren) &&
+    suspendedChildren.every((child) => includesChild(canonicalChildren, child)) &&
+    canonicallyUnjoined.every((child) => includesChild(suspendedChildren, child))
     ? undefined
     : "WaitingForChild suspension is not two-sided covered by canonical SubagentStarted evidence";
 };

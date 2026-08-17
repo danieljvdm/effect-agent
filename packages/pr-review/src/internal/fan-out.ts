@@ -60,6 +60,26 @@ export const MAX_CHILD_CONCERNS = 3;
  */
 export const MAX_FILE_REVIEW_TOOL_CALLS = MAX_UNIT_FILES * 2;
 
+/** Maximum wall-clock allowance for one attached file-review child. */
+export const FILE_REVIEW_MAX_DURATION_MINUTES = 10;
+
+/** Parent-side concurrent child permits. */
+export const FILE_REVIEW_MAX_CONCURRENCY = 4;
+
+/**
+ * A maximum-size audit schedules every unit in deterministic waves. The
+ * coordinator must remain alive for all waves, then have time to merge the
+ * reports into its terminal review.
+ */
+export const MAX_FILE_REVIEW_WAVES = Math.ceil(MAX_REVIEW_UNITS / FILE_REVIEW_MAX_CONCURRENCY);
+export const FILE_REVIEW_WAVE_DURATION_MINUTES =
+  MAX_FILE_REVIEW_WAVES * FILE_REVIEW_MAX_DURATION_MINUTES;
+export const FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES = 10;
+export const FAN_OUT_MAX_DURATION_MINUTES =
+  FILE_REVIEW_WAVE_DURATION_MINUTES + FAN_OUT_COORDINATOR_MERGE_HEADROOM_MINUTES;
+/** GitHub Actions job timeout, including a bounded runner-cleanup allowance. */
+export const FAN_OUT_WORKFLOW_TIMEOUT_MINUTES = FAN_OUT_MAX_DURATION_MINUTES + 5;
+
 // ---------------------------------------------------------------------------
 // The child: a file reviewer over one unit. Its toolkit is intentionally
 // smaller than the flat reviewer's — diff and head-file reads only, no
@@ -145,7 +165,7 @@ export const fileReviewerInstructions = makeFileReviewerInstructions();
 export const defaultFileReviewerPolicy = AgentPolicy.make({
   maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "10 minutes",
+  maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
   toolConcurrency: 2,
   // Same rationale as the flat reviewer's bound: read refusals are
   // model-visible results, and one parallel batch of out-of-unit probes must
@@ -217,10 +237,10 @@ export class FileReviewUnitFailed extends Schema.TaggedError<FileReviewUnitFaile
  */
 export const fileReviewPolicy = SubagentPolicy.make({
   maxChildren: MAX_REVIEW_UNITS,
-  maxConcurrency: 4,
+  maxConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
   maxTurns: 12,
   maxToolCalls: MAX_FILE_REVIEW_TOOL_CALLS,
-  maxDuration: "10 minutes",
+  maxDuration: `${FILE_REVIEW_MAX_DURATION_MINUTES} minutes`,
 });
 
 const delegationDescription =
@@ -315,8 +335,10 @@ export const fanOutReviewInstructions = makeFanOutReviewInstructions();
 export const defaultFanOutPolicy = AgentPolicy.make({
   maxTurns: 6,
   maxToolCalls: 1 + MAX_REVIEW_UNITS,
-  maxDuration: "20 minutes",
-  toolConcurrency: 4,
+  // 16 units / 4 permits = four 10-minute child waves, followed by the
+  // coordinator's bounded merge and final response window.
+  maxDuration: `${FAN_OUT_MAX_DURATION_MINUTES} minutes`,
+  toolConcurrency: FILE_REVIEW_MAX_CONCURRENCY,
   // Contained unit failures (SUB-033) are ordinary successful Tool results,
   // so they no longer fold into the repeated-failure counter; the default
   // bound suffices.

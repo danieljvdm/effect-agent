@@ -4,8 +4,14 @@ import { Effect } from "effect";
 import { describe, expect, it } from "vite-plus/test";
 
 import { CloudflareConversationClient } from "../src/index.ts";
-import { TEST_CALLER, decodeConversationId, plannerDefinition, submitOptions } from "./fixtures.ts";
-import { allSettled, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
+import {
+  TEST_CALLER,
+  approvalDefinition,
+  decodeConversationId,
+  plannerDefinition,
+  submitOptions,
+} from "./fixtures.ts";
+import { allSettled, anyInState, drainAlarmsUntil, runClient, stubFor } from "./harness.ts";
 
 describe("Cloudflare Conversation Object authorization", () => {
   it("re-decodes OperationDenied through the real DO RPC client", async () => {
@@ -83,5 +89,57 @@ describe("Cloudflare Conversation Object authorization", () => {
       (_instance, state) => state.storage.getAlarm(),
     );
     expect(alarmAfter).toBe(alarmBefore);
+  });
+
+  it("authorizes a protected mutation once before prearm even when policy changes", async () => {
+    const conversation = "cf-changing-authorization";
+    const receipt = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.submit(
+          { definition: approvalDefinition },
+          { question: "changing authorization", ref: conversation },
+          submitOptions(conversation, "changing-authorization-key"),
+        );
+      }),
+      "CHANGING_AUTH",
+    );
+    await drainAlarmsUntil(conversation, anyInState(conversation, "suspended", "CHANGING_AUTH"), {
+      namespace: "CHANGING_AUTH",
+    });
+    const command = AbortCommand.make({
+      submissionId: receipt.submissionId,
+      author: "changing-policy-fixture",
+      reason: "one authorization must cover prearm and mutation",
+    });
+
+    const first = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client.abort(decodeConversationId(conversation), command, TEST_CALLER);
+      }),
+      "CHANGING_AUTH",
+    );
+    expect(first).toMatchObject({
+      submissionId: receipt.submissionId,
+      author: "changing-policy-fixture",
+      reason: "one authorization must cover prearm and mutation",
+    });
+
+    const second = await runClient(
+      Effect.gen(function* () {
+        const client = yield* CloudflareConversationClient;
+        return yield* client
+          .abort(decodeConversationId(conversation), command, TEST_CALLER)
+          .pipe(Effect.flip);
+      }),
+      "CHANGING_AUTH",
+    );
+    expect(second).toBeInstanceOf(OperationDenied);
+    expect(second).toMatchObject({
+      _tag: "OperationDenied",
+      operation: "abort",
+      reason: "changing policy denies every authorization after the first",
+    });
   });
 });
