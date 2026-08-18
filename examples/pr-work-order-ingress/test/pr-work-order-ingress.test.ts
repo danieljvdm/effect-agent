@@ -1250,6 +1250,19 @@ describe("PR work-order ingress", () => {
         "",
       ].join("\n");
       expect(yield* completeModifiedPaths(headerLikePayload)).toEqual(["src/value.ts"]);
+      const withoutFinalNewlines = [
+        "diff --git a/src/value.ts b/src/value.ts",
+        `index ${"1".repeat(40)}..${"2".repeat(40)} 100644`,
+        "--- a/src/value.ts",
+        "+++ b/src/value.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "\\ No newline at end of file",
+        "+new",
+        "\\ No newline at end of file",
+        "",
+      ].join("\n");
+      expect(yield* completeModifiedPaths(withoutFinalNewlines)).toEqual(["src/value.ts"]);
 
       const rejected = yield* Effect.all([
         completeModifiedPaths(
@@ -1262,8 +1275,16 @@ describe("PR work-order ingress", () => {
           "diff --git a/../secret b/../secret\n--- a/../secret\n+++ b/../secret\n",
         ).pipe(Effect.flip),
         completeModifiedPaths("diff --git a/src/value.ts b/src/value.ts\n").pipe(Effect.flip),
+        completeModifiedPaths(
+          `${valid}--- a/src/hidden.ts\n+++ b/src/hidden.ts\n@@ -1 +1 @@\n-old\n+new\n`,
+        ).pipe(Effect.flip),
+        completeModifiedPaths(
+          `diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1,2 +1,2 @@\n-old\n+new\n`,
+        ).pipe(Effect.flip),
       ]);
       expect(rejected.map((failure) => failure._tag)).toEqual([
+        "PublisherVerificationFailure",
+        "PublisherVerificationFailure",
         "PublisherVerificationFailure",
         "PublisherVerificationFailure",
         "PublisherVerificationFailure",

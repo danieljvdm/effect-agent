@@ -20,6 +20,13 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
         sawSourceHeader: boolean;
         sawDestinationHeader: boolean;
         sawHunk: boolean;
+        hunk:
+          | {
+              oldRemaining: number;
+              newRemaining: number;
+              allowNoNewlineMarker: boolean;
+            }
+          | undefined;
       }
     | undefined;
   let files = 0;
@@ -29,6 +36,8 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
       !current.sawSourceHeader ||
       !current.sawDestinationHeader ||
       !current.sawHunk ||
+      (current.hunk !== undefined &&
+        (current.hunk.oldRemaining !== 0 || current.hunk.newRemaining !== 0)) ||
       current.source !== current.destination
     ) {
       return yield* reject("publisher accepts only complete same-path text modifications");
@@ -68,17 +77,72 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
         sawSourceHeader: false,
         sawDestinationHeader: false,
         sawHunk: false,
+        hunk: undefined,
       };
       continue;
+    }
+    if (current?.hunk !== undefined) {
+      const hunk = current.hunk;
+      if (hunk.oldRemaining === 0 && hunk.newRemaining === 0) {
+        if (line === "\\ No newline at end of file") {
+          if (!hunk.allowNoNewlineMarker) {
+            return yield* reject("publisher found an unbound no-newline marker");
+          }
+          current.hunk = undefined;
+          continue;
+        }
+        current.hunk = undefined;
+      } else {
+        if (line === "\\ No newline at end of file") {
+          if (!hunk.allowNoNewlineMarker) {
+            return yield* reject("publisher found an unbound no-newline marker");
+          }
+          hunk.allowNoNewlineMarker = false;
+          continue;
+        }
+        if (line.startsWith(" ")) {
+          hunk.oldRemaining -= 1;
+          hunk.newRemaining -= 1;
+        } else if (line.startsWith("-")) {
+          hunk.oldRemaining -= 1;
+        } else if (line.startsWith("+")) {
+          hunk.newRemaining -= 1;
+        } else {
+          return yield* reject("publisher found malformed or incomplete patch hunk content");
+        }
+        if (hunk.oldRemaining < 0 || hunk.newRemaining < 0) {
+          return yield* reject("patch hunk content exceeds its declared line counts");
+        }
+        hunk.allowNoNewlineMarker = true;
+        continue;
+      }
     }
     if (line.startsWith("@@ ")) {
       if (current === undefined || !current.sawSourceHeader || !current.sawDestinationHeader) {
         return yield* reject("publisher found a patch hunk before its complete path headers");
       }
+      const matched = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/.exec(line);
+      const oldCount = Number(matched?.[2] ?? (matched === null ? Number.NaN : 1));
+      const newCount = Number(matched?.[4] ?? (matched === null ? Number.NaN : 1));
+      if (
+        !Number.isSafeInteger(oldCount) ||
+        !Number.isSafeInteger(newCount) ||
+        oldCount < 0 ||
+        newCount < 0 ||
+        oldCount > 1_000_000 ||
+        newCount > 1_000_000 ||
+        (oldCount === 0 && newCount === 0)
+      ) {
+        return yield* reject("publisher could not prove the patch hunk line counts");
+      }
       current.sawHunk = true;
+      current.hunk = {
+        oldRemaining: oldCount,
+        newRemaining: newCount,
+        allowNoNewlineMarker: false,
+      };
       continue;
     }
-    if (current?.sawHunk === true) continue;
     if (line.startsWith("--- ")) {
       if (
         current === undefined ||
@@ -109,6 +173,10 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
         return yield* reject("patch destination header differs from its diff header");
       }
       current.sawDestinationHeader = true;
+      continue;
+    }
+    if (current?.sawHunk === true && line.length > 0) {
+      return yield* reject("publisher found unproven trailing patch structure after a hunk");
     }
   }
   yield* flush();
