@@ -1,12 +1,19 @@
 import { describe, expect, it } from "@effect/vitest";
 import { Duration, Effect, Layer, Redacted, Ref, Schema } from "effect";
-import { Agent, IdGenerator, RunEvent, SubagentReservationsMemoryLive } from "effect-agent";
+import {
+  Agent,
+  AgentRuntime,
+  IdGenerator,
+  RunEvent,
+  SubagentReservationsMemoryLive,
+} from "effect-agent";
 import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
   CandidateAssessment,
   ChangedFile,
+  annotatePatch,
   CodeReview,
   DelegateFileReview,
   executeReview,
@@ -17,7 +24,11 @@ import {
   fanOutReviewerProfile,
   FanOutReviewer,
   FanOutReviewerProfile,
+  findingAnchorInUnitEvidence,
+  fileReviewEvidenceChunks,
   FileReviewer,
+  FileReviewBrief,
+  FileReviewEvidence,
   FileReviewReport,
   FileReviewRequest,
   FileReviewToolkit,
@@ -30,6 +41,7 @@ import {
   makeFanOutReviewInstructions,
   makeFanOutReviewSuite,
   MAX_FILE_REVIEW_TOOL_CALLS,
+  MAX_PATCH_CHARS,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
   planReviewUnits,
@@ -166,6 +178,7 @@ const discoveryRequest = (pass: typeof generalPass): FileReviewRequest =>
     workId: pass.passId,
     unitId: pass.unitId,
     paths: pass.paths,
+    evidenceShardIds: pass.evidenceShardIds,
     perspective: pass.perspective,
     riskCategories: pass.riskCategories,
     candidates: [],
@@ -195,6 +208,7 @@ const verificationRequest = FileReviewRequest.make({
   workId: `${highRiskUnit.unitId}-verification`,
   unitId: highRiskUnit.unitId,
   paths: highRiskUnit.paths,
+  evidenceShardIds: highRiskUnit.evidenceShards.map((shard) => shard.shardId),
   perspective: "candidate-verification",
   riskCategories: highRiskUnit.riskCategories,
   candidates: [supportedCandidate, unsupportedCandidate],
@@ -322,12 +336,14 @@ describe("fan-out review contract", () => {
     expect(instructions).toContain("publication cap is 7");
   });
 
-  it("uses evidence-only children with bounded structured concurrency", () => {
+  it("configures evidence-only children with the framework's bounded concurrency policy", () => {
     expect(Object.keys(FileReviewToolkit.tools)).toEqual([]);
     expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(1);
     expect(defaultFileReviewerPolicy.maxToolCalls).toBe(1);
     expect(fileReviewPolicy.maxToolCalls).toBe(1);
     expect(fileReviewPolicy.maxConcurrency).toBe(4);
+    // The shared attached-subagent scheduler's Scope-owned slot gate is
+    // exercised with deterministic gated children in capabilities tests.
     expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(6 * 60_000);
   });
 
@@ -352,6 +368,55 @@ describe("fan-out review contract", () => {
       expect(jsonSchema.anyOf).toBeUndefined();
     }
   });
+
+  it.effect("selects scripted child outcomes by an exact work-ID marker", () =>
+    Effect.gen(function* () {
+      const prefixReport = FileReviewReport.make({
+        phase: "discovery",
+        workId: "unit-001",
+        unitId: "unit-001",
+        findings: [],
+        concerns: [],
+        fileSummaries: [],
+        assessments: [],
+      });
+      const exactReport = FileReviewReport.make({
+        ...prefixReport,
+        workId: "unit-001-general",
+      });
+      const scripted = yield* makeOfflineFileReviewerModel([
+        { workId: prefixReport.workId, outcome: { _tag: "report", report: prefixReport } },
+        { workId: exactReport.workId, outcome: { _tag: "report", report: exactReport } },
+      ]);
+      const binding = Agent.withModel(FileReviewer, scripted.model);
+      const output = yield* AgentRuntime.run(
+        binding,
+        FileReviewBrief.make({
+          phase: "discovery",
+          workId: exactReport.workId,
+          unitId: exactReport.unitId,
+          paths: ["src/example.ts"],
+          evidenceShardIds: ["shard-0001"],
+          perspective: "general",
+          riskCategories: [],
+          candidates: [],
+          evidence: [
+            FileReviewEvidence.make({
+              shardId: "shard-0001",
+              path: "src/example.ts",
+              status: "modified",
+              reviewMode: "diff",
+              ordinal: 1,
+              total: 1,
+              annotatedPatch: "@@ -1 +1 @@\nR1 + export const value = 1;",
+            }),
+          ],
+        }),
+      ).pipe(Effect.provide(Layer.mergeAll(FileReviewToolkitLayer, IdGenerator.layer)));
+
+      expect(output.output.workId).toBe(exactReport.workId);
+    }),
+  );
 
   it("carries shared guidance to both coordinator and workers", () => {
     const suite = makeFanOutReviewSuite({ guidance: "Architecture first.", maxFindings: 7 });
@@ -421,6 +486,23 @@ describe("deterministic input and risk planning", () => {
     ]);
   });
 
+  it("assigns independent specialist discovery when keyword classification is silent", () => {
+    const file = ChangedFile.make({
+      path: "src/domain/policy.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      patch: "@@ -1 +1 @@\n-export const mode = 1;\n+export const mode = 2;",
+    });
+    const plan = planReviewUnits([file], { totalChangedFiles: 1 });
+    expect(plan.units[0]?.riskCategories).toEqual([]);
+    expect(plan.discoveryPasses.map((pass) => pass.perspective)).toEqual([
+      "general",
+      "risk-specialist",
+    ]);
+    expect(plan.discoveryPasses[1]?.riskCategories).toEqual([]);
+  });
+
   it("reports undiffable and over-capacity paths instead of dropping them", () => {
     const binary = ChangedFile.make({
       path: "assets/logo.png",
@@ -446,7 +528,7 @@ describe("deterministic input and risk planning", () => {
     );
   });
 
-  it("assigns but explicitly marks truncated diff evidence as partial input", () => {
+  it("splits an oversized path into complete bounded evidence shards", () => {
     const oversized = ChangedFile.make({
       path: "src/oversized.ts",
       status: "modified",
@@ -455,8 +537,20 @@ describe("deterministic input and risk planning", () => {
       patch: `@@ -1 +1 @@\n+${"x".repeat(61_000)}`,
     });
     const plan = planReviewUnits([oversized], { totalChangedFiles: 1 });
+    const chunks = fileReviewEvidenceChunks(oversized);
+    const shards = plan.units.flatMap((unit) => unit.evidenceShards);
     expect(plan.units.flatMap((unit) => unit.paths)).toEqual([oversized.path]);
-    expect(plan.partialEvidencePaths).toEqual([oversized.path]);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.annotatedPatch.length <= MAX_PATCH_CHARS)).toBe(true);
+    expect(chunks.map((chunk) => chunk.annotatedPatch).join("")).toBe(
+      annotatePatch(oversized.patch ?? ""),
+    );
+    expect(shards.map((shard) => shard.ordinal)).toEqual(
+      Array.from({ length: chunks.length }, (_, index) => index + 1),
+    );
+    expect(shards.every((shard) => shard.total === chunks.length)).toBe(true);
+    expect(plan.partialEvidencePaths).toEqual([]);
+    expect(plan.unassignedEvidenceShardIds).toEqual([]);
 
     const assessment = assessReviewPipeline({
       shape: "fan-out",
@@ -466,12 +560,46 @@ describe("deterministic input and risk planning", () => {
       totalAnchorFiles: 1,
       events: [],
     });
-    expect(assessment.inputCoverage.status).toBe("incomplete");
+    expect(assessment.inputCoverage.status).toBe("complete");
     expect(assessment.inputCoverage.assignedPaths).toEqual([oversized.path]);
-    expect(assessment.inputCoverage.partialPaths).toEqual([oversized.path]);
-    expect(assessment.inputCoverage.reasons).toContain(
-      `model-visible diff evidence was truncated (1): ${oversized.path}`,
+    expect(assessment.inputCoverage.partialPaths).toEqual([]);
+    expect(assessment.inputCoverage.reasons).toEqual([]);
+  });
+
+  it("binds finding anchors to the exact shards assigned to their unit", () => {
+    const lines = Array.from(
+      { length: 130 },
+      (_, index) => `+export const value${index + 1} = "${"x".repeat(5_500)}";`,
     );
+    const oversized = ChangedFile.make({
+      path: "src/multi-unit.ts",
+      status: "added",
+      additions: lines.length,
+      deletions: 0,
+      patch: [`@@ -0,0 +1,${lines.length} @@`, ...lines].join("\n"),
+    });
+    const plan = planReviewUnits([oversized], { totalChangedFiles: 1 });
+    const first = plan.units[0];
+    const last = plan.units.at(-1);
+    expect(plan.units.length).toBeGreaterThan(1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (first === undefined || last === undefined) return;
+
+    const findingAt = (line: number) =>
+      ReviewFinding.make({
+        path: oversized.path,
+        startLine: line,
+        endLine: line,
+        severity: "important",
+        title: `Defect at line ${line}`,
+        body: "The assigned evidence demonstrates this defect.",
+      });
+
+    expect(findingAnchorInUnitEvidence(findingAt(1), first, [oversized])).toBe(true);
+    expect(findingAnchorInUnitEvidence(findingAt(130), first, [oversized])).toBe(false);
+    expect(findingAnchorInUnitEvidence(findingAt(1), last, [oversized])).toBe(false);
+    expect(findingAnchorInUnitEvidence(findingAt(130), last, [oversized])).toBe(true);
   });
 
   it("is deterministic regardless of source order", () => {
@@ -550,7 +678,7 @@ describe("offline discovery and verification pipeline", () => {
         expect(specialistPrompt).toBeDefined();
         expect(verifierPrompt).toContain(supportedCandidate.candidateId);
         expect(verifierPrompt).toContain("authenticateMode");
-        expect(verifierPrompt).not.toContain("publishWebhookMode");
+        expect(verifierPrompt).toContain("publishWebhookMode");
         for (const prompt of result.childPrompts) expect(prompt).not.toContain(MISSION_MARKER);
       }),
   );
@@ -577,6 +705,66 @@ describe("offline discovery and verification pipeline", () => {
       expect(result.outcome.state).toBeUndefined();
       expect(result.outcome.plan.body).toContain("Incomplete review assurance");
       expect(result.outcome.plan.event).toBe("COMMENT");
+    }),
+  );
+
+  it.effect("rejects a discovery candidate before assurance when its diff anchor is invalid", () =>
+    Effect.gen(function* () {
+      const invalidAnchor = ReviewFinding.make({
+        ...supportedFinding,
+        startLine: 99,
+        endLine: 99,
+        title: "Invalid new-version anchor",
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: [
+          successfulDiscovery[0]!,
+          {
+            workId: specialistPass.passId,
+            outcome: {
+              _tag: "report",
+              report: discoveryReport(specialistPass, [invalidAnchor]),
+            },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: specialistPass.passId,
+          errorTag: "FileReviewWorkRejected",
+        }),
+      );
+      expect(result.outcome.review.findings).toEqual([]);
+      expect(result.outcome.state).toBeUndefined();
+    }),
+  );
+
+  it.effect("binds projected child output to the exact scheduled request", () =>
+    Effect.gen(function* () {
+      const mismatched = FileReviewReport.make({
+        ...discoveryReport(specialistPass, [supportedFinding]),
+        workId: generalPass.passId,
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: [
+          successfulDiscovery[0]!,
+          {
+            workId: specialistPass.passId,
+            outcome: { _tag: "report", report: mismatched },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: specialistPass.passId,
+          errorTag: "FileReviewWorkRejected",
+        }),
+      );
+      expect(result.outcome.review.findings).toEqual([]);
     }),
   );
 

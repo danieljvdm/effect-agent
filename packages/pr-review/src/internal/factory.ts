@@ -317,9 +317,9 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
     ].join(" ");
   const profileSignature = (_mission: ReviewMission): string =>
     [
-      // v2 invalidates continuity produced by the former one-pass-per-unit
-      // architecture; old authenticated state safely triggers a full audit.
-      "pr-review-profile-v2-discovery-verification",
+      // v3 invalidates continuity produced before complete evidence sharding,
+      // universal specialist scrutiny, and request-bound result projection.
+      "pr-review-profile-v3-sharded-request-bound-assurance",
       JSON.stringify(guidanceLines),
       JSON.stringify(options.ignore ?? []),
       `maxFindings=${clampMaxFindings(options.maxFindings)}`,

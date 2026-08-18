@@ -11,12 +11,13 @@ import {
 } from "effect-agent";
 import { Tool, Toolkit } from "effect/unstable/ai";
 
-import { ChangedPath } from "./diff.ts";
+import { anchorViolation } from "./anchors.ts";
+import { ChangedFileStatus, ChangedPath } from "./diff.ts";
 import {
   clampMaxFindings,
   CodeReview,
-  FileDiffView,
-  fileDiffView,
+  fileReviewEvidenceChunks,
+  MAX_PATCH_CHARS,
   MAX_WALKTHROUGH_SUMMARY_CHARS,
   REVIEW_TOOL_RESULT_MAX_BYTES,
   ReviewConcern,
@@ -26,8 +27,11 @@ import {
 } from "./review-agent.ts";
 import {
   MAX_REVIEW_UNITS,
+  MAX_UNIT_EVIDENCE_SHARDS,
   MAX_UNIT_FILES,
+  findingAnchorInUnitEvidence,
   planReviewUnits,
+  ReviewEvidenceShardId,
   ReviewPassId,
   ReviewRiskCategory,
   ReviewUnitId,
@@ -52,7 +56,7 @@ export const MAX_CHILD_FINDINGS = 6;
 /** One discovery pass returns at most this many non-anchored candidates. */
 export const MAX_CHILD_CONCERNS = 3;
 
-/** One unit can receive a general and specialist discovery pass. */
+/** Every unit receives independent general and specialist discovery passes. */
 export const MAX_UNIT_CANDIDATES = (MAX_CHILD_FINDINGS + MAX_CHILD_CONCERNS) * 2;
 
 /** General + specialist discovery for every unit, then one verifier per unit. */
@@ -105,9 +109,10 @@ export class CandidateAssessment extends Schema.Class<CandidateAssessment>(
 }) {}
 
 /**
- * Concern candidates need explicit paths internally so the verifier receives
- * relevant evidence. The public ReviewConcern remains path-free after the
- * host confirms and projects it.
+ * Concern candidates need explicit paths internally to bind the claim to
+ * scheduled evidence. The verifier receives the complete bounded unit so it
+ * can use neighboring evidence to falsify the claim. The public ReviewConcern
+ * remains path-free after the host confirms and projects it.
  */
 export class DiscoveredConcern extends Schema.Class<DiscoveredConcern>(
   "@effect-agent/pr-review/DiscoveredConcern",
@@ -124,6 +129,9 @@ const UnitPaths = Schema.Array(ChangedPath)
 
 const RiskCategories = Schema.Array(ReviewRiskCategory).check(Schema.isMaxLength(6));
 const Candidates = Schema.Array(ReviewCandidate).check(Schema.isMaxLength(MAX_UNIT_CANDIDATES));
+const EvidenceShardIds = Schema.Array(ReviewEvidenceShardId)
+  .check(Schema.isMinLength(1))
+  .check(Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS));
 
 /** Strict-object coordinator request for either discovery or verification. */
 export class FileReviewRequest extends Schema.Class<FileReviewRequest>(
@@ -133,10 +141,24 @@ export class FileReviewRequest extends Schema.Class<FileReviewRequest>(
   workId: ReviewPassId,
   unitId: ReviewUnitId,
   paths: UnitPaths,
+  evidenceShardIds: EvidenceShardIds,
   perspective: ReviewWorkPerspective,
   riskCategories: RiskCategories,
   /** Empty for discovery; the exact discovered set for unit verification. */
   candidates: Candidates,
+}) {}
+
+/** One complete host-selected evidence shard supplied to a review child. */
+export class FileReviewEvidence extends Schema.Class<FileReviewEvidence>(
+  "@effect-agent/pr-review/FileReviewEvidence",
+)({
+  shardId: ReviewEvidenceShardId,
+  path: ChangedPath,
+  status: ChangedFileStatus,
+  reviewMode: Schema.Literals(["diff", "content", "unavailable"]),
+  ordinal: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  total: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  annotatedPatch: Schema.String.check(Schema.isMaxLength(MAX_PATCH_CHARS)),
 }) {}
 
 /** Host-prepared child input with complete bounded diff/content evidence. */
@@ -147,12 +169,13 @@ export class FileReviewBrief extends Schema.Class<FileReviewBrief>(
   workId: ReviewPassId,
   unitId: ReviewUnitId,
   paths: UnitPaths,
+  evidenceShardIds: EvidenceShardIds,
   perspective: ReviewWorkPerspective,
   riskCategories: RiskCategories,
   candidates: Candidates,
-  evidence: Schema.Array(FileDiffView)
+  evidence: Schema.Array(FileReviewEvidence)
     .check(Schema.isMinLength(1))
-    .check(Schema.isMaxLength(MAX_UNIT_FILES)),
+    .check(Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS)),
 }) {}
 
 /** Child output; phase-inapplicable collections must be empty. */
@@ -211,7 +234,7 @@ const staticGuidanceLines = (
 };
 
 const evidenceInstructions = [
-  "The host placed complete bounded review evidence in the input evidence array. Treat that array as the required input surface.",
+  "The host placed complete bounded review evidence shards in the input evidence array. Treat every shard as required input; ordinal/total identifies multi-shard paths.",
   "You have no tools and cannot roam outside this evidence. If it is insufficient for a candidate, reject or omit that candidate rather than guessing.",
   "A diff marks new-version anchors as R<number>; only those lines may anchor findings. B/H content evidence is non-anchorable.",
 ];
@@ -229,20 +252,22 @@ export const makeFileReviewerInstructions =
       return [
         ...common,
         "Independently verify every candidate in the input. You did not receive another reviewer's transcript or reasoning; use only the candidate claim and bounded evidence.",
-        "The evidence array contains the union of candidate-cited paths, not unrelated paths from the rest of the unit.",
+        "The evidence array contains the complete bounded unit, including neighboring changed code that may confirm or falsify a locally plausible claim.",
         "For each candidate, try to falsify it first. Confirm only when the cited behavior is supported and actionable. Reject unsupported, speculative, duplicate, or non-actionable candidates.",
         'Return ONLY JSON with phase "verification", the exact workId/unitId, empty findings/concerns/fileSummaries arrays, and exactly one assessment per candidateId. Each assessment is {"candidateId": <exact id>, "disposition": <"confirmed" | "rejected">, "rationale": <bounded evidence-based reason>}. Never add or omit an id.',
       ].join("\n");
     }
     const focus =
       brief.perspective === "risk-specialist"
-        ? `This is a fresh specialist discovery pass. Concentrate on these host-classified risks without relying on another pass: ${brief.riskCategories.join(", ")}.`
+        ? brief.riskCategories.length > 0
+          ? `This is a fresh specialist discovery pass. Concentrate on these host-classified risks without relying on another pass: ${brief.riskCategories.join(", ")}.`
+          : "This is a fresh specialist discovery pass. The host found no keyword-classified category, so independently scrutinize authentication/authorization, security boundaries, durability, concurrency, credentials, and external side effects rather than treating classification silence as low risk."
         : "This is the general discovery pass. Review broadly for correctness, security, concurrency, resource, API, and error-handling defects.";
     return [
       ...common,
       focus,
-      "The discovery evidence array contains one entry for every path in the unit. Review every entry. A later independent verifier, not you, decides which candidates publish.",
-      "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths so the verifier receives only relevant evidence.",
+      "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
+      "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
       `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
     ].join("\n");
   };
@@ -305,7 +330,14 @@ const prepareReviewBrief = (request: FileReviewRequest) =>
     const metadata = yield* source.metadata.pipe(Effect.mapError(mapSourceFailure));
     const plan = planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
     const unit = plan.units.find((candidate) => candidate.unitId === request.unitId);
-    if (unit === undefined || !sameStrings(request.paths, unit.paths)) {
+    if (
+      unit === undefined ||
+      !sameStrings(request.paths, unit.paths) ||
+      !sameStrings(
+        request.evidenceShardIds,
+        unit.evidenceShards.map((shard) => shard.shardId),
+      )
+    ) {
       return yield* rejectWork(request.workId, "request does not match a host-planned unit");
     }
 
@@ -315,6 +347,7 @@ const prepareReviewBrief = (request: FileReviewRequest) =>
         pass === undefined ||
         pass.unitId !== request.unitId ||
         !sameStrings(pass.paths, request.paths) ||
+        !sameStrings(pass.evidenceShardIds, request.evidenceShardIds) ||
         pass.perspective !== request.perspective ||
         !sameStrings(pass.riskCategories, request.riskCategories) ||
         request.candidates.length !== 0
@@ -351,20 +384,39 @@ const prepareReviewBrief = (request: FileReviewRequest) =>
       }
     }
 
-    const evidencePaths =
-      request.phase === "discovery"
-        ? unit.paths
-        : unit.paths.filter((path) =>
-            request.candidates.some((candidate) => candidate.evidencePaths.includes(path)),
-          );
     const byPath = new Map(files.map((file) => [file.path, file] as const));
-    const evidence: Array<FileDiffView> = [];
-    for (const path of evidencePaths) {
-      const file = byPath.get(path);
+    const evidence: Array<FileReviewEvidence> = [];
+    for (const shard of unit.evidenceShards) {
+      const file = byPath.get(shard.path);
       if (file === undefined) {
-        return yield* rejectWork(request.workId, `planned evidence path is unavailable: ${path}`);
+        return yield* rejectWork(
+          request.workId,
+          `planned evidence path is unavailable: ${shard.path}`,
+        );
       }
-      evidence.push(fileDiffView(file));
+      const chunks = fileReviewEvidenceChunks(file);
+      const chunk = chunks[shard.ordinal - 1];
+      if (
+        chunk === undefined ||
+        chunks.length !== shard.total ||
+        chunk.annotatedPatch.length !== shard.evidenceChars
+      ) {
+        return yield* rejectWork(
+          request.workId,
+          `planned evidence shard no longer matches source: ${shard.shardId}`,
+        );
+      }
+      evidence.push(
+        FileReviewEvidence.make({
+          shardId: shard.shardId,
+          path: shard.path,
+          status: file.status,
+          reviewMode: chunk.reviewMode,
+          ordinal: shard.ordinal,
+          total: shard.total,
+          annotatedPatch: chunk.annotatedPatch,
+        }),
+      );
     }
     return FileReviewBrief.make({ ...request, evidence });
   });
@@ -374,10 +426,20 @@ const candidateOrdinal = (index: number): string => String(index + 1).padStart(3
 const projectReviewResult = (
   report: FileReviewReport,
   context: { readonly budgetExhausted: boolean },
+  request: FileReviewRequest,
 ) => {
   if (context.budgetExhausted) {
     return Effect.fail(
       rejectWork(report.workId, "review work exhausted its budget before exact settlement"),
+    );
+  }
+  if (
+    report.phase !== request.phase ||
+    report.workId !== request.workId ||
+    report.unitId !== request.unitId
+  ) {
+    return Effect.fail(
+      rejectWork(request.workId, "review output identity does not match the scheduled request"),
     );
   }
   if (report.phase === "verification") {
@@ -388,6 +450,21 @@ const projectReviewResult = (
     ) {
       return Effect.fail(
         rejectWork(report.workId, "verification output contained discovery-only fields"),
+      );
+    }
+    const expectedIds = new Set(request.candidates.map((candidate) => candidate.candidateId));
+    const assessedIds = new Set<string>();
+    for (const assessment of report.assessments) {
+      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+        return Effect.fail(
+          rejectWork(report.workId, "verification output did not assess the exact candidate set"),
+        );
+      }
+      assessedIds.add(assessment.candidateId);
+    }
+    if (assessedIds.size !== expectedIds.size) {
+      return Effect.fail(
+        rejectWork(report.workId, "verification output did not assess the exact candidate set"),
       );
     }
     return Effect.succeed(
@@ -406,34 +483,70 @@ const projectReviewResult = (
       rejectWork(report.workId, "discovery output contained verification-only assessments"),
     );
   }
-  const findingCandidates = report.findings.map((finding, index) =>
-    FindingCandidate.make({
-      candidateId: `${report.workId}:finding:${candidateOrdinal(index)}`,
-      workId: report.workId,
-      unitId: report.unitId,
-      finding,
-      evidencePaths: [finding.path],
-    }),
-  );
-  const concernCandidates = report.concerns.map((candidate, index) =>
-    ConcernCandidate.make({
-      candidateId: `${report.workId}:concern:${candidateOrdinal(index)}`,
-      workId: report.workId,
-      unitId: report.unitId,
-      concern: candidate.concern,
-      evidencePaths: candidate.evidencePaths,
-    }),
-  );
-  return Effect.succeed(
-    FileReviewUnitResult.make({
+  const allowed = new Set(request.paths);
+  if (
+    report.findings.some((finding) => !allowed.has(finding.path)) ||
+    report.concerns.some((candidate) =>
+      candidate.evidencePaths.some((path) => !allowed.has(path)),
+    ) ||
+    report.fileSummaries.some((entry) => !allowed.has(entry.path))
+  ) {
+    return Effect.fail(
+      rejectWork(report.workId, "discovery output referenced evidence outside the scheduled unit"),
+    );
+  }
+  return Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const mapSourceFailure = (failure: PullRequestSourceFailure) =>
+      rejectWork(
+        request.workId,
+        `pull-request source ${failure.operation} failed: ${failure.reason}`.slice(0, 600),
+      );
+    const files = yield* source.changedFiles.pipe(Effect.mapError(mapSourceFailure));
+    const metadata = yield* source.metadata.pipe(Effect.mapError(mapSourceFailure));
+    const anchorFiles = yield* source.anchorFiles.pipe(Effect.mapError(mapSourceFailure));
+    const unit = planReviewUnits(files, {
+      totalChangedFiles: metadata.totalChangedFiles,
+    }).units.find((candidate) => candidate.unitId === request.unitId);
+    if (unit === undefined) {
+      return yield* rejectWork(request.workId, "scheduled review unit is no longer available");
+    }
+    for (const finding of report.findings) {
+      const violation = anchorViolation(finding, anchorFiles);
+      if (violation !== undefined || !findingAnchorInUnitEvidence(finding, unit, files)) {
+        return yield* rejectWork(
+          request.workId,
+          `discovery finding has no valid anchor in its assigned evidence: ${violation ?? finding.path}`,
+        );
+      }
+    }
+    const findingCandidates = report.findings.map((finding, index) =>
+      FindingCandidate.make({
+        candidateId: `${request.workId}:finding:${candidateOrdinal(index)}`,
+        workId: request.workId,
+        unitId: request.unitId,
+        finding,
+        evidencePaths: [finding.path],
+      }),
+    );
+    const concernCandidates = report.concerns.map((candidate, index) =>
+      ConcernCandidate.make({
+        candidateId: `${request.workId}:concern:${candidateOrdinal(index)}`,
+        workId: request.workId,
+        unitId: request.unitId,
+        concern: candidate.concern,
+        evidencePaths: candidate.evidencePaths,
+      }),
+    );
+    return FileReviewUnitResult.make({
       phase: report.phase,
       workId: report.workId,
       unitId: report.unitId,
       candidates: [...findingCandidates, ...concernCandidates],
       fileSummaries: report.fileSummaries,
       assessments: [],
-    }),
-  );
+    });
+  });
 };
 
 const delegationDescription =
@@ -489,8 +602,8 @@ export const makeFanOutReviewInstructions =
       mission.body.length > 0 ? `Author description:\n${mission.body}` : "No author description.",
       ...staticGuidanceLines(options.guidance),
       "1. Call list_review_units exactly once.",
-      '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
-      '3. Group candidates returned by all successful discovery passes by unit. For every unit with at least one candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/riskCategories, and EVERY candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
+      '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/evidenceShardIds/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
+      '3. Group candidates returned by all successful discovery passes by unit. For every unit with at least one candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
       "4. Verification is authoritative: rejected candidates must not be reported. The host independently reconstructs publishable findings from exact confirmed assessments, so do not select, rewrite, downgrade, or invent findings.",
       `5. Return ONLY CodeReview JSON. Write a concise summary of completed and failed stages. Set findings=[] and concerns=[]; the host injects exact confirmed candidates. Copy factual fileSummaries into walkthrough without invention. The host publication cap is ${maxFindings}.`,
       "No configured pipeline can prove absence of defects. Describe settled work, never an exhaustive or defect-free review.",

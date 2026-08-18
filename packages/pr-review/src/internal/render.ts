@@ -1,7 +1,9 @@
 import { Schema } from "effect";
 
+import { anchorViolation } from "./anchors.ts";
+export { anchorViolation } from "./anchors.ts";
 import type { ReviewAssurance, ReviewCoverage, ReviewInputCoverage } from "./coverage.ts";
-import { commentableLines, type ChangedFile } from "./diff.ts";
+import type { ChangedFile } from "./diff.ts";
 import { renderFingerprintMarker } from "./fingerprint.ts";
 import {
   ReviewFinding,
@@ -370,22 +372,6 @@ const renderReviewMetadata = (options: {
  * Why one finding cannot become an inline comment, or undefined when it can.
  * Exported so tests can pin each rule individually.
  */
-export const anchorViolation = (
-  finding: ReviewFinding,
-  files: ReadonlyArray<ChangedFile>,
-): string | undefined => {
-  const file = files.find((candidate) => candidate.path === finding.path);
-  if (file === undefined) return "path is not part of the changeset";
-  if (file.patch === undefined) return "file has no anchorable textual diff";
-  if (finding.endLine < finding.startLine) return "endLine precedes startLine";
-  if (finding.endLine - finding.startLine + 1 > 100) return "range is implausibly large";
-  const anchors = commentableLines(file.patch);
-  for (let line = finding.startLine; line <= finding.endLine; line += 1) {
-    if (!anchors.has(line)) return `line ${line} is not part of the diff`;
-  }
-  return undefined;
-};
-
 /**
  * Turn one validated review into the exact GitHub publication payload.
  * `applyVerdict: false` (the safe default) always posts a COMMENT review;
@@ -542,6 +528,13 @@ export const planPublication = (
         "### 🛑 Incomplete input coverage",
         "",
         ...options.inputCoverage.reasons.map((reason) => `- ${reason}`),
+      );
+    } else if (options.inputCoverage === undefined && options.coverage?.status === "incomplete") {
+      parts.push(
+        "",
+        "### 🛑 Incomplete coverage",
+        "",
+        ...options.coverage.reasons.map((reason) => `- ${reason}`),
       );
     }
     if (options.assurance !== undefined && options.assurance.status !== "settled") {

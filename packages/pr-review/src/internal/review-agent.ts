@@ -31,7 +31,7 @@ export const MAX_FINDINGS = 20;
 /** The hard non-anchored-concerns bound carried by the CodeReview schema. */
 export const MAX_CONCERNS = 10;
 
-/** Annotated patches larger than this are truncated with an explicit marker. */
+/** Maximum characters in one deterministic model-visible evidence chunk. */
 export const MAX_PATCH_CHARS = 60_000;
 
 /** The encoded Tool result must retain one complete bounded content fallback. */
@@ -106,8 +106,39 @@ export class FileDiffView extends Schema.Class<FileDiffView>(
   truncated: Schema.Boolean,
 }) {}
 
-/** Host-owned rendering of one changed file's bounded review evidence. */
-export const fileDiffView = (file: ChangedFile): FileDiffView => {
+export interface FileReviewEvidenceChunk {
+  readonly reviewMode: "diff" | "content" | "unavailable";
+  readonly annotatedPatch: string;
+}
+
+/**
+ * Split complete model-visible evidence at deterministic line boundaries.
+ * A pathological single line is hard-sliced so every character is still
+ * assigned and every chunk remains within the provider-independent bound.
+ */
+const boundedEvidenceChunks = (evidence: string): ReadonlyArray<string> => {
+  if (evidence.length <= MAX_PATCH_CHARS) return [evidence];
+  const chunks: Array<string> = [];
+  let offset = 0;
+  while (offset < evidence.length) {
+    let end = Math.min(offset + MAX_PATCH_CHARS, evidence.length);
+    if (end < evidence.length) {
+      const boundary = evidence.lastIndexOf("\n", end - 1);
+      if (boundary >= offset) end = boundary + 1;
+    }
+    // No newline exists inside the bound: preserve complete input with a
+    // deterministic hard slice instead of silently truncating the line.
+    if (end === offset) end = Math.min(offset + MAX_PATCH_CHARS, evidence.length);
+    chunks.push(evidence.slice(offset, end));
+    offset = end;
+  }
+  return chunks;
+};
+
+/** Complete bounded evidence chunks used by deterministic fan-out planning. */
+export const fileReviewEvidenceChunks = (
+  file: ChangedFile,
+): ReadonlyArray<FileReviewEvidenceChunk> => {
   const contentEvidence = renderReviewContent(file);
   const reviewMode =
     file.patch !== undefined
@@ -116,14 +147,22 @@ export const fileDiffView = (file: ChangedFile): FileDiffView => {
         ? ("content" as const)
         : ("unavailable" as const);
   const annotated = file.patch === undefined ? (contentEvidence ?? "") : annotatePatch(file.patch);
-  const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
+  return boundedEvidenceChunks(annotated).map((annotatedPatch) => ({
+    reviewMode,
+    annotatedPatch,
+  }));
+};
+
+/** Host-owned rendering of one changed file's bounded review evidence. */
+export const fileDiffView = (file: ChangedFile): FileDiffView => {
+  const chunks = fileReviewEvidenceChunks(file);
+  const first = chunks[0] ?? { reviewMode: "unavailable" as const, annotatedPatch: "" };
+  const truncated = first.reviewMode === "diff" && chunks.length > 1;
   return FileDiffView.make({
     path: file.path,
     status: file.status,
-    reviewMode,
-    annotatedPatch: truncated
-      ? `${annotated.slice(0, MAX_PATCH_CHARS)}\n[diff truncated]`
-      : annotated,
+    reviewMode: first.reviewMode,
+    annotatedPatch: truncated ? `${first.annotatedPatch}\n[diff truncated]` : first.annotatedPatch,
     truncated,
   });
 };

@@ -61,11 +61,13 @@ enforced host-side, and publication happens only through the
 `ReviewPublisher` port after the run settles. `PrReview.makeFanOut` builds the
 assured delegating variant. The host deterministically partitions bounded
 evidence, classifies high-risk units, requires a general discovery pass for
-every unit, adds a fresh specialist discovery pass for every classified
-high-risk unit, and requires a fresh verifier to confirm or reject every
-discovered candidate. These are S1 attached ephemeral children using Effect
-structured concurrency. Verifiers receive the exact candidate claims and
-only their bounded relevant evidence; they do not receive discovery reasoning.
+every unit, adds a fresh specialist discovery pass for every unit, and uses
+deterministic host-classified risk categories as explicit focus labels. A
+fresh verifier must confirm or reject every discovered candidate. These are
+S1 attached ephemeral children using Effect structured concurrency. Verifiers
+receive the exact candidate claims and the complete bounded unit, including
+neighboring evidence that can falsify a locally plausible claim; they do not
+receive discovery reasoning.
 The host reconstructs publishable findings and concerns from exact confirmed
 candidate IDs, so neither a discovery child nor the coordinator can publish
 an unsupported or invented finding. Shared `guidance` reaches both discovery
@@ -85,11 +87,13 @@ beyond the model-facing render bound remain explicit coverage gaps.
 The public result deliberately separates two claims:
 
 - **Input coverage** says every required path in the selected scope was
-  assigned bounded evidence and separately names partial diff evidence,
-  undiffable paths, source truncation, or over-capacity paths. It does not say
-  the model understood the evidence.
+  assigned every deterministic bounded evidence shard and separately names
+  partially assigned paths, exact unassigned shards, undiffable paths, source
+  truncation, or over-capacity paths. A large textual diff is split across
+  shards and units instead of being called partial merely for exceeding one
+  prompt chunk. Input coverage does not say the model understood the evidence.
 - **Review assurance** says every configured general discovery pass, required
-  high-risk specialist pass, and candidate-verification batch settled
+  independent specialist pass, and candidate-verification batch settled
   exactly. It reports discovered, confirmed, rejected, and unsettled
   candidate counts plus failed pass IDs.
 
@@ -98,7 +102,9 @@ review is exhaustive or the pull request is defect-free. Risk classification
 is deterministic host policy over paths and bounded text and intentionally
 favors redundant work, but it cannot recognize every semantically risky
 change. The specialist pass is context-independent redundancy, not a claim of
-provider or model diversity. The legacy aggregate `coverage` field remains
+provider or model diversity. Running it for every unit prevents classifier
+silence from suppressing scrutiny; the category labels still cannot prove
+that every semantic risk was recognized. The legacy aggregate `coverage` field remains
 for compatibility; new hosts and UI use `inputCoverage` and `assurance`.
 The flat reviewer has path-input accounting but no independent verifier, so
 its assurance is `unverified` and the Action check cannot report success from
@@ -256,11 +262,13 @@ bounded at 300 files:
 files beyond the bound are not fetched, and the review body reports
 `Input exposed N of M changed files` instead of claiming completeness.
 Fan-out capacity overflow is reported, never dropped. Every fan-out unit has
-at most 12 files, 800 weighted changed lines, and 240,000 evidence characters;
+at most 12 files, 12 complete evidence shards, and 240,000 evidence characters;
+one path may span multiple shards or units when necessary, with every
+unassigned shard named if the eight-unit plan capacity is exhausted;
 at most eight units produce at most 24 attached children (general and
 specialist discovery plus one verification batch per unit), with child
 concurrency capped at four. Any blocking active finding fails the Action
-check. Any input gap—including truncated model-visible diff evidence—failed or
+check. Any input gap—including an unassigned evidence shard—failed or
 exhausted configured pass, mismatched candidate batch, or unsettled
 verification is non-success rather than green. A settled
 clean result is evidence that these bounded passes completed, not proof that

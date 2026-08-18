@@ -347,21 +347,22 @@ describe("publication planning", () => {
         totalChangedFiles: 2,
       }).event,
     ).toBe("APPROVE");
-    expect(
-      planPublication(approving, files, {
-        applyVerdict: true,
-        headSha: FIXTURE_SHA,
-        totalChangedFiles: 2,
-        coverage: ReviewCoverage.make({
-          status: "incomplete",
-          requiredPaths: [],
-          reviewedPaths: [],
-          unreviewedPaths: [],
-          failedUnits: [],
-          reasons: ["required review unit did not complete"],
-        }),
-      }).event,
-    ).toBe("REQUEST_CHANGES");
+    const legacyIncomplete = planPublication(approving, files, {
+      applyVerdict: true,
+      headSha: FIXTURE_SHA,
+      totalChangedFiles: 2,
+      coverage: ReviewCoverage.make({
+        status: "incomplete",
+        requiredPaths: [],
+        reviewedPaths: [],
+        unreviewedPaths: [],
+        failedUnits: [],
+        reasons: ["required review unit did not complete"],
+      }),
+    });
+    expect(legacyIncomplete.event).toBe("REQUEST_CHANGES");
+    expect(legacyIncomplete.body).toContain("### 🛑 Incomplete coverage");
+    expect(legacyIncomplete.body).toContain("required review unit did not complete");
   });
 
   it("extends the suggestion fence past any backticks in the replacement", () => {

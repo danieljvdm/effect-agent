@@ -92,20 +92,20 @@ export const makeOfflineFileReviewerModel = (scripts: ReadonlyArray<OfflineUnitS
                 yield* Ref.update(calls, (value) => value + 1);
                 const promptJson = JSON.stringify(request.prompt);
                 yield* Ref.update(prompts, (previous) => [...previous, promptJson]);
-                const script = scripts
-                  .map((candidate) => ({
-                    candidate,
-                    index: promptJson.indexOf(candidate.workId),
-                  }))
-                  .filter((match) => match.index >= 0)
-                  .sort((left, right) => left.index - right.index)[0]?.candidate;
-                if (script === undefined) {
-                  return yield* Effect.die(new Error("The child prompt names no scripted work ID"));
+                const script = scripts.filter((candidate) =>
+                  promptJson.includes(`for ${candidate.workId} in host-planned unit`),
+                );
+                if (script.length !== 1) {
+                  return yield* Effect.die(
+                    new Error("The child prompt must name exactly one scripted work ID"),
+                  );
                 }
+                const [selected] = script;
+                if (selected === undefined) return yield* Effect.die("unreachable scripted match");
                 return Stream.fromIterable(
                   scriptedFinalParts(
-                    script.outcome._tag === "report"
-                      ? JSON.stringify(Schema.encodeSync(FileReviewReport)(script.outcome.report))
+                    selected.outcome._tag === "report"
+                      ? JSON.stringify(Schema.encodeSync(FileReviewReport)(selected.outcome.report))
                       : "this is not valid review JSON",
                   ),
                 );

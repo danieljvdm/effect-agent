@@ -1,6 +1,7 @@
 import { Option, Schema } from "effect";
 import type { RunEvent } from "effect-agent";
 
+import { anchorViolation } from "./anchors.ts";
 import type { ChangedFile } from "./diff.ts";
 import { isReviewableFile } from "./diff.ts";
 import {
@@ -16,7 +17,12 @@ import {
   type ReviewFinding,
   type WalkthroughEntry,
 } from "./review-agent.ts";
-import { planReviewUnits, type ReviewDiscoveryPass } from "./review-units.ts";
+import {
+  findingAnchorInUnitEvidence,
+  planReviewUnits,
+  type ReviewDiscoveryPass,
+  type ReviewUnit,
+} from "./review-units.ts";
 
 // ---------------------------------------------------------------------------
 // Two different claims are deliberately modeled:
@@ -225,8 +231,14 @@ const fanOutInputCoverage = (
   }
   if (plan.partialEvidencePaths.length > 0) {
     reasons.push(
-      boundedListReason("model-visible diff evidence was truncated", plan.partialEvidencePaths),
+      boundedListReason(
+        "fan-out capacity left some deterministic evidence shards unassigned",
+        plan.partialEvidencePaths,
+      ),
     );
+  }
+  if (plan.unassignedEvidenceShardIds.length > 0) {
+    reasons.push(boundedListReason("unassigned evidence shards", plan.unassignedEvidenceShardIds));
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
@@ -282,17 +294,31 @@ const exactDiscoveryRequest = (request: FileReviewRequest, pass: ReviewDiscovery
   request.unitId === pass.unitId &&
   request.perspective === pass.perspective &&
   sameStrings(request.paths, pass.paths) &&
+  sameStrings(request.evidenceShardIds, pass.evidenceShardIds) &&
   sameStrings(request.riskCategories, pass.riskCategories) &&
   request.candidates.length === 0;
 
-const validCandidate = (candidate: ReviewCandidate, pass: ReviewDiscoveryPass): boolean => {
+const validCandidate = (
+  candidate: ReviewCandidate,
+  pass: ReviewDiscoveryPass,
+  unit: ReviewUnit,
+  files: ReadonlyArray<ChangedFile>,
+  anchorFiles: ReadonlyArray<ChangedFile>,
+): boolean => {
   const allowed = new Set(pass.paths);
+  const kind = candidate._tag === "FindingCandidate" ? "finding" : "concern";
+  const idPrefix = `${pass.passId}:${kind}:`;
   return (
+    candidate.candidateId.startsWith(idPrefix) &&
+    /^\d{3}$/.test(candidate.candidateId.slice(idPrefix.length)) &&
     candidate.workId === pass.passId &&
     candidate.unitId === pass.unitId &&
     candidate.evidencePaths.length > 0 &&
     candidate.evidencePaths.every((path) => allowed.has(path)) &&
-    (candidate._tag !== "FindingCandidate" || allowed.has(candidate.finding.path))
+    (candidate._tag !== "FindingCandidate" ||
+      (allowed.has(candidate.finding.path) &&
+        anchorViolation(candidate.finding, anchorFiles) === undefined &&
+        findingAnchorInUnitEvidence(candidate.finding, unit, files)))
   );
 };
 
@@ -329,6 +355,7 @@ const flatAssurance = (): AssuranceAssessment => ({
 const fanOutAssurance = (
   files: ReadonlyArray<ChangedFile>,
   totalFiles: number,
+  anchorFiles: ReadonlyArray<ChangedFile>,
   trace: ToolTrace,
 ): AssuranceAssessment => {
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
@@ -342,6 +369,7 @@ const fanOutAssurance = (
   let completedSpecialistPasses = 0;
 
   for (const pass of plan.discoveryPasses) {
+    const unit = plan.units.find((candidate) => candidate.unitId === pass.unitId);
     const matching = declarations.filter(({ request }) => exactDiscoveryRequest(request, pass));
     const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
     if (matching.length !== 1) {
@@ -391,11 +419,20 @@ const fanOutAssurance = (
     const ids = new Set<string>();
     let candidatesValid = true;
     for (const candidate of result.value.candidates) {
-      if (ids.has(candidate.candidateId) || !validCandidate(candidate, pass)) {
+      if (
+        unit === undefined ||
+        ids.has(candidate.candidateId) ||
+        !validCandidate(candidate, pass, unit, files, anchorFiles)
+      ) {
         candidatesValid = false;
         break;
       }
       ids.add(candidate.candidateId);
+    }
+    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
+    const unitIds = new Set(unitCandidates.map((candidate) => candidate.candidateId));
+    if (result.value.candidates.some((candidate) => unitIds.has(candidate.candidateId))) {
+      candidatesValid = false;
     }
     if (!candidatesValid) {
       failedPasses.push(
@@ -412,7 +449,6 @@ const fanOutAssurance = (
     } else {
       completedGeneralDiscoveryPasses += 1;
     }
-    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
     unitCandidates.push(...result.value.candidates);
     candidatesByUnit.set(pass.unitId, unitCandidates);
     if (pass.perspective === "general") {
@@ -439,6 +475,10 @@ const fanOutAssurance = (
         request.unitId === unit.unitId &&
         request.perspective === "candidate-verification" &&
         sameStrings(request.paths, unit.paths) &&
+        sameStrings(
+          request.evidenceShardIds,
+          unit.evidenceShards.map((shard) => shard.shardId),
+        ) &&
         sameStrings(request.riskCategories, unit.riskCategories) &&
         sameCandidates(request.candidates, candidates),
     );
@@ -502,7 +542,11 @@ const fanOutAssurance = (
       assessedIds.add(assessment.candidateId);
       return true;
     });
-    if (!exactAssessments || assessedIds.size !== expectedIds.size) {
+    if (
+      expectedIds.size !== candidates.length ||
+      !exactAssessments ||
+      assessedIds.size !== expectedIds.size
+    ) {
       unsettledCandidates += candidates.length;
       failedPasses.push(
         FailedReviewPass.make({
@@ -648,7 +692,7 @@ export const assessReviewPipeline = (input: {
   }
   const assessed =
     input.shape === "fan-out"
-      ? fanOutAssurance(input.files, input.totalFiles, trace)
+      ? fanOutAssurance(input.files, input.totalFiles, input.anchorFiles, trace)
       : flatAssurance();
   return {
     inputCoverage,

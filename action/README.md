@@ -168,7 +168,11 @@ finding or concern fails the job. Incomplete or partial input evidence, a failed
 exhausted discovery/specialist/verification pass, a mismatched candidate
 batch, or unsettled candidates is also non-success. Reading every path is not
 semantic completeness, and settled assurance never claims that every defect
-was found. The
+was found. Large textual diffs are deterministically split into complete bounded
+evidence shards; a path is partial only if finite plan capacity leaves one or
+more exact shards unassigned. Every assigned unit receives both a general and
+an independent specialist discovery pass, even when host risk classification
+produces no category label. The
 legacy `fail-on` input is accepted for compatibility but no longer weakens or
 changes this conservative gate.
 

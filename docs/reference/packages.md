@@ -120,8 +120,9 @@ The packaged GitHub pull-request reviewer: schema-first review contracts, the
 validation and publication planning, a fail-open sticky progress comment
 (`ReviewProgressReporter`), flat and fan-out reviewer shapes, and the `PrReview`
 configuration factory. Fan-out uses deterministic host-owned evidence units and risk
-classification, redundant specialist discovery for classified high-risk units, fresh
-candidate verification, and host-only publication of exactly confirmed candidates. Its public
+classification labels, complete bounded evidence sharding, redundant specialist discovery for
+every unit, fresh candidate verification over the complete bounded unit, and host-only publication
+of exactly confirmed candidates. Its public
 result separates path/input coverage from discovery and verification settlement; neither claim
 means exhaustive defect detection. Only complete input plus settled assurance can emit
 authenticated incremental state or a green Action conclusion. Subpath entries: `./testing`

@@ -40127,7 +40127,7 @@ var layer15 = (delegation, childBinding, options) => {
         });
         const projected = yield* delegation.projectResult(result4.output, {
           budgetExhausted: result4.finishReason === "budget-exhausted"
-        });
+        }, parameters);
         const encodedResult = yield* encodeSuccess(projected).pipe(exports_Effect.mapError(() => SubagentProjectionFailure.make({
           delegationId: delegation.delegationId,
           stage: "result",
@@ -40251,7 +40251,7 @@ var layer15 = (delegation, childBinding, options) => {
           }));
           const projected = yield* delegation.projectResult(decoded, {
             budgetExhausted: status.finishReason === "budget-exhausted"
-          }).pipe(exports_Effect.catch((declared) => encodeDeclaredFailure(declared).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)))));
+          }, parameters).pipe(exports_Effect.catch((declared) => encodeDeclaredFailure(declared).pipe(exports_Effect.orDie, exports_Effect.flatMap((encodedFailure) => settleFailure(declared, encodedFailure)))));
           const encodedResult = yield* encodeSuccess(projected).pipe(exports_Effect.catch(() => {
             const failure = SubagentProjectionFailure.make({
               delegationId: delegation.delegationId,
@@ -42302,6 +42302,25 @@ var annotatePatch = (patch3) => {
 `);
 };
 
+// packages/pr-review/src/internal/anchors.ts
+var anchorViolation = (finding, files) => {
+  const file2 = files.find((candidate) => candidate.path === finding.path);
+  if (file2 === undefined)
+    return "path is not part of the changeset";
+  if (file2.patch === undefined)
+    return "file has no anchorable textual diff";
+  if (finding.endLine < finding.startLine)
+    return "endLine precedes startLine";
+  if (finding.endLine - finding.startLine + 1 > 100)
+    return "range is implausibly large";
+  const anchors = commentableLines(file2.patch);
+  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
+    if (!anchors.has(line))
+      return `line ${line} is not part of the diff`;
+  }
+  return;
+};
+
 // packages/pr-review/src/internal/source.ts
 var MAX_FILE_CHARS = 200000;
 var MAX_CHANGED_FILES = 300;
@@ -42411,17 +42430,45 @@ class FileDiffView extends exports_Schema.Class("@effect-agent/pr-review/FileDif
   truncated: exports_Schema.Boolean
 }) {
 }
-var fileDiffView = (file2) => {
+var boundedEvidenceChunks = (evidence) => {
+  if (evidence.length <= MAX_PATCH_CHARS)
+    return [evidence];
+  const chunks2 = [];
+  let offset = 0;
+  while (offset < evidence.length) {
+    let end3 = Math.min(offset + MAX_PATCH_CHARS, evidence.length);
+    if (end3 < evidence.length) {
+      const boundary = evidence.lastIndexOf(`
+`, end3 - 1);
+      if (boundary >= offset)
+        end3 = boundary + 1;
+    }
+    if (end3 === offset)
+      end3 = Math.min(offset + MAX_PATCH_CHARS, evidence.length);
+    chunks2.push(evidence.slice(offset, end3));
+    offset = end3;
+  }
+  return chunks2;
+};
+var fileReviewEvidenceChunks = (file2) => {
   const contentEvidence = renderReviewContent(file2);
   const reviewMode = file2.patch !== undefined ? "diff" : contentEvidence !== undefined ? "content" : "unavailable";
   const annotated = file2.patch === undefined ? contentEvidence ?? "" : annotatePatch(file2.patch);
-  const truncated = reviewMode === "diff" && annotated.length > MAX_PATCH_CHARS;
+  return boundedEvidenceChunks(annotated).map((annotatedPatch) => ({
+    reviewMode,
+    annotatedPatch
+  }));
+};
+var fileDiffView = (file2) => {
+  const chunks2 = fileReviewEvidenceChunks(file2);
+  const first = chunks2[0] ?? { reviewMode: "unavailable", annotatedPatch: "" };
+  const truncated = first.reviewMode === "diff" && chunks2.length > 1;
   return FileDiffView.make({
     path: file2.path,
     status: file2.status,
-    reviewMode,
-    annotatedPatch: truncated ? `${annotated.slice(0, MAX_PATCH_CHARS)}
-[diff truncated]` : annotated,
+    reviewMode: first.reviewMode,
+    annotatedPatch: truncated ? `${first.annotatedPatch}
+[diff truncated]` : first.annotatedPatch,
     truncated
   });
 };
@@ -42635,10 +42682,8 @@ var PullRequestReviewer = Agent.define("pr-reviewer", {
 // packages/pr-review/src/internal/review-units.ts
 var MAX_REVIEW_UNITS = 8;
 var MAX_UNIT_FILES = 12;
-var UNIT_CHANGED_LINE_BUDGET = 800;
 var UNIT_EVIDENCE_CHAR_BUDGET = 240000;
-var MAX_FILE_EVIDENCE_CHARS = MAX_PATCH_CHARS;
-var FILE_OVERHEAD_LINES = 20;
+var MAX_UNIT_EVIDENCE_SHARDS = 12;
 var MAX_MERGED_FINDINGS = 20;
 var ReviewUnitId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32));
 var ReviewRiskCategory = exports_Schema.Literals([
@@ -42651,11 +42696,23 @@ var ReviewRiskCategory = exports_Schema.Literals([
 ]);
 var ReviewDiscoveryPerspective = exports_Schema.Literals(["general", "risk-specialist"]);
 var ReviewPassId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(64));
+var ReviewEvidenceShardId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32));
+
+class ReviewEvidenceShard extends exports_Schema.Class("@effect-agent/pr-review/ReviewEvidenceShard")({
+  shardId: ReviewEvidenceShardId,
+  path: ChangedPath,
+  ordinal: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1)),
+  total: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1)),
+  evidenceChars: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)).check(exports_Schema.isLessThanOrEqualTo(MAX_PATCH_CHARS))
+}) {
+}
+var EvidenceShardIds = exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS));
 
 class ReviewDiscoveryPass extends exports_Schema.Class("@effect-agent/pr-review/ReviewDiscoveryPass")({
   passId: ReviewPassId,
   unitId: ReviewUnitId,
   paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES)),
+  evidenceShardIds: EvidenceShardIds,
   perspective: ReviewDiscoveryPerspective,
   riskCategories: exports_Schema.Array(ReviewRiskCategory).check(exports_Schema.isMaxLength(6))
 }) {
@@ -42664,8 +42721,9 @@ class ReviewDiscoveryPass extends exports_Schema.Class("@effect-agent/pr-review/
 class ReviewUnit extends exports_Schema.Class("@effect-agent/pr-review/ReviewUnit")({
   unitId: ReviewUnitId,
   paths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES)),
+  evidenceShards: exports_Schema.Array(ReviewEvidenceShard).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS)),
   changedLines: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
-  evidenceChars: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  evidenceChars: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)).check(exports_Schema.isLessThanOrEqualTo(UNIT_EVIDENCE_CHAR_BUDGET)),
   riskCategories: exports_Schema.Array(ReviewRiskCategory).check(exports_Schema.isMaxLength(6))
 }) {
 }
@@ -42677,21 +42735,10 @@ class ReviewUnitPlan extends exports_Schema.Class("@effect-agent/pr-review/Revie
   discoveryPasses: exports_Schema.Array(ReviewDiscoveryPass).check(exports_Schema.isMaxLength(MAX_REVIEW_UNITS * 2)),
   undiffablePaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300)),
   partialEvidencePaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300)),
+  unassignedEvidenceShardIds: exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMaxLength(1000)),
   unassignedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300))
 }) {
 }
-var fileCost = (file2) => {
-  const contentChars = (file2.reviewBaseContent?.length ?? 0) + (file2.reviewHeadContent?.length ?? 0);
-  const contentWeight = Math.ceil(contentChars / 200);
-  return file2.additions + file2.deletions + contentWeight + FILE_OVERHEAD_LINES;
-};
-var annotatedPatchChars = (patch3) => {
-  const chars = annotatePatch(patch3).length;
-  return chars > MAX_FILE_EVIDENCE_CHARS ? MAX_FILE_EVIDENCE_CHARS + `
-[diff truncated]`.length : chars;
-};
-var evidenceChars = (file2) => file2.patch === undefined ? renderReviewContent(file2)?.length ?? 0 : annotatedPatchChars(file2.patch);
-var hasPartialEvidence = (file2) => file2.patch !== undefined && annotatePatch(file2.patch).length > MAX_FILE_EVIDENCE_CHARS;
 var riskRules = [
   {
     category: "authentication-authorization",
@@ -42773,70 +42820,123 @@ var classifyReviewRisks = (file2) => {
 `).toLowerCase();
   return riskRules.filter((rule) => rule.patterns.some((pattern) => pattern.test(text2))).map((rule) => rule.category);
 };
-var unitOf = (index2, files) => ReviewUnit.make({
+var findingAnchorInUnitEvidence = (finding, unit, files) => {
+  const file2 = files.find((candidate) => candidate.path === finding.path);
+  if (file2?.patch === undefined || finding.endLine < finding.startLine)
+    return false;
+  const assignedOrdinals = new Set(unit.evidenceShards.filter((shard) => shard.path === finding.path).map((shard) => shard.ordinal));
+  const visibleLines = new Set;
+  const chunks2 = fileReviewEvidenceChunks(file2);
+  for (let index2 = 0;index2 < chunks2.length; index2 += 1) {
+    if (!assignedOrdinals.has(index2 + 1))
+      continue;
+    for (const line of chunks2[index2]?.annotatedPatch.split(`
+`) ?? []) {
+      const match9 = /^R(\d+) /.exec(line);
+      if (match9?.[1] !== undefined)
+        visibleLines.add(Number(match9[1]));
+    }
+  }
+  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
+    if (!visibleLines.has(line))
+      return false;
+  }
+  return true;
+};
+var uniquePaths = (shards) => [
+  ...new Set(shards.map(({ shard }) => shard.path))
+];
+var plannedEvidenceShards = (files) => {
+  const planned = [];
+  let shardIndex = 0;
+  for (const file2 of files) {
+    const chunks2 = fileReviewEvidenceChunks(file2);
+    for (let index2 = 0;index2 < chunks2.length; index2 += 1) {
+      const chunk = chunks2[index2];
+      if (chunk === undefined)
+        continue;
+      shardIndex += 1;
+      planned.push({
+        shard: ReviewEvidenceShard.make({
+          shardId: `shard-${String(shardIndex).padStart(4, "0")}`,
+          path: file2.path,
+          ordinal: index2 + 1,
+          total: chunks2.length,
+          evidenceChars: chunk.annotatedPatch.length
+        }),
+        file: file2,
+        changedLines: index2 === 0 ? file2.additions + file2.deletions : 0
+      });
+    }
+  }
+  return planned;
+};
+var unitOf = (index2, shards) => ReviewUnit.make({
   unitId: `unit-${String(index2 + 1).padStart(3, "0")}`,
-  paths: files.map((file2) => file2.path),
-  changedLines: files.reduce((total, file2) => total + file2.additions + file2.deletions, 0),
-  evidenceChars: files.reduce((total, file2) => total + evidenceChars(file2), 0),
-  riskCategories: [...new Set(files.flatMap((file2) => classifyReviewRisks(file2)))]
+  paths: uniquePaths(shards),
+  evidenceShards: shards.map(({ shard }) => shard),
+  changedLines: shards.reduce((total, shard) => total + shard.changedLines, 0),
+  evidenceChars: shards.reduce((total, { shard }) => total + shard.evidenceChars, 0),
+  riskCategories: [...new Set(shards.flatMap(({ file: file2 }) => classifyReviewRisks(file2)))]
 });
 var discoveryPassesFor = (units) => units.flatMap((unit) => [
   ReviewDiscoveryPass.make({
     passId: `${unit.unitId}-general`,
     unitId: unit.unitId,
     paths: unit.paths,
+    evidenceShardIds: unit.evidenceShards.map((shard) => shard.shardId),
     perspective: "general",
     riskCategories: []
   }),
-  ...unit.riskCategories.length === 0 ? [] : [
-    ReviewDiscoveryPass.make({
-      passId: `${unit.unitId}-specialist`,
-      unitId: unit.unitId,
-      paths: unit.paths,
-      perspective: "risk-specialist",
-      riskCategories: unit.riskCategories
-    })
-  ]
+  ReviewDiscoveryPass.make({
+    passId: `${unit.unitId}-specialist`,
+    unitId: unit.unitId,
+    paths: unit.paths,
+    evidenceShardIds: unit.evidenceShards.map((shard) => shard.shardId),
+    perspective: "risk-specialist",
+    riskCategories: unit.riskCategories
+  })
 ]);
 var planReviewUnits = (files, options3) => {
   const ordered = [...files].sort((left, right) => left.path < right.path ? -1 : 1);
   const reviewable = ordered.filter(isReviewableFile);
   const undiffable = ordered.filter((file2) => !isReviewableFile(file2));
+  const shards = plannedEvidenceShards(reviewable);
   const groups = [];
   const unassigned = [];
   let current = [];
-  let currentCost = 0;
   let currentEvidenceChars = 0;
-  for (const file2 of reviewable) {
-    const cost = fileCost(file2);
-    const chars = evidenceChars(file2);
-    const wouldOverflow = current.length >= MAX_UNIT_FILES || current.length > 0 && (currentCost + cost > UNIT_CHANGED_LINE_BUDGET || currentEvidenceChars + chars > UNIT_EVIDENCE_CHAR_BUDGET);
+  for (const shard of shards) {
+    const nextPaths = new Set([...uniquePaths(current), shard.shard.path]);
+    const wouldOverflow = current.length >= MAX_UNIT_EVIDENCE_SHARDS || nextPaths.size > MAX_UNIT_FILES || current.length > 0 && currentEvidenceChars + shard.shard.evidenceChars > UNIT_EVIDENCE_CHAR_BUDGET;
     if (wouldOverflow) {
       groups.push(current);
       current = [];
-      currentCost = 0;
       currentEvidenceChars = 0;
     }
     if (groups.length >= MAX_REVIEW_UNITS) {
-      unassigned.push(file2);
+      unassigned.push(shard);
       continue;
     }
-    current.push(file2);
-    currentCost += cost;
-    currentEvidenceChars += chars;
+    current.push(shard);
+    currentEvidenceChars += shard.shard.evidenceChars;
   }
   if (current.length > 0 && groups.length < MAX_REVIEW_UNITS) {
     groups.push(current);
   }
   const units = groups.map((group2, index2) => unitOf(index2, group2));
+  const assignedShardIds = new Set(units.flatMap((unit) => unit.evidenceShards.map((shard) => shard.shardId)));
+  const assignedPaths = new Set(shards.filter(({ shard }) => assignedShardIds.has(shard.shardId)).map(({ shard }) => shard.path));
+  const unassignedPathsWithEvidence = new Set(unassigned.map(({ shard }) => shard.path));
   return ReviewUnitPlan.make({
     totalFiles: files.length,
     truncated: files.length < options3.totalChangedFiles,
     units,
     discoveryPasses: discoveryPassesFor(units),
     undiffablePaths: undiffable.map((file2) => file2.path),
-    partialEvidencePaths: reviewable.filter(hasPartialEvidence).map((file2) => file2.path),
-    unassignedPaths: unassigned.map((file2) => file2.path)
+    partialEvidencePaths: [...unassignedPathsWithEvidence].filter((path) => assignedPaths.has(path)),
+    unassignedEvidenceShardIds: unassigned.map(({ shard }) => shard.shardId),
+    unassignedPaths: [...unassignedPathsWithEvidence].filter((path) => !assignedPaths.has(path))
   });
 };
 var severityRank = {
@@ -42912,15 +43012,28 @@ class DiscoveredConcern extends exports_Schema.Class("@effect-agent/pr-review/Di
 var UnitPaths = exports_Schema.Array(ChangedPath).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES));
 var RiskCategories = exports_Schema.Array(ReviewRiskCategory).check(exports_Schema.isMaxLength(6));
 var Candidates = exports_Schema.Array(ReviewCandidate).check(exports_Schema.isMaxLength(MAX_UNIT_CANDIDATES));
+var EvidenceShardIds2 = exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS));
 
 class FileReviewRequest extends exports_Schema.Class("@effect-agent/pr-review/FileReviewRequest")({
   phase: ReviewWorkPhase,
   workId: ReviewPassId,
   unitId: ReviewUnitId,
   paths: UnitPaths,
+  evidenceShardIds: EvidenceShardIds2,
   perspective: ReviewWorkPerspective,
   riskCategories: RiskCategories,
   candidates: Candidates
+}) {
+}
+
+class FileReviewEvidence extends exports_Schema.Class("@effect-agent/pr-review/FileReviewEvidence")({
+  shardId: ReviewEvidenceShardId,
+  path: ChangedPath,
+  status: ChangedFileStatus,
+  reviewMode: exports_Schema.Literals(["diff", "content", "unavailable"]),
+  ordinal: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1)),
+  total: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(1)),
+  annotatedPatch: exports_Schema.String.check(exports_Schema.isMaxLength(MAX_PATCH_CHARS))
 }) {
 }
 
@@ -42929,10 +43042,11 @@ class FileReviewBrief extends exports_Schema.Class("@effect-agent/pr-review/File
   workId: ReviewPassId,
   unitId: ReviewUnitId,
   paths: UnitPaths,
+  evidenceShardIds: EvidenceShardIds2,
   perspective: ReviewWorkPerspective,
   riskCategories: RiskCategories,
   candidates: Candidates,
-  evidence: exports_Schema.Array(FileDiffView).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_FILES))
+  evidence: exports_Schema.Array(FileReviewEvidence).check(exports_Schema.isMinLength(1)).check(exports_Schema.isMaxLength(MAX_UNIT_EVIDENCE_SHARDS))
 }) {
 }
 
@@ -42976,7 +43090,7 @@ var staticGuidanceLines = (guidance) => {
   return lines.filter((line) => line.length > 0);
 };
 var evidenceInstructions = [
-  "The host placed complete bounded review evidence in the input evidence array. Treat that array as the required input surface.",
+  "The host placed complete bounded review evidence shards in the input evidence array. Treat every shard as required input; ordinal/total identifies multi-shard paths.",
   "You have no tools and cannot roam outside this evidence. If it is insufficient for a candidate, reject or omit that candidate rather than guessing.",
   "A diff marks new-version anchors as R<number>; only those lines may anchor findings. B/H content evidence is non-anchorable."
 ];
@@ -42990,18 +43104,18 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => {
     return [
       ...common,
       "Independently verify every candidate in the input. You did not receive another reviewer's transcript or reasoning; use only the candidate claim and bounded evidence.",
-      "The evidence array contains the union of candidate-cited paths, not unrelated paths from the rest of the unit.",
+      "The evidence array contains the complete bounded unit, including neighboring changed code that may confirm or falsify a locally plausible claim.",
       "For each candidate, try to falsify it first. Confirm only when the cited behavior is supported and actionable. Reject unsupported, speculative, duplicate, or non-actionable candidates.",
       'Return ONLY JSON with phase "verification", the exact workId/unitId, empty findings/concerns/fileSummaries arrays, and exactly one assessment per candidateId. Each assessment is {"candidateId": <exact id>, "disposition": <"confirmed" | "rejected">, "rationale": <bounded evidence-based reason>}. Never add or omit an id.'
     ].join(`
 `);
   }
-  const focus = brief.perspective === "risk-specialist" ? `This is a fresh specialist discovery pass. Concentrate on these host-classified risks without relying on another pass: ${brief.riskCategories.join(", ")}.` : "This is the general discovery pass. Review broadly for correctness, security, concurrency, resource, API, and error-handling defects.";
+  const focus = brief.perspective === "risk-specialist" ? brief.riskCategories.length > 0 ? `This is a fresh specialist discovery pass. Concentrate on these host-classified risks without relying on another pass: ${brief.riskCategories.join(", ")}.` : "This is a fresh specialist discovery pass. The host found no keyword-classified category, so independently scrutinize authentication/authorization, security boundaries, durability, concurrency, credentials, and external side effects rather than treating classification silence as low risk." : "This is the general discovery pass. Review broadly for correctness, security, concurrency, resource, API, and error-handling defects.";
   return [
     ...common,
     focus,
-    "The discovery evidence array contains one entry for every path in the unit. Review every entry. A later independent verifier, not you, decides which candidates publish.",
-    "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths so the verifier receives only relevant evidence.",
+    "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
+    "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
     `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`
   ].join(`
 `);
@@ -43041,12 +43155,12 @@ var prepareReviewBrief = (request3) => exports_Effect.gen(function* () {
   const metadata = yield* source.metadata.pipe(exports_Effect.mapError(mapSourceFailure));
   const plan = planReviewUnits(files, { totalChangedFiles: metadata.totalChangedFiles });
   const unit = plan.units.find((candidate) => candidate.unitId === request3.unitId);
-  if (unit === undefined || !sameStrings(request3.paths, unit.paths)) {
+  if (unit === undefined || !sameStrings(request3.paths, unit.paths) || !sameStrings(request3.evidenceShardIds, unit.evidenceShards.map((shard) => shard.shardId))) {
     return yield* rejectWork(request3.workId, "request does not match a host-planned unit");
   }
   if (request3.phase === "discovery") {
     const pass = plan.discoveryPasses.find((candidate) => candidate.passId === request3.workId);
-    if (pass === undefined || pass.unitId !== request3.unitId || !sameStrings(pass.paths, request3.paths) || pass.perspective !== request3.perspective || !sameStrings(pass.riskCategories, request3.riskCategories) || request3.candidates.length !== 0) {
+    if (pass === undefined || pass.unitId !== request3.unitId || !sameStrings(pass.paths, request3.paths) || !sameStrings(pass.evidenceShardIds, request3.evidenceShardIds) || pass.perspective !== request3.perspective || !sameStrings(pass.riskCategories, request3.riskCategories) || request3.candidates.length !== 0) {
       return yield* rejectWork(request3.workId, "discovery request does not match the host plan");
     }
   } else {
@@ -43062,26 +43176,52 @@ var prepareReviewBrief = (request3) => exports_Effect.gen(function* () {
       candidateIds.add(candidate.candidateId);
     }
   }
-  const evidencePaths = request3.phase === "discovery" ? unit.paths : unit.paths.filter((path) => request3.candidates.some((candidate) => candidate.evidencePaths.includes(path)));
   const byPath = new Map(files.map((file2) => [file2.path, file2]));
   const evidence = [];
-  for (const path of evidencePaths) {
-    const file2 = byPath.get(path);
+  for (const shard of unit.evidenceShards) {
+    const file2 = byPath.get(shard.path);
     if (file2 === undefined) {
-      return yield* rejectWork(request3.workId, `planned evidence path is unavailable: ${path}`);
+      return yield* rejectWork(request3.workId, `planned evidence path is unavailable: ${shard.path}`);
     }
-    evidence.push(fileDiffView(file2));
+    const chunks2 = fileReviewEvidenceChunks(file2);
+    const chunk = chunks2[shard.ordinal - 1];
+    if (chunk === undefined || chunks2.length !== shard.total || chunk.annotatedPatch.length !== shard.evidenceChars) {
+      return yield* rejectWork(request3.workId, `planned evidence shard no longer matches source: ${shard.shardId}`);
+    }
+    evidence.push(FileReviewEvidence.make({
+      shardId: shard.shardId,
+      path: shard.path,
+      status: file2.status,
+      reviewMode: chunk.reviewMode,
+      ordinal: shard.ordinal,
+      total: shard.total,
+      annotatedPatch: chunk.annotatedPatch
+    }));
   }
   return FileReviewBrief.make({ ...request3, evidence });
 });
 var candidateOrdinal = (index2) => String(index2 + 1).padStart(3, "0");
-var projectReviewResult = (report2, context4) => {
+var projectReviewResult = (report2, context4, request3) => {
   if (context4.budgetExhausted) {
     return exports_Effect.fail(rejectWork(report2.workId, "review work exhausted its budget before exact settlement"));
+  }
+  if (report2.phase !== request3.phase || report2.workId !== request3.workId || report2.unitId !== request3.unitId) {
+    return exports_Effect.fail(rejectWork(request3.workId, "review output identity does not match the scheduled request"));
   }
   if (report2.phase === "verification") {
     if (report2.findings.length > 0 || report2.concerns.length > 0 || report2.fileSummaries.length > 0) {
       return exports_Effect.fail(rejectWork(report2.workId, "verification output contained discovery-only fields"));
+    }
+    const expectedIds = new Set(request3.candidates.map((candidate) => candidate.candidateId));
+    const assessedIds = new Set;
+    for (const assessment of report2.assessments) {
+      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+        return exports_Effect.fail(rejectWork(report2.workId, "verification output did not assess the exact candidate set"));
+      }
+      assessedIds.add(assessment.candidateId);
+    }
+    if (assessedIds.size !== expectedIds.size) {
+      return exports_Effect.fail(rejectWork(report2.workId, "verification output did not assess the exact candidate set"));
     }
     return exports_Effect.succeed(FileReviewUnitResult.make({
       phase: report2.phase,
@@ -43095,28 +43235,51 @@ var projectReviewResult = (report2, context4) => {
   if (report2.assessments.length > 0) {
     return exports_Effect.fail(rejectWork(report2.workId, "discovery output contained verification-only assessments"));
   }
-  const findingCandidates = report2.findings.map((finding, index2) => FindingCandidate.make({
-    candidateId: `${report2.workId}:finding:${candidateOrdinal(index2)}`,
-    workId: report2.workId,
-    unitId: report2.unitId,
-    finding,
-    evidencePaths: [finding.path]
-  }));
-  const concernCandidates = report2.concerns.map((candidate, index2) => ConcernCandidate.make({
-    candidateId: `${report2.workId}:concern:${candidateOrdinal(index2)}`,
-    workId: report2.workId,
-    unitId: report2.unitId,
-    concern: candidate.concern,
-    evidencePaths: candidate.evidencePaths
-  }));
-  return exports_Effect.succeed(FileReviewUnitResult.make({
-    phase: report2.phase,
-    workId: report2.workId,
-    unitId: report2.unitId,
-    candidates: [...findingCandidates, ...concernCandidates],
-    fileSummaries: report2.fileSummaries,
-    assessments: []
-  }));
+  const allowed = new Set(request3.paths);
+  if (report2.findings.some((finding) => !allowed.has(finding.path)) || report2.concerns.some((candidate) => candidate.evidencePaths.some((path) => !allowed.has(path))) || report2.fileSummaries.some((entry) => !allowed.has(entry.path))) {
+    return exports_Effect.fail(rejectWork(report2.workId, "discovery output referenced evidence outside the scheduled unit"));
+  }
+  return exports_Effect.gen(function* () {
+    const source = yield* PullRequestSource;
+    const mapSourceFailure = (failure) => rejectWork(request3.workId, `pull-request source ${failure.operation} failed: ${failure.reason}`.slice(0, 600));
+    const files = yield* source.changedFiles.pipe(exports_Effect.mapError(mapSourceFailure));
+    const metadata = yield* source.metadata.pipe(exports_Effect.mapError(mapSourceFailure));
+    const anchorFiles = yield* source.anchorFiles.pipe(exports_Effect.mapError(mapSourceFailure));
+    const unit = planReviewUnits(files, {
+      totalChangedFiles: metadata.totalChangedFiles
+    }).units.find((candidate) => candidate.unitId === request3.unitId);
+    if (unit === undefined) {
+      return yield* rejectWork(request3.workId, "scheduled review unit is no longer available");
+    }
+    for (const finding of report2.findings) {
+      const violation = anchorViolation(finding, anchorFiles);
+      if (violation !== undefined || !findingAnchorInUnitEvidence(finding, unit, files)) {
+        return yield* rejectWork(request3.workId, `discovery finding has no valid anchor in its assigned evidence: ${violation ?? finding.path}`);
+      }
+    }
+    const findingCandidates = report2.findings.map((finding, index2) => FindingCandidate.make({
+      candidateId: `${request3.workId}:finding:${candidateOrdinal(index2)}`,
+      workId: request3.workId,
+      unitId: request3.unitId,
+      finding,
+      evidencePaths: [finding.path]
+    }));
+    const concernCandidates = report2.concerns.map((candidate, index2) => ConcernCandidate.make({
+      candidateId: `${request3.workId}:concern:${candidateOrdinal(index2)}`,
+      workId: request3.workId,
+      unitId: request3.unitId,
+      concern: candidate.concern,
+      evidencePaths: candidate.evidencePaths
+    }));
+    return FileReviewUnitResult.make({
+      phase: report2.phase,
+      workId: report2.workId,
+      unitId: report2.unitId,
+      candidates: [...findingCandidates, ...concernCandidates],
+      fileSummaries: report2.fileSummaries,
+      assessments: []
+    });
+  });
 };
 var delegationDescription = "Run exactly one host-planned discovery or candidate-verification child. Copy every plan field and candidate verbatim; never retry failed work.";
 var makeFileReviewDelegation = (child) => Subagent.define("delegate_file_review", {
@@ -43160,8 +43323,8 @@ var makeFanOutReviewInstructions = (options3 = {}) => (mission) => {
 ${mission.body}` : "No author description.",
     ...staticGuidanceLines(options3.guidance),
     "1. Call list_review_units exactly once.",
-    '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
-    '3. Group candidates returned by all successful discovery passes by unit. For every unit with at least one candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/riskCategories, and EVERY candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
+    '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/evidenceShardIds/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
+    '3. Group candidates returned by all successful discovery passes by unit. For every unit with at least one candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
     "4. Verification is authoritative: rejected candidates must not be reported. The host independently reconstructs publishable findings from exact confirmed assessments, so do not select, rewrite, downgrade, or invent findings.",
     `5. Return ONLY CodeReview JSON. Write a concise summary of completed and failed stages. Set findings=[] and concerns=[]; the host injects exact confirmed candidates. Copy factual fileSummaries into walkthrough without invention. The host publication cap is ${maxFindings}.`,
     "No configured pipeline can prove absence of defects. Describe settled work, never an exhaustive or defect-free review."
@@ -43734,7 +43897,10 @@ var fanOutInputCoverage = (files, totalFiles) => {
     reasons.push(boundedListReason("required paths have no reviewable diff or bounded text", plan.undiffablePaths));
   }
   if (plan.partialEvidencePaths.length > 0) {
-    reasons.push(boundedListReason("model-visible diff evidence was truncated", plan.partialEvidencePaths));
+    reasons.push(boundedListReason("fan-out capacity left some deterministic evidence shards unassigned", plan.partialEvidencePaths));
+  }
+  if (plan.unassignedEvidenceShardIds.length > 0) {
+    reasons.push(boundedListReason("unassigned evidence shards", plan.unassignedEvidenceShardIds));
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
@@ -43772,10 +43938,12 @@ var failureTag2 = (trace3, id2) => {
     return;
   return returned.value._tag === "FileReviewUnitFailed" ? `${returned.value._tag}:${returned.value.childErrorTag}` : returned.value._tag;
 };
-var exactDiscoveryRequest = (request3, pass) => request3.phase === "discovery" && request3.workId === pass.passId && request3.unitId === pass.unitId && request3.perspective === pass.perspective && sameStrings2(request3.paths, pass.paths) && sameStrings2(request3.riskCategories, pass.riskCategories) && request3.candidates.length === 0;
-var validCandidate = (candidate, pass) => {
+var exactDiscoveryRequest = (request3, pass) => request3.phase === "discovery" && request3.workId === pass.passId && request3.unitId === pass.unitId && request3.perspective === pass.perspective && sameStrings2(request3.paths, pass.paths) && sameStrings2(request3.evidenceShardIds, pass.evidenceShardIds) && sameStrings2(request3.riskCategories, pass.riskCategories) && request3.candidates.length === 0;
+var validCandidate = (candidate, pass, unit, files, anchorFiles) => {
   const allowed = new Set(pass.paths);
-  return candidate.workId === pass.passId && candidate.unitId === pass.unitId && candidate.evidencePaths.length > 0 && candidate.evidencePaths.every((path) => allowed.has(path)) && (candidate._tag !== "FindingCandidate" || allowed.has(candidate.finding.path));
+  const kind = candidate._tag === "FindingCandidate" ? "finding" : "concern";
+  const idPrefix = `${pass.passId}:${kind}:`;
+  return candidate.candidateId.startsWith(idPrefix) && /^\d{3}$/.test(candidate.candidateId.slice(idPrefix.length)) && candidate.workId === pass.passId && candidate.unitId === pass.unitId && candidate.evidencePaths.length > 0 && candidate.evidencePaths.every((path) => allowed.has(path)) && (candidate._tag !== "FindingCandidate" || allowed.has(candidate.finding.path) && anchorViolation(candidate.finding, anchorFiles) === undefined && findingAnchorInUnitEvidence(candidate.finding, unit, files));
 };
 var flatAssurance = () => ({
   assurance: ReviewAssurance.make({
@@ -43799,7 +43967,7 @@ var flatAssurance = () => ({
   confirmedConcerns: [],
   walkthrough: []
 });
-var fanOutAssurance = (files, totalFiles, trace3) => {
+var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
   const declarations = delegationDeclarations(trace3);
   const expectedWorkIds = new Set(plan.discoveryPasses.map((pass) => pass.passId));
@@ -43810,6 +43978,7 @@ var fanOutAssurance = (files, totalFiles, trace3) => {
   let completedGeneralDiscoveryPasses = 0;
   let completedSpecialistPasses = 0;
   for (const pass of plan.discoveryPasses) {
+    const unit = plan.units.find((candidate) => candidate.unitId === pass.unitId);
     const matching = declarations.filter(({ request: request3 }) => exactDiscoveryRequest(request3, pass));
     const stage = pass.perspective === "risk-specialist" ? "specialist" : "discovery";
     if (matching.length !== 1) {
@@ -43843,11 +44012,16 @@ var fanOutAssurance = (files, totalFiles, trace3) => {
     const ids = new Set;
     let candidatesValid = true;
     for (const candidate of result4.value.candidates) {
-      if (ids.has(candidate.candidateId) || !validCandidate(candidate, pass)) {
+      if (unit === undefined || ids.has(candidate.candidateId) || !validCandidate(candidate, pass, unit, files, anchorFiles)) {
         candidatesValid = false;
         break;
       }
       ids.add(candidate.candidateId);
+    }
+    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
+    const unitIds = new Set(unitCandidates.map((candidate) => candidate.candidateId));
+    if (result4.value.candidates.some((candidate) => unitIds.has(candidate.candidateId))) {
+      candidatesValid = false;
     }
     if (!candidatesValid) {
       failedPasses.push(FailedReviewPass.make({
@@ -43862,7 +44036,6 @@ var fanOutAssurance = (files, totalFiles, trace3) => {
     } else {
       completedGeneralDiscoveryPasses += 1;
     }
-    const unitCandidates = candidatesByUnit.get(pass.unitId) ?? [];
     unitCandidates.push(...result4.value.candidates);
     candidatesByUnit.set(pass.unitId, unitCandidates);
     if (pass.perspective === "general") {
@@ -43882,7 +44055,7 @@ var fanOutAssurance = (files, totalFiles, trace3) => {
     requiredVerificationPasses += 1;
     const workId = `${unit.unitId}-verification`;
     expectedWorkIds.add(workId);
-    const matching = declarations.filter(({ request: request3 }) => request3.phase === "verification" && request3.workId === workId && request3.unitId === unit.unitId && request3.perspective === "candidate-verification" && sameStrings2(request3.paths, unit.paths) && sameStrings2(request3.riskCategories, unit.riskCategories) && sameCandidates(request3.candidates, candidates));
+    const matching = declarations.filter(({ request: request3 }) => request3.phase === "verification" && request3.workId === workId && request3.unitId === unit.unitId && request3.perspective === "candidate-verification" && sameStrings2(request3.paths, unit.paths) && sameStrings2(request3.evidenceShardIds, unit.evidenceShards.map((shard) => shard.shardId)) && sameStrings2(request3.riskCategories, unit.riskCategories) && sameCandidates(request3.candidates, candidates));
     if (matching.length !== 1) {
       unsettledCandidates += candidates.length;
       failedPasses.push(FailedReviewPass.make({
@@ -43923,7 +44096,7 @@ var fanOutAssurance = (files, totalFiles, trace3) => {
       assessedIds.add(assessment.candidateId);
       return true;
     });
-    if (!exactAssessments || assessedIds.size !== expectedIds.size) {
+    if (expectedIds.size !== candidates.length || !exactAssessments || assessedIds.size !== expectedIds.size) {
       unsettledCandidates += candidates.length;
       failedPasses.push(FailedReviewPass.make({
         workId,
@@ -44016,7 +44189,7 @@ var assessReviewPipeline = (input) => {
       ]
     });
   }
-  const assessed = input.shape === "fan-out" ? fanOutAssurance(input.files, input.totalFiles, trace3) : flatAssurance();
+  const assessed = input.shape === "fan-out" ? fanOutAssurance(input.files, input.totalFiles, input.anchorFiles, trace3) : flatAssurance();
   return {
     inputCoverage,
     assurance: assessed.assurance,
@@ -44644,7 +44817,6 @@ var gitHubPriorReviewsLayer = exports_Layer.effect(PriorReviews)(exports_Effect.
     compareHeads
   });
 }));
-
 // packages/pr-review/src/internal/render.ts
 var ReviewEvent = exports_Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]);
 
@@ -44837,23 +45009,6 @@ var renderReviewMetadata = (options3) => [
   "-->"
 ].join(`
 `);
-var anchorViolation = (finding, files) => {
-  const file2 = files.find((candidate) => candidate.path === finding.path);
-  if (file2 === undefined)
-    return "path is not part of the changeset";
-  if (file2.patch === undefined)
-    return "file has no anchorable textual diff";
-  if (finding.endLine < finding.startLine)
-    return "endLine precedes startLine";
-  if (finding.endLine - finding.startLine + 1 > 100)
-    return "range is implausibly large";
-  const anchors = commentableLines(file2.patch);
-  for (let line = finding.startLine;line <= finding.endLine; line += 1) {
-    if (!anchors.has(line))
-      return `line ${line} is not part of the diff`;
-  }
-  return;
-};
 var planPublication = (review, files, options3) => {
   const comments = [];
   const demoted = [];
@@ -44922,6 +45077,8 @@ var planPublication = (review, files, options3) => {
     }
     if (options3.inputCoverage?.status === "incomplete") {
       parts2.push("", "### \uD83D\uDED1 Incomplete input coverage", "", ...options3.inputCoverage.reasons.map((reason) => `- ${reason}`));
+    } else if (options3.inputCoverage === undefined && options3.coverage?.status === "incomplete") {
+      parts2.push("", "### \uD83D\uDED1 Incomplete coverage", "", ...options3.coverage.reasons.map((reason) => `- ${reason}`));
     }
     if (options3.assurance !== undefined && options3.assurance.status !== "settled") {
       parts2.push("", "### \uD83D\uDED1 Incomplete review assurance", "", ...options3.assurance.reasons.map((reason) => `- ${reason}`));
@@ -45308,7 +45465,7 @@ var makeFanOut = (options3) => {
     ...options3.modelLabel === undefined ? [] : [`model=${options3.modelLabel}`]
   ].join(" ");
   const profileSignature = (_mission) => [
-    "pr-review-profile-v2-discovery-verification",
+    "pr-review-profile-v3-sharded-request-bound-assurance",
     JSON.stringify(guidanceLines),
     JSON.stringify(options3.ignore ?? []),
     `maxFindings=${clampMaxFindings(options3.maxFindings)}`,

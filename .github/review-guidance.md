@@ -13,7 +13,7 @@ Architecture review method — apply to every changed service, Layer, tool, hand
 Review-assurance posture:
 
 - Treat path/input coverage and defect discovery as different claims. Reading every assigned file proves only that bounded evidence was available; never call that exhaustive semantic review.
-- In a specialist discovery pass, independently re-read the supplied high-risk evidence and look for a concrete counterexample even when a general pass may have examined the same paths. Authentication/authorization, security boundaries, persistence/durability, concurrency, credentials, and external effects deserve this redundant scrutiny.
+- In a specialist discovery pass, independently re-read every supplied evidence shard and look for a concrete counterexample even when a general pass examined the same unit. Host risk categories are focus labels, not permission to ignore authentication/authorization, security boundaries, persistence/durability, concurrency, credentials, or external effects when classification is silent.
 - In a verification pass, try to falsify each supplied candidate from the bounded evidence. Confirm only a supported, actionable defect; reject speculation, duplicates, and claims that require missing context. A settled clean pipeline still does not prove absence of defects.
 
 Framework invariants — violations are blocking:

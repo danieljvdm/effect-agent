@@ -339,8 +339,9 @@ The Travel Planner Reference Application (the cumulative fixture tree in
 
 The `@effect-agent/pr-review` deterministic fixtures separately pin input coverage and review
 assurance. They must prove that every path in a 41-file reviewable changeset is assigned or
-explicitly reported, and that truncated diff evidence is marked partial; host-classified
-high-risk scope receives a fresh specialist discovery pass;
+explicitly reported, and that an oversized textual diff is split into complete bounded evidence
+shards rather than silently truncated; every unit receives a fresh specialist discovery pass,
+with deterministic host-classified risk categories directing its focus;
 a defect missed by general discovery can still become a candidate; and an independent verifier
 rejects an unsupported candidate before host-side publication. Failed or exhausted discovery and
 verification passes remain visible, leave candidates unsettled, emit no authenticated continuity
@@ -348,10 +349,10 @@ state, and cannot produce a successful Action conclusion. Incremental fixtures p
 affected paths invalidate carried findings while unchanged findings remain active. Explicit final
 mode discards prior assurance scope and plans fresh discovery over the complete bounded diff.
 
-These fixtures guarantee deterministic work assignment, exact pass settlement, and fail-closed
-publication from confirmed candidates. They do not and cannot prove that a model found every
-defect, that the keyword risk classifier recognizes every risky semantic change, or that redundant
-passes provide model diversity.
+These fixtures guarantee deterministic work assignment, complete assignment accounting, exact
+pass settlement, and fail-closed publication from confirmed candidates. They do not and cannot
+prove that a model found every defect, that the keyword risk classifier recognizes every risky
+semantic change, or that redundant passes provide model diversity.
 
 Test IDs use requirement references:
 
