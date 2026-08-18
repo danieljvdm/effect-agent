@@ -30,7 +30,11 @@ const openRuntime = (): Miniflare =>
     script: workerScript,
     modulesRoot: "/",
     compatibilityDate: "2025-05-01",
-    compatibilityFlags: ["nodejs_compat", "experimental"],
+    // Deployed consumers cannot set the `experimental` compatibility flag, so
+    // the conformance runtime must not either: with it present, a load payload
+    // that requires experimental features (e.g. `allowExperimental: true`)
+    // passes here while rejecting every pass in production.
+    compatibilityFlags: ["nodejs_compat"],
     workerLoaders: { LOADER: {} },
     serviceBindings: {
       CODE_MODE_HOST: { name: kCurrentWorker, entrypoint: "CodeModeHostEntrypoint" },

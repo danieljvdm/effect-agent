@@ -607,9 +607,12 @@ const makeExecute = (options: DynamicWorkerCodeExecutorOptions): CodeExecutorExe
       () => releaseHostDispatch,
     );
 
+    // No `allowExperimental`: the runtime only accepts it when the CALLING
+    // worker carries the `experimental` compatibility flag, which deployed
+    // consumers cannot set — the option would reject every pass in
+    // production. The harness needs no experimental runtime features.
     const workerCode = {
       compatibilityDate: options.compatibilityDate ?? "2025-05-01",
-      allowExperimental: true,
       mainModule: "harness.js",
       modules: {
         "harness.js": HARNESS_MODULE,
