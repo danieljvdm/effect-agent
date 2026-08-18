@@ -19,7 +19,7 @@ inputs:
     description: "Phase-scoped GitHub token. Never pass this in the implement or checks phase."
     required: false
   state-secret:
-    description: "Stable HMAC secret for the durable admission/result journal reply."
+    description: "Stable HMAC secret for the GitHub-retained admission/result journal reply."
     required: false
   state-author-id:
     description: "Stable numeric GitHub actor id that authors authenticated journal replies."
@@ -74,7 +74,7 @@ inputs:
     default: "false"
 outputs:
   should-run:
-    description: "true only for the first durably admitted delivery."
+    description: "true only for the first persistently admitted delivery."
   duplicate:
     description: "true when an authenticated journal already owns this dispatch."
   stored-outcome:
@@ -88,7 +88,7 @@ outputs:
   published:
     description: "true when GitHub atomically committed the patch at the expected head."
   outcome:
-    description: "published, settled, or failed after the durable reply is updated."
+    description: "published, settled, or failed after the authenticated reply is updated."
 runs:
   using: node24
   main: dist/index.mjs

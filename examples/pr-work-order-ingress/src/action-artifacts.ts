@@ -13,7 +13,9 @@ const phaseFiles = {
   proposal: "proposal.json",
   settlement: "settlement.json",
   checked: "checked.json",
-  terminal: "terminal.json",
+  implementationTerminal: "implementation-terminal.json",
+  checksTerminal: "checks-terminal.json",
+  publicationTerminal: "publication-terminal.json",
 } as const;
 
 type PhaseFile = keyof typeof phaseFiles;
@@ -51,7 +53,9 @@ const encodeArtifact = (name: PhaseFile, value: ArtifactValue) => {
       return Schema.encodeUnknownEffect(Schema.fromJsonString(SettledWorkOrder))(value);
     case "checked":
       return Schema.encodeUnknownEffect(Schema.fromJsonString(CheckedWorkOrder))(value);
-    case "terminal":
+    case "implementationTerminal":
+    case "checksTerminal":
+    case "publicationTerminal":
       return Schema.encodeUnknownEffect(Schema.fromJsonString(WorkOrderTerminal))(value);
   }
 };
@@ -95,11 +99,11 @@ export const readAdmissionArtifact = readWithSchema("admission", WorkOrderAdmiss
 export const readProposalArtifact = readWithSchema("proposal", ProposedWorkOrder);
 export const readSettlementArtifact = readWithSchema("settlement", SettledWorkOrder);
 export const readCheckedArtifact = readWithSchema("checked", CheckedWorkOrder);
-export const readTerminalArtifact = readWithSchema("terminal", WorkOrderTerminal);
-
 export const readTerminalArtifactOption = Effect.fn("readTerminalArtifactOption")(function* () {
   const fs = yield* FileSystem.FileSystem;
-  const target = yield* artifactPath("terminal");
-  if (!(yield* fs.exists(target))) return undefined;
-  return yield* readTerminalArtifact;
+  for (const name of ["publicationTerminal", "checksTerminal", "implementationTerminal"] as const) {
+    const target = yield* artifactPath(name);
+    if (yield* fs.exists(target)) return yield* readWithSchema(name, WorkOrderTerminal);
+  }
+  return undefined;
 });

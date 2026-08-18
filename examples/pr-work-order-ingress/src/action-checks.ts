@@ -25,6 +25,11 @@ import type { ActionCheckSpec, WorkOrderAdmission } from "./action-contracts.ts"
 import { CheckedFile, CheckedWorkOrder } from "./action-contracts.ts";
 
 const MAX_OUTPUT_BYTES = 4_000_000;
+const TRUSTED_VITE_PLUS_BINARY = "/home/vp/.vite-plus/bin/vp";
+const TRUSTED_INSTALL_PATH =
+  "/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
+const CHECK_PATH =
+  "/workspace/node_modules/.bin:/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
 const ContainerImage = Schema.NonEmptyString.check(
   Schema.isMaxLength(512),
   Schema.isPattern(/^[^\s]+@sha256:[0-9a-f]{64}$/),
@@ -177,7 +182,7 @@ export const isolatedCheckContainerArguments = (input: {
   "--env",
   "VP_HOME=/runtime/.vite-plus",
   "--env",
-  "PATH=/workspace/node_modules/.bin:/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin",
+  `PATH=${input.network === "bridge" ? TRUSTED_INSTALL_PATH : CHECK_PATH}`,
   input.containerImage,
   input.command,
   ...input.args,
@@ -364,11 +369,18 @@ export const validateProposedWorkOrder = Effect.fn("validateProposedWorkOrder")(
       detail: "check checkout is not the admitted pull-request head",
     });
   }
-  const runtimeRoot = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-runtime-" });
+  const runtimeRoot = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-runtime-" }).pipe(
+    Effect.mapError((cause) =>
+      WorkspaceOperationFailure.make({
+        operation: "create isolated check runtime",
+        reason: String(cause).slice(0, 4_096),
+      }),
+    ),
+  );
   const containerPrefix = `effect-agent-${admission.order.workOrderId.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 40)}`;
   const install = yield* runIsolatedContainer({
     args: ["install", "--frozen-lockfile", "--ignore-scripts"],
-    command: "vp",
+    command: TRUSTED_VITE_PLUS_BINARY,
     containerImage,
     containerName: `${containerPrefix}-install`,
     network: "bridge",
@@ -392,9 +404,23 @@ export const validateProposedWorkOrder = Effect.fn("validateProposedWorkOrder")(
       detail: "check checkout was dirty before applying the validated proposal",
     });
   }
-  const patchDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-check-" });
+  const patchDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-check-" }).pipe(
+    Effect.mapError((cause) =>
+      WorkspaceOperationFailure.make({
+        operation: "create proposal patch directory",
+        reason: String(cause).slice(0, 4_096),
+      }),
+    ),
+  );
   const patchFile = path.join(patchDirectory, "proposal.patch");
-  yield* fs.writeFileString(patchFile, proposal.patch);
+  yield* fs.writeFileString(patchFile, proposal.patch).pipe(
+    Effect.mapError((cause) =>
+      WorkspaceOperationFailure.make({
+        operation: "write proposal patch",
+        reason: String(cause).slice(0, 4_096),
+      }),
+    ),
+  );
   yield* runGit(
     repositoryPath,
     ["apply", "--check", "--whitespace=nowarn", patchFile],

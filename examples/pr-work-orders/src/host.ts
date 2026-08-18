@@ -83,12 +83,12 @@ const describeImplementError = (error: unknown): string => {
   }
 };
 
-export const runWorkOrder = <ImplementRequirements>(options: {
+export const runWorkOrder = <ImplementError, ImplementRequirements>(options: {
   readonly order: PullRequestWorkOrder;
   readonly implement: (
     mission: WorkOrderMission,
     workspace: ImplementationWorkspace,
-  ) => Effect.Effect<WorkOrderReport, unknown, ImplementRequirements>;
+  ) => Effect.Effect<WorkOrderReport, ImplementError, ImplementRequirements>;
   readonly timeout?: Duration.Duration | undefined;
 }): Effect.Effect<
   WorkOrderHostResult,
@@ -235,7 +235,7 @@ export const runWorkOrder = <ImplementRequirements>(options: {
           Effect.catch((error: WorkOrderHostError) =>
             Effect.gen(function* () {
               if (!Schema.is(WorkspaceOperationFailure)(error)) {
-                return yield* Effect.fail(error);
+                return yield* error;
               }
               const published = yield* Ref.get(publication);
               if (published === undefined || !error.operation.startsWith("release ")) {
@@ -259,15 +259,15 @@ export const runWorkOrder = <ImplementRequirements>(options: {
 /**
  * Validate one implementation proposal through the host-owned patch seam, but
  * defer required checks and publication to credential-separated Actions jobs.
- * Durable admission is owned by the ingress journal before this operation is
- * invoked, so this seam deliberately has no in-process attempt policy.
+ * The ingress journal claims admission before this operation is invoked, so
+ * this seam deliberately has no in-process attempt policy.
  */
-export const prepareWorkOrder = <ImplementRequirements>(options: {
+export const prepareWorkOrder = <ImplementError, ImplementRequirements>(options: {
   readonly order: PullRequestWorkOrder;
   readonly implement: (
     mission: WorkOrderMission,
     workspace: ImplementationWorkspace,
-  ) => Effect.Effect<WorkOrderReport, unknown, ImplementRequirements>;
+  ) => Effect.Effect<WorkOrderReport, ImplementError, ImplementRequirements>;
   readonly timeout?: Duration.Duration | undefined;
 }): Effect.Effect<
   WorkOrderPreparationResult,
@@ -287,6 +287,14 @@ export const prepareWorkOrder = <ImplementRequirements>(options: {
     yield* host.requireCurrentHead(options.order);
     return yield* host.withWorktree(options.order, (worktree) =>
       Effect.gen(function* () {
+        const deferredWorkspace: ImplementationWorkspace = {
+          ...worktree.modelWorkspace,
+          requestCheck: (name) =>
+            WorkspaceOperationFailure.make({
+              operation: `request deferred check ${name}`,
+              reason: "deferred checks are unavailable in the model implementation process",
+            }),
+        };
         const implement = options
           .implement(
             WorkOrderMission.make({
@@ -295,7 +303,7 @@ export const prepareWorkOrder = <ImplementRequirements>(options: {
               requiredChecks: host.requiredChecks,
               checkExecution: "deferred",
             }),
-            worktree.modelWorkspace,
+            deferredWorkspace,
           )
           .pipe(
             Effect.mapError((error) =>

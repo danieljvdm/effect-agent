@@ -10,7 +10,7 @@ import { IngressStoreFailure } from "./contracts.ts";
 
 const MARKER_PREFIX = "<!-- effect-agent-work-order:v1:";
 const MARKER_SUFFIX = " -->";
-const MARKER_PATTERN = /<!-- effect-agent-work-order:v1:([A-Za-z0-9+/=]+)\.([0-9a-f]{64}) -->/;
+const MARKER_PATTERN = /<!-- effect-agent-work-order:v1:([A-Za-z0-9+/=]+)\.([0-9a-f]{64}) -->/g;
 const SIGNATURE_DOMAIN = "effect-agent/pr-work-order-journal/v1\0";
 
 const failure = (operation: string, cause: unknown) =>
@@ -77,31 +77,33 @@ export class WorkOrderJournalAuthenticator extends Context.Service<
           }),
         extract: (body) => {
           if (body.length > 60_000) return Effect.succeed(Option.none());
-          const match = MARKER_PATTERN.exec(body);
-          const payload = match?.[1];
-          const signature = match?.[2];
-          if (payload === undefined || signature === undefined)
-            return Effect.succeed(Option.none());
-          const json = Result.getOrUndefined(Encoding.decodeBase64String(payload));
-          const bytes = signatureBuffer(signature);
-          if (json === undefined || bytes === undefined) return Effect.succeed(Option.none());
-          const state = Schema.decodeUnknownOption(
-            Schema.fromJsonString(WorkOrderJournalStateSchema),
-          )(json);
-          if (Option.isNone(state)) return Effect.succeed(Option.none());
           return Effect.gen(function* () {
             const key = yield* hmacKey(secret, "verify work-order journal");
-            const valid = yield* Effect.tryPromise({
-              try: () =>
-                globalThis.crypto.subtle.verify(
-                  "HMAC",
-                  key,
-                  bytes,
-                  new TextEncoder().encode(`${SIGNATURE_DOMAIN}${payload}`),
-                ),
-              catch: (cause) => failure("verify work-order journal", cause),
-            });
-            return valid ? state : Option.none();
+            const candidates = [...body.matchAll(MARKER_PATTERN)].slice(-32).reverse();
+            for (const match of candidates) {
+              const payload = match[1];
+              const signature = match[2];
+              if (payload === undefined || signature === undefined) continue;
+              const json = Result.getOrUndefined(Encoding.decodeBase64String(payload));
+              const bytes = signatureBuffer(signature);
+              if (json === undefined || bytes === undefined) continue;
+              const state = Schema.decodeUnknownOption(
+                Schema.fromJsonString(WorkOrderJournalStateSchema),
+              )(json);
+              if (Option.isNone(state)) continue;
+              const valid = yield* Effect.tryPromise({
+                try: () =>
+                  globalThis.crypto.subtle.verify(
+                    "HMAC",
+                    key,
+                    bytes,
+                    new TextEncoder().encode(`${SIGNATURE_DOMAIN}${payload}`),
+                  ),
+                catch: (cause) => failure("verify work-order journal", cause),
+              });
+              if (valid) return state;
+            }
+            return Option.none();
           });
         },
       }),

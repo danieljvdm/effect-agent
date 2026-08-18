@@ -42,6 +42,7 @@ import {
   WorkOrderActionFailure,
   WorkOrderAdmission as WorkOrderAdmissionSchema,
   type WorkOrderTerminal,
+  terminalMatchesAdmission,
   terminalFromSettlement,
 } from "./action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "./action-github.ts";
@@ -410,11 +411,13 @@ const implement = Effect.fn("workOrderAction.implement")(function* () {
               Effect.andThen(writeOutputs([["candidate", "true"]])),
             )
           : writeArtifact("settlement", result).pipe(
-              Effect.andThen(writeArtifact("terminal", terminalFromSettlement(result))),
+              Effect.andThen(
+                writeArtifact("implementationTerminal", terminalFromSettlement(result)),
+              ),
               Effect.andThen(writeOutputs([["candidate", "false"]])),
             ),
       onFailure: (error) =>
-        writeArtifact("terminal", terminalFailure(admission, error)).pipe(
+        writeArtifact("implementationTerminal", terminalFailure(admission, error)).pipe(
           Effect.andThen(writeOutputs([["candidate", "false"]])),
         ),
     }),
@@ -444,7 +447,7 @@ const checks = Effect.fn("workOrderAction.checks")(function* () {
           Effect.andThen(writeOutputs([["validated", "true"]])),
         ),
       onFailure: (error) =>
-        writeArtifact("terminal", terminalFailure(admission, error)).pipe(
+        writeArtifact("checksTerminal", terminalFailure(admission, error)).pipe(
           Effect.andThen(writeOutputs([["validated", "false"]])),
         ),
     }),
@@ -624,7 +627,7 @@ const publish = Effect.fn("workOrderAction.publish")(function* () {
     Effect.matchEffect({
       onSuccess: (publishedHeadSha) =>
         writeArtifact(
-          "terminal",
+          "publicationTerminal",
           PublishedTerminal.make({
             workOrderId: admission.order.workOrderId,
             workOrderDigest: admission.workOrderDigest,
@@ -634,7 +637,7 @@ const publish = Effect.fn("workOrderAction.publish")(function* () {
           }),
         ).pipe(Effect.andThen(writeOutputs([["published", "true"]]))),
       onFailure: (error) =>
-        writeArtifact("terminal", terminalFailure(admission, error)).pipe(
+        writeArtifact("publicationTerminal", terminalFailure(admission, error)).pipe(
           Effect.andThen(writeOutputs([["published", "false"]])),
         ),
     }),
@@ -658,6 +661,13 @@ const present = Effect.fn("workOrderAction.present")(function* () {
   const publicationAttempted = yield* Config.boolean("EFFECT_AGENT_PUBLICATION_ATTEMPTED").pipe(
     Config.withDefault(false),
   );
+  if (existingTerminal !== undefined && !terminalMatchesAdmission(admission, existingTerminal)) {
+    return yield* WorkOrderActionFailure.make({
+      phase: "present",
+      errorTag: "PresentationFailure",
+      detail: "terminal artifact does not belong to the admitted work order and expected head",
+    });
+  }
   const terminal =
     existingTerminal ??
     FailedTerminal.make({

@@ -71,7 +71,7 @@ another explicit dispatch derives a new identity. The host computes a canonical
 `workOrderDigest` over the complete work order. The implementation report must name that digest so
 an edited comment, changed path, stale model settlement, or replayed result cannot be mistaken for
 the admitted instruction. If a production work order crosses a trust boundary, it must travel in
-authenticated transport or trusted durable storage; a digest alone is not authentication.
+authenticated transport or trusted persistent storage; a digest alone is not authentication.
 
 `source.body` and `source.suggestion` are evidence. The host never applies a suggestion as a patch.
 The implementer must inspect the exact target head and may reject the premise of the instruction.
@@ -107,7 +107,7 @@ dispatch, which creates a new work order. Duplicate delivery of the original eve
 already-claimed outcome rather than invoke another implementer.
 
 The trusted-local proof may use an in-memory attempt policy and construct admitted work orders in
-process. The GitHub Action uses the authenticated durable journal and job serialization specified
+process. The GitHub Action uses the authenticated GitHub-retained journal and job serialization specified
 in [work-order ingress](pr-work-order-ingress.md); that operational surface, rather than this local
 attempt policy, owns cross-job and cross-run duplicate delivery.
 
@@ -176,7 +176,7 @@ resolution are separate host/user-interface concerns and must not be inferred fr
    the GitHub flow transfers a bounded proposal to a credential-free, network-disabled container
    job. Reject a failed check or a check that mutates the validated patch.
 10. Re-read the pull-request head and atomically publish only if it still names `headSha`. In the
-    GitHub flow an independent publisher first authenticates the durable admission journal and
+    GitHub flow an independent publisher first authenticates the GitHub-retained admission journal and
     repeats identity, digest, complete-path, allowlist, file, and check-evidence verification.
 11. Release the worktree and all temporary resources on success, expected failure, defect,
     timeout, or interruption.
@@ -191,7 +191,7 @@ exactly-once external publication claim is made.
 `examples/pr-work-orders` remains deployment class E trusted-local evidence: it constructs
 authorized work orders in process, uses a local Git repository, and proves the semantic host
 boundary. `examples/pr-work-order-ingress` and the separately named `work-order-action/` add the
-operational GitHub transport, durable repository journal, isolated checks, and network publisher
+operational GitHub transport, persistent repository journal, isolated checks, and network publisher
 without changing the local proof's deployment claim.
 
 Pull-request code and repository checks are untrusted. No process that executes them may hold a
@@ -260,7 +260,7 @@ implement.
 
 ## 10. Out of scope
 
-GitHub dispatch, durable production admission, isolation, network publication,
+GitHub dispatch, persistent production admission, isolation, network publication,
 and thread presentation are specified in
 [work-order ingress](pr-work-order-ingress.md). They are out of scope for this
 class E proof:
@@ -274,7 +274,7 @@ class E proof:
 - reviewer-produced remediation handoffs, HMAC review handoffs, and finding multisets;
 - automatic GitHub thread resolution;
 - a new framework package;
-- durable production attempt admission; and
+- persistent production attempt admission; and
 - production execution of untrusted pull-request code.
 
 ## 11. Rejected alternatives

@@ -9,11 +9,10 @@ permissions: {}
 concurrency:
   group: pr-work-order-${{ github.repository_id }}-${{ github.event.comment.id }}
   cancel-in-progress: false
-  queue: max
 
 jobs:
   admit:
-    name: Authenticate and durably admit
+    name: Authenticate and persist admission
     if: ${{ github.event.comment.body == '@effect-agent fix this' && github.event.comment.in_reply_to_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -106,7 +105,7 @@ jobs:
           path: |
             state/proposal.json
             state/settlement.json
-            state/terminal.json
+            state/implementation-terminal.json
           if-no-files-found: warn
           retention-days: 1
 
@@ -162,7 +161,7 @@ jobs:
           name: pr-work-order-${{ github.run_id }}-checks
           path: |
             state/checked.json
-            state/terminal.json
+            state/checks-terminal.json
           if-no-files-found: warn
           retention-days: 1
 
@@ -208,12 +207,12 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pr-work-order-${{ github.run_id }}-publication
-          path: state/terminal.json
+          path: state/publication-terminal.json
           if-no-files-found: warn
           retention-days: 1
 
   present:
-    name: Settle the durable thread reply
+    name: Settle the authenticated thread reply
     needs: [admit, implement, checks, publish]
     if: ${{ always() && needs.admit.outputs.should-run == 'true' }}
     runs-on: ubuntu-latest

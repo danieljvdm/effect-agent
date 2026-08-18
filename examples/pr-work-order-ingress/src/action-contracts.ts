@@ -85,6 +85,16 @@ export class FailedTerminal extends Schema.TaggedClass<FailedTerminal>()("failed
 export const WorkOrderTerminal = Schema.Union([PublishedTerminal, SettledTerminal, FailedTerminal]);
 export type WorkOrderTerminal = typeof WorkOrderTerminal.Type;
 
+export const terminalMatchesAdmission = (
+  admission: WorkOrderAdmission,
+  terminal: WorkOrderTerminal,
+): boolean =>
+  terminal.workOrderId === admission.order.workOrderId &&
+  terminal.workOrderDigest === admission.workOrderDigest &&
+  (terminal._tag === "published"
+    ? terminal.previousHeadSha === admission.order.headSha
+    : terminal.headSha === admission.order.headSha);
+
 const journalIdentity = {
   version: Schema.Literal(1),
   eventId: Schema.NonEmptyString.check(Schema.isMaxLength(200)),

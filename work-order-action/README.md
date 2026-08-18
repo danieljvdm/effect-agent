@@ -5,7 +5,7 @@ implementation attempt. It is deliberately separate from the read-only PR-review
 
 Do not invoke the Action as a single step. The five jobs below are part of its security contract:
 
-- `admit` authenticates the GitHub event and durably claims the dispatch;
+- `admit` authenticates the GitHub event and persists its claim in a signed GitHub reply;
 - `implement` has the model credential and a read-only exact-head checkout, but no GitHub write
   token;
 - `checks` has neither provider nor publisher credentials and runs checks without network access;
@@ -14,6 +14,11 @@ Do not invoke the Action as a single step. The five jobs below are part of its s
 
 The Action is precompiled. Pin `uses:` to a full 40-character commit SHA. A release tag or package
 upgrade is not an immutable Action pin.
+
+The journal is external GitHub repository state, not an Effect Agent DN or DC assembly. Recovery
+depends on GitHub retaining and serving the authenticated review reply; the Action rereads that
+reply across jobs and workflow runs, while short-lived Actions artifacts carry only one run's
+bounded phase envelopes.
 
 ## Kommunikasie setup
 
@@ -52,11 +57,10 @@ permissions: {}
 concurrency:
   group: effect-agent-pr-work-order-${{ github.repository_id }}-${{ github.event.comment.id }}
   cancel-in-progress: false
-  queue: max
 
 jobs:
   admit:
-    name: Authenticate and durably admit
+    name: Authenticate and persist admission
     if: ${{ github.event.comment.body == '@effect-agent fix this' && github.event.comment.in_reply_to_id }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -134,7 +138,7 @@ jobs:
           path: |
             state/proposal.json
             state/settlement.json
-            state/terminal.json
+            state/implementation-terminal.json
           if-no-files-found: warn
           retention-days: 1
 
@@ -181,7 +185,7 @@ jobs:
           name: pr-work-order-${{ github.run_id }}-checks
           path: |
             state/checked.json
-            state/terminal.json
+            state/checks-terminal.json
           if-no-files-found: warn
           retention-days: 1
 
@@ -219,18 +223,17 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pr-work-order-${{ github.run_id }}-publication
-          path: state/terminal.json
+          path: state/publication-terminal.json
           if-no-files-found: warn
           retention-days: 1
 
   present:
-    name: Settle the durable thread reply
+    name: Settle the authenticated thread reply
     needs: [admit, implement, checks, publish]
     if: ${{ always() && needs.admit.outputs.should-run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
       pull-requests: write
     steps:
       - name: Download all available host artifacts
@@ -268,8 +271,9 @@ again; another exact reply creates another work order.
 - Publication currently supports modifications to existing regular UTF-8 files only. It rejects
   additions, deletions, renames, copies, executable/mode changes, symlinks, submodules, binary
   patches, and paths outside the exact source/support allowlist.
-- Dependency installation has network access with lifecycle scripts disabled. Required checks run
-  in a read-only, capability-dropped container with no network and no GitHub or provider secret.
+- Dependency installation invokes the pinned image's Vite+ binary by absolute path with lifecycle
+  scripts disabled and a PATH that excludes the pull-request checkout. Required checks run in a
+  read-only, capability-dropped container with no network and no GitHub or provider secret.
 - `not-applicable` and `needs-human` are successful no-publication settlements. The host never
   treats raw model prose as authoritative status and never resolves the review thread.
 - GitHub's atomic expected-head commit provides compare-and-swap publication, not exactly-once

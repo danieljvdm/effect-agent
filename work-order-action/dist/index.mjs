@@ -41835,12 +41835,19 @@ var prepareWorkOrder = (options3) => exports_Effect.gen(function* () {
   yield* host.authorizeDispatch(options3.order);
   yield* host.requireCurrentHead(options3.order);
   return yield* host.withWorktree(options3.order, (worktree) => exports_Effect.gen(function* () {
+    const deferredWorkspace = {
+      ...worktree.modelWorkspace,
+      requestCheck: (name) => WorkspaceOperationFailure.make({
+        operation: `request deferred check ${name}`,
+        reason: "deferred checks are unavailable in the model implementation process"
+      })
+    };
     const implement = options3.implement(WorkOrderMission.make({
       order: options3.order,
       workOrderDigest: digest2,
       requiredChecks: host.requiredChecks,
       checkExecution: "deferred"
-    }), worktree.modelWorkspace).pipe(exports_Effect.mapError((error2) => WorkOrderImplementationFailure.make({
+    }), deferredWorkspace).pipe(exports_Effect.mapError((error2) => WorkOrderImplementationFailure.make({
       reason: describeImplementError(error2)
     })));
     const report2 = yield* options3.timeout ? implement.pipe(exports_Effect.timeoutOrElse({
@@ -52951,6 +52958,7 @@ class FailedTerminal extends exports_Schema.TaggedClass()("failed", {
 }) {
 }
 var WorkOrderTerminal = exports_Schema.Union([PublishedTerminal, SettledTerminal, FailedTerminal]);
+var terminalMatchesAdmission = (admission, terminal) => terminal.workOrderId === admission.order.workOrderId && terminal.workOrderDigest === admission.workOrderDigest && (terminal._tag === "published" ? terminal.previousHeadSha === admission.order.headSha : terminal.headSha === admission.order.headSha);
 var journalIdentity = {
   version: exports_Schema.Literal(1),
   eventId: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(200)),
@@ -52995,7 +53003,9 @@ var phaseFiles = {
   proposal: "proposal.json",
   settlement: "settlement.json",
   checked: "checked.json",
-  terminal: "terminal.json"
+  implementationTerminal: "implementation-terminal.json",
+  checksTerminal: "checks-terminal.json",
+  publicationTerminal: "publication-terminal.json"
 };
 var artifactDirectory = exports_Config.nonEmptyString("EFFECT_AGENT_ARTIFACT_DIRECTORY").pipe(exports_Config.withDefault(".effect-agent-work-order"));
 var failure = (operation, cause) => WorkOrderActionFailure.make({
@@ -53017,7 +53027,9 @@ var encodeArtifact = (name, value4) => {
       return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(SettledWorkOrder))(value4);
     case "checked":
       return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(CheckedWorkOrder))(value4);
-    case "terminal":
+    case "implementationTerminal":
+    case "checksTerminal":
+    case "publicationTerminal":
       return exports_Schema.encodeUnknownEffect(exports_Schema.fromJsonString(WorkOrderTerminal))(value4);
   }
 };
@@ -53041,17 +53053,21 @@ var readAdmissionArtifact = readWithSchema("admission", WorkOrderAdmission);
 var readProposalArtifact = readWithSchema("proposal", ProposedWorkOrder);
 var readSettlementArtifact = readWithSchema("settlement", SettledWorkOrder);
 var readCheckedArtifact = readWithSchema("checked", CheckedWorkOrder);
-var readTerminalArtifact = readWithSchema("terminal", WorkOrderTerminal);
 var readTerminalArtifactOption = exports_Effect.fn("readTerminalArtifactOption")(function* () {
   const fs = yield* exports_FileSystem.FileSystem;
-  const target = yield* artifactPath("terminal");
-  if (!(yield* fs.exists(target)))
-    return;
-  return yield* readTerminalArtifact;
+  for (const name of ["publicationTerminal", "checksTerminal", "implementationTerminal"]) {
+    const target = yield* artifactPath(name);
+    if (yield* fs.exists(target))
+      return yield* readWithSchema(name, WorkOrderTerminal);
+  }
+  return;
 });
 
 // examples/pr-work-order-ingress/src/action-checks.ts
 var MAX_OUTPUT_BYTES = 4000000;
+var TRUSTED_VITE_PLUS_BINARY = "/home/vp/.vite-plus/bin/vp";
+var TRUSTED_INSTALL_PATH = "/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
+var CHECK_PATH = "/workspace/node_modules/.bin:/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin";
 var ContainerImage = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(512), exports_Schema.isPattern(/^[^\s]+@sha256:[0-9a-f]{64}$/));
 var runProcess = exports_Effect.fn("workOrderAction.runProcess")(function* (input) {
   const spawner = yield* exports_ChildProcessSpawner.ChildProcessSpawner;
@@ -53156,7 +53172,7 @@ var isolatedCheckContainerArguments = (input) => [
   "--env",
   "VP_HOME=/runtime/.vite-plus",
   "--env",
-  "PATH=/workspace/node_modules/.bin:/runtime/.vite-plus/bin:/home/vp/.vite-plus/bin:/usr/local/bin:/usr/bin:/bin",
+  `PATH=${input.network === "bridge" ? TRUSTED_INSTALL_PATH : CHECK_PATH}`,
   input.containerImage,
   input.command,
   ...input.args
@@ -53260,11 +53276,14 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
       detail: "check checkout is not the admitted pull-request head"
     });
   }
-  const runtimeRoot = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-runtime-" });
+  const runtimeRoot = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-runtime-" }).pipe(exports_Effect.mapError((cause) => WorkspaceOperationFailure.make({
+    operation: "create isolated check runtime",
+    reason: String(cause).slice(0, 4096)
+  })));
   const containerPrefix = `effect-agent-${admission.order.workOrderId.replace(/[^A-Za-z0-9_.-]/g, "-").slice(0, 40)}`;
   const install = yield* runIsolatedContainer({
     args: ["install", "--frozen-lockfile", "--ignore-scripts"],
-    command: "vp",
+    command: TRUSTED_VITE_PLUS_BINARY,
     containerImage,
     containerName: `${containerPrefix}-install`,
     network: "bridge",
@@ -53287,9 +53306,15 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
       detail: "check checkout was dirty before applying the validated proposal"
     });
   }
-  const patchDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-check-" });
+  const patchDirectory = yield* fs.makeTempDirectoryScoped({ prefix: "work-order-check-" }).pipe(exports_Effect.mapError((cause) => WorkspaceOperationFailure.make({
+    operation: "create proposal patch directory",
+    reason: String(cause).slice(0, 4096)
+  })));
   const patchFile = path.join(patchDirectory, "proposal.patch");
-  yield* fs.writeFileString(patchFile, proposal.patch);
+  yield* fs.writeFileString(patchFile, proposal.patch).pipe(exports_Effect.mapError((cause) => WorkspaceOperationFailure.make({
+    operation: "write proposal patch",
+    reason: String(cause).slice(0, 4096)
+  })));
   yield* runGit(repositoryPath, ["apply", "--check", "--whitespace=nowarn", patchFile], "check proposed patch");
   yield* runGit(repositoryPath, ["apply", "--whitespace=nowarn", patchFile], "apply proposed patch");
   const applied = yield* collectPatch(repositoryPath);
@@ -53845,7 +53870,10 @@ var liveWorkOrderGitHubLayer = (options3) => exports_Layer.effect(WorkOrderGitHu
       return;
     }));
     if (observed !== undefined && observed !== order.headSha) {
-      return yield* StalePullRequestHead.make({ expected: order.headSha, actual: observed });
+      return yield* PublicationUncertainty.make({
+        reason: "GitHub did not confirm whether the createCommitOnBranch request produced the observed head",
+        observedHeadSha: observed
+      });
     }
     if (confirmedError !== undefined && confirmedError.length > 0) {
       return yield* GitHubApiFailure.make({
@@ -54027,7 +54055,7 @@ var constructWorkOrder = exports_Effect.fn("constructWorkOrder")(function* (targ
 // examples/pr-work-order-ingress/src/journal.ts
 var MARKER_PREFIX = "<!-- effect-agent-work-order:v1:";
 var MARKER_SUFFIX = " -->";
-var MARKER_PATTERN = /<!-- effect-agent-work-order:v1:([A-Za-z0-9+/=]+)\.([0-9a-f]{64}) -->/;
+var MARKER_PATTERN = /<!-- effect-agent-work-order:v1:([A-Za-z0-9+/=]+)\.([0-9a-f]{64}) -->/g;
 var SIGNATURE_DOMAIN = "effect-agent/pr-work-order-journal/v1\x00";
 var failure2 = (operation, cause) => IngressStoreFailure.make({
   operation,
@@ -54064,25 +54092,29 @@ ${MARKER_PREFIX}${payload}.${hex2}${MARKER_SUFFIX}`;
     extract: (body) => {
       if (body.length > 60000)
         return exports_Effect.succeed(exports_Option.none());
-      const match9 = MARKER_PATTERN.exec(body);
-      const payload = match9?.[1];
-      const signature = match9?.[2];
-      if (payload === undefined || signature === undefined)
-        return exports_Effect.succeed(exports_Option.none());
-      const json2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
-      const bytes = signatureBuffer(signature);
-      if (json2 === undefined || bytes === undefined)
-        return exports_Effect.succeed(exports_Option.none());
-      const state = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(WorkOrderJournalState))(json2);
-      if (exports_Option.isNone(state))
-        return exports_Effect.succeed(exports_Option.none());
       return exports_Effect.gen(function* () {
         const key = yield* hmacKey2(secret, "verify work-order journal");
-        const valid = yield* exports_Effect.tryPromise({
-          try: () => globalThis.crypto.subtle.verify("HMAC", key, bytes, new TextEncoder().encode(`${SIGNATURE_DOMAIN}${payload}`)),
-          catch: (cause) => failure2("verify work-order journal", cause)
-        });
-        return valid ? state : exports_Option.none();
+        const candidates = [...body.matchAll(MARKER_PATTERN)].slice(-32).reverse();
+        for (const match9 of candidates) {
+          const payload = match9[1];
+          const signature = match9[2];
+          if (payload === undefined || signature === undefined)
+            continue;
+          const json2 = exports_Result.getOrUndefined(exports_Encoding.decodeBase64String(payload));
+          const bytes = signatureBuffer(signature);
+          if (json2 === undefined || bytes === undefined)
+            continue;
+          const state = exports_Schema.decodeUnknownOption(exports_Schema.fromJsonString(WorkOrderJournalState))(json2);
+          if (exports_Option.isNone(state))
+            continue;
+          const valid = yield* exports_Effect.tryPromise({
+            try: () => globalThis.crypto.subtle.verify("HMAC", key, bytes, new TextEncoder().encode(`${SIGNATURE_DOMAIN}${payload}`)),
+            catch: (cause) => failure2("verify work-order journal", cause)
+          });
+          if (valid)
+            return state;
+        }
+        return exports_Option.none();
       });
     }
   }));
@@ -54502,8 +54534,8 @@ var implement = exports_Effect.fn("workOrderAction.implement")(function* () {
     timeout: exports_Duration.minutes(timeoutMinutes)
   }).pipe(exports_Effect.provide(exports_Layer.merge(host2, exports_OpenAiClient.layerConfig({ apiKey: exports_Config.redacted("OPENAI_API_KEY") }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer)))));
   yield* run5.pipe(exports_Effect.matchEffect({
-    onSuccess: (result4) => result4._tag === "proposed" ? writeArtifact("proposal", result4).pipe(exports_Effect.andThen(writeOutputs([["candidate", "true"]]))) : writeArtifact("settlement", result4).pipe(exports_Effect.andThen(writeArtifact("terminal", terminalFromSettlement(result4))), exports_Effect.andThen(writeOutputs([["candidate", "false"]]))),
-    onFailure: (error2) => writeArtifact("terminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["candidate", "false"]])))
+    onSuccess: (result4) => result4._tag === "proposed" ? writeArtifact("proposal", result4).pipe(exports_Effect.andThen(writeOutputs([["candidate", "true"]]))) : writeArtifact("settlement", result4).pipe(exports_Effect.andThen(writeArtifact("implementationTerminal", terminalFromSettlement(result4))), exports_Effect.andThen(writeOutputs([["candidate", "false"]]))),
+    onFailure: (error2) => writeArtifact("implementationTerminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["candidate", "false"]])))
   }));
 });
 var checks = exports_Effect.fn("workOrderAction.checks")(function* () {
@@ -54522,7 +54554,7 @@ var checks = exports_Effect.fn("workOrderAction.checks")(function* () {
     runnerUser
   }).pipe(exports_Effect.matchEffect({
     onSuccess: (checked) => writeArtifact("checked", checked).pipe(exports_Effect.andThen(writeOutputs([["validated", "true"]]))),
-    onFailure: (error2) => writeArtifact("terminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["validated", "false"]])))
+    onFailure: (error2) => writeArtifact("checksTerminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["validated", "false"]])))
   }));
 });
 var exactStrings2 = (left, right) => {
@@ -54628,14 +54660,14 @@ var publish2 = exports_Effect.fn("workOrderAction.publish")(function* () {
     return yield* github.publish({ checked, message });
   });
   yield* publication.pipe(exports_Effect.matchEffect({
-    onSuccess: (publishedHeadSha) => writeArtifact("terminal", PublishedTerminal.make({
+    onSuccess: (publishedHeadSha) => writeArtifact("publicationTerminal", PublishedTerminal.make({
       workOrderId: admission.order.workOrderId,
       workOrderDigest: admission.workOrderDigest,
       previousHeadSha: admission.order.headSha,
       publishedHeadSha,
       changedPaths: checked.proposal.changedPaths
     })).pipe(exports_Effect.andThen(writeOutputs([["published", "true"]]))),
-    onFailure: (error2) => writeArtifact("terminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["published", "false"]])))
+    onFailure: (error2) => writeArtifact("publicationTerminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["published", "false"]])))
   }));
 });
 var visibleTerminal = (terminal) => {
@@ -54652,6 +54684,13 @@ var present = exports_Effect.fn("workOrderAction.present")(function* () {
   const admission = yield* readAdmissionArtifact;
   const existingTerminal = yield* readTerminalArtifactOption();
   const publicationAttempted = yield* exports_Config.boolean("EFFECT_AGENT_PUBLICATION_ATTEMPTED").pipe(exports_Config.withDefault(false));
+  if (existingTerminal !== undefined && !terminalMatchesAdmission(admission, existingTerminal)) {
+    return yield* WorkOrderActionFailure.make({
+      phase: "present",
+      errorTag: "PresentationFailure",
+      detail: "terminal artifact does not belong to the admitted work order and expected head"
+    });
+  }
   const terminal = existingTerminal ?? FailedTerminal.make({
     workOrderId: admission.order.workOrderId,
     workOrderDigest: admission.workOrderDigest,

@@ -5,7 +5,7 @@ Status: **Implemented**
 This specification is the operational GitHub surface for
 [pull-request work orders](pr-work-orders.md). The work-order specification owns the canonical
 instruction, bounded implementer, and deterministic host semantics. This document owns exact
-GitHub dispatch, durable admission, Actions isolation, atomic publication, and thread
+GitHub dispatch, persistent admission, Actions isolation, atomic publication, and thread
 presentation.
 
 The product is a separately named, precompiled JavaScript Action at `work-order-action/` used in a
@@ -55,9 +55,9 @@ Before admission, trusted base code:
 The work-order id and digest cover the full immutable snapshot. The source body and any suggestion
 remain untrusted input. No Schema-valid field is self-authorizing.
 
-## 3. Durable admission journal
+## 3. GitHub-retained admission journal
 
-The repository-appropriate durable attempt record is one bot-authored reply on the selected review
+The repository-appropriate persistent attempt record is one bot-authored reply on the selected review
 thread. Before any model invocation, admission creates that reply with a bounded visible pending
 status and a hidden Schema-encoded journal state authenticated by HMAC-SHA-256. The marker binds:
 
@@ -73,13 +73,17 @@ comment id. If an authenticated marker already owns that event/work-order identi
 returns its stored `claimed` or terminal outcome and sets `should-run=false`; no implementer job is
 started. Multiple matching authenticated markers fail closed.
 
+This GitHub flow is not an Effect Agent DN or DC assembly and makes no DN/DC guarantee.
+Its recovery boundary is GitHub's retention and availability of review comments: admission is
+recovered by rereading that authenticated external repository state across Actions jobs and runs.
+
 The presenter updates that same reply from `claimed` to `completed`; it does not add a second status
 reply. A crash after claim leaves an authenticated incomplete attempt. Rerunning or redelivering it
 returns the stored incomplete state and never replays the implementer. A new explicit dispatch
 creates a distinct work order and journal reply.
 
 Actions artifacts carry bounded Schema-decoded envelopes between jobs in one run, but they are not
-the durable duplicate-delivery authority. Artifact retention can expire without reopening an
+the persistent duplicate-delivery authority. Artifact retention can expire without reopening an
 attempt. The HMAC secret must remain stable; rotation must retain the old secret until all claimed
 attempts are settled or intentionally abandoned.
 
@@ -181,7 +185,7 @@ The committed suites preserve:
 
 - exact target parsing, stable-id authorization, same-repository provenance, and stale-anchor
   rejection;
-- deterministic identity, durable duplicate/incomplete settlement, and distinct new dispatches;
+- deterministic identity, persistent duplicate/incomplete settlement, and distinct new dispatches;
 - Schema/model `E` and `R` proofs and absence of unknown error widening;
 - worktree finalization on success, expected failure, timeout, interruption, and release failure;
 - false/failed/mutating checks and changed-path rejection;
@@ -232,7 +236,7 @@ Live GitHub network calls are not made from deterministic CI tests.
   compares that expected head again.
 - **WOI-005**: The existing bounded implementer runs for the immutable canonical work order;
   `not-applicable` and `needs-human` remain valid no-publication settlements.
-- **WOI-006**: One authenticated durable journal claim exists per explicit dispatch. Duplicate or
+- **WOI-006**: One authenticated GitHub-retained journal claim exists per explicit dispatch. Duplicate or
   interrupted delivery returns stored state, never invokes another implementer, and never replays
   automatically.
 - **WOI-007**: Model, untrusted checks, publisher, and presenter run in separate least-privilege jobs;

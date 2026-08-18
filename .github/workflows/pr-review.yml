@@ -70,7 +70,7 @@ jobs:
           # Generated and vendored surfaces the reviewer should never spend
           # budget on: the lockfile, the committed action bundle, changesets
           # output, and repo-owned skill copies.
-          ignore: "bun.lock,action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
+          ignore: "bun.lock,action/dist/**,work-order-action/dist/**,**/CHANGELOG.md,.agents/skills/**,.claude/skills/**"
           # Scale the safety ceiling with PR size instead of truncating a large
           # review to the same output as a tiny patch. This is an upper bound,
           # not a quota; the guidance still requires every finding to be

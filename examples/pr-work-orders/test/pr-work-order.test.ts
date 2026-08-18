@@ -556,6 +556,61 @@ describe("PR work-order host", () => {
   );
 
   it.effect(
+    "WO-006 deferred preparation denies model check execution before any repository process runs",
+    () =>
+      withFixtureRepository((fixture) =>
+        Effect.gen(function* () {
+          const checkInvocations = yield* Ref.make(0);
+          const forbiddenCheck: HostCheck = {
+            name: REQUIRED_CHECK,
+            run: () =>
+              Ref.updateAndGet(checkInvocations, (count) => count + 1).pipe(
+                Effect.map(() =>
+                  WorkOrderCheckResult.make({
+                    name: REQUIRED_CHECK,
+                    status: "passed",
+                    summary: "must not execute in the model process",
+                  }),
+                ),
+              ),
+          };
+          const order = yield* orderFor(fixture, { eventId: "evt-deferred-check" });
+          const prepared = yield* prepareWorkOrder({
+            order,
+            implement: (mission, workspace) =>
+              Effect.gen(function* () {
+                const denied = yield* workspace.requestCheck(REQUIRED_CHECK).pipe(Effect.flip);
+                expect(denied).toMatchObject({
+                  _tag: "WorkspaceOperationFailure",
+                  operation: `request deferred check ${REQUIRED_CHECK}`,
+                });
+                return WorkOrderReport.make({
+                  workOrderDigest: mission.workOrderDigest,
+                  headSha: mission.order.headSha,
+                  disposition: "needs-human",
+                  changedPaths: [],
+                  checks: [],
+                  summary: "Deferred checks are unavailable in the model process.",
+                });
+              }),
+          }).pipe(
+            Effect.provide(
+              localGitWorkOrderHostLayer(
+                authorizedConfig(fixture, {
+                  checks: [forbiddenCheck],
+                  requiredChecks: [REQUIRED_CHECK],
+                }),
+              ),
+            ),
+          );
+          expect(prepared).toMatchObject({ _tag: "settled", disposition: "needs-human" });
+          expect(yield* Ref.get(checkInvocations)).toBe(0);
+        }),
+      ).pipe(Effect.provide(NodeServices.layer)),
+    60_000,
+  );
+
+  it.effect(
     "WO-005 TEST-017 settles not-applicable and needs-human without a commit and rejects an accompanying patch",
     () =>
       withFixtureRepository((fixture) =>

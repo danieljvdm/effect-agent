@@ -39,6 +39,7 @@ import {
   CheckedWorkOrder,
   FailedTerminal,
   WorkOrderAdmission,
+  terminalMatchesAdmission,
 } from "../src/action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "../src/action-github.ts";
 import {
@@ -915,6 +916,15 @@ describe("PR work-order ingress", () => {
         path.resolve(import.meta.dirname, "../../../.github/workflows/pr-work-order.yml"),
       );
       const parsed = Yaml.parse(contents);
+      expect(isRecord(parsed)).toBe(true);
+      if (!isRecord(parsed)) return;
+      expect(isRecord(parsed.concurrency)).toBe(true);
+      if (!isRecord(parsed.concurrency)) return;
+      expect(Object.keys(parsed.concurrency).sort()).toEqual(["cancel-in-progress", "group"]);
+      expect(parsed.concurrency.group).toBe(
+        "pr-work-order-${{ github.repository_id }}-${{ github.event.comment.id }}",
+      );
+      expect(parsed.concurrency["cancel-in-progress"]).toBe(false);
       const workflow = yield* Schema.decodeUnknownEffect(WorkOrderWorkflowFile)(parsed);
       expect(Object.keys(workflow.jobs).sort()).toEqual([
         "admit",
@@ -1002,6 +1012,11 @@ describe("PR work-order ingress", () => {
           ?.filter((step) => step.run !== undefined)
           .map((step) => step.run),
       ).toEqual([]);
+      const workflowText = JSON.stringify(workflow);
+      expect(workflowText).not.toContain("state/terminal.json");
+      expect(workflowText).toContain("state/implementation-terminal.json");
+      expect(workflowText).toContain("state/checks-terminal.json");
+      expect(workflowText).toContain("state/publication-terminal.json");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
@@ -1043,9 +1058,28 @@ describe("PR work-order ingress", () => {
     ]);
     expect(args.slice(args.indexOf(image))).toEqual([image, "vp", "run", "ready"]);
     expect(args.join(" ")).not.toMatch(/state|secret|token|docker\.sock/i);
+
+    const installArgs = isolatedCheckContainerArguments({
+      args: ["install", "--frozen-lockfile", "--ignore-scripts"],
+      command: "/home/vp/.vite-plus/bin/vp",
+      containerImage: image,
+      containerName: "effect-agent-install",
+      network: "bridge",
+      root: "/runner/work/repository",
+      runnerUser: "1001:1001",
+      runtimeRoot: "/runner/temp/work-order-runtime",
+    });
+    expect(installArgs.slice(installArgs.indexOf(image))).toEqual([
+      image,
+      "/home/vp/.vite-plus/bin/vp",
+      "install",
+      "--frozen-lockfile",
+      "--ignore-scripts",
+    ]);
+    expect(installArgs.find((value) => value.startsWith("PATH="))).not.toContain("/workspace");
   });
 
-  it.effect("WOI-006 authenticates durable claimed and completed journal state", () =>
+  it.effect("WOI-006 authenticates claimed and completed GitHub journal state", () =>
     Effect.gen(function* () {
       const authenticator = yield* WorkOrderJournalAuthenticator;
       const claimed = claimedState({
@@ -1061,6 +1095,9 @@ describe("PR work-order ingress", () => {
       const body = yield* authenticator.render(claimed, "Implementation is pending.");
       const decoded = yield* authenticator.extract(body);
       expect(Option.getOrUndefined(decoded)).toEqual(claimed);
+      const fakeMarker = `<!-- effect-agent-work-order:v1:e30=.${"0".repeat(64)} -->`;
+      const shadowed = yield* authenticator.render(claimed, fakeMarker);
+      expect(Option.getOrUndefined(yield* authenticator.extract(shadowed))).toEqual(claimed);
 
       const terminal = FailedTerminal.make({
         workOrderId: claimed.workOrderId,
@@ -1174,6 +1211,54 @@ describe("PR work-order ingress", () => {
           journalCommentId: "2001",
           runId: "run-1",
         });
+        expect(
+          terminalMatchesAdmission(
+            admission,
+            FailedTerminal.make({
+              workOrderId: order.workOrderId,
+              workOrderDigest: digest,
+              headSha: HEAD,
+              errorTag: "RequiredCheckFailed",
+              detail: "failed",
+            }),
+          ),
+        ).toBe(true);
+        expect(
+          terminalMatchesAdmission(
+            admission,
+            FailedTerminal.make({
+              workOrderId: order.workOrderId,
+              workOrderDigest: digest,
+              headSha: STALE,
+              errorTag: "RequiredCheckFailed",
+              detail: "failed",
+            }),
+          ),
+        ).toBe(false);
+        expect(
+          terminalMatchesAdmission(
+            admission,
+            FailedTerminal.make({
+              workOrderId: "wo-forged",
+              workOrderDigest: digest,
+              headSha: HEAD,
+              errorTag: "RequiredCheckFailed",
+              detail: "failed",
+            }),
+          ),
+        ).toBe(false);
+        expect(
+          terminalMatchesAdmission(
+            admission,
+            FailedTerminal.make({
+              workOrderId: order.workOrderId,
+              workOrderDigest: DIGEST,
+              headSha: HEAD,
+              errorTag: "RequiredCheckFailed",
+              detail: "failed",
+            }),
+          ),
+        ).toBe(false);
         const proposal = ProposedWorkOrder.make({
           order,
           workOrderDigest: digest,
@@ -1289,10 +1374,10 @@ describe("PR work-order ingress", () => {
         const uncertainClient = HttpClient.make((request) => {
           if (request.method === "GET") {
             return Ref.updateAndGet(gets, (count) => count + 1).pipe(
-              Effect.map(() =>
+              Effect.map((count) =>
                 HttpClientResponse.fromWeb(
                   request,
-                  new Response(JSON.stringify(pullWire(HEAD)), {
+                  new Response(JSON.stringify(pullWire(count === 1 ? HEAD : STALE)), {
                     status: 200,
                     headers: { "content-type": "application/json" },
                   }),
@@ -1306,6 +1391,9 @@ describe("PR work-order ingress", () => {
         });
         const uncertain = yield* publishWith(uncertainClient).pipe(Effect.flip);
         expect(uncertain._tag).toBe("PublicationUncertainty");
+        if (uncertain._tag === "PublicationUncertainty") {
+          expect(uncertain.observedHeadSha).toBe(STALE);
+        }
         expect(yield* Ref.get(gets)).toBe(2);
       }).pipe(Effect.provide(NodeServices.layer)),
   );

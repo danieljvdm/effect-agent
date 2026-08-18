@@ -280,7 +280,11 @@ export const liveWorkOrderGitHubLayer = (options: {
             Effect.orElseSucceed(() => undefined),
           );
           if (observed !== undefined && observed !== order.headSha) {
-            return yield* StalePullRequestHead.make({ expected: order.headSha, actual: observed });
+            return yield* PublicationUncertainty.make({
+              reason:
+                "GitHub did not confirm whether the createCommitOnBranch request produced the observed head",
+              observedHeadSha: observed,
+            });
           }
           if (confirmedError !== undefined && confirmedError.length > 0) {
             return yield* GitHubApiFailure.make({
