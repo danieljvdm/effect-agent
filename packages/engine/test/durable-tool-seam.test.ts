@@ -28,7 +28,8 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { LanguageModel, Model, Prompt, type Response, Tool, Toolkit } from "effect/unstable/ai";
+import type { Prompt } from "effect/unstable/ai";
+import { LanguageModel, Model, type Response, Tool, Toolkit } from "effect/unstable/ai";
 
 import {
   AgentRuntime,
@@ -37,6 +38,7 @@ import {
   ToolExecutionClass,
   type RunDurabilityHook,
   type RunStepHook,
+  type RunToolAuthorizationRequest,
   type RunTurnResponseCommit,
   type RunTurnResume,
 } from "../src/index.ts";
@@ -373,9 +375,10 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       }),
   );
 
-  it.effect("prepareToolCalls fires after every approval and before any handler permit", () =>
+  it.effect("RUN-031 authorizes every fresh call before preparation and any handler permit", () =>
     Effect.gen(function* () {
       const marks = yield* Ref.make<ReadonlyArray<string>>([]);
+      const authorizationRequests = yield* Ref.make<ReadonlyArray<RunToolAuthorizationRequest>>([]);
       const Book = Tool.make("book", {
         parameters: Schema.Struct({ ref: Schema.String }),
         success: Schema.String,
@@ -426,18 +429,69 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
                 Effect.as({ _tag: "approved" as const }),
               ),
           },
+          toolAuthorization: {
+            authorize: (request) =>
+              Ref.update(authorizationRequests, (all) => [...all, request]).pipe(
+                Effect.andThen(
+                  Ref.update(marks, (all) => [...all, `authorize:${request.call.toolCallId}`]),
+                ),
+                Effect.as({ _tag: "allowed" as const }),
+              ),
+          },
           durability: markingDurability(marks),
         },
       ).pipe(Effect.provide(toolLayer), Effect.scoped);
 
       const observed = yield* Ref.get(marks);
-      expect(observed.slice(0, 4)).toEqual([
+      expect(observed.slice(0, 6)).toEqual([
         "commit-response",
         "approval:book-1",
         "approval:book-2",
+        "authorize:book-1",
+        "authorize:book-2",
         "prepare:book-1,book-2",
       ]);
-      expect(observed.slice(4).sort()).toEqual(["handler:book-1", "handler:book-2"]);
+      expect(observed.slice(6).sort()).toEqual(["handler:book-1", "handler:book-2"]);
+
+      const requests = yield* Ref.get(authorizationRequests);
+      expect(requests).toHaveLength(2);
+      expect(
+        requests.map(({ conversationId, runId, turnId, turn, input, call }) => ({
+          conversationId,
+          runId,
+          turnId,
+          turn,
+          input,
+          call,
+        })),
+      ).toEqual([
+        {
+          conversationId: "conversation-1",
+          runId: "run-1",
+          turnId: "turn-1",
+          turn: 1,
+          input: { question: "book" },
+          call: {
+            toolCallId: "book-1",
+            toolName: "book",
+            parameters: { ref: "r-1" },
+            executionClass: "uncertain",
+          },
+        },
+        {
+          conversationId: "conversation-1",
+          runId: "run-1",
+          turnId: "turn-1",
+          turn: 1,
+          input: { question: "book" },
+          call: {
+            toolCallId: "book-2",
+            toolName: "book",
+            parameters: { ref: "r-2" },
+            executionClass: "uncertain",
+          },
+        },
+      ]);
     }),
   );
 
@@ -1277,7 +1331,7 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
     }),
   );
 
-  it.effect("keeps durability hook failures and requirements visible in Effect E and R", () => {
+  it.effect("keeps durability and authorization hook E/R visible", () => {
     const Empty = Tool.make("noop", {
       parameters: Schema.Struct({}),
       success: Schema.String,
@@ -1310,14 +1364,35 @@ layer(identifiers)("P5 WP1 durable Tool seams", (it) => {
       { question: "typed" },
       { durability },
     );
+    const authorizationProgram = AgentRuntime.run(
+      Agent.withModel(definition, scriptedModel([], '{"answer":"typed"}')),
+      { question: "typed" },
+      {
+        toolAuthorization: {
+          authorize: () =>
+            Effect.gen(function* () {
+              yield* TypedHookService;
+              return yield* HookFailure.make({ message: "authorization failed" });
+            }),
+        },
+      },
+    );
     type ErrorProof = HookFailure extends Effect.Error<typeof program> ? true : false;
     type RequirementsProof =
       TypedHookService extends Effect.Services<typeof program> ? true : false;
+    type AuthorizationErrorProof =
+      HookFailure extends Effect.Error<typeof authorizationProgram> ? true : false;
+    type AuthorizationRequirementsProof =
+      TypedHookService extends Effect.Services<typeof authorizationProgram> ? true : false;
     const errorProof: ErrorProof = true;
     const requirementsProof: RequirementsProof = true;
+    const authorizationErrorProof: AuthorizationErrorProof = true;
+    const authorizationRequirementsProof: AuthorizationRequirementsProof = true;
 
     expect(errorProof).toBe(true);
     expect(requirementsProof).toBe(true);
+    expect(authorizationErrorProof).toBe(true);
+    expect(authorizationRequirementsProof).toBe(true);
     return Effect.void;
   });
 

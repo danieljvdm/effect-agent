@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { ToolCallId } from "./identifiers.ts";
+
 /** Run input failed to decode through the agent definition's input Schema. */
 export class AgentInputError extends Schema.TaggedError<AgentInputError>()("AgentInputError", {
   message: Schema.String,
@@ -42,6 +44,16 @@ export class AgentApprovalDenied extends Schema.TaggedError<AgentApprovalDenied>
   "AgentApprovalDenied",
   {
     toolCallId: Schema.NonEmptyString,
+    toolName: Schema.NonEmptyString,
+    message: Schema.String,
+  },
+) {}
+
+/** A host denied current execution authority for a Tool Call before its Handler started. */
+export class AgentToolAuthorizationDenied extends Schema.TaggedError<AgentToolAuthorizationDenied>()(
+  "AgentToolAuthorizationDenied",
+  {
+    toolCallId: ToolCallId,
     toolName: Schema.NonEmptyString,
     message: Schema.String,
   },
@@ -92,6 +104,7 @@ export const AgentError = Schema.Union([
   AgentRunDispositionError,
   AgentPolicyError,
   AgentApprovalDenied,
+  AgentToolAuthorizationDenied,
   AgentApprovalPending,
   ModelProtocolError,
   AgentInterrupted,

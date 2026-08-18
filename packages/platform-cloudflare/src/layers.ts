@@ -1,5 +1,6 @@
 import { ConversationId } from "@effect-agent/core";
-import { RunContextPreparation, RunContextPreparationPassthrough } from "@effect-agent/engine";
+import type { RunContextPreparation } from "@effect-agent/engine";
+import { RunContextPreparationPassthrough } from "@effect-agent/engine";
 import {
   AgentBindingResolver,
   DurableAgentRuntime,
@@ -29,7 +30,8 @@ import {
 } from "@effect-agent/storage-cloudflare";
 import { BrowserCrypto } from "@effect/platform-browser";
 import { SqliteClient } from "@effect/sql-sqlite-do";
-import { Context, Crypto, Duration, Effect, Layer, Schema } from "effect";
+import type { Crypto } from "effect";
+import { Context, Duration, Effect, Layer, Schema } from "effect";
 
 import {
   ConversationMaintenance,
@@ -119,9 +121,11 @@ export interface CloudflareDurableRuntimeOptions {
    */
   readonly bindings?: CloudflareBindingSource | undefined;
   /**
-   * Generic model-context preparation acquired with this Durable Object incarnation. The Layer
-   * may depend only on `Crypto.Crypto`, which this platform supplies with `BrowserCrypto`; hosts
-   * must close every application-specific service before passing it here. Default absent.
+   * Generic Run context acquired with this Durable Object incarnation. It may prepare model
+   * context and/or authorize exact model-declared application Tool Calls at action time. The
+   * Layer may depend
+   * only on `Crypto.Crypto`, which this platform supplies with `BrowserCrypto`; hosts must close
+   * every application-specific service before passing it here. Default absent.
    */
   readonly runContext?: CloudflareRunContextSource | undefined;
 }
@@ -150,7 +154,7 @@ export type CloudflareBindingSource =
       | ReadonlyArray<ResolvedBinding>
       | Effect.Effect<ReadonlyArray<ResolvedBinding>, never, never>);
 
-/** A closed context-preparation service whose only remaining requirement is platform Crypto. */
+/** A closed Run-context service whose only remaining requirement is platform Crypto. */
 export type CloudflareRunContextLayer = Layer.Layer<RunContextPreparation, never, Crypto.Crypto>;
 
 /** One Layer or a per-incarnation factory over explicit Cloudflare host values. */

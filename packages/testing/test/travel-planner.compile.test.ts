@@ -1,5 +1,4 @@
-import {
-  Agent,
+import type {
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
@@ -9,6 +8,7 @@ import {
   IdGenerator,
   ModelProtocolError,
 } from "@effect-agent/core";
+import { Agent, type AgentToolAuthorizationDenied } from "@effect-agent/core";
 import {
   type AgentChildPending,
   AgentRuntime,
@@ -19,7 +19,7 @@ import { type Effect, type Scope } from "effect";
 import { type AiError, Model, type Tool, type Toolkit } from "effect/unstable/ai";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
+import type {
   ActivityCatalog,
   ActivityUnavailable,
   FlightCatalog,
@@ -27,12 +27,10 @@ import {
   GuidanceFailure,
   LodgingCatalog,
   LodgingUnavailable,
-  phase1Trip,
-  ScriptedModel,
   TravelGuidance,
-  TravelPlanner,
   TravelPlannerToolkit,
 } from "../src/index.ts";
+import { phase1Trip, ScriptedModel, TravelPlanner } from "../src/index.ts";
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -66,6 +64,7 @@ type ExpectedFailure =
   | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied
+  | AgentToolAuthorizationDenied
   | AgentApprovalPending
   | AgentChildPending;
 

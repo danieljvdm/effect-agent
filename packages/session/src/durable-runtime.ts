@@ -37,6 +37,8 @@ import {
   type RunSubagentEstablishRequest,
   type RunSubagentHook,
   type RunSubagentJoinRequest,
+  type RunToolAuthorizationHook,
+  type RunToolAuthorizationRequest,
   type RuntimeBinding,
   type ToolExecutionClassValue,
 } from "@effect-agent/engine";
@@ -57,6 +59,7 @@ import {
 } from "effect";
 import { Prompt, type Tool } from "effect/unstable/ai";
 
+import type { RetryCommand } from "./admin.ts";
 import {
   ExplainedEvidence,
   ExplainedSubmission,
@@ -66,7 +69,6 @@ import {
   ObligationEntry,
   ObligationReport,
   RecoveryExplanation,
-  RetryCommand,
   RetryRefused,
   obligationSeverityOf,
   predictRecoveryDisposition,
@@ -91,10 +93,18 @@ import {
   type DurableRuntimeFailpointError,
   type DurableRuntimeFailpointLocation,
 } from "./durable-failpoint.ts";
-import {
-  AbortCommand,
+import type {
   AbortIntent,
   AdmissionConflict,
+  Claim,
+  JoinedToHost,
+  OwnershipLost,
+  RecoverySnapshot,
+  SettlementConflict,
+  SubmissionSnapshot,
+} from "./ledger.ts";
+import {
+  AbortCommand,
   AdmissionRequest,
   ApprovalDecisionCommand,
   ApprovalPendingSuspension,
@@ -103,35 +113,29 @@ import {
   ChildBudgetReservationRequest,
   ChildReservationId,
   ChildSettledNotification,
-  Claim,
   ClaimJoiningRequest,
   ClaimRequest,
   IdempotencyKey,
   LedgerError,
-  JoinedToHost,
   MarkInputAppliedRequest,
   MarkJoinedRequest,
   MarkReadyRequest,
   MarkUnknownRequest,
-  OwnershipLost,
   OwnershipToken,
   ParentLinkage,
   Principal,
   QueueSequence,
-  RecoverySnapshot,
   RecoverySnapshotRequest,
   ReleaseChildBudgetRequest,
   ReleaseOwnershipRequest,
   RenewOwnershipRequest,
   RevertJoiningRequest,
-  SettlementConflict,
   SettlementFinalization,
   SettlementReservation,
   Settlement,
   SubmissionLedger,
   SubmissionLookupById,
   SubmissionLookupByKey,
-  SubmissionSnapshot,
   SuspendRequest,
   UnknownResolutionCommand,
   WaitingChild,
@@ -157,21 +161,18 @@ import {
   type OperationDenied,
 } from "./operation-authorizer.ts";
 import { PreparedToolCallEvidence, ToolReconciler } from "./reconciler.ts";
+import type { CanonicalRecordEnvelope, DeploymentId, Digest, ProducerId } from "./records.ts";
 import {
   AbortRequested,
   BatchId,
   CanonicalBatch,
-  CanonicalRecordEnvelope,
   CanonicalSequence,
   CompactionCreated,
   ConversationCreated,
   DefinitionDigests,
-  DeploymentId,
-  Digest,
   ModelResponseInterrupted,
   PersistedJson,
   ProducerEpoch,
-  ProducerId,
   RecordEnvelope,
   RecordId,
   RepairAnnotated,
@@ -245,17 +246,15 @@ import {
   turnResponseBatch,
   turnResultsBatch,
 } from "./run-journal.ts";
+import type { AppendConflict, ConversationNotMaterialized, FenceRejected } from "./store.ts";
 import {
-  AppendConflict,
   ConversationExportRequest,
   ConversationMaterialization,
-  ConversationNotMaterialized,
   ConversationObservation,
   ConversationRead,
   ConversationStore,
   ConversationStoreError,
   ConversationTailRequest,
-  FenceRejected,
   FencedAppendRequest,
   LoadCheckpointRequest,
   type ConversationCheckpoint,
@@ -801,8 +800,9 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const reconciler = yield* ToolReconciler;
   const approvalResolver = yield* DurableApprovalResolver;
-  // Generic model-context preparation is an explicit Layer requirement. Compatible assemblies
-  // provide `RunContextPreparationPassthrough`; custom assemblies provide a scoped hook.
+  // Generic host Run context is an explicit Layer requirement. Compatible assemblies provide
+  // `RunContextPreparationPassthrough`; custom assemblies may install prompt preparation,
+  // action-time Tool authorization, or both.
   const runContextPreparation = yield* RunContextPreparation;
   // Possession-default authorization reference (P7 WP1): the default allows everything —
   // exactly the pre-P7 service-possession boundary — and a host-supplied non-default Layer is
@@ -4160,6 +4160,24 @@ const make = Effect.gen(function* () {
         join: joinSubagent,
       };
 
+      const externalToolAuthorization = runContextPreparation.toolAuthorization;
+      const toolAuthorization =
+        externalToolAuthorization === undefined
+          ? undefined
+          : ({
+              authorize: (request: RunToolAuthorizationRequest) =>
+                externalToolAuthorization.authorize({
+                  ...request,
+                  // Ordinary replacement Attempts restart the engine's Turn counter at 1.
+                  // Present the host with the same canonical journal Turn used by commits;
+                  // pending-batch resumes already carry their canonical Turn and use offset 0.
+                  turn: turnOffset + request.turn,
+                  // Preserve the admitted wire value even when an Agent Schema's decode/encode
+                  // pair normalizes differently on a second pass.
+                  input: submission.inputPayload,
+                }),
+            } satisfies RunToolAuthorizationHook<never, never>);
+
       const options: RunOptions<CoordinatorHalt | RunContextPreparationError, never> = {
         conversationId: submission.conversationId,
         runId,
@@ -4167,6 +4185,7 @@ const make = Effect.gen(function* () {
         onHistory,
         input,
         approval,
+        ...(toolAuthorization === undefined ? {} : { toolAuthorization }),
         durability,
         subagent,
         durationDeadline,
@@ -6905,7 +6924,7 @@ export class DurableAgentRuntime extends Context.Service<
     readonly runRecovery: Effect.Effect<ReadonlyArray<RecoveryReport>, DurableWorkerFailure>;
   }
 >()("@effect-agent/session/DurableAgentRuntime") {
-  /** Generic assembly whose model-context dependency remains visible in `R`. */
+  /** Generic assembly whose host Run-context dependency remains visible in `R`. */
   static readonly layerWithContext: Layer.Layer<
     DurableAgentRuntime,
     never,
@@ -6919,7 +6938,7 @@ export class DurableAgentRuntime extends Context.Service<
     | Crypto.Crypto
   > = Layer.effect(DurableAgentRuntime)(make);
 
-  /** Compatible default assembly with no host context hook. */
+  /** Compatible default assembly with no host context hook or Tool authorizer. */
   static readonly layer: Layer.Layer<
     DurableAgentRuntime,
     never,

@@ -143,6 +143,13 @@ After recovery it asserts:
 - uncertain ordinary tools do not replay automatically;
 - terminalizing work eventually settles.
 
+Action-authorization recovery tests interrupt after durable Tool preparation, then prove the
+resumed Handler is reauthorized from the same canonical Run/Turn/input and Tool Call identity
+before its first write. Fresh-denial tests prove zero Handler writes and no prepared record; resumed
+denial tests allow the prior prepared record and possible historical effects but prove no new
+preparation, no Handler start or write in the denied Attempt, one typed failed Submission
+settlement, and no later retry.
+
 The public Durable Object RPC/alarm seam also carries the maintenance regressions from
 [issue #93](https://github.com/danieljvdm/effect-agent/issues/93): a stable approval wait clears
 its alarm; a forced caught-up alarm performs no SQLite, ledger, recovery, or canonical-history

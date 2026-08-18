@@ -267,12 +267,13 @@ identities are derived and receives the live `DurableObjectState`, raw Worker en
 resources such as Worker service bindings; database clients and other request-scoped resources
 remain outside the cached Durable Object runtime.
 
-`CloudflareDurableRuntimeOptions.runContext` is the generic model-context extension boundary. It
+`CloudflareDurableRuntimeOptions.runContext` is the generic host Run-context boundary. It
 accepts either a closed `CloudflareRunContextLayer` or a per-incarnation factory receiving the same
 explicit Object state, environment, Conversation identity, and producer identity. The Layer must
-provide `RunContextPreparation`; its only permitted remaining requirement is `Crypto.Crypto`,
-which the platform supplies with `BrowserCrypto`. A host using the capabilities compactor closes
-its own service dependencies before returning the adapter:
+install a `RunContextPreparation` override containing model-context preparation, action-time Tool
+authorization, or both; its only permitted remaining requirement is `Crypto.Crypto`, which the
+platform supplies with `BrowserCrypto`. A host using the capabilities compactor closes its own
+service dependencies before returning the adapter:
 
 ```ts
 runContext: ({ env }) =>
@@ -283,8 +284,8 @@ The factory is evaluated once and the Layer is built in the cached runtime Scope
 Object incarnation. Normal Scope closure runs finalizers, but correctness never depends on a
 finalizer during eviction: Cloudflare may discard in-memory state and construct a new incarnation
 without a shutdown callback. The reconstructed Layer receives canonical history again before it
-prepares model context. The default is absence/pass-through, so existing Conversation Object
-construction remains compatible.
+prepares model context and canonical pending-Run authority again before it authorizes a resumed
+Tool Handler. With no override the explicit pass-through Layer has neither hook.
 
 `runContext`, like `bindings`, `toolReconciler`, failpoints, and authorization services, is a
 non-serializable Layer option and is deliberately outside `CloudflareDurableRuntimeConfigValue`.
