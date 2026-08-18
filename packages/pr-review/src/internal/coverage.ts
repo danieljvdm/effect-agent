@@ -9,6 +9,7 @@ import {
   FileReviewRequest,
   FileReviewUnitResult,
   ReviewCandidate,
+  reviewCandidateSubjectKey,
 } from "./fan-out.ts";
 import {
   FileDiffView,
@@ -237,8 +238,16 @@ const fanOutInputCoverage = (
       ),
     );
   }
-  if (plan.unassignedEvidenceShardIds.length > 0) {
-    reasons.push(boundedListReason("unassigned evidence shards", plan.unassignedEvidenceShardIds));
+  if (plan.unassignedEvidenceShardCount > 0) {
+    reasons.push(
+      `${plan.unassignedEvidenceShardCount} deterministic evidence shard(s) exceeded fan-out capacity`,
+    );
+    reasons.push(
+      boundedListReason(
+        `unassigned evidence shard identifier sample (${plan.unassignedEvidenceShardIds.length} of ${plan.unassignedEvidenceShardCount})`,
+        plan.unassignedEvidenceShardIds,
+      ),
+    );
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
@@ -360,7 +369,7 @@ const fanOutAssurance = (
 ): AssuranceAssessment => {
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
   const declarations = delegationDeclarations(trace);
-  const expectedWorkIds = new Set(plan.discoveryPasses.map((pass) => pass.passId));
+  const consumedDeclarationIds = new Set<string>();
   const failedPasses: Array<FailedReviewPass> = [];
   const reasons: Array<string> = [];
   const candidatesByUnit = new Map<string, Array<ReviewCandidate>>();
@@ -393,6 +402,7 @@ const fanOutAssurance = (
       );
       continue;
     }
+    consumedDeclarationIds.add(call.id);
     const failure = failureTag(trace, call.id);
     const succeeded = trace.succeeded.get(call.id);
     const result =
@@ -449,7 +459,13 @@ const fanOutAssurance = (
     } else {
       completedGeneralDiscoveryPasses += 1;
     }
-    unitCandidates.push(...result.value.candidates);
+    const subjectKeys = new Set(unitCandidates.map(reviewCandidateSubjectKey));
+    for (const candidate of result.value.candidates) {
+      const subjectKey = reviewCandidateSubjectKey(candidate);
+      if (subjectKeys.has(subjectKey)) continue;
+      subjectKeys.add(subjectKey);
+      unitCandidates.push(candidate);
+    }
     candidatesByUnit.set(pass.unitId, unitCandidates);
     if (pass.perspective === "general") {
       const allowed = new Set(pass.paths);
@@ -467,7 +483,6 @@ const fanOutAssurance = (
     if (candidates.length === 0) continue;
     requiredVerificationPasses += 1;
     const workId = `${unit.unitId}-verification`;
-    expectedWorkIds.add(workId);
     const matching = declarations.filter(
       ({ request }) =>
         request.phase === "verification" &&
@@ -508,6 +523,7 @@ const fanOutAssurance = (
       );
       continue;
     }
+    consumedDeclarationIds.add(call.id);
     const failure = failureTag(trace, call.id);
     const succeeded = trace.succeeded.get(call.id);
     const result =
@@ -571,12 +587,19 @@ const fanOutAssurance = (
     }
   }
 
-  const unexpected = declarations.filter(({ request }) => !expectedWorkIds.has(request.workId));
-  for (const declaration of unexpected) {
+  const unexpected = [...trace.declared].filter(
+    ([id, declaration]) =>
+      declaration.toolName === "delegate_file_review" && !consumedDeclarationIds.has(id),
+  );
+  for (const [, declaration] of unexpected) {
+    const request = Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
     failedPasses.push(
       FailedReviewPass.make({
-        workId: declaration.request.workId,
-        stage: declaration.request.phase === "verification" ? "verification" : "discovery",
+        workId: Option.isSome(request) ? request.value.workId : "invalid-delegation-request",
+        stage:
+          Option.isSome(request) && request.value.phase === "verification"
+            ? "verification"
+            : "discovery",
         errorTag: "UnexpectedPass",
       }),
     );

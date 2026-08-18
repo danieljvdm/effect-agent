@@ -172,7 +172,8 @@ was found. Fan-out is enabled by default because the flat compatibility shape
 has no independent verifier and cannot produce settled assurance. Large textual
 diffs are deterministically split into complete bounded
 evidence shards; a path is partial only if finite plan capacity leaves one or
-more exact shards unassigned. Every assigned unit receives both a general and
+more shards unassigned. Overflow reports every affected path and the exact
+shard count while bounding the diagnostic identifier sample. Every assigned unit receives both a general and
 an independent specialist discovery pass, even when host risk classification
 produces no category label. The
 legacy `fail-on` input is accepted for compatibility but no longer weakens or

@@ -15,14 +15,27 @@ export const offlineUnitCallId = (workId: string): string => `delegate-${workId}
 
 export type OfflineUnitCall = FileReviewRequest;
 
+const scriptedUnitCallId = (calls: ReadonlyArray<OfflineUnitCall>, index: number): string => {
+  const call = calls[index];
+  if (call === undefined) return "delegate-none";
+  const occurrence = calls
+    .slice(0, index + 1)
+    .filter((candidate) => candidate.workId === call.workId).length;
+  const base = offlineUnitCallId(call.workId);
+  return occurrence === 1 ? base : `${base}-${occurrence}`;
+};
+
 export const makeOfflineFanOutCoordinatorModel = (script: {
   readonly discoveryCalls: ReadonlyArray<OfflineUnitCall>;
   readonly verificationCalls: ReadonlyArray<OfflineUnitCall>;
   readonly review: CodeReview;
 }) => {
-  const firstDiscovery = offlineUnitCallId(script.discoveryCalls[0]?.workId ?? "none");
-  const firstVerification = offlineUnitCallId(script.verificationCalls[0]?.workId ?? "none");
+  const firstDiscovery = scriptedUnitCallId(script.discoveryCalls, 0);
+  const firstVerification = scriptedUnitCallId(script.verificationCalls, 0);
   return makePromptKeyedModel("pr-fanout-coordinator-offline", (promptJson) => {
+    if (script.discoveryCalls.length === 0 && promptJson.includes(OFFLINE_UNITS_CALL_ID)) {
+      return scriptedFinalParts(JSON.stringify(Schema.encodeSync(CodeReview)(script.review)));
+    }
     if (
       script.verificationCalls.length === 0
         ? promptJson.includes(firstDiscovery)
@@ -33,9 +46,9 @@ export const makeOfflineFanOutCoordinatorModel = (script: {
     if (promptJson.includes(firstDiscovery)) {
       return scriptedToolTurn(
         ...script.verificationCalls.map(
-          (call): Response.StreamPartEncoded => ({
+          (call, index): Response.StreamPartEncoded => ({
             type: "tool-call",
-            id: offlineUnitCallId(call.workId),
+            id: scriptedUnitCallId(script.verificationCalls, index),
             name: "delegate_file_review",
             params: Schema.encodeSync(FileReviewRequest)(call),
             providerExecuted: false,
@@ -46,9 +59,9 @@ export const makeOfflineFanOutCoordinatorModel = (script: {
     if (promptJson.includes(OFFLINE_UNITS_CALL_ID)) {
       return scriptedToolTurn(
         ...script.discoveryCalls.map(
-          (call): Response.StreamPartEncoded => ({
+          (call, index): Response.StreamPartEncoded => ({
             type: "tool-call",
-            id: offlineUnitCallId(call.workId),
+            id: scriptedUnitCallId(script.discoveryCalls, index),
             name: "delegate_file_review",
             params: Schema.encodeSync(FileReviewRequest)(call),
             providerExecuted: false,

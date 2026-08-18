@@ -42,6 +42,7 @@ import {
   makeFanOutReviewSuite,
   MAX_FILE_REVIEW_TOOL_CALLS,
   MAX_PATCH_CHARS,
+  MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
   planReviewUnits,
@@ -160,11 +161,15 @@ const unsupportedFinding = ReviewFinding.make({
   body: "The candidate claims the true literal disables the path, but the bounded evidence does not support that behavior.",
 });
 
-const candidateFor = (finding: ReviewFinding, index: number): FindingCandidate =>
+const candidateFor = (
+  finding: ReviewFinding,
+  index: number,
+  pass: typeof specialistPass = specialistPass,
+): FindingCandidate =>
   FindingCandidate.make({
-    candidateId: `${specialistPass.passId}:finding:${String(index).padStart(3, "0")}`,
-    workId: specialistPass.passId,
-    unitId: specialistPass.unitId,
+    candidateId: `${pass.passId}:finding:${String(index).padStart(3, "0")}`,
+    workId: pass.passId,
+    unitId: pass.unitId,
     finding,
     evidencePaths: [finding.path],
   });
@@ -244,13 +249,20 @@ const coordinatorReview = CodeReview.make({
 
 const runOfflineFanOut = (script: {
   readonly discoveryReports: ReadonlyArray<OfflineUnitScript>;
+  readonly discoveryCalls?: ReadonlyArray<FileReviewRequest> | undefined;
   readonly verificationReports?: ReadonlyArray<OfflineUnitScript> | undefined;
   readonly verificationCalls?: ReadonlyArray<FileReviewRequest> | undefined;
   readonly review?: CodeReview | undefined;
+  readonly fixture?: FixturePullRequest | undefined;
 }) =>
   Effect.gen(function* () {
+    const fixture = script.fixture ?? highRiskFixture;
+    const reviewFiles = fixture.files.map((entry) => entry.file);
+    const reviewPlan = planReviewUnits(reviewFiles, {
+      totalChangedFiles: fixture.metadata.totalChangedFiles,
+    });
     const coordinator = yield* makeOfflineFanOutCoordinatorModel({
-      discoveryCalls: highRiskPlan.discoveryPasses.map(discoveryRequest),
+      discoveryCalls: script.discoveryCalls ?? reviewPlan.discoveryPasses.map(discoveryRequest),
       verificationCalls: script.verificationCalls ?? [],
       review: script.review ?? coordinatorReview,
     });
@@ -268,7 +280,7 @@ const runOfflineFanOut = (script: {
         webCryptoReviewStateAuthenticatorLayer(Redacted.make("offline-assurance-secret")),
       ),
     );
-    const sourceLayer = fixturePullRequestSourceLayer(highRiskFixture);
+    const sourceLayer = fixturePullRequestSourceLayer(fixture);
     const childSupportLayer = Layer.mergeAll(
       FileReviewToolkitLayer,
       SubagentReservationsMemoryLive,
@@ -292,9 +304,9 @@ const runOfflineFanOut = (script: {
       Effect.provideService(ReviewExecutionContext, {
         mode: "full",
         reason: "offline full-diff assurance fixture",
-        files: highRiskFiles,
-        affectedPaths: highRiskFiles.map((file) => file.path),
-        totalFiles: highRiskFiles.length,
+        files: reviewFiles,
+        affectedPaths: reviewFiles.map((file) => file.path),
+        totalFiles: reviewFiles.length,
         baselineSha: undefined,
         priorState: undefined,
         profileFingerprint: "a".repeat(64),
@@ -331,7 +343,8 @@ describe("fan-out review contract", () => {
     })(mission);
     expect(instructions).toContain("Review architecture first.");
     expect(instructions).toContain("EVERY discoveryPass");
-    expect(instructions).toContain("EVERY candidate copied byte-for-byte");
+    expect(instructions).toContain("EVERY retained candidate copied byte-for-byte");
+    expect(instructions).toContain("retaining the first candidate in discoveryPass plan order");
     expect(instructions).toContain("never an exhaustive or defect-free review");
     expect(instructions).toContain("publication cap is 7");
   });
@@ -528,6 +541,50 @@ describe("deterministic input and risk planning", () => {
     );
   });
 
+  it("bounds overflow identifiers while preserving the exact shard count and every path", () => {
+    const files = Array.from({ length: 100 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/overflow/file-${String(index + 1).padStart(3, "0")}.ts`,
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: `@@ -0,0 +1 @@\n+${"x".repeat(61_000)}`,
+      }),
+    );
+    const plan = planReviewUnits(files, { totalChangedFiles: files.length });
+    const assignedShardCount = plan.units.reduce(
+      (total, unit) => total + unit.evidenceShards.length,
+      0,
+    );
+    const generatedShardCount = files.reduce(
+      (total, file) => total + fileReviewEvidenceChunks(file).length,
+      0,
+    );
+
+    expect(plan.unassignedEvidenceShardCount).toBe(generatedShardCount - assignedShardCount);
+    expect(plan.unassignedEvidenceShardCount).toBeGreaterThan(
+      MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
+    );
+    expect(plan.unassignedEvidenceShardIds).toHaveLength(MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS);
+    expect(
+      [...new Set([...plan.units.flatMap((unit) => unit.paths), ...plan.unassignedPaths])].sort(),
+    ).toEqual(files.map((file) => file.path).sort());
+
+    const assessment = assessReviewPipeline({
+      shape: "fan-out",
+      files,
+      totalFiles: files.length,
+      anchorFiles: files,
+      totalAnchorFiles: files.length,
+      events: [],
+    });
+    expect(assessment.inputCoverage.status).toBe("incomplete");
+    expect(assessment.inputCoverage.unassignedPaths).toEqual(plan.unassignedPaths);
+    expect(assessment.inputCoverage.reasons.join("\n")).toContain(
+      `${plan.unassignedEvidenceShardCount} deterministic evidence shard(s)`,
+    );
+  });
+
   it("splits an oversized path into complete bounded evidence shards", () => {
     const oversized = ChangedFile.make({
       path: "src/oversized.ts",
@@ -681,6 +738,130 @@ describe("offline discovery and verification pipeline", () => {
         expect(verifierPrompt).toContain("publishWebhookMode");
         for (const prompt of result.childPrompts) expect(prompt).not.toContain(MISSION_MARKER);
       }),
+  );
+
+  it.effect("verifies an equivalent cross-pass candidate once and publishes it once", () =>
+    Effect.gen(function* () {
+      const canonicalCandidate = candidateFor(supportedFinding, 1, generalPass);
+      const deduplicatedVerificationRequest = FileReviewRequest.make({
+        ...verificationRequest,
+        candidates: [canonicalCandidate],
+      });
+      const deduplicatedVerificationReport = FileReviewReport.make({
+        ...verificationReport,
+        assessments: [
+          CandidateAssessment.make({
+            candidateId: canonicalCandidate.candidateId,
+            disposition: "confirmed",
+            rationale: "The bounded evidence confirms the authentication defect once.",
+          }),
+        ],
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: [
+          {
+            workId: generalPass.passId,
+            outcome: {
+              _tag: "report",
+              report: discoveryReport(generalPass, [supportedFinding]),
+            },
+          },
+          {
+            workId: specialistPass.passId,
+            outcome: {
+              _tag: "report",
+              report: discoveryReport(specialistPass, [supportedFinding]),
+            },
+          },
+        ],
+        verificationCalls: [deduplicatedVerificationRequest],
+        verificationReports: [
+          {
+            workId: deduplicatedVerificationRequest.workId,
+            outcome: { _tag: "report", report: deduplicatedVerificationReport },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        discoveredCandidates: 1,
+        confirmedCandidates: 1,
+        rejectedCandidates: 0,
+      });
+      expect(result.outcome.review.findings).toEqual([supportedFinding]);
+      expect(result.outcome.plan.comments).toHaveLength(1);
+    }),
+  );
+
+  it.effect("fails assurance when extra work reuses an expected verification ID", () =>
+    Effect.gen(function* () {
+      const alteredRequest = FileReviewRequest.make({
+        ...verificationRequest,
+        candidates: [supportedCandidate],
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: successfulDiscovery,
+        verificationCalls: [verificationRequest, alteredRequest],
+        verificationReports: [
+          {
+            workId: verificationRequest.workId,
+            outcome: { _tag: "report", report: verificationReport },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: verificationRequest.workId,
+          stage: "verification",
+          errorTag: "UnexpectedPass",
+        }),
+      );
+      expect(result.outcome.state).toBeUndefined();
+      expect(result.outcome.plan.event).toBe("COMMENT");
+    }),
+  );
+
+  it.effect("settles an empty host plan without spawning a review child", () =>
+    Effect.gen(function* () {
+      const emptyFixture = FixturePullRequest.make({
+        metadata: PullRequestMetadata.make({
+          repository: "acme/empty",
+          number: 1,
+          title: "No reviewable changes",
+          body: "",
+          baseRef: "main",
+          baseSha: "0123456789abcdef0123456789abcdef01234567",
+          headRef: "empty",
+          headSha: FIXTURE_SHA,
+          totalChangedFiles: 0,
+        }),
+        files: [],
+      });
+      const result = yield* runOfflineFanOut({
+        fixture: emptyFixture,
+        discoveryCalls: [],
+        discoveryReports: [],
+        review: CodeReview.make({
+          summary: "No reviewable changes were selected.",
+          verdict: "comment",
+          findings: [],
+          concerns: [],
+        }),
+      });
+
+      expect(result.coordinatorCalls).toBe(2);
+      expect(result.childCalls).toBe(0);
+      expect(result.outcome.inputCoverage.status).toBe("complete");
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        requiredGeneralDiscoveryPasses: 0,
+        requiredSpecialistPasses: 0,
+        requiredVerificationPasses: 0,
+      });
+    }),
   );
 
   it.effect("makes failed specialist discovery visible and prevents settled assurance", () =>

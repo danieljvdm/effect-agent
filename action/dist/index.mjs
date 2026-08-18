@@ -42684,6 +42684,7 @@ var MAX_REVIEW_UNITS = 8;
 var MAX_UNIT_FILES = 12;
 var UNIT_EVIDENCE_CHAR_BUDGET = 240000;
 var MAX_UNIT_EVIDENCE_SHARDS = 12;
+var MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS = MAX_REVIEW_UNITS * MAX_UNIT_EVIDENCE_SHARDS;
 var MAX_MERGED_FINDINGS = 20;
 var ReviewUnitId = exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(32));
 var ReviewRiskCategory = exports_Schema.Literals([
@@ -42735,7 +42736,8 @@ class ReviewUnitPlan extends exports_Schema.Class("@effect-agent/pr-review/Revie
   discoveryPasses: exports_Schema.Array(ReviewDiscoveryPass).check(exports_Schema.isMaxLength(MAX_REVIEW_UNITS * 2)),
   undiffablePaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300)),
   partialEvidencePaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300)),
-  unassignedEvidenceShardIds: exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMaxLength(1000)),
+  unassignedEvidenceShardCount: exports_Schema.Int.check(exports_Schema.isGreaterThanOrEqualTo(0)),
+  unassignedEvidenceShardIds: exports_Schema.Array(ReviewEvidenceShardId).check(exports_Schema.isMaxLength(MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS)),
   unassignedPaths: exports_Schema.Array(ChangedPath).check(exports_Schema.isMaxLength(300))
 }) {
 }
@@ -42935,7 +42937,8 @@ var planReviewUnits = (files, options3) => {
     discoveryPasses: discoveryPassesFor(units),
     undiffablePaths: undiffable.map((file2) => file2.path),
     partialEvidencePaths: [...unassignedPathsWithEvidence].filter((path) => assignedPaths.has(path)),
-    unassignedEvidenceShardIds: unassigned.map(({ shard }) => shard.shardId),
+    unassignedEvidenceShardCount: unassigned.length,
+    unassignedEvidenceShardIds: unassigned.slice(0, MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS).map(({ shard }) => shard.shardId),
     unassignedPaths: [...unassignedPathsWithEvidence].filter((path) => !assignedPaths.has(path))
   });
 };
@@ -42996,6 +42999,7 @@ class ConcernCandidate extends exports_Schema.TaggedClass()("ConcernCandidate", 
 }) {
 }
 var ReviewCandidate = exports_Schema.Union([FindingCandidate, ConcernCandidate]);
+var reviewCandidateSubjectKey = (candidate) => candidate._tag === "FindingCandidate" ? `finding:${JSON.stringify(exports_Schema.encodeSync(ReviewFinding)(candidate.finding))}` : `concern:${JSON.stringify(exports_Schema.encodeSync(ReviewConcern)(candidate.concern))}`;
 
 class CandidateAssessment extends exports_Schema.Class("@effect-agent/pr-review/CandidateAssessment")({
   candidateId: ReviewCandidateId,
@@ -43168,12 +43172,15 @@ var prepareReviewBrief = (request3) => exports_Effect.gen(function* () {
       return yield* rejectWork(request3.workId, "verification request does not match the host-planned unit");
     }
     const candidateIds = new Set;
+    const candidateSubjects = new Set;
     const allowed = new Set(unit.paths);
     for (const candidate of request3.candidates) {
-      if (candidateIds.has(candidate.candidateId) || candidate.unitId !== unit.unitId || candidate.evidencePaths.some((path) => !allowed.has(path)) || candidate._tag === "FindingCandidate" && !allowed.has(candidate.finding.path)) {
+      const subjectKey = reviewCandidateSubjectKey(candidate);
+      if (candidateIds.has(candidate.candidateId) || candidateSubjects.has(subjectKey) || candidate.unitId !== unit.unitId || candidate.evidencePaths.some((path) => !allowed.has(path)) || candidate._tag === "FindingCandidate" && !allowed.has(candidate.finding.path)) {
         return yield* rejectWork(request3.workId, "verification candidates are duplicated or outside the planned unit");
       }
       candidateIds.add(candidate.candidateId);
+      candidateSubjects.add(subjectKey);
     }
   }
   const byPath = new Map(files.map((file2) => [file2.path, file2]));
@@ -43324,7 +43331,7 @@ ${mission.body}` : "No author description.",
     ...staticGuidanceLines(options3.guidance),
     "1. Call list_review_units exactly once.",
     '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/evidenceShardIds/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
-    '3. Group candidates returned by all successful discovery passes by unit. For every unit with at least one candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
+    '3. Group candidates returned by all successful discovery passes by unit. Deterministically deduplicate byte-identical finding or concern payloads, retaining the first candidate in discoveryPass plan order. For every unit with at least one retained candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY retained candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
     "4. Verification is authoritative: rejected candidates must not be reported. The host independently reconstructs publishable findings from exact confirmed assessments, so do not select, rewrite, downgrade, or invent findings.",
     `5. Return ONLY CodeReview JSON. Write a concise summary of completed and failed stages. Set findings=[] and concerns=[]; the host injects exact confirmed candidates. Copy factual fileSummaries into walkthrough without invention. The host publication cap is ${maxFindings}.`,
     "No configured pipeline can prove absence of defects. Describe settled work, never an exhaustive or defect-free review."
@@ -43899,8 +43906,9 @@ var fanOutInputCoverage = (files, totalFiles) => {
   if (plan.partialEvidencePaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left some deterministic evidence shards unassigned", plan.partialEvidencePaths));
   }
-  if (plan.unassignedEvidenceShardIds.length > 0) {
-    reasons.push(boundedListReason("unassigned evidence shards", plan.unassignedEvidenceShardIds));
+  if (plan.unassignedEvidenceShardCount > 0) {
+    reasons.push(`${plan.unassignedEvidenceShardCount} deterministic evidence shard(s) exceeded fan-out capacity`);
+    reasons.push(boundedListReason(`unassigned evidence shard identifier sample (${plan.unassignedEvidenceShardIds.length} of ${plan.unassignedEvidenceShardCount})`, plan.unassignedEvidenceShardIds));
   }
   if (plan.unassignedPaths.length > 0) {
     reasons.push(boundedListReason("fan-out capacity left paths unassigned", plan.unassignedPaths));
@@ -43970,7 +43978,7 @@ var flatAssurance = () => ({
 var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
   const plan = planReviewUnits(files, { totalChangedFiles: totalFiles });
   const declarations = delegationDeclarations(trace3);
-  const expectedWorkIds = new Set(plan.discoveryPasses.map((pass) => pass.passId));
+  const consumedDeclarationIds = new Set;
   const failedPasses = [];
   const reasons = [];
   const candidatesByUnit = new Map;
@@ -43998,6 +44006,7 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
       }));
       continue;
     }
+    consumedDeclarationIds.add(call.id);
     const failure = failureTag2(trace3, call.id);
     const succeeded = trace3.succeeded.get(call.id);
     const result4 = succeeded === undefined ? exports_Option.none() : exports_Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
@@ -44036,7 +44045,14 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
     } else {
       completedGeneralDiscoveryPasses += 1;
     }
-    unitCandidates.push(...result4.value.candidates);
+    const subjectKeys = new Set(unitCandidates.map(reviewCandidateSubjectKey));
+    for (const candidate of result4.value.candidates) {
+      const subjectKey = reviewCandidateSubjectKey(candidate);
+      if (subjectKeys.has(subjectKey))
+        continue;
+      subjectKeys.add(subjectKey);
+      unitCandidates.push(candidate);
+    }
     candidatesByUnit.set(pass.unitId, unitCandidates);
     if (pass.perspective === "general") {
       const allowed = new Set(pass.paths);
@@ -44054,7 +44070,6 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
       continue;
     requiredVerificationPasses += 1;
     const workId = `${unit.unitId}-verification`;
-    expectedWorkIds.add(workId);
     const matching = declarations.filter(({ request: request3 }) => request3.phase === "verification" && request3.workId === workId && request3.unitId === unit.unitId && request3.perspective === "candidate-verification" && sameStrings2(request3.paths, unit.paths) && sameStrings2(request3.evidenceShardIds, unit.evidenceShards.map((shard) => shard.shardId)) && sameStrings2(request3.riskCategories, unit.riskCategories) && sameCandidates(request3.candidates, candidates));
     if (matching.length !== 1) {
       unsettledCandidates += candidates.length;
@@ -44075,6 +44090,7 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
       }));
       continue;
     }
+    consumedDeclarationIds.add(call.id);
     const failure = failureTag2(trace3, call.id);
     const succeeded = trace3.succeeded.get(call.id);
     const result4 = succeeded === undefined ? exports_Option.none() : exports_Schema.decodeUnknownOption(FileReviewUnitResult)(succeeded.result);
@@ -44117,11 +44133,12 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
       }
     }
   }
-  const unexpected = declarations.filter(({ request: request3 }) => !expectedWorkIds.has(request3.workId));
-  for (const declaration of unexpected) {
+  const unexpected = [...trace3.declared].filter(([id2, declaration]) => declaration.toolName === "delegate_file_review" && !consumedDeclarationIds.has(id2));
+  for (const [, declaration] of unexpected) {
+    const request3 = exports_Schema.decodeUnknownOption(FileReviewRequest)(declaration.parameters);
     failedPasses.push(FailedReviewPass.make({
-      workId: declaration.request.workId,
-      stage: declaration.request.phase === "verification" ? "verification" : "discovery",
+      workId: exports_Option.isSome(request3) ? request3.value.workId : "invalid-delegation-request",
+      stage: exports_Option.isSome(request3) && request3.value.phase === "verification" ? "verification" : "discovery",
       errorTag: "UnexpectedPass"
     }));
   }

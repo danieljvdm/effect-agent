@@ -100,6 +100,12 @@ export class ConcernCandidate extends Schema.TaggedClass<ConcernCandidate>()("Co
 export const ReviewCandidate = Schema.Union([FindingCandidate, ConcernCandidate]);
 export type ReviewCandidate = typeof ReviewCandidate.Type;
 
+/** Deterministic host equivalence for claims repeated across discovery passes. */
+export const reviewCandidateSubjectKey = (candidate: ReviewCandidate): string =>
+  candidate._tag === "FindingCandidate"
+    ? `finding:${JSON.stringify(Schema.encodeSync(ReviewFinding)(candidate.finding))}`
+    : `concern:${JSON.stringify(Schema.encodeSync(ReviewConcern)(candidate.concern))}`;
+
 export class CandidateAssessment extends Schema.Class<CandidateAssessment>(
   "@effect-agent/pr-review/CandidateAssessment",
 )({
@@ -367,10 +373,13 @@ const prepareReviewBrief = (request: FileReviewRequest) =>
         );
       }
       const candidateIds = new Set<string>();
+      const candidateSubjects = new Set<string>();
       const allowed = new Set(unit.paths);
       for (const candidate of request.candidates) {
+        const subjectKey = reviewCandidateSubjectKey(candidate);
         if (
           candidateIds.has(candidate.candidateId) ||
+          candidateSubjects.has(subjectKey) ||
           candidate.unitId !== unit.unitId ||
           candidate.evidencePaths.some((path) => !allowed.has(path)) ||
           (candidate._tag === "FindingCandidate" && !allowed.has(candidate.finding.path))
@@ -381,6 +390,7 @@ const prepareReviewBrief = (request: FileReviewRequest) =>
           );
         }
         candidateIds.add(candidate.candidateId);
+        candidateSubjects.add(subjectKey);
       }
     }
 
@@ -603,7 +613,7 @@ export const makeFanOutReviewInstructions =
       ...staticGuidanceLines(options.guidance),
       "1. Call list_review_units exactly once.",
       '2. For EVERY discoveryPass, call delegate_file_review exactly once with phase "discovery", workId=passId, and the pass unitId/paths/evidenceShardIds/perspective/riskCategories verbatim; candidates must be []. Prefer one bounded parallel batch. Never retry.',
-      '3. Group candidates returned by all successful discovery passes by unit. For every unit with at least one candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
+      '3. Group candidates returned by all successful discovery passes by unit. Deterministically deduplicate byte-identical finding or concern payloads, retaining the first candidate in discoveryPass plan order. For every unit with at least one retained candidate, call delegate_file_review exactly once with phase "verification", workId "<unitId>-verification", perspective "candidate-verification", the unit paths/evidenceShardIds/riskCategories, and EVERY retained candidate copied byte-for-byte. Prefer one bounded parallel batch. Never retry.',
       "4. Verification is authoritative: rejected candidates must not be reported. The host independently reconstructs publishable findings from exact confirmed assessments, so do not select, rewrite, downgrade, or invent findings.",
       `5. Return ONLY CodeReview JSON. Write a concise summary of completed and failed stages. Set findings=[] and concerns=[]; the host injects exact confirmed candidates. Copy factual fileSummaries into walkthrough without invention. The host publication cap is ${maxFindings}.`,
       "No configured pipeline can prove absence of defects. Describe settled work, never an exhaustive or defect-free review.",

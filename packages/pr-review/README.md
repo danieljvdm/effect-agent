@@ -69,7 +69,9 @@ receive the exact candidate claims and the complete bounded unit, including
 neighboring evidence that can falsify a locally plausible claim; they do not
 receive discovery reasoning.
 The host reconstructs publishable findings and concerns from exact confirmed
-candidate IDs, so neither a discovery child nor the coordinator can publish
+candidate IDs, deduplicates byte-identical cross-pass claims in deterministic
+plan order, and requires every delegation declaration to be consumed by one
+exact planned request. Neither a discovery child nor the coordinator can publish
 an unsupported or invented finding. Shared `guidance` reaches both discovery
 and verification; `maxFindings` remains a host-enforced publication cap.
 
@@ -88,8 +90,9 @@ The public result deliberately separates two claims:
 
 - **Input coverage** says every required path in the selected scope was
   assigned every deterministic bounded evidence shard and separately names
-  partially assigned paths, exact unassigned shards, undiffable paths, source
-  truncation, or over-capacity paths. A large textual diff is split across
+  partially assigned and unassigned paths, the exact unassigned-shard count
+  with a bounded identifier sample, undiffable paths, source truncation, or
+  over-capacity paths. A large textual diff is split across
   shards and units instead of being called partial merely for exceeding one
   prompt chunk. Input coverage does not say the model understood the evidence.
 - **Review assurance** says every configured general discovery pass, required
@@ -266,8 +269,9 @@ files beyond the bound are not fetched, and the review body reports
 `Input exposed N of M changed files` instead of claiming completeness.
 Fan-out capacity overflow is reported, never dropped. Every fan-out unit has
 at most 12 files, 12 complete evidence shards, and 240,000 evidence characters;
-one path may span multiple shards or units when necessary, with every
-unassigned shard named if the eight-unit plan capacity is exhausted;
+one path may span multiple shards or units when necessary. If the eight-unit
+plan capacity is exhausted, every affected path and the exact shard count are
+reported, with a deterministic identifier sample bounded to one plan's capacity;
 at most eight units produce at most 24 attached children (general and
 specialist discovery plus one verification batch per unit), with child
 concurrency capped at four. Any blocking active finding fails the Action

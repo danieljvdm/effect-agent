@@ -36,6 +36,14 @@ export const UNIT_EVIDENCE_CHAR_BUDGET = 240_000;
 /** Maximum complete evidence shards placed in one child brief. */
 export const MAX_UNIT_EVIDENCE_SHARDS = 12;
 
+/**
+ * Keep overflow diagnostics bounded to one plan's total assignment capacity.
+ * The plan separately records the exact overflow count and every affected
+ * path, so identifiers are a deterministic diagnostic sample rather than the
+ * authority for whether input coverage is complete.
+ */
+export const MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS = MAX_REVIEW_UNITS * MAX_UNIT_EVIDENCE_SHARDS;
+
 /** @deprecated Use `MAX_PATCH_CHARS`; this is now the per-shard bound. */
 export const MAX_FILE_EVIDENCE_CHARS = MAX_PATCH_CHARS;
 
@@ -128,8 +136,12 @@ export class ReviewUnitPlan extends Schema.Class<ReviewUnitPlan>(
   undiffablePaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(300)),
   /** Assigned paths with one or more evidence shards beyond plan capacity. */
   partialEvidencePaths: Schema.Array(ChangedPath).check(Schema.isMaxLength(300)),
-  /** Exact shards beyond the bounded unit capacity. */
-  unassignedEvidenceShardIds: Schema.Array(ReviewEvidenceShardId).check(Schema.isMaxLength(1_000)),
+  /** Exact number of shards beyond the bounded unit capacity. */
+  unassignedEvidenceShardCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  /** Bounded deterministic prefix of the unassigned shard identifiers. */
+  unassignedEvidenceShardIds: Schema.Array(ReviewEvidenceShardId).check(
+    Schema.isMaxLength(MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS),
+  ),
   /**
    * Diffable files beyond the fan-out capacity (MAX_REVIEW_UNITS units of
    * MAX_UNIT_FILES files). Never silently dropped: the coordinator must name
@@ -405,7 +417,10 @@ export const planReviewUnits = (
     partialEvidencePaths: [...unassignedPathsWithEvidence].filter((path) =>
       assignedPaths.has(path),
     ),
-    unassignedEvidenceShardIds: unassigned.map(({ shard }) => shard.shardId),
+    unassignedEvidenceShardCount: unassigned.length,
+    unassignedEvidenceShardIds: unassigned
+      .slice(0, MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS)
+      .map(({ shard }) => shard.shardId),
     unassignedPaths: [...unassignedPathsWithEvidence].filter((path) => !assignedPaths.has(path)),
   });
 };

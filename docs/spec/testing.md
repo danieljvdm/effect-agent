@@ -348,6 +348,10 @@ verification passes remain visible, leave candidates unsettled, emit no authenti
 state, and cannot produce a successful Action conclusion. Incremental fixtures prove that newly
 affected paths invalidate carried findings while unchanged findings remain active. Explicit final
 mode discards prior assurance scope and plans fresh discovery over the complete bounded diff.
+Overflow fixtures preserve every affected path and the exact unassigned-shard count while bounding
+identifier diagnostics. Extra or duplicate delegation declarations cannot hide behind an expected
+work ID, equivalent cross-pass candidates are verified once, and an empty plan settles without
+spawning a child.
 
 These fixtures guarantee deterministic work assignment, complete assignment accounting, exact
 pass settlement, and fail-closed publication from confirmed candidates. They do not and cannot
