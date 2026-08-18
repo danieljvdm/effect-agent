@@ -41,6 +41,7 @@ jobs:
     outputs:
       release-pr-number: ${{ steps.changesets.outputs.pullRequestNumber }}
       has-changesets: ${{ steps.changesets.outputs.hasChangesets }}
+      is-release-commit: ${{ steps.classify-release.outputs.is-release-commit }}
     env:
       CI: "true"
       VITE_GIT_HOOKS: "0"
@@ -79,6 +80,18 @@ jobs:
           createGithubReleases: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Classify exact generated release commit
+        id: classify-release
+        if: ${{ steps.changesets.outputs.hasChangesets == 'false' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          BASE_SHA="$(git rev-parse "${GITHUB_SHA}^")"
+          ./node_modules/.bin/vp run --no-cache verify:changesets-release -- \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$GITHUB_SHA" \
+            --classification-output "$GITHUB_OUTPUT"
 
   verify-release:
     name: Verify generated release tree
@@ -229,7 +242,7 @@ jobs:
   prepare-publish:
     name: Build immutable release artifacts
     needs: version-release
-    if: ${{ needs.version-release.outputs.has-changesets == 'false' }}
+    if: ${{ needs.version-release.outputs.is-release-commit == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -292,7 +305,7 @@ jobs:
   publish-packages:
     name: Publish packages with npm OIDC
     needs: [version-release, prepare-publish]
-    if: ${{ needs.version-release.outputs.has-changesets == 'false' && needs.prepare-publish.outputs.publish-count != '0' }}
+    if: ${{ needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.outputs.publish-count != '0' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -484,7 +497,7 @@ jobs:
   tag-release:
     name: Tag published packages
     needs: [version-release, prepare-publish, publish-packages]
-    if: ${{ always() && needs.version-release.outputs.has-changesets == 'false' && needs.prepare-publish.result == 'success' && (needs.publish-packages.result == 'success' || needs.publish-packages.result == 'skipped') }}
+    if: ${{ always() && needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.result == 'success' && (needs.publish-packages.result == 'success' || needs.publish-packages.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

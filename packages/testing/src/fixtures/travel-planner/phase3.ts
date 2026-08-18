@@ -115,9 +115,8 @@ export const phase3TravelPlannerBatches = [
 ] as const;
 
 /** Portable current-version fixture; it contains no passenger identity or credentials. */
-export const phase3TravelPlannerEncodedFixture = Schema.encodeSync(Schema.Array(CanonicalBatch))(
-  phase3TravelPlannerBatches,
-);
+export const phase3TravelPlannerEncodedFixture: ReadonlyArray<typeof CanonicalBatch.Encoded> =
+  Schema.encodeSync(Schema.Array(CanonicalBatch))(phase3TravelPlannerBatches);
 
 export class TravelPlannerProjectionError extends Schema.TaggedError<TravelPlannerProjectionError>()(
   "TravelPlannerProjectionError",

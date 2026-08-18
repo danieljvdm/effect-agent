@@ -377,6 +377,9 @@ Current platform references:
 
 - framework and platform code live in owner-gated `packages/*`; private runnable benches may live
   in leaf `examples/*`, and there is no deployable `apps/` workspace;
+- a `main` push may enter package publication only when its complete tree is the exact Changesets
+  version regeneration from its first parent; the absence of pending changesets alone grants no
+  release authority;
 - the root Bun catalog pins the exact Effect v4 version before 1.0;
 - workspace manifests consume that version through `catalog:` and may not introduce another copy;
 - `platform-cloudflare` publishes `effect-cf` as a compatible caret peer while the root catalog

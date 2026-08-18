@@ -13,6 +13,7 @@ import {
   withTemporaryManifest,
 } from "../../../scripts/release-publish.ts";
 import {
+  classifyChangesetsRelease,
   InvalidCommitSha,
   ReleaseTreeMismatch,
   verifyChangesetsRelease,
@@ -931,6 +932,22 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
         publish: "true",
         version: "./node_modules/.bin/vp run ci:version",
       });
+      expect(versionJob?.outputs?.["is-release-commit"]).toBe(
+        "${{ steps.classify-release.outputs.is-release-commit }}",
+      );
+      const classifyReleaseStep = workflowStep(
+        releaseWorkflow,
+        "version-release",
+        "Classify exact generated release commit",
+      );
+      expect(classifyReleaseStep?.id).toBe("classify-release");
+      expect(classifyReleaseStep?.if).toBe(
+        "${{ steps.changesets.outputs.hasChangesets == 'false' }}",
+      );
+      expect(classifyReleaseStep?.env).toEqual({ GITHUB_TOKEN: "${{ github.token }}" });
+      expect(classifyReleaseStep?.run).toContain('git rev-parse "${GITHUB_SHA}^"');
+      expect(classifyReleaseStep?.run).toContain("vp run --no-cache verify:changesets-release");
+      expect(classifyReleaseStep?.run).toContain('--classification-output "$GITHUB_OUTPUT"');
 
       const verifyJob = releaseWorkflow.jobs["verify-release"];
       expect(verifyJob?.needs).toBe("version-release");
@@ -983,7 +1000,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
 
       const prepareJob = releaseWorkflow.jobs["prepare-publish"];
       expect(prepareJob?.needs).toBe("version-release");
-      expect(prepareJob?.if).toBe("${{ needs.version-release.outputs.has-changesets == 'false' }}");
+      expect(prepareJob?.if).toBe(
+        "${{ needs.version-release.outputs.is-release-commit == 'true' }}",
+      );
       expect(prepareJob?.permissions).toEqual({ contents: "read" });
       const prepareStep = workflowStep(
         releaseWorkflow,
@@ -994,6 +1013,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(prepareStep?.run).toContain("sha256sum --check --strict");
 
       const publishJob = releaseWorkflow.jobs["publish-packages"];
+      expect(publishJob?.if).toBe(
+        "${{ needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.outputs.publish-count != '0' }}",
+      );
       expect(publishJob?.permissions).toEqual({
         actions: "read",
         contents: "read",
@@ -1030,6 +1052,9 @@ layer(NodeServices.layer)("workspace toolchain", (it) => {
       expect(publishStep?.run).not.toContain("vp run");
 
       const tagJob = releaseWorkflow.jobs["tag-release"];
+      expect(tagJob?.if).toBe(
+        "${{ always() && needs.version-release.outputs.is-release-commit == 'true' && needs.prepare-publish.result == 'success' && (needs.publish-packages.result == 'success' || needs.publish-packages.result == 'skipped') }}",
+      );
       expect(tagJob?.permissions).toEqual({ actions: "read", contents: "write" });
       expect(tagJob?.steps?.every((step) => step.uses === undefined)).toBe(true);
       const tagStep = workflowStep(
@@ -1529,6 +1554,14 @@ Exercise the generated release verifier.
           headSha: generatedHead,
           repositoryRoot: fixtureRoot,
         });
+        expect(
+          yield* classifyChangesetsRelease({
+            baseSha,
+            changesetBinary,
+            headSha: generatedHead,
+            repositoryRoot: fixtureRoot,
+          }),
+        ).toBe(true);
         const worktreesAfterSuccess = yield* runFixtureCommand(fixtureRoot, "git", [
           "worktree",
           "list",
@@ -1601,7 +1634,7 @@ Exercise the generated release verifier.
         yield* runFixtureCommand(fixtureRoot, "git", ["commit", "-m", "alter generated output"]);
         const alteredHead = yield* runFixtureCommand(fixtureRoot, "git", ["rev-parse", "HEAD"]);
         const alteredFailure = yield* Effect.flip(
-          verifyChangesetsRelease({
+          classifyChangesetsRelease({
             baseSha,
             changesetBinary,
             headSha: alteredHead,
@@ -1628,6 +1661,14 @@ Exercise the generated release verifier.
         expect(
           Schema.decodeUnknownSync(ReleaseTreeMismatch)(unexpectedFailure).changedPaths,
         ).toContain("unexpected.txt");
+        expect(
+          yield* classifyChangesetsRelease({
+            baseSha,
+            changesetBinary: path.join(temporaryRoot, "must-not-run"),
+            headSha: unexpectedHead,
+            repositoryRoot: fixtureRoot,
+          }),
+        ).toBe(false);
 
         const invalidShaFailure = yield* Effect.flip(
           verifyChangesetsRelease({

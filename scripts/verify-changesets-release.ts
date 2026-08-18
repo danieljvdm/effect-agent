@@ -2,7 +2,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { NodeRuntime, NodeServices } from "@effect/platform-node";
-import { Cause, Console, Effect, Exit, FileSystem, Path, Schema, Stream } from "effect";
+import { Cause, Console, Effect, Exit, FileSystem, Option, Path, Schema, Stream } from "effect";
 import { Command as CliCommand, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
@@ -105,6 +105,14 @@ const findRepositoryRoot = Effect.fn("verifyChangesetsRelease.findRepositoryRoot
   const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
   return path.resolve(path.dirname(scriptPath), "..");
 });
+
+const isReleaseMetadataPath = (path: string): boolean =>
+  path === ".changeset/pre.json" || /^\.changeset\/[A-Za-z0-9._-]+[.]md$/.test(path);
+
+const isGeneratedReleasePath = (path: string): boolean =>
+  path === "bun.lock" ||
+  isReleaseMetadataPath(path) ||
+  /^packages\/[^/]+\/(?:CHANGELOG[.]md|package[.]json)$/.test(path);
 
 const cleanupError = (operation: string) => (cause: unknown) =>
   VerificationCleanupError.make({
@@ -244,22 +252,83 @@ export const verifyChangesetsRelease = Effect.fn("verifyChangesetsRelease")(func
   );
 });
 
+/**
+ * Classify one pushed commit without treating the absence of pending changesets as release
+ * authority. Commits outside the generated Changesets surface are ordinary pushes; commits that
+ * look like release output must pass the same exact-tree verifier used for the generated PR.
+ */
+export const classifyChangesetsRelease = Effect.fn("classifyChangesetsRelease")(
+  function* (options: {
+    readonly baseSha: string;
+    readonly headSha: string;
+    readonly repositoryRoot?: string;
+    readonly changesetBinary?: string;
+    readonly bunBinary?: string;
+  }) {
+    const baseSha = yield* decodeCommitSha("--base-sha", options.baseSha);
+    const headSha = yield* decodeCommitSha("--head-sha", options.headSha);
+    const root = options.repositoryRoot ?? (yield* findRepositoryRoot());
+
+    yield* runCommand(root, "git", ["cat-file", "-e", `${baseSha}^{commit}`]);
+    yield* runCommand(root, "git", ["cat-file", "-e", `${headSha}^{commit}`]);
+    const changedPathOutput = yield* runCommand(root, "git", [
+      "diff",
+      "--name-only",
+      baseSha,
+      headSha,
+    ]);
+    const changedPaths = changedPathOutput.length === 0 ? [] : changedPathOutput.split("\n");
+    const isReleaseCandidate =
+      changedPaths.some(isReleaseMetadataPath) && changedPaths.every(isGeneratedReleasePath);
+
+    if (!isReleaseCandidate) return false;
+
+    yield* verifyChangesetsRelease(options);
+    return true;
+  },
+);
+
 const baseSha = Flag.string("base-sha").pipe(
   Flag.withDescription("Trusted pull-request base commit SHA."),
 );
 const headSha = Flag.string("head-sha").pipe(
   Flag.withDescription("Generated Changesets pull-request head commit SHA."),
 );
+const classificationOutput = Flag.string("classification-output").pipe(
+  Flag.optional,
+  Flag.withDescription(
+    "Append an is-release-commit result for GitHub Actions after classifying the candidate commit.",
+  ),
+);
 
 const command = CliCommand.make(
   "verify-changesets-release",
-  { baseSha, headSha },
-  Effect.fn("verifyChangesetsRelease.command")(function* ({ baseSha, headSha }) {
-    yield* verifyChangesetsRelease({ baseSha, headSha });
+  { baseSha, classificationOutput, headSha },
+  Effect.fn("verifyChangesetsRelease.command")(function* ({
+    baseSha,
+    classificationOutput,
+    headSha,
+  }) {
+    if (Option.isNone(classificationOutput)) {
+      return yield* verifyChangesetsRelease({ baseSha, headSha });
+    }
+
+    const isReleaseCommit = yield* classifyChangesetsRelease({ baseSha, headSha });
+    const fs = yield* FileSystem.FileSystem;
+    yield* fs.writeFileString(
+      classificationOutput.value,
+      `is-release-commit=${String(isReleaseCommit)}\n`,
+      { flag: "a" },
+    );
+    yield* Console.log(
+      isReleaseCommit
+        ? `Classified ${headSha} as an exact generated Changesets release commit.`
+        : `Classified ${headSha} as an ordinary non-release commit.`,
+    );
   }),
 ).pipe(
   CliCommand.withDescription(
-    "Regenerate Changesets output from a trusted base and require the PR head tree to match exactly.",
+    "Regenerate Changesets output from a trusted base and verify or classify a candidate release tree.",
   ),
 );
 

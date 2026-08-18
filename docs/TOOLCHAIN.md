@@ -160,8 +160,10 @@ the fixed group in `.changeset/config.json`; the toolchain test fails if the wor
 diverge.
 
 Releases are automated: on every push to `main`, `.github/workflows/release.yml`
-maintains a "Version Packages (beta)" PR from the pending changesets, and
-merging that PR publishes via npm **trusted publishing** — the workflow's OIDC
+maintains a "Version Packages (beta)" PR from the pending changesets. When no pending changeset
+remains, the workflow classifies the pushed tree against a clean Changesets regeneration from its
+first parent; only that exact generated tree may enter the publish jobs. An ordinary no-changeset
+push is not release authority. Merging the version PR publishes via npm **trusted publishing** — the workflow's OIDC
 identity is exchanged for short-lived credentials (no npm token, no OTP), with
 provenance attached. The generated PR is release metadata over code that
 already passed the ordinary PR gates: its Static checks, Tests, Build, and
@@ -192,8 +194,8 @@ not complete, or that rule is absent, it posts a failing `ready` conclusion. Ope
 the ruleset's `strict_required_status_checks_policy` setting: it invalidates the head-bound success
 for merge purposes whenever `main` later advances, until Changesets regenerates from the new base.
 
-After a version PR merge, an unprivileged preparation job frozen-installs and rebuilds the exact
-versioned tree, packs every public workspace with Bun into a scope-owned staging directory, and
+After the version PR merge passes that exact-tree classification, an unprivileged preparation job
+frozen-installs and rebuilds the exact versioned tree, packs every public workspace with Bun into a scope-owned staging directory, and
 atomically renames that directory into place only after every tarball and the manifest are
 complete. Failure or interruption removes the partial staging tree, so a retry never inherits an
 incomplete release artifact. The atomic rename itself is uninterruptible, and a failed preparation,
