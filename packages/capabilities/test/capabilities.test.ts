@@ -1407,7 +1407,7 @@ describe("capability contracts", () => {
         McpSchema.Tool.make({
           name,
           description: "bounded",
-          inputSchema: {},
+          inputSchema: { type: "object" },
         }),
       );
       const exit = yield* validateMcpDiscovery(request, {
@@ -1492,11 +1492,15 @@ describe("capability contracts", () => {
         identity,
         capabilities: McpSchema.ServerCapabilities.make({}),
         tools: [
-          McpSchema.Tool.make({
+          // Deliberately non-canonical JSON (an `undefined` value): `Tool.make` now
+          // validates `inputSchema` against the MCP JSON-Schema shape and would reject
+          // it at construction, so this bypasses construction to reach digestJson's own
+          // canonical-JSON check instead.
+          {
             name: matching.name,
             description: matching.description,
             inputSchema: { type: "object", unsupported: undefined },
-          }),
+          } as unknown as McpSchema.Tool,
         ],
         toolkit,
       }).pipe(Effect.flip);

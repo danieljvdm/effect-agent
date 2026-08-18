@@ -5,7 +5,7 @@ import {
   McpToolkitMismatch,
   type McpConnection,
 } from "@effect-agent/capabilities";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, JsonSchema, Layer, Schema } from "effect";
 import { Tool } from "effect/unstable/ai";
 import * as McpSchema from "effect/unstable/ai/McpSchema";
 
@@ -37,10 +37,35 @@ export const docsMcpIdentity = McpServerIdentity.make({
   }),
 });
 
+/**
+ * `Tool.getJsonSchema` produces a `$ref`/`$defs`-shaped schema for
+ * `FetchDocument`'s named, refined parameters type, but `McpSchema.Tool`'s
+ * `inputSchema` requires a flat `{ type: "object", ... }` root — the shape a
+ * real MCP server advertises on the wire. This inlines the single top-level
+ * `$ref` so the derivation described above still holds byte-for-byte.
+ */
+const flattenTopLevelRef = (schema: JsonSchema.JsonSchema): McpSchema.ToolJsonSchema => {
+  const ref = schema["$ref"];
+  const defs = schema["$defs"] as JsonSchema.Definitions | undefined;
+  if (typeof ref !== "string" || defs === undefined) return schema as McpSchema.ToolJsonSchema;
+
+  const resolved = JsonSchema.resolve$ref(ref, defs);
+  return (resolved ?? schema) as McpSchema.ToolJsonSchema;
+};
+
+const fetchDocumentOutputSchema = flattenTopLevelRef(
+  Tool.getJsonSchemaFromSchema(FetchDocument.successSchema),
+);
+
 const discoveredFetchDocument = McpSchema.Tool.make({
   name: FetchDocument.name,
   description: "Fetch one bounded research document by its identifier.",
-  inputSchema: Tool.getJsonSchema(FetchDocument),
+  inputSchema: flattenTopLevelRef(Tool.getJsonSchema(FetchDocument)),
+  // `validateMcpDiscovery` only compares an `outputSchema` derived down to an
+  // object type; mirror that so this fixture stays a real round-trip check.
+  ...(fetchDocumentOutputSchema.type === "object"
+    ? { outputSchema: fetchDocumentOutputSchema }
+    : {}),
 });
 
 const scriptedConnector = (tools: ReadonlyArray<McpSchema.Tool>): Layer.Layer<McpConnector> =>

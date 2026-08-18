@@ -1,0 +1,14 @@
+{
+  "action": "created",
+  "comment": {
+    "id": 1001,
+    "path": "src/value.ts",
+    "commit_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "line": 1,
+    "body": "@effect-agent fix this",
+    "user": { "id": 42, "login": "dana" }
+  },
+  "pull_request": { "number": 17 },
+  "repository": { "full_name": "acme/widgets", "fork": false },
+  "sender": { "id": 42, "login": "dana" }
+}

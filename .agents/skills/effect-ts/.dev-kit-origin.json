@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "selector": "effect-ts",
+  "name": "effect-ts",
+  "baseDigest": "sha256:c9b42fee517f1077152ccf7231adf5912c048179368bc78837edea2a61815286",
+  "source": {
+    "type": "bundled",
+    "version": "0.17.0"
+  }
+}

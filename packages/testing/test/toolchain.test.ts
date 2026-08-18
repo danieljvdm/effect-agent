@@ -96,6 +96,7 @@ const providerConsumingPackages = new Set<string>(["pr-review"]);
 const exampleNames = [
   "code-mode-cloudflare",
   "demo",
+  "pr-work-order-ingress",
   "pr-work-orders",
   "pr-review",
   "providers",
@@ -1770,7 +1771,7 @@ Exercise the generated release verifier.
   );
 
   it.effect(
-    "WO-006 WO-009 WO-010 WO-011 keeps provider adapters catalog-pinned and confines the work-order leaf off the reviewer",
+    "WO-006 WO-009 WO-010 WO-011 WOI-012 keeps provider adapters catalog-pinned and confines the work-order leaf off the reviewer",
     () =>
       Effect.gen(function* () {
         const root = yield* readManifest(`${repositoryRoot}/package.json`);
@@ -1781,11 +1782,15 @@ Exercise the generated release verifier.
         const prWorkOrders = yield* readManifest(
           `${repositoryRoot}/examples/pr-work-orders/package.json`,
         );
+        const prWorkOrderIngress = yield* readManifest(
+          `${repositoryRoot}/examples/pr-work-order-ingress/package.json`,
+        );
         const demoDependencies = manifestDependencies(demo);
         const providerDependencies = manifestDependencies(providers);
         const repoOpsDependencies = manifestDependencies(repoOps);
         const prReviewDependencies = manifestDependencies(prReview);
         const prWorkOrdersDependencies = manifestDependencies(prWorkOrders);
+        const prWorkOrderIngressDependencies = manifestDependencies(prWorkOrderIngress);
 
         expect(demo.name).toBe("@effect-agent/example-demo");
         expect(demo.dependencies?.["@effect-agent/core"]).toBe("workspace:*");
@@ -1848,6 +1853,17 @@ Exercise the generated release verifier.
         ).toBe(false);
         expect(
           prWorkOrdersDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
+        ).toBe(false);
+        expect(prWorkOrderIngress.name).toBe("@effect-agent/example-pr-work-order-ingress");
+        expect(prWorkOrderIngress.private).toBe(true);
+        expect(prWorkOrderIngress.dependencies?.["@effect-agent/pr-review"]).toBeUndefined();
+        expect(prWorkOrderIngress.dependencies?.["@effect-agent/example-pr-work-orders"]).toBe(
+          "workspace:*",
+        );
+        expect(prWorkOrderIngress.dependencies?.effect).toBe("catalog:");
+        expect(prWorkOrderIngressDependencies).not.toContain("wrangler");
+        expect(
+          prWorkOrderIngressDependencies.some((dependency) => dependency.startsWith("@effect/ai-")),
         ).toBe(false);
         const prReviewPublicIndex = yield* readRepositoryFile("packages/pr-review/src/index.ts");
         expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);

@@ -64,6 +64,7 @@ const bundleTo = Effect.fn("bundleTo")(function* (outfile: string) {
 });
 
 const checkFlag = Flag.boolean("check").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Rebuild to a scratch path and fail if the committed bundle is stale."),
 );
 

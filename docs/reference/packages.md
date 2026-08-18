@@ -137,7 +137,9 @@ equivalence).
 same Definition binds directly to upstream OpenAI and Anthropic Models. `examples/pr-review` is a
 consumer of `@effect-agent/pr-review` demonstrating the adaptation path (guidance, an extra
 read-only tool, ignore globs); `examples/pr-work-orders` is the private
-trusted-local proof of a head-bound work-order implementer; `examples/repo-ops`
+trusted-local proof of a head-bound work-order implementer;
+`examples/pr-work-order-ingress` is the private GitHub dispatch and isolated
+publication proof; `examples/repo-ops`
 is an internal repository-operations auditor. None is a framework
 or deployment package. The repository root also carries `action/`, the prebuilt
 node-runtime GitHub Action over `@effect-agent/pr-review` with its committed bundle.

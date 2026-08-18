@@ -20,6 +20,7 @@ release evidence reference those IDs.
 | `DEPLOY`     | Hosts and deployment classes               | [Deployment](spec/deployment.md)                       |
 | `SEC`, `OPS` | Security and operations                    | [Security and operations](spec/security-operations.md) |
 | `WO`         | Pull-request work orders                   | [Work orders](spec/pr-work-orders.md)                  |
+| `WOI`        | Work-order GitHub ingress                  | [Work-order ingress](spec/pr-work-order-ingress.md)    |
 | `TEST`       | Verification                               | [Testing](spec/testing.md)                             |
 | `COMPAT`     | Interoperability, boundaries, and versions | [Compatibility](spec/compatibility.md)                 |
 

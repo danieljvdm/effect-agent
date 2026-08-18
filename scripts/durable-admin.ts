@@ -63,6 +63,7 @@ const database = Flag.file("database").pipe(
 );
 
 const json = Flag.boolean("json").pipe(
+  Flag.withDefault(false),
   Flag.withDescription("Print Schema-encoded JSON instead of operator text."),
 );
 
