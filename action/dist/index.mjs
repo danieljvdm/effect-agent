@@ -56528,7 +56528,6 @@ var anthropicClientLayer = exports_AnthropicClient.layerConfig({
 }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer));
 
 // packages/pr-review/src/action.ts
-var FailOnPolicy = exports_Schema.Literals(["never", "request-changes"]);
 var ReviewCheckConclusion = exports_Schema.Literals(["success", "blocking", "incomplete"]);
 
 class ReviewGateFailed extends exports_Schema.TaggedError()("ReviewGateFailed", {
@@ -56570,7 +56569,6 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   const ignoreRaw = yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""));
   const maxFindings = yield* exports_Config.option(exports_Config.int("PR_REVIEW_MAX_FINDINGS"));
   const reviewMode = yield* exports_Config.literals(["incremental", "final"], "PR_REVIEW_MODE").pipe(exports_Config.withDefault("incremental"));
-  const failOn = yield* exports_Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(exports_Config.withDefault("never"));
   const skipUnchanged = yield* exports_Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(exports_Config.withDefault(true));
   const retireStaleReviews2 = yield* exports_Config.boolean("PR_REVIEW_RETIRE_STALE_REVIEWS").pipe(exports_Config.withDefault(true));
   const progressComment = yield* exports_Config.boolean("PR_REVIEW_PROGRESS_COMMENT").pipe(exports_Config.withDefault(true));
@@ -56587,7 +56585,6 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
     maxFindings: exports_Option.getOrUndefined(maxFindings),
     maxDurationMinutes,
     reviewMode,
-    failOn,
     skipUnchanged,
     retireStaleReviews: retireStaleReviews2,
     progressComment
@@ -56943,7 +56940,6 @@ var reviewActionProgram = exports_Effect.gen(function* () {
   };
   const harness = {
     post: inputs.post,
-    failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
     retireStaleReviews: inputs.retireStaleReviews,
@@ -56975,7 +56971,6 @@ var INPUT_TO_ENV = [
   ["INPUT_IGNORE", "PR_REVIEW_IGNORE"],
   ["INPUT_MAX-FINDINGS", "PR_REVIEW_MAX_FINDINGS"],
   ["INPUT_REVIEW-MODE", "PR_REVIEW_MODE"],
-  ["INPUT_FAIL-ON", "PR_REVIEW_FAIL_ON"],
   ["INPUT_SKIP-UNCHANGED", "PR_REVIEW_SKIP_UNCHANGED"],
   ["INPUT_RETIRE-STALE-REVIEWS", "PR_REVIEW_RETIRE_STALE_REVIEWS"],
   ["INPUT_PROGRESS-COMMENT", "PR_REVIEW_PROGRESS_COMMENT"],

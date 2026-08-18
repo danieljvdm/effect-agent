@@ -51,10 +51,6 @@ import {
 // nothing.
 // ---------------------------------------------------------------------------
 
-/** Deprecated compatibility input; host-derived conclusions are unconditional. */
-export const FailOnPolicy = Schema.Literals(["never", "request-changes"]);
-export type FailOnPolicy = typeof FailOnPolicy.Type;
-
 export const ReviewCheckConclusion = Schema.Literals(["success", "blocking", "incomplete"]);
 export type ReviewCheckConclusion = typeof ReviewCheckConclusion.Type;
 
@@ -96,8 +92,6 @@ export interface ResolvedActionInputs {
   readonly maxFindings: number | undefined;
   readonly maxDurationMinutes: number | undefined;
   readonly reviewMode: ReviewMode;
-  /** Deprecated compatibility input; conclusions are always conservative. */
-  readonly failOn: FailOnPolicy;
   readonly skipUnchanged: boolean;
   readonly retireStaleReviews: boolean;
   readonly progressComment: boolean;
@@ -135,9 +129,6 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   const reviewMode = yield* Config.literals(["incremental", "final"], "PR_REVIEW_MODE").pipe(
     Config.withDefault<ReviewMode>("incremental"),
   );
-  const failOn = yield* Config.literals(["never", "request-changes"], "PR_REVIEW_FAIL_ON").pipe(
-    Config.withDefault<FailOnPolicy>("never"),
-  );
   const skipUnchanged = yield* Config.boolean("PR_REVIEW_SKIP_UNCHANGED").pipe(
     Config.withDefault(true),
   );
@@ -163,7 +154,6 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
     maxFindings: Option.getOrUndefined(maxFindings),
     maxDurationMinutes,
     reviewMode,
-    failOn,
     skipUnchanged,
     retireStaleReviews,
     progressComment,
@@ -462,7 +452,6 @@ export const runReviewAction = <E, R, FingerprintE = never, FingerprintR = never
   reviewer: HarnessedReviewer<E, R, FingerprintE, FingerprintR>,
   options: {
     readonly post?: boolean | undefined;
-    readonly failOn?: FailOnPolicy | undefined;
     /** Skip model execution when the current head already has complete stored coverage. */
     readonly skipUnchanged?: boolean | undefined;
     /** Incremental by default; `final` deliberately re-reviews the full PR diff. */
@@ -747,7 +736,6 @@ export const reviewActionProgram = Effect.gen(function* () {
   };
   const harness = {
     post: inputs.post,
-    failOn: inputs.failOn,
     skipUnchanged: inputs.skipUnchanged,
     reviewMode: inputs.reviewMode,
     retireStaleReviews: inputs.retireStaleReviews,
