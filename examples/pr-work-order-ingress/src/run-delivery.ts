@@ -36,13 +36,19 @@ export const pullRequestNumberFromEvent = (
     ),
   );
 
-const actorIdsFromConfig = (raw: string): ReadonlyArray<string> => {
-  const ids = raw
-    .split(",")
-    .map((part) => part.trim())
-    .filter((part) => part.length > 0);
-  return ids.length > 0 ? ids : ["3450486"];
-};
+const AuthorizedActorIds = Schema.NonEmptyArray(
+  Schema.NonEmptyString.check(Schema.isMaxLength(100)),
+);
+
+export const authorizedActorIdsFromConfig = (
+  raw: string,
+): Effect.Effect<typeof AuthorizedActorIds.Type, Schema.SchemaError> =>
+  Schema.decodeUnknownEffect(AuthorizedActorIds)(
+    raw
+      .split(",")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0),
+  );
 
 export const runActionsDelivery = Effect.fn("runActionsDelivery")(function* () {
   const fs = yield* FileSystem.FileSystem;
@@ -59,9 +65,8 @@ export const runActionsDelivery = Effect.fn("runActionsDelivery")(function* () {
   const reactionContent = yield* Config.nonEmptyString("EFFECT_AGENT_REACTION_CONTENT").pipe(
     Config.withDefault(DEFAULT_REACTION_CONTENT),
   );
-  const actorIdsRaw = yield* Config.string("EFFECT_AGENT_AUTHORIZED_ACTOR_IDS").pipe(
-    Config.withDefault("3450486"),
-  );
+  const actorIdsRaw = yield* Config.nonEmptyString("EFFECT_AGENT_AUTHORIZED_ACTOR_IDS");
+  const authorizedActorIds = yield* authorizedActorIdsFromConfig(actorIdsRaw);
   const runnerTemp = yield* Config.string("RUNNER_TEMP").pipe(
     Config.orElse(() => Config.string("TMPDIR")),
     Config.withDefault("/tmp"),
@@ -72,7 +77,7 @@ export const runActionsDelivery = Effect.fn("runActionsDelivery")(function* () {
   const policy = IngressPolicyConfig.make({
     repository,
     pullRequestNumber,
-    authorizedActorIds: [...actorIdsFromConfig(actorIdsRaw)],
+    authorizedActorIds: [...authorizedActorIds],
     mentionCommand,
     reactionContent,
     webhookSecret: "actions-mode",

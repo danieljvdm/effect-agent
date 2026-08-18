@@ -92,7 +92,11 @@ export const admitOnlyHostLayer = Layer.effect(
           inspectPatch: workspace.inspectPatch,
           runCheck: workspace.requestCheck,
           observedChecks: Effect.succeed([]),
-          commitAndPublish: () => Effect.die("admit-only host does not publish"),
+          commitAndPublish: () =>
+            WorkspaceOperationFailure.make({
+              operation: "commit and publish",
+              reason: "this entrypoint admits and replies; it does not publish commits",
+            }),
         }),
     });
   }),

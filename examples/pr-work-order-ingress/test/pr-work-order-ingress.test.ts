@@ -51,7 +51,7 @@ import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts
 import { IsolatedChecks } from "../src/isolation.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
-import { pullRequestNumberFromEvent } from "../src/run-delivery.ts";
+import { authorizedActorIdsFromConfig, pullRequestNumberFromEvent } from "../src/run-delivery.ts";
 import { FileBackedAttemptStore, IngressStoreFailpoint } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
@@ -87,7 +87,6 @@ const WorkOrderWorkflowFile = Schema.Struct({
   jobs: Schema.Record(Schema.String, WorkOrderWorkflowJob),
 });
 const ALLOWED_WRITE_SCOPES = new Set(["pull-requests"]);
-const ALLOWED_SECRET_NAMES = new Set(["GITHUB_TOKEN"]);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -112,22 +111,11 @@ const forbiddenSecretAccesses = (value: unknown): Array<string> => {
   const found: Array<string> = [];
   const visit = (node: unknown) => {
     if (typeof node === "string") {
-      for (const expression of node.matchAll(/\$\{\{([^}]+)\}\}/g)) {
-        const body = expression[1] ?? "";
-        const accesses = [
-          ...body.matchAll(
-            /\bsecrets(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)|\s*\[\s*['"]([^'"]+)['"]\s*\])?/g,
-          ),
-        ];
-        if (accesses.length === 0 && /\bsecrets\b/.test(body)) {
-          found.push("*");
-          continue;
-        }
-        for (const access of accesses) {
-          const name = access[1] ?? access[2] ?? "*";
-          if (!ALLOWED_SECRET_NAMES.has(name)) found.push(name);
-        }
-      }
+      const remainder = node.replace(
+        /\$\{\{\s*secrets\s*(?:\.\s*GITHUB_TOKEN|\[\s*['"]GITHUB_TOKEN['"]\s*\])\s*\}\}/g,
+        "",
+      );
+      if (/\bsecrets\b/.test(remainder)) found.push("*");
       return;
     }
     if (Array.isArray(node)) {
@@ -909,12 +897,14 @@ describe("PR work-order ingress", () => {
           `${jobName} must not inherit or map repository secrets`,
         ).toBeUndefined();
         expect(job.uses, `${jobName} must not call a reusable workflow`).toBeUndefined();
-        const checkout = (job.steps ?? []).find((step) =>
+        const checkouts = (job.steps ?? []).filter((step) =>
           (step.uses ?? "").startsWith("actions/checkout@"),
         );
-        expect(checkout, `${jobName} must check out trusted base code`).toBeDefined();
-        expect(checkout?.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
-        expect(checkout?.with?.["persist-credentials"]).toBe(false);
+        expect(checkouts, `${jobName} must check out trusted base code`).not.toHaveLength(0);
+        for (const checkout of checkouts) {
+          expect(checkout.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+          expect(checkout.with?.["persist-credentials"]).toBe(false);
+        }
         expect(
           (job.steps ?? []).some((step) => (step.run ?? "").includes("pr-work-order-ingress")),
         ).toBe(true);
@@ -928,6 +918,21 @@ describe("PR work-order ingress", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("WOI-011 secret scanning rejects a secrets context hidden by braces", () =>
+    Effect.sync(() => {
+      expect(
+        forbiddenSecretAccesses({
+          env: { KEY: "${{ format('{0}', 'x') && secrets.OPENAI_API_KEY }}" },
+        }),
+      ).toEqual(["*"]);
+      expect(
+        forbiddenSecretAccesses({
+          env: { TOKEN: "${{ secrets.GITHUB_TOKEN }}" },
+        }),
+      ).toEqual([]);
+    }),
+  );
+
   it.effect("the Actions entrypoint reads the pull-request number from the trusted event", () =>
     Effect.gen(function* () {
       const number = yield* pullRequestNumberFromEvent(
@@ -936,6 +941,15 @@ describe("PR work-order ingress", () => {
       const rejected = yield* pullRequestNumberFromEvent("{}").pipe(Effect.flip);
       expect(number).toBe(PULL);
       expect(rejected._tag).toBe("DispatchTargetRejected");
+    }),
+  );
+
+  it.effect("the Actions runner fails closed without authorized actor ids", () =>
+    Effect.gen(function* () {
+      const ids = yield* authorizedActorIdsFromConfig("3450486, 99");
+      const empty = yield* authorizedActorIdsFromConfig(" , ").pipe(Effect.flip);
+      expect([...ids]).toEqual(["3450486", "99"]);
+      expect(empty._tag).toBe("SchemaError");
     }),
   );
 
