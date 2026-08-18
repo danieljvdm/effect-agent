@@ -1,5 +1,23 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.20
+
+### Patch Changes
+
+- [#111](https://github.com/danieljvdm/effect-agent/pull/111) [`c715f9f`](https://github.com/danieljvdm/effect-agent/commit/c715f9f8e436fa85e8c1ef2b27f640e637ea52e4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Align every public package with the Effect 4.0.0-rc.110 family.
+
+- [#111](https://github.com/danieljvdm/effect-agent/pull/111) [`c715f9f`](https://github.com/danieljvdm/effect-agent/commit/c715f9f8e436fa85e8c1ef2b27f640e637ea52e4) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Fix `validateMcpDiscovery` reporting a permanent schema drift for MCP tools whose parameters or success type is a named, refined Schema (a branded ID, a bounded string, a `Schema.Class`) — both schema derivations now resolve a top-level `$ref` before comparison.
+
+- Updated dependencies [[`7c093ec`](https://github.com/danieljvdm/effect-agent/commit/7c093ecfd900a0c55163fce76b0609d04434fa73), [`c715f9f`](https://github.com/danieljvdm/effect-agent/commit/c715f9f8e436fa85e8c1ef2b27f640e637ea52e4), [`c715f9f`](https://github.com/danieljvdm/effect-agent/commit/c715f9f8e436fa85e8c1ef2b27f640e637ea52e4)]:
+  - @effect-agent/session@0.1.0-beta.20
+  - @effect-agent/core@0.1.0-beta.20
+  - @effect-agent/engine@0.1.0-beta.20
+  - @effect-agent/capabilities@0.1.0-beta.20
+  - @effect-agent/sandbox@0.1.0-beta.20
+  - @effect-agent/storage-memory@0.1.0-beta.20
+  - @effect-agent/storage-sqlite@0.1.0-beta.20
+  - @effect-agent/platform-node@0.1.0-beta.20
+
 ## 0.1.0-beta.19
 
 ### Patch Changes
