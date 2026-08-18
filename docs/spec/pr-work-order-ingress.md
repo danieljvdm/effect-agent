@@ -11,8 +11,9 @@ and credentials stay isolated, and how a validated patch is published back to
 the pull request.
 
 The class E leaf `examples/pr-work-orders` remains the host proof. It does not
-implement this ingress. No enabled GitHub workflow may run an implementer until
-the isolation and credential-separation requirements below are met.
+implement this ingress. The first live Actions entrypoint admits an explicit
+mention reply and posts a host-authored thread reply. It does not run a model
+or publish commits.
 
 ## 1. Product
 
@@ -166,7 +167,8 @@ The suite must demonstrate:
 
 ## 8. Out of scope
 
-- enabling a GitHub workflow before isolation evidence exists;
+- enabling a GitHub workflow that holds both a model secret and a commit
+  write token;
 - admitting fork or untrusted pull requests;
 - automatic dispatch on review creation or every comment;
 - general PR-conversation instructions;
@@ -226,8 +228,10 @@ The suite must demonstrate:
   no exactly-once claim.
 - **WOI-010**: Presentation is one host-authored thread reply; the source
   thread is never resolved.
-- **WOI-011**: No enabled workflow may run an implementer until isolation and
-  credential separation are implemented and tested.
+- **WOI-011**: An enabled workflow may admit a dispatch only after isolation
+  and credential separation are implemented and tested. The first live
+  entrypoint admits and replies; it does not hold a model secret or a commit
+  write token, and it is not an `@effect-agent/pr-review` export.
 - **WOI-012**: `@effect-agent/pr-review` remains read-only; ingress is a
   separate leaf or Action entrypoint.
 - **WOI-013**: Ingress operations keep expected authentication, targeting,

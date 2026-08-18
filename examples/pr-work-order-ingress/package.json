@@ -6,6 +6,7 @@
   "scripts": {
     "build": "vp pack",
     "check": "tsc --noEmit -p tsconfig.json",
+    "dispatch": "node --experimental-strip-types src/bin.ts",
     "test": "vp test"
   },
   "dependencies": {

@@ -259,7 +259,8 @@ authorization, same-repository non-fork admission, stale-anchor rejection,
 file-backed duplicate-delivery replay, isolated check-process credentials,
 fail-closed publisher path and identity verification, atomic compare-and-swap
 fencing, and one host-authored thread reply that does not resolve the thread.
-Tests do not call live GitHub and do not enable a repository workflow.
+Tests do not call live GitHub. The enabled Actions workflow is asserted to
+keep model and commit-write credentials out of the admit job.
 
 ## 9. Compatibility tests
 

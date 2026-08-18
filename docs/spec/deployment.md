@@ -21,7 +21,8 @@ restart-recovery, hosted publication, or untrusted-code isolation claim. See
 [pull-request work orders](pr-work-orders.md). GitHub dispatch, file-backed
 attempt admission, isolated checks, and network compare-and-swap live in
 `examples/pr-work-order-ingress` and [work-order ingress](pr-work-order-ingress.md).
-That leaf is not an enabled workflow.
+The first live Actions entrypoint admits a mention reply and posts a
+host-authored thread reply. It does not publish commits.
 
 ### Class P — Persistent
 

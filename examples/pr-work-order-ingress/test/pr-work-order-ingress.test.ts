@@ -44,11 +44,13 @@ import {
   ReviewCommentView,
   type StaleCommentAnchor,
 } from "../src/contracts.ts";
+import { pullRequestFromWire, reviewCommentFromWire } from "../src/github-live.ts";
 import { makeFakeGitHub } from "../src/github.ts";
 import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts";
 import { IsolatedChecks } from "../src/isolation.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
+import { pullRequestNumberFromEvent } from "../src/run-delivery.ts";
 import { FileBackedAttemptStore, IngressStoreFailpoint } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
@@ -812,23 +814,68 @@ describe("PR work-order ingress", () => {
       ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("WOI-011 no enabled workflow runs an implementer", () =>
+  it.effect("WOI-011 the enabled workflow does not hold a model secret or commit write token", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const workflows = path.resolve(import.meta.dirname, "../../../.github/workflows");
-      const files = yield* fs.readDirectory(workflows);
-      const contents = yield* Effect.forEach(files, (file) =>
-        fs.readFileString(path.join(workflows, file)),
+      const workflow = yield* fs.readFileString(
+        path.resolve(import.meta.dirname, "../../../.github/workflows/pr-work-order.yml"),
       );
-      expect(
-        contents.some(
-          (body) =>
-            body.includes("pr-work-order-ingress") ||
-            body.includes("handleWorkOrderDelivery") ||
-            body.includes("example-pr-work-order-ingress"),
-        ),
-      ).toBe(false);
+      expect(workflow).toContain("pr-work-order-ingress");
+      expect(workflow).toContain("contents: read");
+      expect(workflow).not.toContain("contents: write");
+      expect(workflow).not.toContain("OPENAI_API_KEY");
+      expect(workflow).not.toContain("EFFECT_AGENT_MODEL_SECRET");
+      expect(workflow).not.toContain("EFFECT_AGENT_GITHUB_WRITE_TOKEN");
+      expect(workflow).not.toContain("@effect-agent/pr-review");
+      expect(workflow).not.toContain("./action");
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("the Actions entrypoint reads the pull-request number from the trusted event", () =>
+    Effect.gen(function* () {
+      const number = yield* pullRequestNumberFromEvent(
+        JSON.stringify({ pull_request: { number: PULL } }),
+      );
+      const rejected = yield* pullRequestNumberFromEvent("{}").pipe(Effect.flip);
+      expect(number).toBe(PULL);
+      expect(rejected._tag).toBe("DispatchTargetRejected");
+    }),
+  );
+
+  it.effect("the live GitHub adapter maps API wires onto ingress views", () =>
+    Effect.sync(() => {
+      const pull = pullRequestFromWire(REPOSITORY, {
+        number: PULL,
+        head: {
+          sha: HEAD,
+          repo: { full_name: REPOSITORY, fork: false },
+        },
+        base: { repo: { full_name: REPOSITORY, fork: false } },
+      });
+      const comment = reviewCommentFromWire({
+        id: 1001,
+        user: { id: 7, login: "reviewer" },
+        commit_id: HEAD,
+        path: FILE_PATH,
+        line: 1,
+        start_line: 1,
+        original_line: 1,
+        body: "The exported answer must be 42.",
+        pull_request_url: `https://api.github.com/repos/${REPOSITORY}/pulls/${String(PULL)}`,
+      });
+      expect(pull).toMatchObject({
+        repository: REPOSITORY,
+        pullRequestNumber: PULL,
+        headSha: HEAD,
+        headIsFork: false,
+      });
+      expect(comment).toMatchObject({
+        commentId: "1001",
+        authorId: "7",
+        path: FILE_PATH,
+        commitSha: HEAD,
+      });
+    }),
   );
 });
