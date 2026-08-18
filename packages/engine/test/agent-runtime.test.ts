@@ -51,6 +51,7 @@ import {
   ToolExecutionClass,
   withTerminalDefectEvent,
   type RunBudgetHook,
+  type RunToolAuthorizationRequest,
   type RunTurnResume,
   type RunUsageDelta,
 } from "../src/index.ts";
@@ -3094,6 +3095,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
 
   it.effect("preserves transformed parameters across the native Toolkit handler boundary", () => {
     let handlerParameter: unknown;
+    let authorizationCall: RunToolAuthorizationRequest["call"] | undefined;
     let promptResult: unknown;
     const Increment = Tool.make("increment", {
       parameters: Schema.Struct({ value: Schema.FiniteFromString }),
@@ -3155,9 +3157,19 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       }),
     });
 
-    return AgentRuntime.run(Agent.withModel(definition, model), {
-      question: "increment",
-    }).pipe(
+    return AgentRuntime.run(
+      Agent.withModel(definition, model),
+      { question: "increment" },
+      {
+        toolAuthorization: {
+          authorize: (request) =>
+            Effect.sync(() => {
+              authorizationCall = request.call;
+              return { _tag: "allowed" } as const;
+            }),
+        },
+      },
+    ).pipe(
       Effect.provide(
         tools.toLayer({
           increment: ({ value }) => {
@@ -3169,6 +3181,7 @@ layer(identifiers)("RUN-001 Phase 1 AgentRuntime", (it) => {
       Effect.scoped,
       Effect.tap(() =>
         Effect.sync(() => {
+          expect(authorizationCall?.parameters).toEqual({ value: "41" });
           expect(handlerParameter).toBe(41);
           expect(promptResult).toEqual({ value: 42 });
         }),

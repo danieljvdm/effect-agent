@@ -62,8 +62,16 @@ Authorization is evaluated for:
 Policies consume normalized attributes and return allow, deny, or approval-required
 with a reason. Denial is typed and canonical when it affects accepted work.
 
-The engine rechecks authorization at action time. Authorization performed when
-instructions were first received is insufficient for a later tool call.
+The engine rechecks optional host Tool authorization for model-declared application batches at
+action time, after approval and before durable preparation or any Handler starts. The host receives
+canonical Run/Turn/input authority and one exact Tool Call descriptor; it owns mutation
+classification and freshness policy. A recovered
+durable batch is rechecked with stable identity. Denial is typed, starts no Handler and creates no
+new side effect in the denied Attempt, and terminally fails accepted work so recovery cannot retry
+it again. Historical effects from a prior crashed Attempt remain governed by the Tool's recovery
+contract. Authorization performed when instructions were first received is insufficient for a
+later Tool Call.
+Programmatic `ToolBroker` calls are outside this authorization hook.
 
 ## 4. Least authority
 

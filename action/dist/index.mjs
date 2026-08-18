@@ -30121,6 +30121,13 @@ class AgentApprovalDenied extends exports_Schema.TaggedError()("AgentApprovalDen
 }) {
 }
 
+class AgentToolAuthorizationDenied extends exports_Schema.TaggedError()("AgentToolAuthorizationDenied", {
+  toolCallId: ToolCallId,
+  toolName: exports_Schema.NonEmptyString,
+  message: exports_Schema.String
+}) {
+}
+
 class AgentApprovalPending extends exports_Schema.TaggedError()("AgentApprovalPending", {
   approvalId: exports_Schema.NonEmptyString,
   toolCallId: exports_Schema.NonEmptyString,
@@ -30150,6 +30157,7 @@ var AgentError = exports_Schema.Union([
   AgentRunDispositionError,
   AgentPolicyError,
   AgentApprovalDenied,
+  AgentToolAuthorizationDenied,
   AgentApprovalPending,
   ModelProtocolError,
   AgentInterrupted,
@@ -34929,6 +34937,36 @@ var preflightApproval = (context3, turnId, prepared, options) => exports_Stream.
     }
   });
 })));
+var preflightToolAuthorization = (context3, turnId, turn, call, options) => {
+  const authorization = options.toolAuthorization;
+  if (authorization === undefined)
+    return exports_Stream.empty;
+  return exports_Stream.unwrap(authorization.authorize({
+    conversationId: context3.conversationId,
+    runId: context3.runId,
+    turnId,
+    turn,
+    input: context3.input,
+    call
+  }).pipe(exports_Effect.map((decision) => {
+    if (decision._tag === "allowed")
+      return exports_Stream.empty;
+    const denied = AgentToolAuthorizationDenied.make({
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      message: decision.reason
+    });
+    return exports_Stream.fromEffect(exports_Effect.map(eventBase(context3), (base2) => ToolCallFailed.make({
+      ...base2,
+      turnId,
+      toolCallId: call.toolCallId,
+      toolName: call.toolName,
+      errorTag: denied._tag,
+      message: denied.message,
+      providerExecuted: false
+    }))).pipe(exports_Stream.concat(exports_Stream.fail(denied)));
+  })));
+};
 var ProviderResponsePartId = exports_Schema.String.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
 var ProviderToolCallId = ToolCallId.check(exports_Schema.isMaxLength(128), exports_Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/));
 var isTelemetryToolCallId = exports_Schema.is(ProviderToolCallId);
@@ -35113,26 +35151,19 @@ var executePreparedToolCall = (context3, turnId, toolkit, prepared, trace2, resu
     return restored.reasons.length === 0 ? exports_Stream.empty : exports_Stream.failCause(restored);
   }));
 };
-var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, options, brokerAccounting, resultBounds, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
+var executeToolBatch = (context3, turnId, turn, toolkit, calls, trace2, concurrency, options, brokerAccounting, resultBounds, settledCallIds) => exports_Stream.unwrap(exports_Effect.gen(function* () {
   const prepared = yield* exports_Effect.forEach(calls, (call, declarationIndex) => prepareToolCall(toolkit, call, declarationIndex));
   const semaphore = yield* exports_Semaphore.make(concurrency);
   const approvalPreflight = prepared.reduce((stream, call) => stream.pipe(exports_Stream.concat(preflightApproval(context3, turnId, call, options))), exports_Stream.empty);
+  const descriptors = trace2.applicationCallDescriptors;
   const durability = options.durability;
   const hookServices = yield* exports_Effect.context();
   const executable = settledCallIds === undefined ? prepared : prepared.filter((call) => !settledCallIds.has(call.call.id));
+  const executableDescriptors = settledCallIds === undefined ? descriptors : descriptors.filter((call) => !settledCallIds.has(call.toolCallId));
+  const authorizationPreflight = executableDescriptors.reduce((stream, call) => stream.pipe(exports_Stream.concat(preflightToolAuthorization(context3, turnId, turn, call, options))), exports_Stream.empty);
   const preparation = durability === undefined ? exports_Stream.empty : exports_Stream.fromEffect(exports_Effect.suspend(() => {
-    const descriptors = prepared.flatMap((call) => {
-      const executionClass = getToolExecutionClass(call.tool);
-      return executionClass === "readonly" ? [] : [
-        {
-          toolCallId: call.toolCallId,
-          toolName: call.name,
-          parameters: call.nativeHandlerParams,
-          executionClass
-        }
-      ];
-    });
-    return descriptors.length === 0 ? exports_Effect.void : durability.prepareToolCalls(descriptors);
+    const preparedDescriptors = descriptors.filter((call) => call.executionClass !== "readonly");
+    return preparedDescriptors.length === 0 ? exports_Effect.void : durability.prepareToolCalls(preparedDescriptors);
   })).pipe(exports_Stream.drain);
   const stepServiceFor = (call) => durability === undefined ? passthroughDurableStep() : makeDurableStepService(call.toolCallId, durability.step, hookServices);
   const liveBrokers = new Map;
@@ -35212,7 +35243,7 @@ var executeToolBatch = (context3, turnId, toolkit, calls, trace2, concurrency, o
       message: `${waiting.length} durable delegation ${waiting.length === 1 ? "call is" : "calls are"} waiting on attached children; the Run suspended without settling`
     }));
   })).pipe(exports_Stream.drain)));
-  return approvalPreflight.pipe(exports_Stream.concat(preparation), exports_Stream.concat(settled));
+  return approvalPreflight.pipe(exports_Stream.concat(authorizationPreflight), exports_Stream.concat(preparation), exports_Stream.concat(settled));
 }));
 var ErrorMessage = exports_Schema.Struct({ message: exports_Schema.String });
 var ErrorTag = exports_Schema.Struct({ _tag: exports_Schema.NonEmptyString });
@@ -36338,7 +36369,7 @@ var makeTurn = (agent2, context3, prompt, turn, priorToolCalls, options) => expo
             calls: trace2.applicationCallDescriptors
           });
         }
-        const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
+        const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, turn, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
           maxToolCalls: bounds.maxToolCalls,
           declaredToolCalls: toolCalls
         }, agent2.definition.policy.toolResultBounds), options.budget);
@@ -36543,7 +36574,7 @@ var makeResumeTurn = (agent2, context3, prompt, resume, options) => exports_Stre
     }), settledIds);
     return started.pipe(exports_Stream.concat(exports_Stream.fromIterable(rejection)), exports_Stream.concat(continueAfterBatch()));
   }
-  const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
+  const toolResults = guardBudgetStream(executeToolBatch(context3, turnId, turn, toolkit, trace2.applicationToolCalls, trace2, concurrency, options, {
     maxToolCalls: bounds.maxToolCalls,
     declaredToolCalls: toolCalls
   }, agent2.definition.policy.toolResultBounds, settledIds), options.budget);
@@ -36577,6 +36608,7 @@ var stream = (agent2, input, options = {}) => {
       agentId: agent2.definition.id,
       conversationId,
       runId,
+      input: undefined,
       pendingFollowUps: [],
       startedAtMillis,
       durationDeadlineMillis,
@@ -36632,6 +36664,7 @@ var stream = (agent2, input, options = {}) => {
       const decodedInput = yield* decodeInput(agent2, input);
       const instructions = yield* evaluateInstructions(agent2.definition.instructions, decodedInput);
       const encodedInput = yield* encodeInput(agent2, decodedInput);
+      context3.input = encodedInput;
       const priorHistoryLength = context3.history.content.length;
       const prompt = yield* makeInitialPrompt(instructions, encodedInput, context3.history);
       if (options.context === undefined) {
@@ -38771,7 +38804,7 @@ var ToolJsonSchema = /* @__PURE__ */ StructWithRest(/* @__PURE__ */ Struct2({
   required: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6))
 }), [/* @__PURE__ */ Record(String6, Json2)]);
 
-class Tool2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
+class Tool extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
   name: String6,
   title: /* @__PURE__ */ optional3(String6),
   description: /* @__PURE__ */ optional3(String6),
@@ -38785,7 +38818,7 @@ class Tool2 extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/Tool")({
 
 class ListToolsResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/ListToolsResult")({
   ...PaginatedResultMeta.fields,
-  tools: /* @__PURE__ */ ArraySchema(Tool2)
+  tools: /* @__PURE__ */ ArraySchema(Tool)
 })) {
 }
 class CallToolResult extends (/* @__PURE__ */ Class4("@effect/ai/McpSchema/CallToolResult")({
@@ -38903,7 +38936,7 @@ class CreateMessage extends (/* @__PURE__ */ make53("sampling/createMessage", {
     maxTokens: Int,
     stopSequences: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(String6)),
     metadata: /* @__PURE__ */ optional3(/* @__PURE__ */ Record(String6, Unknown2)),
-    tools: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct2(Tool2.fields))),
+    tools: /* @__PURE__ */ optional3(/* @__PURE__ */ ArraySchema(/* @__PURE__ */ Struct2(Tool.fields))),
     toolChoice: /* @__PURE__ */ optional3(/* @__PURE__ */ Struct2(ToolChoice.fields))
   }
 })) {
@@ -39117,7 +39150,7 @@ class McpToolkitMismatch extends exports_Schema.TaggedError()("McpToolkitMismatc
 class McpDiscovery extends exports_Schema.Class("@effect-agent/capabilities/McpDiscovery")({
   identity: McpServerIdentity,
   capabilities: ServerCapabilities,
-  tools: exports_Schema.Array(Tool2).check(exports_Schema.isMaxLength(MAX_MCP_TOOLS)),
+  tools: exports_Schema.Array(Tool).check(exports_Schema.isMaxLength(MAX_MCP_TOOLS)),
   encodedBytes: exports_Schema.Natural.check(exports_Schema.isLessThanOrEqualTo(MAX_MCP_DISCOVERY_BYTES)),
   toolkitSchemaDigest: Sha256Digest
 }) {
@@ -39237,7 +39270,7 @@ var validateMcpDiscovery = exports_Effect.fn("validateMcpDiscovery")(function* (
   const encoded = yield* exports_Schema.encodeEffect(exports_Schema.Struct({
     identity: McpServerIdentity,
     capabilities: ServerCapabilities,
-    tools: exports_Schema.Array(Tool2)
+    tools: exports_Schema.Array(Tool)
   }))({
     identity: server.identity,
     capabilities: server.capabilities,

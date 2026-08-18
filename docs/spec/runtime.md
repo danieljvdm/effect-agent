@@ -50,14 +50,15 @@ Normative sequence:
 8. Reject malformed or incomplete provider sequences.
 9. If the assistant response is final, decode Agent output.
 10. Otherwise validate the complete Tool Call batch.
-11. Apply approvals and scheduling policy.
-12. Execute Tool Handlers.
-13. Encode outcomes and construct deterministic Tool result messages.
-14. Advance the Conversation.
-15. Drain steering commands.
-16. Evaluate Stop Policy.
-17. If otherwise complete, drain follow-ups.
-18. Begin another Turn or emit one terminal Run event.
+11. Apply approval policy.
+12. Re-evaluate optional host Tool authorization at the action boundary.
+13. Apply scheduling policy and execute Tool Handlers.
+14. Encode outcomes and construct deterministic Tool result messages.
+15. Advance the Conversation.
+16. Drain steering commands.
+17. Evaluate Stop Policy.
+18. If otherwise complete, drain follow-ups.
+19. Begin another Turn or emit one terminal Run event.
 
 The transition reducer should be pure wherever possible. Effects interpret decisions; they do not
 hide transition rules.
@@ -147,6 +148,28 @@ Before any Handler starts:
 - approval decisions must be known or represented as suspension.
 
 A length-truncated response never executes Tool Calls.
+
+### Host action authorization
+
+`RunOptions.toolAuthorization`, when present, runs for every still-executable model-declared call
+in an application Tool batch after complete-batch validation and approval, but before durable
+preparation, semaphore acquisition, or any Handler. Every decision in the batch completes in
+declaration order before
+the first Handler may start. The request carries canonical `ConversationId`, `RunId`, `TurnId`,
+Turn number, the Agent-Schema encoded Run input, the selected call's stable ID/name/encoded
+parameters/execution class. A durable host receives the exact admitted canonical Submission input.
+Policy remains host-owned; the library assigns no mutation meaning to Tool names. Programmatic
+`ToolBroker` calls are outside this hook.
+
+A durable batch resume reconstructs input authority from the canonical Submission and calls from
+the pending response record, then invokes the same hook again with the same Run, Turn, input, and
+call identity. Already-settled calls are omitted because no Handler can start for them. A denied
+decision emits `ToolCallFailed` and fails the Run with `AgentToolAuthorizationDenied` before the
+denied Attempt starts any Handler or creates a new side effect. A fresh denial precedes
+preparation; a resumed denial may retain the prior Attempt's prepared record and historical effects
+but writes no new preparation. DN/DC then record the ordinary bounded failed Submission settlement,
+which is terminal and cannot select the call for another retry. A hook failure remains typed in the
+Run error channel and is likewise fail-closed.
 
 ### Scheduling
 
@@ -274,15 +297,17 @@ Official prior history remains the exact prefix of the newly materialized Run hi
 instructions and the current decoded input append after that prefix; a new Run must never prepend,
 rewrite, or reorder already-official messages.
 
-`RunContextPreparation` is a generic Effect service, not a Conversation store. Its optional hook
-receives stable Run/Turn identities, the immutable source `Prompt`, and the rendered
-output-contract text when available; it returns only the prompt for the next model call. An absent
-hook is the original pass-through behavior. `DurableAgentRuntime.layerWithContext` exposes the
-service in its Layer requirement; `DurableAgentRuntime.layer` explicitly supplies
+`RunContextPreparation` is a generic Effect service, not a Conversation store. Its optional prompt
+hook receives stable Run/Turn identities, the immutable source `Prompt`, and the rendered
+output-contract text when available; it returns only the prompt for the next model call. Its
+optional `toolAuthorization` hook is the closed durable-host form of the action boundary in §5. An
+absent hook is the original pass-through behavior. `DurableAgentRuntime.layerWithContext` exposes
+the service in its Layer requirement; `DurableAgentRuntime.layer` explicitly supplies
 `RunContextPreparationPassthrough` for compatibility. Coordinators always apply journal
-reconstruction before a host hook, so an ownership retry or a new host incarnation cannot let a
-transform bypass canonical committed Turns. The returned prompt is never assigned to official
-history and cannot enter canonical records.
+reconstruction before a prompt hook and rebuild action-authorization authority from canonical
+records before a resumed Handler, so an ownership retry or a new host incarnation cannot bypass
+either boundary. The returned prompt is never assigned to official history and cannot enter
+canonical records.
 
 ### Window and budget calculation
 
@@ -611,3 +636,9 @@ the engine contributes approval policy, scheduling, budgets, encoding, and telem
   children still join as mandatory recovery cleanup before the expired parent fails. The engine
   verifies the coordinator's exact open delegation Call IDs and restores duration interruption
   before continuation, without authorizing a new model, ordinary Tool, or child execution.
+- **RUN-031:** Optional host Tool authorization runs for each model-declared call in the complete
+  still-executable application batch before durable preparation or any Handler. Fresh and
+  durable-resumed calls present the same canonical Run/Turn/input authority and stable call
+  descriptor; denial fails typed and settles accepted work terminally without the denied Attempt
+  starting a Handler or creating a new side effect — fresh denial writes no prepared record,
+  resumed denial writes no new preparation.

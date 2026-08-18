@@ -1,10 +1,11 @@
+import type { Agent } from "@effect-agent/core";
 import {
-  Agent,
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
   AgentOutputError,
   AgentRunDispositionError,
+  AgentToolAuthorizationDenied,
   type AgentPolicy,
   AgentPolicyError,
   type AgentId,
@@ -53,6 +54,7 @@ import {
   TurnStarted,
   type TurnId,
 } from "@effect-agent/core";
+import type { Take } from "effect";
 import {
   Cause,
   Clock,
@@ -71,15 +73,14 @@ import {
   Scope,
   Semaphore,
   Stream,
-  Take,
 } from "effect";
+import type { Tool } from "effect/unstable/ai";
 import {
   AiError,
   LanguageModel,
   type Model,
   Prompt,
   Response,
-  Tool,
   type Toolkit,
 } from "effect/unstable/ai";
 
@@ -262,6 +263,7 @@ export type AgentRuntimeFailure<
   | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied
+  | AgentToolAuthorizationDenied
   | AgentApprovalPending
   | AgentChildPending
   | HookError
@@ -315,6 +317,8 @@ interface RunContext {
   readonly agentId: Agent.AnyDefinition["id"];
   readonly conversationId: ConversationId;
   readonly runId: RunId;
+  /** Agent-Schema encoded input identifying this logical Run's originating authority/wake. */
+  input: unknown;
   readonly pendingFollowUps: Array<Prompt.RawInput>;
   /** Wall-clock Run start, the base of the run-status elapsed rendering (RUN-024). */
   readonly startedAtMillis: number;
@@ -914,6 +918,56 @@ const preflightApproval = <Tools extends Record<string, Tool.Any>, HookError, Ho
     ),
   );
 
+/**
+ * Recheck host-owned Tool authority after approval and before durable preparation or scheduling.
+ * Every call in the executable batch is authorized in declaration order before ANY Handler may
+ * start, so a later denial leaves this Attempt's complete batch at zero application side effects.
+ */
+const preflightToolAuthorization = <HookError, HookRequirements>(
+  context: RunContext,
+  turnId: TurnId,
+  turn: number,
+  call: RunToolCallDescriptor,
+  options: RunOptions<HookError, HookRequirements>,
+): Stream.Stream<RunEvent, HookError | AgentToolAuthorizationDenied, HookRequirements> => {
+  const authorization = options.toolAuthorization;
+  if (authorization === undefined) return Stream.empty;
+  return Stream.unwrap(
+    authorization
+      .authorize({
+        conversationId: context.conversationId,
+        runId: context.runId,
+        turnId,
+        turn,
+        input: context.input,
+        call,
+      })
+      .pipe(
+        Effect.map((decision) => {
+          if (decision._tag === "allowed") return Stream.empty;
+          const denied = AgentToolAuthorizationDenied.make({
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            message: decision.reason,
+          });
+          return Stream.fromEffect(
+            Effect.map(eventBase(context), (base) =>
+              ToolCallFailed.make({
+                ...base,
+                turnId,
+                toolCallId: call.toolCallId,
+                toolName: call.toolName,
+                errorTag: denied._tag,
+                message: denied.message,
+                providerExecuted: false,
+              }),
+            ),
+          ).pipe(Stream.concat(Stream.fail(denied)));
+        }),
+      ),
+  );
+};
+
 const ProviderResponsePartId = Schema.String.check(
   Schema.isMaxLength(128),
   Schema.isPattern(/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/),
@@ -1307,6 +1361,7 @@ const executePreparedToolCall = <Tools extends Record<string, Tool.Any>>(
 const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, HookRequirements>(
   context: RunContext,
   turnId: TurnId,
+  turn: number,
   toolkit: Toolkit.WithHandler<Tools>,
   calls: ReadonlyArray<Response.ToolCallPart<string, unknown>>,
   trace: TurnTrace,
@@ -1333,6 +1388,7 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
   | ModelProtocolError
   | AgentApprovalDenied
   | AgentApprovalPending
+  | AgentToolAuthorizationDenied
   | AgentChildPending
   | AiError.AiError
   | Tool.HandlerError<ToolUnion<Tools>>,
@@ -1357,6 +1413,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         Stream.empty,
       );
 
+      // Reuse the canonical wire-form descriptors already committed with the response. Handler
+      // parameters were decoded/re-encoded separately above, so the host policy never receives
+      // the handler's live parameter object.
+      const descriptors = trace.applicationCallDescriptors;
+
       const durability = options.durability;
       // The hook's requirements are captured here (they are already part of
       // this stream's requirements) so the per-call `DurableStep` service can
@@ -1368,6 +1429,19 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
         settledCallIds === undefined
           ? prepared
           : prepared.filter((call) => !settledCallIds.has(call.call.id));
+      const executableDescriptors =
+        settledCallIds === undefined
+          ? descriptors
+          : descriptors.filter((call) => !settledCallIds.has(call.toolCallId));
+      const authorizationPreflight = executableDescriptors.reduce<
+        Stream.Stream<RunEvent, HookError | AgentToolAuthorizationDenied, HookRequirements>
+      >(
+        (stream, call) =>
+          stream.pipe(
+            Stream.concat(preflightToolAuthorization(context, turnId, turn, call, options)),
+          ),
+        Stream.empty,
+      );
 
       // Durable preparation runs strictly after every approval resolved
       // approved and before any handler acquires a permit. `readonly` calls
@@ -1379,22 +1453,12 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ? Stream.empty
           : Stream.fromEffect(
               Effect.suspend(() => {
-                const descriptors = prepared.flatMap((call) => {
-                  const executionClass = getToolExecutionClass(call.tool);
-                  return executionClass === "readonly"
-                    ? []
-                    : [
-                        {
-                          toolCallId: call.toolCallId,
-                          toolName: call.name,
-                          parameters: call.nativeHandlerParams,
-                          executionClass,
-                        } satisfies RunToolCallDescriptor,
-                      ];
-                });
-                return descriptors.length === 0
+                const preparedDescriptors = descriptors.filter(
+                  (call) => call.executionClass !== "readonly",
+                );
+                return preparedDescriptors.length === 0
                   ? Effect.void
-                  : durability.prepareToolCalls(descriptors);
+                  : durability.prepareToolCalls(preparedDescriptors);
               }),
             ).pipe(Stream.drain);
 
@@ -1595,7 +1659,11 @@ const executeToolBatch = <Tools extends Record<string, Tool.Any>, HookError, Hoo
           ).pipe(Stream.drain),
         ),
       );
-      return approvalPreflight.pipe(Stream.concat(preparation), Stream.concat(settled));
+      return approvalPreflight.pipe(
+        Stream.concat(authorizationPreflight),
+        Stream.concat(preparation),
+        Stream.concat(settled),
+      );
     }),
   );
 
@@ -3636,6 +3704,7 @@ const makeTurn = <
                   executeToolBatch(
                     context,
                     turnId,
+                    turn,
                     toolkit,
                     trace.applicationToolCalls,
                     trace,
@@ -4069,6 +4138,7 @@ const makeResumeTurn = <
         executeToolBatch(
           context,
           turnId,
+          turn,
           toolkit,
           trace.applicationToolCalls,
           trace,
@@ -4183,6 +4253,7 @@ const stream = <
         agentId: agent.definition.id,
         conversationId,
         runId,
+        input: undefined,
         pendingFollowUps: [],
         startedAtMillis,
         durationDeadlineMillis,
@@ -4267,6 +4338,7 @@ const stream = <
             InstructionRequirements
           >(agent.definition.instructions, decodedInput);
           const encodedInput = yield* encodeInput(agent, decodedInput);
+          context.input = encodedInput;
           const priorHistoryLength = context.history.content.length;
           const prompt = yield* makeInitialPrompt(instructions, encodedInput, context.history);
           // RUN-022: the instruction/input block is protected from compaction

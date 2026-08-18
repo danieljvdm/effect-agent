@@ -10,7 +10,8 @@ import type {
   ToolCallId,
   TurnId,
 } from "@effect-agent/core";
-import { Context, type DateTime, Effect, Layer, Schema } from "effect";
+import type { Effect } from "effect";
+import { Context, type DateTime, Layer, Schema } from "effect";
 import type { Prompt, Response } from "effect/unstable/ai";
 
 import type { RunStepHook, ToolExecutionClassValue } from "./durable-step.ts";
@@ -115,27 +116,6 @@ export class RunContextPreparationError extends Schema.TaggedError<RunContextPre
 ) {}
 
 /**
- * Generic host-owned preparation of one model-visible prompt.
- *
- * The service is intentionally narrower than a Conversation store: it receives the engine's
- * immutable source prompt and can return only the prompt used for the next model request. Durable
- * coordinators capture it once while their runtime Layer is acquired. When absent, they preserve
- * the existing pass-through behavior.
- */
-export class RunContextPreparation extends Context.Service<
-  RunContextPreparation,
-  {
-    /** Absent is the exact legacy path: the engine receives no context hook. */
-    readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
-  }
->()("@effect-agent/engine/RunContextPreparation") {}
-
-/** Explicit no-preparer Layer used by compatible runtime assemblies. */
-export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation> = Layer.succeed(
-  RunContextPreparation,
-)({});
-
-/**
  * One usage delta. Turn-boundary consumption charges `modelCalls: 1` after a
  * complete response and before any Tool starts; the programmatic Tool broker
  * charges `modelCalls: 0, toolCalls: 1` before each inner handler starts
@@ -184,6 +164,57 @@ export interface RunToolCallDescriptor {
   readonly executionClass: ToolExecutionClassValue;
 }
 
+/** Decision returned by a host's action-time Tool authorization policy. */
+export type RunToolAuthorizationDecision =
+  | { readonly _tag: "allowed" }
+  | { readonly _tag: "denied"; readonly reason: string };
+
+/**
+ * Exact authority presented before one model-declared application Tool Handler may start.
+ *
+ * `input` is the Agent Schema's encoded Run input. Durable coordinators replace it with the exact
+ * canonical Submission input admitted for the logical Run on every Attempt.
+ * `call` is the exact still-executable call being authorized. Recorded settled calls are never
+ * reauthorized because no Handler can start for them.
+ */
+export interface RunToolAuthorizationRequest {
+  readonly conversationId: ConversationId;
+  readonly runId: RunId;
+  readonly turnId: TurnId;
+  readonly turn: number;
+  readonly input: unknown;
+  readonly call: RunToolCallDescriptor;
+}
+
+/** Host policy invoked for each still-executable model-declared call in an application batch. */
+export interface RunToolAuthorizationHook<Error = never, Requirements = never> {
+  readonly authorize: (
+    request: RunToolAuthorizationRequest,
+  ) => Effect.Effect<RunToolAuthorizationDecision, Error, Requirements>;
+}
+
+/**
+ * Generic host-owned extensions for one Run's model context and action-time Tool authority.
+ *
+ * The service is intentionally narrower than a Conversation store. Durable coordinators capture
+ * it once while their runtime Layer is acquired. When absent, compatible assemblies preserve the
+ * existing pass-through behavior.
+ */
+export class RunContextPreparation extends Context.Service<
+  RunContextPreparation,
+  {
+    /** Optional transformation of the model-visible prompt. */
+    readonly hook?: RunContextHook<RunContextPreparationError, never> | undefined;
+    /** Optional action-time Tool authorization, closed over all host dependencies. */
+    readonly toolAuthorization?: RunToolAuthorizationHook<never, never> | undefined;
+  }
+>()("@effect-agent/engine/RunContextPreparation") {}
+
+/** Explicit no-preparer/no-authorizer Layer used by compatible runtime assemblies. */
+export const RunContextPreparationPassthrough: Layer.Layer<RunContextPreparation> = Layer.succeed(
+  RunContextPreparation,
+)({});
+
 /**
  * Payload of one durable response commit: the completed Turn's identity, its
  * response messages in official (encoded) form, and every application Tool
@@ -230,7 +261,7 @@ export interface RunTurnUsage {
  * `commitResponse` fires after the finish part's continuation validations and staged canonical
  * provider/Turn events have been emitted, but before approval preflight (making the response
  * canonical before any Tool work — the provably-safe resume window); `prepareToolCalls` fires after
- * every approval resolved approved and before any handler acquires a
+ * every approval and host authorization resolved allowed and before any handler acquires a
  * scheduler permit, with the non-`readonly` calls of the batch (it is skipped
  * entirely when no call needs preparation); `step` persists Durable Step
  * results mid-flight. When the hook is absent the engine behaves exactly as
@@ -241,7 +272,7 @@ export interface RunDurabilityHook<Error = never, Requirements = never> {
   readonly commitResponse: (
     commit: RunTurnResponseCommit,
   ) => Effect.Effect<void, Error, Requirements>;
-  /** After every approval resolved approved, before any handler starts. */
+  /** After every approval and host authorization resolved allowed, before any handler starts. */
   readonly prepareToolCalls: (
     calls: ReadonlyArray<RunToolCallDescriptor>,
   ) => Effect.Effect<void, Error, Requirements>;
@@ -416,7 +447,8 @@ export interface RunTurnResumeSettledCall {
  * When present, the engine's first Turn skips the model request entirely: the
  * declared calls are re-validated through their Tool parameter Schemas (a
  * decode failure executes nothing), approval preflight runs against recorded
- * decisions, `prepareToolCalls` replays the full prepared batch idempotently,
+ * decisions, host Tool authorization is re-evaluated, `prepareToolCalls` replays the full
+ * prepared batch idempotently,
  * calls listed in `settled` are injected as final results without starting
  * their handlers, and only the remaining open calls execute. The Run then
  * proceeds through the normal continuation.
@@ -496,6 +528,14 @@ export interface RunOptions<HookError = never, HookRequirements = never> {
   readonly approval?: RunApprovalHook<HookError, HookRequirements> | undefined;
   readonly context?: RunContextHook<HookError, HookRequirements> | undefined;
   readonly budget?: RunBudgetHook<HookError, HookRequirements> | undefined;
+  /**
+   * Host-owned action-time authorization for model-declared application Tool batches. The engine
+   * invokes it for every still-executable call after complete-batch validation and approval, but
+   * before durable preparation or any Handler permit. A resumed durable batch invokes it again
+   * with the same canonical Run/Turn/input authority and Tool Call identity. Programmatic
+   * `ToolBroker` calls are outside this hook.
+   */
+  readonly toolAuthorization?: RunToolAuthorizationHook<HookError, HookRequirements> | undefined;
   /**
    * Optional absolute deadline for the Run's `maxDuration` rail. The engine
    * uses the earlier of this value and the fresh policy deadline, so callers

@@ -218,6 +218,17 @@ If a worker dies mid-stream:
 
 An ordinary tool is at-least-once and may have external side effects.
 
+Immediately before execution, the optional host action-authorizer receives canonical Run/Turn/input
+authority plus the exact model-declared call descriptor. It runs before preparation and every
+Handler in both a fresh application batch and a canonical batch resume. A denial fails the Run with
+a typed diagnostic and terminal failed Submission settlement; a fresh denial writes no prepared
+record, while a resumed denial retains any prior prepared record but writes no new one. Neither
+denied Attempt starts a Handler, creates a new side effect, or can be selected for another retry.
+An idempotent call may still have historical effects from the crashed Attempt that prepared it. No
+secondary authorization ledger is required: every Attempt reconstructs the same authority from
+the Submission input and pending response record. Programmatic `ToolBroker` invocations are
+outside this seam.
+
 Before calling it, the engine commits `ToolCallPrepared` with tool identity, decoded
 input digest, and tool-call ID. After it returns and output validation succeeds, the
 engine commits `ToolCallSettled`.
@@ -380,7 +391,8 @@ authoritative for every repair and later pass.
 | After canonical input append, before applied marker           | Input canonical                                                   | Detect exact input and repair marker              |
 | After claim, before Attempt start                             | Ready/owned                                                       | Reclaim after ownership loss                      |
 | Mid-provider stream                                           | Canonical partial text/reasoning may exist; no completed response | Record interruption and retry as a new response   |
-| After model item commit, before tool preparation              | Model item canonical                                              | Resume tool scheduling                            |
+| After model item commit, before tool authorization            | Model item canonical                                              | Reauthorize from canonical authority              |
+| After authorization, before tool preparation                  | Model item canonical                                              | Reauthorize, then resume tool scheduling          |
 | After tool prepared, before invocation                        | Prepared only                                                     | Retry only if proof says invocation did not start |
 | During ordinary tool invocation                               | Prepared only                                                     | Reconcile or mark unknown                         |
 | After tool returns, before result commit                      | Prepared only                                                     | Reconcile/idempotent retry or mark unknown        |

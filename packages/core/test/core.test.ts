@@ -14,6 +14,7 @@ import {
   type ToolCallFailed,
   AgentId,
   AgentApprovalDenied,
+  AgentToolAuthorizationDenied,
   AgentApprovalPending,
   AgentError,
   AgentInputError,
@@ -38,6 +39,7 @@ import {
   SettlementId,
   SubagentParentLink,
   ToolCallDeclared,
+  ToolCallId,
   ToolResultBounds,
   TruncatedToolResult,
   TurnId,
@@ -132,6 +134,11 @@ describe("core schemas", () => {
         toolCallId: "hold-1",
         toolName: "hold",
         message: "denied",
+      }),
+      AgentToolAuthorizationDenied.make({
+        toolCallId: Schema.decodeSync(ToolCallId)("hold-1"),
+        toolName: "hold",
+        message: "current execution authority was denied",
       }),
       AgentApprovalPending.make({
         approvalId: "approval-1",

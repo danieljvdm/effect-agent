@@ -33,18 +33,20 @@ enables every capability.
 The engine owns durable Tool scheduling. Effect AI emits Tool Call Response parts,
 and the engine invokes the original Effect AI Toolkit handlers.
 
-Every tool call passes through this pipeline:
+Every model-declared Tool Call passes through this pipeline:
 
 1. Reduce Effect AI Response parts into a complete Tool Call.
 2. Resolve the Tool in the Effect AI Toolkit.
 3. Let Effect AI decode input with the Tool's Effect Schema.
-4. Evaluate authorization and Effect AI approval policy.
-5. Acquire the required Effect `Semaphore` permits.
-6. Execute the Effect AI Toolkit handler within a scoped child Fiber; release permits on every
+4. Evaluate Effect AI approval policy.
+5. Re-evaluate optional host authorization over the exact Run/Turn/input and call descriptor.
+6. Commit durable preparation for non-readonly calls.
+7. Acquire the required Effect `Semaphore` permits.
+8. Execute the Effect AI Toolkit handler within a scoped child Fiber; release permits on every
    exit.
-7. Encode success or a declared tool-domain failure.
-8. Redact and bound the result for model context and persisted events.
-9. Commit the result in deterministic order.
+9. Encode success or a declared tool-domain failure.
+10. Redact and bound the result for model context and persisted events.
+11. Commit the result in deterministic order.
 
 The framework distinguishes:
 
@@ -57,7 +59,10 @@ The framework distinguishes:
 - `ToolUnknownOutcome`: an external side effect may have happened but no canonical
   result was recorded.
 
-The tool call ID is stable across logging, approval, execution, and recovery.
+The tool call ID is stable across logging, approval, host authorization, execution, and recovery.
+The host, not the framework, classifies which Tools mutate and whether the originating Run input
+still carries current authority. A recovered durable batch passes through the same authorization
+step again before any Handler.
 
 ## 3. Sessions and conversations
 

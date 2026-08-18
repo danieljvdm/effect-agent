@@ -4,10 +4,12 @@ import {
   DurableStepError,
   RunContextPreparation,
   ToolExecutionClass,
+  type RunToolAuthorizationDecision,
+  type RunToolAuthorizationRequest,
 } from "@effect-agent/engine";
+import type { CanonicalRecordEnvelope } from "@effect-agent/session";
 import {
   AbortCommand,
-  CanonicalRecordEnvelope,
   ConversationRead,
   ConversationStore,
   DefinitionDigests,
@@ -51,8 +53,21 @@ import {
 } from "@effect-agent/storage-memory";
 import { NodeCrypto } from "@effect/platform-node";
 import { expect, layer } from "@effect/vitest";
-import { Cause, Context, Duration, Effect, Exit, Layer, Option, Ref, Schema, Stream } from "effect";
-import { LanguageModel, Model, Prompt, Tool, Toolkit, type Response } from "effect/unstable/ai";
+import {
+  Cause,
+  Context,
+  Duration,
+  Effect,
+  Exit,
+  Layer,
+  Option,
+  Ref,
+  Schema,
+  SchemaGetter,
+  Stream,
+} from "effect";
+import type { Prompt } from "effect/unstable/ai";
+import { LanguageModel, Model, Tool, Toolkit, type Response } from "effect/unstable/ai";
 
 const SHA_A = Schema.decodeSync(Digest)("a".repeat(64));
 const PRINCIPAL = Schema.decodeSync(Principal)("principal-durable-tools");
@@ -289,6 +304,51 @@ const reconcilerTestLayer = Layer.effectContext(
   }),
 );
 
+/** Host action-authorization control (default: allow) captured by the existing run-context hook. */
+class ToolAuthorizationTestControl extends Context.Service<
+  ToolAuthorizationTestControl,
+  {
+    readonly set: (
+      decide: (request: RunToolAuthorizationRequest) => RunToolAuthorizationDecision,
+    ) => Effect.Effect<void>;
+    readonly reset: Effect.Effect<void>;
+    readonly requests: Effect.Effect<ReadonlyArray<RunToolAuthorizationRequest>>;
+  }
+>()("@effect-agent/testing/ToolAuthorizationTestControl") {}
+
+const allowToolExecution = (): RunToolAuthorizationDecision => ({ _tag: "allowed" });
+
+const toolAuthorizationTestLayer = Layer.effectContext(
+  Effect.gen(function* () {
+    const policy =
+      yield* Ref.make<(request: RunToolAuthorizationRequest) => RunToolAuthorizationDecision>(
+        allowToolExecution,
+      );
+    const requests = yield* Ref.make<ReadonlyArray<RunToolAuthorizationRequest>>([]);
+    return Context.make(
+      RunContextPreparation,
+      RunContextPreparation.of({
+        toolAuthorization: {
+          authorize: (request) =>
+            Ref.update(requests, (all) => [...all, request]).pipe(
+              Effect.andThen(Ref.get(policy)),
+              Effect.map((decide) => decide(request)),
+            ),
+        },
+      }),
+    ).pipe(
+      Context.add(
+        ToolAuthorizationTestControl,
+        ToolAuthorizationTestControl.of({
+          set: (decide) => Ref.set(policy, decide),
+          reset: Ref.set(policy, allowToolExecution).pipe(Effect.andThen(Ref.set(requests, []))),
+          requests: Ref.get(requests),
+        }),
+      ),
+    );
+  }),
+);
+
 const configLayer = DurableRuntimeConfig.layer({
   deploymentId: Schema.decodeSync(DeploymentId)("deployment-durable-tools"),
   producerId: Schema.decodeSync(ProducerId)("producer-durable-tools"),
@@ -303,10 +363,11 @@ const baseLayer = Layer.mergeAll(
   WakeScheduler.layerNoop,
   DurableRuntimeFailpoint.layerTest,
   reconcilerTestLayer,
+  toolAuthorizationTestLayer,
   configLayer,
 ).pipe(Layer.provideMerge(NodeCrypto.layer));
 
-const testLayer = DurableAgentRuntime.layer.pipe(Layer.provideMerge(baseLayer));
+const testLayer = DurableAgentRuntime.layerWithContext.pipe(Layer.provideMerge(baseLayer));
 
 const readLog = (conversationId: string) =>
   Effect.gen(function* () {
@@ -635,6 +696,219 @@ layer(testLayer)("DUR P5 durable Tools (prepared/settled, reconciliation, unknow
         expect(assistantIndex).toBeGreaterThan(userIndex);
         expect(roles).toContain("tool");
       }),
+  );
+
+  it.effect(
+    "RUN-031 preserves canonical authority for a later-Turn restart and durable resume",
+    () =>
+      Effect.gen(function* () {
+        yield* resetReconciler;
+        const authorization = yield* ToolAuthorizationTestControl;
+        yield* authorization.reset;
+        const runtime = yield* DurableAgentRuntime;
+        const handlerWrites = yield* Ref.make<ReadonlyArray<string>>([]);
+        const toolLayer = bookIdempotentTools.toLayer({
+          book: ({ ref }) =>
+            Ref.update(handlerWrites, (writes) => [...writes, ref]).pipe(
+              Effect.as({ confirmation: `confirmed-${ref}` }),
+            ),
+        });
+        const nonIdempotentWake = Schema.String.pipe(
+          Schema.decode({
+            decode: SchemaGetter.transform((value) => value),
+            encode: SchemaGetter.transform((value) => `admitted:${value}`),
+          }),
+        );
+        const definition = Agent.define("durable-book-idempotent-canonical-authority", {
+          input: Schema.Struct({ question: Schema.String, wake: nonIdempotentWake }),
+          output: Schema.Struct({ answer: Schema.String }),
+          instructions: "Book it idempotently.",
+          toolkit: bookIdempotentTools,
+          policy,
+        });
+        const scripted = yield* makeScriptedModel((call) => {
+          switch (call) {
+            case 0:
+              return toolTurn(toolCall("book-582-turn-1", "book", { ref: "r-turn-1" }));
+            case 1:
+              return toolTurn(toolCall("book-582-turn-2", "book", { ref: "r-authorized" }));
+            default:
+              return finalParts('{"answer":"resumed"}');
+          }
+        });
+        const agent = Agent.withModel(definition, scripted.model);
+        const conversation = "conversation-tool-authorization-resume";
+
+        const receipt = yield* runtime.submit(
+          agent,
+          { question: "book it", wake: "wake-582" },
+          submitOptions(conversation, "tool-authorization-resume-1"),
+        );
+
+        // Commit Turn 1 and interrupt after its results boundary. No batch remains pending, so the
+        // replacement engine really restarts its local Turn counter at 1.
+        yield* armFailpoint("turn:after-results-append");
+        const turnOneInterrupted = yield* Effect.exit(
+          runtime
+            .processConversation(agent, decodeConversationId(conversation))
+            .pipe(Effect.provide(toolLayer)),
+        );
+        expect(failureTag(turnOneInterrupted)).toBe("DurableRuntimeFailpointError");
+        expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
+        expect(yield* authorization.requests).toHaveLength(1);
+        yield* clearFailpoint;
+
+        // The replacement declares canonical Turn 2 from engine-local Turn 1, authorizes it, and
+        // dies after preparation. Its following Attempt resumes that exact durable batch.
+        yield* armFailpoint("tools:after-prepared-append");
+        const turnTwoInterrupted = yield* Effect.exit(
+          runtime
+            .processConversation(agent, decodeConversationId(conversation))
+            .pipe(Effect.provide(toolLayer)),
+        );
+        expect(failureTag(turnTwoInterrupted)).toBe("DurableRuntimeFailpointError");
+        expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
+        expect(yield* authorization.requests).toHaveLength(2);
+        yield* clearFailpoint;
+
+        const runId = runIdForSubmission(receipt.submissionId);
+        const targetPreparedId = toolCallPreparedRecordId(
+          runId,
+          2,
+          decodeToolCallId("book-582-turn-2"),
+        );
+        expect(
+          (yield* readLog(conversation)).filter(
+            (envelope) => envelope.record.recordId === targetPreparedId,
+          ),
+        ).toHaveLength(1);
+        yield* authorization.set(() => ({
+          _tag: "denied",
+          reason: "the originating task-message wake was superseded before resume",
+        }));
+
+        const settlements = yield* runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(toolLayer));
+        expect(settlements).toHaveLength(1);
+        expect(settlements[0]).toMatchObject({
+          outcome: "failed",
+          failure: {
+            errorTag: "AgentToolAuthorizationDenied",
+            message: "the originating task-message wake was superseded before resume",
+          },
+        });
+        expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
+
+        const requests = yield* authorization.requests;
+        expect(requests).toHaveLength(3);
+        expect(requests.map((request) => request.turn)).toEqual([1, 2, 2]);
+        const freshTurnTwo = requests[1];
+        const resumedTurnTwo = requests[2];
+        expect(freshTurnTwo).toBeDefined();
+        expect(resumedTurnTwo).toEqual(freshTurnTwo);
+        expect(freshTurnTwo).toMatchObject({
+          conversationId: conversation,
+          turn: 2,
+          input: { question: "book it", wake: "admitted:wake-582" },
+          call: {
+            toolCallId: "book-582-turn-2",
+            toolName: "book",
+            parameters: { ref: "r-authorized" },
+            executionClass: "idempotent",
+          },
+        });
+        expect(freshTurnTwo?.runId).toBeDefined();
+        expect(freshTurnTwo?.turnId).toBeDefined();
+        expect(scripted.prompts).toHaveLength(2);
+
+        const records = yield* readLog(conversation);
+        expect(
+          records.filter((envelope) => envelope.record.recordId === targetPreparedId),
+        ).toHaveLength(1);
+        expect(
+          records.filter((envelope) => envelope.record.payload._tag === "SubmissionSettled"),
+        ).toHaveLength(1);
+
+        const replay = yield* runtime
+          .processConversation(agent, decodeConversationId(conversation))
+          .pipe(Effect.provide(toolLayer));
+        expect(replay).toEqual([]);
+        expect(yield* Ref.get(handlerWrites)).toEqual(["r-turn-1"]);
+        expect(yield* authorization.requests).toHaveLength(3);
+        yield* authorization.reset;
+      }),
+  );
+
+  it.effect("settles a denied action failed without preparation, handler writes, or retry", () =>
+    Effect.gen(function* () {
+      yield* resetReconciler;
+      const authorization = yield* ToolAuthorizationTestControl;
+      yield* authorization.reset;
+      yield* authorization.set(() => ({
+        _tag: "denied",
+        reason: "the originating task-message wake was superseded",
+      }));
+      const runtime = yield* DurableAgentRuntime;
+      const desk = yield* makeBookDesk(bookTools);
+      const scripted = yield* makeScriptedModel((call) =>
+        call === 0
+          ? toolTurn(toolCall("book-denied-582", "book", { ref: "r-denied" }))
+          : finalParts('{"answer":"unreachable"}'),
+      );
+      const agent = Agent.withModel(bookDefinition, scripted.model);
+      const conversation = "conversation-tool-authorization-denied";
+
+      const receipt = yield* runtime.submit(
+        agent,
+        { question: "book it" },
+        submitOptions(conversation, "tool-authorization-denied-1"),
+      );
+      const settlements = yield* runtime
+        .processConversation(agent, decodeConversationId(conversation))
+        .pipe(Effect.provide(desk.toolLayer));
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]).toMatchObject({
+        outcome: "failed",
+        failure: {
+          errorTag: "AgentToolAuthorizationDenied",
+          message: "the originating task-message wake was superseded",
+        },
+      });
+      expect(yield* desk.count("r-denied")).toBe(0);
+
+      const requests = yield* authorization.requests;
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.call).toEqual({
+        toolCallId: "book-denied-582",
+        toolName: "book",
+        parameters: { ref: "r-denied" },
+        executionClass: "uncertain",
+      });
+      const records = yield* readLog(conversation);
+      expect(logTags(records)).toEqual([
+        "ConversationCreated",
+        "UserInputRecorded",
+        "ModelResponseRecorded",
+        "SubmissionSettled",
+      ]);
+      expect(records.some((envelope) => envelope.record.payload._tag === "ToolCallPrepared")).toBe(
+        false,
+      );
+
+      const settled = yield* runtime.awaitSettlement(receipt);
+      expect(settled).toMatchObject({
+        outcome: "failed",
+        failure: { errorTag: "AgentToolAuthorizationDenied" },
+      });
+      const replay = yield* runtime
+        .processConversation(agent, decodeConversationId(conversation))
+        .pipe(Effect.provide(desk.toolLayer));
+      expect(replay).toEqual([]);
+      expect(yield* desk.count("r-denied")).toBe(0);
+      expect(yield* authorization.requests).toHaveLength(1);
+      yield* authorization.reset;
+    }),
   );
 
   it.effect(

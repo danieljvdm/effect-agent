@@ -1,4 +1,4 @@
-import {
+import type {
   AgentApprovalDenied,
   AgentApprovalPending,
   AgentInputError,
@@ -8,6 +8,7 @@ import {
   IdGenerator,
   ModelProtocolError,
 } from "@effect-agent/core";
+import { type AgentToolAuthorizationDenied } from "@effect-agent/core";
 import {
   AgentRuntime,
   type AgentChildPending,
@@ -18,13 +19,11 @@ import { describe, expect, it } from "@effect/vitest";
 import { Effect, type Scope, Schema, Stream } from "effect";
 import { type AiError, type Tool, type Toolkit } from "effect/unstable/ai";
 
+import type { CalculationFailure, FixtureChatToolkit, FixtureKnowledge } from "./general-chat";
 import {
-  CalculationFailure,
   ChatInput,
   ChatOutput,
   FixtureChatRuntimeLayer,
-  FixtureChatToolkit,
-  FixtureKnowledge,
   makeFixtureChatAgent,
   searchFixtureKnowledge,
 } from "./general-chat";
@@ -55,6 +54,7 @@ type ExpectedFailure =
   | ContextOverflowError
   | ModelProtocolError
   | AgentApprovalDenied
+  | AgentToolAuthorizationDenied
   | AgentApprovalPending
   | AgentChildPending;
 type RequirementsProof = Assert<
