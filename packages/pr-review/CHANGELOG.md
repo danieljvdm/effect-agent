@@ -1,5 +1,14 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.22
+
+### Patch Changes
+
+- [#121](https://github.com/danieljvdm/effect-agent/pull/121) [`0717444`](https://github.com/danieljvdm/effect-agent/commit/0717444097bb4fc8be4ab665ccac8a09de4f1c3d) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Publish a fan-out finding's GitHub suggestion block only when independent verification settles its text as committable replacement source. A confirmed finding whose suggestion is not settled as committable is published without the suggestion block, and a verification pass that leaves a carried suggestion unsettled fails the unit's settlement.
+
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.22
+
 ## 0.1.0-beta.21
 
 ### Patch Changes

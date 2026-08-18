@@ -1,5 +1,20 @@
 # @effect-agent/session
 
+## 0.1.0-beta.22
+
+### Minor Changes
+
+- [#124](https://github.com/danieljvdm/effect-agent/pull/124) [`ce8b39c`](https://github.com/danieljvdm/effect-agent/commit/ce8b39ce8f716c0a11c6394d136b67cb9be84588) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Authorize every still-executable model-declared call in a fresh or resumed application Tool batch
+  through a host-supplied Run option before durable preparation or Handler execution. Settle denied
+  accepted work with a typed failure while preserving canonical Run, Turn, input, and Tool Call
+  identity across recovery.
+
+### Patch Changes
+
+- Updated dependencies [[`ce8b39c`](https://github.com/danieljvdm/effect-agent/commit/ce8b39ce8f716c0a11c6394d136b67cb9be84588)]:
+  - @effect-agent/core@0.1.0-beta.22
+  - @effect-agent/engine@0.1.0-beta.22
+
 ## 0.1.0-beta.21
 
 ### Patch Changes
