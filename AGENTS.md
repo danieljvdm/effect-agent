@@ -45,7 +45,7 @@ agent must preserve a common domain language, dependency direction, and durabili
 Before editing code:
 
 1. Read `README.md`.
-2. Read `CONTEXT.md`.
+2. Read `GLOSSARY.md` when changing domain concepts or public terminology.
 3. Read `docs/TOOLCHAIN.md`.
 4. Read the specification documents for the modules in scope (`docs/spec/`).
 5. Read `node_modules/effect/AGENTS.md` before writing Effect code (the canonical Effect
@@ -54,7 +54,7 @@ Before editing code:
    scripts.
 7. Inspect neighboring package tests before introducing a new pattern.
 
-Architecture is encoded in the docs site (`docs/spec/`, `docs/concepts/`, `docs/ARCHITECTURE.md`)
+Architecture is encoded in the docs site (`docs/spec/` and `docs/concepts/`)
 and enforced by tests; there is no separate decision register or ADR log. Do not create planning
 documents, decision registers, ADRs, roadmaps, or evidence logs — record semantics in the
 specification pages and rationale in the pull request.
@@ -105,8 +105,7 @@ packages.
   for repository packages.
 - The root catalog is the single source for the exact Effect v4 version. Do not pin Effect
   independently in a package.
-- After changing an Effect-family version, run `bun install`, `bun run sync:effect`, and
-  `bun run ready`.
+- After changing an Effect-family version, run `vp install` and `vp run check`.
 - Contributor skills under `.agents/skills` are repo-owned, each tracked by its own
   `.dev-kit-origin.json` receipt. Check for upstream updates with
   `bunx @danieljvdm/dev-kit@latest skills status`, and fast-forward an unmodified skill with

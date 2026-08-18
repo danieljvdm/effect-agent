@@ -7,13 +7,7 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   // Contributor artifacts stay in the repository but out of the published site.
-  srcExclude: [
-    "REQUIREMENTS.md",
-    "TOOLCHAIN.md",
-    "ARCHITECTURE.md",
-    "THREAT-MODEL.md",
-    "security/**",
-  ],
+  srcExclude: ["TOOLCHAIN.md"],
   head: [
     ["link", { rel: "icon", type: "image/svg+xml", href: "/mark.svg" }],
     ["meta", { name: "theme-color", content: "#161714" }],
@@ -86,10 +80,7 @@ export default defineConfig({
       },
       {
         text: "Reference",
-        items: [
-          { text: "Package map", link: "/reference/packages" },
-          { text: "Implementation status", link: "/reference/status" },
-        ],
+        items: [{ text: "Package map", link: "/reference/packages" }],
       },
       {
         text: "Specifications",

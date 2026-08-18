@@ -24,7 +24,7 @@
 (* Scope split: Attempt ownership rotation and producer-epoch fencing are  *)
 (* modeled and checked in DurableSubmission.tla; here each lane has one    *)
 (* claim at a time, recovery acts only on quiet lanes, and crash clears    *)
-(* the claim (lease expiry abstracted).  See formal/CORRESPONDENCE.md.     *)
+(* the claim (lease expiry abstracted).                                    *)
 (***************************************************************************)
 EXTENDS Naturals, FiniteSets, TLC
 
@@ -1539,8 +1539,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
-(* Invariants (safety).  Each maps to executable evidence named in         *)
-(* formal/CORRESPONDENCE.md.                                               *)
+(* Invariants (safety).                                                     *)
 (***************************************************************************)
 
 TypeOK ==

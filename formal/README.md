@@ -1,10 +1,7 @@
 # Formal models (TLA+ / PlusCal)
 
-Bounded TLA+ models of the durable Submission protocol and the S2 durable
-attached-Subagent protocol, model-checked with TLC. What each action and
-invariant corresponds to in the implementation — and the abstraction
-assumptions — is in [CORRESPONDENCE.md](./CORRESPONDENCE.md). The committed
-TLC run results are in [EVIDENCE.md](./EVIDENCE.md).
+Bounded TLA+ models of the durable Submission protocol and the durable
+attached-Subagent protocol, model-checked with TLC.
 
 These checks are **not** part of `bun run ready` or the PR gate: they need a
 JVM, which the Bun-only CI deliberately does not carry. Run them manually via
@@ -86,7 +83,5 @@ java -cp tla2tools.jar pcal.trans -nocfg SubagentEstablishment.tla
 ```
 
 then re-run TLC on all six instances (`bun run formal:check`). Keep the
-invariant/property definitions BELOW the `\* END TRANSLATION` marker — the
-translator rewrites only the block between the markers. When behavior
-semantics change, update [CORRESPONDENCE.md](./CORRESPONDENCE.md) and refresh
-[EVIDENCE.md](./EVIDENCE.md) with the new run summaries.
+invariant/property definitions below the `\* END TRANSLATION` marker; the
+translator rewrites only the block between the markers.

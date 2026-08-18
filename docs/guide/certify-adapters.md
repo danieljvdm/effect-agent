@@ -90,11 +90,9 @@ crash matrices.
   designated row subset and reports per-row results) to earn `exercised` — or its certificate
   says `not-exercised`, visibly.
 
-## The shipped certificates
+## Shipped adapter tests
 
-The repository certifies its own three adapters — `storage-memory` (reference),
-`storage-sqlite` (`DN`), and `storage-cloudflare` (`DC`, run inside workerd against a real
-SQLite-backed Durable Object) — and commits the resulting JSON certificates under
-`docs/certification/`. Reports are deterministic (scripted model, virtual clock, fixed lane
-names), so a diff in a regenerated certificate is a real behavior change. Use those runners as
-worked examples when certifying your own adapter.
+The repository runs the same certification suite against its memory, SQLite, and Cloudflare
+adapters. Set `EFFECT_AGENT_CERTIFICATION_OUT` when running a Node certification test to write a
+Schema-encoded report locally. The Cloudflare runner can print its report from workerd by enabling
+`PRINT_REPORT` in its test file.

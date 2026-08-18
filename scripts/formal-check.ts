@@ -294,9 +294,7 @@ const formalCheck = Effect.fn("formalCheck")(function* (options: {
   for (const instance of INSTANCES) {
     yield* checkInstance(located.java, jar, formalDir, instance);
   }
-  yield* Console.log(
-    "\nAll formal instances match their committed verdicts (see formal/EVIDENCE.md).",
-  );
+  yield* Console.log("\nAll formal instances match their expected verdicts.");
 });
 
 const command = CliCommand.make(

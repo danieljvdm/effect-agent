@@ -205,7 +205,7 @@ export const CancelBooking = Tool.make("cancel_booking", {
 
 /**
  * The Durable Tool: declaring `DurableStep` in `dependencies` is what makes it durable
- * (CONTEXT.md). Its handler divides supplier mutation into three named Steps — `reserve-flight`,
+ * (GLOSSARY.md). Its handler divides supplier mutation into three named Steps — `reserve-flight`,
  * `reserve-lodging`, `issue-confirmation` — each deriving its supplier idempotency key from
  * `(toolCallId, stepName)`, so re-entry after interruption replays recorded Step results and the
  * supplier dedupes any honestly-repeated call. The Tool itself carries no execution-class

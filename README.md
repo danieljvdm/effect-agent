@@ -91,11 +91,9 @@ Normative words such as **MUST**, **SHOULD**, and **MAY** are used in their usua
 The documentation site lives in [`docs/`](docs/index.md); run it locally with
 `bun run docs:dev`. The specifications below remain the normative design source.
 
-1. [Domain language](CONTEXT.md)
-2. [Technical architecture](docs/ARCHITECTURE.md)
-3. [Repository toolchain](docs/TOOLCHAIN.md)
-4. [Requirements and traceability index](docs/REQUIREMENTS.md)
-5. [Instructions for implementation agents](AGENTS.md)
+1. [Domain glossary](GLOSSARY.md)
+2. [Repository toolchain](docs/TOOLCHAIN.md)
+3. [Instructions for implementation agents](AGENTS.md)
 
 ## Detailed specifications
 
@@ -193,7 +191,5 @@ claim durable execution after it can demonstrate:
 - [Vite+ Effect/Cloudflare template](https://github.com/danieljvdm/vp-effect-cf-template)
 - [Contributor agent skills](https://github.com/danieljvdm/agent-skills)
 
-Flue and Pi are source material. All normative behavior is restated in the
-Effect-native specifications. Their pinned source snapshots live in the shallow Git submodules at
-`repos/flue` and `repos/pi`; the matching Effect source lives at `repos/effect`. Effect and Effect
-AI are the runtime foundation.
+Flue and Pi are source material. All normative behavior is restated in the Effect-native
+specifications. Effect and Effect AI are the runtime foundation.

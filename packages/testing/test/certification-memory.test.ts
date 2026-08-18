@@ -32,8 +32,7 @@ import { maybeWriteReport } from "./certification-report-io.ts";
 // weakens.
 //
 // One certification run is shared by every test in this file (a certificate is one run's
-// verdict); the committed report is docs/certification/storage-memory.json, regenerated with
-// EFFECT_AGENT_CERTIFICATION_OUT=docs/certification (see docs/guide/certify-adapters.md).
+// verdict). Set EFFECT_AGENT_CERTIFICATION_OUT to write the encoded report locally.
 // ---------------------------------------------------------------------------
 
 let cached: CertificationReport | undefined;

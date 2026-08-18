@@ -7,9 +7,8 @@
 (* uncertainty (DUR-009/DUR-017), approval suspension, joined input       *)
 (* (DUR-016), abort (DUR-012), and terminalization (DUR-011).             *)
 (*                                                                         *)
-(* Every action corresponds to a coordinator function or ledger operation *)
-(* named in formal/CORRESPONDENCE.md; the abstraction assumptions are     *)
-(* stated there.  Crash is modeled as a nondeterministic choice at every  *)
+(* Every action corresponds to a coordinator function or ledger operation. *)
+(* Crash is modeled as a nondeterministic choice at every                 *)
 (* PlusCal label -- i.e. between any two durable mutations -- consuming a *)
 (* bounded fault budget.  `FencingEnabled = FALSE` is a committed         *)
 (* negative control: it disables ownership/epoch checks so TLC            *)
@@ -1851,8 +1850,7 @@ Spec == /\ Init /\ [][Next]_vars
 
 -----------------------------------------------------------------------------
 (***************************************************************************)
-(* Invariants (safety).  Each maps to executable evidence named in         *)
-(* formal/CORRESPONDENCE.md.                                               *)
+(* Invariants (safety).                                                     *)
 (***************************************************************************)
 
 States == {"unsubmitted", "admitted", "ready", "joining", "joined",
