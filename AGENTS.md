@@ -130,6 +130,11 @@ packages.
 - Do not use type assertions to cross a schema boundary.
 - Do not build persistence migration tooling during private development. Incompatible development
   data may be reset, but must fail clearly rather than decode incorrectly.
+- Write changesets as changelog entries in the Effect style (Effect-TS/effect's CHANGELOG is the
+  reference): one or two imperative sentences naming the consumer-visible change, plus at most a
+  short usage example or an explicit BEHAVIOR CHANGE note when upgrading consumers must act.
+  Spec and requirement IDs, root-cause narratives, review and test stories, and implementation
+  mechanics belong in the pull request, never in the changeset.
 
 ## Parallel work
 
