@@ -553,7 +553,7 @@ export const validateProposedWorkOrder = Effect.fn("validateProposedWorkOrder")(
         status: result.exitCode === 0 ? "passed" : "failed",
         summary: result.output.slice(0, 2_000) || (result.exitCode === 0 ? "passed" : "failed"),
       });
-    }),
+    }).pipe(Effect.scoped),
   );
   const failed = results.find((result) => result.status === "failed");
   if (failed !== undefined) {

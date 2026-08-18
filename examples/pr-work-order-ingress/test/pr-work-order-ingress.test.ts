@@ -46,7 +46,7 @@ import {
   terminalMatchesAdmission,
 } from "../src/action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "../src/action-github.ts";
-import { admitWorkOrder, type AdmissionContext } from "../src/action.ts";
+import { admitWorkOrder, type AdmissionRequest } from "../src/action.ts";
 import {
   authenticateDelivery,
   ObservedActionsIdentity,
@@ -205,7 +205,7 @@ type HandleRequiresCrypto = Assert<
   Equal<Extract<TypedHandleServices, Crypto.Crypto>, Crypto.Crypto>
 >;
 
-const typedAdmission = admitWorkOrder(null as unknown as AdmissionContext);
+const typedAdmission = admitWorkOrder(null as unknown as AdmissionRequest);
 type TypedAdmissionServices = Effect.Services<typeof typedAdmission>;
 type AdmissionRequiresPolicy = Assert<
   Equal<Extract<TypedAdmissionServices, IngressPolicy>, IngressPolicy>
@@ -1162,6 +1162,14 @@ describe("PR work-order ingress", () => {
       expect(yield* fs.readFileString(path.join(second.runtimeRoot, ".vite-plus", "cache"))).toBe(
         "trusted cache\n",
       );
+      const released = yield* restoreFreshCheckWorkspace({
+        repositoryPath,
+        runtimeRoot,
+        checkName: "released",
+        index: 2,
+      }).pipe(Effect.scoped);
+      expect(yield* fs.exists(released.repositoryPath)).toBe(false);
+      expect(yield* fs.exists(released.runtimeRoot)).toBe(false);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 

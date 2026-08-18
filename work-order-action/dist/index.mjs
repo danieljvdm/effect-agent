@@ -53401,7 +53401,7 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
       status: result4.exitCode === 0 ? "passed" : "failed",
       summary: result4.output.slice(0, 2000) || (result4.exitCode === 0 ? "passed" : "failed")
     });
-  }));
+  }).pipe(exports_Effect.scoped));
   const failed = results.find((result4) => result4.status === "failed");
   if (failed !== undefined) {
     return yield* RequiredCheckFailed.make({ check: failed.name, summary: failed.summary });
@@ -54506,18 +54506,28 @@ var admissionContext = exports_Effect.fn("workOrderAction.admissionContext")(fun
     webhookSecret: "actions-identity"
   });
   const delivery = PlatformDelivery.make({ deliveryId: eventId, eventName, rawBody });
-  return { repository, eventName, rawBody, runId, eventId, event, delivery, policy: policy2 };
+  return {
+    repository,
+    eventName,
+    rawBody,
+    runId,
+    eventId,
+    delivery,
+    policy: policy2
+  };
 });
-var admitWorkOrder = exports_Effect.fn("workOrderAction.admit")(function* (context4) {
-  const { repository, runId, eventId, event, delivery } = context4;
+var admitWorkOrder = exports_Effect.fn("workOrderAction.admit")(function* (request3) {
+  const { delivery, runId } = request3;
   yield* authenticateDelivery(delivery);
   const target = yield* parseDispatchTarget(delivery);
-  const order = yield* constructWorkOrder(target, eventId);
+  const order = yield* constructWorkOrder(target, delivery.deliveryId);
+  const eventId = order.dispatch.eventId;
+  const repository = order.repository;
   const digest2 = yield* workOrderDigest(order);
   const stateAuthorId = yield* stableActorId("EFFECT_AGENT_STATE_AUTHOR_ID");
   const journal = yield* WorkOrderGitHub;
   const authenticator = yield* WorkOrderJournalAuthenticator;
-  const comments = yield* journal.listReviewComments(repository, event.pull_request.number);
+  const comments = yield* journal.listReviewComments(repository, order.pullRequestNumber);
   const matching = [];
   for (const comment of comments) {
     if (comment.authorId !== stateAuthorId || comment.inReplyToId !== order.source.commentId)
@@ -54842,7 +54852,7 @@ var workOrderActionProgram = exports_Effect.gen(function* () {
         })
       });
       const admissionLayer = exports_Layer.mergeAll(liveGitHubApiLayer(options3), IngressPolicy.layer(context4.policy), exports_Layer.succeed(ObservedActionsIdentity, trustedIdentity), exports_Layer.unwrap(journalLayer()));
-      return yield* admitWorkOrder(context4).pipe(exports_Effect.provide(admissionLayer));
+      return yield* admitWorkOrder({ delivery: context4.delivery, runId: context4.runId }).pipe(exports_Effect.provide(admissionLayer));
     }
     case "implement":
       return yield* implement();

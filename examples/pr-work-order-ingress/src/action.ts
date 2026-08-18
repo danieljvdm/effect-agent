@@ -79,15 +79,19 @@ const ActionsEvent = Schema.Struct({
   }),
 });
 
-export interface AdmissionContext {
+interface AdmissionRuntimeContext {
   readonly repository: string;
   readonly eventName: string;
   readonly rawBody: string;
   readonly runId: string;
   readonly eventId: string;
-  readonly event: typeof ActionsEvent.Type;
   readonly delivery: PlatformDelivery;
   readonly policy: IngressPolicyConfig;
+}
+
+export interface AdmissionRequest {
+  readonly delivery: PlatformDelivery;
+  readonly runId: string;
 }
 
 const StringArray = Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
@@ -249,21 +253,31 @@ const admissionContext = Effect.fn("workOrderAction.admissionContext")(function*
     webhookSecret: "actions-identity",
   });
   const delivery = PlatformDelivery.make({ deliveryId: eventId, eventName, rawBody });
-  return { repository, eventName, rawBody, runId, eventId, event, delivery, policy } as const;
+  return {
+    repository,
+    eventName,
+    rawBody,
+    runId,
+    eventId,
+    delivery,
+    policy,
+  } satisfies AdmissionRuntimeContext;
 });
 
 export const admitWorkOrder = Effect.fn("workOrderAction.admit")(function* (
-  context: AdmissionContext,
+  request: AdmissionRequest,
 ) {
-  const { repository, runId, eventId, event, delivery } = context;
+  const { delivery, runId } = request;
   yield* authenticateDelivery(delivery);
   const target = yield* parseDispatchTarget(delivery);
-  const order = yield* constructWorkOrder(target, eventId);
+  const order = yield* constructWorkOrder(target, delivery.deliveryId);
+  const eventId = order.dispatch.eventId;
+  const repository = order.repository;
   const digest = yield* workOrderDigest(order);
   const stateAuthorId = yield* stableActorId("EFFECT_AGENT_STATE_AUTHOR_ID");
   const journal = yield* WorkOrderGitHub;
   const authenticator = yield* WorkOrderJournalAuthenticator;
-  const comments = yield* journal.listReviewComments(repository, event.pull_request.number);
+  const comments = yield* journal.listReviewComments(repository, order.pullRequestNumber);
   const matching = [] as Array<{
     readonly commentId: string;
     readonly state: JournalClaimed | ReturnType<typeof completedState>;
@@ -792,7 +806,9 @@ export const workOrderActionProgram = Effect.gen(function* () {
         Layer.succeed(ObservedActionsIdentity, trustedIdentity),
         Layer.unwrap(journalLayer()),
       );
-      return yield* admitWorkOrder(context).pipe(Effect.provide(admissionLayer));
+      return yield* admitWorkOrder({ delivery: context.delivery, runId: context.runId }).pipe(
+        Effect.provide(admissionLayer),
+      );
     }
     case "implement":
       return yield* implement();
