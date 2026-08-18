@@ -1,5 +1,21 @@
 # @effect-agent/testing
 
+## 0.1.0-beta.22
+
+### Patch Changes
+
+- [#122](https://github.com/danieljvdm/effect-agent/pull/122) [`1d88eed`](https://github.com/danieljvdm/effect-agent/commit/1d88eed54e1def3746d9010537d90f32db517a80) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Stabilize the encoded Travel Planner persistence fixture's declaration so repeated package builds
+  produce the same release artifact.
+- Updated dependencies [[`ce8b39c`](https://github.com/danieljvdm/effect-agent/commit/ce8b39ce8f716c0a11c6394d136b67cb9be84588)]:
+  - @effect-agent/capabilities@0.1.0-beta.22
+  - @effect-agent/core@0.1.0-beta.22
+  - @effect-agent/engine@0.1.0-beta.22
+  - @effect-agent/session@0.1.0-beta.22
+  - @effect-agent/platform-node@0.1.0-beta.22
+  - @effect-agent/storage-memory@0.1.0-beta.22
+  - @effect-agent/storage-sqlite@0.1.0-beta.22
+  - @effect-agent/sandbox@0.1.0-beta.22
+
 ## 0.1.0-beta.21
 
 ### Patch Changes

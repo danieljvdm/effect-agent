@@ -25,6 +25,7 @@
     "@effect-agent/example-pr-work-order-ingress": "0.0.0"
   },
   "changesets": [
+    "authorize-tool-execution",
     "beta107-runtime-fixes",
     "bounded-recovery-history",
     "budget-extension",
@@ -40,6 +41,7 @@
     "effect-agent-umbrella",
     "effect-rc110-upgrade",
     "efficient-pr-review",
+    "fan-out-suggestion-contract",
     "friendly-cloudflare-peer",
     "initial-live-test-release",
     "mcp-ref-schema-normalization",
@@ -61,6 +63,7 @@
     "retire-stale-reviews",
     "review-patchless-text",
     "skip-equivalent-rebase-review",
+    "stable-testing-release-artifacts",
     "subagent-request-bound-projection",
     "typed-budget-settlement",
     "typed-run-disposition",
