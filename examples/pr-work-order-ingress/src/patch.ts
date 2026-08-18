@@ -19,6 +19,7 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
         destination: string;
         sawSourceHeader: boolean;
         sawDestinationHeader: boolean;
+        sawHunk: boolean;
       }
     | undefined;
   let files = 0;
@@ -27,6 +28,7 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
     if (
       !current.sawSourceHeader ||
       !current.sawDestinationHeader ||
+      !current.sawHunk ||
       current.source !== current.destination
     ) {
       return yield* reject("publisher accepts only complete same-path text modifications");
@@ -65,11 +67,25 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
         destination: matched[2],
         sawSourceHeader: false,
         sawDestinationHeader: false,
+        sawHunk: false,
       };
       continue;
     }
+    if (line.startsWith("@@ ")) {
+      if (current === undefined || !current.sawSourceHeader || !current.sawDestinationHeader) {
+        return yield* reject("publisher found a patch hunk before its complete path headers");
+      }
+      current.sawHunk = true;
+      continue;
+    }
+    if (current?.sawHunk === true) continue;
     if (line.startsWith("--- ")) {
-      if (current === undefined || line === "--- /dev/null") {
+      if (
+        current === undefined ||
+        current.sawSourceHeader ||
+        current.sawDestinationHeader ||
+        line === "--- /dev/null"
+      ) {
         return yield* reject("publisher could not prove the patch source path");
       }
       const source = line.slice(6).split("\t", 1)[0];
@@ -80,7 +96,12 @@ export const completeModifiedPaths = Effect.fn("completeModifiedPaths")(function
       continue;
     }
     if (line.startsWith("+++ ")) {
-      if (current === undefined || line === "+++ /dev/null") {
+      if (
+        current === undefined ||
+        !current.sawSourceHeader ||
+        current.sawDestinationHeader ||
+        line === "+++ /dev/null"
+      ) {
         return yield* reject("publisher could not prove the patch destination path");
       }
       const destination = line.slice(6).split("\t", 1)[0];

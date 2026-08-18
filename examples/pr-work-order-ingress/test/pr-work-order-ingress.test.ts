@@ -146,10 +146,13 @@ const secretAccesses = (value: unknown): Array<string> => {
   const found: Array<string> = [];
   const visit = (node: unknown) => {
     if (typeof node === "string") {
-      for (const match of node.matchAll(/\bsecrets\s*\.\s*([A-Z0-9_]+)/g)) {
-        if (match[1] !== undefined) found.push(match[1]);
+      const exactReference =
+        /\bsecrets\s*(?:\.\s*([A-Za-z_][A-Za-z0-9_]*)|\[\s*(['"])([A-Za-z_][A-Za-z0-9_]*)\2\s*\])/g;
+      for (const match of node.matchAll(exactReference)) {
+        const name = match[1] ?? match[3];
+        if (name !== undefined) found.push(name.toUpperCase());
       }
-      if (/\bsecrets\b/.test(node) && !/\bsecrets\s*\.\s*[A-Z0-9_]+/.test(node)) {
+      if (/\bsecrets\b/.test(node.replaceAll(exactReference, ""))) {
         found.push("*");
       }
       return;
@@ -952,6 +955,15 @@ describe("PR work-order ingress", () => {
         "pr-work-order-${{ github.repository_id }}-${{ github.event.comment.id }}",
       );
       expect(parsed.concurrency["cancel-in-progress"]).toBe(false);
+      expect(isRecord(parsed.jobs)).toBe(true);
+      if (!isRecord(parsed.jobs)) return;
+      const rawJobs = parsed.jobs;
+      expect(
+        secretAccesses(
+          Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "jobs")),
+        ),
+        "workflow-level configuration must not expose a secret to every job",
+      ).toEqual([]);
       const workflow = yield* Schema.decodeUnknownEffect(WorkOrderWorkflowFile)(parsed);
       expect(Object.keys(workflow.jobs).sort()).toEqual([
         "admit",
@@ -989,6 +1001,9 @@ describe("PR work-order ingress", () => {
           `${jobName} must not use reusable-workflow secret inheritance`,
         ).toBeUndefined();
         expect(job.uses, `${jobName} must not call a reusable workflow`).toBeUndefined();
+        const rawJob = rawJobs[jobName];
+        expect(isRecord(rawJob), `${jobName} must remain a raw YAML job object`).toBe(true);
+        if (!isRecord(rawJob)) continue;
         const checkouts = (job.steps ?? []).filter((step) =>
           (step.uses ?? "").startsWith("actions/checkout@"),
         );
@@ -1002,7 +1017,7 @@ describe("PR work-order ingress", () => {
           expect(checkout.with?.["persist-credentials"]).toBe(false);
           expect(checkout.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
         }
-        expect(secretAccesses(job)).toEqual([...expectedSecrets[knownJob]]);
+        expect(secretAccesses(rawJob)).toEqual([...expectedSecrets[knownJob]]);
         for (const step of job.steps ?? []) {
           expect(step.uses ?? "").not.toContain("@effect-agent/pr-review");
           expect(step.uses).not.toBe("./action");
@@ -1060,6 +1075,14 @@ describe("PR work-order ingress", () => {
         }),
       ).toEqual(["GITHUB_TOKEN"]);
       expect(secretAccesses({ secrets: "inherit" })).toEqual(["inherit"]);
+      expect(
+        secretAccesses({
+          env: {
+            TOKENS:
+              "${{ secrets.OPENAI_API_KEY }} ${{ secrets['EXTRA_TOKEN'] }} ${{ secrets[inputs.dynamic] }}",
+          },
+        }),
+      ).toEqual(["*", "EXTRA_TOKEN", "OPENAI_API_KEY"]);
     }),
   );
 
@@ -1208,6 +1231,17 @@ describe("PR work-order ingress", () => {
         "",
       ].join("\n");
       expect(yield* completeModifiedPaths(valid)).toEqual(["src/value.ts"]);
+      const headerLikePayload = [
+        "diff --git a/src/value.ts b/src/value.ts",
+        `index ${"1".repeat(40)}..${"2".repeat(40)} 100644`,
+        "--- a/src/value.ts",
+        "+++ b/src/value.ts",
+        "@@ -1 +1 @@",
+        "--- const oldDivider = true;",
+        "+++ const newDivider = true;",
+        "",
+      ].join("\n");
+      expect(yield* completeModifiedPaths(headerLikePayload)).toEqual(["src/value.ts"]);
 
       const rejected = yield* Effect.all([
         completeModifiedPaths(

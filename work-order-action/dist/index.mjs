@@ -54324,7 +54324,7 @@ var completeModifiedPaths = exports_Effect.fn("completeModifiedPaths")(function*
   const flush = exports_Effect.fn("completeModifiedPaths.flush")(function* () {
     if (current === undefined)
       return;
-    if (!current.sawSourceHeader || !current.sawDestinationHeader || current.source !== current.destination) {
+    if (!current.sawSourceHeader || !current.sawDestinationHeader || !current.sawHunk || current.source !== current.destination) {
       return yield* reject("publisher accepts only complete same-path text modifications");
     }
     paths.add(yield* normalizeWorkspacePath(current.source).pipe(exports_Effect.mapError(() => reject("patch contains a non-normalized repository path"))));
@@ -54346,12 +54346,22 @@ var completeModifiedPaths = exports_Effect.fn("completeModifiedPaths")(function*
         source: matched[1],
         destination: matched[2],
         sawSourceHeader: false,
-        sawDestinationHeader: false
+        sawDestinationHeader: false,
+        sawHunk: false
       };
       continue;
     }
+    if (line.startsWith("@@ ")) {
+      if (current === undefined || !current.sawSourceHeader || !current.sawDestinationHeader) {
+        return yield* reject("publisher found a patch hunk before its complete path headers");
+      }
+      current.sawHunk = true;
+      continue;
+    }
+    if (current?.sawHunk === true)
+      continue;
     if (line.startsWith("--- ")) {
-      if (current === undefined || line === "--- /dev/null") {
+      if (current === undefined || current.sawSourceHeader || current.sawDestinationHeader || line === "--- /dev/null") {
         return yield* reject("publisher could not prove the patch source path");
       }
       const source = line.slice(6).split("\t", 1)[0];
@@ -54362,7 +54372,7 @@ var completeModifiedPaths = exports_Effect.fn("completeModifiedPaths")(function*
       continue;
     }
     if (line.startsWith("+++ ")) {
-      if (current === undefined || line === "+++ /dev/null") {
+      if (current === undefined || !current.sawSourceHeader || current.sawDestinationHeader || line === "+++ /dev/null") {
         return yield* reject("publisher could not prove the patch destination path");
       }
       const destination = line.slice(6).split("\t", 1)[0];
