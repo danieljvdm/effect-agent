@@ -130,6 +130,9 @@ packages.
 - Do not use type assertions to cross a schema boundary.
 - Do not build persistence migration tooling during private development. Incompatible development
   data may be reset, but must fail clearly rather than decode incorrectly.
+- Write changesets as one or two imperative sentences naming the consumer-visible change. Add only
+  a short usage example or an explicit BEHAVIOR CHANGE note when consumers must act; keep IDs,
+  root-cause, review and test stories, and implementation mechanics in the pull request.
 
 ## Parallel work
 
