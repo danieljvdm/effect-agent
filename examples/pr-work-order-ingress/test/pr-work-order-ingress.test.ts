@@ -939,7 +939,7 @@ describe("PR work-order ingress", () => {
         present: ["PR_WORK_ORDER_STATE_SECRET"],
       } as const;
       for (const [jobName, job] of Object.entries(workflow.jobs)) {
-        const knownJob = Schema.decodeUnknownSync(
+        const knownJob = yield* Schema.decodeUnknownEffect(
           Schema.Literals(["admit", "implement", "checks", "publish", "present"]),
         )(jobName);
         assertExactPermissions(
@@ -1123,7 +1123,7 @@ describe("PR work-order ingress", () => {
     "WOI-009 uses GitHub's expected-head commit CAS and preserves stale/uncertain outcomes",
     () =>
       Effect.gen(function* () {
-        const published = Schema.decodeUnknownSync(GitCommitSha)("d".repeat(40));
+        const published = yield* Schema.decodeUnknownEffect(GitCommitSha)("d".repeat(40));
         const order = yield* createWorkOrder(
           WorkOrderIdentity.make({
             version: 1,
@@ -1164,7 +1164,7 @@ describe("PR work-order ingress", () => {
           "+export const value = 42;",
           "",
         ].join("\n");
-        const patchDigest = Schema.decodeUnknownSync(PatchDigest)(
+        const patchDigest = yield* Schema.decodeUnknownEffect(PatchDigest)(
           createHash("sha256").update(patch).digest("hex"),
         );
         const admission = WorkOrderAdmission.make({

@@ -53037,16 +53037,17 @@ var readWithSchema = exports_Effect.fn("readArtifact")(function* (name, schema3)
   const text2 = yield* fs.readFileString(target).pipe(exports_Effect.mapError((cause) => failure(`read ${name} artifact`, cause)));
   return yield* exports_Schema.decodeUnknownEffect(exports_Schema.fromJsonString(schema3))(text2).pipe(exports_Effect.mapError((cause) => failure(`decode ${name} artifact`, cause)));
 });
-var readAdmissionArtifact = () => readWithSchema("admission", WorkOrderAdmission);
-var readProposalArtifact = () => readWithSchema("proposal", ProposedWorkOrder);
-var readCheckedArtifact = () => readWithSchema("checked", CheckedWorkOrder);
-var readTerminalArtifact = () => readWithSchema("terminal", WorkOrderTerminal);
+var readAdmissionArtifact = readWithSchema("admission", WorkOrderAdmission);
+var readProposalArtifact = readWithSchema("proposal", ProposedWorkOrder);
+var readSettlementArtifact = readWithSchema("settlement", SettledWorkOrder);
+var readCheckedArtifact = readWithSchema("checked", CheckedWorkOrder);
+var readTerminalArtifact = readWithSchema("terminal", WorkOrderTerminal);
 var readTerminalArtifactOption = exports_Effect.fn("readTerminalArtifactOption")(function* () {
   const fs = yield* exports_FileSystem.FileSystem;
   const target = yield* artifactPath("terminal");
   if (!(yield* fs.exists(target)))
     return;
-  return yield* readTerminalArtifact();
+  return yield* readTerminalArtifact;
 });
 
 // examples/pr-work-order-ingress/src/action-checks.ts
@@ -53325,10 +53326,13 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
       detail: "a required check mutated the validated proposal"
     });
   }
-  const files = yield* exports_Effect.forEach(after.changedPaths, (relative) => runGit(repositoryPath, ["ls-files", "--stage", "-z", "--", relative], `verify checked file mode ${relative}`).pipe(exports_Effect.flatMap((entry) => /^100644 [0-9a-f]{40,64} 0\t[^\0]+\0$/.test(entry) ? exports_Effect.void : WorkspaceOperationFailure.make({
-    operation: `verify checked file mode ${relative}`,
-    reason: "publisher supports only existing regular tracked files"
-  })), exports_Effect.andThen(fs.readFileString(path.join(repositoryPath, relative))), exports_Effect.flatMap((content) => content.length <= 200000 ? exports_Effect.succeed(CheckedFile.make({ path: relative, content })) : WorkspaceOperationFailure.make({
+  const files = yield* exports_Effect.forEach(after.changedPaths, (relative) => runGit(repositoryPath, ["ls-files", "--stage", "-z", "--", relative], `verify checked file mode ${relative}`).pipe(exports_Effect.flatMap((entry) => {
+    const withoutTerminator = entry.endsWith("\x00") ? entry.slice(0, -1) : undefined;
+    return withoutTerminator !== undefined && !withoutTerminator.includes("\x00") && /^100644 [0-9a-f]{40,64} 0\t.+$/s.test(withoutTerminator) ? exports_Effect.void : WorkspaceOperationFailure.make({
+      operation: `verify checked file mode ${relative}`,
+      reason: "publisher supports only existing regular tracked files"
+    });
+  }), exports_Effect.andThen(fs.readFileString(path.join(repositoryPath, relative))), exports_Effect.flatMap((content) => content.length <= 200000 ? exports_Effect.succeed(CheckedFile.make({ path: relative, content })) : WorkspaceOperationFailure.make({
     operation: `read checked file ${relative}`,
     reason: "checked file exceeds 200,000 characters"
   })), exports_Effect.mapError((cause) => exports_Schema.is(WorkspaceOperationFailure)(cause) ? cause : WorkspaceOperationFailure.make({
@@ -54466,7 +54470,7 @@ var admit = exports_Effect.fn("workOrderAction.admit")(function* () {
   ]);
 });
 var implement = exports_Effect.fn("workOrderAction.implement")(function* () {
-  const admission = yield* readAdmissionArtifact();
+  const admission = yield* readAdmissionArtifact;
   const repositoryPath = yield* exports_Config.nonEmptyString("EFFECT_AGENT_REPOSITORY_PATH").pipe(exports_Config.withDefault("worktree"));
   const configuredActors = yield* actorIds();
   const configuredChecks = yield* actionChecks();
@@ -54488,7 +54492,7 @@ var implement = exports_Effect.fn("workOrderAction.implement")(function* () {
     order: admission.order,
     implement: makeImplementationAgent(exports_AnthropicLanguageModel.model(exports_Option.getOrElse(modelName, () => "claude-sonnet-5"), { max_tokens: 8000 })).run,
     timeout: exports_Duration.minutes(timeoutMinutes)
-  }).pipe(exports_Effect.provide(host2), exports_Effect.provide(exports_AnthropicClient.layerConfig({ apiKey: exports_Config.redacted("ANTHROPIC_API_KEY") }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer)))) : prepareWorkOrder({
+  }).pipe(exports_Effect.provide(exports_Layer.merge(host2, exports_AnthropicClient.layerConfig({ apiKey: exports_Config.redacted("ANTHROPIC_API_KEY") }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer))))) : prepareWorkOrder({
     order: admission.order,
     implement: makeImplementationAgent(exports_OpenAiLanguageModel.model(exports_Option.getOrElse(modelName, () => "gpt-5.6-sol"), {
       max_output_tokens: 32000,
@@ -54496,15 +54500,15 @@ var implement = exports_Effect.fn("workOrderAction.implement")(function* () {
       strictJsonSchema: true
     })).run,
     timeout: exports_Duration.minutes(timeoutMinutes)
-  }).pipe(exports_Effect.provide(host2), exports_Effect.provide(exports_OpenAiClient.layerConfig({ apiKey: exports_Config.redacted("OPENAI_API_KEY") }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer))));
+  }).pipe(exports_Effect.provide(exports_Layer.merge(host2, exports_OpenAiClient.layerConfig({ apiKey: exports_Config.redacted("OPENAI_API_KEY") }).pipe(exports_Layer.provide(exports_FetchHttpClient.layer)))));
   yield* run5.pipe(exports_Effect.matchEffect({
     onSuccess: (result4) => result4._tag === "proposed" ? writeArtifact("proposal", result4).pipe(exports_Effect.andThen(writeOutputs([["candidate", "true"]]))) : writeArtifact("settlement", result4).pipe(exports_Effect.andThen(writeArtifact("terminal", terminalFromSettlement(result4))), exports_Effect.andThen(writeOutputs([["candidate", "false"]]))),
     onFailure: (error2) => writeArtifact("terminal", terminalFailure(admission, error2)).pipe(exports_Effect.andThen(writeOutputs([["candidate", "false"]])))
   }));
 });
 var checks = exports_Effect.fn("workOrderAction.checks")(function* () {
-  const admission = yield* readAdmissionArtifact();
-  const proposal = yield* readProposalArtifact();
+  const admission = yield* readAdmissionArtifact;
+  const proposal = yield* readProposalArtifact;
   const configuredChecks = yield* actionChecks();
   const containerImage = yield* exports_Config.nonEmptyString("EFFECT_AGENT_CHECK_CONTAINER_IMAGE");
   const runnerUser = yield* exports_Config.nonEmptyString("EFFECT_AGENT_RUNNER_USER");
@@ -54575,8 +54579,8 @@ var verifyPublisherEnvelope = exports_Effect.fn("verifyPublisherEnvelope")(funct
   }
 });
 var publish2 = exports_Effect.fn("workOrderAction.publish")(function* () {
-  const admission = yield* readAdmissionArtifact();
-  const checked = yield* readCheckedArtifact();
+  const admission = yield* readAdmissionArtifact;
+  const checked = yield* readCheckedArtifact;
   const configuredActors = yield* actorIds();
   const configuredSupportPaths = yield* supportPaths();
   const configuredChecks = yield* actionChecks();
@@ -54645,7 +54649,7 @@ var visibleTerminal = (terminal) => {
   }
 };
 var present = exports_Effect.fn("workOrderAction.present")(function* () {
-  const admission = yield* readAdmissionArtifact();
+  const admission = yield* readAdmissionArtifact;
   const existingTerminal = yield* readTerminalArtifactOption();
   const publicationAttempted = yield* exports_Config.boolean("EFFECT_AGENT_PUBLICATION_ATTEMPTED").pipe(exports_Config.withDefault(false));
   const terminal = existingTerminal ?? FailedTerminal.make({

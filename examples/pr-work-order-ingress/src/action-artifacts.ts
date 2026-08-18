@@ -91,15 +91,15 @@ const readWithSchema = Effect.fn("readArtifact")(function* <S extends Schema.Top
   );
 });
 
-export const readAdmissionArtifact = () => readWithSchema("admission", WorkOrderAdmission);
-export const readProposalArtifact = () => readWithSchema("proposal", ProposedWorkOrder);
-export const readSettlementArtifact = () => readWithSchema("settlement", SettledWorkOrder);
-export const readCheckedArtifact = () => readWithSchema("checked", CheckedWorkOrder);
-export const readTerminalArtifact = () => readWithSchema("terminal", WorkOrderTerminal);
+export const readAdmissionArtifact = readWithSchema("admission", WorkOrderAdmission);
+export const readProposalArtifact = readWithSchema("proposal", ProposedWorkOrder);
+export const readSettlementArtifact = readWithSchema("settlement", SettledWorkOrder);
+export const readCheckedArtifact = readWithSchema("checked", CheckedWorkOrder);
+export const readTerminalArtifact = readWithSchema("terminal", WorkOrderTerminal);
 
 export const readTerminalArtifactOption = Effect.fn("readTerminalArtifactOption")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const target = yield* artifactPath("terminal");
   if (!(yield* fs.exists(target))) return undefined;
-  return yield* readTerminalArtifact();
+  return yield* readTerminalArtifact;
 });

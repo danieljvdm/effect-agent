@@ -32,10 +32,11 @@ import {
   writeArtifact,
 } from "./action-artifacts.ts";
 import { reproduceCheckedPatch, validateProposedWorkOrder } from "./action-checks.ts";
-import type { JournalClaimed } from "./action-contracts.ts";
 import {
   ActionCheckSpecs,
+  type CheckedWorkOrder,
   FailedTerminal,
+  type JournalClaimed,
   PublishedTerminal,
   type WorkOrderAdmission,
   WorkOrderActionFailure,
@@ -332,7 +333,7 @@ const admit = Effect.fn("workOrderAction.admit")(function* () {
 });
 
 const implement = Effect.fn("workOrderAction.implement")(function* () {
-  const admission = yield* readAdmissionArtifact();
+  const admission = yield* readAdmissionArtifact;
   const repositoryPath = yield* Config.nonEmptyString("EFFECT_AGENT_REPOSITORY_PATH").pipe(
     Config.withDefault("worktree"),
   );
@@ -369,10 +370,12 @@ const implement = Effect.fn("workOrderAction.implement")(function* () {
           ).run,
           timeout: Duration.minutes(timeoutMinutes),
         }).pipe(
-          Effect.provide(host),
           Effect.provide(
-            AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") }).pipe(
-              Layer.provide(FetchHttpClient.layer),
+            Layer.merge(
+              host,
+              AnthropicClient.layerConfig({ apiKey: Config.redacted("ANTHROPIC_API_KEY") }).pipe(
+                Layer.provide(FetchHttpClient.layer),
+              ),
             ),
           ),
         )
@@ -390,10 +393,12 @@ const implement = Effect.fn("workOrderAction.implement")(function* () {
           ).run,
           timeout: Duration.minutes(timeoutMinutes),
         }).pipe(
-          Effect.provide(host),
           Effect.provide(
-            OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
-              Layer.provide(FetchHttpClient.layer),
+            Layer.merge(
+              host,
+              OpenAiClient.layerConfig({ apiKey: Config.redacted("OPENAI_API_KEY") }).pipe(
+                Layer.provide(FetchHttpClient.layer),
+              ),
             ),
           ),
         );
@@ -417,8 +422,8 @@ const implement = Effect.fn("workOrderAction.implement")(function* () {
 });
 
 const checks = Effect.fn("workOrderAction.checks")(function* () {
-  const admission = yield* readAdmissionArtifact();
-  const proposal = yield* readProposalArtifact();
+  const admission = yield* readAdmissionArtifact;
+  const proposal = yield* readProposalArtifact;
   const configuredChecks = yield* actionChecks();
   const containerImage = yield* Config.nonEmptyString("EFFECT_AGENT_CHECK_CONTAINER_IMAGE");
   const runnerUser = yield* Config.nonEmptyString("EFFECT_AGENT_RUNNER_USER");
@@ -453,7 +458,7 @@ const exactStrings = (left: ReadonlyArray<string>, right: ReadonlyArray<string>)
 };
 
 const verifyPublisherEnvelope = Effect.fn("verifyPublisherEnvelope")(function* (input: {
-  readonly checked: typeof import("./action-contracts.ts").CheckedWorkOrder.Type;
+  readonly checked: CheckedWorkOrder;
   readonly authorizedActorIds: ReadonlyArray<string>;
   readonly supportPaths: ReadonlyArray<string>;
   readonly requiredChecks: ReadonlyArray<string>;
@@ -538,8 +543,8 @@ const verifyPublisherEnvelope = Effect.fn("verifyPublisherEnvelope")(function* (
 });
 
 const publish = Effect.fn("workOrderAction.publish")(function* () {
-  const admission = yield* readAdmissionArtifact();
-  const checked = yield* readCheckedArtifact();
+  const admission = yield* readAdmissionArtifact;
+  const checked = yield* readCheckedArtifact;
   const configuredActors = yield* actorIds();
   const configuredSupportPaths = yield* supportPaths();
   const configuredChecks = yield* actionChecks();
@@ -648,7 +653,7 @@ const visibleTerminal = (terminal: WorkOrderTerminal): string => {
 };
 
 const present = Effect.fn("workOrderAction.present")(function* () {
-  const admission = yield* readAdmissionArtifact();
+  const admission = yield* readAdmissionArtifact;
   const existingTerminal = yield* readTerminalArtifactOption();
   const publicationAttempted = yield* Config.boolean("EFFECT_AGENT_PUBLICATION_ATTEMPTED").pipe(
     Config.withDefault(false),

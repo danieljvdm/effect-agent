@@ -459,14 +459,17 @@ export const validateProposedWorkOrder = Effect.fn("validateProposedWorkOrder")(
       ["ls-files", "--stage", "-z", "--", relative],
       `verify checked file mode ${relative}`,
     ).pipe(
-      Effect.flatMap((entry) =>
-        /^100644 [0-9a-f]{40,64} 0\t[^\0]+\0$/.test(entry)
+      Effect.flatMap((entry) => {
+        const withoutTerminator = entry.endsWith("\0") ? entry.slice(0, -1) : undefined;
+        return withoutTerminator !== undefined &&
+          !withoutTerminator.includes("\0") &&
+          /^100644 [0-9a-f]{40,64} 0\t.+$/s.test(withoutTerminator)
           ? Effect.void
           : WorkspaceOperationFailure.make({
               operation: `verify checked file mode ${relative}`,
               reason: "publisher supports only existing regular tracked files",
-            }),
-      ),
+            });
+      }),
       Effect.andThen(fs.readFileString(path.join(repositoryPath, relative))),
       Effect.flatMap((content) =>
         content.length <= 200_000
