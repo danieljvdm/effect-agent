@@ -109,7 +109,9 @@ publication claim is made.
 
 Pull-request code and repository checks are untrusted. Until this isolation is
 implemented and tested, the repository must not add an enabled workflow that
-runs an implementer.
+runs an implementer. An enabled admit-and-reply workflow must check out the
+pull-request base commit without persisted credentials so its authorization
+logic is trusted repository code, not the pull-request merge ref.
 
 ## 5. Presentation
 
@@ -231,7 +233,9 @@ The suite must demonstrate:
 - **WOI-011**: An enabled workflow may admit a dispatch only after isolation
   and credential separation are implemented and tested. The first live
   entrypoint admits and replies; it does not hold a model secret or a commit
-  write token, and it is not an `@effect-agent/pr-review` export.
+  write token, and it is not an `@effect-agent/pr-review` export. It checks
+  out the pull-request base commit without persisted credentials so
+  authorization runs from trusted repository code.
 - **WOI-012**: `@effect-agent/pr-review` remains read-only; ingress is a
   separate leaf or Action entrypoint.
 - **WOI-013**: Ingress operations keep expected authentication, targeting,

@@ -16,6 +16,7 @@ import {
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { type Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Yaml } from "effect/unstable/encoding";
 
 import {
   authenticateDelivery,
@@ -64,6 +65,82 @@ const REPOSITORY = "acme/widgets";
 const PULL = 17;
 const ACTOR_ID = "42";
 const FILE_PATH = "src/value.ts";
+
+const WorkOrderWorkflowPermissions = Schema.Union([
+  Schema.String,
+  Schema.Record(Schema.String, Schema.String),
+]);
+const WorkOrderWorkflowStep = Schema.Struct({
+  uses: Schema.optionalKey(Schema.String),
+  with: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  run: Schema.optionalKey(Schema.String),
+});
+const WorkOrderWorkflowJob = Schema.Struct({
+  uses: Schema.optionalKey(Schema.String),
+  permissions: Schema.optionalKey(WorkOrderWorkflowPermissions),
+  secrets: Schema.optionalKey(Schema.Union([Schema.Literal("inherit"), Schema.Unknown])),
+  steps: Schema.optionalKey(Schema.Array(WorkOrderWorkflowStep)),
+});
+const WorkOrderWorkflowFile = Schema.Struct({
+  permissions: Schema.optionalKey(WorkOrderWorkflowPermissions),
+  jobs: Schema.Record(Schema.String, WorkOrderWorkflowJob),
+});
+const ALLOWED_WRITE_SCOPES = new Set(["pull-requests"]);
+const ALLOWED_SECRET_NAMES = new Set(["GITHUB_TOKEN"]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const assertFailClosedPermissions = (permissions: unknown, label: string) => {
+  expect(permissions, `${label} must declare an explicit permissions map`).toBeTypeOf("object");
+  expect(permissions).not.toBeNull();
+  expect(Array.isArray(permissions)).toBe(false);
+  if (!isRecord(permissions)) return;
+  expect(permissions.contents, `${label} contents must be read`).toBe("read");
+  for (const [scope, access] of Object.entries(permissions)) {
+    expect(["read", "write", "none"], `${label} ${scope} must be an access level`).toContain(
+      access,
+    );
+    if (access === "write") {
+      expect(ALLOWED_WRITE_SCOPES.has(scope), `${label} must not grant ${scope}: write`).toBe(true);
+    }
+  }
+};
+
+const forbiddenSecretAccesses = (value: unknown): Array<string> => {
+  const found: Array<string> = [];
+  const visit = (node: unknown) => {
+    if (typeof node === "string") {
+      for (const expression of node.matchAll(/\$\{\{([^}]+)\}\}/g)) {
+        const body = expression[1] ?? "";
+        const accesses = [
+          ...body.matchAll(
+            /\bsecrets(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)|\s*\[\s*['"]([^'"]+)['"]\s*\])?/g,
+          ),
+        ];
+        if (accesses.length === 0 && /\bsecrets\b/.test(body)) {
+          found.push("*");
+          continue;
+        }
+        for (const access of accesses) {
+          const name = access[1] ?? access[2] ?? "*";
+          if (!ALLOWED_SECRET_NAMES.has(name)) found.push(name);
+        }
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (node.secrets === "inherit") found.push("inherit");
+    for (const child of Object.values(node)) visit(child);
+  };
+  visit(value);
+  return found;
+};
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -818,17 +895,36 @@ describe("PR work-order ingress", () => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const workflow = yield* fs.readFileString(
+      const contents = yield* fs.readFileString(
         path.resolve(import.meta.dirname, "../../../.github/workflows/pr-work-order.yml"),
       );
-      expect(workflow).toContain("pr-work-order-ingress");
-      expect(workflow).toContain("contents: read");
-      expect(workflow).not.toContain("contents: write");
-      expect(workflow).not.toContain("OPENAI_API_KEY");
-      expect(workflow).not.toContain("EFFECT_AGENT_MODEL_SECRET");
-      expect(workflow).not.toContain("EFFECT_AGENT_GITHUB_WRITE_TOKEN");
-      expect(workflow).not.toContain("@effect-agent/pr-review");
-      expect(workflow).not.toContain("./action");
+      const parsed = Yaml.parse(contents);
+      const workflow = yield* Schema.decodeUnknownEffect(WorkOrderWorkflowFile)(parsed);
+      expect(Object.keys(workflow.jobs).length).toBeGreaterThan(0);
+      assertFailClosedPermissions(workflow.permissions, "workflow");
+      for (const [jobName, job] of Object.entries(workflow.jobs)) {
+        assertFailClosedPermissions(job.permissions ?? workflow.permissions, `job ${jobName}`);
+        expect(
+          job.secrets,
+          `${jobName} must not inherit or map repository secrets`,
+        ).toBeUndefined();
+        expect(job.uses, `${jobName} must not call a reusable workflow`).toBeUndefined();
+        const checkout = (job.steps ?? []).find((step) =>
+          (step.uses ?? "").startsWith("actions/checkout@"),
+        );
+        expect(checkout, `${jobName} must check out trusted base code`).toBeDefined();
+        expect(checkout?.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+        expect(checkout?.with?.["persist-credentials"]).toBe(false);
+        expect(
+          (job.steps ?? []).some((step) => (step.run ?? "").includes("pr-work-order-ingress")),
+        ).toBe(true);
+        for (const step of job.steps ?? []) {
+          expect(step.uses ?? "").not.toContain("@effect-agent/pr-review");
+          expect(step.uses).not.toBe("./action");
+          expect(step.run ?? "").not.toContain("@effect-agent/pr-review");
+        }
+      }
+      expect(forbiddenSecretAccesses(parsed)).toEqual([]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
