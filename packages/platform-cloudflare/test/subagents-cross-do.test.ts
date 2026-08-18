@@ -541,10 +541,14 @@ describe("DC cross-Object subagent matrix (parent and child in different Durable
     const duringFault = await readCanonical(ref, SUBAGENTS);
     expect(payloadsOf(duringFault, "SubagentStarted")).toHaveLength(0);
     expect(childModelInvocations(ref)).toBe(0);
-    expect(
-      await scheduledAlarm(ref, SUBAGENTS),
-      "indeterminate establishment is autonomous retry state and must retain an alarm (#93)",
-    ).not.toBeNull();
+    // Each recovery pass re-arms the alarm inside its own delivery, and workerd auto-retries
+    // a rejected delivery on its own timers — an instant probe can land mid-delivery, after
+    // the alarm slot was consumed but before the pass re-arms it. The durable SUB-031 claim
+    // is that autonomous retry state keeps an alarm armed, so poll for it.
+    await waitFor(
+      async () => (await scheduledAlarm(ref, SUBAGENTS)) !== null,
+      "indeterminate establishment to retain its autonomous retry alarm (#93)",
+    );
 
     // Heal the transport: the next alarm passes resolve the admission (fresh), establish the
     // ONE child, and the delegation completes — no duplicate was ever possible.
