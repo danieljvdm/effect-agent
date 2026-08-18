@@ -83,7 +83,8 @@ makes only a class E claim. See [pull-request work orders](spec/pr-work-orders.m
 `examples/pr-work-order-ingress` is the private GitHub-facing proof: recorded
 events become one work order, admission is persisted in a file-backed attempt
 store, checks and publication stay isolated, and the publisher
-compare-and-swaps. It is not an enabled workflow. See
+compare-and-swaps. The first live Actions entrypoint admits a mention reply
+and posts a host-authored thread reply. See
 [work-order ingress](spec/pr-work-order-ingress.md).
 Examples are outside the framework dependency graph and do not define
 a deployment boundary.

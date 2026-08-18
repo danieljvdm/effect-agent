@@ -16,6 +16,7 @@ import {
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { type Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import { Yaml } from "effect/unstable/encoding";
 
 import {
   authenticateDelivery,
@@ -44,11 +45,13 @@ import {
   ReviewCommentView,
   type StaleCommentAnchor,
 } from "../src/contracts.ts";
+import { pullRequestFromWire, reviewCommentFromWire } from "../src/github-live.ts";
 import { makeFakeGitHub } from "../src/github.ts";
 import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts";
 import { IsolatedChecks } from "../src/isolation.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
+import { authorizedActorIdsFromConfig, pullRequestNumberFromEvent } from "../src/run-delivery.ts";
 import { FileBackedAttemptStore, IngressStoreFailpoint } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
@@ -62,6 +65,70 @@ const REPOSITORY = "acme/widgets";
 const PULL = 17;
 const ACTOR_ID = "42";
 const FILE_PATH = "src/value.ts";
+
+const WorkOrderWorkflowPermissions = Schema.Union([
+  Schema.String,
+  Schema.Record(Schema.String, Schema.String),
+]);
+const WorkOrderWorkflowStep = Schema.Struct({
+  uses: Schema.optionalKey(Schema.String),
+  with: Schema.optionalKey(Schema.Record(Schema.String, Schema.Unknown)),
+  env: Schema.optionalKey(Schema.Record(Schema.String, Schema.String)),
+  run: Schema.optionalKey(Schema.String),
+});
+const WorkOrderWorkflowJob = Schema.Struct({
+  uses: Schema.optionalKey(Schema.String),
+  permissions: Schema.optionalKey(WorkOrderWorkflowPermissions),
+  secrets: Schema.optionalKey(Schema.Union([Schema.Literal("inherit"), Schema.Unknown])),
+  steps: Schema.optionalKey(Schema.Array(WorkOrderWorkflowStep)),
+});
+const WorkOrderWorkflowFile = Schema.Struct({
+  permissions: Schema.optionalKey(WorkOrderWorkflowPermissions),
+  jobs: Schema.Record(Schema.String, WorkOrderWorkflowJob),
+});
+const ALLOWED_WRITE_SCOPES = new Set(["pull-requests"]);
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+const assertFailClosedPermissions = (permissions: unknown, label: string) => {
+  expect(permissions, `${label} must declare an explicit permissions map`).toBeTypeOf("object");
+  expect(permissions).not.toBeNull();
+  expect(Array.isArray(permissions)).toBe(false);
+  if (!isRecord(permissions)) return;
+  expect(permissions.contents, `${label} contents must be read`).toBe("read");
+  for (const [scope, access] of Object.entries(permissions)) {
+    expect(["read", "write", "none"], `${label} ${scope} must be an access level`).toContain(
+      access,
+    );
+    if (access === "write") {
+      expect(ALLOWED_WRITE_SCOPES.has(scope), `${label} must not grant ${scope}: write`).toBe(true);
+    }
+  }
+};
+
+const forbiddenSecretAccesses = (value: unknown): Array<string> => {
+  const found: Array<string> = [];
+  const visit = (node: unknown) => {
+    if (typeof node === "string") {
+      const remainder = node.replace(
+        /\$\{\{\s*secrets\s*(?:\.\s*GITHUB_TOKEN|\[\s*['"]GITHUB_TOKEN['"]\s*\])\s*\}\}/g,
+        "",
+      );
+      if (/\bsecrets\b/.test(remainder)) found.push("*");
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child);
+      return;
+    }
+    if (!isRecord(node)) return;
+    if (node.secrets === "inherit") found.push("inherit");
+    for (const child of Object.values(node)) visit(child);
+  };
+  visit(value);
+  return found;
+};
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -812,23 +879,113 @@ describe("PR work-order ingress", () => {
       ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("WOI-011 no enabled workflow runs an implementer", () =>
+  it.effect("WOI-011 the enabled workflow does not hold a model secret or commit write token", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const workflows = path.resolve(import.meta.dirname, "../../../.github/workflows");
-      const files = yield* fs.readDirectory(workflows);
-      const contents = yield* Effect.forEach(files, (file) =>
-        fs.readFileString(path.join(workflows, file)),
+      const contents = yield* fs.readFileString(
+        path.resolve(import.meta.dirname, "../../../.github/workflows/pr-work-order.yml"),
       );
-      expect(
-        contents.some(
-          (body) =>
-            body.includes("pr-work-order-ingress") ||
-            body.includes("handleWorkOrderDelivery") ||
-            body.includes("example-pr-work-order-ingress"),
-        ),
-      ).toBe(false);
+      const parsed = Yaml.parse(contents);
+      const workflow = yield* Schema.decodeUnknownEffect(WorkOrderWorkflowFile)(parsed);
+      expect(Object.keys(workflow.jobs).length).toBeGreaterThan(0);
+      assertFailClosedPermissions(workflow.permissions, "workflow");
+      for (const [jobName, job] of Object.entries(workflow.jobs)) {
+        assertFailClosedPermissions(job.permissions ?? workflow.permissions, `job ${jobName}`);
+        expect(
+          job.secrets,
+          `${jobName} must not inherit or map repository secrets`,
+        ).toBeUndefined();
+        expect(job.uses, `${jobName} must not call a reusable workflow`).toBeUndefined();
+        const checkouts = (job.steps ?? []).filter((step) =>
+          (step.uses ?? "").startsWith("actions/checkout@"),
+        );
+        expect(checkouts, `${jobName} must check out trusted base code`).not.toHaveLength(0);
+        for (const checkout of checkouts) {
+          expect(checkout.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
+          expect(checkout.with?.["persist-credentials"]).toBe(false);
+        }
+        expect(
+          (job.steps ?? []).some((step) => (step.run ?? "").includes("pr-work-order-ingress")),
+        ).toBe(true);
+        for (const step of job.steps ?? []) {
+          expect(step.uses ?? "").not.toContain("@effect-agent/pr-review");
+          expect(step.uses).not.toBe("./action");
+          expect(step.run ?? "").not.toContain("@effect-agent/pr-review");
+        }
+      }
+      expect(forbiddenSecretAccesses(parsed)).toEqual([]);
     }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("WOI-011 secret scanning rejects a secrets context hidden by braces", () =>
+    Effect.sync(() => {
+      expect(
+        forbiddenSecretAccesses({
+          env: { KEY: "${{ format('{0}', 'x') && secrets.OPENAI_API_KEY }}" },
+        }),
+      ).toEqual(["*"]);
+      expect(
+        forbiddenSecretAccesses({
+          env: { TOKEN: "${{ secrets.GITHUB_TOKEN }}" },
+        }),
+      ).toEqual([]);
+    }),
+  );
+
+  it.effect("the Actions entrypoint reads the pull-request number from the trusted event", () =>
+    Effect.gen(function* () {
+      const number = yield* pullRequestNumberFromEvent(
+        JSON.stringify({ pull_request: { number: PULL } }),
+      );
+      const rejected = yield* pullRequestNumberFromEvent("{}").pipe(Effect.flip);
+      expect(number).toBe(PULL);
+      expect(rejected._tag).toBe("DispatchTargetRejected");
+    }),
+  );
+
+  it.effect("the Actions runner fails closed without authorized actor ids", () =>
+    Effect.gen(function* () {
+      const ids = yield* authorizedActorIdsFromConfig("3450486, 99");
+      const empty = yield* authorizedActorIdsFromConfig(" , ").pipe(Effect.flip);
+      expect([...ids]).toEqual(["3450486", "99"]);
+      expect(empty._tag).toBe("SchemaError");
+    }),
+  );
+
+  it.effect("the live GitHub adapter maps API wires onto ingress views", () =>
+    Effect.sync(() => {
+      const pull = pullRequestFromWire(REPOSITORY, {
+        number: PULL,
+        head: {
+          sha: HEAD,
+          repo: { full_name: REPOSITORY, fork: false },
+        },
+        base: { repo: { full_name: REPOSITORY, fork: false } },
+      });
+      const comment = reviewCommentFromWire({
+        id: 1001,
+        user: { id: 7, login: "reviewer" },
+        commit_id: HEAD,
+        path: FILE_PATH,
+        line: 1,
+        start_line: 1,
+        original_line: 1,
+        body: "The exported answer must be 42.",
+        pull_request_url: `https://api.github.com/repos/${REPOSITORY}/pulls/${String(PULL)}`,
+      });
+      expect(pull).toMatchObject({
+        repository: REPOSITORY,
+        pullRequestNumber: PULL,
+        headSha: HEAD,
+        headIsFork: false,
+      });
+      expect(comment).toMatchObject({
+        commentId: "1001",
+        authorId: "7",
+        path: FILE_PATH,
+        commitSha: HEAD,
+      });
+    }),
   );
 });
