@@ -366,6 +366,21 @@ describe("fan-out review contract", () => {
     expect(outputSchema).toContain("never prose describing the change");
   });
 
+  it("requires verifiers to settle every carried suggestion exactly", () => {
+    const instructions = FileReviewer.instructions({
+      ...verificationRequest,
+      evidence: [],
+    });
+    expect(instructions).toContain('"suggestion": <"committable" | "not-committable"');
+    expect(instructions).toContain(
+      "full replacement source for exactly lines startLine..endLine and nothing else",
+    );
+    const outputSchema = JSON.stringify(Tool.getJsonSchemaFromSchema(FileReviewReport));
+    expect(outputSchema).toContain(
+      "Required exactly when the candidate finding carries a suggestion",
+    );
+  });
+
   it("configures evidence-only children with the framework's bounded concurrency policy", () => {
     expect(Object.keys(FileReviewToolkit.tools)).toEqual([]);
     expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(1);
@@ -998,6 +1013,150 @@ describe("offline discovery and verification pipeline", () => {
     }),
   );
 
+  const committableSuggestionFinding = ReviewFinding.make({
+    ...supportedFinding,
+    suggestion: 'export const authenticateMode = "verified";',
+  });
+  const proseSuggestionFinding = ReviewFinding.make({
+    path: supportedFinding.path,
+    startLine: 3,
+    endLine: 3,
+    severity: "important",
+    category: "correctness",
+    title: "The enable flag ships without a rollout guard",
+    body: "The new flag enables the mode unconditionally in every environment.",
+    suggestion: "Move the flag behind the environment rollout guard before enabling it.",
+  });
+  const committableCandidate = candidateFor(committableSuggestionFinding, 1);
+  const proseCandidate = candidateFor(proseSuggestionFinding, 2);
+  const suggestionDiscovery: ReadonlyArray<OfflineUnitScript> = [
+    successfulDiscovery[0]!,
+    {
+      workId: specialistPass.passId,
+      outcome: {
+        _tag: "report",
+        report: discoveryReport(specialistPass, [
+          committableSuggestionFinding,
+          proseSuggestionFinding,
+        ]),
+      },
+    },
+  ];
+  const suggestionVerificationRequest = FileReviewRequest.make({
+    ...verificationRequest,
+    candidates: [committableCandidate, proseCandidate],
+  });
+
+  it.effect("publishes a suggestion only on an exact committable settlement", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        discoveryReports: suggestionDiscovery,
+        verificationCalls: [suggestionVerificationRequest],
+        verificationReports: [
+          {
+            workId: suggestionVerificationRequest.workId,
+            outcome: {
+              _tag: "report",
+              report: FileReviewReport.make({
+                phase: "verification",
+                workId: suggestionVerificationRequest.workId,
+                unitId: suggestionVerificationRequest.unitId,
+                findings: [],
+                concerns: [],
+                fileSummaries: [],
+                assessments: [
+                  CandidateAssessment.make({
+                    candidateId: committableCandidate.candidateId,
+                    disposition: "confirmed",
+                    suggestion: "committable",
+                    rationale: "The replacement is the exact committable source for line 2.",
+                  }),
+                  CandidateAssessment.make({
+                    candidateId: proseCandidate.candidateId,
+                    disposition: "confirmed",
+                    suggestion: "not-committable",
+                    rationale: "The suggestion text is advice prose, not replacement source.",
+                  }),
+                ],
+              }),
+            },
+          },
+        ],
+      });
+
+      const { suggestion: _prose, ...strippedProse } = proseSuggestionFinding;
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        confirmedCandidates: 2,
+        rejectedCandidates: 0,
+        unsettledCandidates: 0,
+      });
+      expect(result.outcome.review.findings).toEqual([
+        committableSuggestionFinding,
+        ReviewFinding.make(strippedProse),
+      ]);
+      const committableComment = result.outcome.plan.comments.find((comment) =>
+        comment.body.includes(committableSuggestionFinding.title),
+      );
+      const strippedComment = result.outcome.plan.comments.find((comment) =>
+        comment.body.includes(proseSuggestionFinding.title),
+      );
+      expect(committableComment?.body).toContain("```suggestion");
+      expect(strippedComment?.body).toBeDefined();
+      expect(strippedComment?.body).not.toContain("```suggestion");
+    }),
+  );
+
+  it.effect("leaves the unit unsettled when a carried suggestion is not settled", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        discoveryReports: suggestionDiscovery,
+        verificationCalls: [suggestionVerificationRequest],
+        verificationReports: [
+          {
+            workId: suggestionVerificationRequest.workId,
+            outcome: {
+              _tag: "report",
+              report: FileReviewReport.make({
+                phase: "verification",
+                workId: suggestionVerificationRequest.workId,
+                unitId: suggestionVerificationRequest.unitId,
+                findings: [],
+                concerns: [],
+                fileSummaries: [],
+                assessments: [
+                  CandidateAssessment.make({
+                    candidateId: committableCandidate.candidateId,
+                    disposition: "confirmed",
+                    rationale: "Confirmed without settling the carried suggestion.",
+                  }),
+                  CandidateAssessment.make({
+                    candidateId: proseCandidate.candidateId,
+                    disposition: "confirmed",
+                    suggestion: "not-committable",
+                    rationale: "The suggestion text is advice prose, not replacement source.",
+                  }),
+                ],
+              }),
+            },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: suggestionVerificationRequest.workId,
+          stage: "verification",
+          errorTag: "FileReviewWorkRejected",
+        }),
+      );
+      expect(result.outcome.review.findings).toEqual([]);
+      expect(result.outcome.plan.comments).toEqual([]);
+      expect(result.outcome.state).toBeUndefined();
+    }),
+  );
+
   it("surfaces typed policy exhaustion as a failed specialist pass", () => {
     const generalRequest = discoveryRequest(generalPass);
     const specialistRequest = discoveryRequest(specialistPass);
@@ -1076,6 +1235,113 @@ describe("offline discovery and verification pipeline", () => {
       }),
     );
     expect(assessment.coverage.status).toBe("incomplete");
+  });
+
+  // The independent fold must re-enforce suggestion settlement itself: a
+  // recorded trace can carry verification results the live projection never
+  // vetted, e.g. runs recorded before this contract existed.
+  it("independently rejects a recorded settlement that settles a suggestion nothing carried", () => {
+    const generalRequest = discoveryRequest(generalPass);
+    const specialistRequest = discoveryRequest(specialistPass);
+    const discoveredCandidate = candidateFor(supportedFinding, 1, generalPass);
+    const recordedVerificationRequest = FileReviewRequest.make({
+      ...verificationRequest,
+      candidates: [discoveredCandidate],
+    });
+    const base = {
+      eventVersion: 1,
+      runId: "run-suggestion-settlement",
+      conversationId: "conversation-suggestion-settlement",
+      agentId: "pr-fanout-reviewer",
+      timestamp: "2026-08-18T20:00:00.000Z",
+      providerExecuted: false,
+    } as const;
+    const declared = (sequence: number, toolCallId: string, request: FileReviewRequest) =>
+      Schema.decodeUnknownSync(RunEvent)({
+        ...base,
+        _tag: "ToolCallDeclared",
+        sequence,
+        toolCallId,
+        toolName: "delegate_file_review",
+        parameters: Schema.encodeSync(FileReviewRequest)(request),
+      });
+    const succeeded = (sequence: number, toolCallId: string, result: FileReviewUnitResult) =>
+      Schema.decodeUnknownSync(RunEvent)({
+        ...base,
+        _tag: "ToolCallSucceeded",
+        sequence,
+        toolCallId,
+        toolName: "delegate_file_review",
+        result: Schema.encodeSync(FileReviewUnitResult)(result),
+      });
+    const events = [
+      declared(1, "general-call", generalRequest),
+      succeeded(
+        2,
+        "general-call",
+        FileReviewUnitResult.make({
+          phase: "discovery",
+          workId: generalPass.passId,
+          unitId: generalPass.unitId,
+          candidates: [discoveredCandidate],
+          fileSummaries: [],
+          assessments: [],
+        }),
+      ),
+      declared(3, "specialist-call", specialistRequest),
+      succeeded(
+        4,
+        "specialist-call",
+        FileReviewUnitResult.make({
+          phase: "discovery",
+          workId: specialistPass.passId,
+          unitId: specialistPass.unitId,
+          candidates: [],
+          fileSummaries: [],
+          assessments: [],
+        }),
+      ),
+      declared(5, "verification-call", recordedVerificationRequest),
+      succeeded(
+        6,
+        "verification-call",
+        FileReviewUnitResult.make({
+          phase: "verification",
+          workId: recordedVerificationRequest.workId,
+          unitId: recordedVerificationRequest.unitId,
+          candidates: [],
+          fileSummaries: [],
+          assessments: [
+            CandidateAssessment.make({
+              candidateId: discoveredCandidate.candidateId,
+              disposition: "confirmed",
+              // supportedFinding carries no suggestion, so settling one is
+              // an inexact recorded settlement the fold must reject.
+              suggestion: "committable",
+              rationale: "The recorded settlement names a suggestion the candidate never carried.",
+            }),
+          ],
+        }),
+      ),
+    ];
+    const assessment = assessReviewPipeline({
+      shape: "fan-out",
+      files: highRiskFiles,
+      totalFiles: 2,
+      anchorFiles: highRiskFiles,
+      totalAnchorFiles: 2,
+      events,
+    });
+
+    expect(assessment.assurance.status).toBe("incomplete");
+    expect(assessment.assurance.failedPasses).toContainEqual(
+      expect.objectContaining({
+        workId: recordedVerificationRequest.workId,
+        stage: "verification",
+        errorTag: "SuggestionSettlementMismatch",
+      }),
+    );
+    expect(assessment.confirmedFindings).toEqual([]);
   });
 });
 

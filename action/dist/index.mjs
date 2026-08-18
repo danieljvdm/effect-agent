@@ -43006,9 +43006,20 @@ var reviewCandidateSubjectKey = (candidate) => candidate._tag === "FindingCandid
 class CandidateAssessment extends exports_Schema.Class("@effect-agent/pr-review/CandidateAssessment")({
   candidateId: ReviewCandidateId,
   disposition: exports_Schema.Literals(["confirmed", "rejected"]),
+  suggestion: exports_Schema.optionalKey(exports_Schema.Literals(["committable", "not-committable"]).annotate({
+    description: 'Required exactly when the candidate finding carries a suggestion: "committable" only when its text is the full replacement source for exactly lines startLine..endLine and nothing else. Forbidden for candidates without a suggestion.'
+  })),
   rationale: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(600))
 }) {
 }
+var assessmentSettlesSuggestionExactly = (assessment, candidate) => candidate._tag === "FindingCandidate" && candidate.finding.suggestion !== undefined ? assessment.suggestion !== undefined : assessment.suggestion === undefined;
+var confirmedFindingForPublication = (assessment, candidate) => {
+  if (candidate.finding.suggestion === undefined || assessment.suggestion === "committable") {
+    return candidate.finding;
+  }
+  const { suggestion: _stripped, ...finding } = candidate.finding;
+  return ReviewFinding.make(finding);
+};
 
 class DiscoveredConcern extends exports_Schema.Class("@effect-agent/pr-review/DiscoveredConcern")({
   concern: ReviewConcern,
@@ -43112,7 +43123,8 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => {
       "Independently verify every candidate in the input. You did not receive another reviewer's transcript or reasoning; use only the candidate claim and bounded evidence.",
       "The evidence array contains the complete bounded unit, including neighboring changed code that may confirm or falsify a locally plausible claim.",
       "For each candidate, try to falsify it first. Confirm only when the cited behavior is supported and actionable. Reject unsupported, speculative, duplicate, or non-actionable candidates.",
-      'Return ONLY JSON with phase "verification", the exact workId/unitId, empty findings/concerns/fileSummaries arrays, and exactly one assessment per candidateId. Each assessment is {"candidateId": <exact id>, "disposition": <"confirmed" | "rejected">, "rationale": <bounded evidence-based reason>}. Never add or omit an id.'
+      'Return ONLY JSON with phase "verification", the exact workId/unitId, empty findings/concerns/fileSummaries arrays, and exactly one assessment per candidateId. Each assessment is {"candidateId": <exact id>, "disposition": <"confirmed" | "rejected">, "suggestion": <"committable" | "not-committable", present exactly when the candidate finding carries a suggestion>, "rationale": <bounded evidence-based reason>}. Never add or omit an id.',
+      `Settle every carried suggestion independently of the claim: answer "committable" only when its text is the full replacement source for exactly lines startLine..endLine and nothing else — it compiles in context and preserves the finding's intent, never prose describing a change. Otherwise answer "not-committable"; the host then publishes the confirmed finding without its suggestion. Omit the assessment "suggestion" field for candidates without one.`
     ].join(`
 `);
   }
@@ -43223,15 +43235,19 @@ var projectReviewResult = (report2, context4, request3) => {
     if (report2.findings.length > 0 || report2.concerns.length > 0 || report2.fileSummaries.length > 0) {
       return exports_Effect.fail(rejectWork(report2.workId, "verification output contained discovery-only fields"));
     }
-    const expectedIds = new Set(request3.candidates.map((candidate) => candidate.candidateId));
+    const expectedById = new Map(request3.candidates.map((candidate) => [candidate.candidateId, candidate]));
     const assessedIds = new Set;
     for (const assessment of report2.assessments) {
-      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+      const candidate = expectedById.get(assessment.candidateId);
+      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
         return exports_Effect.fail(rejectWork(report2.workId, "verification output did not assess the exact candidate set"));
+      }
+      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
+        return exports_Effect.fail(rejectWork(report2.workId, "verification output did not settle suggestion publication exactly"));
       }
       assessedIds.add(assessment.candidateId);
     }
-    if (assessedIds.size !== expectedIds.size) {
+    if (assessedIds.size !== expectedById.size) {
       return exports_Effect.fail(rejectWork(report2.workId, "verification output did not assess the exact candidate set"));
     }
     return exports_Effect.succeed(FileReviewUnitResult.make({
@@ -44107,31 +44123,35 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
       }));
       continue;
     }
-    const expectedIds = new Set(candidates.map((candidate) => candidate.candidateId));
+    const byId = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
     const assessedIds = new Set;
+    let suggestionSettlementExact = true;
     const exactAssessments = result4.value.assessments.every((assessment) => {
-      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+      const candidate = byId.get(assessment.candidateId);
+      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
         return false;
       }
       assessedIds.add(assessment.candidateId);
+      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
+        suggestionSettlementExact = false;
+      }
       return true;
     });
-    if (expectedIds.size !== candidates.length || !exactAssessments || assessedIds.size !== expectedIds.size) {
+    if (byId.size !== candidates.length || !exactAssessments || assessedIds.size !== byId.size || !suggestionSettlementExact) {
       unsettledCandidates += candidates.length;
       failedPasses.push(FailedReviewPass.make({
         workId,
         stage: "verification",
-        errorTag: "VerificationAssessmentMismatch"
+        errorTag: exactAssessments && !suggestionSettlementExact ? "SuggestionSettlementMismatch" : "VerificationAssessmentMismatch"
       }));
       continue;
     }
     completedVerificationPasses += 1;
-    const byId = new Map(candidates.map((candidate) => [candidate.candidateId, candidate]));
     for (const assessment of result4.value.assessments) {
       if (assessment.disposition === "confirmed") {
         const candidate = byId.get(assessment.candidateId);
         if (candidate !== undefined)
-          confirmedCandidates.push(candidate);
+          confirmedCandidates.push({ assessment, candidate });
       } else {
         rejectedCandidates += 1;
       }
@@ -44171,8 +44191,8 @@ var fanOutAssurance = (files, totalFiles, anchorFiles, trace3) => {
       failedPasses,
       reasons
     }),
-    confirmedFindings: confirmedCandidates.flatMap((candidate) => candidate._tag === "FindingCandidate" ? [candidate.finding] : []),
-    confirmedConcerns: confirmedCandidates.flatMap((candidate) => candidate._tag === "ConcernCandidate" ? [candidate.concern] : []),
+    confirmedFindings: confirmedCandidates.flatMap(({ assessment, candidate }) => candidate._tag === "FindingCandidate" ? [confirmedFindingForPublication(assessment, candidate)] : []),
+    confirmedConcerns: confirmedCandidates.flatMap(({ candidate }) => candidate._tag === "ConcernCandidate" ? [candidate.concern] : []),
     walkthrough
   };
 };
