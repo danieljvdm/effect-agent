@@ -349,6 +349,23 @@ describe("fan-out review contract", () => {
     expect(instructions).toContain("publication cap is 7");
   });
 
+  it("spells the finding shape and committable-suggestion rule out to discovery workers", () => {
+    const instructions = FileReviewer.instructions({
+      ...discoveryRequest(generalPass),
+      evidence: [],
+    });
+    expect(instructions).toContain(
+      '"suggestion": <string, OPTIONAL: replacement source code for exactly lines startLine..endLine, ready to commit>',
+    );
+    expect(instructions).toContain(
+      "full replacement source for every line in the range and nothing else",
+    );
+    // The rendered final-output contract carries the same rule with the schema,
+    // so every consumer of ReviewFinding shows it to the model.
+    const outputSchema = JSON.stringify(Tool.getJsonSchemaFromSchema(FileReviewReport));
+    expect(outputSchema).toContain("never prose describing the change");
+  });
+
   it("configures evidence-only children with the framework's bounded concurrency policy", () => {
     expect(Object.keys(FileReviewToolkit.tools)).toEqual([]);
     expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(1);

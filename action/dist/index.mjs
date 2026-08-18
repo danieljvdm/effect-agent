@@ -42598,7 +42598,9 @@ class ReviewFinding extends exports_Schema.Class("@effect-agent/pr-review/Review
   category: exports_Schema.optionalKey(FindingCategory),
   title: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(120)),
   body: exports_Schema.NonEmptyString.check(exports_Schema.isMaxLength(2000)),
-  suggestion: exports_Schema.optionalKey(exports_Schema.String.check(exports_Schema.isMaxLength(2000)))
+  suggestion: exports_Schema.optionalKey(exports_Schema.String.annotate({
+    description: "Committable replacement source code for exactly lines startLine..endLine: the full replacement for every line in the range and nothing else — never prose describing the change, which belongs in body."
+  }).check(exports_Schema.isMaxLength(2000)))
 }) {
 }
 var ReviewVerdict = exports_Schema.Literals(["approve", "comment", "request-changes"]);
@@ -43120,7 +43122,9 @@ var makeFileReviewerInstructions = (options3 = {}) => (brief) => {
     focus,
     "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
     "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
-    `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`
+    `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
+    'Each finding is {"path": <a unit file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL problem-kind label>, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement source code for exactly lines startLine..endLine, ready to commit>}.',
+    'Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement source for every line in the range and nothing else — never prose describing the change, which belongs in "body".'
   ].join(`
 `);
 };
