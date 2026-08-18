@@ -111,8 +111,50 @@ export class CandidateAssessment extends Schema.Class<CandidateAssessment>(
 )({
   candidateId: ReviewCandidateId,
   disposition: Schema.Literals(["confirmed", "rejected"]),
+  /**
+   * Exact suggestion settlement: required when the candidate finding carries
+   * a suggestion, forbidden otherwise. Untrusted child output cannot publish
+   * a GitHub replacement block by prompt compliance alone — the host keeps a
+   * confirmed finding's suggestion only on an exact "committable" settlement.
+   */
+  suggestion: Schema.optionalKey(
+    Schema.Literals(["committable", "not-committable"]).annotate({
+      description:
+        'Required exactly when the candidate finding carries a suggestion: "committable" only when its text is the full replacement source for exactly lines startLine..endLine and nothing else. Forbidden for candidates without a suggestion.',
+    }),
+  ),
   rationale: Schema.NonEmptyString.check(Schema.isMaxLength(600)),
 }) {}
+
+/**
+ * Exact suggestion settlement shape: a carried suggestion must be settled and
+ * nothing else may be. Enforced identically by the live delegation projection
+ * and the independent host coverage fold.
+ */
+export const assessmentSettlesSuggestionExactly = (
+  assessment: CandidateAssessment,
+  candidate: ReviewCandidate,
+): boolean =>
+  candidate._tag === "FindingCandidate" && candidate.finding.suggestion !== undefined
+    ? assessment.suggestion !== undefined
+    : assessment.suggestion === undefined;
+
+/**
+ * Fail-closed publication of a confirmed finding: only an exact "committable"
+ * settlement keeps the suggestion; anything else publishes the finding with
+ * the suggestion stripped so unverified text can never become a one-click
+ * GitHub replacement block.
+ */
+export const confirmedFindingForPublication = (
+  assessment: CandidateAssessment,
+  candidate: FindingCandidate,
+): ReviewFinding => {
+  if (candidate.finding.suggestion === undefined || assessment.suggestion === "committable") {
+    return candidate.finding;
+  }
+  const { suggestion: _stripped, ...finding } = candidate.finding;
+  return ReviewFinding.make(finding);
+};
 
 /**
  * Concern candidates need explicit paths internally to bind the claim to
@@ -260,7 +302,8 @@ export const makeFileReviewerInstructions =
         "Independently verify every candidate in the input. You did not receive another reviewer's transcript or reasoning; use only the candidate claim and bounded evidence.",
         "The evidence array contains the complete bounded unit, including neighboring changed code that may confirm or falsify a locally plausible claim.",
         "For each candidate, try to falsify it first. Confirm only when the cited behavior is supported and actionable. Reject unsupported, speculative, duplicate, or non-actionable candidates.",
-        'Return ONLY JSON with phase "verification", the exact workId/unitId, empty findings/concerns/fileSummaries arrays, and exactly one assessment per candidateId. Each assessment is {"candidateId": <exact id>, "disposition": <"confirmed" | "rejected">, "rationale": <bounded evidence-based reason>}. Never add or omit an id.',
+        'Return ONLY JSON with phase "verification", the exact workId/unitId, empty findings/concerns/fileSummaries arrays, and exactly one assessment per candidateId. Each assessment is {"candidateId": <exact id>, "disposition": <"confirmed" | "rejected">, "suggestion": <"committable" | "not-committable", present exactly when the candidate finding carries a suggestion>, "rationale": <bounded evidence-based reason>}. Never add or omit an id.',
+        'Settle every carried suggestion independently of the claim: answer "committable" only when its text is the full replacement source for exactly lines startLine..endLine and nothing else — it compiles in context and preserves the finding\'s intent, never prose describing a change. Otherwise answer "not-committable"; the host then publishes the confirmed finding without its suggestion. Omit the assessment "suggestion" field for candidates without one.',
       ].join("\n");
     }
     const focus =
@@ -275,6 +318,8 @@ export const makeFileReviewerInstructions =
       "The discovery evidence array contains every complete shard in the unit. Review every entry and every shard of a multi-shard path. A later independent verifier, not you, decides which candidates publish.",
       "When a non-anchored concern depends on one or more unit files, list 1-3 exact evidencePaths to bind the claim to scheduled evidence.",
       `Return ONLY JSON with phase "discovery", the exact workId/unitId, up to ${MAX_CHILD_FINDINGS} findings, up to ${MAX_CHILD_CONCERNS} concerns shaped as {concern, evidencePaths}, one factual file summary per path (<= ${MAX_WALKTHROUGH_SUMMARY_CHARS} chars), and an empty assessments array. Empty candidate arrays are valid; do not invent defects.`,
+      'Each finding is {"path": <a unit file path>, "startLine": <integer, an R-marked new-file line>, "endLine": <integer, >= startLine, same file, R-marked>, "severity": <"blocking" | "important" | "nit">, "category": <OPTIONAL problem-kind label>, "title": <string, <= 120 chars>, "body": <string, why it matters and what to do>, "suggestion": <string, OPTIONAL: replacement source code for exactly lines startLine..endLine, ready to commit>}.',
+      'Include "suggestion" only when you are confident the replacement compiles and preserves intent; its text must contain the full replacement source for every line in the range and nothing else — never prose describing the change, which belongs in "body".',
     ].join("\n");
   };
 
@@ -462,17 +507,28 @@ const projectReviewResult = (
         rejectWork(report.workId, "verification output contained discovery-only fields"),
       );
     }
-    const expectedIds = new Set(request.candidates.map((candidate) => candidate.candidateId));
+    const expectedById = new Map(
+      request.candidates.map((candidate) => [candidate.candidateId, candidate] as const),
+    );
     const assessedIds = new Set<string>();
     for (const assessment of report.assessments) {
-      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+      const candidate = expectedById.get(assessment.candidateId);
+      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
         return Effect.fail(
           rejectWork(report.workId, "verification output did not assess the exact candidate set"),
         );
       }
+      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
+        return Effect.fail(
+          rejectWork(
+            report.workId,
+            "verification output did not settle suggestion publication exactly",
+          ),
+        );
+      }
       assessedIds.add(assessment.candidateId);
     }
-    if (assessedIds.size !== expectedIds.size) {
+    if (assessedIds.size !== expectedById.size) {
       return Effect.fail(
         rejectWork(report.workId, "verification output did not assess the exact candidate set"),
       );

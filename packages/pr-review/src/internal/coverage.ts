@@ -5,6 +5,9 @@ import { anchorViolation } from "./anchors.ts";
 import type { ChangedFile } from "./diff.ts";
 import { isReviewableFile } from "./diff.ts";
 import {
+  assessmentSettlesSuggestionExactly,
+  type CandidateAssessment,
+  confirmedFindingForPublication,
   FileReviewDelegationFailure,
   FileReviewRequest,
   FileReviewUnitResult,
@@ -473,7 +476,10 @@ const fanOutAssurance = (
     }
   }
 
-  const confirmedCandidates: Array<ReviewCandidate> = [];
+  const confirmedCandidates: Array<{
+    readonly assessment: CandidateAssessment;
+    readonly candidate: ReviewCandidate;
+  }> = [];
   let rejectedCandidates = 0;
   let unsettledCandidates = 0;
   let requiredVerificationPasses = 0;
@@ -549,38 +555,46 @@ const fanOutAssurance = (
       );
       continue;
     }
-    const expectedIds = new Set(candidates.map((candidate) => candidate.candidateId));
+    const byId = new Map(
+      candidates.map((candidate) => [candidate.candidateId, candidate] as const),
+    );
     const assessedIds = new Set<string>();
+    let suggestionSettlementExact = true;
     const exactAssessments = result.value.assessments.every((assessment) => {
-      if (!expectedIds.has(assessment.candidateId) || assessedIds.has(assessment.candidateId)) {
+      const candidate = byId.get(assessment.candidateId);
+      if (candidate === undefined || assessedIds.has(assessment.candidateId)) {
         return false;
       }
       assessedIds.add(assessment.candidateId);
+      if (!assessmentSettlesSuggestionExactly(assessment, candidate)) {
+        suggestionSettlementExact = false;
+      }
       return true;
     });
     if (
-      expectedIds.size !== candidates.length ||
+      byId.size !== candidates.length ||
       !exactAssessments ||
-      assessedIds.size !== expectedIds.size
+      assessedIds.size !== byId.size ||
+      !suggestionSettlementExact
     ) {
       unsettledCandidates += candidates.length;
       failedPasses.push(
         FailedReviewPass.make({
           workId,
           stage: "verification",
-          errorTag: "VerificationAssessmentMismatch",
+          errorTag:
+            exactAssessments && !suggestionSettlementExact
+              ? "SuggestionSettlementMismatch"
+              : "VerificationAssessmentMismatch",
         }),
       );
       continue;
     }
     completedVerificationPasses += 1;
-    const byId = new Map(
-      candidates.map((candidate) => [candidate.candidateId, candidate] as const),
-    );
     for (const assessment of result.value.assessments) {
       if (assessment.disposition === "confirmed") {
         const candidate = byId.get(assessment.candidateId);
-        if (candidate !== undefined) confirmedCandidates.push(candidate);
+        if (candidate !== undefined) confirmedCandidates.push({ assessment, candidate });
       } else {
         rejectedCandidates += 1;
       }
@@ -641,10 +655,12 @@ const fanOutAssurance = (
       failedPasses,
       reasons,
     }),
-    confirmedFindings: confirmedCandidates.flatMap((candidate) =>
-      candidate._tag === "FindingCandidate" ? [candidate.finding] : [],
+    confirmedFindings: confirmedCandidates.flatMap(({ assessment, candidate }) =>
+      candidate._tag === "FindingCandidate"
+        ? [confirmedFindingForPublication(assessment, candidate)]
+        : [],
     ),
-    confirmedConcerns: confirmedCandidates.flatMap((candidate) =>
+    confirmedConcerns: confirmedCandidates.flatMap(({ candidate }) =>
       candidate._tag === "ConcernCandidate" ? [candidate.concern] : [],
     ),
     walkthrough,

@@ -346,7 +346,12 @@ export class ReviewFinding extends Schema.Class<ReviewFinding>(
   title: Schema.NonEmptyString.check(Schema.isMaxLength(120)),
   body: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
   /** Replacement for exactly lines startLine..endLine; omit when unsure. */
-  suggestion: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(2_000))),
+  suggestion: Schema.optionalKey(
+    Schema.String.annotate({
+      description:
+        "Committable replacement source code for exactly lines startLine..endLine: the full replacement for every line in the range and nothing else — never prose describing the change, which belongs in body.",
+    }).check(Schema.isMaxLength(2_000)),
+  ),
 }) {}
 
 export const ReviewVerdict = Schema.Literals(["approve", "comment", "request-changes"]);
