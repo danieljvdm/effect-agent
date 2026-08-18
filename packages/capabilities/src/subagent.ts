@@ -396,9 +396,12 @@ export interface SubagentDefineOptions<
     context: SubagentPrepareContext,
   ) => Effect.Effect<TargetInput["Type"], Failure["Type"], PrepareRequirements>;
   /**
-   * Bounded result projection from the Schema-decoded child output to the
-   * declared Tool success value (spec/subagents.md §4.2). This is the explicit
-   * declassification boundary for child output. The context carries the
+   * Bounded result projection from the Schema-decoded child output, result
+   * context, and original Schema-decoded Tool parameters to the declared Tool
+   * success value (spec/subagents.md §4.2). This is the explicit
+   * declassification boundary for child output: the parameters let it bind
+   * echoed identity and scope to the exact request without prompt parsing.
+   * The context carries the
    * framework's honest exhaustion marker (SUB-034): when `budgetExhausted` is
    * true the child settled through the final-answer resolution (RUN-018) and
    * its output is a budget-truncated partial — surface it in the declared
@@ -408,6 +411,7 @@ export interface SubagentDefineOptions<
   readonly projectResult: (
     output: TargetOutput["Type"],
     context: SubagentResultContext,
+    parameters: Parameters["Type"],
   ) => Effect.Effect<Success["Type"], Failure["Type"], ProjectRequirements>;
   /**
    * Per-invocation child Tool Call allowance (SUB-034): a tightening-only
@@ -1502,9 +1506,13 @@ const layer = <
           // the parent without leaking any child transcript.
           ...(result.exhausted !== undefined ? { exhausted: result.exhausted } : {}),
         });
-        const projected = yield* delegation.projectResult(result.output, {
-          budgetExhausted: result.finishReason === "budget-exhausted",
-        });
+        const projected = yield* delegation.projectResult(
+          result.output,
+          {
+            budgetExhausted: result.finishReason === "budget-exhausted",
+          },
+          parameters,
+        );
         const encodedResult = yield* encodeSuccess(projected).pipe(
           Effect.mapError(() =>
             SubagentProjectionFailure.make({
@@ -1751,9 +1759,13 @@ const layer = <
             }),
           );
           const projected = yield* delegation
-            .projectResult(decoded, {
-              budgetExhausted: status.finishReason === "budget-exhausted",
-            })
+            .projectResult(
+              decoded,
+              {
+                budgetExhausted: status.finishReason === "budget-exhausted",
+              },
+              parameters,
+            )
             .pipe(
               Effect.catch((declared) =>
                 encodeDeclaredFailure(declared).pipe(

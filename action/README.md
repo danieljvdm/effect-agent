@@ -2,8 +2,8 @@
 
 Prebuilt node-runtime GitHub Action over
 [`@effect-agent/pr-review`](../packages/pr-review): a bounded, read-only
-reviewer whose findings and required-file coverage are validated against the
-real diff before the check concludes. No install step — the committed
+reviewer whose input assignment, verifier-confirmed findings, and anchors are
+validated host-side before the check concludes. No install step — the committed
 `dist/index.mjs` bundle runs directly (`vp run action:build` regenerates it;
 `vp run check` fails when it is stale).
 
@@ -34,6 +34,7 @@ jobs:
           guidance: |
             This is an Effect codebase. Flag naked Promises in public APIs.
           ignore: "**/*.lock,dist/**"
+          fan-out: true # settled assurance requires discovery + verification
           review-mode: incremental
           retire-stale-reviews: true
 ```
@@ -48,21 +49,24 @@ must not combine `guidance-file` with `pull_request_target`.)
 
 ## Incremental reviews and authenticated continuity state
 
-Every review with complete host-verified coverage embeds a bounded,
-schema-validated, terminal state marker in its review body. `state-secret`
+Every review with complete host-derived input coverage and settled discovery/
+verification assurance embeds a bounded, schema-validated, terminal state
+marker in its review body. `state-secret`
 HMAC-authenticates the marker so model text or another workflow cannot forge
 scope-narrowing authority. The marker records the PR
-identity, base/head lineage, reviewer-profile fingerprint, reviewed-scope
+identity, base/head lineage, reviewer-profile fingerprint, settled-scope
 fingerprint, and unresolved findings/concerns. On the next `synchronize`, the
 action validates that state and asks GitHub for the previous-head...current-head
 comparison. Only changed paths still present in the current PR diff are sent
 to the model; prior unresolved findings in unchanged paths remain active, and
-paths changed or reverted since the baseline are reconsidered. A compatible
+paths changed or reverted since the baseline receive fresh discovery and
+verification. A compatible
 ancestor advance of the base includes overlapping PR paths as affected
 context.
 
 Before ancestry-based range selection, the action compares the current
-accepted-scope fingerprint with the authenticated prior state. The fingerprint
+settled-scope fingerprint with the authenticated prior state. The wire schema
+retains the compatibility name `acceptedScopeFingerprint`. The fingerprint
 hashes the ignore-filtered file paths, statuses, addition/deletion counts,
 unified-diff content and context (excluding hunk line coordinates), bounded
 patchless base/head evidence, pull-request framing, and reviewer profile. It
@@ -75,7 +79,7 @@ configuration reviews again.
 The action visibly falls back to the full current PR diff when state is
 missing or unreadable, PR/base/head/profile identity is incompatible, a prior
 head is no longer an ancestor, a comparison is unavailable or truncated, or
-the base lineage changed materially and the accepted-scope fingerprint does
+the base lineage changed materially and the settled-scope fingerprint does
 not match. `skip-unchanged: "true"` is the default.
 Only terminal markers authored by the configured `review-author` identity,
 authenticated with the same stable `state-secret`, and pinned to the review's
@@ -138,8 +142,9 @@ to additionally see the engine's per-turn and per-handler telemetry, or
 
 ## Final merge-readiness audit
 
-`review-mode: final` deliberately ignores the incremental baseline and audits
-the bounded full current PR diff. It is not run on ordinary corrective pushes.
+`review-mode: final` deliberately ignores prior assurance state, plans fresh
+discovery over the bounded full current PR diff, and independently verifies
+the new candidates. It is not run on ordinary corrective pushes.
 This repository triggers one such audit when an operator applies the
 `pr-review:final-audit` label. The audit reruns the same required `review`
 check on the current head, so a blocking or incomplete final audit prevents
@@ -154,23 +159,38 @@ optional category chip and a collapsed copy-paste "Prompt for AI agents"
 (with a consolidated all-findings variant in the body). Reviews end with a
 footer naming the selected scope, model, token usage, and workflow run.
 Deliberate full-review fallbacks explain their reason in the body. The run
-also writes a step summary and `conclusion`, `coverage`, `review-mode`, and
-`review-reason` outputs.
+also writes a step summary and `conclusion`, `input-coverage`,
+`review-assurance`, `review-mode`, and `review-reason` outputs. The older
+`coverage` output remains as a deprecated compatibility aggregate.
 
 The check conclusion does not trust the model verdict. Any active blocking
-finding or concern fails the job. Missing required coverage — including an
-`AgentPolicyError`, failed/unassigned unit, undiffable required path,
-truncated source surface, or coordinator failure — is also non-success. The
+finding or concern fails the job. Incomplete or partial input evidence, a failed or
+exhausted discovery/specialist/verification pass, a mismatched candidate
+batch, or unsettled candidates is also non-success. Reading every path is not
+semantic completeness, and settled assurance never claims that every defect
+was found. Fan-out is enabled by default because the flat compatibility shape
+has no independent verifier and cannot produce settled assurance. Large textual
+diffs are deterministically split into complete bounded
+evidence shards; a path is partial only if finite plan capacity leaves one or
+more shards unassigned. Overflow reports every affected path and the exact
+shard count while bounding the diagnostic identifier sample. Every assigned unit receives both a general and
+an independent specialist discovery pass, even when host risk classification
+produces no category label. The
 legacy `fail-on` input is accepted for compatibility but no longer weakens or
 changes this conservative gate.
 
-If you set `max-duration-minutes` (or rely on the defaults: 8 flat / 15
+For custom `runReviewAction` harnesses, a changeset `fingerprint` without a
+`profileFingerprint` and authenticated review state never authorizes an
+unchanged-review skip. That legacy shape still compiles, but runs again rather
+than converting unauthenticated prior-review text into a green assurance claim.
+
+If you set `max-duration-minutes` (or rely on the defaults: 8 flat / 20
 fan-out), keep the job's `timeout-minutes` above it — a runner-killed job
 posts nothing, while a budget-ended run fails typed with its forensics.
 
 Inputs, outputs, and defaults are documented in [`action.yml`](action.yml).
 Honest limits: execution remains deployment class E and posting is never
 exactly-once. Review progress survives across runs only through the bounded
-state in successfully covered GitHub reviews. A runtime failure posts
-nothing; a settled but structurally incomplete review is posted honestly and
-fails the check. A draft or non-PR event is a typed skip (`skipped=true`).
+state in complete-input, settled-assurance GitHub reviews. A runtime failure posts
+nothing; a settled run with incomplete input or assurance is posted honestly
+and fails the check. A draft or non-PR event is a typed skip (`skipped=true`).

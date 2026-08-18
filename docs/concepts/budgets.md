@@ -75,8 +75,10 @@ rejected four-call batch cannot trip a limit of three.
 
 **`"fail"`.** The pre-arc behavior, byte for byte: exhaustion fails the Run typed before the
 exceeding work starts. Choose it for pipelines that must never accept a truncated answer — the
-repository's own PR reviewer pins it for review _children_, because a review is a coverage claim
-and a partial produced without reading the diff would launder exhaustion into "reviewed".
+repository's own PR reviewer pins it for review _children_, because every configured discovery
+and verification pass must settle exactly; a partial result would launder exhaustion into settled
+review assurance. Its separate input-coverage claim is host-derived and does not imply defect
+recall.
 
 Duration, cost, and repeated-failure bounds are hard rails regardless — and the token dimension's
 soft landing is one-shot (RUN-025): a soft landing can never loop or spend unboundedly, because

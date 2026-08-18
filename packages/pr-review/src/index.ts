@@ -1,6 +1,7 @@
 // The @effect-agent/pr-review public surface. Platform-free: host entrypoints
 // live behind the "./action" and "./cli" subpaths, deterministic test helpers
 // behind "./testing".
+export * from "./internal/anchors.ts";
 export * from "./internal/diff.ts";
 export * from "./internal/coverage.ts";
 export * from "./internal/effort.ts";

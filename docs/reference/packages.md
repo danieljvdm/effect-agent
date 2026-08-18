@@ -119,7 +119,14 @@ The packaged GitHub pull-request reviewer: schema-first review contracts, the
 `PullRequestSource`/`ReviewPublisher` ports with GitHub REST adapters, fail-closed anchor
 validation and publication planning, a fail-open sticky progress comment
 (`ReviewProgressReporter`), flat and fan-out reviewer shapes, and the `PrReview`
-configuration factory. Subpath entries: `./testing` (fixture source, collecting publisher,
+configuration factory. Fan-out uses deterministic host-owned evidence units and risk
+classification labels, complete bounded evidence sharding, redundant specialist discovery for
+every unit, fresh candidate verification over the complete bounded unit, and host-only publication
+of exactly confirmed candidates. Its public
+result separates path/input coverage from discovery and verification settlement; neither claim
+means exhaustive defect detection. Only complete input plus settled assurance can emit
+authenticated incremental state or a green Action conclusion. Subpath entries: `./testing`
+(fixture source, collecting publisher,
 prompt-keyed scripted models), `./action` and `./cli` (platform-node host entrypoints). Consumes
 the `effect-agent` umbrella — the first package-level consumer of that edge. Deployment class E
 only; review posting is never claimed exactly-once.
@@ -144,8 +151,8 @@ is an internal repository-operations auditor. None is a framework
 or deployment package. The repository root also carries `action/`, the prebuilt
 node-runtime GitHub Action over `@effect-agent/pr-review` with its committed bundle.
 Its normal synchronize path recovers authenticated review state and reviews only affected scope;
-explicit final mode audits the bounded full diff, and blocking or incomplete results fail the
-check host-side.
+explicit final mode performs fresh discovery over the bounded full diff, and blocking,
+input-incomplete, or assurance-incomplete results fail the check host-side.
 
 ## Dependency direction
 

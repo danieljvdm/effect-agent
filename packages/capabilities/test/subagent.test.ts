@@ -221,7 +221,8 @@ const researchDelegation = Subagent.define("delegate_research", {
   success: ResearchFindings,
   failure: ResearchDelegationFailed,
   prepareInput: ({ topic }) => Effect.succeed({ question: `research:${topic}` }),
-  projectResult: (output) => Effect.succeed({ summary: `finding:${output.answer}` }),
+  projectResult: (output, _context, parameters) =>
+    Effect.succeed({ summary: `finding:${parameters.topic}:${output.answer}` }),
   policy: researchPolicy,
 });
 
@@ -356,7 +357,7 @@ layer(TestServices)("SubagentRuntime S1 attached delegation", (it) => {
 
       // The parent Tool result is the projected, Schema-encoded value.
       expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
-        result: { summary: "finding:child-answer" },
+        result: { summary: "finding:paris:child-answer" },
       });
 
       // Child isolation (SUB-006/015): the child prompt contains only the
@@ -1517,7 +1518,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         // projectResult ran over the Schema-decoded verified child output and
         // the parent Tool result is the projected, encoded value.
         expect(findEvent(events, "ToolCallSucceeded")).toMatchObject({
-          result: { summary: "finding:child-answer" },
+          result: { summary: "finding:paris:child-answer" },
         });
         expect(findEvent(events, "SubagentJoined")).toMatchObject({
           toolCallId: "call-1",
@@ -1527,7 +1528,7 @@ layer(TestServices)("SubagentRuntime S2 durable delegation", (it) => {
         expect(yield* Ref.get(joins)).toEqual([
           {
             toolCallId: "call-1",
-            encodedResult: { summary: "finding:child-answer" },
+            encodedResult: { summary: "finding:paris:child-answer" },
             isFailure: false,
             encodedAccounting: expectedConservativeAccounting,
           },

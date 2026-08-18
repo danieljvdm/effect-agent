@@ -10,6 +10,7 @@ import {
 } from "effect-agent";
 import { Toolkit, type LanguageModel, type Model, type Tool } from "effect/unstable/ai";
 
+import type { ChangedFile } from "./diff.ts";
 import {
   fanOutHandlersLayerFor,
   FanOutCoordinatorToolkitLayer,
@@ -256,7 +257,7 @@ const make = <
     fingerprint: makeFingerprint(signature, options.ignore),
     profileFingerprint: makeProfileFingerprint(profileSignature, options.ignore),
     snapshot: makeReviewSnapshot(options.ignore),
-    filterFiles: (files: ReadonlyArray<import("./diff.ts").ChangedFile>) => {
+    filterFiles: (files: ReadonlyArray<ChangedFile>) => {
       const ignored = compileIgnoreGlobs(options.ignore ?? []);
       return files.filter((file) => !ignored(file.path));
     },
@@ -280,12 +281,12 @@ export interface PrReviewFanOutOptions<
 }
 
 /**
- * Build the fan-out reviewer: a coordinator that delegates bounded per-unit
- * file reviews to attached ephemeral children and merges their findings under
- * the same output contract and the same fail-closed publication path as the
- * flat reviewer. Child and coordinator execution bounds are packaged and not
- * configurable here — the delegation reservation mirrors the child policy,
- * and letting the two drift apart is a published-API hazard.
+ * Build the fan-out reviewer: a coordinator schedules host-planned general
+ * and specialist discovery plus independent candidate verification through
+ * attached ephemeral children. Host code reconstructs publication only from
+ * exactly confirmed candidates. Child and coordinator execution bounds are
+ * packaged and not configurable here — the delegation reservation mirrors
+ * the child policy, and letting the two drift apart is a published-API hazard.
  */
 const makeFanOut = <Provider, ModelProvides, ModelRequires>(
   options: PrReviewFanOutOptions<Provider, ModelProvides, ModelRequires>,
@@ -316,7 +317,9 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
     ].join(" ");
   const profileSignature = (_mission: ReviewMission): string =>
     [
-      "pr-review-profile-v1-fan-out",
+      // v3 invalidates continuity produced before complete evidence sharding,
+      // universal specialist scrutiny, and request-bound result projection.
+      "pr-review-profile-v3-sharded-request-bound-assurance",
       JSON.stringify(guidanceLines),
       JSON.stringify(options.ignore ?? []),
       `maxFindings=${clampMaxFindings(options.maxFindings)}`,
@@ -358,7 +361,7 @@ const makeFanOut = <Provider, ModelProvides, ModelRequires>(
     fingerprint: makeFingerprint(signature, options.ignore),
     profileFingerprint: makeProfileFingerprint(profileSignature, options.ignore),
     snapshot: makeReviewSnapshot(options.ignore),
-    filterFiles: (files: ReadonlyArray<import("./diff.ts").ChangedFile>) => {
+    filterFiles: (files: ReadonlyArray<ChangedFile>) => {
       const ignored = compileIgnoreGlobs(options.ignore ?? []);
       return files.filter((file) => !ignored(file.path));
     },

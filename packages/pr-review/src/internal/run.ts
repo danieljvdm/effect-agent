@@ -10,9 +10,10 @@ import {
 import { type Tool } from "effect/unstable/ai";
 
 import {
-  assessReviewCoverage,
-  collectUnitFileSummaries,
+  assessReviewPipeline,
+  ReviewAssurance,
   ReviewCoverage,
+  ReviewInputCoverage,
   type ReviewShape,
 } from "./coverage.ts";
 import type { ChangedFile } from "./diff.ts";
@@ -66,11 +67,11 @@ export const reviewBudgetLimits = UsageBudgetLimits.make({
  * while bounded children run.
  */
 export const fanOutReviewBudgetLimits = UsageBudgetLimits.make({
-  maxInputTokens: 400_000,
-  maxOutputTokens: 16_000,
-  maxToolCalls: 24,
+  maxInputTokens: 600_000,
+  maxOutputTokens: 32_000,
+  maxToolCalls: 32,
   maxCostMicrousd: 2_000_000,
-  maxDurationMillis: 900_000,
+  maxDurationMillis: 1_200_000,
 });
 
 /** Everything one review run produced, publication receipt included. */
@@ -84,6 +85,10 @@ export class ReviewRunOutcome extends Schema.Class<ReviewRunOutcome>(
   activeConcerns: Schema.Array(ReviewConcern).check(Schema.isMaxLength(10)),
   /** Host-owned structural coverage used by the Actions check conclusion. */
   coverage: ReviewCoverage,
+  /** Exact path/evidence assignment, distinct from semantic review work. */
+  inputCoverage: ReviewInputCoverage,
+  /** Settlement of configured discovery, specialist, and verification work. */
+  assurance: ReviewAssurance,
   plan: ReviewPublicationPlan,
   published: Schema.optionalKey(PublishedReview),
   turns: Schema.Int.check(Schema.isGreaterThan(0)),
@@ -245,31 +250,30 @@ export const executeReview = <
     // The engine validated the terminal JSON against the output schema; this
     // decode recovers the typed value on this side of the generic boundary.
     const decoded = yield* Schema.decodeUnknownEffect(CodeReview)(result.output);
-    // Under fan-out, the merged walkthrough must be traceable to the children:
-    // only entries a successfully settled delegation actually reported for its
-    // OWN unit's paths survive (the flat reviewer needs no such check — its
-    // walkthrough carries the same single-agent trust as its findings, and
-    // both stay changeset-validated by planPublication).
+    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
+    const pipeline = assessReviewPipeline({
+      shape: options.reviewShape ?? "flat",
+      files,
+      totalFiles: reviewTotalFiles,
+      anchorFiles,
+      totalAnchorFiles: metadata.totalChangedFiles,
+      events,
+    });
+    // The coordinator owns prose only. Fan-out findings and concerns are
+    // reconstructed from exact verifier-confirmed discovery candidates; an
+    // unsupported or coordinator-invented candidate cannot reach publication.
     const verifiedReview =
-      options.reviewShape !== "fan-out" || decoded.walkthrough === undefined
+      options.reviewShape !== "fan-out"
         ? decoded
-        : (() => {
-            const verified = new Set(
-              collectUnitFileSummaries(events).map(
-                (entry) => `${entry.path}\u0000${entry.summary}`,
-              ),
-            );
-            const walkthrough = decoded.walkthrough.filter((entry) =>
-              verified.has(`${entry.path}\u0000${entry.summary}`),
-            );
-            return CodeReview.make({
-              summary: decoded.summary,
-              verdict: decoded.verdict,
-              findings: decoded.findings,
-              ...(decoded.concerns !== undefined ? { concerns: decoded.concerns } : {}),
-              ...(walkthrough.length > 0 ? { walkthrough } : {}),
-            });
-          })();
+        : CodeReview.make({
+            summary: decoded.summary,
+            verdict: decoded.verdict,
+            findings: rankAndDedupeFindings(pipeline.confirmedFindings),
+            ...(pipeline.confirmedConcerns.length === 0
+              ? {}
+              : { concerns: rankAndDedupeConcerns(pipeline.confirmedConcerns) }),
+            ...(pipeline.walkthrough.length === 0 ? {} : { walkthrough: pipeline.walkthrough }),
+          });
     const review = enforceFindingsBound(verifiedReview, clampMaxFindings(options.maxFindings));
     const usage = yield* budget.snapshot;
     const affectedPaths = new Set(
@@ -311,18 +315,11 @@ export const executeReview = <
       const key = `${concern.title}\u0000${concern.body}`;
       return activeConcernKeys.has(key) && !currentConcernKeys.has(key);
     });
-    const reviewTotalFiles = executionContext?.totalFiles ?? metadata.totalChangedFiles;
-    const coverage = assessReviewCoverage({
-      shape: options.reviewShape ?? "flat",
-      files,
-      totalFiles: reviewTotalFiles,
-      anchorFiles,
-      totalAnchorFiles: metadata.totalChangedFiles,
-      events,
-    });
+    const { assurance, coverage, inputCoverage } = pipeline;
     const stateCandidate =
       executionContext !== undefined &&
-      coverage.status === "complete" &&
+      inputCoverage.status === "complete" &&
+      assurance.status === "settled" &&
       fingerprint !== undefined &&
       metadata.baseSha !== undefined &&
       executionContext.stateAuthenticator?.status === "available"
@@ -349,7 +346,8 @@ export const executeReview = <
             marker: undefined,
             notice:
               executionContext?.stateAuthenticator?.status === "unavailable" &&
-              coverage.status === "complete"
+              inputCoverage.status === "complete" &&
+              assurance.status === "settled"
                 ? (executionContext.stateAuthenticator.unavailableReason ??
                   "authenticated continuity state is unavailable")
                 : undefined,
@@ -377,8 +375,13 @@ export const executeReview = <
       runUrl: options.runUrl,
       usage,
       usageScope: options.usageScope,
-      fingerprint: coverage.status === "complete" ? fingerprint : undefined,
+      fingerprint:
+        inputCoverage.status === "complete" && assurance.status === "settled"
+          ? fingerprint
+          : undefined,
       coverage,
+      inputCoverage,
+      assurance,
       carriedFindings,
       carriedConcerns,
       reviewMode: executionContext?.mode,
@@ -398,6 +401,8 @@ export const executeReview = <
         activeFindings,
         activeConcerns,
         coverage,
+        inputCoverage,
+        assurance,
         plan,
         turns: result.turns,
         usage,
@@ -415,6 +420,8 @@ export const executeReview = <
       activeFindings,
       activeConcerns,
       coverage,
+      inputCoverage,
+      assurance,
       plan,
       published,
       turns: result.turns,
