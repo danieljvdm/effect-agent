@@ -80,7 +80,6 @@ describe("resolveActionInputs", () => {
         ignore: [],
         maxFindings: undefined,
         maxDurationMinutes: undefined,
-        failOn: "never",
         skipUnchanged: true,
         retireStaleReviews: true,
         progressComment: true,
@@ -104,7 +103,6 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_IGNORE: " **/*.lock , dist/** ,",
           PR_REVIEW_MAX_FINDINGS: "7",
           PR_REVIEW_MAX_DURATION_MINUTES: "12",
-          PR_REVIEW_FAIL_ON: "request-changes",
           PR_REVIEW_SKIP_UNCHANGED: "false",
           PR_REVIEW_RETIRE_STALE_REVIEWS: "false",
           PR_REVIEW_PROGRESS_COMMENT: "false",
@@ -123,7 +121,6 @@ describe("resolveActionInputs", () => {
         ignore: ["**/*.lock", "dist/**"],
         maxFindings: 7,
         maxDurationMinutes: 12,
-        failOn: "request-changes",
         skipUnchanged: false,
         retireStaleReviews: false,
         progressComment: false,
@@ -480,7 +477,7 @@ describe("runReviewAction", () => {
     }),
   );
 
-  it.effect("fails the check for a blocking finding regardless of model verdict or fail-on", () =>
+  it.effect("fails the check for a blocking finding regardless of model verdict", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
         JSON.stringify({
@@ -490,7 +487,7 @@ describe("runReviewAction", () => {
       );
       const exit = yield* runReviewAction(
         { run: () => Effect.succeed(fakeOutcome("comment", { blocking: true })) },
-        { post: false, failOn: "never" },
+        { post: false },
       ).pipe(Effect.provide(harness.layer), Effect.exit);
       const failure = failureFrom(exit);
       expect(Schema.is(ReviewGateFailed)(failure)).toBe(true);

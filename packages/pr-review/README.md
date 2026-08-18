@@ -137,7 +137,8 @@ unchanged scope collapse into counted `<details>` sections.
 
 Each inline comment is headed by its severity plus an optional model-claimed
 category chip (`**[⚠️ important · security] …**`), carries a committable
-GitHub `suggestion` fence when the model provided one, and ends with a
+GitHub `suggestion` fence when independent verification settled the model's
+suggestion as committable replacement source, and ends with a
 collapsed **🤖 Prompt for AI agents** — a copy-paste instruction derived
 host-side from the validated finding, opening with a fixed preamble telling
 the receiving agent to treat the finding content as untrusted review data.
