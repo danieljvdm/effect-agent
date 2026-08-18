@@ -70,6 +70,7 @@ examples/
   providers
   repo-ops
 action/
+work-order-action/
 ```
 
 There is no `apps/` workspace. Reusable Travel Planner fixtures live in the leaf testing package;
@@ -80,11 +81,11 @@ trusted-local proof of a head-bound work-order implementer: a distinct Agent
 receives only jailed file/patch/named-check tools, and host Effect code owns
 admission, validation, and atomic publication. It adds no package edge and
 makes only a class E claim. See [pull-request work orders](spec/pr-work-orders.md).
-`examples/pr-work-order-ingress` is the private GitHub-facing proof: recorded
-events become one work order, admission is persisted in a file-backed attempt
-store, checks and publication stay isolated, and the publisher
-compare-and-swaps. The first live Actions entrypoint admits a mention reply
-and posts a host-authored thread reply. See
+`examples/pr-work-order-ingress` owns the GitHub-facing implementation: recorded
+events become one work order, a signed bot-authored thread journal persists admission,
+model and checks run without a write credential, and the independent publisher
+compare-and-swaps through GitHub. `work-order-action/` is its precompiled, separately
+named consumer surface and the enabled workflow runs it from trusted base code. See
 [work-order ingress](spec/pr-work-order-ingress.md).
 Examples are outside the framework dependency graph and do not define
 a deployment boundary.

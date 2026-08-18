@@ -192,9 +192,10 @@ policy.
 Review, implementation, and publication stay separate. The host contract is
 [pull-request work orders](pr-work-orders.md). GitHub dispatch, isolation, and
 network publication are [work-order ingress](pr-work-order-ingress.md). The
-current local proof must not execute untrusted pull-request code in a process
-holding credentials or provider secrets, and no enabled workflow may run an
-implementer until that isolation exists.
+enabled work-order workflow runs model, untrusted repository checks, publisher,
+and presenter in separate jobs. Pull-request code executes only in the
+credential-free networkless check container; trusted base code authenticates
+the durable journal and owns atomic publication.
 
 ## 10. Supply chain
 

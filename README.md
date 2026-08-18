@@ -49,9 +49,10 @@ reviewer's read-only authority.
 - PR work-order evidence: `examples/pr-work-orders` admits one explicit head-bound
   work order, grants a separate implementation Agent only jailed file/patch/named-check
   tools, and leaves admission, checks, and atomic publication to host Effect code.
-  `examples/pr-work-order-ingress` proves GitHub dispatch, durable admission, isolated
-  checks, and compare-and-swap publication against recorded fixtures. Neither leaf is
-  an enabled production workflow.
+  `examples/pr-work-order-ingress`, the prebuilt `work-order-action/`, and the enabled
+  multi-job workflow provide exact GitHub dispatch, an authenticated durable admission journal,
+  credential-separated model/check/publisher jobs, atomic publication, and bounded thread
+  presentation. The work-order Action remains separate from the read-only reviewer.
 - Stated plainly: completion is an engineering claim, not a stability one — no hosted-Cloudflare
   evidence is claimed (the `DC` harness is workerd/Miniflare); the opt-in live-model suites are
   implemented and gate-skipped, with live execution a release-lane action; open-source

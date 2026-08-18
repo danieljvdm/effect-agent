@@ -33,7 +33,7 @@ import {
   type WorkOrderValidationFailure,
   type WorkspaceOperationFailure,
 } from "../src/contracts.ts";
-import { runWorkOrder } from "../src/host.ts";
+import { prepareWorkOrder, runWorkOrder } from "../src/host.ts";
 import { makeImplementationAgent, type WorkOrderMission } from "../src/implementation-agent.ts";
 import { localGitWorkOrderHostLayer, type LocalGitWorkOrderConfig } from "../src/local-git.ts";
 import {
@@ -120,6 +120,31 @@ type HostKeepsCheck = Assert<
 >;
 type HostUnknownExcluded = Assert<Equal<unknown extends TypedHostError ? true : false, false>>;
 
+const typedPreparation = prepareWorkOrder({
+  order: null as unknown as PullRequestWorkOrder,
+  implement: () => Effect.succeed(null as unknown as WorkOrderReport),
+});
+type TypedPreparationServices = Effect.Services<typeof typedPreparation>;
+type TypedPreparationError = Effect.Error<typeof typedPreparation>;
+type PreparationRequiresHost = Assert<
+  Equal<Extract<TypedPreparationServices, WorkOrderHost>, WorkOrderHost>
+>;
+type PreparationRequiresCrypto = Assert<
+  Equal<Extract<TypedPreparationServices, Crypto.Crypto>, Crypto.Crypto>
+>;
+type PreparationExcludesAttempts = Assert<
+  Equal<Extract<TypedPreparationServices, WorkOrderAttemptPolicy>, never>
+>;
+type PreparationExcludesCheckFailure = Assert<
+  Equal<Extract<TypedPreparationError, RequiredCheckFailed>, never>
+>;
+type PreparationExcludesReleaseFailure = Assert<
+  Equal<Extract<TypedPreparationError, WorkOrderReleaseFailure>, never>
+>;
+type PreparationUnknownExcluded = Assert<
+  Equal<unknown extends TypedPreparationError ? true : false, false>
+>;
+
 describe("implementation Agent type proofs", () => {
   it("WO-003 WO-012 keeps model requirements and host failures typed while hiding workspace internals", () => {
     const proofs = {
@@ -136,6 +161,12 @@ describe("implementation Agent type proofs", () => {
       hostKeepsTimeout: true as HostKeepsTimeout,
       hostKeepsCheck: true as HostKeepsCheck,
       hostUnknownExcluded: true as HostUnknownExcluded,
+      preparationRequiresHost: true as PreparationRequiresHost,
+      preparationRequiresCrypto: true as PreparationRequiresCrypto,
+      preparationExcludesAttempts: true as PreparationExcludesAttempts,
+      preparationExcludesCheckFailure: true as PreparationExcludesCheckFailure,
+      preparationExcludesReleaseFailure: true as PreparationExcludesReleaseFailure,
+      preparationUnknownExcluded: true as PreparationUnknownExcluded,
     };
     expect(proofs).toEqual({
       modelRequirementProof: true,
@@ -151,6 +182,12 @@ describe("implementation Agent type proofs", () => {
       hostKeepsTimeout: true,
       hostKeepsCheck: true,
       hostUnknownExcluded: true,
+      preparationRequiresHost: true,
+      preparationRequiresCrypto: true,
+      preparationExcludesAttempts: true,
+      preparationExcludesCheckFailure: true,
+      preparationExcludesReleaseFailure: true,
+      preparationUnknownExcluded: true,
     });
   });
 });

@@ -305,7 +305,7 @@ const makeWorkspace = Effect.fn("LocalGitWorkOrderHost.makeWorkspace")(function*
       ),
     );
   });
-  const inspectPatch = Effect.gen(function* () {
+  const collectPatch = Effect.gen(function* () {
     const changed = yield* git.run(
       realRoot,
       ["diff", "--name-only", "-z", "--no-ext-diff", "HEAD", "--"],
@@ -337,13 +337,15 @@ const makeWorkspace = Effect.fn("LocalGitWorkOrderHost.makeWorkspace")(function*
         reason: `patch exceeds the ${MAX_PATCH_CHARS}-character host bound`,
       });
     }
-    return PatchSnapshot.make({
+    const snapshot = PatchSnapshot.make({
       digest: yield* sha256(crypto, patch),
       changedPaths,
       preview: patch.slice(0, 20_000),
       truncated: patch.length > 20_000,
     });
+    return { snapshot, patch } as const;
   });
+  const inspectPatch = collectPatch.pipe(Effect.map(({ snapshot }) => snapshot));
   const requestCheck = Effect.fn("ImplementationWorkspace.requestCheck")(function* (name: string) {
     const check = input.checks.get(name);
     if (check === undefined) {
@@ -366,6 +368,7 @@ const makeWorkspace = Effect.fn("LocalGitWorkOrderHost.makeWorkspace")(function*
   return {
     modelWorkspace,
     inspectPatch,
+    collectPatch,
     requestCheck,
     observedChecks: Ref.get(observedChecks),
     git,
@@ -568,6 +571,7 @@ export const localGitWorkOrderHostLayer = (
                     allowedPaths,
                     modelWorkspace: workspace.modelWorkspace,
                     inspectPatch: workspace.inspectPatch,
+                    collectPatch: workspace.collectPatch,
                     runCheck: workspace.requestCheck,
                     observedChecks: workspace.observedChecks,
                     commitAndPublish,

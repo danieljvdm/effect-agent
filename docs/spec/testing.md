@@ -263,11 +263,12 @@ The private `examples/pr-work-order-ingress` leaf uses recorded GitHub event
 fixtures and a fake GitHub API. It proves authenticated mention and reaction
 dispatch, Actions payload binding, unique inline targeting, actor-id
 authorization, same-repository non-fork admission, stale-anchor rejection,
-file-backed duplicate-delivery replay, isolated check-process credentials,
-fail-closed publisher path and identity verification, atomic compare-and-swap
-fencing, and one host-authored thread reply that does not resolve the thread.
-Tests do not call live GitHub. The enabled Actions workflow is asserted to
-keep model and commit-write credentials out of the admit job.
+duplicate-delivery replay, authenticated journal state, isolated check-process
+credentials, fail-closed complete patch paths, atomic compare-and-swap fencing,
+and one host-authored thread reply that does not resolve the thread. Tests do
+not call live GitHub. The enabled Actions workflow is asserted to use trusted
+base code, immutable pins, five least-privilege jobs, exact-head checkouts, and
+a networkless check container that cannot see sibling artifacts or credentials.
 
 ## 9. Compatibility tests
 
@@ -425,3 +426,7 @@ No durability milestone is complete while its crash tests are skipped.
 - **TEST-017**: The trusted-local work-order proof covers success, non-publication
   settlements, path escape, false check claims, failed host checks, stale-head
   publication fencing, typed/interrupted cleanup, and one-attempt admission.
+- **TEST-018**: The operational work-order ingress proof covers authenticated durable journal
+  state, exact dispatch and provenance, complete patch paths, check-container isolation,
+  independent publisher verification, atomic publication uncertainty, thread presentation, and
+  enabled workflow credential shape.

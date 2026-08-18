@@ -1,6 +1,6 @@
 # Pull-request work orders
 
-Status: **Draft**
+Status: **Implemented**
 
 A **work order** is one immutable, head-bound, path-scoped instruction admitted from an explicit
 human dispatch on a pull request. A distinct **implementer** may propose a patch. Deterministic
@@ -107,8 +107,9 @@ dispatch, which creates a new work order. Duplicate delivery of the original eve
 already-claimed outcome rather than invoke another implementer.
 
 The trusted-local proof may use an in-memory attempt policy and construct admitted work orders in
-process. A production ingress requires durable duplicate-delivery and attempt admission semantics
-appropriate to its deployment; the current proof makes no such claim.
+process. The GitHub Action uses the authenticated durable journal and job serialization specified
+in [work-order ingress](pr-work-order-ingress.md); that operational surface, rather than this local
+attempt policy, owns cross-job and cross-run duplicate delivery.
 
 ## 4. Outcomes
 
@@ -171,9 +172,12 @@ resolution are separate host/user-interface concerns and must not be inferred fr
 7. For `not-applicable` or `needs-human`, require an empty patch and settle without publication.
 8. For `fixed`, require a non-empty patch, exact reported/observed path and digest agreement, and
    no path outside the allowlist.
-9. Rerun every required named check in host-owned execution. Reject a failed check or a check that
-   mutates the validated patch.
-10. Re-read the pull-request head and atomically publish only if it still names `headSha`.
+9. Rerun every required named check in host-owned execution. The local proof runs checks inline;
+   the GitHub flow transfers a bounded proposal to a credential-free, network-disabled container
+   job. Reject a failed check or a check that mutates the validated patch.
+10. Re-read the pull-request head and atomically publish only if it still names `headSha`. In the
+    GitHub flow an independent publisher first authenticates the durable admission journal and
+    repeats identity, digest, complete-path, allowlist, file, and check-evidence verification.
 11. Release the worktree and all temporary resources on success, expected failure, defect,
     timeout, or interruption.
 
@@ -184,10 +188,11 @@ exactly-once external publication claim is made.
 
 ## 7. Security and deployment posture
 
-The first proof is deployment class E, trusted-local evidence. It constructs authorized work
-orders in process, uses a local Git repository, and proves the semantic host boundary. It is not a
-GitHub workflow, webhook listener, network publisher, durable attempt service, or production
-isolation claim.
+`examples/pr-work-orders` remains deployment class E trusted-local evidence: it constructs
+authorized work orders in process, uses a local Git repository, and proves the semantic host
+boundary. `examples/pr-work-order-ingress` and the separately named `work-order-action/` add the
+operational GitHub transport, durable repository journal, isolated checks, and network publisher
+without changing the local proof's deployment claim.
 
 Pull-request code and repository checks are untrusted. No process that executes them may hold a
 GitHub write token, model-provider secret, or other publishing credential. A production adapter
@@ -196,11 +201,11 @@ publisher receives only host-validated bounded artifacts and metadata, independe
 patch digest, required-check evidence, allowed paths, work-order identity, and expected head, and
 then performs compare-and-swap publication.
 
-The model never receives GitHub credentials, provider secrets, arbitrary publishing authority, or
-an unrestricted push tool. Schema validation, model settlement, a source comment, or a suggestion
-cannot substitute for authentication or authorization. Until genuine isolation and credential
-separation exist, no enabled remediation workflow may be added and no untrusted or fork pull
-request may be admitted.
+The model never receives GitHub credentials, provider publication capabilities, arbitrary
+publishing authority, or an unrestricted push tool. Schema validation, model settlement, a source
+comment, or a suggestion cannot substitute for authentication or authorization. The enabled
+workflow runs authorization and publication from trusted base code, admits no fork, and separates
+model, untrusted checks, publisher, and presenter into jobs with least-privilege credentials.
 
 ## 8. Leaf proof and retained substrate
 
@@ -312,8 +317,9 @@ class E proof:
   publication cleanup failure remains distinguishable and makes no exactly-once claim.
 - **WO-008**: Worktrees and temporary resources are scoped and released on success, expected
   failure, defect, timeout, and interruption, with release failures kept typed.
-- **WO-009**: The current proof is class E trusted-local, lives in a private leaf example, and
-  creates no new public package or enabled GitHub workflow.
+- **WO-009**: The semantic host proof remains class E trusted-local in a private leaf; the
+  operational GitHub product is a separately named, precompiled Action and enabled multi-job
+  workflow, not a public framework package or reviewer export.
 - **WO-010**: `@effect-agent/pr-review` remains read-only and exports no work-order, remediation
   handoff, implementer, edit, or publication surface.
 - **WO-011**: Re-review and CI are independent downstream observers of a published head, not steps

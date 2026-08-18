@@ -19,6 +19,7 @@ export const GitHubPullWire = Schema.Struct({
   number: Schema.Int,
   head: Schema.Struct({
     sha: GitCommitSha,
+    ref: Schema.NonEmptyString,
     repo: Schema.NullOr(GitHubRepoWire),
   }),
   base: Schema.Struct({
@@ -56,6 +57,7 @@ export const pullRequestFromWire = (
     repository,
     pullRequestNumber: wire.number,
     headSha: wire.head.sha,
+    headRef: wire.head.ref,
     ...(wire.head.repo === null ? {} : { headRepository: wire.head.repo.full_name }),
     headIsFork: wire.head.repo?.fork === true,
     baseRepository: wire.base.repo.full_name,

@@ -207,6 +207,7 @@ export class PullRequestView extends Schema.Class<PullRequestView>(
   repository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   pullRequestNumber: Schema.Int.check(Schema.isGreaterThan(0)),
   headSha: GitCommitSha,
+  headRef: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
   headRepository: Schema.optionalKey(Schema.NonEmptyString.check(Schema.isMaxLength(200))),
   headIsFork: Schema.Boolean,
   baseRepository: Schema.NonEmptyString.check(Schema.isMaxLength(200)),

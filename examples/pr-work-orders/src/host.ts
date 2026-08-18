@@ -2,6 +2,7 @@ import { type Crypto, type Duration, Effect, Exit, Option, Ref, Schema } from "e
 
 import {
   RequiredCheckFailed,
+  ProposedWorkOrder,
   SettledWorkOrder,
   WorkOrderImplementationFailure,
   WorkOrderRejected,
@@ -14,7 +15,9 @@ import {
   type WorkOrderCheckResult,
   type WorkOrderDigest,
   type WorkOrderHostError,
+  type WorkOrderPreparationError,
   type WorkOrderHostResult,
+  type WorkOrderPreparationResult,
   type WorkOrderReport,
   workOrderDigest,
   workOrderIdFor,
@@ -120,6 +123,7 @@ export const runWorkOrder = <ImplementRequirements>(options: {
                   order: options.order,
                   workOrderDigest: digest,
                   requiredChecks: host.requiredChecks,
+                  checkExecution: "inline",
                 }),
                 worktree.modelWorkspace,
               )
@@ -151,7 +155,7 @@ export const runWorkOrder = <ImplementRequirements>(options: {
               });
             }
 
-            const patch = yield* worktree.inspectPatch;
+            const { snapshot: patch } = yield* worktree.collectPatch;
             if (report.disposition === "not-applicable" || report.disposition === "needs-human") {
               if (
                 patch.changedPaths.length > 0 ||
@@ -207,7 +211,7 @@ export const runWorkOrder = <ImplementRequirements>(options: {
                 summary: failed.summary,
               });
             }
-            const afterChecks = yield* worktree.inspectPatch;
+            const { snapshot: afterChecks } = yield* worktree.collectPatch;
             if (
               afterChecks.digest !== patch.digest ||
               !exactMultiset(afterChecks.changedPaths, patch.changedPaths)
@@ -250,4 +254,128 @@ export const runWorkOrder = <ImplementRequirements>(options: {
           ),
         );
     }).pipe(Effect.onExit((exit) => attempts.complete(options.order, exit)));
+  });
+
+/**
+ * Validate one implementation proposal through the host-owned patch seam, but
+ * defer required checks and publication to credential-separated Actions jobs.
+ * Durable admission is owned by the ingress journal before this operation is
+ * invoked, so this seam deliberately has no in-process attempt policy.
+ */
+export const prepareWorkOrder = <ImplementRequirements>(options: {
+  readonly order: PullRequestWorkOrder;
+  readonly implement: (
+    mission: WorkOrderMission,
+    workspace: ImplementationWorkspace,
+  ) => Effect.Effect<WorkOrderReport, unknown, ImplementRequirements>;
+  readonly timeout?: Duration.Duration | undefined;
+}): Effect.Effect<
+  WorkOrderPreparationResult,
+  WorkOrderPreparationError,
+  ImplementRequirements | Crypto.Crypto | WorkOrderHost
+> =>
+  Effect.gen(function* () {
+    const host = yield* WorkOrderHost;
+    const expectedId = yield* workOrderIdFor(workOrderIdentityOf(options.order));
+    if (options.order.workOrderId !== expectedId) {
+      return yield* WorkOrderRejected.make({
+        reason: "work-order identity does not match the admitted snapshot",
+      });
+    }
+    const digest = yield* workOrderDigest(options.order);
+    yield* host.authorizeDispatch(options.order);
+    yield* host.requireCurrentHead(options.order);
+    return yield* host.withWorktree(options.order, (worktree) =>
+      Effect.gen(function* () {
+        const implement = options
+          .implement(
+            WorkOrderMission.make({
+              order: options.order,
+              workOrderDigest: digest,
+              requiredChecks: host.requiredChecks,
+              checkExecution: "deferred",
+            }),
+            worktree.modelWorkspace,
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              WorkOrderImplementationFailure.make({
+                reason: describeImplementError(error),
+              }),
+            ),
+          );
+        const report = yield* options.timeout
+          ? implement.pipe(
+              Effect.timeoutOrElse({
+                duration: options.timeout,
+                orElse: () =>
+                  WorkOrderTimeout.make({
+                    workOrderId: options.order.workOrderId,
+                    headSha: options.order.headSha,
+                  }),
+              }),
+            )
+          : implement;
+        yield* validateReportIdentity(report, digest, options.order);
+        const observedChecks = yield* worktree.observedChecks;
+        if (report.disposition === "fixed" && !exactChecks(report.checks, observedChecks)) {
+          return yield* WorkOrderValidationFailure.make({
+            reason: "check-results-mismatch",
+            detail: "model-reported checks differ from host-observed check capability results",
+          });
+        }
+        const { patch, snapshot } = yield* worktree.collectPatch;
+        if (report.disposition === "not-applicable" || report.disposition === "needs-human") {
+          if (
+            snapshot.changedPaths.length > 0 ||
+            report.changedPaths.length > 0 ||
+            report.patchDigest !== undefined
+          ) {
+            return yield* WorkOrderValidationFailure.make({
+              reason: "unexpected-patch",
+              detail: "non-publication dispositions must not propose a patch",
+            });
+          }
+          return SettledWorkOrder.make({
+            workOrderId: options.order.workOrderId,
+            workOrderDigest: digest,
+            headSha: options.order.headSha,
+            disposition: report.disposition,
+            summary: report.summary,
+          });
+        }
+        if (snapshot.changedPaths.length === 0) {
+          return yield* WorkOrderValidationFailure.make({
+            reason: "empty-patch",
+            detail: "fixed disposition produced no host-visible patch",
+          });
+        }
+        if (snapshot.changedPaths.some((path) => !worktree.allowedPaths.has(path))) {
+          return yield* WorkOrderValidationFailure.make({
+            reason: "path-not-allowed",
+            detail: "host-collected patch contains a path outside the work-order allowlist",
+          });
+        }
+        if (!exactMultiset(report.changedPaths, snapshot.changedPaths)) {
+          return yield* WorkOrderValidationFailure.make({
+            reason: "changed-paths-mismatch",
+            detail: "model-reported changed paths differ from the host-collected patch",
+          });
+        }
+        if (report.patchDigest === undefined || report.patchDigest !== snapshot.digest) {
+          return yield* WorkOrderValidationFailure.make({
+            reason: "patch-digest-mismatch",
+            detail: "model-reported patch digest differs from the host-collected patch",
+          });
+        }
+        return ProposedWorkOrder.make({
+          order: options.order,
+          workOrderDigest: digest,
+          patch,
+          patchDigest: snapshot.digest,
+          changedPaths: snapshot.changedPaths,
+          requiredChecks: host.requiredChecks,
+        });
+      }),
+    );
   });

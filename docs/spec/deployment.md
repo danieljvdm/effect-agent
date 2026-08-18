@@ -18,11 +18,11 @@ The `examples/pr-work-orders` work-order host is class E trusted-local evidence.
 Its one-attempt policy is process-local, its worktree is scoped to one run, and
 its branch update is locally compare-and-swap fenced. It makes no
 restart-recovery, hosted publication, or untrusted-code isolation claim. See
-[pull-request work orders](pr-work-orders.md). GitHub dispatch, file-backed
-attempt admission, isolated checks, and network compare-and-swap live in
-`examples/pr-work-order-ingress` and [work-order ingress](pr-work-order-ingress.md).
-The first live Actions entrypoint admits a mention reply and posts a
-host-authored thread reply. It does not publish commits.
+[pull-request work orders](pr-work-orders.md). The separately named
+`work-order-action/` composes `examples/pr-work-order-ingress` into an operational
+five-job GitHub flow with an authenticated repository admission journal,
+networkless check container, independent network publisher, and bounded thread
+presentation. See [work-order ingress](pr-work-order-ingress.md).
 
 ### Class P — Persistent
 

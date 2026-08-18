@@ -197,6 +197,19 @@ export class SettledWorkOrder extends Schema.TaggedClass<SettledWorkOrder>()("se
   summary: Schema.NonEmptyString.check(Schema.isMaxLength(2_000)),
 }) {}
 
+export class ProposedWorkOrder extends Schema.TaggedClass<ProposedWorkOrder>()("proposed", {
+  order: PullRequestWorkOrder,
+  workOrderDigest: WorkOrderDigest,
+  patch: Schema.NonEmptyString.check(Schema.isMaxLength(1_000_000)),
+  patchDigest: PatchDigest,
+  changedPaths: Schema.Array(WorkspacePath).check(Schema.isMinLength(1), Schema.isMaxLength(100)),
+  requiredChecks: Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(120))).check(
+    Schema.isMaxLength(20),
+  ),
+}) {}
+
+export type WorkOrderPreparationResult = ProposedWorkOrder | SettledWorkOrder;
+
 export type WorkOrderHostResult = PublishedWorkOrder | SettledWorkOrder;
 
 export class WorkOrderReleaseFailure extends Schema.TaggedError<WorkOrderReleaseFailure>()(
@@ -223,6 +236,14 @@ export type WorkOrderHostError =
   | StalePullRequestHead
   | WorkspaceOperationFailure
   | WorkOrderReleaseFailure
+  | WorkOrderTimeout
+  | WorkOrderImplementationFailure;
+
+export type WorkOrderPreparationError =
+  | WorkOrderRejected
+  | WorkOrderValidationFailure
+  | StalePullRequestHead
+  | WorkspaceOperationFailure
   | WorkOrderTimeout
   | WorkOrderImplementationFailure;
 

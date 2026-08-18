@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 
 import {
+  createWorkOrder,
   GitCommitSha,
   PatchDigest,
+  ProposedWorkOrder,
   WorkOrderAttemptPolicy,
   WorkOrderCheckResult,
   WorkOrderDigest,
   WorkOrderHost,
+  WorkOrderIdentity,
   WorkOrderReport,
+  workOrderDigest,
   type ImplementationWorkspace,
   type PatchSnapshot,
   type PublishedWorkOrder,
@@ -15,9 +19,28 @@ import {
 } from "@effect-agent/example-pr-work-orders";
 import { NodeServices } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
-import { type Crypto, Effect, FileSystem, Layer, Path, Schema } from "effect";
+import {
+  type Crypto,
+  Effect,
+  FileSystem,
+  Layer,
+  Option,
+  Path,
+  Redacted,
+  Ref,
+  Schema,
+} from "effect";
 import { Yaml } from "effect/unstable/encoding";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
+import { isolatedCheckContainerArguments, reproduceCheckedPatch } from "../src/action-checks.ts";
+import {
+  CheckedFile,
+  CheckedWorkOrder,
+  FailedTerminal,
+  WorkOrderAdmission,
+} from "../src/action-contracts.ts";
+import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "../src/action-github.ts";
 import {
   authenticateDelivery,
   ObservedActionsIdentity,
@@ -49,9 +72,10 @@ import { pullRequestFromWire, reviewCommentFromWire } from "../src/github-live.t
 import { makeFakeGitHub } from "../src/github.ts";
 import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts";
 import { IsolatedChecks } from "../src/isolation.ts";
+import { claimedState, completedState, WorkOrderJournalAuthenticator } from "../src/journal.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
+import { completeModifiedPaths } from "../src/patch.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
-import { authorizedActorIdsFromConfig, pullRequestNumberFromEvent } from "../src/run-delivery.ts";
 import { FileBackedAttemptStore, IngressStoreFailpoint } from "../src/store.ts";
 
 const HEAD = Schema.decodeUnknownSync(GitCommitSha)("a".repeat(40));
@@ -86,36 +110,36 @@ const WorkOrderWorkflowFile = Schema.Struct({
   permissions: Schema.optionalKey(WorkOrderWorkflowPermissions),
   jobs: Schema.Record(Schema.String, WorkOrderWorkflowJob),
 });
-const ALLOWED_WRITE_SCOPES = new Set(["pull-requests"]);
-
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
-const assertFailClosedPermissions = (permissions: unknown, label: string) => {
+const assertExactPermissions = (
+  permissions: unknown,
+  label: string,
+  expected: Readonly<Record<string, "read" | "write" | "none">>,
+) => {
   expect(permissions, `${label} must declare an explicit permissions map`).toBeTypeOf("object");
   expect(permissions).not.toBeNull();
   expect(Array.isArray(permissions)).toBe(false);
   if (!isRecord(permissions)) return;
-  expect(permissions.contents, `${label} contents must be read`).toBe("read");
+  expect(permissions).toEqual(expected);
   for (const [scope, access] of Object.entries(permissions)) {
     expect(["read", "write", "none"], `${label} ${scope} must be an access level`).toContain(
       access,
     );
-    if (access === "write") {
-      expect(ALLOWED_WRITE_SCOPES.has(scope), `${label} must not grant ${scope}: write`).toBe(true);
-    }
   }
 };
 
-const forbiddenSecretAccesses = (value: unknown): Array<string> => {
+const secretAccesses = (value: unknown): Array<string> => {
   const found: Array<string> = [];
   const visit = (node: unknown) => {
     if (typeof node === "string") {
-      const remainder = node.replace(
-        /\$\{\{\s*secrets\s*(?:\.\s*GITHUB_TOKEN|\[\s*['"]GITHUB_TOKEN['"]\s*\])\s*\}\}/g,
-        "",
-      );
-      if (/\bsecrets\b/.test(remainder)) found.push("*");
+      for (const match of node.matchAll(/\bsecrets\s*\.\s*([A-Z0-9_]+)/g)) {
+        if (match[1] !== undefined) found.push(match[1]);
+      }
+      if (/\bsecrets\b/.test(node) && !/\bsecrets\s*\.\s*[A-Z0-9_]+/.test(node)) {
+        found.push("*");
+      }
       return;
     }
     if (Array.isArray(node)) {
@@ -127,7 +151,7 @@ const forbiddenSecretAccesses = (value: unknown): Array<string> => {
     for (const child of Object.values(node)) visit(child);
   };
   visit(value);
-  return found;
+  return found.sort();
 };
 
 type Equal<Left, Right> =
@@ -222,6 +246,7 @@ const pullRequest = (overrides?: Partial<PullRequestView>) =>
     repository: REPOSITORY,
     pullRequestNumber: PULL,
     headSha: HEAD,
+    headRef: "feature",
     headRepository: REPOSITORY,
     headIsFork: false,
     baseRepository: REPOSITORY,
@@ -299,6 +324,9 @@ const stubHostLayer = Layer.succeed(
         allowedPaths: new Set([FILE_PATH]),
         modelWorkspace: workspace,
         inspectPatch: workspace.inspectPatch,
+        collectPatch: workspace.inspectPatch.pipe(
+          Effect.map((snapshot) => ({ snapshot, patch: "" })),
+        ),
         runCheck: workspace.requestCheck,
         observedChecks: Effect.succeed([]),
         commitAndPublish: ({ order, report, patch, checks }) =>
@@ -436,7 +464,7 @@ describe("PR work-order ingress", () => {
           handleRequiresCrypto: true,
           publishKeepsVerification: true,
         });
-      }),
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect(
@@ -879,7 +907,7 @@ describe("PR work-order ingress", () => {
       ).pipe(Effect.provide(NodeServices.layer)),
   );
 
-  it.effect("WOI-011 the enabled workflow does not hold a model secret or commit write token", () =>
+  it.effect("WOI-011 the enabled workflow enforces the five-job credential boundary", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
@@ -888,69 +916,398 @@ describe("PR work-order ingress", () => {
       );
       const parsed = Yaml.parse(contents);
       const workflow = yield* Schema.decodeUnknownEffect(WorkOrderWorkflowFile)(parsed);
-      expect(Object.keys(workflow.jobs).length).toBeGreaterThan(0);
-      assertFailClosedPermissions(workflow.permissions, "workflow");
+      expect(Object.keys(workflow.jobs).sort()).toEqual([
+        "admit",
+        "checks",
+        "implement",
+        "present",
+        "publish",
+      ]);
+      assertExactPermissions(workflow.permissions, "workflow", {});
+      const expectedPermissions = {
+        admit: { contents: "read", "pull-requests": "write" },
+        implement: { contents: "read" },
+        checks: { contents: "read" },
+        publish: { contents: "write", "pull-requests": "read" },
+        present: { contents: "read", "pull-requests": "write" },
+      } as const;
+      const expectedSecrets = {
+        admit: ["PR_WORK_ORDER_STATE_SECRET"],
+        implement: ["OPENAI_API_KEY"],
+        checks: [],
+        publish: ["PR_WORK_ORDER_STATE_SECRET"],
+        present: ["PR_WORK_ORDER_STATE_SECRET"],
+      } as const;
       for (const [jobName, job] of Object.entries(workflow.jobs)) {
-        assertFailClosedPermissions(job.permissions ?? workflow.permissions, `job ${jobName}`);
+        const knownJob = Schema.decodeUnknownSync(
+          Schema.Literals(["admit", "implement", "checks", "publish", "present"]),
+        )(jobName);
+        assertExactPermissions(
+          job.permissions ?? workflow.permissions,
+          `job ${jobName}`,
+          expectedPermissions[knownJob],
+        );
         expect(
           job.secrets,
-          `${jobName} must not inherit or map repository secrets`,
+          `${jobName} must not use reusable-workflow secret inheritance`,
         ).toBeUndefined();
         expect(job.uses, `${jobName} must not call a reusable workflow`).toBeUndefined();
         const checkouts = (job.steps ?? []).filter((step) =>
           (step.uses ?? "").startsWith("actions/checkout@"),
         );
         expect(checkouts, `${jobName} must check out trusted base code`).not.toHaveLength(0);
+        const trustedCheckout = checkouts.find(
+          (checkout) => checkout.with?.path === ".effect-agent/trusted",
+        );
+        expect(trustedCheckout).toBeDefined();
+        expect(trustedCheckout?.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
         for (const checkout of checkouts) {
-          expect(checkout.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
           expect(checkout.with?.["persist-credentials"]).toBe(false);
+          expect(checkout.uses).toMatch(/^actions\/checkout@[0-9a-f]{40}$/);
         }
-        expect(
-          (job.steps ?? []).some((step) => (step.run ?? "").includes("pr-work-order-ingress")),
-        ).toBe(true);
+        expect(secretAccesses(job)).toEqual([...expectedSecrets[knownJob]]);
         for (const step of job.steps ?? []) {
           expect(step.uses ?? "").not.toContain("@effect-agent/pr-review");
           expect(step.uses).not.toBe("./action");
           expect(step.run ?? "").not.toContain("@effect-agent/pr-review");
+          if (step.uses?.includes("/.effect-agent/trusted/work-order-action")) {
+            expect(step.uses).toBe("./.effect-agent/trusted/work-order-action");
+          }
+          if (step.uses !== undefined && !step.uses.startsWith("./")) {
+            expect(step.uses).toMatch(/@[0-9a-f]{40}$/);
+          }
         }
       }
-      expect(forbiddenSecretAccesses(parsed)).toEqual([]);
+      for (const jobName of ["implement", "checks"] as const) {
+        const headCheckout = workflow.jobs[jobName]?.steps?.find(
+          (step) => step.with?.path === "worktree",
+        );
+        expect(headCheckout?.with?.ref).toBe("${{ github.event.pull_request.head.sha }}");
+        expect(headCheckout?.with?.repository).toBe("${{ github.repository }}");
+      }
+      expect(workflow.jobs.publish?.steps?.some((step) => step.with?.path === "worktree")).toBe(
+        false,
+      );
+      expect(workflow.jobs.present?.steps?.some((step) => step.with?.path === "worktree")).toBe(
+        false,
+      );
+      const checkAction = workflow.jobs.checks?.steps?.find(
+        (step) => step.with?.phase === "checks",
+      );
+      expect(checkAction?.with?.["check-container-image"]).toMatch(
+        /^ghcr\.io\/voidzero-dev\/vite-plus:[^@]+@sha256:[0-9a-f]{64}$/,
+      );
+      expect(
+        workflow.jobs.checks?.steps
+          ?.filter((step) => step.run !== undefined)
+          .map((step) => step.run),
+      ).toEqual([]);
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("WOI-011 secret scanning rejects a secrets context hidden by braces", () =>
     Effect.sync(() => {
       expect(
-        forbiddenSecretAccesses({
+        secretAccesses({
           env: { KEY: "${{ format('{0}', 'x') && secrets.OPENAI_API_KEY }}" },
         }),
-      ).toEqual(["*"]);
+      ).toEqual(["OPENAI_API_KEY"]);
       expect(
-        forbiddenSecretAccesses({
+        secretAccesses({
           env: { TOKEN: "${{ secrets.GITHUB_TOKEN }}" },
         }),
-      ).toEqual([]);
+      ).toEqual(["GITHUB_TOKEN"]);
+      expect(secretAccesses({ secrets: "inherit" })).toEqual(["inherit"]);
     }),
   );
 
-  it.effect("the Actions entrypoint reads the pull-request number from the trusted event", () =>
+  it("WOI-007 gives pull-request checks only a networkless worktree container", () => {
+    const image = `docker.io/library/node:24@sha256:${"a".repeat(64)}`;
+    const args = isolatedCheckContainerArguments({
+      args: ["run", "ready"],
+      command: "vp",
+      containerImage: image,
+      containerName: "effect-agent-check",
+      network: "none",
+      root: "/runner/work/repository",
+      runnerUser: "1001:1001",
+      runtimeRoot: "/runner/temp/work-order-runtime",
+    });
+    expect(args).toContain("none");
+    expect(args).toContain("--read-only");
+    expect(args).toContain("--cap-drop");
+    expect(args).toContain("no-new-privileges");
+    expect(args.filter((value) => value.startsWith("type=bind"))).toEqual([
+      "type=bind,src=/runner/work/repository,dst=/workspace",
+      "type=bind,src=/runner/temp/work-order-runtime,dst=/runtime",
+    ]);
+    expect(args.slice(args.indexOf(image))).toEqual([image, "vp", "run", "ready"]);
+    expect(args.join(" ")).not.toMatch(/state|secret|token|docker\.sock/i);
+  });
+
+  it.effect("WOI-006 authenticates durable claimed and completed journal state", () =>
     Effect.gen(function* () {
-      const number = yield* pullRequestNumberFromEvent(
-        JSON.stringify({ pull_request: { number: PULL } }),
+      const authenticator = yield* WorkOrderJournalAuthenticator;
+      const claimed = claimedState({
+        eventId: "review-comment:1002",
+        repository: REPOSITORY,
+        pullRequestNumber: PULL,
+        sourceCommentId: "1001",
+        workOrderId: "wo-journal",
+        workOrderDigest: DIGEST,
+        expectedHeadSha: HEAD,
+        runId: "run-1",
+      });
+      const body = yield* authenticator.render(claimed, "Implementation is pending.");
+      const decoded = yield* authenticator.extract(body);
+      expect(Option.getOrUndefined(decoded)).toEqual(claimed);
+
+      const terminal = FailedTerminal.make({
+        workOrderId: claimed.workOrderId,
+        workOrderDigest: claimed.workOrderDigest,
+        headSha: claimed.expectedHeadSha,
+        errorTag: "RequiredCheckFailed",
+        detail: "a required check failed",
+      });
+      const completed = completedState(claimed, terminal);
+      const completedBody = yield* authenticator.render(completed, "No patch was published.");
+      expect(Option.getOrUndefined(yield* authenticator.extract(completedBody))).toEqual(completed);
+
+      const tampered = completedBody.replace(/([0-9a-f])(?= -->)/, (hex) =>
+        hex === "0" ? "1" : "0",
       );
-      const rejected = yield* pullRequestNumberFromEvent("{}").pipe(Effect.flip);
-      expect(number).toBe(PULL);
-      expect(rejected._tag).toBe("DispatchTargetRejected");
+      expect(Option.isNone(yield* authenticator.extract(tampered))).toBe(true);
+    }).pipe(
+      Effect.provide(
+        WorkOrderJournalAuthenticator.layer(Redacted.make("journal-test-secret-with-entropy")),
+      ),
+    ),
+  );
+
+  it.effect("WOI-008 derives complete patch paths and rejects path ambiguity or escapes", () =>
+    Effect.gen(function* () {
+      const valid = [
+        "diff --git a/src/value.ts b/src/value.ts",
+        `index ${"1".repeat(40)}..${"2".repeat(40)} 100644`,
+        "--- a/src/value.ts",
+        "+++ b/src/value.ts",
+        "@@ -1 +1 @@",
+        "-export const value = 1;",
+        "+export const value = 42;",
+        "",
+      ].join("\n");
+      expect(yield* completeModifiedPaths(valid)).toEqual(["src/value.ts"]);
+
+      const rejected = yield* Effect.all([
+        completeModifiedPaths(
+          "diff --git a/src/old.ts b/src/new.ts\nrename from src/old.ts\nrename to src/new.ts\n",
+        ).pipe(Effect.flip),
+        completeModifiedPaths(
+          "diff --git a/src/new.ts b/src/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/src/new.ts\n",
+        ).pipe(Effect.flip),
+        completeModifiedPaths(
+          "diff --git a/../secret b/../secret\n--- a/../secret\n+++ b/../secret\n",
+        ).pipe(Effect.flip),
+        completeModifiedPaths("diff --git a/src/value.ts b/src/value.ts\n").pipe(Effect.flip),
+      ]);
+      expect(rejected.map((failure) => failure._tag)).toEqual([
+        "PublisherVerificationFailure",
+        "PublisherVerificationFailure",
+        "PublisherVerificationFailure",
+        "PublisherVerificationFailure",
+      ]);
     }),
   );
 
-  it.effect("the Actions runner fails closed without authorized actor ids", () =>
-    Effect.gen(function* () {
-      const ids = yield* authorizedActorIdsFromConfig("3450486, 99");
-      const empty = yield* authorizedActorIdsFromConfig(" , ").pipe(Effect.flip);
-      expect([...ids]).toEqual(["3450486", "99"]);
-      expect(empty._tag).toBe("SchemaError");
-    }),
+  it.effect(
+    "WOI-009 uses GitHub's expected-head commit CAS and preserves stale/uncertain outcomes",
+    () =>
+      Effect.gen(function* () {
+        const published = Schema.decodeUnknownSync(GitCommitSha)("d".repeat(40));
+        const order = yield* createWorkOrder(
+          WorkOrderIdentity.make({
+            version: 1,
+            repository: REPOSITORY,
+            pullRequestNumber: PULL,
+            headSha: HEAD,
+            source: {
+              commentId: "1001",
+              authorId: "7",
+              authorLogin: "reviewer",
+              commitSha: HEAD,
+              path: FILE_PATH,
+              body: "The exported answer must be 42.",
+            },
+            dispatch: {
+              kind: "mention",
+              eventId: "review-comment:1002",
+              actorId: ACTOR_ID,
+              actorLogin: "alice",
+            },
+          }),
+        );
+        const digest = yield* workOrderDigest(order);
+        const baseContent = "export const value = 1;\n";
+        const finalContent = "export const value = 42;\n";
+        const gitBlob = (content: string) =>
+          createHash("sha1")
+            .update(`blob ${String(Buffer.byteLength(content))}\0`)
+            .update(content)
+            .digest("hex");
+        const patch = [
+          "diff --git a/src/value.ts b/src/value.ts",
+          `index ${gitBlob(baseContent)}..${gitBlob(finalContent)} 100644`,
+          "--- a/src/value.ts",
+          "+++ b/src/value.ts",
+          "@@ -1 +1 @@",
+          "-export const value = 1;",
+          "+export const value = 42;",
+          "",
+        ].join("\n");
+        const patchDigest = Schema.decodeUnknownSync(PatchDigest)(
+          createHash("sha256").update(patch).digest("hex"),
+        );
+        const admission = WorkOrderAdmission.make({
+          version: 1,
+          order,
+          workOrderDigest: digest,
+          journalCommentId: "2001",
+          runId: "run-1",
+        });
+        const proposal = ProposedWorkOrder.make({
+          order,
+          workOrderDigest: digest,
+          patch,
+          patchDigest,
+          changedPaths: [FILE_PATH],
+          requiredChecks: ["ready"],
+        });
+        const checked = CheckedWorkOrder.make({
+          version: 1,
+          admission,
+          proposal,
+          checks: [WorkOrderCheckResult.make({ name: "ready", status: "passed", summary: "ok" })],
+          files: [CheckedFile.make({ path: FILE_PATH, content: finalContent })],
+        });
+        yield* reproduceCheckedPatch({
+          checked,
+          expectedHeadFiles: new Map([[FILE_PATH, baseContent]]),
+        });
+        const substituted = CheckedWorkOrder.make({
+          version: 1,
+          admission,
+          proposal,
+          checks: checked.checks,
+          files: [
+            CheckedFile.make({ path: FILE_PATH, content: "export const value = 'forged';\n" }),
+          ],
+        });
+        expect(
+          (yield* reproduceCheckedPatch({
+            checked: substituted,
+            expectedHeadFiles: new Map([[FILE_PATH, baseContent]]),
+          }).pipe(Effect.flip))._tag,
+        ).toBe("WorkOrderValidationFailure");
+        const pullWire = (headSha: typeof HEAD) => ({
+          number: PULL,
+          head: {
+            sha: headSha,
+            ref: "feature",
+            repo: { full_name: REPOSITORY, fork: false },
+          },
+          base: { repo: { full_name: REPOSITORY, fork: false } },
+        });
+        const publishWith = (client: HttpClient.HttpClient) =>
+          Effect.gen(function* () {
+            const github = yield* WorkOrderGitHub;
+            return yield* github.publish({ checked, message: "fix: implement work order" });
+          }).pipe(
+            Effect.provide(
+              liveWorkOrderGitHubLayer({
+                token: "github-token",
+                apiUrl: "https://api.github.test",
+                graphqlUrl: "https://api.github.test/graphql",
+              }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient)(client))),
+            ),
+          );
+
+        const bodies = yield* Ref.make<ReadonlyArray<string>>([]);
+        const successClient = HttpClient.make((request, url) => {
+          if (request.method === "GET" && url.pathname === `/repos/${REPOSITORY}/pulls/${PULL}`) {
+            return Effect.succeed(
+              HttpClientResponse.fromWeb(
+                request,
+                new Response(JSON.stringify(pullWire(HEAD)), {
+                  status: 200,
+                  headers: { "content-type": "application/json" },
+                }),
+              ),
+            );
+          }
+          if (request.method === "POST" && url.pathname === "/graphql") {
+            const body =
+              request.body._tag === "Uint8Array"
+                ? new TextDecoder().decode(request.body.body)
+                : "unexpected-body";
+            return Ref.update(bodies, (previous) => [...previous, body]).pipe(
+              Effect.as(
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response(
+                    JSON.stringify({
+                      data: { createCommitOnBranch: { commit: { oid: published } } },
+                    }),
+                    { status: 200, headers: { "content-type": "application/json" } },
+                  ),
+                ),
+              ),
+            );
+          }
+          return Effect.die(new Error(`unexpected request ${request.method} ${url.href}`));
+        });
+        expect(yield* publishWith(successClient)).toBe(published);
+        expect(yield* Ref.get(bodies)).toHaveLength(1);
+        expect((yield* Ref.get(bodies))[0]).toContain(`"expectedHeadOid":"${HEAD}"`);
+        expect((yield* Ref.get(bodies))[0]).toContain(`"path":"${FILE_PATH}"`);
+
+        const staleClient = HttpClient.make((request) =>
+          Effect.succeed(
+            HttpClientResponse.fromWeb(
+              request,
+              new Response(JSON.stringify(pullWire(STALE)), {
+                status: 200,
+                headers: { "content-type": "application/json" },
+              }),
+            ),
+          ),
+        );
+        expect((yield* publishWith(staleClient).pipe(Effect.flip))._tag).toBe(
+          "StalePullRequestHead",
+        );
+
+        const gets = yield* Ref.make(0);
+        const uncertainClient = HttpClient.make((request) => {
+          if (request.method === "GET") {
+            return Ref.updateAndGet(gets, (count) => count + 1).pipe(
+              Effect.map(() =>
+                HttpClientResponse.fromWeb(
+                  request,
+                  new Response(JSON.stringify(pullWire(HEAD)), {
+                    status: 200,
+                    headers: { "content-type": "application/json" },
+                  }),
+                ),
+              ),
+            );
+          }
+          return Effect.succeed(
+            HttpClientResponse.fromWeb(request, new Response("unconfirmed", { status: 503 })),
+          );
+        });
+        const uncertain = yield* publishWith(uncertainClient).pipe(Effect.flip);
+        expect(uncertain._tag).toBe("PublicationUncertainty");
+        expect(yield* Ref.get(gets)).toBe(2);
+      }).pipe(Effect.provide(NodeServices.layer)),
   );
 
   it.effect("the live GitHub adapter maps API wires onto ingress views", () =>
@@ -959,6 +1316,7 @@ describe("PR work-order ingress", () => {
         number: PULL,
         head: {
           sha: HEAD,
+          ref: "feature",
           repo: { full_name: REPOSITORY, fork: false },
         },
         base: { repo: { full_name: REPOSITORY, fork: false } },

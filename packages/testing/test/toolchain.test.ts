@@ -1880,9 +1880,9 @@ Exercise the generated release verifier.
         expect(
           prReviewDependencies.some((dependency) => dependency.startsWith("@cloudflare/")),
         ).toBe(false);
-        // The work-order proof stays a private leaf. It consumes the public
-        // Agent runtime and no reviewer, provider adapter, or Cloudflare/GitHub
-        // deployment dependency.
+        // The reusable implementer stays provider-agnostic. The operational
+        // ingress Action binds the two supported Effect AI provider Layers,
+        // while still remaining separate from the read-only reviewer.
         expect(prWorkOrders.name).toBe("@effect-agent/example-pr-work-orders");
         expect(prWorkOrders.private).toBe(true);
         expect(prWorkOrders.dependencies?.["@effect-agent/pr-review"]).toBeUndefined();
@@ -1901,10 +1901,19 @@ Exercise the generated release verifier.
         expect(prWorkOrderIngress.dependencies?.["@effect-agent/example-pr-work-orders"]).toBe(
           "workspace:*",
         );
+        expect(prWorkOrderIngress.dependencies?.["@effect/ai-openai"]).toBe("catalog:");
+        expect(prWorkOrderIngress.dependencies?.["@effect/ai-anthropic"]).toBe("catalog:");
         expect(prWorkOrderIngress.dependencies?.effect).toBe("catalog:");
         expect(prWorkOrderIngressDependencies).not.toContain("wrangler");
         expect(
-          prWorkOrderIngressDependencies.some((dependency) => dependency.startsWith("@effect/ai-")),
+          prWorkOrderIngressDependencies.filter((dependency) =>
+            dependency.startsWith("@effect/ai-"),
+          ),
+        ).toEqual(["@effect/ai-anthropic", "@effect/ai-openai"]);
+        expect(
+          prWorkOrderIngressDependencies.some((dependency) =>
+            dependency.startsWith("@cloudflare/"),
+          ),
         ).toBe(false);
         const prReviewPublicIndex = yield* readRepositoryFile("packages/pr-review/src/index.ts");
         expect(prReviewPublicIndex).not.toMatch(/work-?order|remediation|handoff|implementer/i);
