@@ -46,7 +46,7 @@ import {
   terminalFromSettlement,
 } from "./action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "./action-github.ts";
-import { ObservedActionsIdentity } from "./authenticate.ts";
+import { authenticateDelivery, ObservedActionsIdentity } from "./authenticate.ts";
 import { constructWorkOrder } from "./construct.ts";
 import {
   DEFAULT_MENTION_COMMAND,
@@ -57,7 +57,12 @@ import {
   PublisherVerificationFailure,
 } from "./contracts.ts";
 import { liveGitHubApiLayer } from "./github-live.ts";
-import { claimedState, completedState, WorkOrderJournalAuthenticator } from "./journal.ts";
+import {
+  claimedState,
+  completedState,
+  journalStatesEqual,
+  WorkOrderJournalAuthenticator,
+} from "./journal.ts";
 import { parseDispatchTarget } from "./parse-event.ts";
 import { completeModifiedPaths } from "./patch.ts";
 
@@ -73,6 +78,17 @@ const ActionsEvent = Schema.Struct({
     number: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 });
+
+export interface AdmissionContext {
+  readonly repository: string;
+  readonly eventName: string;
+  readonly rawBody: string;
+  readonly runId: string;
+  readonly eventId: string;
+  readonly event: typeof ActionsEvent.Type;
+  readonly delivery: PlatformDelivery;
+  readonly policy: IngressPolicyConfig;
+}
 
 const StringArray = Schema.Array(Schema.NonEmptyString.check(Schema.isMaxLength(512))).check(
   Schema.isMaxLength(100),
@@ -196,7 +212,7 @@ const journalLayer = Effect.fn("workOrderAction.journalLayer")(function* () {
   );
 });
 
-const admit = Effect.fn("workOrderAction.admit")(function* () {
+const admissionContext = Effect.fn("workOrderAction.admissionContext")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const repository = yield* Config.nonEmptyString("GITHUB_REPOSITORY");
   const eventName = yield* Config.nonEmptyString("GITHUB_EVENT_NAME");
@@ -233,19 +249,16 @@ const admit = Effect.fn("workOrderAction.admit")(function* () {
     webhookSecret: "actions-identity",
   });
   const delivery = PlatformDelivery.make({ deliveryId: eventId, eventName, rawBody });
-  const options = yield* githubOptions();
-  const githubLayer = liveGitHubApiLayer(options);
-  const trustedIdentity = ObservedActionsIdentity.of({
-    read: Effect.succeed({ repository, eventName, eventPayload: rawBody, deliveryId: eventId }),
-  });
-  const order = yield* Effect.gen(function* () {
-    const target = yield* parseDispatchTarget(delivery);
-    return yield* constructWorkOrder(target, eventId);
-  }).pipe(
-    Effect.provide(IngressPolicy.layer(policy)),
-    Effect.provideService(ObservedActionsIdentity, trustedIdentity),
-    Effect.provide(githubLayer),
-  );
+  return { repository, eventName, rawBody, runId, eventId, event, delivery, policy } as const;
+});
+
+export const admitWorkOrder = Effect.fn("workOrderAction.admit")(function* (
+  context: AdmissionContext,
+) {
+  const { repository, runId, eventId, event, delivery } = context;
+  yield* authenticateDelivery(delivery);
+  const target = yield* parseDispatchTarget(delivery);
+  const order = yield* constructWorkOrder(target, eventId);
   const digest = yield* workOrderDigest(order);
   const stateAuthorId = yield* stableActorId("EFFECT_AGENT_STATE_AUTHOR_ID");
   const journal = yield* WorkOrderGitHub;
@@ -308,11 +321,19 @@ const admit = Effect.fn("workOrderAction.admit")(function* () {
     commentId: order.source.commentId,
     body,
   });
-  if (created.authorId !== stateAuthorId || created.inReplyToId !== order.source.commentId) {
+  const acknowledged = yield* authenticator.extract(created.body);
+  if (
+    created.authorId !== stateAuthorId ||
+    created.inReplyToId !== order.source.commentId ||
+    created.body !== body ||
+    Option.isNone(acknowledged) ||
+    !journalStatesEqual(claimed, acknowledged.value)
+  ) {
     return yield* WorkOrderActionFailure.make({
       phase: "admit",
       errorTag: "AdmissionConflict",
-      detail: "created admission journal has an unexpected author or thread target",
+      detail:
+        "created admission journal did not acknowledge the exact authenticated claim and thread target",
     });
   }
   yield* writeArtifact(
@@ -717,15 +738,29 @@ const present = Effect.fn("workOrderAction.present")(function* () {
       detail: "admission journal state is not the claimed work order owned by this run",
     });
   }
-  const body = yield* authenticator.render(
-    completedState(decoded.value, terminal),
-    visibleTerminal(terminal),
-  );
-  yield* github.updateComment({
+  const completed = completedState(decoded.value, terminal);
+  const body = yield* authenticator.render(completed, visibleTerminal(terminal));
+  const updated = yield* github.updateComment({
     repository: admission.order.repository,
     commentId: admission.journalCommentId,
     body,
   });
+  const acknowledged = yield* authenticator.extract(updated.body);
+  if (
+    updated.id !== admission.journalCommentId ||
+    updated.authorId !== stateAuthorId ||
+    updated.inReplyToId !== admission.order.source.commentId ||
+    updated.body !== body ||
+    Option.isNone(acknowledged) ||
+    !journalStatesEqual(completed, acknowledged.value)
+  ) {
+    return yield* WorkOrderActionFailure.make({
+      phase: "present",
+      errorTag: "PresentationFailure",
+      detail:
+        "updated admission journal did not acknowledge the exact authenticated terminal state and thread target",
+    });
+  }
   yield* writeOutputs([["outcome", terminal._tag]]);
   if (terminal._tag === "failed") {
     return yield* WorkOrderActionFailure.make({
@@ -740,8 +775,25 @@ export const workOrderActionProgram = Effect.gen(function* () {
   const phase = yield* Config.schema(ActionPhase, "EFFECT_AGENT_PHASE");
   yield* Console.log(`Effect Agent work-order phase: ${phase}`);
   switch (phase) {
-    case "admit":
-      return yield* admit().pipe(Effect.provide(Layer.unwrap(journalLayer())));
+    case "admit": {
+      const context = yield* admissionContext();
+      const options = yield* githubOptions();
+      const trustedIdentity = ObservedActionsIdentity.of({
+        read: Effect.succeed({
+          repository: context.repository,
+          eventName: context.eventName,
+          eventPayload: context.rawBody,
+          deliveryId: context.eventId,
+        }),
+      });
+      const admissionLayer = Layer.mergeAll(
+        liveGitHubApiLayer(options),
+        IngressPolicy.layer(context.policy),
+        Layer.succeed(ObservedActionsIdentity, trustedIdentity),
+        Layer.unwrap(journalLayer()),
+      );
+      return yield* admitWorkOrder(context).pipe(Effect.provide(admissionLayer));
+    }
     case "implement":
       return yield* implement();
     case "checks":

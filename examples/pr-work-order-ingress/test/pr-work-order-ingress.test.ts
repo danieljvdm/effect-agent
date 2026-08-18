@@ -33,7 +33,11 @@ import {
 import { Yaml } from "effect/unstable/encoding";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
-import { isolatedCheckContainerArguments, reproduceCheckedPatch } from "../src/action-checks.ts";
+import {
+  isolatedCheckContainerArguments,
+  reproduceCheckedPatch,
+  restoreFreshCheckWorkspace,
+} from "../src/action-checks.ts";
 import {
   CheckedFile,
   CheckedWorkOrder,
@@ -42,6 +46,7 @@ import {
   terminalMatchesAdmission,
 } from "../src/action-contracts.ts";
 import { liveWorkOrderGitHubLayer, WorkOrderGitHub } from "../src/action-github.ts";
+import { admitWorkOrder, type AdmissionContext } from "../src/action.ts";
 import {
   authenticateDelivery,
   ObservedActionsIdentity,
@@ -70,10 +75,16 @@ import {
   type StaleCommentAnchor,
 } from "../src/contracts.ts";
 import { pullRequestFromWire, reviewCommentFromWire } from "../src/github-live.ts";
+import type { GitHubApi } from "../src/github.ts";
 import { makeFakeGitHub } from "../src/github.ts";
 import { handleWorkOrderDelivery, WorkOrderImplementer } from "../src/ingress.ts";
 import { IsolatedChecks } from "../src/isolation.ts";
-import { claimedState, completedState, WorkOrderJournalAuthenticator } from "../src/journal.ts";
+import {
+  claimedState,
+  completedState,
+  journalStatesEqual,
+  WorkOrderJournalAuthenticator,
+} from "../src/journal.ts";
 import { parseDispatchTarget } from "../src/parse-event.ts";
 import { completeModifiedPaths } from "../src/patch.ts";
 import { IsolatedPublisher } from "../src/publisher.ts";
@@ -190,6 +201,16 @@ type HandleRequiresHost = Assert<Equal<Extract<TypedHandleServices, WorkOrderHos
 type HandleRequiresCrypto = Assert<
   Equal<Extract<TypedHandleServices, Crypto.Crypto>, Crypto.Crypto>
 >;
+
+const typedAdmission = admitWorkOrder(null as unknown as AdmissionContext);
+type TypedAdmissionServices = Effect.Services<typeof typedAdmission>;
+type AdmissionRequiresPolicy = Assert<
+  Equal<Extract<TypedAdmissionServices, IngressPolicy>, IngressPolicy>
+>;
+type AdmissionRequiresActionsIdentity = Assert<
+  Equal<Extract<TypedAdmissionServices, ObservedActionsIdentity>, ObservedActionsIdentity>
+>;
+type AdmissionRequiresGitHub = Assert<Equal<Extract<TypedAdmissionServices, GitHubApi>, GitHubApi>>;
 
 const defaultTrustFields = {
   workOrderId: "wo-1",
@@ -450,6 +471,9 @@ describe("PR work-order ingress", () => {
           handleRequiresStore: true as HandleRequiresStore,
           handleRequiresHost: true as HandleRequiresHost,
           handleRequiresCrypto: true as HandleRequiresCrypto,
+          admissionRequiresPolicy: true as AdmissionRequiresPolicy,
+          admissionRequiresActionsIdentity: true as AdmissionRequiresActionsIdentity,
+          admissionRequiresGitHub: true as AdmissionRequiresGitHub,
           publishKeepsVerification: true as PublishKeepsVerification,
         };
         expect(proofs).toEqual({
@@ -463,6 +487,9 @@ describe("PR work-order ingress", () => {
           handleRequiresStore: true,
           handleRequiresHost: true,
           handleRequiresCrypto: true,
+          admissionRequiresPolicy: true,
+          admissionRequiresActionsIdentity: true,
+          admissionRequiresGitHub: true,
           publishKeepsVerification: true,
         });
       }).pipe(Effect.provide(NodeServices.layer)),
@@ -1079,6 +1106,42 @@ describe("PR work-order ingress", () => {
     expect(installArgs.find((value) => value.startsWith("PATH="))).not.toContain("/workspace");
   });
 
+  it.effect("WOI-007 restores an independent checkout and runtime for every required check", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const repositoryPath = yield* fs.makeTempDirectoryScoped({ prefix: "check-source-" });
+      const runtimeRoot = yield* fs.makeTempDirectoryScoped({ prefix: "check-runtime-" });
+      yield* fs.writeFileString(path.join(repositoryPath, "tracked.txt"), "validated patch\n");
+      yield* fs.makeDirectory(path.join(runtimeRoot, ".vite-plus"), { recursive: true });
+      yield* fs.writeFileString(path.join(runtimeRoot, ".vite-plus", "cache"), "trusted cache\n");
+
+      const first = yield* restoreFreshCheckWorkspace({
+        repositoryPath,
+        runtimeRoot,
+        checkName: "first",
+        index: 0,
+      });
+      const second = yield* restoreFreshCheckWorkspace({
+        repositoryPath,
+        runtimeRoot,
+        checkName: "second",
+        index: 1,
+      });
+      yield* fs.writeFileString(path.join(first.repositoryPath, "tracked.txt"), "poisoned\n");
+      yield* fs.writeFileString(path.join(first.runtimeRoot, ".vite-plus", "cache"), "poisoned\n");
+
+      expect(first.repositoryPath).not.toBe(second.repositoryPath);
+      expect(first.runtimeRoot).not.toBe(second.runtimeRoot);
+      expect(yield* fs.readFileString(path.join(second.repositoryPath, "tracked.txt"))).toBe(
+        "validated patch\n",
+      );
+      expect(yield* fs.readFileString(path.join(second.runtimeRoot, ".vite-plus", "cache"))).toBe(
+        "trusted cache\n",
+      );
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("WOI-006 authenticates claimed and completed GitHub journal state", () =>
     Effect.gen(function* () {
       const authenticator = yield* WorkOrderJournalAuthenticator;
@@ -1109,6 +1172,17 @@ describe("PR work-order ingress", () => {
       const completed = completedState(claimed, terminal);
       const completedBody = yield* authenticator.render(completed, "No patch was published.");
       expect(Option.getOrUndefined(yield* authenticator.extract(completedBody))).toEqual(completed);
+      expect(journalStatesEqual(claimed, claimed)).toBe(true);
+      expect(journalStatesEqual(claimed, completed)).toBe(false);
+      expect(
+        journalStatesEqual(
+          completed,
+          completedState(
+            claimed,
+            FailedTerminal.make({ ...terminal, detail: "a different authenticated result" }),
+          ),
+        ),
+      ).toBe(false);
 
       const tampered = completedBody.replace(/([0-9a-f])(?= -->)/, (hex) =>
         hex === "0" ? "1" : "0",

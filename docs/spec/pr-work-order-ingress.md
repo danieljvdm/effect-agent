@@ -71,7 +71,8 @@ Admission accepts a marker only when both its HMAC and the reply author's config
 actor id match. The workflow concurrency key serializes deliveries by repository id and dispatch
 comment id. If an authenticated marker already owns that event/work-order identity, admission
 returns its stored `claimed` or terminal outcome and sets `should-run=false`; no implementer job is
-started. Multiple matching authenticated markers fail closed.
+started. Multiple matching authenticated markers fail closed. Admission proceeds only when the
+GitHub create response echoes the exact authenticated claim, bot actor id, and source-thread target.
 
 This GitHub flow is not an Effect Agent DN or DC assembly and makes no DN/DC guarantee.
 Its recovery boundary is GitHub's retention and availability of review comments: admission is
@@ -108,8 +109,9 @@ configured model provider.
 
 The checks phase first installs locked dependencies with lifecycle scripts disabled in a
 networked setup container that can see only the exact-head worktree and an ephemeral tool-runtime
-directory. Each required host-configured command is then executed without a shell in a fresh
-container from that same immutable image with:
+directory. The host then restores a separate copy of that validated patched worktree and tool
+runtime for each required check. Each required host-configured command is executed without a shell
+in a fresh container from that same immutable image with:
 
 - no network;
 - read-only container root;
@@ -119,10 +121,11 @@ container from that same immutable image with:
 
 Required-check containers have no network and cannot see sibling artifact state,
 provider/publisher credentials, the Docker socket, or the host filesystem outside those two
-mounts. Scoped finalizers forcibly remove every setup/check container and the runtime directory on
+mounts. A check therefore cannot alter a later check's worktree, dependencies, or runtime cache.
+Scoped finalizers forcibly remove every setup/check container and copied runtime directory on
 success, failure, timeout, or interruption. The host rejects a dirty post-install checkout, a
-patch that does not reproduce exactly, false/missing check evidence, a failed check, or any check
-mutation of the accepted patch.
+patch that does not reproduce exactly in every restored worktree, false/missing check evidence, a
+failed check, or any check mutation of the accepted patch.
 
 ## 5. Independent publication
 
@@ -164,7 +167,9 @@ The presenter updates the one authenticated admission reply with bounded host-au
 Raw model prose is not copied as authoritative status. A missing terminal artifact is typed
 `AttemptIncomplete` before publisher eligibility and conservatively becomes
 `PublicationUncertainty` after validated check evidence made publication eligible. The source
-thread remains open; no phase calls a thread-resolution API.
+thread remains open; no phase calls a thread-resolution API. Presentation succeeds only when the
+GitHub update response echoes the same journal comment, bot actor, source-thread target, response
+body, and exact authenticated terminal state.
 
 ## 7. Trusted workflow and consumer surface
 

@@ -138,6 +138,68 @@ const runGit = (root: string, args: ReadonlyArray<string>, operation: string) =>
     ),
   );
 
+const copyTree = Effect.fn("workOrderAction.copyTree")(function* (input: {
+  readonly source: string;
+  readonly target: string;
+  readonly operation: string;
+}) {
+  const copied = yield* runProcess({
+    command: "/bin/cp",
+    args: ["-a", `${input.source}/.`, input.target],
+    cwd: input.source,
+    operation: input.operation,
+    timeoutSeconds: 900,
+  });
+  if (copied.exitCode !== 0) {
+    return yield* WorkspaceOperationFailure.make({
+      operation: input.operation,
+      reason: copied.output.slice(0, 4_096) || `cp exited with ${String(copied.exitCode)}`,
+    });
+  }
+});
+
+export const restoreFreshCheckWorkspace = Effect.fn("workOrderAction.restoreFreshCheckWorkspace")(
+  function* (input: {
+    readonly repositoryPath: string;
+    readonly runtimeRoot: string;
+    readonly checkName: string;
+    readonly index: number;
+  }) {
+    const fs = yield* FileSystem.FileSystem;
+    const repositoryPath = yield* fs
+      .makeTempDirectoryScoped({ prefix: `work-order-check-${String(input.index)}-` })
+      .pipe(
+        Effect.mapError((cause) =>
+          WorkspaceOperationFailure.make({
+            operation: `create fresh checkout for required check ${input.checkName}`,
+            reason: String(cause).slice(0, 4_096),
+          }),
+        ),
+      );
+    const runtimeRoot = yield* fs
+      .makeTempDirectoryScoped({ prefix: `work-order-check-runtime-${String(input.index)}-` })
+      .pipe(
+        Effect.mapError((cause) =>
+          WorkspaceOperationFailure.make({
+            operation: `create fresh runtime for required check ${input.checkName}`,
+            reason: String(cause).slice(0, 4_096),
+          }),
+        ),
+      );
+    yield* copyTree({
+      source: input.repositoryPath,
+      target: repositoryPath,
+      operation: `restore fresh checkout for required check ${input.checkName}`,
+    });
+    yield* copyTree({
+      source: input.runtimeRoot,
+      target: runtimeRoot,
+      operation: `restore fresh runtime for required check ${input.checkName}`,
+    });
+    return { repositoryPath, runtimeRoot } as const;
+  },
+);
+
 export const isolatedCheckContainerArguments = (input: {
   readonly args: ReadonlyArray<string>;
   readonly command: string;
@@ -443,26 +505,55 @@ export const validateProposedWorkOrder = Effect.fn("validateProposedWorkOrder")(
     });
   }
   const results = yield* Effect.forEach(checks, (check, index) =>
-    runIsolatedContainer({
-      args: check.args,
-      command: check.command,
-      containerImage,
-      containerName: `${containerPrefix}-${String(index)}`,
-      network: "none",
-      operation: `run isolated required check ${check.name}`,
-      repositoryPath,
-      runnerUser: input.runnerUser,
-      runtimeRoot,
-      timeoutSeconds: check.timeoutSeconds,
-    }).pipe(
-      Effect.map(({ exitCode, output }) =>
-        WorkOrderCheckResult.make({
-          name: check.name,
-          status: exitCode === 0 ? "passed" : "failed",
-          summary: output.slice(0, 2_000) || (exitCode === 0 ? "passed" : "failed"),
-        }),
-      ),
-    ),
+    Effect.gen(function* () {
+      const fresh = yield* restoreFreshCheckWorkspace({
+        repositoryPath,
+        runtimeRoot,
+        checkName: check.name,
+        index,
+      });
+      const checkRepositoryPath = fresh.repositoryPath;
+      const checkRuntimeRoot = fresh.runtimeRoot;
+      const restored = yield* collectPatch(checkRepositoryPath);
+      if (
+        restored.patch !== proposal.patch ||
+        restored.digest !== proposal.patchDigest ||
+        !exactStrings(restored.changedPaths, proposal.changedPaths)
+      ) {
+        return yield* WorkOrderValidationFailure.make({
+          reason: "check-mutated-patch",
+          detail: `fresh checkout for required check ${check.name} did not reproduce the validated patch`,
+        });
+      }
+      const result = yield* runIsolatedContainer({
+        args: check.args,
+        command: check.command,
+        containerImage,
+        containerName: `${containerPrefix}-${String(index)}`,
+        network: "none",
+        operation: `run isolated required check ${check.name}`,
+        repositoryPath: checkRepositoryPath,
+        runnerUser: input.runnerUser,
+        runtimeRoot: checkRuntimeRoot,
+        timeoutSeconds: check.timeoutSeconds,
+      });
+      const afterCheck = yield* collectPatch(checkRepositoryPath);
+      if (
+        afterCheck.patch !== proposal.patch ||
+        afterCheck.digest !== proposal.patchDigest ||
+        !exactStrings(afterCheck.changedPaths, proposal.changedPaths)
+      ) {
+        return yield* WorkOrderValidationFailure.make({
+          reason: "check-mutated-patch",
+          detail: `required check ${check.name} mutated the validated patch`,
+        });
+      }
+      return WorkOrderCheckResult.make({
+        name: check.name,
+        status: result.exitCode === 0 ? "passed" : "failed",
+        summary: result.output.slice(0, 2_000) || (result.exitCode === 0 ? "passed" : "failed"),
+      });
+    }),
   );
   const failed = results.find((result) => result.status === "failed");
   if (failed !== undefined) {

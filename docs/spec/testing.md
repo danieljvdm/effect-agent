@@ -426,7 +426,7 @@ No durability milestone is complete while its crash tests are skipped.
 - **TEST-017**: The trusted-local work-order proof covers success, non-publication
   settlements, path escape, false check claims, failed host checks, stale-head
   publication fencing, typed/interrupted cleanup, and one-attempt admission.
-- **TEST-018**: The operational work-order ingress proof covers authenticated durable journal
+- **TEST-018**: The operational work-order ingress proof covers authenticated persistent journal
   state, exact dispatch and provenance, complete patch paths, check-container isolation,
   independent publisher verification, atomic publication uncertainty, thread presentation, and
   enabled workflow credential shape.

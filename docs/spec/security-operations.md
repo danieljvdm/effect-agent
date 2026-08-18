@@ -195,7 +195,7 @@ network publication are [work-order ingress](pr-work-order-ingress.md). The
 enabled work-order workflow runs model, untrusted repository checks, publisher,
 and presenter in separate jobs. Pull-request code executes only in the
 credential-free networkless check container; trusted base code authenticates
-the durable journal and owns atomic publication.
+the GitHub-retained journal and owns atomic publication.
 
 ## 10. Supply chain
 

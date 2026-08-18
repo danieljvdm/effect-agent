@@ -138,3 +138,56 @@ export const completedState = (
     runId: claimed.runId,
     terminal,
   });
+
+const terminalStatesEqual = (
+  left: JournalCompleted["terminal"],
+  right: JournalCompleted["terminal"],
+): boolean => {
+  if (left._tag !== right._tag) return false;
+  switch (left._tag) {
+    case "published":
+      return (
+        right._tag === "published" &&
+        left.workOrderId === right.workOrderId &&
+        left.workOrderDigest === right.workOrderDigest &&
+        left.previousHeadSha === right.previousHeadSha &&
+        left.publishedHeadSha === right.publishedHeadSha &&
+        left.changedPaths.length === right.changedPaths.length &&
+        left.changedPaths.every((path, index) => path === right.changedPaths[index])
+      );
+    case "settled":
+      return (
+        right._tag === "settled" &&
+        left.workOrderId === right.workOrderId &&
+        left.workOrderDigest === right.workOrderDigest &&
+        left.headSha === right.headSha &&
+        left.disposition === right.disposition
+      );
+    case "failed":
+      return (
+        right._tag === "failed" &&
+        left.workOrderId === right.workOrderId &&
+        left.workOrderDigest === right.workOrderDigest &&
+        left.headSha === right.headSha &&
+        left.errorTag === right.errorTag &&
+        left.detail === right.detail
+      );
+  }
+};
+
+export const journalStatesEqual = (
+  left: WorkOrderJournalState,
+  right: WorkOrderJournalState,
+): boolean =>
+  left._tag === right._tag &&
+  left.version === right.version &&
+  left.eventId === right.eventId &&
+  left.repository === right.repository &&
+  left.pullRequestNumber === right.pullRequestNumber &&
+  left.sourceCommentId === right.sourceCommentId &&
+  left.workOrderId === right.workOrderId &&
+  left.workOrderDigest === right.workOrderDigest &&
+  left.expectedHeadSha === right.expectedHeadSha &&
+  left.runId === right.runId &&
+  (left._tag === "claimed" ||
+    (right._tag === "completed" && terminalStatesEqual(left.terminal, right.terminal)));

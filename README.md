@@ -50,7 +50,7 @@ reviewer's read-only authority.
   work order, grants a separate implementation Agent only jailed file/patch/named-check
   tools, and leaves admission, checks, and atomic publication to host Effect code.
   `examples/pr-work-order-ingress`, the prebuilt `work-order-action/`, and the enabled
-  multi-job workflow provide exact GitHub dispatch, an authenticated durable admission journal,
+  multi-job workflow provide exact GitHub dispatch, an authenticated GitHub-retained admission journal,
   credential-separated model/check/publisher jobs, atomic publication, and bounded thread
   presentation. The work-order Action remains separate from the read-only reviewer.
 - Stated plainly: completion is an engineering claim, not a stability one — no hosted-Cloudflare

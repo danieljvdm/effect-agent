@@ -79,7 +79,7 @@ examples/
   demo/             Leaf TanStack Start browser bench
   pr-review/        Leaf consumer of @effect-agent/pr-review (guidance, extra tool, ignore globs)
   pr-work-orders/           Trusted-local work-order implementer proof (private, class E)
-  pr-work-order-ingress/    GitHub dispatch, durable journal, isolated checks/publication
+  pr-work-order-ingress/    GitHub dispatch, persistent journal, isolated checks/publication
   providers/        Leaf OpenAI/Anthropic Model-binding compile proof
   repo-ops/         Leaf repo-ops evidence auditor (P7 internal agent)
 action/             Prebuilt node24 GitHub Action over @effect-agent/pr-review (committed bundle)

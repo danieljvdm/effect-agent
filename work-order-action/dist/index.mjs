@@ -53137,6 +53137,43 @@ var runGit = (root, args2, operation) => runProcess({
   operation,
   reason: output.slice(0, 4096) || `git exited with ${String(exitCode)}`
 })));
+var copyTree = exports_Effect.fn("workOrderAction.copyTree")(function* (input) {
+  const copied = yield* runProcess({
+    command: "/bin/cp",
+    args: ["-a", `${input.source}/.`, input.target],
+    cwd: input.source,
+    operation: input.operation,
+    timeoutSeconds: 900
+  });
+  if (copied.exitCode !== 0) {
+    return yield* WorkspaceOperationFailure.make({
+      operation: input.operation,
+      reason: copied.output.slice(0, 4096) || `cp exited with ${String(copied.exitCode)}`
+    });
+  }
+});
+var restoreFreshCheckWorkspace = exports_Effect.fn("workOrderAction.restoreFreshCheckWorkspace")(function* (input) {
+  const fs = yield* exports_FileSystem.FileSystem;
+  const repositoryPath = yield* fs.makeTempDirectoryScoped({ prefix: `work-order-check-${String(input.index)}-` }).pipe(exports_Effect.mapError((cause) => WorkspaceOperationFailure.make({
+    operation: `create fresh checkout for required check ${input.checkName}`,
+    reason: String(cause).slice(0, 4096)
+  })));
+  const runtimeRoot = yield* fs.makeTempDirectoryScoped({ prefix: `work-order-check-runtime-${String(input.index)}-` }).pipe(exports_Effect.mapError((cause) => WorkspaceOperationFailure.make({
+    operation: `create fresh runtime for required check ${input.checkName}`,
+    reason: String(cause).slice(0, 4096)
+  })));
+  yield* copyTree({
+    source: input.repositoryPath,
+    target: repositoryPath,
+    operation: `restore fresh checkout for required check ${input.checkName}`
+  });
+  yield* copyTree({
+    source: input.runtimeRoot,
+    target: runtimeRoot,
+    operation: `restore fresh runtime for required check ${input.checkName}`
+  });
+  return { repositoryPath, runtimeRoot };
+});
 var isolatedCheckContainerArguments = (input) => [
   "run",
   "--rm",
@@ -53324,22 +53361,47 @@ var validateProposedWorkOrder = exports_Effect.fn("validateProposedWorkOrder")(f
       detail: "isolated checkout did not reproduce the proposed patch exactly"
     });
   }
-  const results = yield* exports_Effect.forEach(checks, (check2, index2) => runIsolatedContainer({
-    args: check2.args,
-    command: check2.command,
-    containerImage,
-    containerName: `${containerPrefix}-${String(index2)}`,
-    network: "none",
-    operation: `run isolated required check ${check2.name}`,
-    repositoryPath,
-    runnerUser: input.runnerUser,
-    runtimeRoot,
-    timeoutSeconds: check2.timeoutSeconds
-  }).pipe(exports_Effect.map(({ exitCode, output }) => WorkOrderCheckResult.make({
-    name: check2.name,
-    status: exitCode === 0 ? "passed" : "failed",
-    summary: output.slice(0, 2000) || (exitCode === 0 ? "passed" : "failed")
-  }))));
+  const results = yield* exports_Effect.forEach(checks, (check2, index2) => exports_Effect.gen(function* () {
+    const fresh2 = yield* restoreFreshCheckWorkspace({
+      repositoryPath,
+      runtimeRoot,
+      checkName: check2.name,
+      index: index2
+    });
+    const checkRepositoryPath = fresh2.repositoryPath;
+    const checkRuntimeRoot = fresh2.runtimeRoot;
+    const restored = yield* collectPatch(checkRepositoryPath);
+    if (restored.patch !== proposal.patch || restored.digest !== proposal.patchDigest || !exactStrings(restored.changedPaths, proposal.changedPaths)) {
+      return yield* WorkOrderValidationFailure.make({
+        reason: "check-mutated-patch",
+        detail: `fresh checkout for required check ${check2.name} did not reproduce the validated patch`
+      });
+    }
+    const result4 = yield* runIsolatedContainer({
+      args: check2.args,
+      command: check2.command,
+      containerImage,
+      containerName: `${containerPrefix}-${String(index2)}`,
+      network: "none",
+      operation: `run isolated required check ${check2.name}`,
+      repositoryPath: checkRepositoryPath,
+      runnerUser: input.runnerUser,
+      runtimeRoot: checkRuntimeRoot,
+      timeoutSeconds: check2.timeoutSeconds
+    });
+    const afterCheck = yield* collectPatch(checkRepositoryPath);
+    if (afterCheck.patch !== proposal.patch || afterCheck.digest !== proposal.patchDigest || !exactStrings(afterCheck.changedPaths, proposal.changedPaths)) {
+      return yield* WorkOrderValidationFailure.make({
+        reason: "check-mutated-patch",
+        detail: `required check ${check2.name} mutated the validated patch`
+      });
+    }
+    return WorkOrderCheckResult.make({
+      name: check2.name,
+      status: result4.exitCode === 0 ? "passed" : "failed",
+      summary: result4.output.slice(0, 2000) || (result4.exitCode === 0 ? "passed" : "failed")
+    });
+  }));
   const failed = results.find((result4) => result4.status === "failed");
   if (failed !== undefined) {
     return yield* RequiredCheckFailed.make({ check: failed.name, summary: failed.summary });
@@ -54133,6 +54195,19 @@ var completedState = (claimed, terminal) => JournalCompleted.make({
   runId: claimed.runId,
   terminal
 });
+var terminalStatesEqual = (left, right) => {
+  if (left._tag !== right._tag)
+    return false;
+  switch (left._tag) {
+    case "published":
+      return right._tag === "published" && left.workOrderId === right.workOrderId && left.workOrderDigest === right.workOrderDigest && left.previousHeadSha === right.previousHeadSha && left.publishedHeadSha === right.publishedHeadSha && left.changedPaths.length === right.changedPaths.length && left.changedPaths.every((path, index2) => path === right.changedPaths[index2]);
+    case "settled":
+      return right._tag === "settled" && left.workOrderId === right.workOrderId && left.workOrderDigest === right.workOrderDigest && left.headSha === right.headSha && left.disposition === right.disposition;
+    case "failed":
+      return right._tag === "failed" && left.workOrderId === right.workOrderId && left.workOrderDigest === right.workOrderDigest && left.headSha === right.headSha && left.errorTag === right.errorTag && left.detail === right.detail;
+  }
+};
+var journalStatesEqual = (left, right) => left._tag === right._tag && left.version === right.version && left.eventId === right.eventId && left.repository === right.repository && left.pullRequestNumber === right.pullRequestNumber && left.sourceCommentId === right.sourceCommentId && left.workOrderId === right.workOrderId && left.workOrderDigest === right.workOrderDigest && left.expectedHeadSha === right.expectedHeadSha && left.runId === right.runId && (left._tag === "claimed" || right._tag === "completed" && terminalStatesEqual(left.terminal, right.terminal));
 
 // examples/pr-work-order-ingress/src/parse-event.ts
 var GitHubActor = exports_Schema.Struct({
@@ -54390,7 +54465,7 @@ var journalLayer = exports_Effect.fn("workOrderAction.journalLayer")(function* (
   })));
   return exports_Layer.merge(liveWorkOrderGitHubLayer(options3), WorkOrderJournalAuthenticator.layer(secret));
 });
-var admit = exports_Effect.fn("workOrderAction.admit")(function* () {
+var admissionContext = exports_Effect.fn("workOrderAction.admissionContext")(function* () {
   const fs = yield* exports_FileSystem.FileSystem;
   const repository = yield* exports_Config.nonEmptyString("GITHUB_REPOSITORY");
   const eventName = yield* exports_Config.nonEmptyString("GITHUB_EVENT_NAME");
@@ -54421,15 +54496,13 @@ var admit = exports_Effect.fn("workOrderAction.admit")(function* () {
     webhookSecret: "actions-identity"
   });
   const delivery = PlatformDelivery.make({ deliveryId: eventId, eventName, rawBody });
-  const options3 = yield* githubOptions();
-  const githubLayer = liveGitHubApiLayer(options3);
-  const trustedIdentity = ObservedActionsIdentity.of({
-    read: exports_Effect.succeed({ repository, eventName, eventPayload: rawBody, deliveryId: eventId })
-  });
-  const order = yield* exports_Effect.gen(function* () {
-    const target = yield* parseDispatchTarget(delivery);
-    return yield* constructWorkOrder(target, eventId);
-  }).pipe(exports_Effect.provide(IngressPolicy.layer(policy2)), exports_Effect.provideService(ObservedActionsIdentity, trustedIdentity), exports_Effect.provide(githubLayer));
+  return { repository, eventName, rawBody, runId, eventId, event, delivery, policy: policy2 };
+});
+var admitWorkOrder = exports_Effect.fn("workOrderAction.admit")(function* (context4) {
+  const { repository, runId, eventId, event, delivery } = context4;
+  yield* authenticateDelivery(delivery);
+  const target = yield* parseDispatchTarget(delivery);
+  const order = yield* constructWorkOrder(target, eventId);
   const digest2 = yield* workOrderDigest(order);
   const stateAuthorId = yield* stableActorId("EFFECT_AGENT_STATE_AUTHOR_ID");
   const journal = yield* WorkOrderGitHub;
@@ -54480,11 +54553,12 @@ var admit = exports_Effect.fn("workOrderAction.admit")(function* () {
     commentId: order.source.commentId,
     body
   });
-  if (created.authorId !== stateAuthorId || created.inReplyToId !== order.source.commentId) {
+  const acknowledged = yield* authenticator.extract(created.body);
+  if (created.authorId !== stateAuthorId || created.inReplyToId !== order.source.commentId || created.body !== body || exports_Option.isNone(acknowledged) || !journalStatesEqual(claimed, acknowledged.value)) {
     return yield* WorkOrderActionFailure.make({
       phase: "admit",
       errorTag: "AdmissionConflict",
-      detail: "created admission journal has an unexpected author or thread target"
+      detail: "created admission journal did not acknowledge the exact authenticated claim and thread target"
     });
   }
   yield* writeArtifact("admission", WorkOrderAdmission.make({
@@ -54718,12 +54792,21 @@ var present = exports_Effect.fn("workOrderAction.present")(function* () {
       detail: "admission journal state is not the claimed work order owned by this run"
     });
   }
-  const body = yield* authenticator.render(completedState(decoded.value, terminal), visibleTerminal(terminal));
-  yield* github.updateComment({
+  const completed = completedState(decoded.value, terminal);
+  const body = yield* authenticator.render(completed, visibleTerminal(terminal));
+  const updated = yield* github.updateComment({
     repository: admission.order.repository,
     commentId: admission.journalCommentId,
     body
   });
+  const acknowledged = yield* authenticator.extract(updated.body);
+  if (updated.id !== admission.journalCommentId || updated.authorId !== stateAuthorId || updated.inReplyToId !== admission.order.source.commentId || updated.body !== body || exports_Option.isNone(acknowledged) || !journalStatesEqual(completed, acknowledged.value)) {
+    return yield* WorkOrderActionFailure.make({
+      phase: "present",
+      errorTag: "PresentationFailure",
+      detail: "updated admission journal did not acknowledge the exact authenticated terminal state and thread target"
+    });
+  }
   yield* writeOutputs([["outcome", terminal._tag]]);
   if (terminal._tag === "failed") {
     return yield* WorkOrderActionFailure.make({
@@ -54737,8 +54820,20 @@ var workOrderActionProgram = exports_Effect.gen(function* () {
   const phase = yield* exports_Config.schema(ActionPhase, "EFFECT_AGENT_PHASE");
   yield* exports_Console.log(`Effect Agent work-order phase: ${phase}`);
   switch (phase) {
-    case "admit":
-      return yield* admit().pipe(exports_Effect.provide(exports_Layer.unwrap(journalLayer())));
+    case "admit": {
+      const context4 = yield* admissionContext();
+      const options3 = yield* githubOptions();
+      const trustedIdentity = ObservedActionsIdentity.of({
+        read: exports_Effect.succeed({
+          repository: context4.repository,
+          eventName: context4.eventName,
+          eventPayload: context4.rawBody,
+          deliveryId: context4.eventId
+        })
+      });
+      const admissionLayer = exports_Layer.mergeAll(liveGitHubApiLayer(options3), IngressPolicy.layer(context4.policy), exports_Layer.succeed(ObservedActionsIdentity, trustedIdentity), exports_Layer.unwrap(journalLayer()));
+      return yield* admitWorkOrder(context4).pipe(exports_Effect.provide(admissionLayer));
+    }
     case "implement":
       return yield* implement();
     case "checks":
