@@ -60,10 +60,12 @@ inputs:
     default: "false"
   fan-out:
     description: >-
-      Use deterministic per-unit discovery, redundant high-risk scrutiny, and
-      independent candidate verification with bounded subagent children.
+      Use deterministic evidence sharding, independent general and specialist
+      discovery, and candidate verification with bounded subagent children.
+      Enabled by default because the flat shape has no independent verifier
+      and therefore cannot produce settled review assurance.
     required: false
-    default: "false"
+    default: "true"
   guidance:
     description: "Extra review guidance injected into the reviewer's instructions."
     required: false

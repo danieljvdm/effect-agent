@@ -127,7 +127,7 @@ export const resolveActionInputs = Effect.fn("resolveActionInputs")(function* ()
   const applyVerdict = yield* Config.boolean("PR_REVIEW_APPLY_VERDICT").pipe(
     Config.withDefault(false),
   );
-  const fanOut = yield* Config.boolean("PR_REVIEW_FAN_OUT").pipe(Config.withDefault(false));
+  const fanOut = yield* Config.boolean("PR_REVIEW_FAN_OUT").pipe(Config.withDefault(true));
   const guidance = yield* Config.option(Config.nonEmptyString("PR_REVIEW_GUIDANCE"));
   const guidanceFile = yield* Config.option(Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* Config.string("PR_REVIEW_IGNORE").pipe(Config.withDefault(""));
@@ -336,11 +336,17 @@ const resolveRunUrl = Effect.fn("resolveRunUrl")(function* () {
   return `${server}/${repository}/actions/runs/${runId}`;
 });
 
-/** The reviewer surface the action harness drives. `PrReview.make` and
- * `PrReview.makeFanOut` provide the state-selection effects; the legacy
- * fingerprint field remains for source compatibility with custom harnesses. */
+/**
+ * The reviewer surface the action harness drives. `PrReview.make` and
+ * `PrReview.makeFanOut` provide the state-selection effects. A fingerprint is
+ * skip authority only when a profile fingerprint and authenticated review
+ * state bind it to settled assurance; a fingerprint-only custom harness
+ * remains source-compatible but deliberately runs instead of claiming green
+ * assurance from unauthenticated prior-review text.
+ */
 export interface HarnessedReviewer<E, R, FingerprintE, FingerprintR> {
   readonly run: (runOptions?: RunReviewOptions) => Effect.Effect<ReviewRunOutcome, E, R>;
+  /** Current effective changeset fingerprint; not standalone skip authority. */
   readonly fingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
   readonly profileFingerprint?: Effect.Effect<string, FingerprintE, FingerprintR> | undefined;
   readonly snapshot?:

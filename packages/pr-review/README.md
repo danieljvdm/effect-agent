@@ -230,7 +230,8 @@ request `final` mode (or disable unchanged skipping) for that case.
   supporting a committed review-profile document via `guidance-file` (this
   repository's own profile lives at `.github/review-guidance.md`)
   (`action/` at the repo root) — `uses` it with an API-key secret and nothing
-  else. While a run executes it maintains one sticky, fail-open "review in
+  else. Fan-out is the Action default because the flat compatibility shape
+  has no independent verifier and cannot settle review assurance. While a run executes it maintains one sticky, fail-open "review in
   progress" comment updated in place with the settled outcome
   (`progress-comment` input, default on; at-least-once with generation-fenced
   writes and best-effort duplicate cleanup — strict single-comment behavior
@@ -240,7 +241,9 @@ request `final` mode (or disable unchanged skipping) for that case.
   resolution, typed draft/non-PR skips, bounded range selection, step
   outputs, and conservative check gate) to harness your own `reviewer.run`;
   pass `progressComment: true` to opt a custom harness into the sticky
-  progress comment.
+  progress comment. A custom fingerprint-only harness remains source-compatible
+  but cannot skip model work: unchanged skipping requires the profile fingerprint
+  and authenticated state that prove the prior configured work settled.
 - **CLI**: `bun src/cli.ts --repo owner/name --pr 123 [--post] [--provider anthropic] [--fan-out]`
   (also exported as the `./cli` entry).
 

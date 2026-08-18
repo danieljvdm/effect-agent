@@ -56490,7 +56490,7 @@ var resolveActionInputs = exports_Effect.fn("resolveActionInputs")(function* () 
   }
   const post3 = yield* exports_Config.boolean("PR_REVIEW_POST").pipe(exports_Config.withDefault(true));
   const applyVerdict = yield* exports_Config.boolean("PR_REVIEW_APPLY_VERDICT").pipe(exports_Config.withDefault(false));
-  const fanOut = yield* exports_Config.boolean("PR_REVIEW_FAN_OUT").pipe(exports_Config.withDefault(false));
+  const fanOut = yield* exports_Config.boolean("PR_REVIEW_FAN_OUT").pipe(exports_Config.withDefault(true));
   const guidance = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE"));
   const guidanceFile = yield* exports_Config.option(exports_Config.nonEmptyString("PR_REVIEW_GUIDANCE_FILE"));
   const ignoreRaw = yield* exports_Config.string("PR_REVIEW_IGNORE").pipe(exports_Config.withDefault(""));

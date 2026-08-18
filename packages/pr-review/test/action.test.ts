@@ -74,7 +74,7 @@ describe("resolveActionInputs", () => {
         effort: undefined,
         post: true,
         applyVerdict: false,
-        fanOut: false,
+        fanOut: true,
         guidance: undefined,
         guidanceFile: undefined,
         ignore: [],
@@ -98,7 +98,7 @@ describe("resolveActionInputs", () => {
           PR_REVIEW_EFFORT: "xhigh",
           PR_REVIEW_POST: "false",
           PR_REVIEW_APPLY_VERDICT: "true",
-          PR_REVIEW_FAN_OUT: "true",
+          PR_REVIEW_FAN_OUT: "false",
           PR_REVIEW_GUIDANCE: "Flag naked Promises.",
           PR_REVIEW_GUIDANCE_FILE: ".github/review-guidance.md",
           PR_REVIEW_IGNORE: " **/*.lock , dist/** ,",
@@ -117,7 +117,7 @@ describe("resolveActionInputs", () => {
         effort: 0.75,
         post: false,
         applyVerdict: true,
-        fanOut: true,
+        fanOut: false,
         guidance: "Flag naked Promises.",
         guidanceFile: ".github/review-guidance.md",
         ignore: ["**/*.lock", "dist/**"],
@@ -554,7 +554,7 @@ describe("runReviewAction", () => {
     }),
   );
 
-  it.effect("does not turn a legacy fingerprint match into green unverified assurance", () =>
+  it.effect("reruns a fingerprint-only harness instead of claiming unauthenticated assurance", () =>
     Effect.gen(function* () {
       const harness = yield* actionHarness(
         JSON.stringify({
