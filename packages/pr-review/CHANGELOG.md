@@ -1,5 +1,16 @@
 # @effect-agent/pr-review
 
+## 0.1.0-beta.21
+
+### Patch Changes
+
+- [#117](https://github.com/danieljvdm/effect-agent/pull/117) [`27618dc`](https://github.com/danieljvdm/effect-agent/commit/27618dc03b0703fc784dc7abc4280fc74bb95045) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Review pull requests with deterministic complete evidence sharding, independent general and
+  specialist discovery, and request-bound verification that publishes only confirmed candidates.
+  Default the Action to this fan-out pipeline and require complete input assignment plus settled
+  configured work before emitting authenticated incremental state or a successful conclusion.
+- Updated dependencies []:
+  - effect-agent@0.1.0-beta.21
+
 ## 0.1.0-beta.20
 
 ### Patch Changes

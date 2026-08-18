@@ -47,6 +47,7 @@
     "model-visible-output-contract",
     "native-tool-observability",
     "pin-internal-dependency-versions",
+    "pr-review-assurance-pipeline",
     "pr-review-guidance-file",
     "pr-review-incremental-continuity",
     "pr-review-package",
@@ -60,6 +61,7 @@
     "retire-stale-reviews",
     "review-patchless-text",
     "skip-equivalent-rebase-review",
+    "subagent-request-bound-projection",
     "typed-budget-settlement",
     "typed-run-disposition",
     "visible-review-runs"

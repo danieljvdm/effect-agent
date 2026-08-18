@@ -1,5 +1,17 @@
 # @effect-agent/capabilities
 
+## 0.1.0-beta.21
+
+### Patch Changes
+
+- [#117](https://github.com/danieljvdm/effect-agent/pull/117) [`27618dc`](https://github.com/danieljvdm/effect-agent/commit/27618dc03b0703fc784dc7abc4280fc74bb95045) Thanks [@danieljvdm](https://github.com/danieljvdm)! - Pass the original Schema-decoded delegation parameters to `projectResult` on both ephemeral and
+  durable attached-subagent paths so result declassification can bind child output to the exact
+  request without trusting echoed identity fields.
+- Updated dependencies []:
+  - @effect-agent/core@0.1.0-beta.21
+  - @effect-agent/engine@0.1.0-beta.21
+  - @effect-agent/sandbox@0.1.0-beta.21
+
 ## 0.1.0-beta.20
 
 ### Patch Changes

@@ -4,6 +4,7 @@ import { Effect, Option, Redacted } from "effect";
 import {
   ChangedFile,
   PullRequestMetadata,
+  planReviewUnits,
   ReviewHeadComparison,
   ReviewState,
   ReviewStateAuthenticator,
@@ -231,7 +232,7 @@ describe("review state", () => {
     expect(rewrittenBase.reason).toContain("changed materially");
   });
 
-  it("performs a bounded full-diff audit only when final mode is explicit", () => {
+  it("forces fresh full-diff discovery only when final mode is explicit", () => {
     const selection = select({ requestedMode: "final" });
     expect(selection.mode).toBe("full");
     expect(selection.files.map((file) => file.path)).toEqual([
@@ -240,5 +241,13 @@ describe("review state", () => {
     ]);
     expect(selection.reason).toBe("explicit final full-diff audit requested");
     expect(selection.priorState).toBe(undefined);
+    const plan = planReviewUnits(selection.files, { totalChangedFiles: 2 });
+    expect(plan.discoveryPasses.filter((pass) => pass.perspective === "general")).toHaveLength(
+      plan.units.length,
+    );
+    expect([...new Set(plan.discoveryPasses.flatMap((pass) => pass.paths))].sort()).toEqual([
+      "src/accepted.ts",
+      "src/corrective.ts",
+    ]);
   });
 });

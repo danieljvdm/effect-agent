@@ -3,7 +3,7 @@ description: >-
   Review the current pull request with @effect-agent/pr-review — a bounded,
   read-only reviewer whose findings are validated against the real diff — and
   post the result as a pull-request review. Ephemeral execution (deployment
-  class E): a runtime failure posts nothing, an incomplete settled review
+  class E): a runtime failure posts nothing, incomplete input or assurance
   fails the check honestly, and posting is never exactly-once.
 branding:
   icon: "eye"
@@ -46,7 +46,7 @@ inputs:
     required: false
   max-duration-minutes:
     description: >-
-      Run duration budget in minutes (defaults: 8 flat, 15 fan-out). Keep the
+      Run duration budget in minutes (defaults: 8 flat, 20 fan-out). Keep the
       job's timeout-minutes ABOVE this so the reviewer ends its run gracefully
       instead of being killed by the runner with nothing posted.
     required: false
@@ -59,9 +59,13 @@ inputs:
     required: false
     default: "false"
   fan-out:
-    description: "Delegate per-unit file reviews to bounded subagent children."
+    description: >-
+      Use deterministic evidence sharding, independent general and specialist
+      discovery, and candidate verification with bounded subagent children.
+      Enabled by default because the flat shape has no independent verifier
+      and therefore cannot produce settled review assurance.
     required: false
-    default: "false"
+    default: "true"
   guidance:
     description: "Extra review guidance injected into the reviewer's instructions."
     required: false
@@ -80,13 +84,14 @@ inputs:
   fail-on:
     description: >-
       Deprecated compatibility input. Blocking findings and incomplete
-      coverage always fail the check; model verdicts never weaken that gate.
+      input coverage or review assurance always fail the check; model verdicts
+      never weaken that gate.
     required: false
     default: "never"
   skip-unchanged:
     description: >-
       Skip model execution when the current effective patch matches the last
-      completely reviewed patch ('true', default), including commit-ID-only
+      patch with settled stored assurance ('true', default), including commit-ID-only
       rebases, while preserving the stored blocking/success conclusion. Set
       'false' to force execution.
     required: false
@@ -101,8 +106,8 @@ inputs:
   review-mode:
     description: >-
       "incremental" (default) reviews changes since the last compatible,
-      successfully covered head. "final" deliberately audits the full
-      current pull-request diff.
+      complete-input, settled-assurance head. "final" deliberately performs
+      fresh discovery over the full current pull-request diff.
     required: false
     default: "incremental"
   progress-comment:
@@ -127,15 +132,19 @@ inputs:
     default: "Info"
 outputs:
   skipped:
-    description: "'true' when the event is not reviewable or the effective patch already has stored coverage."
+    description: "'true' when the event is not reviewable or the effective patch already has settled stored assurance."
   skip-reason:
     description: "Why the run skipped (set only when skipped is 'true')."
   fingerprint:
     description: "Deprecated changeset-fingerprint output."
   conclusion:
     description: "Host-derived check conclusion: success, blocking, or incomplete."
+  input-coverage:
+    description: "Host-derived path/evidence assignment: complete or incomplete."
+  review-assurance:
+    description: "Configured discovery and verification settlement: settled, incomplete, or unverified."
   coverage:
-    description: "Host-derived required-scope coverage: complete or incomplete."
+    description: "Deprecated compatibility aggregate: complete or incomplete."
   review-mode:
     description: "Selected scope: incremental or full."
   review-reason:

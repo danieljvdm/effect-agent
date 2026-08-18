@@ -1,53 +1,61 @@
 import { describe, expect, it } from "@effect/vitest";
-import { Duration, Effect, Layer, Ref, Schema, Stream } from "effect";
+import { Duration, Effect, Layer, Redacted, Ref, Schema } from "effect";
 import {
   Agent,
-  AgentSpawner,
+  AgentRuntime,
   IdGenerator,
-  RunEventSink,
-  SubagentBudgetExhausted,
-  SubagentDurability,
-  SubagentDurabilityError,
-  SubagentExecutionFailure,
-  SubagentReservations,
+  RunEvent,
   SubagentReservationsMemoryLive,
-  ToolCallWaiting,
 } from "effect-agent";
-import { type AiError, LanguageModel, Model, Tool, Toolkit } from "effect/unstable/ai";
+import { Tool } from "effect/unstable/ai";
 import { toCodecOpenAI } from "effect/unstable/ai/OpenAiStructuredOutput";
 
 import {
+  CandidateAssessment,
   ChangedFile,
+  annotatePatch,
   CodeReview,
   DelegateFileReview,
   executeReview,
-  FanOutCoordinatorToolkitLayer,
+  assessReviewPipeline,
   fanOutHandlersLayer,
-  FanOutReviewer,
+  FanOutCoordinatorToolkitLayer,
   fanOutReviewBudgetLimits,
   fanOutReviewerProfile,
+  FanOutReviewer,
   FanOutReviewerProfile,
+  findingAnchorInUnitEvidence,
+  fileReviewEvidenceChunks,
   FileReviewer,
+  FileReviewBrief,
+  FileReviewEvidence,
   FileReviewReport,
+  FileReviewRequest,
   FileReviewToolkit,
   FileReviewToolkitLayer,
   FileReviewUnitFailed,
-  FileReviewBrief,
+  FileReviewUnitResult,
+  type FileReviewWorkRejected,
+  FindingCandidate,
   ListReviewUnits,
   makeFanOutReviewInstructions,
   makeFanOutReviewSuite,
   MAX_FILE_REVIEW_TOOL_CALLS,
+  MAX_PATCH_CHARS,
+  MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
   MAX_REVIEW_UNITS,
   MAX_UNIT_FILES,
   planReviewUnits,
   PullRequestMetadata,
-  PullRequestSource,
   rankAndDedupeFindings,
-  ReviewConcern,
   ReviewFinding,
+  ReviewExecutionContext,
   ReviewMission,
-  ReviewPublicationPlan,
+  type ReviewPublicationPlan,
+  ReviewStateAuthenticator,
+  type ReviewRiskCategory,
   WalkthroughEntry,
+  webCryptoReviewStateAuthenticatorLayer,
   defaultFileReviewerPolicy,
   fileReviewPolicy,
 } from "../src/index.ts";
@@ -58,9 +66,11 @@ import {
   fixturePullRequestSourceLayer,
   makeOfflineFanOutCoordinatorModel,
   makeOfflineFileReviewerModel,
-  type OfflineUnitCall,
   type OfflineUnitScript,
 } from "../src/testing.ts";
+
+const requiresNothing = <A, E>(effect: Effect.Effect<A, E, never>): Effect.Effect<A, E, never> =>
+  effect;
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends <Value>() => Value extends Right ? 1 : 2
@@ -69,142 +79,208 @@ type Equal<Left, Right> =
       : false
     : false;
 type Assert<Value extends true> = Value;
-
-const requiresNothing = <A, E>(effect: Effect.Effect<A, E, never>): Effect.Effect<A, E, never> =>
-  effect;
-
-// ---------------------------------------------------------------------------
-// Deterministic fixture pull request: four diffable TypeScript files across
-// two directories, sized so the pure planner yields exactly two review units,
-// plus one binary file no unit can cover. Declared line counts drive the
-// planner; the small real patches drive anchor validation.
-// ---------------------------------------------------------------------------
+type EffectError<T> = T extends Effect.Effect<infer _A, infer E, infer _R> ? E : never;
 
 const FIXTURE_SHA = "fedcba9876543210fedcba9876543210fedcba98";
-
-/** A parent-only secret: must never appear in any child prompt (SUB-006/015). */
 const MISSION_MARKER = "coordinator-dossier-91x";
 
-const patchFor = (marker: string): string =>
+const patchFor = (name: string): string =>
   [
     "@@ -1,3 +1,4 @@",
-    ` const ${marker}Base = 1;`,
-    `-const ${marker}Old = 3;`,
-    `+const ${marker}New = 2;`,
-    `+const ${marker}Extra = 3;`,
-    ` export const ${marker}Sum = ${marker}Base + ${marker}New;`,
+    ` export const ${name}Base = 1;`,
+    `-export const ${name}Mode = "old";`,
+    `+export const ${name}Mode = "new";`,
+    `+export const ${name}Enabled = true;`,
+    ` export const ${name}Value = ${name}Base;`,
   ].join("\n");
 
-const headFor = (marker: string): string =>
-  [
-    `const ${marker}Base = 1;`,
-    `const ${marker}New = 2;`,
-    `const ${marker}Extra = 3;`,
-    `export const ${marker}Sum = ${marker}Base + ${marker}New;`,
-  ].join("\n");
-
-const fixtureSource = (marker: string, path: string, additions: number, deletions: number) =>
+const fixtureFile = (
+  path: string,
+  name: string,
+  options: { readonly additions?: number; readonly deletions?: number } = {},
+): FixtureFile =>
   FixtureFile.make({
     file: ChangedFile.make({
       path,
       status: "modified",
-      additions,
-      deletions,
-      patch: patchFor(marker),
+      additions: options.additions ?? 2,
+      deletions: options.deletions ?? 1,
+      patch: patchFor(name),
     }),
-    headContent: headFor(marker),
+    headContent: [
+      `export const ${name}Base = 1;`,
+      `export const ${name}Mode = "new";`,
+      `export const ${name}Enabled = true;`,
+      `export const ${name}Value = ${name}Base;`,
+    ].join("\n"),
   });
 
-const fixture = FixturePullRequest.make({
+const highRiskFixture = FixturePullRequest.make({
   metadata: PullRequestMetadata.make({
-    repository: "acme/widgets",
-    number: 202,
-    title: "Refactor the api and core constants",
-    body: `Large refactor; ${MISSION_MARKER} stays with the coordinator.`,
+    repository: "acme/ingress",
+    number: 110,
+    title: "Authenticate and publish work-order events",
+    body: `Regression fixture; ${MISSION_MARKER} stays with the coordinator.`,
     baseRef: "main",
-    headRef: "refactor/constants",
+    baseSha: "0123456789abcdef0123456789abcdef01234567",
+    headRef: "work-order-ingress",
     headSha: FIXTURE_SHA,
-    totalChangedFiles: 5,
+    totalChangedFiles: 2,
   }),
   files: [
-    fixtureSource("alpha", "src/api/alpha.ts", 350, 20),
-    fixtureSource("beta", "src/api/beta.ts", 330, 20),
-    fixtureSource("delta", "src/core/delta.ts", 90, 10),
-    fixtureSource("gamma", "src/core/gamma.ts", 190, 10),
-    FixtureFile.make({
-      file: ChangedFile.make({
-        path: "assets/logo.png",
-        status: "added",
-        additions: 0,
-        deletions: 0,
-      }),
+    fixtureFile("examples/pr-work-order-ingress/src/authenticate.ts", "authenticate"),
+    fixtureFile("examples/pr-work-order-ingress/src/parse-event.ts", "publishWebhook"),
+  ],
+});
+
+const highRiskFiles = highRiskFixture.files.map((entry) => entry.file);
+const highRiskPlan = planReviewUnits(highRiskFiles, { totalChangedFiles: 2 });
+const highRiskUnit = highRiskPlan.units[0]!;
+const generalPass = highRiskPlan.discoveryPasses.find((pass) => pass.perspective === "general")!;
+const specialistPass = highRiskPlan.discoveryPasses.find(
+  (pass) => pass.perspective === "risk-specialist",
+)!;
+
+const supportedFinding = ReviewFinding.make({
+  path: "examples/pr-work-order-ingress/src/authenticate.ts",
+  startLine: 2,
+  endLine: 2,
+  severity: "important",
+  category: "security",
+  title: "Authentication mode accepts an unverified caller",
+  body: "The new mode reaches the authenticated path without validating the caller identity.",
+});
+
+const unsupportedFinding = ReviewFinding.make({
+  path: "examples/pr-work-order-ingress/src/authenticate.ts",
+  startLine: 3,
+  endLine: 3,
+  severity: "important",
+  category: "correctness",
+  title: "The feature flag always disables authentication",
+  body: "The candidate claims the true literal disables the path, but the bounded evidence does not support that behavior.",
+});
+
+const candidateFor = (
+  finding: ReviewFinding,
+  index: number,
+  pass: typeof specialistPass = specialistPass,
+): FindingCandidate =>
+  FindingCandidate.make({
+    candidateId: `${pass.passId}:finding:${String(index).padStart(3, "0")}`,
+    workId: pass.passId,
+    unitId: pass.unitId,
+    finding,
+    evidencePaths: [finding.path],
+  });
+
+const supportedCandidate = candidateFor(supportedFinding, 1);
+const unsupportedCandidate = candidateFor(unsupportedFinding, 2);
+
+const discoveryRequest = (pass: typeof generalPass): FileReviewRequest =>
+  FileReviewRequest.make({
+    phase: "discovery",
+    workId: pass.passId,
+    unitId: pass.unitId,
+    paths: pass.paths,
+    evidenceShardIds: pass.evidenceShardIds,
+    perspective: pass.perspective,
+    riskCategories: pass.riskCategories,
+    candidates: [],
+  });
+
+const discoveryReport = (
+  pass: typeof generalPass,
+  findings: ReadonlyArray<ReviewFinding>,
+): FileReviewReport =>
+  FileReviewReport.make({
+    phase: "discovery",
+    workId: pass.passId,
+    unitId: pass.unitId,
+    findings,
+    concerns: [],
+    fileSummaries:
+      pass.perspective === "general"
+        ? pass.paths.map((path) =>
+            WalkthroughEntry.make({ path, summary: `Reviews the bounded change in ${path}.` }),
+          )
+        : [],
+    assessments: [],
+  });
+
+const verificationRequest = FileReviewRequest.make({
+  phase: "verification",
+  workId: `${highRiskUnit.unitId}-verification`,
+  unitId: highRiskUnit.unitId,
+  paths: highRiskUnit.paths,
+  evidenceShardIds: highRiskUnit.evidenceShards.map((shard) => shard.shardId),
+  perspective: "candidate-verification",
+  riskCategories: highRiskUnit.riskCategories,
+  candidates: [supportedCandidate, unsupportedCandidate],
+});
+
+const verificationReport = FileReviewReport.make({
+  phase: "verification",
+  workId: verificationRequest.workId,
+  unitId: verificationRequest.unitId,
+  findings: [],
+  concerns: [],
+  fileSummaries: [],
+  assessments: [
+    CandidateAssessment.make({
+      candidateId: supportedCandidate.candidateId,
+      disposition: "confirmed",
+      rationale: "The changed authentication mode is reachable without an identity check.",
+    }),
+    CandidateAssessment.make({
+      candidateId: unsupportedCandidate.candidateId,
+      disposition: "rejected",
+      rationale: "The evidence contains no disabling branch and does not establish the claim.",
     }),
   ],
 });
 
-const fixtureFiles = fixture.files.map((entry) => entry.file);
-
-const UNIT_ONE = { unitId: "unit-001", paths: ["src/api/alpha.ts", "src/api/beta.ts"] } as const;
-const UNIT_TWO = { unitId: "unit-002", paths: ["src/core/delta.ts", "src/core/gamma.ts"] } as const;
-
-// The scripted children's findings: one valid anchor with a suggestion, one
-// ghost anchor (demoted by the host), one valid nit from the second unit.
-const alphaFinding = ReviewFinding.make({
-  path: "src/api/alpha.ts",
-  startLine: 2,
-  endLine: 2,
-  severity: "important",
-  title: "Magic number replaces the named constant",
-  body: "The literal duplicates the meaning of the extra constant.",
-  suggestion: "const alphaNew = TWO;",
+const coordinatorReview = CodeReview.make({
+  summary: "General and specialist discovery completed; candidate verification settled.",
+  verdict: "comment",
+  findings: [unsupportedFinding],
+  concerns: [],
 });
-const betaGhostFinding = ReviewFinding.make({
-  path: "src/api/beta.ts",
-  startLine: 99,
-  endLine: 99,
-  severity: "nit",
-  title: "Ghost anchor",
-  body: "This line does not exist in the diff.",
-});
-const gammaFinding = ReviewFinding.make({
-  path: "src/core/gamma.ts",
-  startLine: 3,
-  endLine: 3,
-  severity: "nit",
-  title: "Name the gamma literal",
-  body: "The literal deserves a named constant.",
-});
-
-const unitOneReport = FileReviewReport.make({
-  unitId: "unit-001",
-  findings: [alphaFinding, betaGhostFinding],
-});
-const unitTwoReport = FileReviewReport.make({
-  unitId: "unit-002",
-  findings: [gammaFinding],
-});
-
-// ---------------------------------------------------------------------------
-// Shared offline wiring: the exact host fan-out composition, minus GitHub and
-// live models.
-// ---------------------------------------------------------------------------
 
 const runOfflineFanOut = (script: {
-  readonly children: ReadonlyArray<OfflineUnitScript>;
-  readonly review: CodeReview;
-  readonly unitCalls?: ReadonlyArray<OfflineUnitCall> | undefined;
-  readonly sourceFixture?: FixturePullRequest | undefined;
+  readonly discoveryReports: ReadonlyArray<OfflineUnitScript>;
+  readonly discoveryCalls?: ReadonlyArray<FileReviewRequest> | undefined;
+  readonly verificationReports?: ReadonlyArray<OfflineUnitScript> | undefined;
+  readonly verificationCalls?: ReadonlyArray<FileReviewRequest> | undefined;
+  readonly review?: CodeReview | undefined;
+  readonly fixture?: FixturePullRequest | undefined;
 }) =>
   Effect.gen(function* () {
-    const coordinator = yield* makeOfflineFanOutCoordinatorModel({
-      unitCalls: script.unitCalls ?? [UNIT_ONE, UNIT_TWO],
-      review: script.review,
+    const fixture = script.fixture ?? highRiskFixture;
+    const reviewFiles = fixture.files.map((entry) => entry.file);
+    const reviewPlan = planReviewUnits(reviewFiles, {
+      totalChangedFiles: fixture.metadata.totalChangedFiles,
     });
-    const children = yield* makeOfflineFileReviewerModel(script.children);
+    const coordinator = yield* makeOfflineFanOutCoordinatorModel({
+      discoveryCalls: script.discoveryCalls ?? reviewPlan.discoveryPasses.map(discoveryRequest),
+      verificationCalls: script.verificationCalls ?? [],
+      review: script.review ?? coordinatorReview,
+    });
+    const children = yield* makeOfflineFileReviewerModel([
+      ...script.discoveryReports,
+      ...(script.verificationReports ?? []),
+    ]);
     const parentBinding = Agent.withModel(FanOutReviewer, coordinator.model);
     const childBinding = Agent.withModel(FileReviewer, children.model);
     const published = yield* Ref.make<ReadonlyArray<ReviewPublicationPlan>>([]);
-    const sourceLayer = fixturePullRequestSourceLayer(script.sourceFixture ?? fixture);
+    const stateAuthenticator = yield* Effect.gen(function* () {
+      return yield* ReviewStateAuthenticator;
+    }).pipe(
+      Effect.provide(
+        webCryptoReviewStateAuthenticatorLayer(Redacted.make("offline-assurance-secret")),
+      ),
+    );
+    const sourceLayer = fixturePullRequestSourceLayer(fixture);
     const childSupportLayer = Layer.mergeAll(
       FileReviewToolkitLayer,
       SubagentReservationsMemoryLive,
@@ -215,6 +291,7 @@ const runOfflineFanOut = (script: {
       applyVerdict: false,
       limits: fanOutReviewBudgetLimits,
       reviewShape: "fan-out",
+      signature: () => "offline-assurance-profile-v2",
     }).pipe(
       Effect.provide(
         Layer.mergeAll(
@@ -224,6 +301,17 @@ const runOfflineFanOut = (script: {
           IdGenerator.layer,
         ),
       ),
+      Effect.provideService(ReviewExecutionContext, {
+        mode: "full",
+        reason: "offline full-diff assurance fixture",
+        files: reviewFiles,
+        affectedPaths: reviewFiles.map((file) => file.path),
+        totalFiles: reviewFiles.length,
+        baselineSha: undefined,
+        priorState: undefined,
+        profileFingerprint: "a".repeat(64),
+        stateAuthenticator,
+      }),
       Effect.scoped,
     );
     const outcome = yield* requiresNothing(program);
@@ -237,166 +325,204 @@ const runOfflineFanOut = (script: {
     };
   });
 
-// ---------------------------------------------------------------------------
-// Coordinator instructions: the shared guidance and the configured findings
-// bound reach the coordinator, not only the children (the dogfooded gap).
-// ---------------------------------------------------------------------------
-
-describe("coordinator instructions", () => {
+describe("fan-out review contract", () => {
   const mission = ReviewMission.make({
-    repository: "acme/widgets",
-    number: 202,
-    title: "Refactor",
+    repository: "acme/ingress",
+    number: 110,
+    title: "Authenticate ingress",
     body: "",
     baseRef: "main",
-    headRef: "refactor/constants",
-    changedFileCount: 5,
+    headRef: "work-order-ingress",
+    changedFileCount: 2,
   });
 
-  it("carry the shared guidance and the configured findings bound", () => {
+  it("requires discovery, exact independent verification, and honest non-exhaustive prose", () => {
     const instructions = makeFanOutReviewInstructions({
-      guidance: ["Review architecture first, correctness second."],
+      guidance: "Review architecture first.",
       maxFindings: 7,
     })(mission);
-    expect(instructions).toContain("Review architecture first, correctness second.");
-    expect(instructions).toContain("keep at most 7 findings");
-    expect(instructions).toContain('"concerns"');
+    expect(instructions).toContain("Review architecture first.");
+    expect(instructions).toContain("EVERY discoveryPass");
+    expect(instructions).toContain("EVERY retained candidate copied byte-for-byte");
+    expect(instructions).toContain("retaining the first candidate in discoveryPass plan order");
+    expect(instructions).toContain("never an exhaustive or defect-free review");
+    expect(instructions).toContain("publication cap is 7");
   });
 
-  it("reach both the coordinator and the children through the suite", () => {
-    const suite = makeFanOutReviewSuite({ guidance: "Architecture first.", maxFindings: 7 });
-    expect(suite.parent.instructions(mission)).toContain("Architecture first.");
-    expect(suite.parent.instructions(mission)).toContain("keep at most 7 findings");
-    const brief = FileReviewBrief.make({
-      unitId: "unit-001",
-      paths: ["src/api/alpha.ts"],
-      focus: "defects-first",
-    });
-    expect(suite.child.instructions(brief)).toContain("Architecture first.");
-  });
-});
-
-describe("file-reviewer policy", () => {
-  it("budgets one diff and one context read for every path in a maximum-size unit", () => {
-    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(MAX_UNIT_FILES * 2);
-    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
-    expect(fileReviewPolicy.maxToolCalls).toBe(MAX_UNIT_FILES * 2);
-  });
-
-  it("keeps the child and delegation deadlines aligned with reasoning-model headroom", () => {
+  it("configures evidence-only children with the framework's bounded concurrency policy", () => {
+    expect(Object.keys(FileReviewToolkit.tools)).toEqual([]);
+    expect(MAX_FILE_REVIEW_TOOL_CALLS).toBe(1);
+    expect(defaultFileReviewerPolicy.maxToolCalls).toBe(1);
+    expect(fileReviewPolicy.maxToolCalls).toBe(1);
+    expect(fileReviewPolicy.maxConcurrency).toBe(4);
+    // The shared attached-subagent scheduler's Scope-owned slot gate is
+    // exercised with deterministic gated children in capabilities tests.
     expect(Duration.toMillis(defaultFileReviewerPolicy.maxDuration)).toBe(6 * 60_000);
-    expect(Duration.toMillis(fileReviewPolicy.maxDuration)).toBe(6 * 60_000);
   });
-});
 
-// ---------------------------------------------------------------------------
-// Profile claim.
-// ---------------------------------------------------------------------------
-
-describe("fan-out profile", () => {
-  it("pins the profile claim and its schema round-trip", () => {
+  it("pins the exact capability and non-guarantee profile", () => {
     const decoded = Schema.decodeUnknownSync(FanOutReviewerProfile)(
       Schema.encodeSync(FanOutReviewerProfile)(fanOutReviewerProfile),
     );
     expect(decoded).toEqual(fanOutReviewerProfile);
-    expect(fanOutReviewerProfile).toEqual({
-      deploymentClass: "E",
-      readOnlyToolSurface: true,
-      publicationOutsideAgentLoop: true,
-      anchorsValidatedBeforePublication: true,
-      attachedEphemeralDelegation: true,
-      failedUnitsReportedNotRetried: true,
-      liveProfileOptIn: true,
+    expect(fanOutReviewerProfile).toMatchObject({
+      hostOwnedRiskClassification: true,
+      redundantHighRiskDiscovery: true,
+      independentCandidateVerification: true,
+      defectAbsenceProven: false,
       exactlyOnceExternalEffects: false,
     });
   });
-});
 
-// ---------------------------------------------------------------------------
-// OpenAI strict schema compatibility for the fan-out tool surface.
-// ---------------------------------------------------------------------------
-
-describe("fan-out OpenAI tool schema compatibility", () => {
-  it("encodes the coordinator tools as strict OpenAI object schemas", () => {
+  it("keeps coordinator tools compatible with strict provider object schemas", () => {
     for (const tool of [ListReviewUnits, DelegateFileReview]) {
       const jsonSchema = Tool.getJsonSchema(tool, { transformer: toCodecOpenAI });
       expect(jsonSchema.type).toBe("object");
       expect(jsonSchema.anyOf).toBeUndefined();
     }
   });
+
+  it.effect("selects scripted child outcomes by an exact work-ID marker", () =>
+    Effect.gen(function* () {
+      const prefixReport = FileReviewReport.make({
+        phase: "discovery",
+        workId: "unit-001",
+        unitId: "unit-001",
+        findings: [],
+        concerns: [],
+        fileSummaries: [],
+        assessments: [],
+      });
+      const exactReport = FileReviewReport.make({
+        ...prefixReport,
+        workId: "unit-001-general",
+      });
+      const scripted = yield* makeOfflineFileReviewerModel([
+        { workId: prefixReport.workId, outcome: { _tag: "report", report: prefixReport } },
+        { workId: exactReport.workId, outcome: { _tag: "report", report: exactReport } },
+      ]);
+      const binding = Agent.withModel(FileReviewer, scripted.model);
+      const output = yield* AgentRuntime.run(
+        binding,
+        FileReviewBrief.make({
+          phase: "discovery",
+          workId: exactReport.workId,
+          unitId: exactReport.unitId,
+          paths: ["src/example.ts"],
+          evidenceShardIds: ["shard-0001"],
+          perspective: "general",
+          riskCategories: [],
+          candidates: [],
+          evidence: [
+            FileReviewEvidence.make({
+              shardId: "shard-0001",
+              path: "src/example.ts",
+              status: "modified",
+              reviewMode: "diff",
+              ordinal: 1,
+              total: 1,
+              annotatedPatch: "@@ -1 +1 @@\nR1 + export const value = 1;",
+            }),
+          ],
+        }),
+      ).pipe(Effect.provide(Layer.mergeAll(FileReviewToolkitLayer, IdGenerator.layer)));
+
+      expect(output.output.workId).toBe(exactReport.workId);
+    }),
+  );
+
+  it("carries shared guidance to both coordinator and workers", () => {
+    const suite = makeFanOutReviewSuite({ guidance: "Architecture first.", maxFindings: 7 });
+    expect(suite.parent.instructions(mission)).toContain("Architecture first.");
+    const brief = {
+      ...discoveryRequest(generalPass),
+      evidence: [],
+    };
+    expect(suite.child.instructions(brief)).toContain("Architecture first.");
+  });
 });
 
-// ---------------------------------------------------------------------------
-// Deterministic unit planning.
-// ---------------------------------------------------------------------------
+describe("deterministic input and risk planning", () => {
+  it("assigns all 41 PR #110-style paths despite the old 24-call flat bound", () => {
+    const files = Array.from({ length: 41 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/routine/file-${String(index + 1).padStart(2, "0")}.ts`,
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        patch: patchFor(`routine${index + 1}`),
+      }),
+    );
+    const plan = planReviewUnits(files, { totalChangedFiles: files.length });
+    const assigned = plan.units.flatMap((unit) => unit.paths);
 
-describe("planReviewUnits", () => {
-  it("packs directory-affine, size-budgeted units and reports undiffable files", () => {
-    const plan = planReviewUnits(fixtureFiles, { totalChangedFiles: 5 });
-    expect(plan.totalFiles).toBe(5);
-    expect(plan.truncated).toBe(false);
-    expect(plan.units.map((unit) => ({ unitId: unit.unitId, paths: [...unit.paths] }))).toEqual([
-      { unitId: "unit-001", paths: [...UNIT_ONE.paths] },
-      { unitId: "unit-002", paths: [...UNIT_TWO.paths] },
-    ]);
-    expect(plan.units[0]?.changedLines).toBe(720);
-    expect(plan.units[1]?.changedLines).toBe(300);
-    expect([...plan.undiffablePaths]).toEqual(["assets/logo.png"]);
-    expect(plan.unassignedPaths).toHaveLength(0);
+    expect(assigned).toHaveLength(41);
+    expect([...assigned].sort()).toEqual(files.map((file) => file.path).sort());
+    expect(plan.undiffablePaths).toEqual([]);
+    expect(plan.unassignedPaths).toEqual([]);
+    expect(plan.units.length).toBeLessThanOrEqual(MAX_REVIEW_UNITS);
+    expect(plan.units.every((unit) => unit.paths.length <= MAX_UNIT_FILES)).toBe(true);
   });
 
-  it("assigns patchless files recovered as bounded text and keeps binaries unreviewed", () => {
-    const snapshot = ChangedFile.make({
-      path: "db/snapshot.json",
-      status: "added",
+  it("classifies high-risk scope in host code and assigns fresh specialist discovery", () => {
+    const risks = new Set<ReviewRiskCategory>(highRiskUnit.riskCategories);
+    expect(risks.has("authentication-authorization")).toBe(true);
+    expect(risks.has("external-side-effects")).toBe(true);
+    expect(highRiskPlan.discoveryPasses.map((pass) => pass.perspective)).toEqual([
+      "general",
+      "risk-specialist",
+    ]);
+    expect(specialistPass.riskCategories).toEqual(highRiskUnit.riskCategories);
+  });
+
+  it("covers every required high-risk category with deterministic host rules", () => {
+    const file = ChangedFile.make({
+      path: "src/auth/security-boundary.ts",
+      status: "modified",
       additions: 1,
-      deletions: 0,
-      reviewHeadContent: '{"version":"7","tables":{}}',
+      deletions: 1,
+      patch:
+        "@@ -1 +1 @@\n-const previous = true;\n+authorizeBearerCredentialInsideSandboxTransactionWithSemaphoreThenPublish();",
     });
+    const plan = planReviewUnits([file], { totalChangedFiles: 1 });
+    expect(plan.units[0]?.riskCategories).toEqual([
+      "authentication-authorization",
+      "security-boundary",
+      "persistence-durability",
+      "concurrency",
+      "credential-handling",
+      "external-side-effects",
+    ]);
+    expect(plan.discoveryPasses.map((pass) => pass.perspective)).toEqual([
+      "general",
+      "risk-specialist",
+    ]);
+  });
+
+  it("assigns independent specialist discovery when keyword classification is silent", () => {
+    const file = ChangedFile.make({
+      path: "src/domain/policy.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      patch: "@@ -1 +1 @@\n-export const mode = 1;\n+export const mode = 2;",
+    });
+    const plan = planReviewUnits([file], { totalChangedFiles: 1 });
+    expect(plan.units[0]?.riskCategories).toEqual([]);
+    expect(plan.discoveryPasses.map((pass) => pass.perspective)).toEqual([
+      "general",
+      "risk-specialist",
+    ]);
+    expect(plan.discoveryPasses[1]?.riskCategories).toEqual([]);
+  });
+
+  it("reports undiffable and over-capacity paths instead of dropping them", () => {
     const binary = ChangedFile.make({
       path: "assets/logo.png",
       status: "added",
       additions: 0,
       deletions: 0,
     });
-    const plan = planReviewUnits([snapshot, binary], { totalChangedFiles: 2 });
-
-    expect(plan.units.flatMap((unit) => [...unit.paths])).toEqual([snapshot.path]);
-    expect([...plan.undiffablePaths]).toEqual([binary.path]);
-  });
-
-  it("keeps fallback evidence beyond the complete render bound unreviewed", () => {
-    const lineHeavyAddition = ChangedFile.make({
-      path: "db/line-heavy.json",
-      status: "added",
-      additions: 100_000,
-      deletions: 0,
-      reviewHeadContent: "x\n".repeat(100_000),
-    });
-    const largeModification = ChangedFile.make({
-      path: "db/large-modified.json",
-      status: "modified",
-      additions: 1,
-      deletions: 1,
-      reviewBaseContent: "b".repeat(120_000),
-      reviewHeadContent: "h".repeat(120_000),
-    });
-    const plan = planReviewUnits([lineHeavyAddition, largeModification], {
-      totalChangedFiles: 2,
-    });
-
-    expect(plan.units).toEqual([]);
-    expect([...plan.undiffablePaths]).toEqual(["db/large-modified.json", "db/line-heavy.json"]);
-  });
-
-  it("is deterministic regardless of input order", () => {
-    const shuffled = [...fixtureFiles].reverse();
-    expect(planReviewUnits(shuffled, { totalChangedFiles: 5 })).toEqual(
-      planReviewUnits(fixtureFiles, { totalChangedFiles: 5 }),
-    );
-  });
-
-  it("bounds the fan-out and reports overflow files instead of dropping them", () => {
     const many = Array.from({ length: 120 }, (_, index) =>
       ChangedFile.make({
         path: `src/wide/file-${String(index + 1).padStart(3, "0")}.ts`,
@@ -406,567 +532,566 @@ describe("planReviewUnits", () => {
         patch: patchFor("wide"),
       }),
     );
-    const plan = planReviewUnits(many, { totalChangedFiles: 310 });
-    expect(plan.truncated).toBe(true);
-    expect(plan.units).toHaveLength(MAX_REVIEW_UNITS);
-    for (const unit of plan.units) {
-      expect(unit.paths.length).toBeLessThanOrEqual(MAX_UNIT_FILES);
-    }
-    const assigned = plan.units.flatMap((unit) => [...unit.paths]);
-    expect(assigned).toHaveLength(MAX_REVIEW_UNITS * MAX_UNIT_FILES);
-    // Every input file is either assigned or reported unassigned — no file
-    // silently disappears.
+    const plan = planReviewUnits([...many, binary], { totalChangedFiles: 121 });
+    const assigned = plan.units.flatMap((unit) => unit.paths);
+
+    expect(plan.undiffablePaths).toEqual(["assets/logo.png"]);
     expect([...assigned, ...plan.unassignedPaths].sort()).toEqual(
       many.map((file) => file.path).sort(),
     );
   });
-});
 
-// ---------------------------------------------------------------------------
-// Deterministic merge policy.
-// ---------------------------------------------------------------------------
-
-describe("rankAndDedupeFindings", () => {
-  it("dedupes shared anchors keeping the most severe and ranks the rest", () => {
-    const duplicateNit = ReviewFinding.make({ ...alphaFinding, severity: "nit", title: "Dup" });
-    const blocking = ReviewFinding.make({ ...gammaFinding, severity: "blocking" });
-    const merged = rankAndDedupeFindings([duplicateNit, gammaFinding, blocking, alphaFinding]);
-    // The alpha anchor collapsed to its most severe finding; the gamma anchor
-    // collapsed to the blocking duplicate, which then ranks first.
-    expect(merged.map((finding) => [finding.path, finding.severity])).toEqual([
-      ["src/core/gamma.ts", "blocking"],
-      ["src/api/alpha.ts", "important"],
-    ]);
-    expect(merged[1]?.title).toBe(alphaFinding.title);
-  });
-
-  it("caps the merged list at the CodeReview findings bound", () => {
-    const many = Array.from({ length: 25 }, (_, index) =>
-      ReviewFinding.make({
-        path: "src/api/alpha.ts",
-        startLine: index + 1,
-        endLine: index + 1,
-        severity: index % 2 === 0 ? "nit" : "important",
-        title: `Finding ${index + 1}`,
-        body: "Bounded merge test.",
+  it("bounds overflow identifiers while preserving the exact shard count and every path", () => {
+    const files = Array.from({ length: 100 }, (_, index) =>
+      ChangedFile.make({
+        path: `src/overflow/file-${String(index + 1).padStart(3, "0")}.ts`,
+        status: "added",
+        additions: 1,
+        deletions: 0,
+        patch: `@@ -0,0 +1 @@\n+${"x".repeat(61_000)}`,
       }),
     );
-    const merged = rankAndDedupeFindings(many);
-    expect(merged).toHaveLength(20);
-    // All 12 "important" findings out-rank the nits; the cap trims nits only.
-    expect(merged.filter((finding) => finding.severity === "important")).toHaveLength(12);
+    const plan = planReviewUnits(files, { totalChangedFiles: files.length });
+    const assignedShardCount = plan.units.reduce(
+      (total, unit) => total + unit.evidenceShards.length,
+      0,
+    );
+    const generatedShardCount = files.reduce(
+      (total, file) => total + fileReviewEvidenceChunks(file).length,
+      0,
+    );
+
+    expect(plan.unassignedEvidenceShardCount).toBe(generatedShardCount - assignedShardCount);
+    expect(plan.unassignedEvidenceShardCount).toBeGreaterThan(
+      MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS,
+    );
+    expect(plan.unassignedEvidenceShardIds).toHaveLength(MAX_REPORTED_UNASSIGNED_EVIDENCE_SHARDS);
+    expect(
+      [...new Set([...plan.units.flatMap((unit) => unit.paths), ...plan.unassignedPaths])].sort(),
+    ).toEqual(files.map((file) => file.path).sort());
+
+    const assessment = assessReviewPipeline({
+      shape: "fan-out",
+      files,
+      totalFiles: files.length,
+      anchorFiles: files,
+      totalAnchorFiles: files.length,
+      events: [],
+    });
+    expect(assessment.inputCoverage.status).toBe("incomplete");
+    expect(assessment.inputCoverage.unassignedPaths).toEqual(plan.unassignedPaths);
+    expect(assessment.inputCoverage.reasons.join("\n")).toContain(
+      `${plan.unassignedEvidenceShardCount} deterministic evidence shard(s)`,
+    );
+  });
+
+  it("splits an oversized path into complete bounded evidence shards", () => {
+    const oversized = ChangedFile.make({
+      path: "src/oversized.ts",
+      status: "modified",
+      additions: 1,
+      deletions: 0,
+      patch: `@@ -1 +1 @@\n+${"x".repeat(61_000)}`,
+    });
+    const plan = planReviewUnits([oversized], { totalChangedFiles: 1 });
+    const chunks = fileReviewEvidenceChunks(oversized);
+    const shards = plan.units.flatMap((unit) => unit.evidenceShards);
+    expect(plan.units.flatMap((unit) => unit.paths)).toEqual([oversized.path]);
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.annotatedPatch.length <= MAX_PATCH_CHARS)).toBe(true);
+    expect(chunks.map((chunk) => chunk.annotatedPatch).join("")).toBe(
+      annotatePatch(oversized.patch ?? ""),
+    );
+    expect(shards.map((shard) => shard.ordinal)).toEqual(
+      Array.from({ length: chunks.length }, (_, index) => index + 1),
+    );
+    expect(shards.every((shard) => shard.total === chunks.length)).toBe(true);
+    expect(plan.partialEvidencePaths).toEqual([]);
+    expect(plan.unassignedEvidenceShardIds).toEqual([]);
+
+    const assessment = assessReviewPipeline({
+      shape: "fan-out",
+      files: [oversized],
+      totalFiles: 1,
+      anchorFiles: [oversized],
+      totalAnchorFiles: 1,
+      events: [],
+    });
+    expect(assessment.inputCoverage.status).toBe("complete");
+    expect(assessment.inputCoverage.assignedPaths).toEqual([oversized.path]);
+    expect(assessment.inputCoverage.partialPaths).toEqual([]);
+    expect(assessment.inputCoverage.reasons).toEqual([]);
+  });
+
+  it("binds finding anchors to the exact shards assigned to their unit", () => {
+    const lines = Array.from(
+      { length: 130 },
+      (_, index) => `+export const value${index + 1} = "${"x".repeat(5_500)}";`,
+    );
+    const oversized = ChangedFile.make({
+      path: "src/multi-unit.ts",
+      status: "added",
+      additions: lines.length,
+      deletions: 0,
+      patch: [`@@ -0,0 +1,${lines.length} @@`, ...lines].join("\n"),
+    });
+    const plan = planReviewUnits([oversized], { totalChangedFiles: 1 });
+    const first = plan.units[0];
+    const last = plan.units.at(-1);
+    expect(plan.units.length).toBeGreaterThan(1);
+    expect(first).toBeDefined();
+    expect(last).toBeDefined();
+    if (first === undefined || last === undefined) return;
+
+    const findingAt = (line: number) =>
+      ReviewFinding.make({
+        path: oversized.path,
+        startLine: line,
+        endLine: line,
+        severity: "important",
+        title: `Defect at line ${line}`,
+        body: "The assigned evidence demonstrates this defect.",
+      });
+
+    expect(findingAnchorInUnitEvidence(findingAt(1), first, [oversized])).toBe(true);
+    expect(findingAnchorInUnitEvidence(findingAt(130), first, [oversized])).toBe(false);
+    expect(findingAnchorInUnitEvidence(findingAt(1), last, [oversized])).toBe(false);
+    expect(findingAnchorInUnitEvidence(findingAt(130), last, [oversized])).toBe(true);
+  });
+
+  it("is deterministic regardless of source order", () => {
+    expect(planReviewUnits([...highRiskFiles].reverse(), { totalChangedFiles: 2 })).toEqual(
+      highRiskPlan,
+    );
   });
 });
 
-// ---------------------------------------------------------------------------
-// Offline end-to-end fan-out: scripted coordinator + scripted children over
-// the real S1 delegation, toolkits, source port, and publication path.
-// ---------------------------------------------------------------------------
-
-describe("offline fan-out review run", () => {
-  const happyChildren: ReadonlyArray<OfflineUnitScript> = [
+describe("offline discovery and verification pipeline", () => {
+  const successfulDiscovery: ReadonlyArray<OfflineUnitScript> = [
     {
-      unitId: "unit-001",
-      diffPath: "src/api/alpha.ts",
-      outcome: { _tag: "findings", report: unitOneReport },
+      workId: generalPass.passId,
+      outcome: { _tag: "report", report: discoveryReport(generalPass, []) },
     },
     {
-      unitId: "unit-002",
-      diffPath: "src/core/gamma.ts",
-      outcome: { _tag: "findings", report: unitTwoReport },
+      workId: specialistPass.passId,
+      outcome: {
+        _tag: "report",
+        report: discoveryReport(specialistPass, [supportedFinding, unsupportedFinding]),
+      },
     },
   ];
 
-  const mergedFindings = rankAndDedupeFindings([
-    ...unitOneReport.findings,
-    ...unitTwoReport.findings,
-  ]);
-
-  const happyReview = CodeReview.make({
-    summary:
-      "Reviewed 2 units across 4 files by delegation. assets/logo.png has no textual diff and was not reviewed.",
-    verdict: "comment",
-    findings: mergedFindings,
-  });
-
   it.effect(
-    "fans out to two children, merges their findings, and publishes the validated plan",
+    "finds a defect missed by general discovery and publishes only verifier-confirmed candidates",
     () =>
       Effect.gen(function* () {
-        const result = yield* runOfflineFanOut({ children: happyChildren, review: happyReview });
+        const result = yield* runOfflineFanOut({
+          discoveryReports: successfulDiscovery,
+          verificationCalls: [verificationRequest],
+          verificationReports: [
+            {
+              workId: verificationRequest.workId,
+              outcome: { _tag: "report", report: verificationReport },
+            },
+          ],
+        });
 
-        // list -> delegate batch -> final: three coordinator turns.
-        expect(result.outcome.turns).toBe(3);
-        expect(result.coordinatorCalls).toBe(3);
-        // Two children, two turns each: real fan-out, not sequential re-use.
-        expect(result.childCalls).toBe(4);
-
-        // The merged review round-tripped through the run unchanged.
-        expect(result.outcome.review).toEqual(happyReview);
-
-        // Anchor validation is unchanged host-side: the ghost anchor demoted,
-        // the two real anchors published inline.
+        expect(result.outcome.inputCoverage.status).toBe("complete");
+        expect(result.outcome.assurance).toMatchObject({
+          status: "settled",
+          requiredGeneralDiscoveryPasses: 1,
+          completedGeneralDiscoveryPasses: 1,
+          requiredSpecialistPasses: 1,
+          completedSpecialistPasses: 1,
+          requiredVerificationPasses: 1,
+          completedVerificationPasses: 1,
+          discoveredCandidates: 2,
+          confirmedCandidates: 1,
+          rejectedCandidates: 1,
+          unsettledCandidates: 0,
+        });
+        expect(result.outcome.review.findings).toEqual([supportedFinding]);
+        expect(result.outcome.review.findings).not.toContainEqual(unsupportedFinding);
         expect(result.outcome.plan.comments.map((comment) => comment.path)).toEqual([
-          "src/api/alpha.ts",
-          "src/core/gamma.ts",
+          supportedFinding.path,
         ]);
-        expect(result.outcome.plan.demoted).toEqual([betaGhostFinding]);
-        expect(result.outcome.plan.body).toContain("`src/api/beta.ts:99`");
-        expect(result.outcome.plan.commitSha).toBe(FIXTURE_SHA);
-
-        // Publication went through the collecting publisher exactly once.
+        expect(result.outcome.plan.body).toContain("**Review assurance:** settled");
+        expect(result.outcome.state?.reviewedHeadSha).toBe(FIXTURE_SHA);
+        expect(result.outcome.plan.body).toContain("effect-agent-pr-review state-v1:");
         expect(result.published).toHaveLength(1);
-        expect(result.outcome.published?.inlineComments).toBe(2);
-        expect(result.outcome.coverage.status).toBe("incomplete");
-        expect(result.outcome.coverage.unreviewedPaths).toContain("assets/logo.png");
 
-        // Context isolation: each child saw exactly its briefed unit — never
-        // the other unit's paths and never the parent-only mission marker.
-        const unitOnePrompt = result.childPrompts.find((prompt) => prompt.includes("unit-001"));
-        const unitTwoPrompt = result.childPrompts.find((prompt) => prompt.includes("unit-002"));
-        expect(unitOnePrompt).toBeDefined();
-        expect(unitTwoPrompt).toBeDefined();
-        expect(unitOnePrompt).toContain("src/api/alpha.ts");
-        expect(unitOnePrompt).not.toContain("src/core/gamma.ts");
-        expect(unitTwoPrompt).toContain("src/core/delta.ts");
-        expect(unitTwoPrompt).not.toContain("src/api/alpha.ts");
-        for (const prompt of result.childPrompts) {
-          expect(prompt).not.toContain(MISSION_MARKER);
-        }
-
-        // Declassification: the diffs the children read never reach the
-        // coordinator — only the projected findings do.
-        for (const prompt of result.coordinatorPrompts) {
-          expect(prompt).not.toContain("alphaBase");
-          expect(prompt).not.toContain("gammaBase");
-        }
-        const finalPrompt = result.coordinatorPrompts[2] ?? "";
-        expect(finalPrompt).toContain(alphaFinding.title);
-        expect(finalPrompt).toContain(gammaFinding.title);
+        const generalPrompt = result.childPrompts.find((prompt) =>
+          prompt.includes(generalPass.passId),
+        );
+        const specialistPrompt = result.childPrompts.find(
+          (prompt) =>
+            prompt.includes(specialistPass.passId) &&
+            !prompt.includes(supportedCandidate.candidateId),
+        );
+        const verifierPrompt = result.childPrompts.find((prompt) =>
+          prompt.includes(verificationRequest.workId),
+        );
+        expect(generalPrompt).toBeDefined();
+        expect(specialistPrompt).toBeDefined();
+        expect(verifierPrompt).toContain(supportedCandidate.candidateId);
+        expect(verifierPrompt).toContain("authenticateMode");
+        expect(verifierPrompt).toContain("publishWebhookMode");
+        for (const prompt of result.childPrompts) expect(prompt).not.toContain(MISSION_MARKER);
       }),
   );
 
-  it.effect("reviews a patchless generated text file through bounded head content", () =>
+  it.effect("verifies an equivalent cross-pass candidate once and publishes it once", () =>
     Effect.gen(function* () {
-      const snapshotPath = "packages/db/migrations/next/snapshot.json";
-      const snapshotContent = `{"version":"7","payload":"${"x".repeat(142_900)}","tail":"snapshot-tail"}`;
-      const snapshotFixture = FixturePullRequest.make({
-        metadata: PullRequestMetadata.make({
-          repository: "acme/widgets",
-          number: 203,
-          title: "Add generated migration snapshot",
-          body: "",
-          baseRef: "main",
-          headRef: "feature/migration",
-          headSha: FIXTURE_SHA,
-          totalChangedFiles: 1,
-        }),
-        files: [
-          FixtureFile.make({
-            file: ChangedFile.make({
-              path: snapshotPath,
-              status: "added",
-              additions: 1,
-              deletions: 0,
-            }),
-            headContent: snapshotContent,
+      const canonicalCandidate = candidateFor(supportedFinding, 1, generalPass);
+      const deduplicatedVerificationRequest = FileReviewRequest.make({
+        ...verificationRequest,
+        candidates: [canonicalCandidate],
+      });
+      const deduplicatedVerificationReport = FileReviewReport.make({
+        ...verificationReport,
+        assessments: [
+          CandidateAssessment.make({
+            candidateId: canonicalCandidate.candidateId,
+            disposition: "confirmed",
+            rationale: "The bounded evidence confirms the authentication defect once.",
           }),
         ],
       });
-      const cleanReport = FileReviewReport.make({ unitId: "unit-001", findings: [] });
-      const cleanReview = CodeReview.make({
-        summary: "Reviewed the generated snapshot through bounded head content.",
-        verdict: "approve",
-        findings: [],
-      });
-
       const result = yield* runOfflineFanOut({
-        sourceFixture: snapshotFixture,
-        unitCalls: [{ unitId: "unit-001", paths: [snapshotPath] }],
-        children: [
+        discoveryReports: [
           {
-            unitId: "unit-001",
-            diffPath: snapshotPath,
-            outcome: { _tag: "findings", report: cleanReport },
-          },
-        ],
-        review: cleanReview,
-      });
-
-      expect(result.outcome.coverage.status).toBe("complete");
-      expect(result.outcome.coverage.unreviewedPaths).toEqual([]);
-      expect(result.childPrompts.join("\n")).toContain("snapshot-tail");
-      expect(result.childPrompts.join("\n")).toContain("not valid inline-comment anchors");
-      expect(result.childPrompts.join("\n")).toContain('"truncated":false');
-      expect(result.outcome.plan.body).not.toContain("Incomplete coverage");
-    }),
-  );
-
-  it.effect("projects child concerns to the coordinator and renders them as body sections", () =>
-    Effect.gen(function* () {
-      const gammaConcern = ReviewConcern.make({
-        severity: "important",
-        title: "Replaced gamma path is never deleted",
-        body: "The old constant path stays reachable after this refactor.",
-      });
-      const concernedChildren: ReadonlyArray<OfflineUnitScript> = [
-        happyChildren[0] as OfflineUnitScript,
-        {
-          unitId: "unit-002",
-          diffPath: "src/core/gamma.ts",
-          outcome: {
-            _tag: "findings",
-            report: FileReviewReport.make({
-              unitId: "unit-002",
-              findings: [gammaFinding],
-              concerns: [gammaConcern],
-            }),
-          },
-        },
-      ];
-      const concernedReview = CodeReview.make({
-        summary: "Merged 2 units; one non-anchored concern carried through.",
-        verdict: "comment",
-        findings: mergedFindings,
-        concerns: [gammaConcern],
-      });
-
-      const result = yield* runOfflineFanOut({
-        children: concernedChildren,
-        review: concernedReview,
-      });
-
-      // The projection carried the concern across the declassification
-      // boundary: the coordinator's merge turn saw it.
-      const finalPrompt = result.coordinatorPrompts[2] ?? "";
-      expect(finalPrompt).toContain(gammaConcern.title);
-
-      // The published body renders it as a severity-tagged section.
-      expect(result.outcome.plan.body).toContain(`### ⚠️ ${gammaConcern.title}`);
-      expect(result.outcome.plan.body).toContain(gammaConcern.body);
-    }),
-  );
-
-  it.effect("projects child file summaries and renders only unit-verified walkthrough rows", () =>
-    Effect.gen(function* () {
-      const alphaSummary = WalkthroughEntry.make({
-        path: "src/api/alpha.ts",
-        summary: "Renames the alpha constant and rewires its export.",
-      });
-      // In the changeset, but OUTSIDE unit-001's briefed paths: a child must
-      // not be able to smuggle a summary for a file it never reviewed.
-      const crossUnitSummary = WalkthroughEntry.make({
-        path: "src/core/gamma.ts",
-        summary: "Smuggled cross-unit summary.",
-      });
-      const summarizedChildren: ReadonlyArray<OfflineUnitScript> = [
-        {
-          unitId: "unit-001",
-          diffPath: "src/api/alpha.ts",
-          outcome: {
-            _tag: "findings",
-            report: FileReviewReport.make({
-              unitId: "unit-001",
-              findings: [alphaFinding, betaGhostFinding],
-              fileSummaries: [alphaSummary, crossUnitSummary],
-            }),
-          },
-        },
-        happyChildren[1] as OfflineUnitScript,
-      ];
-      // A coordinator-invented entry: in the changeset, but no child reported it.
-      const inventedSummary = WalkthroughEntry.make({
-        path: "src/core/delta.ts",
-        summary: "Invented by the coordinator.",
-      });
-      const walkthroughReview = CodeReview.make({
-        summary: "Merged 2 units; the walkthrough carries the alpha summary.",
-        verdict: "comment",
-        findings: mergedFindings,
-        walkthrough: [alphaSummary, crossUnitSummary, inventedSummary],
-      });
-
-      const result = yield* runOfflineFanOut({
-        children: summarizedChildren,
-        review: walkthroughReview,
-      });
-
-      // The projection carried the per-file summary across the
-      // declassification boundary: the coordinator's merge turn saw it.
-      const finalPrompt = result.coordinatorPrompts[2] ?? "";
-      expect(finalPrompt).toContain("Renames the alpha constant");
-
-      // Host verification kept exactly the child-reported, in-unit entry:
-      // the cross-unit smuggle and the coordinator invention are dropped.
-      expect(result.outcome.review.walkthrough).toEqual([alphaSummary]);
-      expect(result.outcome.plan.body).toContain("<summary>📝 Walkthrough (1 file)</summary>");
-      expect(result.outcome.plan.body).toContain(
-        "| `src/api/alpha.ts` | Renames the alpha constant and rewires its export. |",
-      );
-      expect(result.outcome.plan.body).not.toContain("Smuggled cross-unit summary.");
-      expect(result.outcome.plan.body).not.toContain("Invented by the coordinator.");
-    }),
-  );
-
-  it.effect("reports a failed unit honestly in the summary instead of failing the run", () =>
-    Effect.gen(function* () {
-      const failingChildren: ReadonlyArray<OfflineUnitScript> = [
-        happyChildren[0] as OfflineUnitScript,
-        {
-          unitId: "unit-002",
-          diffPath: "src/core/gamma.ts",
-          outcome: { _tag: "malformed-output" },
-        },
-      ];
-      const honestReview = CodeReview.make({
-        summary:
-          "Reviewed unit-001 (src/api). unit-002 unreviewed: AgentOutputError — its findings are missing from this review. assets/logo.png has no textual diff.",
-        verdict: "comment",
-        findings: rankAndDedupeFindings([...unitOneReport.findings]),
-      });
-
-      const result = yield* runOfflineFanOut({ children: failingChildren, review: honestReview });
-
-      // The run COMPLETED: the typed unit failure surfaced to the model as a
-      // failed tool result instead of aborting the fan-out (containment via
-      // the parent-facing return-mode Tool view).
-      expect(result.outcome.turns).toBe(3);
-      expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentOutputError");
-
-      // The typed failure — tag and child error tag — was model-visible.
-      const finalPrompt = result.coordinatorPrompts[2] ?? "";
-      expect(finalPrompt).toContain("FileReviewUnitFailed");
-      expect(finalPrompt).toContain("AgentOutputError");
-
-      // No retry: the coordinator declared exactly one delegation per unit
-      // and the failed child ran its two scripted turns exactly once.
-      expect(result.coordinatorCalls).toBe(3);
-      expect(result.childCalls).toBe(4);
-
-      // The published review carries the honest summary and the surviving
-      // unit's validated findings.
-      expect(result.published).toHaveLength(1);
-      expect(result.outcome.plan.body).toContain("unit-002 unreviewed");
-      expect(result.outcome.plan.comments.map((comment) => comment.path)).toEqual([
-        "src/api/alpha.ts",
-      ]);
-      expect(result.outcome.coverage.status).toBe("incomplete");
-      // The contained failure carries the child error tag through the
-      // coverage classification (first-party return mode, SUB-033).
-      expect(result.outcome.coverage.failedUnits).toContainEqual({
-        unitId: "unit-002",
-        errorTag: "FileReviewUnitFailed:AgentOutputError",
-      });
-    }),
-  );
-
-  it.effect("reports a whole batch of failed units before the repeated-failure stop", () =>
-    Effect.gen(function* () {
-      const failedUnits: ReadonlyArray<OfflineUnitScript> = [
-        {
-          unitId: "unit-001",
-          diffPath: "src/api/alpha.ts",
-          outcome: { _tag: "malformed-output" },
-        },
-        {
-          unitId: "unit-002",
-          diffPath: "src/core/gamma.ts",
-          outcome: { _tag: "malformed-output" },
-        },
-        {
-          unitId: "unit-003",
-          diffPath: "src/core/delta.ts",
-          outcome: { _tag: "malformed-output" },
-        },
-      ];
-      const honestReview = CodeReview.make({
-        summary:
-          "unit-001, unit-002, and unit-003 were unreviewed after AgentOutputError failures.",
-        verdict: "comment",
-        findings: [],
-      });
-
-      const result = yield* runOfflineFanOut({
-        children: failedUnits,
-        review: honestReview,
-        unitCalls: failedUnits.map((unit) => ({
-          unitId: unit.unitId,
-          paths: [unit.diffPath],
-        })),
-      });
-
-      expect(result.outcome.turns).toBe(3);
-      expect(result.coordinatorCalls).toBe(3);
-      expect(result.childCalls).toBe(6);
-      expect(result.outcome.review).toEqual(honestReview);
-      expect(result.published).toHaveLength(1);
-      const finalPrompt = result.coordinatorPrompts[2] ?? "";
-      expect(finalPrompt.match(/FileReviewUnitFailed/g)).toHaveLength(3);
-    }),
-  );
-
-  it.effect(
-    "SUB-033 a runaway child fails typed and its unit is reported honestly, never retried",
-    () =>
-      Effect.gen(function* () {
-        const runawayChildren: ReadonlyArray<OfflineUnitScript> = [
-          happyChildren[0] as OfflineUnitScript,
-          {
-            unitId: "unit-002",
-            diffPath: "src/core/gamma.ts",
-            // One more declared call than the child AgentPolicy allows: the
-            // reviewer pins typed exhaustion (a review is a coverage claim —
-            // schema-valid findings from a child whose reads never executed
-            // would launder budget exhaustion into coverage), so the child
-            // fails typed and first-party containment turns that into result
-            // data instead of failing the run.
+            workId: generalPass.passId,
             outcome: {
-              _tag: "budget-runaway",
-              declaredCalls: MAX_FILE_REVIEW_TOOL_CALLS + 1,
+              _tag: "report",
+              report: discoveryReport(generalPass, [supportedFinding]),
             },
           },
-        ];
-        const honestReview = CodeReview.make({
-          summary: "unit-002 unreviewed: AgentPolicyError (exceeded its Tool Call budget).",
-          verdict: "comment",
-          findings: rankAndDedupeFindings([...unitOneReport.findings]),
-        });
+          {
+            workId: specialistPass.passId,
+            outcome: {
+              _tag: "report",
+              report: discoveryReport(specialistPass, [supportedFinding]),
+            },
+          },
+        ],
+        verificationCalls: [deduplicatedVerificationRequest],
+        verificationReports: [
+          {
+            workId: deduplicatedVerificationRequest.workId,
+            outcome: { _tag: "report", report: deduplicatedVerificationReport },
+          },
+        ],
+      });
 
-        const result = yield* runOfflineFanOut({
-          children: runawayChildren,
-          review: honestReview,
-        });
-
-        // The child failed typed on its Tool Call bound BEFORE any runaway
-        // call executed: one child model call, no second chance, run intact.
-        expect(result.childCalls).toBe(3);
-        expect(result.coordinatorCalls).toBe(3);
-
-        // The typed policy failure crossed the delegation boundary bounded
-        // and model-visible; the unit stays honestly unreviewed.
-        const finalPrompt = result.coordinatorPrompts[2] ?? "";
-        expect(finalPrompt).toContain("FileReviewUnitFailed");
-        expect(finalPrompt).toContain("AgentPolicyError");
-        expect(result.outcome.review.summary).toContain("unit-002 unreviewed: AgentPolicyError");
-        expect(result.published).toHaveLength(1);
-        expect(result.outcome.coverage.status).toBe("incomplete");
-        expect(result.outcome.coverage.failedUnits).toContainEqual({
-          unitId: "unit-002",
-          errorTag: "FileReviewUnitFailed:AgentPolicyError",
-        });
-      }),
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        discoveredCandidates: 1,
+        confirmedCandidates: 1,
+        rejectedCandidates: 0,
+      });
+      expect(result.outcome.review.findings).toEqual([supportedFinding]);
+      expect(result.outcome.plan.comments).toHaveLength(1);
+    }),
   );
+
+  it.effect("fails assurance when extra work reuses an expected verification ID", () =>
+    Effect.gen(function* () {
+      const alteredRequest = FileReviewRequest.make({
+        ...verificationRequest,
+        candidates: [supportedCandidate],
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: successfulDiscovery,
+        verificationCalls: [verificationRequest, alteredRequest],
+        verificationReports: [
+          {
+            workId: verificationRequest.workId,
+            outcome: { _tag: "report", report: verificationReport },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: verificationRequest.workId,
+          stage: "verification",
+          errorTag: "UnexpectedPass",
+        }),
+      );
+      expect(result.outcome.state).toBeUndefined();
+      expect(result.outcome.plan.event).toBe("COMMENT");
+    }),
+  );
+
+  it.effect("settles an empty host plan without spawning a review child", () =>
+    Effect.gen(function* () {
+      const emptyFixture = FixturePullRequest.make({
+        metadata: PullRequestMetadata.make({
+          repository: "acme/empty",
+          number: 1,
+          title: "No reviewable changes",
+          body: "",
+          baseRef: "main",
+          baseSha: "0123456789abcdef0123456789abcdef01234567",
+          headRef: "empty",
+          headSha: FIXTURE_SHA,
+          totalChangedFiles: 0,
+        }),
+        files: [],
+      });
+      const result = yield* runOfflineFanOut({
+        fixture: emptyFixture,
+        discoveryCalls: [],
+        discoveryReports: [],
+        review: CodeReview.make({
+          summary: "No reviewable changes were selected.",
+          verdict: "comment",
+          findings: [],
+          concerns: [],
+        }),
+      });
+
+      expect(result.coordinatorCalls).toBe(2);
+      expect(result.childCalls).toBe(0);
+      expect(result.outcome.inputCoverage.status).toBe("complete");
+      expect(result.outcome.assurance).toMatchObject({
+        status: "settled",
+        requiredGeneralDiscoveryPasses: 0,
+        requiredSpecialistPasses: 0,
+        requiredVerificationPasses: 0,
+      });
+    }),
+  );
+
+  it.effect("makes failed specialist discovery visible and prevents settled assurance", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        discoveryReports: [
+          successfulDiscovery[0]!,
+          { workId: specialistPass.passId, outcome: { _tag: "malformed-output" } },
+        ],
+      });
+
+      expect(result.outcome.inputCoverage.status).toBe("complete");
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: specialistPass.passId,
+          stage: "specialist",
+          errorTag: expect.stringContaining("AgentOutputError"),
+        }),
+      );
+      expect(result.outcome.coverage.status).toBe("incomplete");
+      expect(result.outcome.state).toBeUndefined();
+      expect(result.outcome.plan.body).toContain("Incomplete review assurance");
+      expect(result.outcome.plan.event).toBe("COMMENT");
+    }),
+  );
+
+  it.effect("rejects a discovery candidate before assurance when its diff anchor is invalid", () =>
+    Effect.gen(function* () {
+      const invalidAnchor = ReviewFinding.make({
+        ...supportedFinding,
+        startLine: 99,
+        endLine: 99,
+        title: "Invalid new-version anchor",
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: [
+          successfulDiscovery[0]!,
+          {
+            workId: specialistPass.passId,
+            outcome: {
+              _tag: "report",
+              report: discoveryReport(specialistPass, [invalidAnchor]),
+            },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: specialistPass.passId,
+          errorTag: "FileReviewWorkRejected",
+        }),
+      );
+      expect(result.outcome.review.findings).toEqual([]);
+      expect(result.outcome.state).toBeUndefined();
+    }),
+  );
+
+  it.effect("binds projected child output to the exact scheduled request", () =>
+    Effect.gen(function* () {
+      const mismatched = FileReviewReport.make({
+        ...discoveryReport(specialistPass, [supportedFinding]),
+        workId: generalPass.passId,
+      });
+      const result = yield* runOfflineFanOut({
+        discoveryReports: [
+          successfulDiscovery[0]!,
+          {
+            workId: specialistPass.passId,
+            outcome: { _tag: "report", report: mismatched },
+          },
+        ],
+      });
+
+      expect(result.outcome.assurance.status).toBe("incomplete");
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: specialistPass.passId,
+          errorTag: "FileReviewWorkRejected",
+        }),
+      );
+      expect(result.outcome.review.findings).toEqual([]);
+    }),
+  );
+
+  it.effect("leaves every candidate unsettled when independent verification fails", () =>
+    Effect.gen(function* () {
+      const result = yield* runOfflineFanOut({
+        discoveryReports: successfulDiscovery,
+        verificationCalls: [verificationRequest],
+        verificationReports: [
+          { workId: verificationRequest.workId, outcome: { _tag: "malformed-output" } },
+        ],
+      });
+
+      expect(result.outcome.assurance).toMatchObject({
+        status: "incomplete",
+        requiredVerificationPasses: 1,
+        completedVerificationPasses: 0,
+        discoveredCandidates: 2,
+        confirmedCandidates: 0,
+        unsettledCandidates: 2,
+      });
+      expect(result.outcome.assurance.failedPasses).toContainEqual(
+        expect.objectContaining({
+          workId: verificationRequest.workId,
+          stage: "verification",
+          errorTag: expect.stringContaining("AgentOutputError"),
+        }),
+      );
+      expect(result.outcome.review.findings).toEqual([]);
+      expect(result.outcome.plan.comments).toEqual([]);
+      expect(result.outcome.plan.event).toBe("COMMENT");
+      expect(result.outcome.state).toBeUndefined();
+    }),
+  );
+
+  it("surfaces typed policy exhaustion as a failed specialist pass", () => {
+    const generalRequest = discoveryRequest(generalPass);
+    const specialistRequest = discoveryRequest(specialistPass);
+    const base = {
+      eventVersion: 1,
+      runId: "run-assurance-exhaustion",
+      conversationId: "conversation-assurance-exhaustion",
+      agentId: "pr-fanout-reviewer",
+      timestamp: "2026-08-17T20:00:00.000Z",
+      providerExecuted: false,
+    } as const;
+    const events = [
+      Schema.decodeUnknownSync(RunEvent)({
+        ...base,
+        _tag: "ToolCallDeclared",
+        sequence: 1,
+        toolCallId: "general-call",
+        toolName: "delegate_file_review",
+        parameters: Schema.encodeSync(FileReviewRequest)(generalRequest),
+      }),
+      Schema.decodeUnknownSync(RunEvent)({
+        ...base,
+        _tag: "ToolCallSucceeded",
+        sequence: 2,
+        toolCallId: "general-call",
+        toolName: "delegate_file_review",
+        result: Schema.encodeSync(FileReviewUnitResult)(
+          FileReviewUnitResult.make({
+            phase: "discovery",
+            workId: generalPass.passId,
+            unitId: generalPass.unitId,
+            candidates: [],
+            fileSummaries: [],
+            assessments: [],
+          }),
+        ),
+      }),
+      Schema.decodeUnknownSync(RunEvent)({
+        ...base,
+        _tag: "ToolCallDeclared",
+        sequence: 3,
+        toolCallId: "specialist-call",
+        toolName: "delegate_file_review",
+        parameters: Schema.encodeSync(FileReviewRequest)(specialistRequest),
+      }),
+      Schema.decodeUnknownSync(RunEvent)({
+        ...base,
+        _tag: "ToolCallSucceeded",
+        sequence: 4,
+        toolCallId: "specialist-call",
+        toolName: "delegate_file_review",
+        result: Schema.encodeSync(FileReviewUnitFailed)(
+          FileReviewUnitFailed.make({
+            childErrorTag: "AgentPolicyError",
+            message: "review worker exceeded its bounded turn budget",
+          }),
+        ),
+      }),
+    ];
+    const assessment = assessReviewPipeline({
+      shape: "fan-out",
+      files: highRiskFiles,
+      totalFiles: 2,
+      anchorFiles: highRiskFiles,
+      totalAnchorFiles: 2,
+      events,
+    });
+
+    expect(defaultFileReviewerPolicy.onExhaustion).toBe("fail");
+    expect(assessment.assurance.status).toBe("incomplete");
+    expect(assessment.assurance.failedPasses).toContainEqual(
+      expect.objectContaining({
+        workId: specialistPass.passId,
+        stage: "specialist",
+        errorTag: "FileReviewUnitFailed:AgentPolicyError",
+      }),
+    );
+    expect(assessment.coverage.status).toBe("incomplete");
+  });
 });
 
-// ---------------------------------------------------------------------------
-// E/R compile proofs (AGENTS.md change discipline): the parent-facing
-// return-mode Tool view contains expected unit failures — they are results,
-// not Run failures — while the delegation Layer's construction requirements
-// stay honestly visible.
-// ---------------------------------------------------------------------------
+describe("deterministic finding merge", () => {
+  it("keeps the most severe duplicate anchor and ranks deterministically", () => {
+    const duplicate = ReviewFinding.make({ ...supportedFinding, severity: "nit" });
+    const blocking = ReviewFinding.make({ ...unsupportedFinding, severity: "blocking" });
+    expect(
+      rankAndDedupeFindings([duplicate, unsupportedFinding, blocking, supportedFinding]),
+    ).toEqual([blocking, supportedFinding]);
+  });
+});
 
-const typesModel = Model.make(
-  "scripted",
-  "fan-out-types",
-  Layer.effect(
-    LanguageModel.LanguageModel,
-    LanguageModel.make({
-      generateText: () => Effect.succeed([]),
-      streamText: () => Stream.empty,
-    }),
-  ),
-);
-
-const typedChildBinding = Agent.withModel(FileReviewer, typesModel);
-const typedFanOutLayer = fanOutHandlersLayer(typedChildBinding);
-const typedFanOutProgram = executeReview(Agent.withModel(FanOutReviewer, typesModel), {
-  post: false,
-  applyVerdict: false,
-}).pipe(Effect.provide(typedFanOutLayer));
-
-type LayerContext<L> = L extends Layer.Layer<infer _ROut, infer _E, infer RIn> ? RIn : never;
-type EffectError<T> = T extends Effect.Effect<infer _A, infer E, infer _R> ? E : never;
-
-type FanOutLayerRequirements = LayerContext<typeof typedFanOutLayer>;
-type FanOutProgramFailure = EffectError<typeof typedFanOutProgram>;
-type FanOutProgramServices = Effect.Services<typeof typedFanOutProgram>;
-type DelegateHandlerError = Tool.HandlerError<typeof DelegateFileReview>;
-
-// The first-party contained delegation Tool (SUB-033): every expected unit
-// failure is result data, so only the engine signals — the durable waiting
-// suspension and coordinator-seam error, neither of which can occur on this
-// class-E path — remain in the Run's `E`; one failed unit cannot abort the
-// fan-out review.
-type ContainedHandlerErrorProof = Assert<
-  Equal<DelegateHandlerError, AiError.AiError | ToolCallWaiting | SubagentDurabilityError>
+type OfflineFanOutProgram = ReturnType<typeof runOfflineFanOut>;
+type OfflineFanOutServices = Effect.Services<OfflineFanOutProgram>;
+type OfflineFanOutFailure = EffectError<OfflineFanOutProgram>;
+type OfflineFanOutRequirementsProof = Assert<Equal<OfflineFanOutServices, never>>;
+type UnitFailureContainedProof = Assert<
+  Equal<Extract<OfflineFanOutFailure, FileReviewUnitFailed>, never>
 >;
-type ContainedUnitFailureProof = Assert<
-  Equal<Extract<FanOutProgramFailure, FileReviewUnitFailed>, never>
->;
-type ContainedBudgetFailureProof = Assert<
-  Equal<Extract<FanOutProgramFailure, SubagentBudgetExhausted>, never>
->;
-type ContainedExecutionFailureProof = Assert<
-  Equal<Extract<FanOutProgramFailure, SubagentExecutionFailure>, never>
->;
-// Layer construction carries the child's runtime needs visibly: its tool
-// handlers' source port and the parent-owned reservation service.
-type LayerSourceProof = Assert<
-  Equal<Extract<FanOutLayerRequirements, PullRequestSource>, PullRequestSource>
->;
-type LayerReservationsProof = Assert<
-  Equal<Extract<FanOutLayerRequirements, SubagentReservations>, SubagentReservations>
->;
-type LayerChildHandlersProof = Assert<
-  Equal<
-    Extract<FanOutLayerRequirements, Tool.HandlersFor<Toolkit.Tools<typeof FileReviewToolkit>>>,
-    Tool.HandlersFor<Toolkit.Tools<typeof FileReviewToolkit>>
-  >
->;
-// Engine-provided per-batch services never surface as program requirements.
-type ProgramSpawnerExcludedProof = Assert<
-  Equal<Extract<FanOutProgramServices, AgentSpawner>, never>
->;
-type ProgramSinkExcludedProof = Assert<Equal<Extract<FanOutProgramServices, RunEventSink>, never>>;
-type ProgramDurabilityExcludedProof = Assert<
-  Equal<Extract<FanOutProgramServices, SubagentDurability>, never>
->;
-// The provided program still needs the coordinator-side source port,
-// identifiers, and the publisher — visible, not hidden.
-type ProgramSourceProof = Assert<
-  Equal<Extract<FanOutProgramServices, PullRequestSource>, PullRequestSource>
->;
-type ProgramIdGeneratorProof = Assert<
-  Equal<Extract<FanOutProgramServices, IdGenerator>, IdGenerator>
+type WorkRejectionContainedProof = Assert<
+  Equal<Extract<OfflineFanOutFailure, FileReviewWorkRejected>, never>
 >;
 
-describe("fan-out type proofs", () => {
-  it("contains unit failures as results and keeps construction requirements visible", () => {
-    const containedHandlerErrorProof: ContainedHandlerErrorProof = true;
-    const containedUnitFailureProof: ContainedUnitFailureProof = true;
-    const containedBudgetFailureProof: ContainedBudgetFailureProof = true;
-    const containedExecutionFailureProof: ContainedExecutionFailureProof = true;
-    const layerSourceProof: LayerSourceProof = true;
-    const layerReservationsProof: LayerReservationsProof = true;
-    const layerChildHandlersProof: LayerChildHandlersProof = true;
-    const programSpawnerExcludedProof: ProgramSpawnerExcludedProof = true;
-    const programSinkExcludedProof: ProgramSinkExcludedProof = true;
-    const programDurabilityExcludedProof: ProgramDurabilityExcludedProof = true;
-    const programSourceProof: ProgramSourceProof = true;
-    const programIdGeneratorProof: ProgramIdGeneratorProof = true;
-    expect([
-      containedHandlerErrorProof,
-      containedUnitFailureProof,
-      containedBudgetFailureProof,
-      containedExecutionFailureProof,
-      layerSourceProof,
-      layerReservationsProof,
-      layerChildHandlersProof,
-      programSpawnerExcludedProof,
-      programSinkExcludedProof,
-      programDurabilityExcludedProof,
-      programSourceProof,
-      programIdGeneratorProof,
-    ]).toEqual([true, true, true, true, true, true, true, true, true, true, true, true]);
+describe("fan-out Effect channels", () => {
+  it("keeps provided requirements empty and expected child failures contained", () => {
+    const noRequirements: OfflineFanOutRequirementsProof = true;
+    const unitFailuresAreResults: UnitFailureContainedProof = true;
+    const workRejectionsAreResults: WorkRejectionContainedProof = true;
+    expect([noRequirements, unitFailuresAreResults, workRejectionsAreResults]).toEqual([
+      true,
+      true,
+      true,
+    ]);
   });
 });

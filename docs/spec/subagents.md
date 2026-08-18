@@ -213,7 +213,9 @@ The child Agent output is decoded by its normal output Schema before `projectRes
 `projectResult` produces the bounded value encoded by the delegation Tool success Schema; it also
 receives the framework's bounded result context (SUB-034) — currently the honest
 `budgetExhausted` marker — so a budget-truncated partial can be surfaced in the declared success
-Schema for the orchestrator's extension decision.
+Schema for the orchestrator's extension decision. The projection also receives the original
+Schema-decoded Tool parameters, allowing the declassification boundary to bind child output to
+the exact request without reparsing prompts or trusting echoed child identity fields.
 
 An Agent's full inferred error channel does not automatically form a stable cross-Agent wire
 contract, and native Effect AI handlers cannot leak an arbitrary child `E`. A Delegation
