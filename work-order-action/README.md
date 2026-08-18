@@ -6,8 +6,8 @@ implementation attempt. It is deliberately separate from the read-only PR-review
 Do not invoke the Action as a single step. The five jobs below are part of its security contract:
 
 - `admit` authenticates the GitHub event and persists its claim in a signed GitHub reply;
-- `implement` has the model credential and a read-only exact-head checkout, but no GitHub write
-  token;
+- `implement` has the model credential, a writable isolated exact-head checkout, and only a
+  contents-read GitHub token; it has no GitHub write token;
 - `checks` has neither provider nor publisher credentials and runs checks without network access;
 - `publish` has the contents write token, but no PR checkout or provider credential; and
 - `present` has only the pull-request write permission needed to update the existing journal reply.
