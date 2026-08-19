@@ -128,7 +128,7 @@ Tool Call settles. Detachment is a separate future capability.
 **Work Order**
 A head-bound, path-scoped instruction on a pull request, admitted only by explicit human
 dispatch. An implementer proposes a patch; the host validates and publishes. See
-`docs/spec/pr-work-orders.md`. GitHub dispatch, durable admission, isolated
+`docs/spec/pr-work-orders.md`. GitHub dispatch, persistent admission, isolated
 publication, and thread presentation are implemented by the separately named
 `work-order-action/` surface specified in `docs/spec/pr-work-order-ingress.md`.
 

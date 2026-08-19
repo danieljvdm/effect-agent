@@ -669,7 +669,12 @@ const visibleTerminal = (terminal: WorkOrderTerminal): string => {
     case "settled":
       return `Effect Agent settled this work order as **${terminal.disposition}**. No patch was published.`;
     case "failed":
-      return `Effect Agent did not publish this work order: **${terminal.errorTag}**.`;
+      // Publication uncertainty must never be presented as confirmed
+      // non-publication: the head mutation may have succeeded before GitHub
+      // failed to confirm it.
+      return terminal.errorTag === "PublicationUncertainty"
+        ? "Effect Agent could not confirm whether this work order published: **PublicationUncertainty**. Inspect the pull-request head before dispatching again."
+        : `Effect Agent did not publish this work order: **${terminal.errorTag}**.`;
   }
 };
 
@@ -717,46 +722,52 @@ const present = Effect.fn("workOrderAction.present")(function* () {
     });
   }
   const decoded = yield* authenticator.extract(comment.body);
-  if (
-    Option.isNone(decoded) ||
-    decoded.value._tag !== "claimed" ||
-    decoded.value.eventId !== admission.order.dispatch.eventId ||
-    decoded.value.repository !== admission.order.repository ||
-    decoded.value.pullRequestNumber !== admission.order.pullRequestNumber ||
-    decoded.value.sourceCommentId !== admission.order.source.commentId ||
-    decoded.value.workOrderId !== admission.order.workOrderId ||
-    decoded.value.workOrderDigest !== admission.workOrderDigest ||
-    decoded.value.expectedHeadSha !== admission.order.headSha ||
-    decoded.value.runId !== admission.runId
-  ) {
-    return yield* WorkOrderActionFailure.make({
-      phase: "present",
-      errorTag: "PresentationFailure",
-      detail: "admission journal state is not the claimed work order owned by this run",
-    });
-  }
-  const completed = completedState(decoded.value, terminal);
-  const body = yield* authenticator.render(completed, visibleTerminal(terminal));
-  const updated = yield* github.updateComment({
+  const claimed = claimedState({
+    eventId: admission.order.dispatch.eventId,
     repository: admission.order.repository,
-    commentId: admission.journalCommentId,
-    body,
+    pullRequestNumber: admission.order.pullRequestNumber,
+    sourceCommentId: admission.order.source.commentId,
+    workOrderId: admission.order.workOrderId,
+    workOrderDigest: admission.workOrderDigest,
+    expectedHeadSha: admission.order.headSha,
+    runId: admission.runId,
   });
-  const acknowledged = yield* authenticator.extract(updated.body);
-  if (
-    updated.id !== admission.journalCommentId ||
-    updated.authorId !== stateAuthorId ||
-    updated.inReplyToId !== admission.order.source.commentId ||
-    updated.body !== body ||
-    Option.isNone(acknowledged) ||
-    !journalStatesEqual(completed, acknowledged.value)
-  ) {
+  const completed = completedState(claimed, terminal);
+  // A retry after a lost update acknowledgement finds the exact authenticated
+  // completed state already recorded; the external mutation is done and the
+  // transition must settle idempotently instead of failing forever.
+  const alreadySettled = Option.isSome(decoded) && journalStatesEqual(completed, decoded.value);
+  if (!alreadySettled && (Option.isNone(decoded) || !journalStatesEqual(claimed, decoded.value))) {
     return yield* WorkOrderActionFailure.make({
       phase: "present",
       errorTag: "PresentationFailure",
       detail:
-        "updated admission journal did not acknowledge the exact authenticated terminal state and thread target",
+        "admission journal state is neither the claim owned by this run nor its exact recorded terminal",
     });
+  }
+  if (!alreadySettled) {
+    const body = yield* authenticator.render(completed, visibleTerminal(terminal));
+    const updated = yield* github.updateComment({
+      repository: admission.order.repository,
+      commentId: admission.journalCommentId,
+      body,
+    });
+    const acknowledged = yield* authenticator.extract(updated.body);
+    if (
+      updated.id !== admission.journalCommentId ||
+      updated.authorId !== stateAuthorId ||
+      updated.inReplyToId !== admission.order.source.commentId ||
+      updated.body !== body ||
+      Option.isNone(acknowledged) ||
+      !journalStatesEqual(completed, acknowledged.value)
+    ) {
+      return yield* WorkOrderActionFailure.make({
+        phase: "present",
+        errorTag: "PresentationFailure",
+        detail:
+          "updated admission journal did not acknowledge the exact authenticated terminal state and thread target",
+      });
+    }
   }
   yield* writeOutputs([["outcome", terminal._tag]]);
   if (terminal._tag === "failed") {

@@ -79,9 +79,15 @@ Its recovery boundary is GitHub's retention and availability of review comments:
 recovered by rereading that authenticated external repository state across Actions jobs and runs.
 
 The presenter updates that same reply from `claimed` to `completed`; it does not add a second status
-reply. A crash after claim leaves an authenticated incomplete attempt. Rerunning or redelivering it
-returns the stored incomplete state and never replays the implementer. A new explicit dispatch
-creates a distinct work order and journal reply.
+reply. A crash after claim leaves an authenticated incomplete attempt. While the journal reply is
+retained, rerunning or redelivering it returns the stored incomplete state and never replays the
+implementer. A new explicit dispatch creates a distinct work order and journal reply.
+
+The journal reply is also the only claim record. A principal with pull-request write authority can
+delete it, and a rerun after that deletion admits a fresh attempt, exactly as that principal could
+authorize a new attempt with a new explicit reply. Replay prevention is therefore scoped to GitHub's
+retention of the reply and to already-trusted write-authorized principals — it is not a defense
+against them — and publication stays fenced by the expected-head compare-and-swap either way.
 
 Actions artifacts carry bounded Schema-decoded envelopes between jobs in one run, but they are not
 the persistent duplicate-delivery authority. Artifact retention can expire without reopening an
@@ -166,10 +172,13 @@ The presenter updates the one authenticated admission reply with bounded host-au
 
 Raw model prose is not copied as authoritative status. A missing terminal artifact is typed
 `AttemptIncomplete` before publisher eligibility and conservatively becomes
-`PublicationUncertainty` after validated check evidence made publication eligible. The source
-thread remains open; no phase calls a thread-resolution API. Presentation succeeds only when the
-GitHub update response echoes the same journal comment, bot actor, source-thread target, response
-body, and exact authenticated terminal state.
+`PublicationUncertainty` after validated check evidence made publication eligible.
+`PublicationUncertainty` is rendered as unconfirmed publication that requires head inspection,
+never as confirmed non-publication. The source thread remains open; no phase calls a
+thread-resolution API. Presentation succeeds only when the GitHub update response echoes the same
+journal comment, bot actor, source-thread target, response body, and exact authenticated terminal
+state — or when the reply already carries that exact authenticated terminal state from an earlier
+attempt whose acknowledgement was lost. A conflicting completed state fails closed.
 
 ## 7. Trusted workflow and consumer surface
 
@@ -212,7 +221,8 @@ Live GitHub network calls are not made from deterministic CI tests.
 - file additions/deletions, renames/copies, binary/executable changes, symlinks/submodules, or mode
   changes;
 - checks that require network access or files outside the checked worktree;
-- automatic thread resolution or closed-loop re-review; and
+- automatic thread resolution or closed-loop re-review;
+- replay prevention against write-authorized principals who delete the bot journal reply; and
 - exactly-once GitHub publication.
 
 ## 10. Rejected alternatives

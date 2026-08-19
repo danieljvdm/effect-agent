@@ -6,7 +6,7 @@ import { GitHubApiFailure, PullRequestView, ReviewCommentView } from "./contract
 import { GitHubApi } from "./github.ts";
 
 const GitHubRepoWire = Schema.Struct({
-  full_name: Schema.NonEmptyString,
+  full_name: Schema.NonEmptyString.check(Schema.isMaxLength(200)),
   fork: Schema.Boolean,
 });
 
@@ -14,7 +14,7 @@ export const GitHubPullWire = Schema.Struct({
   number: Schema.Int,
   head: Schema.Struct({
     sha: GitCommitSha,
-    ref: Schema.NonEmptyString,
+    ref: Schema.NonEmptyString.check(Schema.isMaxLength(512)),
     repo: Schema.NullOr(GitHubRepoWire),
   }),
   base: Schema.Struct({
@@ -26,7 +26,7 @@ export const GitHubReviewCommentWire = Schema.Struct({
   id: Schema.Int,
   user: Schema.Struct({
     id: Schema.Int,
-    login: Schema.NonEmptyString,
+    login: Schema.NonEmptyString.check(Schema.isMaxLength(100)),
   }),
   commit_id: GitCommitSha,
   path: Schema.optionalKey(Schema.String),
