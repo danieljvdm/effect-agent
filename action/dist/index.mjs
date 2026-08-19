@@ -43250,9 +43250,10 @@ var extractFingerprint = (body) => {
   }
   return last3;
 };
-var sha256Hex = (text2) => exports_Effect.promise(async () => {
-  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(text2));
-  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+var sha256Hex = exports_Effect.fn("sha256Hex")(function* (text2) {
+  const crypto2 = yield* exports_Crypto.Crypto;
+  const digest2 = yield* crypto2.digest("SHA-256", new TextEncoder().encode(text2)).pipe(exports_Effect.orDie);
+  return exports_Encoding.encodeHex(digest2);
 });
 var FIELD = "\x00";
 var RECORD = "\x01";
@@ -43260,6 +43261,7 @@ var SECTION = "\x02";
 var canonicalPatch = (patch3) => patch3.replace(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/gm, "@@ -_ +_ @@");
 var canonicalChangeset = (files) => files.map((file2) => `${file2.path}${FIELD}${file2.status}${FIELD}${String(file2.additions)}${FIELD}${String(file2.deletions)}${FIELD}${file2.patch === undefined ? "" : canonicalPatch(file2.patch)}${FIELD}${file2.reviewBaseContent ?? ""}${FIELD}${file2.reviewHeadContent ?? ""}`).sort().join(RECORD);
 var computeChangesetFingerprint = (files, signature) => sha256Hex(`${canonicalChangeset(files)}${SECTION}${signature}`);
+var computeProfileFingerprint = (signature) => sha256Hex(signature);
 
 // packages/pr-review/src/internal/ignore.ts
 var REGEX_SPECIALS = /[.+^${}()|[\]\\]/g;
@@ -43598,10 +43600,6 @@ var selectedPullRequestSourceLayer = (selection) => exports_Layer.effect(PullReq
     }))
   });
 }));
-var computeProfileFingerprint = (signature) => exports_Effect.promise(async () => {
-  const digest2 = await globalThis.crypto.subtle.digest("SHA-256", new TextEncoder().encode(signature));
-  return Array.from(new Uint8Array(digest2)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
-});
 var buildProfileMission = (metadata, files) => ReviewMission.make({
   repository: metadata.repository,
   number: metadata.number,
