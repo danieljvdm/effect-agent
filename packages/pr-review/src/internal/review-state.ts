@@ -506,18 +506,6 @@ export const selectedPullRequestSourceLayer = (
     }),
   );
 
-/** Profile fingerprints are SHA-256 over configuration-only signatures. */
-export const computeProfileFingerprint = (signature: string): Effect.Effect<string> =>
-  Effect.promise(async () => {
-    const digest = await globalThis.crypto.subtle.digest(
-      "SHA-256",
-      new TextEncoder().encode(signature),
-    );
-    return Array.from(new Uint8Array(digest))
-      .map((byte) => byte.toString(16).padStart(2, "0"))
-      .join("");
-  });
-
 /** Build the full-surface mission used only to resolve profile guidance. */
 export const buildProfileMission = (
   metadata: PullRequestMetadata,

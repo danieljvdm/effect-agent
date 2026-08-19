@@ -1,3 +1,4 @@
+import { NodeCrypto } from "@effect/platform-node";
 import { describe, expect, it } from "@effect/vitest";
 import { Effect, Exit, Layer, Ref, Schema } from "effect";
 import { Agent, IdGenerator } from "effect-agent";
@@ -996,6 +997,7 @@ describe("offline review run", () => {
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
             IdGenerator.layer,
+            NodeCrypto.layer,
           ),
         ),
         Effect.scoped,
@@ -1058,6 +1060,7 @@ describe("offline review run", () => {
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
             IdGenerator.layer,
+            NodeCrypto.layer,
           ),
         ),
         Effect.scoped,
@@ -1109,6 +1112,7 @@ describe("offline review run", () => {
             ReviewToolkitLayer.pipe(Layer.provideMerge(fixturePullRequestSourceLayer(fixture))),
             collectingReviewPublisherLayer(published),
             IdGenerator.layer,
+            NodeCrypto.layer,
           ),
         ),
         Effect.scoped,
@@ -1231,6 +1235,7 @@ describe("offline review run", () => {
             ReviewToolkitLayer.pipe(Layer.provideMerge(selectedSource)),
             collectingReviewPublisherLayer(published),
             IdGenerator.layer,
+            NodeCrypto.layer,
           ),
         ),
         Effect.provideService(ReviewExecutionContext, selection),
@@ -1275,6 +1280,7 @@ describe.skipIf(!liveEnabled)("pr-review live profile (opt-in)", () => {
               collectingReviewPublisherLayer(published),
               openAiClientLayer,
               IdGenerator.layer,
+              NodeCrypto.layer,
             ),
           ),
           Effect.scoped,

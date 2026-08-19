@@ -1,4 +1,6 @@
-import { describe, expect, it } from "@effect/vitest";
+import { NodeCrypto } from "@effect/platform-node";
+import { describe, expect, it, layer } from "@effect/vitest";
+import type { Crypto } from "effect";
 import { Effect, Layer, Ref, Schema, Stream } from "effect";
 import type { IdGenerator } from "effect-agent";
 import { ToolExecutionClass } from "effect-agent";
@@ -168,7 +170,7 @@ const runFactoryReviewer = <E, R>(
     return { outcome, published: yield* Ref.get(published) };
   });
 
-describe("PrReview.make", () => {
+layer(NodeCrypto.layer)("PrReview.make", (it) => {
   it.effect("injects guidance between the mission framing and the intact contract", () =>
     Effect.gen(function* () {
       const scripted = yield* makeOfflineReviewerModel({
@@ -368,9 +370,11 @@ type PlainServices = ServicesOf<typeof plainRun>;
 type ExtraServices = ServicesOf<typeof extraRun>;
 type FanOutServices = ServicesOf<typeof fanOutRun>;
 
-// The two ports stay visible on every shape.
+// The two ports and Crypto stay visible on every shape.
 type PlainSourceProof = Assert<Equal<Extract<PlainServices, PullRequestSource>, PullRequestSource>>;
 type PlainPublisherProof = Assert<Equal<Extract<PlainServices, ReviewPublisher>, ReviewPublisher>>;
+type PlainCryptoProof = Assert<Equal<Extract<PlainServices, Crypto.Crypto>, Crypto.Crypto>>;
+type FanOutCryptoProof = Assert<Equal<Extract<FanOutServices, Crypto.Crypto>, Crypto.Crypto>>;
 type FanOutSourceProof = Assert<
   Equal<Extract<FanOutServices, PullRequestSource>, PullRequestSource>
 >;
@@ -393,6 +397,8 @@ describe("factory type proofs", () => {
   it("keeps ports and extra handlers visible while hiding framework plumbing", () => {
     const plainSourceProof: PlainSourceProof = true;
     const plainPublisherProof: PlainPublisherProof = true;
+    const plainCryptoProof: PlainCryptoProof = true;
+    const fanOutCryptoProof: FanOutCryptoProof = true;
     const fanOutSourceProof: FanOutSourceProof = true;
     const plainIdGeneratorExcludedProof: PlainIdGeneratorExcludedProof = true;
     const fanOutIdGeneratorExcludedProof: FanOutIdGeneratorExcludedProof = true;
@@ -401,12 +407,14 @@ describe("factory type proofs", () => {
     expect([
       plainSourceProof,
       plainPublisherProof,
+      plainCryptoProof,
+      fanOutCryptoProof,
       fanOutSourceProof,
       plainIdGeneratorExcludedProof,
       fanOutIdGeneratorExcludedProof,
       extraHandlerProof,
       plainHandlerExcludedProof,
-    ]).toEqual([true, true, true, true, true, true, true]);
+    ]).toEqual([true, true, true, true, true, true, true, true, true]);
   });
 });
 
@@ -416,7 +424,7 @@ describe("factory type proofs", () => {
 // regression: PR #26's third review died on exactly this).
 // ---------------------------------------------------------------------------
 
-describe("out-of-changeset reads", () => {
+layer(NodeCrypto.layer)("out-of-changeset reads", (it) => {
   it.effect("refuses the read as a result and completes the review", () =>
     Effect.gen(function* () {
       const scripted = yield* makePromptKeyedModel("bad-read-reviewer", (promptJson) => {
